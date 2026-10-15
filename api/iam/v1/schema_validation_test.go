@@ -16,6 +16,38 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestAccountLifecycleCompletionSchemaAndStrictCodec(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AccountLifecycleCompletion")
+	valid := []string{
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountLifecycleCompletion","actorAccountId":"platform-home","actorPrincipalId":"operator-one","operation":"ACCOUNT_CREATE","accountId":"account-new","commandRequestId":"create-one","expectedResourceVersion":0,"resultingResourceVersion":1,"status":"ACTIVE","rootPrincipalId":"root-one","eventId":"event-create","occurredAt":"2026-10-15T12:00:00.123456Z"}`,
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountLifecycleCompletion","actorAccountId":"platform-home","actorPrincipalId":"operator-one","operation":"ACCOUNT_SET_STATUS","accountId":"account-one","commandRequestId":"disable-one","expectedResourceVersion":4,"resultingResourceVersion":5,"status":"DISABLED","eventId":"event-disable","occurredAt":"2026-10-15T12:00:00.123456Z"}`,
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountLifecycleCompletion","actorAccountId":"platform-home","actorPrincipalId":"operator-one","operation":"ACCOUNT_ROOT_CREDENTIALS_RECOVER","accountId":"account-one","commandRequestId":"recover-one","expectedResourceVersion":5,"resultingResourceVersion":6,"status":"ACTIVE","rootPrincipalId":"root-one","eventId":"event-recover","occurredAt":"2026-10-15T12:00:00.123456Z"}`,
+	}
+	check := func(wire string, want bool) {
+		t.Helper()
+		instance, err := jsonschema.UnmarshalJSON(strings.NewReader(wire))
+		var result AccountLifecycleCompletion
+		if err != nil || (schema.Validate(instance) == nil) != want || (DecodeRequest(strings.NewReader(wire), &result) == nil) != want {
+			t.Fatalf("account lifecycle completion schema/runtime disagree: want=%t", want)
+		}
+	}
+	for _, wire := range valid {
+		check(wire, true)
+	}
+	for _, wire := range []string{
+		strings.Replace(valid[0], `"expectedResourceVersion":0`, `"expectedResourceVersion":1`, 1),
+		strings.Replace(valid[0], `"resultingResourceVersion":1`, `"resultingResourceVersion":2`, 1),
+		strings.Replace(valid[0], `,"rootPrincipalId":"root-one"`, ``, 1),
+		strings.Replace(valid[1], `"expectedResourceVersion":4`, `"expectedResourceVersion":0`, 1),
+		strings.Replace(valid[1], `"eventId":`, `"rootPrincipalId":"root-one","eventId":`, 1),
+		strings.Replace(valid[2], `"status":"ACTIVE"`, `"status":"DISABLED"`, 1),
+		strings.Replace(valid[2], `"ACCOUNT_ROOT_CREDENTIALS_RECOVER"`, `"OTHER"`, 1),
+		strings.Replace(valid[0], `"eventId":`, `"password":"forbidden","eventId":`, 1),
+	} {
+		check(wire, false)
+	}
+}
+
 func TestUserPasswordResetCompletionSchemaAndStrictCodec(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "UserPasswordResetCompletion")
 	valid := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"UserPasswordResetCompletion","accountId":"account-one","actorPrincipalId":"administrator-one","userId":"user-one","requestId":"reset-one","expectedResourceVersion":4,"resultingResourceVersion":5,"eventId":"event-one","occurredAt":"2026-09-28T00:00:00.123456Z"}`

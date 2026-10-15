@@ -1,6 +1,7 @@
 DO $verify_accounts$
 BEGIN
     IF NOT iam.account_security_settings_contract_ready() OR NOT iam.user_password_reset_contract_ready()
+        OR NOT iam.account_lifecycle_completion_contract_ready()
         OR NOT iam.root_password_recovery_contract_ready() THEN
         RAISE EXCEPTION 'IAM security settings contract is unavailable';
     END IF;
@@ -65,6 +66,7 @@ BEGIN
         OR NOT has_function_privilege('matrix_iam_api','iam.create_account(text,text,text,text,text,text,text,text,text,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.set_account_status(text,text,text,text,text,bigint,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text)','EXECUTE')
+        OR NOT has_function_privilege('matrix_iam_api','iam.read_account_lifecycle_completion(text,text,text,text,text,text,bigint)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.set_account_alias(text,text,text,text,bigint,jsonb)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.change_user(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text,bigint)','EXECUTE')
         OR NOT has_function_privilege('matrix_iam_api','iam.read_user(text,text,text,text)','EXECUTE')
@@ -75,9 +77,11 @@ BEGIN
         OR has_function_privilege('public','iam.read_root_password_recovery(text,text,text,text,bigint)','EXECUTE')
         OR has_function_privilege('public','iam.set_account_status(text,text,text,text,text,bigint,jsonb)','EXECUTE')
         OR has_function_privilege('public','iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text)','EXECUTE')
+        OR has_function_privilege('public','iam.read_account_lifecycle_completion(text,text,text,text,text,text,bigint)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.create_account(text,text,text,text,text,text,text,text,text,jsonb)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.set_account_status(text,text,text,text,text,bigint,jsonb)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.recover_root_credentials(text,text,text,text,text,bigint,text,text,jsonb,bigint,text,text)','EXECUTE')
+        OR has_function_privilege('matrix_iam_worker','iam.read_account_lifecycle_completion(text,text,text,text,text,text,bigint)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.read_user(text,text,text,text)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.update_user(text,text,text,text,text,bigint,jsonb)','EXECUTE')
         OR has_function_privilege('matrix_iam_worker','iam.delete_user(text,text,text,text,bigint,text,jsonb)','EXECUTE')

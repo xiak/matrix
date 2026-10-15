@@ -987,6 +987,37 @@ type ResetUserPasswordRequest struct {
 	RequestID       string `json:"requestId"`
 }
 
+// AccountLifecycleOperation is the closed set of platform account commands
+// whose non-secret completion can be inspected after an uncertain response.
+// It is not an action name, permission or replay instruction.
+type AccountLifecycleOperation string
+
+const (
+	AccountLifecycleCreate                 AccountLifecycleOperation = "ACCOUNT_CREATE"
+	AccountLifecycleSetStatus              AccountLifecycleOperation = "ACCOUNT_SET_STATUS"
+	AccountLifecycleRecoverRootCredentials AccountLifecycleOperation = "ACCOUNT_ROOT_CREDENTIALS_RECOVER"
+)
+
+// AccountLifecycleCompletion identifies one committed platform account
+// command. The original password is deliberately neither committed nor
+// returned; this value only permits a same-actor, currently authorized read of
+// the immutable non-secret outcome.
+type AccountLifecycleCompletion struct {
+	APIVersion               string                    `json:"apiVersion"`
+	Kind                     string                    `json:"kind"`
+	ActorAccountID           AccountID                 `json:"actorAccountId"`
+	ActorPrincipalID         PrincipalID               `json:"actorPrincipalId"`
+	Operation                AccountLifecycleOperation `json:"operation"`
+	AccountID                AccountID                 `json:"accountId"`
+	CommandRequestID         string                    `json:"commandRequestId"`
+	ExpectedResourceVersion  uint64                    `json:"expectedResourceVersion"`
+	ResultingResourceVersion uint64                    `json:"resultingResourceVersion"`
+	Status                   AccountStatus             `json:"status"`
+	RootPrincipalID          PrincipalID               `json:"rootPrincipalId,omitempty"`
+	EventID                  string                    `json:"eventId"`
+	OccurredAt               time.Time                 `json:"occurredAt"`
+}
+
 // UserPasswordResetCompletion identifies one committed administrator reset.
 // It is neither a password-input commitment nor proof of current password
 // validity, user eligibility, Audit delivery or permission to repeat the reset.

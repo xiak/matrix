@@ -294,8 +294,13 @@ func buildPaths() object {
 		"/v1/accounts/{accountId}":                          object{"get": readOperation("getAccount", "Read account metadata and management capabilities as a platform operator", "AccountAccess", nil, []any{openapi31.PathIDParameter("accountId")})},
 		"/v1/accounts/{accountId}:set-status":               object{"post": mutationOperation("setAccountStatus", "Suspend or restore account access without stopping workloads", "SetAccountStatusRequest", "Account", "200", nil, []any{openapi31.PathIDParameter("accountId")})},
 		"/v1/accounts/{accountId}:recover-root-credentials": object{"post": mutationOperation("recoverRootCredentials", "Recover the account's immutable root identity without transferring ownership", "RecoverRootCredentialsRequest", "Account", "200", nil, []any{openapi31.PathIDParameter("accountId")})},
-		"/v1/account:alias":                                 object{"post": mutationOperation("setAccountAlias", "Set the current account login alias", "SetAccountAliasRequest", "Account", "200", nil, nil)},
-		"/v1/users/{userId}":                                object{"get": readOperation("getUser", "Read one manageable account user and target capabilities", "UserAccess", nil, []any{openapi31.PathIDParameter("userId")})},
+		"/v1/accounts/{accountId}/lifecycle-completions/{commandRequestId}": object{"get": readOperation("getAccountLifecycleCompletion", "Observe only the original actor's committed account command under its current authority; no password, replay permit or assertion of present account state", "AccountLifecycleCompletion", nil,
+			[]any{openapi31.PathIDParameter("accountId"), openapi31.PathIDParameter("commandRequestId"),
+				object{"name": "operation", "in": "query", "required": true, "schema": openapi31.Ref("AccountLifecycleOperation"), "description": "Exact original account command kind."},
+				object{"name": "expectedResourceVersion", "in": "query", "required": true,
+					"schema": object{"type": "integer", "minimum": 0, "maximum": 9007199254740990}, "description": "Original expected version; zero only for account creation. Canonical decimal; no other query fields or body are accepted."}})},
+		"/v1/account:alias":  object{"post": mutationOperation("setAccountAlias", "Set the current account login alias", "SetAccountAliasRequest", "Account", "200", nil, nil)},
+		"/v1/users/{userId}": object{"get": readOperation("getUser", "Read one manageable account user and target capabilities", "UserAccess", nil, []any{openapi31.PathIDParameter("userId")})},
 		"/v1/users/{userId}/password-resets/{resetRequestId}": object{"get": readOperation("getUserPasswordResetCompletion", "Observe only the original actor's committed reset under current reset-password authority; no password, replay permit or assertion of present credential validity", "UserPasswordResetCompletion", nil,
 			[]any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("resetRequestId"), object{"name": "resourceVersion", "in": "query", "required": true,
 				"schema": object{"type": "integer", "minimum": 1, "maximum": 9007199254740990}, "description": "Original expected version, canonical positive decimal. No other query fields or body are accepted."}})},
@@ -525,10 +530,10 @@ func readOperation(
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No current-account report content is available for this reference; expired content is never revived by the read."}
 	}
 	switch operationID {
-	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest", "passwordRequirements", "getUserPasswordResetCompletion":
+	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest", "passwordRequirements", "getUserPasswordResetCompletion", "getAccountLifecycleCompletion":
 		responses["400"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "Invalid path, query or unexpected body; no identity selector is accepted."}
 	}
-	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" || operationID == "getAuthenticatorRemovalByRequest" || operationID == "getUserPasswordResetCompletion" {
+	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" || operationID == "getAuthenticatorRemovalByRequest" || operationID == "getUserPasswordResetCompletion" || operationID == "getAccountLifecycleCompletion" {
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."}
 	}
 	switch operationID {
@@ -538,7 +543,11 @@ func readOperation(
 	if operationID == "cancelTOTPEnrollment" {
 		responses["409"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "The enrollment is already confirmed and cannot be cancelled."}
 	}
-	responses["200"] = openapi31.JSONResponse("Current authority state.", responseSchema)
+	responseDescription := "Current authority state."
+	if operationID == "getUserPasswordResetCompletion" || operationID == "getAccountLifecycleCompletion" {
+		responseDescription = "Original immutable non-secret completion observed under current authority; not present resource or credential state."
+	}
+	responses["200"] = openapi31.JSONResponse(responseDescription, responseSchema)
 	operation := object{
 		"operationId": operationID,
 		"summary":     summary,
@@ -600,6 +609,7 @@ func enumSchemas() map[string][]string {
 		"ServiceRoleTemplateStatus":       {string(iamv1.ServiceRoleTemplateActive), string(iamv1.ServiceRoleTemplateRetired)},
 		"WorkloadRoleBindingStatus":       {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
 		"WorkloadRoleCommandType":         {string(iamv1.WorkloadRoleCommandBind), string(iamv1.WorkloadRoleCommandUnbind)},
+		"AccountLifecycleOperation":       {string(iamv1.AccountLifecycleCreate), string(iamv1.AccountLifecycleSetStatus), string(iamv1.AccountLifecycleRecoverRootCredentials)},
 		"AccountStatus":                   {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
 		"PrincipalType":                   {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
 		"SubjectType":                     {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
@@ -869,6 +879,7 @@ func structContracts() map[string]reflect.Type {
 		"RemoveGroupMembershipRequest":                  openapi31.StructType[iamv1.RemoveGroupMembershipRequest](),
 		"SetAccountStatusRequest":                       openapi31.StructType[iamv1.SetAccountStatusRequest](),
 		"RecoverRootCredentialsRequest":                 openapi31.StructType[iamv1.RecoverRootCredentialsRequest](),
+		"AccountLifecycleCompletion":                    openapi31.StructType[iamv1.AccountLifecycleCompletion](),
 		"ResetUserPasswordRequest":                      openapi31.StructType[iamv1.ResetUserPasswordRequest](),
 		"UserPasswordResetCompletion":                   openapi31.StructType[iamv1.UserPasswordResetCompletion](),
 		"RevokeSessionRequest":                          openapi31.StructType[iamv1.RevokeSessionRequest](),
@@ -897,6 +908,14 @@ func structContracts() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "AccountLifecycleCompletion" {
+		switch jsonName {
+		case "expectedResourceVersion":
+			return object{"type": "integer", "minimum": 0, "maximum": uint64(9007199254740990)}
+		case "resultingResourceVersion":
+			return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740991)}
+		}
+	}
 	if owner == "UserPasswordResetCompletion" {
 		switch jsonName {
 		case "expectedResourceVersion":
@@ -1550,6 +1569,21 @@ func applySemanticOverlays(schemas object) {
 	schemas["ServiceLinkedRoleListing"].(object)["properties"].(object)["bindingCount"].(object)["minimum"] = 1
 	schemas["ServiceLinkedRoleList"].(object)["properties"].(object)["items"].(object)["maxItems"] = iamv1.DirectoryPageSize
 	schemas["UserPasswordResetCompletion"].(object)["description"] = "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion."
+	schemas["AccountLifecycleCompletion"].(object)["description"] = "Non-secret, permanently retained confirmation of one committed platform account command. commandRequestId is the original write body's requestId, not this GET's transport request ID. The value is not password-input equality, current account state, Audit delivery, authorization or permission to replay. Runtime validation binds the original actor, operation, target, request and version; creation uses expectedResourceVersion zero, while status and root recovery require resultingResourceVersion = expectedResourceVersion + 1. A missing or rejected read never authorizes a replacement intent."
+	schemas["AccountLifecycleCompletion"].(object)["oneOf"] = []any{
+		object{"required": []string{"rootPrincipalId"}, "properties": object{
+			"operation": object{"const": string(iamv1.AccountLifecycleCreate)}, "expectedResourceVersion": object{"const": 0},
+			"resultingResourceVersion": object{"const": 1}, "status": object{"const": string(iamv1.AccountActive)},
+		}},
+		object{"properties": object{
+			"operation": object{"const": string(iamv1.AccountLifecycleSetStatus)}, "expectedResourceVersion": object{"minimum": 1},
+			"rootPrincipalId": false,
+		}},
+		object{"required": []string{"rootPrincipalId"}, "properties": object{
+			"operation": object{"const": string(iamv1.AccountLifecycleRecoverRootCredentials)}, "expectedResourceVersion": object{"minimum": 1},
+			"status": object{"const": string(iamv1.AccountActive)},
+		}},
+	}
 	schemas["PasswordRequirements"].(object)["description"] = "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings."
 	schemas["PasswordRequirements"].(object)["oneOf"] = []any{
 		object{"properties": object{"source": object{"const": "ACCOUNT"}}},

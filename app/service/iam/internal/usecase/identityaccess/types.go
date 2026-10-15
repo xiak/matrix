@@ -209,6 +209,7 @@ type Transaction interface {
 	CreateAccount(context.Context, AccountMutation) (iamv1.Account, error)
 	SetAccountStatus(context.Context, AccountStatusMutation) (iamv1.Account, error)
 	RecoverRootCredentials(context.Context, RootCredentialRecovery) (iamv1.Account, error)
+	ReadAccountLifecycleCompletion(context.Context, AccountRead, iamv1.AccountID, iamv1.AccountLifecycleOperation, string, uint64) (iamv1.AccountLifecycleCompletion, error)
 	InspectLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, *iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, error)
 	PrepareLocalCredentialRecovery(context.Context, iamv1.LocalCredentialRecoveryScope, iamv1.LocalCredentialRecoveryExpected, iamv1.LocalCredentialRecoveryReceiptQuery) (iamv1.LocalCredentialRecoveryInspection, PasswordReplacementMaterial, error)
 	RecoverLocalCredentials(context.Context, LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error)

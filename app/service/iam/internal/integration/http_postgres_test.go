@@ -35361,7 +35361,12 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	operatorUser := createMember(root, "lifecycle.operator", "")
 	operator := login("lifecycle.operator@"+home, initial, http.StatusOK)
 	changePassword(operator, initial, changed)
-	request(http.MethodPost, "/v1/policy-attachments", root, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(operatorUser.ID)}, "policyId": iamv1.SystemPolicyPlatformOperator, "policyResourceVersion": 1, "requestId": "request-lifecycle-platform-grant"}, http.StatusOK)
+	platformGrant := request(http.MethodPost, "/v1/policy-attachments", root, map[string]any{"target": iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(operatorUser.ID)}, "policyId": iamv1.SystemPolicyPlatformOperator, "policyResourceVersion": 1, "requestId": "request-lifecycle-platform-grant"}, http.StatusOK)
+	var platformAttachment iamv1.PolicyAttachment
+	if json.Unmarshal(platformGrant.Body.Bytes(), &platformAttachment) != nil || iamv1.ValidatePolicyAttachment(platformAttachment) != nil ||
+		platformAttachment.Target.ID != string(operatorUser.ID) || platformAttachment.PolicyID != iamv1.SystemPolicyPlatformOperator {
+		t.Fatal("platform operator attachment is invalid")
+	}
 	request(http.MethodGet, "/v1/auth/me", operator, nil, http.StatusUnauthorized)
 	operator = login("lifecycle.operator@"+home, changed, http.StatusOK)
 	operatorIdentity := request(http.MethodGet, "/v1/auth/me", operator, nil, http.StatusOK)
@@ -35401,6 +35406,33 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	if json.Unmarshal(created.Body.Bytes(), &account) != nil || account.ID != tenantID {
 		t.Fatal("platform operator could not onboard tenant")
 	}
+	readCompletion := func(bearer, id, command string, operation iamv1.AccountLifecycleOperation, version uint64, expected int) iamv1.AccountLifecycleCompletion {
+		t.Helper()
+		path := fmt.Sprintf("/v1/accounts/%s/lifecycle-completions/%s?operation=%s&expectedResourceVersion=%d", id, command, operation, version)
+		response := request(http.MethodGet, path, bearer, nil, expected)
+		if expected != http.StatusOK {
+			return iamv1.AccountLifecycleCompletion{}
+		}
+		var completion iamv1.AccountLifecycleCompletion
+		if json.Unmarshal(response.Body.Bytes(), &completion) != nil || iamv1.ValidateAccountLifecycleCompletion(completion) != nil ||
+			completion.Operation != operation || completion.AccountID != iamv1.AccountID(id) ||
+			completion.CommandRequestID != command || completion.ExpectedResourceVersion != version {
+			t.Fatal("invalid account lifecycle completion")
+		}
+		return completion
+	}
+	// A new login models another browser. It can observe only the original
+	// non-secret result under the same USER's current authority.
+	operatorObserver := login("lifecycle.operator@"+home, changed, http.StatusOK)
+	createCompletion := readCompletion(operatorObserver, tenantID, "request-lifecycle-create", iamv1.AccountLifecycleCreate, 0, http.StatusOK)
+	if createCompletion.ActorAccountID != home || createCompletion.ActorPrincipalID != operatorUser.ID ||
+		createCompletion.ResultingResourceVersion != 1 || createCompletion.Status != iamv1.AccountActive ||
+		createCompletion.RootPrincipalID != account.RootIdentity.PrincipalID {
+		t.Fatal("account creation completion lost its original actor or result")
+	}
+	readCompletion(root, tenantID, "request-lifecycle-create", iamv1.AccountLifecycleCreate, 0, http.StatusNotFound)
+	readCompletion(operatorObserver, home, "request-lifecycle-create", iamv1.AccountLifecycleCreate, 0, http.StatusNotFound)
+	readCompletion(operatorObserver, tenantID, "request-lifecycle-create", iamv1.AccountLifecycleRecoverRootCredentials, 1, http.StatusNotFound)
 	primaryID := account.RootIdentity.PrincipalID
 	primary := login("lifecycle.primary", initial, http.StatusOK)
 	changePassword(primary, initial, changed)
@@ -35416,13 +35448,21 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 		}
 		return result.Account
 	}
-	status := func(id string, next iamv1.AccountStatus, version uint64, expected int) {
+	statusSequence := 0
+	status := func(id string, next iamv1.AccountStatus, version uint64, expected int) string {
+		statusSequence++
+		command := fmt.Sprintf("request-lifecycle-status-%d", statusSequence)
 		request(http.MethodPost, "/v1/accounts/"+id+":set-status", operator,
-			map[string]any{"status": next, "resourceVersion": version, "requestId": "request-lifecycle-status"}, expected)
+			map[string]any{"status": next, "resourceVersion": version, "requestId": command}, expected)
+		return command
 	}
-	recoverPrimary := func(id string, version uint64, expected int) {
+	recoverySequence := 0
+	recoverPrimary := func(id string, version uint64, expected int) string {
+		recoverySequence++
+		command := fmt.Sprintf("request-lifecycle-recover-%d", recoverySequence)
 		request(http.MethodPost, "/v1/accounts/"+id+":recover-root-credentials", operator,
-			map[string]any{"initialPassword": recovered, "resourceVersion": version, "requestId": "request-lifecycle-recover"}, expected)
+			map[string]any{"initialPassword": recovered, "resourceVersion": version, "requestId": command}, expected)
+		return command
 	}
 	// Compare credential, session, role and lifecycle-success state, not SQL text
 	// or incidental request/decision ordering. Denied decisions may be audited.
@@ -35449,6 +35489,10 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 			t.Fatal("denied/conflicting lifecycle command partially changed security state or success facts")
 		}
 	}
+	unchanged(func() {
+		request(http.MethodPost, "/v1/accounts/"+tenantID+":set-status", operator,
+			map[string]any{"status": iamv1.AccountDisabled, "resourceVersion": 1, "requestId": "request-lifecycle-create"}, http.StatusConflict)
+	})
 	for _, actor := range []string{primary, otherPrimary, memberSession} {
 		request(http.MethodGet, "/v1/accounts/"+tenantID, actor, nil, http.StatusForbidden)
 		request(http.MethodPost, "/v1/accounts/"+tenantID+":set-status", actor,
@@ -35575,7 +35619,12 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 		WHERE tenant_id=$1 AND id=$2`, tenantID, primaryID); err != nil {
 		t.Fatal(err)
 	}
-	recoverPrimary(tenantID, 1, http.StatusOK)
+	recoveryCommand := recoverPrimary(tenantID, 1, http.StatusOK)
+	recoveryCompletion := readCompletion(operatorObserver, tenantID, recoveryCommand, iamv1.AccountLifecycleRecoverRootCredentials, 1, http.StatusOK)
+	if recoveryCompletion.ResultingResourceVersion != 2 || recoveryCompletion.Status != iamv1.AccountActive ||
+		recoveryCompletion.RootPrincipalID != primaryID {
+		t.Fatal("root recovery completion lost its original result")
+	}
 	if fresh := readAccount(tenantID); fresh.RootIdentity.PrincipalID != primaryID || fresh.ResourceVersion != 2 {
 		t.Fatal("primary recovery transferred ownership")
 	}
@@ -35702,7 +35751,12 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 		}
 	}
 	oldPrimary := primary
-	status(tenantID, iamv1.AccountDisabled, readAccount(tenantID).ResourceVersion, http.StatusOK)
+	disableVersion := readAccount(tenantID).ResourceVersion
+	disableCommand := status(tenantID, iamv1.AccountDisabled, disableVersion, http.StatusOK)
+	disableCompletion := readCompletion(operatorObserver, tenantID, disableCommand, iamv1.AccountLifecycleSetStatus, disableVersion, http.StatusOK)
+	if disableCompletion.ResultingResourceVersion != disableVersion+1 || disableCompletion.Status != iamv1.AccountDisabled || disableCompletion.RootPrincipalID != "" {
+		t.Fatal("account status completion lost its original result")
+	}
 	for _, bearer := range []string{oldPrimary, memberSession, delegateSession} {
 		request(http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusUnauthorized)
 	}
@@ -35717,6 +35771,9 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	applyIAMSchema(t, ctx, database)
 	if readAccount(tenantID).Status != iamv1.AccountDisabled {
 		t.Fatal("migration replay revived suspended tenant")
+	}
+	if replayed := readCompletion(operatorObserver, tenantID, "request-lifecycle-create", iamv1.AccountLifecycleCreate, 0, http.StatusOK); replayed != createCompletion {
+		t.Fatal("migration replay changed the original account creation completion")
 	}
 	status(tenantID, iamv1.AccountActive, readAccount(tenantID).ResourceVersion, http.StatusOK)
 	request(http.MethodGet, "/v1/auth/me", oldPrimary, nil, http.StatusUnauthorized)
@@ -35754,6 +35811,29 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 			event.Target.TenantID = "organization-customer-b"
 			request(http.MethodPost, "/v1/audit-producer:resolve", iamProducerCredential, map[string]any{"event": event}, http.StatusForbidden)
 		}
+	}
+	for _, statement := range []string{
+		"UPDATE iam.account_lifecycle_completions SET resulting_status=resulting_status WHERE request_id='request-lifecycle-create'",
+		"DELETE FROM iam.account_lifecycle_completions WHERE request_id='request-lifecycle-create'",
+		"TRUNCATE iam.account_lifecycle_completions",
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, mutationErr := tx.Exec(ctx, statement)
+		_ = tx.Rollback(ctx)
+		if mutationErr == nil {
+			t.Fatal("account lifecycle completion was mutable")
+		}
+	}
+	request(http.MethodPost, "/v1/policy-attachments/"+string(platformAttachment.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: platformAttachment.ResourceVersion, RequestID: "request-lifecycle-platform-revoke"}, http.StatusOK)
+	revokedRead := performIAMRequest(handler, http.MethodGet,
+		"/v1/accounts/"+tenantID+"/lifecycle-completions/request-lifecycle-create?operation=ACCOUNT_CREATE&expectedResourceVersion=0",
+		operatorObserver, nil)
+	if revokedRead.Code != http.StatusUnauthorized && revokedRead.Code != http.StatusForbidden {
+		t.Fatalf("revoked platform authority still read account completion: status=%d body=%s", revokedRead.Code, revokedRead.Body.String())
 	}
 	assertIAMSecretsAbsent(t, ctx, database, initial, changed, recovered, operator, primary, memberSession, delegateSession)
 }

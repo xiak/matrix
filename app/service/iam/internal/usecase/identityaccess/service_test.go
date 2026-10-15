@@ -834,6 +834,109 @@ func TestPasswordResetCompletionUsesCurrentActorAndOnlyOriginalHistory(t *testin
 	}
 }
 
+func TestAccountLifecycleCompletionUsesCurrentActorAuthorityAndExactHistory(t *testing.T) {
+	tx := newCoreTransaction()
+	repository := &coreRepository{transaction: tx}
+	service, err := newCoreAuthority(repository, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	document := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), document); err != nil {
+		t.Fatal(err)
+	}
+	login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: document.Administrator.Password, RequestID: "account-history-login"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: document.Administrator.Password,
+		NewPassword: coreSecret(t, "Account-History-Actor-Password-83!"), RequestID: "account-history-change"}); err != nil {
+		t.Fatal(err)
+	}
+	base := iamv1.AccountLifecycleCompletion{APIVersion: iamv1.APIVersion, Kind: "AccountLifecycleCompletion",
+		ActorAccountID: tx.organization.ID, ActorPrincipalID: tx.principal.ID, AccountID: "account-target",
+		CommandRequestID: "account-command", ExpectedResourceVersion: 7, ResultingResourceVersion: 8,
+		Status: iamv1.AccountDisabled, EventID: "account-event", OccurredAt: tx.now.Add(-time.Minute)}
+	cases := []struct {
+		operation iamv1.AccountLifecycleOperation
+		version   uint64
+		action    iamv1.Action
+		resource  iamv1.ResourceReference
+		mode      iamv1.AuthorizationResourceMode
+		usage     iamv1.AuthorizationCollectionUsage
+		prepare   func(*iamv1.AccountLifecycleCompletion)
+	}{
+		{iamv1.AccountLifecycleCreate, 0, iamv1.ActionIAMAccountCreate,
+			iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "collection"}, iamv1.AuthorizationResourceCollection,
+			iamv1.AuthorizationCollectionCreate, func(v *iamv1.AccountLifecycleCompletion) {
+				v.ExpectedResourceVersion, v.ResultingResourceVersion = 0, 1
+				v.Status, v.RootPrincipalID = iamv1.AccountActive, "root-target"
+			}},
+		{iamv1.AccountLifecycleSetStatus, 7, iamv1.ActionIAMAccountSetStatus,
+			iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "account-target"}, iamv1.AuthorizationResourceInstance, "", nil},
+		{iamv1.AccountLifecycleRecoverRootCredentials, 7, iamv1.ActionIAMAccountRootCredentialsRecover,
+			iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: "account-target"}, iamv1.AuthorizationResourceInstance, "",
+			func(v *iamv1.AccountLifecycleCompletion) {
+				v.Status, v.RootPrincipalID = iamv1.AccountActive, "root-target"
+			}},
+	}
+	for _, sample := range cases {
+		t.Run(string(sample.operation), func(t *testing.T) {
+			original := base
+			original.Operation, original.ExpectedResourceVersion, original.ResultingResourceVersion = sample.operation, sample.version, sample.version+1
+			if sample.prepare != nil {
+				sample.prepare(&original)
+			}
+			result, readErr, reads := original, error(nil), 0
+			tx.accountLifecycleCompletionRead = func(read AccountRead, target iamv1.AccountID, operation iamv1.AccountLifecycleOperation,
+				command string, version uint64) (iamv1.AccountLifecycleCompletion, error) {
+				reads++
+				if !repository.inTransaction || read.AccountID != original.ActorAccountID || read.ActorPrincipalID != original.ActorPrincipalID ||
+					read.DecisionID == "" || target != original.AccountID || operation != sample.operation || command != original.CommandRequestID || version != sample.version {
+					t.Fatal("completion lookup lost its credential-derived exact scope")
+				}
+				decision := tx.authorizations[len(tx.authorizations)-1].Decision
+				if !decision.Allowed || decision.Action != sample.action || decision.Resource != sample.resource ||
+					decision.ResourceMode != sample.mode || decision.CollectionUsage != sample.usage {
+					t.Fatal("completion lookup reused unrelated authority")
+				}
+				return result, readErr
+			}
+			query := func() (iamv1.AccountLifecycleCompletion, error) {
+				return service.AccountLifecycleCompletion(t.Context(), login.Credential, original.AccountID, sample.operation,
+					original.CommandRequestID, sample.version, "read-account-history")
+			}
+			if got, err := query(); err != nil || got != original {
+				t.Fatal("exact account lifecycle completion failed", err)
+			}
+			for _, mutate := range []func(*iamv1.AccountLifecycleCompletion){
+				func(v *iamv1.AccountLifecycleCompletion) { v.ActorAccountID = "other-account" },
+				func(v *iamv1.AccountLifecycleCompletion) { v.ActorPrincipalID = "other-actor" },
+				func(v *iamv1.AccountLifecycleCompletion) { v.AccountID = "other-target" },
+				func(v *iamv1.AccountLifecycleCompletion) { v.CommandRequestID = "other-command" },
+				func(v *iamv1.AccountLifecycleCompletion) { v.ExpectedResourceVersion++ },
+				func(v *iamv1.AccountLifecycleCompletion) { v.OccurredAt = tx.now.Add(time.Second) },
+			} {
+				result = original
+				mutate(&result)
+				if got, err := query(); !errors.Is(err, ErrUnavailable) || got != (iamv1.AccountLifecycleCompletion{}) {
+					t.Fatal("unbound account history escaped", err)
+				}
+			}
+			result, readErr = original, ErrAccountLifecycleCompletionNotFound
+			if got, err := query(); !errors.Is(err, ErrAccountLifecycleCompletionNotFound) || got != (iamv1.AccountLifecycleCompletion{}) {
+				t.Fatal("missing account history was invented", err)
+			}
+			before := reads
+			tx.profileErr = ErrUnavailable
+			if _, err := query(); !errors.Is(err, ErrUnavailable) || reads != before {
+				t.Fatal("unavailable current authority read account history", err)
+			}
+			tx.profileErr = nil
+		})
+	}
+}
+
 func TestRootPasswordRecoveryPreservesPreparedIdentityAndCurrentAuthority(t *testing.T) {
 	tx := newCoreTransaction()
 	repository := &coreRepository{transaction: tx}
@@ -3690,6 +3793,7 @@ type coreTransaction struct {
 	settingsMutationCalled           bool
 	passwordResetRead                func(AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
 	passwordResetCompletionRead      func(AccountRead, iamv1.PrincipalID, string, uint64) (iamv1.UserPasswordResetCompletion, error)
+	accountLifecycleCompletionRead   func(AccountRead, iamv1.AccountID, iamv1.AccountLifecycleOperation, string, uint64) (iamv1.AccountLifecycleCompletion, error)
 	userCreationSettings             func(AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
 	userCreationMutation             *UserMutation
 	userChange                       func(UserChange) (iamv1.User, error)
@@ -3937,6 +4041,14 @@ func (transaction *coreTransaction) ReadPasswordReset(_ context.Context, read Ac
 
 func (transaction *coreTransaction) ReadUserPasswordResetCompletion(_ context.Context, read AccountRead, user iamv1.PrincipalID, request string, version uint64) (iamv1.UserPasswordResetCompletion, error) {
 	return transaction.passwordResetCompletionRead(read, user, request, version)
+}
+
+func (transaction *coreTransaction) ReadAccountLifecycleCompletion(_ context.Context, read AccountRead, account iamv1.AccountID,
+	operation iamv1.AccountLifecycleOperation, request string, version uint64) (iamv1.AccountLifecycleCompletion, error) {
+	if transaction.accountLifecycleCompletionRead == nil {
+		return iamv1.AccountLifecycleCompletion{}, ErrUnavailable
+	}
+	return transaction.accountLifecycleCompletionRead(read, account, operation, request, version)
 }
 
 func (transaction *coreTransaction) ChangeUser(_ context.Context, mutation UserChange) (iamv1.User, error) {

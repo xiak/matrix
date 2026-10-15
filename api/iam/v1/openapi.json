@@ -1600,6 +1600,126 @@
           }
         ]
       },
+      "AccountLifecycleCompletion": {
+        "additionalProperties": false,
+        "description": "Non-secret, permanently retained confirmation of one committed platform account command. commandRequestId is the original write body's requestId, not this GET's transport request ID. The value is not password-input equality, current account state, Audit delivery, authorization or permission to replay. Runtime validation binds the original actor, operation, target, request and version; creation uses expectedResourceVersion zero, while status and root recovery require resultingResourceVersion = expectedResourceVersion + 1. A missing or rejected read never authorizes a replacement intent.",
+        "oneOf": [
+          {
+            "properties": {
+              "expectedResourceVersion": {
+                "const": 0
+              },
+              "operation": {
+                "const": "ACCOUNT_CREATE"
+              },
+              "resultingResourceVersion": {
+                "const": 1
+              },
+              "status": {
+                "const": "ACTIVE"
+              }
+            },
+            "required": [
+              "rootPrincipalId"
+            ]
+          },
+          {
+            "properties": {
+              "expectedResourceVersion": {
+                "minimum": 1
+              },
+              "operation": {
+                "const": "ACCOUNT_SET_STATUS"
+              },
+              "rootPrincipalId": false
+            }
+          },
+          {
+            "properties": {
+              "expectedResourceVersion": {
+                "minimum": 1
+              },
+              "operation": {
+                "const": "ACCOUNT_ROOT_CREDENTIALS_RECOVER"
+              },
+              "status": {
+                "const": "ACTIVE"
+              }
+            },
+            "required": [
+              "rootPrincipalId"
+            ]
+          }
+        ],
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "actorAccountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "actorPrincipalId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "commandRequestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/AccountLifecycleOperation"
+          },
+          "resultingResourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "rootPrincipalId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AccountStatus"
+          }
+        },
+        "required": [
+          "accountId",
+          "actorAccountId",
+          "actorPrincipalId",
+          "apiVersion",
+          "commandRequestId",
+          "eventId",
+          "expectedResourceVersion",
+          "kind",
+          "occurredAt",
+          "operation",
+          "resultingResourceVersion",
+          "status"
+        ],
+        "type": "object"
+      },
+      "AccountLifecycleOperation": {
+        "enum": [
+          "ACCOUNT_CREATE",
+          "ACCOUNT_SET_STATUS",
+          "ACCOUNT_ROOT_CREDENTIALS_RECOVER"
+        ],
+        "type": "string"
+      },
       "AccountList": {
         "additionalProperties": false,
         "properties": {
@@ -43143,6 +43263,88 @@
         "summary": "Read account metadata and management capabilities as a platform operator"
       }
     },
+    "/v1/accounts/{accountId}/lifecycle-completions/{commandRequestId}": {
+      "get": {
+        "operationId": "getAccountLifecycleCompletion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "accountId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "commandRequestId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact original account command kind.",
+            "in": "query",
+            "name": "operation",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/AccountLifecycleOperation"
+            }
+          },
+          {
+            "description": "Original expected version; zero only for account creation. Canonical decimal; no other query fields or body are accepted.",
+            "in": "query",
+            "name": "expectedResourceVersion",
+            "required": true,
+            "schema": {
+              "maximum": 9007199254740990,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountLifecycleCompletion"
+                }
+              }
+            },
+            "description": "Original immutable non-secret completion observed under current authority; not present resource or credential state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Observe only the original actor's committed account command under its current authority; no password, replay permit or assertion of present account state"
+      }
+    },
     "/v1/accounts/{accountId}:recover-root-credentials": {
       "post": {
         "operationId": "recoverRootCredentials",
@@ -49853,7 +50055,7 @@
                 }
               }
             },
-            "description": "Current authority state."
+            "description": "Original immutable non-secret completion observed under current authority; not present resource or credential state."
           },
           "400": {
             "$ref": "#/components/responses/ProblemResponse",

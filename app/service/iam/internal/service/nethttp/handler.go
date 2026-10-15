@@ -99,6 +99,7 @@ type Workflow interface {
 	GetAccount(context.Context, iamv1.Secret, iamv1.AccountID, string) (iamv1.AccountAccess, error)
 	SetAccountStatus(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.SetAccountStatusRequest) (iamv1.Account, error)
 	RecoverRootCredentials(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.RecoverRootCredentialsRequest) (iamv1.Account, error)
+	AccountLifecycleCompletion(context.Context, iamv1.Secret, iamv1.AccountID, iamv1.AccountLifecycleOperation, string, uint64, string) (iamv1.AccountLifecycleCompletion, error)
 	CreateAccount(context.Context, iamv1.Secret, iamv1.CreateAccountRequest) (iamv1.Account, error)
 	SetAccountAlias(context.Context, iamv1.Secret, iamv1.SetAccountAliasRequest) (iamv1.Account, error)
 	UpdateUser(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.UpdateUserRequest) (iamv1.User, error)
@@ -1876,6 +1877,11 @@ func (value *handler) setAccountAlias(response http.ResponseWriter, request *htt
 }
 
 func (value *handler) account(response http.ResponseWriter, request *http.Request) {
+	parts := strings.Split(strings.TrimPrefix(request.URL.Path, "/v1/accounts/"), "/")
+	if len(parts) >= 2 && parts[1] == "lifecycle-completions" {
+		value.accountLifecycleCompletion(response, request, parts)
+		return
+	}
 	suffix := ""
 	if request.Method != http.MethodGet {
 		if !value.requireMethod(response, request, http.MethodPost) {
@@ -1914,6 +1920,49 @@ func (value *handler) account(response http.ResponseWriter, request *http.Reques
 			return
 		}
 		result, err = value.workflow.RecoverRootCredentials(request.Context(), credential, iamv1.AccountID(id), body)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) accountLifecycleCompletion(response http.ResponseWriter, request *http.Request, parts []string) {
+	if len(parts) != 3 || iamv1.ValidateID("accountId", parts[0]) != nil ||
+		iamv1.ValidateID("commandRequestId", parts[2]) != nil {
+		value.notFound(response, request)
+		return
+	}
+	if !value.requireMethod(response, request, http.MethodGet) {
+		return
+	}
+	query, err := url.ParseQuery(request.URL.RawQuery)
+	operations, versions := query["operation"], query["expectedResourceVersion"]
+	var version uint64
+	if err == nil && len(versions) == 1 {
+		version, err = strconv.ParseUint(versions[0], 10, 64)
+	}
+	operation := iamv1.AccountLifecycleOperation("")
+	if len(operations) == 1 {
+		operation = iamv1.AccountLifecycleOperation(operations[0])
+	}
+	validOperation := operation == iamv1.AccountLifecycleCreate || operation == iamv1.AccountLifecycleSetStatus ||
+		operation == iamv1.AccountLifecycleRecoverRootCredentials
+	if err != nil || len(request.URL.RawQuery) > 256 || len(query) != 2 || len(operations) != 1 || len(versions) != 1 ||
+		!validOperation || versions[0] != strconv.FormatUint(version, 10) || version >= 9007199254740991 ||
+		(operation == iamv1.AccountLifecycleCreate) != (version == 0) || request.ContentLength != 0 || len(request.TransferEncoding) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.request.invalid", "IAM request is invalid")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.AccountLifecycleCompletion(request.Context(), credential, iamv1.AccountID(parts[0]), operation, parts[2], version, requestID(request))
+	if err == nil && (iamv1.ValidateAccountLifecycleCompletion(result) != nil || result.Operation != operation ||
+		result.AccountID != iamv1.AccountID(parts[0]) || result.CommandRequestID != parts[2] || result.ExpectedResourceVersion != version) {
+		err = identityaccess.ErrUnavailable
 	}
 	if err != nil {
 		value.writeError(response, request, err)
@@ -2266,6 +2315,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusNotFound, "iam.access-finding.not-found", "Access finding not found")
 	case errors.Is(err, identityaccess.ErrUserPasswordResetCompletionNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.user-password-reset-completion.not-found", "User password reset completion not found")
+	case errors.Is(err, identityaccess.ErrAccountLifecycleCompletionNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.account-lifecycle-completion.not-found", "Account lifecycle completion not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):
 		writeProblem(response, requestID, http.StatusUnprocessableEntity, "iam.verification.rejected", "IAM verification rejected")
 	case errors.Is(err, identityaccess.ErrOverloaded):

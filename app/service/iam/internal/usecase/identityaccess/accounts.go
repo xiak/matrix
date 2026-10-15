@@ -15,6 +15,7 @@ import (
 
 var ErrSecuritySettingsChangeNotFound = errors.New("security settings change was not found")
 var ErrUserPasswordResetCompletionNotFound = errors.New("user password reset completion was not found")
+var ErrAccountLifecycleCompletionNotFound = errors.New("account lifecycle completion was not found")
 
 type SecuritySettingsMutation struct {
 	Session    iamv1.Session
@@ -1032,6 +1033,56 @@ func (service *Authority) RecoverRootCredentials(ctx context.Context, credential
 				DecisionID: decision.ID, AccountID: id, PrincipalID: root.PrincipalID,
 				ResourceVersion: request.ResourceVersion, PasswordHash: hash, ExpectedPassword: original, AttachmentID: iamv1.PolicyAttachmentID(attachmentID), AuditEvent: event,
 			})
+		})
+}
+
+// AccountLifecycleCompletion observes an immutable, non-secret account
+// command result. It cannot verify a password or authorize a replacement
+// intent; the original USER must authenticate again and retain the exact
+// current command authority.
+func (service *Authority) AccountLifecycleCompletion(ctx context.Context, credential iamv1.Secret, id iamv1.AccountID,
+	operation iamv1.AccountLifecycleOperation, commandRequestID string, expectedVersion uint64, requestID string) (iamv1.AccountLifecycleCompletion, error) {
+	if iamv1.ValidateID("accountId", string(id)) != nil || iamv1.ValidateID("commandRequestId", commandRequestID) != nil ||
+		iamv1.ValidateID("requestId", requestID) != nil || expectedVersion >= 9007199254740991 {
+		return iamv1.AccountLifecycleCompletion{}, ErrInvalidArgument
+	}
+	var action iamv1.Action
+	mode := iamv1.AuthorizationResourceInstance
+	usage := iamv1.AuthorizationCollectionUsage("")
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(id)}
+	switch operation {
+	case iamv1.AccountLifecycleCreate:
+		if expectedVersion != 0 {
+			return iamv1.AccountLifecycleCompletion{}, ErrInvalidArgument
+		}
+		action, mode, usage = iamv1.ActionIAMAccountCreate, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate
+		resource.ID = "collection"
+	case iamv1.AccountLifecycleSetStatus:
+		if expectedVersion == 0 {
+			return iamv1.AccountLifecycleCompletion{}, ErrInvalidArgument
+		}
+		action = iamv1.ActionIAMAccountSetStatus
+	case iamv1.AccountLifecycleRecoverRootCredentials:
+		if expectedVersion == 0 {
+			return iamv1.AccountLifecycleCompletion{}, ErrInvalidArgument
+		}
+		action = iamv1.ActionIAMAccountRootCredentialsRecover
+	default:
+		return iamv1.AccountLifecycleCompletion{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, action, mode, usage, resource, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccountLifecycleCompletion, error) {
+			result, err := tx.ReadAccountLifecycleCompletion(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id, operation, commandRequestID, expectedVersion)
+			if err != nil {
+				return iamv1.AccountLifecycleCompletion{}, err
+			}
+			if iamv1.ValidateAccountLifecycleCompletion(result) != nil || result.ActorAccountID != subject.Subject.Organization.ID ||
+				result.ActorPrincipalID != subject.Subject.Principal.ID || result.Operation != operation || result.AccountID != id ||
+				result.CommandRequestID != commandRequestID || result.ExpectedResourceVersion != expectedVersion || result.OccurredAt.After(now) {
+				return iamv1.AccountLifecycleCompletion{}, ErrUnavailable
+			}
+			return result, nil
 		})
 }
 

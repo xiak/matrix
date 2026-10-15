@@ -1607,6 +1607,48 @@ func ValidateResetUserPasswordRequest(value ResetUserPasswordRequest) error {
 	return errors.Join(validatePositiveVersion(value.ResourceVersion), ValidateID("requestId", value.RequestID))
 }
 
+func ValidateAccountLifecycleCompletion(value AccountLifecycleCompletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountLifecycleCompletion" {
+		return errors.New("account lifecycle completion metadata is invalid")
+	}
+	if value.Status != AccountActive && value.Status != AccountDisabled {
+		return errors.New("account lifecycle completion status is invalid")
+	}
+	if value.ResultingResourceVersion == 0 || value.ResultingResourceVersion > 9007199254740991 {
+		return errors.New("account lifecycle completion resulting version is invalid")
+	}
+	switch value.Operation {
+	case AccountLifecycleCreate:
+		if value.ExpectedResourceVersion != 0 || value.ResultingResourceVersion != 1 ||
+			value.Status != AccountActive || value.RootPrincipalID == "" {
+			return errors.New("account creation completion is invalid")
+		}
+	case AccountLifecycleSetStatus:
+		if validatePositiveVersion(value.ExpectedResourceVersion) != nil ||
+			value.ExpectedResourceVersion >= 9007199254740991 ||
+			value.ResultingResourceVersion != value.ExpectedResourceVersion+1 || value.RootPrincipalID != "" {
+			return errors.New("account status completion is invalid")
+		}
+	case AccountLifecycleRecoverRootCredentials:
+		if validatePositiveVersion(value.ExpectedResourceVersion) != nil ||
+			value.ExpectedResourceVersion >= 9007199254740991 ||
+			value.ResultingResourceVersion != value.ExpectedResourceVersion+1 ||
+			value.Status != AccountActive || value.RootPrincipalID == "" {
+			return errors.New("account root recovery completion is invalid")
+		}
+	default:
+		return errors.New("account lifecycle completion operation is invalid")
+	}
+	var rootError error
+	if value.RootPrincipalID != "" {
+		rootError = ValidateID("rootPrincipalId", string(value.RootPrincipalID))
+	}
+	return errors.Join(ValidateID("actorAccountId", string(value.ActorAccountID)),
+		ValidateID("actorPrincipalId", string(value.ActorPrincipalID)), ValidateID("accountId", string(value.AccountID)),
+		ValidateID("commandRequestId", value.CommandRequestID), rootError,
+		ValidateID("eventId", value.EventID), validateTime("occurredAt", value.OccurredAt))
+}
+
 func ValidateUserPasswordResetCompletion(value UserPasswordResetCompletion) error {
 	if value.APIVersion != APIVersion || value.Kind != "UserPasswordResetCompletion" {
 		return errors.New("user password reset completion metadata is invalid")

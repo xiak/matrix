@@ -1753,6 +1753,82 @@ func TestUserPasswordResetCompletionBindsOneOriginalNonSecretResult(t *testing.T
 	}
 }
 
+func TestAccountLifecycleCompletionIsClosedAndNonSecret(t *testing.T) {
+	now := time.Date(2026, 10, 15, 12, 0, 0, 123456000, time.UTC)
+	valid := []AccountLifecycleCompletion{
+		{APIVersion: APIVersion, Kind: "AccountLifecycleCompletion", ActorAccountID: "platform-home", ActorPrincipalID: "operator-one",
+			Operation: AccountLifecycleCreate, AccountID: "account-new", CommandRequestID: "create-one",
+			ExpectedResourceVersion: 0, ResultingResourceVersion: 1, Status: AccountActive, RootPrincipalID: "root-one", EventID: "event-create", OccurredAt: now},
+		{APIVersion: APIVersion, Kind: "AccountLifecycleCompletion", ActorAccountID: "platform-home", ActorPrincipalID: "operator-one",
+			Operation: AccountLifecycleSetStatus, AccountID: "account-one", CommandRequestID: "disable-one",
+			ExpectedResourceVersion: 4, ResultingResourceVersion: 5, Status: AccountDisabled, EventID: "event-disable", OccurredAt: now},
+		{APIVersion: APIVersion, Kind: "AccountLifecycleCompletion", ActorAccountID: "platform-home", ActorPrincipalID: "operator-one",
+			Operation: AccountLifecycleRecoverRootCredentials, AccountID: "account-one", CommandRequestID: "recover-one",
+			ExpectedResourceVersion: 5, ResultingResourceVersion: 6, Status: AccountActive, RootPrincipalID: "root-one", EventID: "event-recover", OccurredAt: now},
+	}
+	for _, value := range valid {
+		if err := ValidateAccountLifecycleCompletion(value); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(value)
+		var decoded AccountLifecycleCompletion
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) != nil || decoded != value ||
+			bytes.Contains(encoded, []byte("password")) || bytes.Contains(encoded, []byte("digest")) {
+			t.Fatal("account lifecycle completion lost closed non-secret metadata")
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		index  int
+		change func(*AccountLifecycleCompletion)
+	}{
+		{"api version", 0, func(v *AccountLifecycleCompletion) { v.APIVersion = "other/v1" }},
+		{"kind", 0, func(v *AccountLifecycleCompletion) { v.Kind = "Account" }},
+		{"actor account", 0, func(v *AccountLifecycleCompletion) { v.ActorAccountID = "" }},
+		{"actor principal", 0, func(v *AccountLifecycleCompletion) { v.ActorPrincipalID = "" }},
+		{"operation", 0, func(v *AccountLifecycleCompletion) { v.Operation = "OTHER" }},
+		{"target account", 0, func(v *AccountLifecycleCompletion) { v.AccountID = "" }},
+		{"command request", 0, func(v *AccountLifecycleCompletion) { v.CommandRequestID = "" }},
+		{"create expected", 0, func(v *AccountLifecycleCompletion) { v.ExpectedResourceVersion = 1 }},
+		{"create result", 0, func(v *AccountLifecycleCompletion) { v.ResultingResourceVersion = 2 }},
+		{"create status", 0, func(v *AccountLifecycleCompletion) { v.Status = AccountDisabled }},
+		{"create root", 0, func(v *AccountLifecycleCompletion) { v.RootPrincipalID = "" }},
+		{"status expected", 1, func(v *AccountLifecycleCompletion) { v.ExpectedResourceVersion = 0 }},
+		{"status result", 1, func(v *AccountLifecycleCompletion) { v.ResultingResourceVersion++ }},
+		{"status root", 1, func(v *AccountLifecycleCompletion) { v.RootPrincipalID = "root-one" }},
+		{"recovery status", 2, func(v *AccountLifecycleCompletion) { v.Status = AccountDisabled }},
+		{"recovery root", 2, func(v *AccountLifecycleCompletion) { v.RootPrincipalID = "" }},
+		{"event", 0, func(v *AccountLifecycleCompletion) { v.EventID = "event/other" }},
+		{"time", 0, func(v *AccountLifecycleCompletion) { v.OccurredAt = time.Time{} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := valid[test.index]
+			test.change(&value)
+			if ValidateAccountLifecycleCompletion(value) == nil {
+				t.Fatal("invalid account lifecycle completion accepted")
+			}
+			encoded, err := json.Marshal(value)
+			decoded := valid[test.index]
+			if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) == nil || decoded != valid[test.index] {
+				t.Fatal("invalid lifecycle completion decoded or partially replaced the previous value")
+			}
+		})
+	}
+	encoded, err := json.Marshal(valid[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded = append(encoded[:len(encoded)-1], []byte(`,"password":"forbidden"}`)...)
+	var decoded AccountLifecycleCompletion
+	if DecodeRequest(bytes.NewReader(encoded), &decoded) == nil {
+		t.Fatal("account lifecycle completion accepted an extra secret field")
+	}
+	var missing *AccountLifecycleCompletion
+	if missing.UnmarshalJSON([]byte(`{}`)) == nil {
+		t.Fatal("nil account lifecycle completion destination accepted")
+	}
+}
+
 func TestOtherSessionRevocationIsAClosedCompletionIncludingZeroTargets(t *testing.T) {
 	valid := RevokeOtherSessionsResponse{APIVersion: APIVersion, Kind: "OtherSessionsRevocation", Outcome: "APPLIED",
 		AccountID: "account-one", UserID: "user-one", CurrentSessionID: "session-one", RequestID: "request-one",
@@ -8684,6 +8760,53 @@ func TestIAMOpenAPISessionTouchIsBodylessMutation(t *testing.T) {
 	success := mustIAMObject(t, responses["200"], "session touch success")
 	if success["description"] != "Command completed." {
 		t.Fatal("session activity mutation is documented as an observation")
+	}
+}
+
+func TestIAMOpenAPIAccountLifecycleCompletionIsReadOnlyAndExact(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	paths := mustIAMObject(t, document["paths"], "paths")
+	path := mustIAMObject(t, paths["/v1/accounts/{accountId}/lifecycle-completions/{commandRequestId}"], "account lifecycle completion path")
+	if len(path) != 1 || path["get"] == nil {
+		t.Fatal("account lifecycle completion exposed a mutation")
+	}
+	operation := mustIAMObject(t, path["get"], "account lifecycle completion operation")
+	if operation["requestBody"] != nil {
+		t.Fatal("account lifecycle completion accepts a body")
+	}
+	parameters, ok := operation["parameters"].([]any)
+	if !ok || len(parameters) != 4 {
+		t.Fatal("account lifecycle completion reference is not closed")
+	}
+	expected := map[string]string{"accountId": "path", "commandRequestId": "path", "operation": "query", "expectedResourceVersion": "query"}
+	for _, raw := range parameters {
+		parameter := mustIAMObject(t, raw, "account lifecycle completion parameter")
+		name, ok := parameter["name"].(string)
+		if !ok || expected[name] == "" || parameter["in"] != expected[name] || parameter["required"] != true {
+			t.Fatal("account lifecycle completion accepts a selector or optional original identity")
+		}
+		delete(expected, name)
+		if name == "expectedResourceVersion" {
+			schema := mustIAMObject(t, parameter["schema"], "original account version")
+			if schema["type"] != "integer" || schema["minimum"] != float64(0) || schema["maximum"] != float64(9007199254740990) {
+				t.Fatal("account lifecycle completion loses safe original version bounds")
+			}
+		}
+		if name == "operation" {
+			schema := mustIAMObject(t, parameter["schema"], "account lifecycle operation")
+			if schema["$ref"] != "#/components/schemas/AccountLifecycleOperation" {
+				t.Fatal("account lifecycle completion accepts an open operation")
+			}
+		}
+	}
+	responses := mustIAMObject(t, operation["responses"], "account lifecycle completion outcomes")
+	for _, code := range []string{"200", "400", "401", "403", "404", "503"} {
+		if responses[code] == nil {
+			t.Fatal("account lifecycle completion omitted a closed outcome", code)
+		}
+	}
+	if responses["201"] != nil || responses["409"] != nil {
+		t.Fatal("account lifecycle completion implies a write or replacement intent")
 	}
 }
 

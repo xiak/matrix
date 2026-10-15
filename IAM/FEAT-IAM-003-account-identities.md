@@ -17,6 +17,7 @@
 | IAM-ID-07 | 改密/重置/恢复保持 generation 单调，forced 必撤其他临时会话，普通默认撤其他可选 |
 | IAM-ID-08 | 删除/停用用户不改变已有资源、Operation 和审计归属；恢复不激活旧 session |
 | IAM-ID-09 | 原 root 凭据恢复不换 owner、不授平台、不启用暂停账号；平台 primary 仍需离线限定能力 |
+| IAM-ID-10 | 账号开通、停复用和原 root 凭据恢复在提交结果不确定后，原 USER 可在新的浏览器会话中按原操作、目标、requestId 和预期版本只读查询永久完成事实；查询不重放写入、不证明密码输入相同，也不替代当前权限校验 |
 
 ## 详细设计
 
@@ -37,6 +38,7 @@ RootIdentity 仍由底层 USER principal 承载认证，但不出现在日常 Us
 首个纵向替换只改变已有账号/用户闭环的当前契约，不抢先实现 Group、Role 或 AccessKey：
 
 - 平台面：`GET|POST /v1/accounts`、`GET /v1/accounts/{accountId}`、`POST /v1/accounts/{accountId}:set-status`、`POST /v1/accounts/{accountId}:recover-root-credentials`。列表和详情返回 `AccountAccess`，把 Account 数据与该 actor 对该目标的状态/恢复能力分开。
+- 账号命令完成面：`GET /v1/accounts/{accountId}/lifecycle-completions/{commandRequestId}?operation=ACCOUNT_CREATE|ACCOUNT_SET_STATUS|ACCOUNT_ROOT_CREDENTIALS_RECOVER&expectedResourceVersion=...`。`commandRequestId` 是原写请求 body 的 `requestId`，不是本次 GET 的传输 request ID；开通的预期版本固定为 0，其他操作必须大于 0。响应只返回原 actor、操作、目标、原预期/结果版本、结果状态、可选原 root、事件和完成时间，不返回密码、哈希、输入 commitment、当前 Account 快照或授权结论。
 - 当前账号面：`POST /v1/account:alias`；Account 只能由当前有效 session 推导，body/query 不接受 `accountId`。
 - 用户面：`GET|POST /v1/users`、`GET /v1/users/{userId}`、`POST /v1/users/{userId}:update`、`POST /v1/users/{userId}:delete`、`POST /v1/users/{userId}:set-status`、`POST /v1/users/{userId}:reset-password`。详情返回与列表同形的 `UserAccess`；资料更新首片只允许显示名称，登录名与 Account 不可变。
 - `GET /v1/auth/me` 返回 `Account`、当前 USER 投影、显式 identityKind、策略附件与完整当前能力集合；不再保留 `canCreateAccounts` 单一提示或任何角色枚举。
@@ -55,11 +57,15 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 管理路由从旧 principal/organization 命名到目标 account/users 的替换与 schema、UI、生成契约原子收口；没有平行兼容别名。公开历史 Audit action 不重命名；新删除/身份命令定义新的封闭事实。
 
+账号生命周期完成事实与对应成功 Audit outbox 在同一事务提交并永久保留，使用原 actor Account、原 USER、原 requestId 作为唯一意图边界；同一 actor 不能把已成功的生命周期 requestId 换操作、目标或版本再次使用。只为新命令生成完成事实；旧成功 Audit 不猜测缺失的原版本和开通显示输入，也不反向补造完成记录，但其 requestId 仍视为已消费。读取时重新验证当前 session、当前同一 action 权威、原 actor/目标/版本和不可变 Audit/decision 证据；当前 User 被停用、会话失效或权限撤销后失败关闭。`404`、`403`、`401`、协议错误和不确定响应都不能据此签发替代意图。完成事实不随 Account 后续状态变化而改写，也不能被 runtime role 直接读写、更新、删除或 truncate。
+
 ## 验收
 
 两个 Account、各原 root/管理员 User/普通 User，同名登录、别名竞争、改密、退出、越租户 ID/cursor/body 攻击；平台与租户权限互不继承。错误版本、非原 root、并发状态/密码/平台授予无部分变更。旧 binary 状态升级、重放、重启和签名保留数据回滚通过，工作负载及 Audit 归属保持。
 
 首个命名替换门禁还必须证明旧管理路径全部 404、严格解码拒绝旧 selector/字段、RootIdentity 不出现在 User 目录且不能被普通 User 命令命中、同名 User 只能经显式 realm 登录。能力门禁必须证明读/写拆分、self/installation/system/disabled/must-change/must-disable 限制，客户端拒绝缺失、额外、重复或错目标能力；增加产品、策略或角色名称不能要求通用 evaluator 或控制台新增名称分支。详情/资料/删除门禁还须证明跨 Account ID、RootIdentity、当前 actor、平台附件主体、错误版本和并发 status/update/delete 全部失败关闭；删除前失败或提交冲突时凭据、session、附件、tombstone 和 outbox 无部分变化，成功后旧密码/会话不能使用，登录名不能重建，Account 资源、Operation 与 Audit 归属不变。当前源码进程、OpenAPI、静态控制台和安装测试消费者必须在同一提交只使用新路由/DTO；残留扫描允许的旧词只限冻结的 Bootstrap、ServiceIdentity、历史决定/Audit 和迁移读取证据。
+
+账号生命周期不确定结果门禁还须覆盖三个操作：成功响应丢失后，原 USER 在新登录会话以精确 operation、accountId、commandRequestId 和 expectedResourceVersion 取得同一非敏感事实；错误 actor、跨 Account、错误操作/目标/版本、重复 query、请求 body、旧或撤销权限、停用身份及被篡改的 receipt/Audit/decision 全部失败关闭。相同 requestId 跨操作重用不得产生部分账号、密码、session、附件、完成事实或 outbox 变化；完成后目标继续演进不改变旧事实。完成表和读取函数必须保持强制 RLS、无 runtime 表权限、只给 API 角色执行封闭读取函数，apply-twice 与进程重启保持原事实；旧成功历史不补造 receipt，但必须拒绝用其 requestId 创建新意图。
 
 ## 当前候选证据
 

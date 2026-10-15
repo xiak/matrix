@@ -1371,6 +1371,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM iam.account_aliases AS alias WHERE alias.alias=new_id) THEN
         RAISE EXCEPTION USING ERRCODE='23505', MESSAGE='account namespace is reserved';
     END IF;
+    PERFORM iam.assert_account_lifecycle_intent_unused(tenant,actor,event->>'requestId');
     PERFORM set_config('matrix.iam_tenant_id',new_id,true);
     INSERT INTO iam.accounts(id,display_name,status,resource_version,created_at,updated_at)
     VALUES(new_id,display_name,'ACTIVE',1,effective_now,effective_now);
@@ -1385,6 +1386,10 @@ BEGIN
     VALUES(new_id,'primary-admin-binding',primary_id,'system.account-administrator',1,effective_now,effective_now);
     result := iam.account_snapshot(new_id);
     PERFORM iam.append_account_event(tenant,actor,decision,'iam.account.created','ACCOUNT',new_id,event);
+    INSERT INTO iam.account_lifecycle_completions(actor_account_id,actor_principal_id,request_id,operation,account_id,
+        expected_version,resulting_version,resulting_status,root_principal_id,display_name,root_login_name,root_display_name,event_id,occurred_at)
+    VALUES(tenant,actor,event->>'requestId','ACCOUNT_CREATE',new_id,0,1,'ACTIVE',primary_id,display_name,login_name,primary_name,
+        event->>'eventId',effective_now);
     RETURN result;
 END
 $function$;
@@ -1401,6 +1406,7 @@ BEGIN
     IF new_status='DISABLED' AND EXISTS(SELECT 1 FROM iam.bootstrap_receipts AS receipt WHERE receipt.organization_id=target_tenant) THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='installation service account is protected';
     END IF;
+    PERFORM iam.assert_account_lifecycle_intent_unused(tenant,actor,event->>'requestId');
     PERFORM set_config('matrix.iam_tenant_id',target_tenant,true);
     SELECT * INTO stored FROM iam.accounts AS account WHERE account.id=target_tenant FOR UPDATE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='account is unavailable'; END IF;
@@ -1416,6 +1422,10 @@ BEGIN
     END IF;
     PERFORM iam.append_account_event(tenant,actor,decision,
         CASE WHEN new_status='DISABLED' THEN 'iam.account.disabled' ELSE 'iam.account.enabled' END,'ACCOUNT',target_tenant,event);
+    INSERT INTO iam.account_lifecycle_completions(actor_account_id,actor_principal_id,request_id,operation,account_id,
+        expected_version,resulting_version,resulting_status,event_id,occurred_at)
+    VALUES(tenant,actor,event->>'requestId','ACCOUNT_SET_STATUS',target_tenant,expected_version,expected_version+1,new_status,
+        event->>'eventId',transaction_timestamp());
     RETURN iam.account_snapshot(target_tenant);
 END
 $function$;
@@ -1437,6 +1447,7 @@ BEGIN
         OR COALESCE(expected_history_digest,'') !~ '^sha256:[0-9a-f]{64}$' OR expected_password_hash=new_password_hash THEN
         RAISE EXCEPTION USING ERRCODE='22023', MESSAGE='root credential recovery is invalid';
     END IF;
+    PERFORM iam.assert_account_lifecycle_intent_unused(tenant,actor,event->>'requestId');
     IF iam.lock_recoverable_root(target_tenant,expected_version) IS DISTINCT FROM primary_id THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='root credential recovery is forbidden';
     END IF;
@@ -1463,9 +1474,294 @@ BEGIN
     UPDATE iam.accounts AS account SET resource_version=account.resource_version+1,updated_at=transaction_timestamp()
     WHERE account.id=target_tenant;
     PERFORM iam.append_account_event(tenant,actor,decision,'iam.account-root.credentials-recovered','USER',primary_id,event);
+    INSERT INTO iam.account_lifecycle_completions(actor_account_id,actor_principal_id,request_id,operation,account_id,
+        expected_version,resulting_version,resulting_status,root_principal_id,event_id,occurred_at)
+    VALUES(tenant,actor,event->>'requestId','ACCOUNT_ROOT_CREDENTIALS_RECOVER',target_tenant,expected_version,expected_version+1,
+        'ACTIVE',primary_id,event->>'eventId',transaction_timestamp());
     RETURN iam.account_snapshot(target_tenant);
 END
 $function$;
+
+-- Account lifecycle completions are immutable same-USER observations. Existing
+-- historical facts are deliberately not backfilled because their original
+-- version and create display inputs were not retained separately. Their
+-- request IDs remain consumed through the indexed Audit history.
+CREATE INDEX IF NOT EXISTS account_lifecycle_intent_history ON iam.audit_outbox
+    (tenant_id,(event_document#>>'{actor,id}'),(event_document->>'requestId'))
+    WHERE event_document->>'action' IN ('iam.account.created','iam.account.disabled','iam.account.enabled','iam.account-root.credentials-recovered')
+      AND event_document->>'result'='SUCCEEDED';
+CREATE TABLE IF NOT EXISTS iam.account_lifecycle_completions (
+    actor_account_id text COLLATE "C" NOT NULL,
+    actor_principal_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    operation text COLLATE "C" NOT NULL,
+    account_id text COLLATE "C" NOT NULL,
+    expected_version bigint NOT NULL,
+    resulting_version bigint NOT NULL,
+    resulting_status text COLLATE "C" NOT NULL,
+    root_principal_id text COLLATE "C",
+    display_name text,
+    root_login_name text COLLATE "C",
+    root_display_name text,
+    event_id text COLLATE "C" NOT NULL,
+    occurred_at timestamptz(6) NOT NULL,
+    CONSTRAINT account_lifecycle_completions_pk PRIMARY KEY(actor_account_id,actor_principal_id,request_id),
+    CONSTRAINT account_lifecycle_completions_event_uq UNIQUE(actor_account_id,event_id),
+    CONSTRAINT account_lifecycle_completions_actor_fk FOREIGN KEY(actor_account_id,actor_principal_id) REFERENCES iam.principals(tenant_id,id),
+    CONSTRAINT account_lifecycle_completions_account_fk FOREIGN KEY(account_id) REFERENCES iam.accounts(id),
+    CONSTRAINT account_lifecycle_completions_root_fk FOREIGN KEY(account_id,root_principal_id) REFERENCES iam.principals(tenant_id,id),
+    CONSTRAINT account_lifecycle_completions_event_fk FOREIGN KEY(actor_account_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id),
+    CONSTRAINT account_lifecycle_completions_values CHECK(
+        actor_account_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND account_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND resulting_status IN ('ACTIVE','DISABLED') AND isfinite(occurred_at)
+        AND (root_principal_id IS NULL OR root_principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (CASE operation
+          WHEN 'ACCOUNT_CREATE' THEN expected_version=0 AND resulting_version=1 AND resulting_status='ACTIVE'
+            AND root_principal_id IS NOT NULL AND length(display_name) BETWEEN 1 AND 128 AND btrim(display_name)=display_name
+            AND root_login_name COLLATE "C" ~ '^[a-z][a-z0-9._-]{2,63}$'
+            AND length(root_display_name) BETWEEN 1 AND 128 AND btrim(root_display_name)=root_display_name
+          WHEN 'ACCOUNT_SET_STATUS' THEN expected_version BETWEEN 1 AND 9007199254740990
+            AND resulting_version=expected_version+1 AND root_principal_id IS NULL
+            AND display_name IS NULL AND root_login_name IS NULL AND root_display_name IS NULL
+          WHEN 'ACCOUNT_ROOT_CREDENTIALS_RECOVER' THEN expected_version BETWEEN 1 AND 9007199254740990
+            AND resulting_version=expected_version+1 AND resulting_status='ACTIVE' AND root_principal_id IS NOT NULL
+            AND display_name IS NULL AND root_login_name IS NULL AND root_display_name IS NULL
+          ELSE false END))
+);
+ALTER TABLE iam.account_lifecycle_completions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.account_lifecycle_completions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.account_lifecycle_completions;
+CREATE POLICY tenant_isolation ON iam.account_lifecycle_completions
+    USING(actor_account_id=iam.current_tenant_id()) WITH CHECK(actor_account_id=iam.current_tenant_id());
+DROP TRIGGER IF EXISTS account_lifecycle_completions_immutable ON iam.account_lifecycle_completions;
+CREATE TRIGGER account_lifecycle_completions_immutable BEFORE UPDATE OR DELETE ON iam.account_lifecycle_completions
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.account_lifecycle_completions ENABLE ALWAYS TRIGGER account_lifecycle_completions_immutable;
+DROP TRIGGER IF EXISTS account_lifecycle_completions_no_truncate ON iam.account_lifecycle_completions;
+CREATE TRIGGER account_lifecycle_completions_no_truncate BEFORE TRUNCATE ON iam.account_lifecycle_completions
+    FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.account_lifecycle_completions ENABLE ALWAYS TRIGGER account_lifecycle_completions_no_truncate;
+REVOKE ALL ON iam.account_lifecycle_completions FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
+CREATE OR REPLACE FUNCTION iam.assert_account_lifecycle_intent_unused(tenant text,actor text,command_id text)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF COALESCE(command_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='account lifecycle intent is invalid'; END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    IF EXISTS(SELECT 1 FROM iam.account_lifecycle_completions c WHERE c.actor_account_id=tenant
+          AND c.actor_principal_id=actor AND c.request_id=command_id)
+      OR EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=tenant
+          AND o.event_document->>'action' IN ('iam.account.created','iam.account.disabled','iam.account.enabled','iam.account-root.credentials-recovered')
+          AND o.event_document->>'result'='SUCCEEDED' AND o.event_document#>>'{actor,id}'=actor
+          AND o.event_document->>'requestId'=command_id) THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='account lifecycle intent was already used';
+    END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.assert_account_lifecycle_completion(tenant text,actor text,command_id text)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.account_lifecycle_completions%ROWTYPE; fact jsonb; expected_digest text;
+    event_action text; decision_action text; decision_target text; decision_mode text; decision_usage text;
+BEGIN
+    SELECT * INTO receipt FROM iam.account_lifecycle_completions c WHERE c.actor_account_id=tenant
+        AND c.actor_principal_id=actor AND c.request_id=command_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='account lifecycle completion is missing'; END IF;
+    CASE receipt.operation
+      WHEN 'ACCOUNT_CREATE' THEN
+        event_action:='iam.account.created'; decision_action:='iam.account.create'; decision_target:='collection';
+        decision_mode:='COLLECTION'; decision_usage:='COLLECTION_CREATE';
+        expected_digest:='sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')||
+          convert_to('account-create','UTF8')||decode('00','hex')||convert_to('{"ID":'||to_json(receipt.account_id)::text||
+          ',"DisplayName":'||to_json(receipt.display_name)::text||',"LoginName":'||to_json(receipt.root_login_name)::text||
+          ',"RootName":'||to_json(receipt.root_display_name)::text||',"RequestID":'||to_json(command_id)::text||'}','UTF8')),'hex');
+      WHEN 'ACCOUNT_SET_STATUS' THEN
+        event_action:=CASE receipt.resulting_status WHEN 'ACTIVE' THEN 'iam.account.enabled' ELSE 'iam.account.disabled' END;
+        decision_action:='iam.account.set-status'; decision_target:=receipt.account_id; decision_mode:='INSTANCE'; decision_usage:=NULL;
+        expected_digest:='sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')||
+          convert_to('account-status','UTF8')||decode('00','hex')||convert_to('{"ID":'||to_json(receipt.account_id)::text||
+          ',"Request":{"status":'||to_json(receipt.resulting_status)::text||',"resourceVersion":'||receipt.expected_version::text||
+          ',"requestId":'||to_json(command_id)::text||'}}','UTF8')),'hex');
+      WHEN 'ACCOUNT_ROOT_CREDENTIALS_RECOVER' THEN
+        event_action:='iam.account-root.credentials-recovered'; decision_action:='iam.account.recover-root-credentials';
+        decision_target:=receipt.account_id; decision_mode:='INSTANCE'; decision_usage:=NULL;
+        expected_digest:='sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')||
+          convert_to('account-root-credentials-recover','UTF8')||decode('00','hex')||convert_to('{"AccountID":'||to_json(receipt.account_id)::text||
+          ',"ResourceVersion":'||receipt.expected_version::text||',"RequestID":'||to_json(command_id)::text||'}','UTF8')),'hex');
+      ELSE RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='account lifecycle completion operation differs';
+    END CASE;
+    SELECT o.event_document INTO fact FROM iam.audit_outbox o WHERE o.tenant_id=tenant AND o.event_id=receipt.event_id;
+    IF fact IS NULL OR fact->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1' OR fact->>'kind' IS DISTINCT FROM 'AuditEvent'
+      OR fact->>'eventId' IS DISTINCT FROM receipt.event_id OR fact->>'installationId' IS NULL OR fact ? 'tenantId'
+      OR fact->>'action' IS DISTINCT FROM event_action OR fact->>'result' IS DISTINCT FROM 'SUCCEEDED'
+      OR fact->'actor' IS DISTINCT FROM jsonb_build_object('type','USER','id',actor)
+      OR fact->'target' IS DISTINCT FROM (CASE receipt.operation WHEN 'ACCOUNT_ROOT_CREDENTIALS_RECOVER' THEN
+          jsonb_build_object('kind','USER','id',receipt.root_principal_id,'tenantId',receipt.account_id)
+          ELSE jsonb_build_object('kind','ACCOUNT','id',receipt.account_id) END)
+      OR fact->>'requestId' IS DISTINCT FROM command_id OR fact->>'correlationId' IS DISTINCT FROM command_id
+      OR fact->>'requestDigest' IS DISTINCT FROM expected_digest
+      OR (fact->>'occurredAt')::timestamptz IS DISTINCT FROM receipt.occurred_at
+      OR fact ? 'operationId' OR (fact-ARRAY['apiVersion','kind','eventId','installationId','actor','iamDecisionId','action','target','result',
+          'requestDigest','requestId','correlationId','occurredAt','traceparent'])<>'{}'::jsonb
+      OR NOT EXISTS(SELECT 1 FROM iam.bootstrap_receipts b WHERE b.organization_id=tenant AND b.installation_id=fact->>'installationId')
+      OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER')
+      OR (receipt.root_principal_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM iam.account_roots r
+          WHERE r.account_id=receipt.account_id AND r.principal_id=receipt.root_principal_id))
+      OR NOT EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=fact->>'iamDecisionId'
+          AND d.principal_id=actor AND d.subject_type='USER' AND d.contract_version IN (4,5,6,7) AND d.access_key_id IS NULL AND d.allowed
+          AND d.action_name=decision_action AND d.target_kind='ACCOUNT' AND d.target_id=decision_target
+          AND d.resource_mode=decision_mode AND d.collection_usage IS NOT DISTINCT FROM decision_usage
+          AND d.document->>'installationId'=fact->>'installationId' AND d.request_id=command_id AND d.decided_at=receipt.occurred_at) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='account lifecycle completion evidence differs';
+    END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.verify_account_lifecycle_completion()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE tenant text; actor text; command_id text;
+BEGIN
+    IF TG_TABLE_NAME='account_lifecycle_completions' THEN
+      tenant:=NEW.actor_account_id; actor:=NEW.actor_principal_id; command_id:=NEW.request_id;
+    ELSE
+      IF NEW.event_document->>'action' NOT IN ('iam.account.created','iam.account.disabled','iam.account.enabled','iam.account-root.credentials-recovered') THEN RETURN NULL; END IF;
+      tenant:=NEW.tenant_id; actor:=NEW.event_document#>>'{actor,id}'; command_id:=NEW.event_document->>'requestId';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM iam.assert_account_lifecycle_completion(tenant,actor,command_id);
+    RETURN NULL;
+END $function$;
+DROP TRIGGER IF EXISTS verify_account_lifecycle_completion ON iam.account_lifecycle_completions;
+CREATE CONSTRAINT TRIGGER verify_account_lifecycle_completion AFTER INSERT ON iam.account_lifecycle_completions
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_account_lifecycle_completion();
+ALTER TABLE iam.account_lifecycle_completions ENABLE ALWAYS TRIGGER verify_account_lifecycle_completion;
+DROP TRIGGER IF EXISTS verify_account_lifecycle_completion ON iam.audit_outbox;
+CREATE CONSTRAINT TRIGGER verify_account_lifecycle_completion AFTER INSERT ON iam.audit_outbox
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_account_lifecycle_completion();
+ALTER TABLE iam.audit_outbox ENABLE ALWAYS TRIGGER verify_account_lifecycle_completion;
+
+CREATE OR REPLACE FUNCTION iam.account_lifecycle_completion_contract_ready()
+RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE relation_oid oid:=to_regclass('iam.account_lifecycle_completions'); expected record;
+BEGIN
+    IF relation_oid IS NULL OR NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=relation_oid AND c.relkind='r'
+        AND c.relowner='matrix_iam_owner'::regrole AND c.relrowsecurity AND c.relforcerowsecurity)
+        OR (SELECT count(*) FROM pg_policy p WHERE p.polrelid=relation_oid)<>1
+        OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=relation_oid AND p.polname='tenant_isolation'
+            AND p.polcmd='*' AND p.polpermissive AND p.polroles=ARRAY[0::oid] AND p.polqual IS NOT NULL AND p.polwithcheck IS NOT NULL)
+        OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attnum>0 AND NOT a.attisdropped)<>14
+        OR EXISTS(SELECT 1 FROM pg_class c, LATERAL aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) acl
+            WHERE c.oid=relation_oid AND acl.grantee<>c.relowner)
+        OR EXISTS(SELECT 1 FROM pg_attribute a, LATERAL aclexplode(a.attacl) acl
+            WHERE a.attrelid=relation_oid AND acl.grantee<>'matrix_iam_owner'::regrole)
+        OR NOT EXISTS(SELECT 1 FROM pg_class i JOIN pg_index x ON x.indexrelid=i.oid
+            WHERE i.oid=to_regclass('iam.account_lifecycle_intent_history') AND i.relkind='i'
+              AND x.indrelid='iam.audit_outbox'::regclass AND x.indisvalid AND x.indisready AND NOT x.indisunique) THEN
+        RETURN false;
+    END IF;
+    FOR expected IN SELECT * FROM (VALUES
+        ('actor_account_id','text',-1,true),('actor_principal_id','text',-1,true),('request_id','text',-1,true),
+        ('operation','text',-1,true),('account_id','text',-1,true),('expected_version','bigint',-1,true),
+        ('resulting_version','bigint',-1,true),('resulting_status','text',-1,true),('root_principal_id','text',-1,false),
+        ('display_name','text',-1,false),('root_login_name','text',-1,false),('root_display_name','text',-1,false),
+        ('event_id','text',-1,true),('occurred_at','timestamptz',6,true)
+    ) e(name,kind,precision,required) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attname=expected.name
+            AND a.atttypid=expected.kind::regtype AND a.atttypmod=expected.precision
+            AND a.attnotnull=expected.required AND NOT a.attisdropped) THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT * FROM (VALUES
+        ('p','actor_account_id,actor_principal_id,request_id',NULL,NULL),
+        ('u','actor_account_id,event_id',NULL,NULL),
+        ('f','actor_account_id,actor_principal_id','iam.principals','tenant_id,id'),
+        ('f','account_id','iam.accounts','id'),
+        ('f','account_id,root_principal_id','iam.principals','tenant_id,id'),
+        ('f','actor_account_id,event_id','iam.audit_outbox','tenant_id,event_id')
+    ) e(kind,columns,reference_table,reference_columns) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=relation_oid AND c.contype::text=expected.kind
+            AND c.convalidated AND c.conenforced AND NOT c.condeferrable AND NOT c.condeferred
+            AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+                JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=string_to_array(expected.columns,',')
+            AND (expected.kind<>'f' OR (c.confrelid=to_regclass(expected.reference_table) AND c.confupdtype='a' AND c.confdeltype='a'
+                AND c.confmatchtype='s' AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+                    JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=string_to_array(expected.reference_columns,','))))
+            THEN RETURN false; END IF;
+    END LOOP;
+    IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=relation_oid
+        AND c.conname='account_lifecycle_completions_values' AND c.contype='c' AND c.convalidated AND c.conenforced) THEN
+        RETURN false;
+    END IF;
+    FOR expected IN SELECT * FROM (VALUES
+        ('iam.account_lifecycle_completions','account_lifecycle_completions_immutable',27,'iam.reject_policy_history_change()',false),
+        ('iam.account_lifecycle_completions','account_lifecycle_completions_no_truncate',34,'iam.reject_policy_history_change()',false),
+        ('iam.account_lifecycle_completions','verify_account_lifecycle_completion',5,'iam.verify_account_lifecycle_completion()',true),
+        ('iam.audit_outbox','verify_account_lifecycle_completion',5,'iam.verify_account_lifecycle_completion()',true)
+    ) e(relation,name,kind,signature,deferred) LOOP
+        IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass(expected.relation) AND t.tgname=expected.name
+            AND t.tgenabled='A' AND NOT t.tgisinternal AND t.tgtype=expected.kind AND t.tgnargs=0 AND t.tgqual IS NULL
+            AND t.tgfoid=to_regprocedure(expected.signature) AND t.tgdeferrable=expected.deferred AND t.tginitdeferred=expected.deferred)
+            THEN RETURN false; END IF;
+    END LOOP;
+    RETURN (SELECT count(*)=4 FROM pg_proc p JOIN (VALUES
+        ('iam.assert_account_lifecycle_intent_unused(text,text,text)',false,'void',false,'tenant,actor,command_id'),
+        ('iam.assert_account_lifecycle_completion(text,text,text)',false,'void',false,'tenant,actor,command_id'),
+        ('iam.verify_account_lifecycle_completion()',false,'trigger',false,''),
+        ('iam.read_account_lifecycle_completion(text,text,text,text,text,text,bigint)',true,'jsonb',false,
+            'tenant,actor,decision,target_tenant,lifecycle_operation,command_id,expected_version')
+    ) definition(signature,definer,result_type,returns_set,names) ON p.oid=to_regprocedure(definition.signature)
+        AND p.prosecdef=definition.definer AND p.prorettype=definition.result_type::regtype AND p.proretset=definition.returns_set
+        AND COALESCE(array_to_string(p.proargnames,','),'')=definition.names
+        WHERE p.proowner='matrix_iam_owner'::regrole AND NOT p.proisstrict AND p.provolatile='v' AND p.proparallel='u'
+          AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+          AND has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')=definition.definer
+          AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
+            WHERE acl.privilege_type='EXECUTE' AND (acl.is_grantable OR
+              acl.grantee NOT IN (p.proowner,CASE WHEN definition.definer THEN 'matrix_iam_api'::regrole ELSE p.proowner END))
+              AND acl.grantee<>p.proowner));
+END $function$;
+REVOKE ALL ON FUNCTION iam.account_lifecycle_completion_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
+CREATE OR REPLACE FUNCTION iam.read_account_lifecycle_completion(tenant text,actor text,decision text,target_tenant text,
+    lifecycle_operation text,command_id text,expected_version bigint)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.account_lifecycle_completions%ROWTYPE; action_name text; target_id text; mode text; usage text;
+BEGIN
+    CASE lifecycle_operation
+      WHEN 'ACCOUNT_CREATE' THEN action_name:='iam.account.create'; target_id:='collection'; mode:='COLLECTION'; usage:='COLLECTION_CREATE';
+      WHEN 'ACCOUNT_SET_STATUS' THEN action_name:='iam.account.set-status'; target_id:=target_tenant; mode:='INSTANCE'; usage:=NULL;
+      WHEN 'ACCOUNT_ROOT_CREDENTIALS_RECOVER' THEN action_name:='iam.account.recover-root-credentials'; target_id:=target_tenant; mode:='INSTANCE'; usage:=NULL;
+      ELSE RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='account lifecycle completion reference is invalid';
+    END CASE;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action_name,'ACCOUNT',target_id,mode,usage);
+    IF NOT iam.account_lifecycle_completion_contract_ready()
+      OR COALESCE(target_tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(command_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR expected_version IS NULL OR expected_version NOT BETWEEN 0 AND 9007199254740990
+      OR (lifecycle_operation='ACCOUNT_CREATE')<>(expected_version=0) THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='account lifecycle completion reference is invalid';
+    END IF;
+    SELECT * INTO receipt FROM iam.account_lifecycle_completions c WHERE c.actor_account_id=tenant
+      AND c.actor_principal_id=actor AND c.account_id=target_tenant AND c.operation=lifecycle_operation
+      AND c.request_id=command_id AND c.expected_version=read_account_lifecycle_completion.expected_version;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='account lifecycle completion is not found'; END IF;
+    PERFORM iam.assert_account_lifecycle_completion(tenant,actor,command_id);
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','AccountLifecycleCompletion',
+      'actorAccountId',receipt.actor_account_id,'actorPrincipalId',receipt.actor_principal_id,'operation',receipt.operation,
+      'accountId',receipt.account_id,'commandRequestId',receipt.request_id,'expectedResourceVersion',receipt.expected_version,
+      'resultingResourceVersion',receipt.resulting_version,'status',receipt.resulting_status,'eventId',receipt.event_id,
+      'occurredAt',to_char(receipt.occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'))
+      ||CASE WHEN receipt.root_principal_id IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('rootPrincipalId',receipt.root_principal_id) END;
+END $function$;
+REVOKE ALL ON FUNCTION iam.assert_account_lifecycle_intent_unused(text,text,text),iam.assert_account_lifecycle_completion(text,text,text),
+    iam.verify_account_lifecycle_completion(),iam.read_account_lifecycle_completion(text,text,text,text,text,text,bigint)
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,matrix_iam_credential_recovery,
+      matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+GRANT EXECUTE ON FUNCTION iam.read_account_lifecycle_completion(text,text,text,text,text,text,bigint) TO matrix_iam_api;
 
 CREATE OR REPLACE FUNCTION iam.set_account_alias(tenant text, actor text, decision text,
     new_alias text, expected_version bigint, event jsonb)

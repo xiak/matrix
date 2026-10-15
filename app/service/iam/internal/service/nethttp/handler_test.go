@@ -2147,6 +2147,91 @@ func TestIAMUserPasswordResetCompletionBoundary(t *testing.T) {
 	}
 }
 
+func TestIAMAccountLifecycleCompletionBoundary(t *testing.T) {
+	const path = "/v1/accounts/account-target/lifecycle-completions/account-command"
+	valid := iamv1.AccountLifecycleCompletion{APIVersion: iamv1.APIVersion, Kind: "AccountLifecycleCompletion",
+		ActorAccountID: "account-catalog", ActorPrincipalID: "platform-operator", Operation: iamv1.AccountLifecycleSetStatus,
+		AccountID: "account-target", CommandRequestID: "account-command", ExpectedResourceVersion: 7,
+		ResultingResourceVersion: 8, Status: iamv1.AccountDisabled, EventID: "account-event",
+		OccurredAt: time.Date(2026, 10, 15, 0, 0, 0, 0, time.UTC)}
+	validQuery := "?operation=ACCOUNT_SET_STATUS&expectedResourceVersion=7"
+	for _, attack := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{http.MethodGet, path, "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=ACCOUNT_SET_STATUS", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=ACCOUNT_SET_STATUS&operation=ACCOUNT_SET_STATUS&expectedResourceVersion=7", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=OTHER&expectedResourceVersion=7", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=ACCOUNT_CREATE&expectedResourceVersion=7", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=ACCOUNT_SET_STATUS&expectedResourceVersion=0", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=ACCOUNT_SET_STATUS&expectedResourceVersion=07", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=ACCOUNT_SET_STATUS&expectedResourceVersion=7&accountId=other", "", http.StatusBadRequest},
+		{http.MethodGet, path + validQuery, `{}`, http.StatusBadRequest},
+		{http.MethodGet, path + "/extra" + validQuery, "", http.StatusNotFound},
+		{http.MethodPost, path + validQuery, "", http.StatusMethodNotAllowed},
+	} {
+		t.Run(attack.method+attack.path+attack.body, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			request := httptest.NewRequest(attack.method, attack.path, strings.NewReader(attack.body))
+			request.Header.Set("Authorization", "Bearer current")
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != attack.status || workflow.accountLifecycleCompletionCalls != 0 {
+				t.Fatalf("invalid account completion query reached workflow: status=%d calls=%d", response.Code, workflow.accountLifecycleCompletionCalls)
+			}
+		})
+	}
+	for _, outcome := range []struct {
+		err    error
+		status int
+	}{
+		{nil, http.StatusOK}, {identityaccess.ErrAccountLifecycleCompletionNotFound, http.StatusNotFound},
+		{identityaccess.ErrUnauthenticated, http.StatusUnauthorized}, {identityaccess.ErrForbidden, http.StatusForbidden},
+		{identityaccess.ErrUnavailable, http.StatusServiceUnavailable},
+	} {
+		workflow := newHTTPWorkflow(t)
+		workflow.accountLifecycleCompletion, workflow.accountLifecycleCompletionError = valid, outcome.err
+		request := httptest.NewRequest(http.MethodGet, path+validQuery, nil)
+		request.Header.Set("Authorization", "Bearer current")
+		request.Header.Set("X-Tenant-ID", "forged-account")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != outcome.status || workflow.accountLifecycleCompletionCalls != 1 ||
+			workflow.accountLifecycleAccount != valid.AccountID || workflow.accountLifecycleOperation != valid.Operation ||
+			workflow.accountLifecycleCommand != valid.CommandRequestID || workflow.accountLifecycleVersion != valid.ExpectedResourceVersion {
+			t.Fatalf("account completion outcome was misrepresented: %d", response.Code)
+		}
+		if outcome.err == nil {
+			var got iamv1.AccountLifecycleCompletion
+			if json.Unmarshal(response.Body.Bytes(), &got) != nil || got != valid || string(workflow.accountLifecycleCredential.CopyBytes()) != "current" ||
+				response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("original account completion changed or accepted a tenant selector")
+			}
+		}
+	}
+	for _, mutate := range []func(*iamv1.AccountLifecycleCompletion){
+		func(v *iamv1.AccountLifecycleCompletion) { v.AccountID = "wrong-target" },
+		func(v *iamv1.AccountLifecycleCompletion) { v.Operation = iamv1.AccountLifecycleCreate },
+		func(v *iamv1.AccountLifecycleCompletion) { v.CommandRequestID = "wrong-command" },
+		func(v *iamv1.AccountLifecycleCompletion) {
+			v.ExpectedResourceVersion, v.ResultingResourceVersion = 8, 9
+		},
+		func(v *iamv1.AccountLifecycleCompletion) { v.EventID = "" },
+	} {
+		workflow := newHTTPWorkflow(t)
+		workflow.accountLifecycleCompletion = valid
+		mutate(&workflow.accountLifecycleCompletion)
+		request := httptest.NewRequest(http.MethodGet, path+validQuery, nil)
+		request.Header.Set("Authorization", "Bearer current")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatal("unbound account completion exposed")
+		}
+	}
+}
+
 func TestIAMSecuritySettingsWriteAndCompletion(t *testing.T) {
 	const path = "/v1/account/security-settings"
 	const body = `{"requestId":"settings-command","stepUpId":"settings-proof","expectedResourceVersion":1,"mfa":{"requiredForUsers":false},"password":{"minimumLength":15,"requireLowercase":false,"requireUppercase":false,"requireDigit":false,"requireSymbol":false,"historyCount":1,"maxAgeDays":0,"expiryMode":"CHANGE_PASSWORD"},"session":{"idleTimeoutMinutes":30},"accessKeyNetwork":{"allowedSourceCidrs":[]}}`
@@ -2561,13 +2646,21 @@ func httpSecurityReportFixture(t testing.TB) (iamv1.AccountSecurityReport, []byt
 }
 
 type httpWorkflow struct {
-	resetCompletion            iamv1.UserPasswordResetCompletion
-	resetCompletionCalls       int
-	resetCompletionError       error
-	passwordRequirements       iamv1.PasswordRequirements
-	passwordRequirementsCalls  int
-	passwordRequirementsError  error
-	passwordRequirementsBearer iamv1.Secret
+	resetCompletion                 iamv1.UserPasswordResetCompletion
+	resetCompletionCalls            int
+	resetCompletionError            error
+	accountLifecycleCompletion      iamv1.AccountLifecycleCompletion
+	accountLifecycleCompletionCalls int
+	accountLifecycleCompletionError error
+	accountLifecycleCredential      iamv1.Secret
+	accountLifecycleAccount         iamv1.AccountID
+	accountLifecycleOperation       iamv1.AccountLifecycleOperation
+	accountLifecycleCommand         string
+	accountLifecycleVersion         uint64
+	passwordRequirements            iamv1.PasswordRequirements
+	passwordRequirementsCalls       int
+	passwordRequirementsError       error
+	passwordRequirementsBearer      iamv1.Secret
 	Workflow
 	policyCalls                      int
 	ownSessionCalls                  int
@@ -2778,6 +2871,14 @@ func (value *httpWorkflow) UserPasswordResetCompletion(_ context.Context, creden
 		return iamv1.UserPasswordResetCompletion{}, identityaccess.ErrUnavailable
 	}
 	return value.resetCompletion, value.resetCompletionError
+}
+
+func (value *httpWorkflow) AccountLifecycleCompletion(_ context.Context, credential iamv1.Secret, account iamv1.AccountID,
+	operation iamv1.AccountLifecycleOperation, command string, version uint64, _ string) (iamv1.AccountLifecycleCompletion, error) {
+	value.accountLifecycleCompletionCalls++
+	value.accountLifecycleCredential, value.accountLifecycleAccount = credential, account
+	value.accountLifecycleOperation, value.accountLifecycleCommand, value.accountLifecycleVersion = operation, command, version
+	return value.accountLifecycleCompletion, value.accountLifecycleCompletionError
 }
 
 func (value *httpWorkflow) UpdateAccountSecuritySettings(_ context.Context, credential iamv1.Secret, request iamv1.UpdateAccountSecuritySettingsRequest) (iamv1.UpdateAccountSecuritySettingsResponse, error) {

@@ -278,6 +278,26 @@ func (value *transaction) RecoverRootCredentials(ctx context.Context, mutation i
 	return result, nil
 }
 
+func (value *transaction) ReadAccountLifecycleCompletion(ctx context.Context, read identityaccess.AccountRead, account iamv1.AccountID,
+	operation iamv1.AccountLifecycleOperation, requestID string, expectedVersion uint64) (iamv1.AccountLifecycleCompletion, error) {
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, "SELECT iam.read_account_lifecycle_completion($1,$2,$3,$4,$5,$6,$7)",
+		read.AccountID, read.ActorPrincipalID, read.DecisionID, account, operation, requestID, expectedVersion).Scan(&encoded)
+	if err != nil {
+		var failure *pgconn.PgError
+		if errors.As(err, &failure) && failure.Code == "P0002" {
+			return iamv1.AccountLifecycleCompletion{}, identityaccess.ErrAccountLifecycleCompletionNotFound
+		}
+		return iamv1.AccountLifecycleCompletion{}, mapAuthorizationDatabaseError("read account lifecycle completion", err)
+	}
+	defer clear(encoded)
+	var result iamv1.AccountLifecycleCompletion
+	if contractjson.DecodeObjectBytes(encoded, 4096, &result) != nil {
+		return iamv1.AccountLifecycleCompletion{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 func (value *transaction) ListUsers(ctx context.Context, read identityaccess.AccountRead) (iamv1.UserList, error) {
 	var encoded []byte
 	if err := value.tx.QueryRow(ctx, "SELECT iam.list_users($1,$2,$3,$4)", read.AccountID, read.ActorPrincipalID, read.DecisionID, read.After).Scan(&encoded); err != nil {
