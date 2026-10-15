@@ -5636,6 +5636,68 @@ func capacityCPU(t *testing.T) map[string]uint64 {
 	return result
 }
 
+func capacityMemoryEvents(t *testing.T) map[string]uint64 {
+	t.Helper()
+	content, err := os.ReadFile("/sys/fs/cgroup/memory.events")
+	if err != nil {
+		t.Fatal("capacity memory event observation is unavailable")
+	}
+	result := make(map[string]uint64)
+	for _, line := range strings.Split(string(content), "\n") {
+		parts := strings.Fields(line)
+		if len(parts) != 2 || !slices.Contains([]string{"low", "high", "max", "oom", "oom_kill", "oom_group_kill"}, parts[0]) {
+			continue
+		}
+		value, err := strconv.ParseUint(parts[1], 10, 64)
+		if err != nil {
+			t.Fatal("invalid capacity memory event counter")
+		}
+		result[parts[0]] = value
+	}
+	if len(result) != 6 {
+		t.Fatal("capacity memory event observation is incomplete")
+	}
+	return result
+}
+
+type iamCapacityFailureAuthorityState struct {
+	TenantID iamv1.AccountID `json:"accountId"`
+	Purpose  string          `json:"purpose"`
+	State    string          `json:"state"`
+	Live     bool            `json:"live"`
+	Count    int             `json:"count"`
+}
+
+func observeIAMCapacityFailureAuthorityState(ctx context.Context, database *pgx.Conn) []iamCapacityFailureAuthorityState {
+	rows, err := database.Query(ctx, `SELECT tenant_id,purpose,state,expires_at>clock_timestamp(),count(*)
+		FROM iam.password_attempts GROUP BY tenant_id,purpose,state,expires_at>clock_timestamp()
+		ORDER BY tenant_id,purpose,state,expires_at>clock_timestamp()`)
+	if err != nil {
+		return nil
+	}
+	defer rows.Close()
+	var result []iamCapacityFailureAuthorityState
+	for rows.Next() {
+		var item iamCapacityFailureAuthorityState
+		if rows.Scan(&item.TenantID, &item.Purpose, &item.State, &item.Live, &item.Count) != nil {
+			return nil
+		}
+		result = append(result, item)
+	}
+	if rows.Err() != nil {
+		return nil
+	}
+	return result
+}
+
+func iamCapacityFailureProblemCode(status int, body []byte) string {
+	var problem iamv1.Problem
+	if json.Unmarshal(body, &problem) != nil || iamv1.ValidateProblem(problem) != nil || problem.Status != status {
+		return "invalid-problem"
+	}
+	return problem.Code
+}
+
 func capacityPercentile(values []time.Duration, percentile int) time.Duration {
 	if len(values) == 0 || percentile < 1 || percentile > 100 {
 		return 0
@@ -5708,6 +5770,25 @@ func TestIAMCapacityPercentiles(t *testing.T) {
 	}
 	if values[0] != 100*time.Millisecond || capacityPercentile(nil, 99) != 0 || capacityPercentile([]time.Duration{5 * time.Second}, 99) != 5*time.Second {
 		t.Fatal("capacity observations were mutated or an error-duration sample was lost")
+	}
+}
+
+func TestIAMCapacityFailureProblemCode(t *testing.T) {
+	valid := []byte(`{"type":"https://matrix.xiak.com/problems/iam.authentication.failed","title":"IAM authentication failed","status":401,"code":"iam.authentication.failed","requestId":"capacity-request"}`)
+	if code := iamCapacityFailureProblemCode(http.StatusUnauthorized, valid); code != "iam.authentication.failed" {
+		t.Fatalf("valid capacity failure code = %q", code)
+	}
+	for _, sample := range []struct {
+		status int
+		body   []byte
+	}{
+		{http.StatusServiceUnavailable, valid},
+		{http.StatusUnauthorized, []byte(`{"status":401,"code":"iam.authentication.failed"}`)},
+		{http.StatusUnauthorized, []byte(`not-json`)},
+	} {
+		if code := iamCapacityFailureProblemCode(sample.status, sample.body); code != "invalid-problem" {
+			t.Fatalf("invalid capacity failure code = %q", code)
+		}
 	}
 }
 
@@ -6160,10 +6241,15 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 		failures                 int
 		statuses                 map[int]int
 		errors                   map[string]int
+		problemCodes             map[string]int
 		starts                   []time.Time
 		first, last              time.Time
 		lags, scheduledLatencies []time.Duration
 		interval                 time.Duration
+		firstFailureIndex        int
+		firstFailureStatus       int
+		firstFailureProblemCode  string
+		firstFailureAuthority    []iamCapacityFailureAuthorityState
 	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.Proxy = nil
@@ -6197,13 +6283,18 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 				"stage": name, "lane": laneName, "completion": "INCOMPLETE",
 				"plannedSamples": planned[laneName], "observedSamples": 0,
 				"unobservedOutcomes": planned[laneName], "failures": 0,
-				"statusCounts": map[int]int{}, "errorCounts": map[string]int{},
+				"statusCounts": map[int]int{}, "errorCounts": map[string]int{}, "problemCodeCounts": map[string]int{},
 				"observedP50MS": nil, "observedP95MS": nil, "observedP99MS": nil, "observedMaxMS": nil,
 			}
 			if lane := lanes[laneName]; lane != nil {
 				observation["observedSamples"] = len(lane.latencies)
 				observation["unobservedOutcomes"] = planned[laneName] - len(lane.latencies)
 				observation["failures"], observation["statusCounts"], observation["errorCounts"] = lane.failures, lane.statuses, lane.errors
+				observation["problemCodeCounts"] = lane.problemCodes
+				if lane.firstFailureProblemCode != "" {
+					observation["firstFailureIndex"], observation["firstFailureStatus"] = lane.firstFailureIndex, lane.firstFailureStatus
+					observation["firstFailureProblemCode"], observation["firstFailureAuthorityState"] = lane.firstFailureProblemCode, lane.firstFailureAuthority
+				}
 				if len(lane.latencies) != 0 {
 					for metric, percentile := range map[string]int{"observedP50MS": 50, "observedP95MS": 95, "observedP99MS": 99, "observedMaxMS": 100} {
 						observation[metric] = float64(capacityPercentile(lane.latencies, percentile)) / float64(time.Millisecond)
@@ -6237,6 +6328,7 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 	}
 	sample()
 	cpuStart := capacityCPU(t)
+	memoryEventsStart := capacityMemoryEvents(t)
 	started := time.Now()
 	results, err := dispatchIAMCapacityCalls(ctx, client, started, concurrency, schedule, calls)
 	if err != nil {
@@ -6254,7 +6346,7 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 			call := calls[result.index]
 			lane := lanes[call.lane]
 			if lane == nil {
-				lane = &laneResult{statuses: make(map[int]int), errors: make(map[string]int), interval: call.interval}
+				lane = &laneResult{statuses: make(map[int]int), errors: make(map[string]int), problemCodes: make(map[string]int), interval: call.interval}
 				lanes[call.lane] = lane
 			}
 			lane.latencies = append(lane.latencies, result.completed.Sub(result.started))
@@ -6284,12 +6376,21 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 			if !accepted {
 				lane.failures++
 				reason := "response-contract"
+				problemCode := "not-a-problem"
 				if result.failed {
 					reason = "transport-or-body"
+					problemCode = "transport-or-body"
 				} else if result.status != call.status {
 					reason = "unexpected-status"
+					problemCode = iamCapacityFailureProblemCode(result.status, result.body)
 				}
 				lane.errors[reason]++
+				lane.problemCodes[problemCode]++
+				if lane.firstFailureProblemCode == "" {
+					lane.firstFailureIndex, lane.firstFailureStatus = result.index, result.status
+					lane.firstFailureProblemCode = problemCode
+					lane.firstFailureAuthority = observeIAMCapacityFailureAuthorityState(ctx, database)
+				}
 			}
 			clear(result.body)
 			if result.confirm != nil {
@@ -6305,11 +6406,18 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 	elapsed := time.Since(started)
 	sample()
 	cpuEnd := capacityCPU(t)
+	memoryEventsEnd := capacityMemoryEvents(t)
 	for key, before := range cpuStart {
 		if cpuEnd[key] < before {
 			t.Fatal("capacity counter reset during one stage")
 		}
 		cpuEnd[key] -= before
+	}
+	for key, before := range memoryEventsStart {
+		if memoryEventsEnd[key] < before {
+			t.Fatal("capacity memory event counter reset during one stage")
+		}
+		memoryEventsEnd[key] -= before
 	}
 	names := make([]string, 0, len(lanes))
 	for lane := range lanes {
@@ -6326,7 +6434,7 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 		}
 		observation := map[string]any{
 			"stage": name, "lane": laneName, "concurrency": concurrency, "load": load,
-			"samples": len(lane.latencies), "failures": lane.failures, "statusCounts": lane.statuses, "errorCounts": lane.errors,
+			"samples": len(lane.latencies), "failures": lane.failures, "statusCounts": lane.statuses, "errorCounts": lane.errors, "problemCodeCounts": lane.problemCodes,
 			"elapsedMS": float64(elapsed) / float64(time.Millisecond), "verifiedRequestsPerSecond": float64(len(lane.latencies)-lane.failures) / elapsed.Seconds(),
 			"p50MS":              float64(capacityPercentile(lane.latencies, 50)) / float64(time.Millisecond),
 			"p95MS":              float64(capacityPercentile(lane.latencies, 95)) / float64(time.Millisecond),
@@ -6336,6 +6444,11 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 			"observedIAMActivePeak": peakActive, "observedIAMLockWaitingPeak": peakLockWaiting, "observedIAMOutboxPeak": peakOutbox,
 			"poolWaitDuration": nil, "lockWaitDuration": nil, "runnerCPUChange": cpuEnd,
 			"runnerMemoryCurrentBytes": capacityCgroupNumber(t, "memory.current"), "runnerMemoryPeakBytes": capacityCgroupNumber(t, "memory.peak"),
+			"runnerMemoryEventsChange": memoryEventsEnd,
+		}
+		if lane.firstFailureProblemCode != "" {
+			observation["firstFailureIndex"], observation["firstFailureStatus"] = lane.firstFailureIndex, lane.firstFailureStatus
+			observation["firstFailureProblemCode"], observation["firstFailureAuthorityState"] = lane.firstFailureProblemCode, lane.firstFailureAuthority
 		}
 		if schedule == iamCapacityIndependent || schedule == iamCapacityOpenLoop {
 			observation["laneStartMS"] = float64(lane.first.Sub(started)) / float64(time.Millisecond)
