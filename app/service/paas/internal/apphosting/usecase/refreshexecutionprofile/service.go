@@ -28,6 +28,48 @@ var (
 	ErrRetryableTransaction = errors.New("execution profile transaction must be retried")
 )
 
+// RefreshFailureStage identifies the closed workflow stage that rejected an
+// execution-profile refresh. It deliberately carries no adapter, database, or
+// host detail across the worker process boundary.
+type RefreshFailureStage uint8
+
+const (
+	RefreshFailureUnknown RefreshFailureStage = iota
+	RefreshFailureObserve
+	RefreshFailureValidate
+	RefreshFailureLoad
+	RefreshFailureBuild
+	RefreshFailureSave
+	RefreshFailureTransaction
+)
+
+type refreshFailure struct {
+	stage RefreshFailureStage
+	cause error
+}
+
+func (failure *refreshFailure) Error() string {
+	return "execution profile refresh failed"
+}
+
+func (failure *refreshFailure) Unwrap() error {
+	return failure.cause
+}
+
+// ClassifyRefreshFailure returns only the closed refresh stage. Callers must
+// not expose the wrapped native cause outside the service process.
+func ClassifyRefreshFailure(err error) RefreshFailureStage {
+	var failure *refreshFailure
+	if !errors.As(err, &failure) || failure == nil {
+		return RefreshFailureUnknown
+	}
+	return failure.stage
+}
+
+func failRefresh(stage RefreshFailureStage, cause error) error {
+	return &refreshFailure{stage: stage, cause: cause}
+}
+
 type IDs struct {
 	PoolID   paasv1.ResourceID
 	TargetID paasv1.ResourceID
@@ -129,12 +171,17 @@ func (service *Service) Refresh(ctx context.Context) error {
 	}}
 	observation, err := service.adapter.ObserveExecutionTarget(ctx, request)
 	if err != nil {
-		return errors.New("execution target observation failed")
+		return failRefresh(RefreshFailureObserve, err)
 	}
-	if paasv1.ValidateExecutionTargetObservation(observation) != nil ||
-		observation.ExecutionTargetID != service.config.IDs.TargetID ||
+	if validationErr := paasv1.ValidateExecutionTargetObservation(observation); validationErr != nil {
+		return failRefresh(RefreshFailureValidate, validationErr)
+	}
+	if observation.ExecutionTargetID != service.config.IDs.TargetID ||
 		!validLocalIsolationObservation(observation) {
-		return errors.New("execution target observation is invalid")
+		return failRefresh(
+			RefreshFailureValidate,
+			errors.New("execution target observation is invalid"),
+		)
 	}
 
 	for attempt := 0; attempt < service.config.MaxTransactionAttempts; attempt++ {
@@ -144,20 +191,29 @@ func (service *Service) Refresh(ctx context.Context) error {
 			func(transactionContext context.Context, transaction Transaction) error {
 				snapshot, loadErr := transaction.Load(transactionContext, service.config.IDs)
 				if loadErr != nil {
-					return loadErr
+					return failRefresh(RefreshFailureLoad, loadErr)
 				}
 				profile, versions, buildErr := service.build(snapshot, observation)
 				if buildErr != nil {
-					return buildErr
+					return failRefresh(RefreshFailureBuild, buildErr)
 				}
-				return transaction.Save(transactionContext, versions, profile)
+				if saveErr := transaction.Save(transactionContext, versions, profile); saveErr != nil {
+					return failRefresh(RefreshFailureSave, saveErr)
+				}
+				return nil
 			},
 		)
+		if err == nil {
+			return nil
+		}
 		if !errors.Is(err, ErrRetryableTransaction) {
+			if ClassifyRefreshFailure(err) == RefreshFailureUnknown {
+				return failRefresh(RefreshFailureTransaction, err)
+			}
 			return err
 		}
 	}
-	return ErrRetryableTransaction
+	return failRefresh(RefreshFailureTransaction, ErrRetryableTransaction)
 }
 
 func (service *Service) Ready(ctx context.Context) error {

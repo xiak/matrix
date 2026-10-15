@@ -84,6 +84,14 @@ const (
 	workerFailureDatabase                workerFailureStage = "PAAS_WORKER_DATABASE"
 	workerFailureExecutionProfile        workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE"
 	workerFailureExecutionProfileRefresh workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_REFRESH"
+	workerFailureExecutionObserveTimeout workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_TIMEOUT"
+	workerFailureExecutionObserveDown    workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_UNAVAILABLE"
+	workerFailureExecutionObserveReject  workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_REJECTED"
+	workerFailureExecutionValidate       workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_VALIDATE"
+	workerFailureExecutionLoad           workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_LOAD"
+	workerFailureExecutionBuild          workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_BUILD"
+	workerFailureExecutionSave           workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_SAVE"
+	workerFailureExecutionTransaction    workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_TRANSACTION"
 	workerFailureArtifactCatalog         workerFailureStage = "PAAS_WORKER_ARTIFACT_CATALOG"
 	workerFailureSecretResolver          workerFailureStage = "PAAS_WORKER_SECRET_RESOLVER"
 	workerFailureComposeRuntime          workerFailureStage = "PAAS_WORKER_COMPOSE_RUNTIME"
@@ -176,7 +184,7 @@ func run(ctx context.Context) (result error) {
 	}
 	stage = workerFailureExecutionProfileRefresh
 	if err := executionProfile.Refresh(ctx); err != nil {
-		return errors.New("PaaS local execution profile cannot start")
+		return failWorker(executionProfileRefreshFailure(err))
 	}
 
 	stage = workerFailureArtifactCatalog
@@ -392,6 +400,55 @@ func run(ctx context.Context) (result error) {
 			)
 		},
 	)
+}
+
+func executionProfileRefreshFailure(err error) workerFailureStage {
+	var adapterFault paasv1.AdapterFault
+	adapterClass := paasv1.AdapterErrorClass("")
+	if errors.As(err, &adapterFault) {
+		adapterClass = adapterFault.Normalized.Class
+	}
+	return executionProfileRefreshStageFailure(
+		refreshexecutionprofile.ClassifyRefreshFailure(err),
+		adapterClass,
+	)
+}
+
+func executionProfileRefreshStageFailure(
+	stage refreshexecutionprofile.RefreshFailureStage,
+	adapterClass paasv1.AdapterErrorClass,
+) workerFailureStage {
+	switch stage {
+	case refreshexecutionprofile.RefreshFailureObserve:
+		switch adapterClass {
+		case paasv1.AdapterErrorTimeout:
+			return workerFailureExecutionObserveTimeout
+		case paasv1.AdapterErrorRateLimited,
+			paasv1.AdapterErrorTransient,
+			paasv1.AdapterErrorUnavailable:
+			return workerFailureExecutionObserveDown
+		case paasv1.AdapterErrorValidation,
+			paasv1.AdapterErrorConflict,
+			paasv1.AdapterErrorPermissionDenied,
+			paasv1.AdapterErrorQuotaExceeded,
+			paasv1.AdapterErrorNotFound:
+			return workerFailureExecutionObserveReject
+		default:
+			return workerFailureExecutionProfileRefresh
+		}
+	case refreshexecutionprofile.RefreshFailureValidate:
+		return workerFailureExecutionValidate
+	case refreshexecutionprofile.RefreshFailureLoad:
+		return workerFailureExecutionLoad
+	case refreshexecutionprofile.RefreshFailureBuild:
+		return workerFailureExecutionBuild
+	case refreshexecutionprofile.RefreshFailureSave:
+		return workerFailureExecutionSave
+	case refreshexecutionprofile.RefreshFailureTransaction:
+		return workerFailureExecutionTransaction
+	default:
+		return workerFailureExecutionProfileRefresh
+	}
 }
 
 func newLocalExecutionProfile(

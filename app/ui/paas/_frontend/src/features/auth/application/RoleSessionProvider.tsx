@@ -424,14 +424,15 @@ export function RoleSessionProvider({
       setActiveCredential(null);
       setActiveSourceCredential(null);
       setObservedSession(session);
-      return finishSourceRestore(revision);
+      setStage("source-validation-unknown");
+      return await finishSourceRestore(revision);
     } catch (failure) {
       if (revision !== operationRevision.current || roleCredential.current !== credential) return false;
       setError(operationFailure(failure));
       setStage("exit-unknown");
       return false;
     } finally {
-      if (revision === operationRevision.current && busy !== "restore") setBusy(null);
+      if (revision === operationRevision.current) setBusy(null);
     }
   }, [busy, finishSourceRestore, observedSession, service]);
 
@@ -466,9 +467,10 @@ export function RoleSessionProvider({
   }, [busy, current, expireCurrentSource, observedSession, resetRole, service]);
 
   const restoreSource = useCallback(() => {
+    if (busy || (stage !== "source-validation-unknown" && stage !== "role-expired")) return Promise.resolve(false);
     const revision = ++operationRevision.current;
     return finishSourceRestore(revision);
-  }, [finishSourceRestore]);
+  }, [busy, finishSourceRestore, stage]);
 
   const clearAttempt = useCallback(() => {
     if (busy || stage === "activation-unknown" || stage === "role-active" || stage === "exit-unknown" || stage === "source-validation-unknown") return;

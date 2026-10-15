@@ -6,6 +6,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshexecutionprofile"
 )
 
 type loopWorker struct {
@@ -95,6 +98,69 @@ func TestWorkerFailureCodeDoesNotExposeUnexpectedError(t *testing.T) {
 	native := errors.New("database password and /host/path must not escape")
 	if code := workerFailureCode(native); code != workerFailureUnexpected {
 		t.Fatalf("unexpected worker failure code = %q", code)
+	}
+}
+
+func TestExecutionProfileRefreshStageFailureUsesOnlyClosedCodes(t *testing.T) {
+	tests := []struct {
+		name         string
+		stage        refreshexecutionprofile.RefreshFailureStage
+		adapterClass paasv1.AdapterErrorClass
+		want         workerFailureStage
+	}{
+		{
+			name: "observe timeout", stage: refreshexecutionprofile.RefreshFailureObserve,
+			adapterClass: paasv1.AdapterErrorTimeout, want: workerFailureExecutionObserveTimeout,
+		},
+		{
+			name: "observe unavailable", stage: refreshexecutionprofile.RefreshFailureObserve,
+			adapterClass: paasv1.AdapterErrorUnavailable, want: workerFailureExecutionObserveDown,
+		},
+		{
+			name: "observe rejected", stage: refreshexecutionprofile.RefreshFailureObserve,
+			adapterClass: paasv1.AdapterErrorValidation, want: workerFailureExecutionObserveReject,
+		},
+		{
+			name: "unexpected adapter", stage: refreshexecutionprofile.RefreshFailureObserve,
+			adapterClass: paasv1.AdapterErrorInternal,
+			want:         workerFailureExecutionProfileRefresh,
+		},
+		{
+			name: "validate", stage: refreshexecutionprofile.RefreshFailureValidate,
+			want: workerFailureExecutionValidate,
+		},
+		{
+			name: "load", stage: refreshexecutionprofile.RefreshFailureLoad,
+			want: workerFailureExecutionLoad,
+		},
+		{
+			name: "build", stage: refreshexecutionprofile.RefreshFailureBuild,
+			want: workerFailureExecutionBuild,
+		},
+		{
+			name: "save", stage: refreshexecutionprofile.RefreshFailureSave,
+			want: workerFailureExecutionSave,
+		},
+		{
+			name: "transaction", stage: refreshexecutionprofile.RefreshFailureTransaction,
+			want: workerFailureExecutionTransaction,
+		},
+		{
+			name: "unknown", stage: refreshexecutionprofile.RefreshFailureUnknown,
+			want: workerFailureExecutionProfileRefresh,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := executionProfileRefreshStageFailure(test.stage, test.adapterClass); got != test.want {
+				t.Fatalf("refresh failure code = %q, want %q", got, test.want)
+			}
+		})
+	}
+
+	native := errors.New("database password and /host/path must not escape")
+	if got := executionProfileRefreshFailure(native); got != workerFailureExecutionProfileRefresh {
+		t.Fatalf("unexpected refresh failure code = %q", got)
 	}
 }
 

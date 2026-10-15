@@ -12,6 +12,7 @@ import type {
 } from "@/features/auth/domain/serviceAuthorization";
 import { previewAccountRepository, previewCredential, previewIamRepository } from "@/features/auth/repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import { AUDIT_API_VERSION } from "@/features/audit/domain/audit";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import { previewServiceActivationStorageKey, writePreviewServiceActivation } from "../application/previewServiceActivation";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
@@ -228,10 +229,12 @@ async function renderConsole({
   listServiceDefinitions,
   getServiceActivation,
   activateService,
+  activateQuota,
   listCommandResults,
   logout = vi.fn().mockResolvedValue(undefined),
   accountRepository,
   iamRepository,
+  roleSelfService,
   product,
   view: initialView,
   heldRoute
@@ -252,10 +255,12 @@ async function renderConsole({
   listServiceDefinitions?: ControlPlaneRepository["listServiceDefinitions"];
   getServiceActivation?: ControlPlaneRepository["getServiceActivation"];
   activateService?: ControlPlaneRepository["activateService"];
+  activateQuota?: ControlPlaneRepository["activateQuota"];
   listCommandResults?: ControlPlaneRepository["listCommandResults"];
   logout?: IamRepository["logout"];
   accountRepository?: AccountRepository;
   iamRepository?: IamRepository;
+  roleSelfService?: IamRepository["roleSelfService"];
   heldRoute?: { href: string; ready: boolean; promise: Promise<void> };
 } = {}) {
   const loadedInstallations = new Map<string, ControlPlaneSnapshot["installations"][number]>();
@@ -272,7 +277,7 @@ async function renderConsole({
       return installation;
     }),
     terminateInstallation,
-    activateQuota: vi.fn(),
+    activateQuota: activateQuota ?? vi.fn(),
     createInstallation: vi.fn(),
     readApplication,
     listApplications,
@@ -301,19 +306,23 @@ async function renderConsole({
       };
     },
     async changePassword() {},
-    logout
+    logout,
+    roleSelfService
   };
   const user = userEvent.setup({ delay: null });
   let replaceRepository: (next: ControlPlaneRepository) => void = () => {};
+  let commitRoute: (href: string) => void = () => {};
   function RoutedPage() {
     const [activeRepository, setActiveRepository] = useState(repository);
     replaceRepository = setActiveRepository;
     const [href, setHref] = useState(consoleRouteHref({ section, view: initialView, product }));
-    if (heldRoute) navigation.push.mockImplementation((target: string) => {
+    const acceptRoute = (target: string) => {
       const url = new URL(target, "https://matrix.invalid");
       navigation.query = url.search.slice(1);
       setHref(target);
-    });
+    };
+    commitRoute = acceptRoute;
+    if (heldRoute) navigation.push.mockImplementation(acceptRoute);
     if (heldRoute && href === heldRoute.href && !heldRoute.ready) throw heldRoute.promise;
     return <ConsoleShellRenderer accountRepository={accountRepository} experience={experience} repository={activeRepository} selection={parseControlPlanePathname(new URL(href, "https://matrix.invalid").pathname)} />;
   }
@@ -330,7 +339,7 @@ async function renderConsole({
   if (openWorkspace) await user.click(await screen.findByRole("button", { name: section === "quotas" ? "激活配额" : section === "installations" ? "安装服务" : "查看平台状态" }));
   const loginDestination = navigation.replace.mock.calls.at(-1)?.[0];
   navigation.replace.mockClear();
-  return { user, view, repository, replaceRepository, loginDestination };
+  return { user, view, repository, replaceRepository, commitRoute, loginDestination };
 }
 
 afterEach(() => {
@@ -338,6 +347,7 @@ afterEach(() => {
   localStorage.clear();
   useConsoleUiStore.setState({ sidebarOverlayOpen: false, workspaceOpen: false });
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   navigation.push.mockReset();
   navigation.replace.mockReset();
   vi.useRealTimers();
@@ -2305,6 +2315,147 @@ describe("ConsoleShellRenderer", () => {
     await user.click(within(dialog).getByRole("button", { name: "关闭产品与服务" }));
     expect(rail.closest("[inert]")).toBeNull();
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("日志概览");
+  });
+
+  describe("quota recovery in the original window", () => {
+    it.each([false, true])("rereads authoritative quota data after UNKNOWN with read failure=%s and never resubmits activation", async failRead => {
+      let serverCommitted = false; let originalRequest = "";
+      const recoveredQuota = { ...snapshot.entitlements[0]!, id: "quota-recovered", reservedCount: 0, consumedCount: 0 };
+      const activateQuota = vi.fn<ControlPlaneRepository["activateQuota"]>(async (_credential, _command, requestId) => {
+        serverCommitted = true; originalRequest = requestId;
+        throw new HttpProblem(503, "SYNTHETIC_LOST_RESPONSE");
+      });
+      const load = vi.fn<ControlPlaneRepository["load"]>(async (_credential, resources) => {
+        if (failRead && resources.length === 1 && resources[0] === "entitlements") throw new HttpProblem(503, "SYNTHETIC_READ_FAILURE");
+        return { ...snapshot, entitlements: serverCommitted ? [recoveredQuota] : [] };
+      });
+      const listCommandResults = vi.fn<NonNullable<ControlPlaneRepository["listCommandResults"]>>(async () => [{
+        idempotencyKey: originalRequest, commandType: "QUOTA_ACTIVATE", inputDigest: `sha256:${"d".repeat(64)}`,
+        state: "SUCCEEDED", target: { kind: "QUOTA_ENTITLEMENT", id: recoveredQuota.id }, operation: null, bindingId: null,
+        completedAt: new Date().toISOString()
+      }]);
+      const { user } = await renderConsole({ section: "quotas", openWorkspace: true, activateQuota, listCommandResults, load });
+      const confirm = screen.getByRole("button", { name: "确认激活配额" });
+      await user.click(confirm);
+      await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(true));
+      await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
+      await screen.findByText(recoveredQuota.id);
+      await waitFor(() => expect(screen.queryByRole("button", { name: "确认激活配额" })).toBeNull());
+      expect(!confirm.isConnected || confirm.closest("[inert]")).toBeTruthy();
+      expect(activateQuota).toHaveBeenCalledTimes(1);
+      expect(listCommandResults).toHaveBeenCalledWith("renderer-test-memory-only-session", "QUOTA_ACTIVATE");
+      expect(load).toHaveBeenLastCalledWith("renderer-test-memory-only-session", ["entitlements"]);
+      if (failRead) {
+        expect(await screen.findByText("托管服务控制面暂时不可用，未展示任何模拟资源。")).toBeTruthy();
+        expect(screen.queryByText("尚未激活服务配额")).toBeNull();
+        expect(screen.getByRole("main").textContent).not.toContain("已激活1");
+      } else {
+        await waitFor(() => expect(screen.getByRole("main").textContent).toContain("已激活1"));
+        expect(screen.getByRole("main").textContent).toContain("使用中0");
+        expect(screen.getByRole("main").textContent).toContain("可用1");
+        expect(screen.queryByText("尚未激活服务配额")).toBeNull();
+      }
+      expect(navigation.replace).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("role exit from a business route", () => {
+    function selfService(overrides: Partial<NonNullable<IamRepository["roleSelfService"]>> = {}): NonNullable<IamRepository["roleSelfService"]> {
+      const role = {
+        roleId: "role-support-reader", accountId: "organization-test", name: "Signed UI Support Reader", status: "ACTIVE" as const,
+        maxSessionDurationSeconds: 3600, resourceVersion: 4,
+        capability: { action: "iam.role.assume" as const, resource: { kind: "ROLE" as const, id: "role-support-reader" }, available: true as const, restrictionReason: null }
+      };
+      const active = {
+        id: "role-session-reader", accountId: role.accountId, roleId: role.roleId, sourceUserId: "principal-test", status: "ACTIVE" as const,
+        issuedAt: new Date(Date.now() - 30_000).toISOString(), expiresAt: new Date(Date.now() + 3_600_000).toISOString(), revokedAt: null
+      };
+      const revoked = { ...active, status: "REVOKED" as const, revokedAt: new Date().toISOString() };
+      return {
+        listAssumable: vi.fn(async () => ({ accountId: role.accountId, sourceUserId: active.sourceUserId, items: [role], nextAfter: null })),
+        assume: vi.fn(async () => ({ outcome: "APPLIED" as const, session: active, credential: "synthetic-role-bearer" })),
+        readByRequest: vi.fn(async () => active), revokeByRequest: vi.fn(async () => revoked),
+        currentIdentity: vi.fn(async () => ({ session: active, account: { id: role.accountId, displayName: "Xiak" }, role: { id: role.roleId, name: role.name }, sourceUser: { id: active.sourceUserId, loginName: "admin", displayName: "Source member" } })),
+        logout: vi.fn(async () => revoked), revalidateSource: vi.fn(async () => undefined), ...overrides
+      };
+    }
+
+    async function enterAudit(service: NonNullable<IamRepository["roleSelfService"]>) {
+      const fetchAudit = vi.fn(async (path: RequestInfo | URL, init?: RequestInit) => {
+        if (String(path) !== "/api/audit/v1/records:query") throw new Error("Unexpected test API request");
+        const role = new Headers(init?.headers).get("Authorization") === "Bearer synthetic-role-bearer";
+        return new Response(JSON.stringify(role ? { code: "PERMISSION_DENIED" } : { apiVersion: AUDIT_API_VERSION, kind: "AuditRecordPage", tenantId: "organization-test", records: [] }), { status: role ? 403 : 200, headers: { "Content-Type": "application/json" } });
+      });
+      vi.stubGlobal("fetch", fetchAudit);
+      const sourceLogout = vi.fn(async () => undefined);
+      const result = await renderConsole({ section: "access", view: "role-access", roleSelfService: service, logout: sourceLogout });
+      await result.user.click(await screen.findByRole("button", { name: "审阅并承担 Signed UI Support Reader" }));
+      await result.user.click(screen.getByRole("button", { name: "承担角色" }));
+      await screen.findByRole("heading", { name: "当前角色身份" });
+      await act(async () => result.commitRoute("/console/audit/"));
+      await screen.findByText("当前身份没有 audit.record.read 或 audit.integrity.verify 权限。");
+      navigation.push.mockClear(); navigation.replace.mockClear();
+      return { ...result, fetchAudit, sourceLogout };
+    }
+
+    it("restores the same Audit route with the User bearer only after source validation", async () => {
+      let restoreSource!: () => void;
+      const service = selfService({ revalidateSource: vi.fn(() => new Promise<void>(resolve => { restoreSource = resolve; })) });
+      const { user, fetchAudit, sourceLogout } = await enterAudit(service);
+      await user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+      await user.click(screen.getByRole("menuitem", { name: "结束当前角色会话" }));
+      await screen.findByText("来源用户仍需重新验证");
+      const restore = screen.getByRole("button", { name: "重新验证来源用户" });
+      expect((restore as HTMLButtonElement).disabled).toBe(true);
+      expect(screen.queryByText(/IAM 会话已失效/)).toBeNull();
+      expect(fetchAudit).toHaveBeenCalledTimes(1);
+      await user.click(restore);
+      expect(service.revalidateSource).toHaveBeenCalledTimes(1);
+      await act(async () => restoreSource());
+      await waitFor(() => expect(fetchAudit).toHaveBeenCalledTimes(2));
+      expect(new Headers(fetchAudit.mock.calls[1]![1]?.headers).get("Authorization")).toBe("Bearer renderer-test-memory-only-session");
+      expect(await screen.findByRole("heading", { level: 1, name: "审计记录" })).toBeTruthy();
+      await waitFor(() => expect(screen.queryByText("无法读取审计记录")).toBeNull());
+      expect(screen.queryByText(/IAM 会话已失效/)).toBeNull();
+      expect(screen.queryByText("Signed UI Support Reader")).toBeNull();
+      await user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+      expect(within(screen.getByRole("dialog", { name: "账号菜单" })).getByText("admin", { exact: true })).toBeTruthy();
+      expect(navigation.push).not.toHaveBeenCalled(); expect(navigation.replace).not.toHaveBeenCalled();
+      expect(sourceLogout).not.toHaveBeenCalled();
+    });
+
+    it("drops Role-owned Audit filters when exit and source validation settle immediately", async () => {
+      const { user, fetchAudit } = await enterAudit(selfService());
+      await user.click(screen.getByRole("button", { name: "查询条件" }));
+      await user.type(screen.getByLabelText("操作者 ID", { exact: true }), "role-owned-filter");
+      await user.click(screen.getByRole("button", { name: "查询" }));
+      await waitFor(() => expect(fetchAudit).toHaveBeenCalledTimes(2));
+      expect(JSON.parse(String(fetchAudit.mock.calls[1]![1]?.body)).actor).toEqual({ type: "USER", id: "role-owned-filter" });
+      await user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+      await user.click(screen.getByRole("menuitem", { name: "结束当前角色会话" }));
+      await waitFor(() => expect(fetchAudit.mock.calls.some(([, init]) => new Headers(init?.headers).get("Authorization") === "Bearer renderer-test-memory-only-session")).toBe(true));
+      const sourceReads = fetchAudit.mock.calls.filter(([, init]) => new Headers(init?.headers).get("Authorization") === "Bearer renderer-test-memory-only-session");
+      expect(JSON.parse(String(sourceReads[0]![1]?.body)).actor).toBeUndefined();
+      expect(JSON.parse(String(sourceReads[0]![1]?.body)).cursor).toBeUndefined();
+      expect(await screen.findByRole("heading", { level: 1, name: "审计记录" })).toBeTruthy();
+      expect(screen.queryByText(/IAM 会话已失效/)).toBeNull();
+    });
+
+    it.each(["source-unavailable", "logout-unknown"] as const)("keeps %s in the role recovery surface without navigation or source logout", async (failure) => {
+      const service = selfService(failure === "source-unavailable"
+        ? { revalidateSource: vi.fn(async () => { throw new HttpProblem(503, "IAM_UNAVAILABLE"); }) }
+        : { logout: vi.fn(async () => { throw new Error("Synthetic lost logout response"); }) });
+      const { user, fetchAudit, sourceLogout } = await enterAudit(service);
+      await user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+      await user.click(screen.getByRole("menuitem", { name: "结束当前角色会话" }));
+      expect(await screen.findByText(failure === "source-unavailable" ? "来源用户仍需重新验证" : "角色退出结果尚未确认")).toBeTruthy();
+      await waitFor(() => expect((screen.getByRole("button", { name: failure === "source-unavailable" ? "重新验证来源用户" : "重试同一退出" }) as HTMLButtonElement).disabled).toBe(false));
+      expect(fetchAudit).toHaveBeenCalledTimes(1);
+      expect(screen.queryByText(/IAM 会话已失效/)).toBeNull();
+      expect(navigation.push).not.toHaveBeenCalled(); expect(navigation.replace).not.toHaveBeenCalled();
+      expect(sourceLogout).not.toHaveBeenCalled();
+      expect(service.logout).toHaveBeenCalledTimes(1);
+    });
   });
 
   it("shows failed revocation without claiming logout or revealing the upstream error", async () => {

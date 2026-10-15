@@ -13,6 +13,7 @@ var profileTestTime = time.Date(2026, 8, 26, 8, 0, 0, 0, time.UTC)
 
 type profileAdapter struct {
 	observation paasv1.ExecutionTargetObservation
+	err         error
 }
 
 func (adapter *profileAdapter) Capabilities(context.Context) (paasv1.AdapterCapabilitiesContract, error) {
@@ -34,12 +35,18 @@ func (adapter *profileAdapter) ObserveExecutionTarget(
 		request.Command.ExecutionTargetID != adapter.observation.ExecutionTargetID {
 		return paasv1.ExecutionTargetObservation{}, errors.New("invalid observation request")
 	}
+	if adapter.err != nil {
+		return paasv1.ExecutionTargetObservation{}, adapter.err
+	}
 	return adapter.observation, nil
 }
 
 type profileRepository struct {
-	snapshot Snapshot
-	saves    int
+	snapshot  Snapshot
+	saves     int
+	withinErr error
+	loadErr   error
+	saveErr   error
 }
 
 func (repository *profileRepository) WithinTransaction(
@@ -47,6 +54,9 @@ func (repository *profileRepository) WithinTransaction(
 	_ paasv1.TenantID,
 	callback func(context.Context, Transaction) error,
 ) error {
+	if repository.withinErr != nil {
+		return repository.withinErr
+	}
 	return callback(ctx, &profileTransaction{repository: repository})
 }
 
@@ -55,6 +65,9 @@ type profileTransaction struct {
 }
 
 func (transaction *profileTransaction) Load(context.Context, IDs) (Snapshot, error) {
+	if transaction.repository.loadErr != nil {
+		return Snapshot{}, transaction.repository.loadErr
+	}
 	return transaction.repository.snapshot, nil
 }
 
@@ -63,6 +76,9 @@ func (transaction *profileTransaction) Save(
 	versions Versions,
 	profile Profile,
 ) error {
+	if transaction.repository.saveErr != nil {
+		return transaction.repository.saveErr
+	}
 	current := transaction.repository.snapshot
 	if versions.Pool != currentPoolVersion(current.Pool) ||
 		versions.Target != currentTargetVersion(current.Target) ||
@@ -120,6 +136,94 @@ func TestRefreshCreatesAndKeepsLocalProfileFresh(t *testing.T) {
 	}
 }
 
+func TestRefreshClassifiesNormalizedObservationFailureWithoutDroppingCause(t *testing.T) {
+	fault := paasv1.AdapterFault{Normalized: paasv1.NormalizedAdapterError{
+		Class: paasv1.AdapterErrorTimeout, Code: paasv1.ErrorDeadlineExceeded,
+		Message: "closed adapter timeout", Retryable: true,
+	}}
+	adapter := &profileAdapter{
+		observation: readyProfileObservation(profileTestTime),
+		err:         fault,
+	}
+	repository := &profileRepository{snapshot: Snapshot{TransactionTime: profileTestTime}}
+	err := newProfileService(t, adapter, repository).Refresh(context.Background())
+	if stage := ClassifyRefreshFailure(err); stage != RefreshFailureObserve {
+		t.Fatalf("observation failure stage = %v", stage)
+	}
+	var preserved paasv1.AdapterFault
+	if !errors.As(err, &preserved) || preserved.Normalized.Class != paasv1.AdapterErrorTimeout {
+		t.Fatalf("normalized observation failure = %#v", err)
+	}
+	if repository.saves != 0 {
+		t.Fatal("failed observation wrote execution profile")
+	}
+}
+
+func TestRefreshClassifiesInvalidObservation(t *testing.T) {
+	observation := readyProfileObservation(profileTestTime)
+	observation.IdentityFingerprint = ""
+	adapter := &profileAdapter{observation: observation}
+	repository := &profileRepository{snapshot: Snapshot{TransactionTime: profileTestTime}}
+	err := newProfileService(t, adapter, repository).Refresh(context.Background())
+	if stage := ClassifyRefreshFailure(err); stage != RefreshFailureValidate {
+		t.Fatalf("invalid observation failure stage = %v", stage)
+	}
+	if repository.saves != 0 {
+		t.Fatal("invalid observation wrote execution profile")
+	}
+}
+
+func TestRefreshClassifiesPersistenceStagesAndPreservesSentinels(t *testing.T) {
+	native := errors.New("native detail must remain process-local")
+	tests := []struct {
+		name       string
+		repository *profileRepository
+		wantStage  RefreshFailureStage
+		wantCause  error
+	}{
+		{
+			name: "load", repository: &profileRepository{
+				snapshot: Snapshot{TransactionTime: profileTestTime}, loadErr: native,
+			},
+			wantStage: RefreshFailureLoad, wantCause: native,
+		},
+		{
+			name: "save", repository: &profileRepository{
+				snapshot: Snapshot{TransactionTime: profileTestTime}, saveErr: ErrConflict,
+			},
+			wantStage: RefreshFailureSave, wantCause: ErrConflict,
+		},
+		{
+			name: "transaction", repository: &profileRepository{
+				snapshot: Snapshot{TransactionTime: profileTestTime}, withinErr: native,
+			},
+			wantStage: RefreshFailureTransaction, wantCause: native,
+		},
+		{
+			name: "retry exhaustion", repository: &profileRepository{
+				snapshot: Snapshot{TransactionTime: profileTestTime},
+				saveErr:  ErrRetryableTransaction,
+			},
+			wantStage: RefreshFailureTransaction, wantCause: ErrRetryableTransaction,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			adapter := &profileAdapter{observation: readyProfileObservation(profileTestTime)}
+			err := newProfileService(t, adapter, test.repository).Refresh(context.Background())
+			if stage := ClassifyRefreshFailure(err); stage != test.wantStage {
+				t.Fatalf("failure stage = %v, want %v", stage, test.wantStage)
+			}
+			if !errors.Is(err, test.wantCause) {
+				t.Fatalf("failure = %v, want cause %v", err, test.wantCause)
+			}
+			if test.repository.saves != 0 {
+				t.Fatal("failed persistence stage wrote execution profile")
+			}
+		})
+	}
+}
+
 func TestRefreshPersistsDegradedProfileWithoutIsolation(t *testing.T) {
 	observation := readyProfileObservation(profileTestTime)
 	observation.Health = paasv1.ExecutionTargetHealthDegraded
@@ -150,7 +254,8 @@ func TestRefreshRejectsStoredProfileSelectorDrift(t *testing.T) {
 	repository.snapshot.TransactionTime = profileTestTime.Add(time.Minute)
 	adapter.observation.ObservedAt = repository.snapshot.TransactionTime
 	repository.snapshot.Pool.Spec.ExecutionTargetSelector.MatchLabels["unexpected"] = "drift"
-	if err := service.Refresh(context.Background()); !errors.Is(err, ErrConflict) {
+	if err := service.Refresh(context.Background()); !errors.Is(err, ErrConflict) ||
+		ClassifyRefreshFailure(err) != RefreshFailureBuild {
 		t.Fatalf("stored selector drift error = %v", err)
 	}
 	if repository.saves != 1 {

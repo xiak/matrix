@@ -49,6 +49,7 @@ import {
 } from "lucide-react";
 import { useSession } from "@/features/auth/application/SessionProvider";
 import { useEffectiveCredential, useRoleSession } from "@/features/auth/application/RoleSessionProvider";
+import { LiveRoleSelfService } from "@/features/auth/renderers/LiveRoleSelfService";
 import { AccountAccessProvider, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
 import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
@@ -265,6 +266,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const workspaceTrigger = useRef<{ focus(): void }>(null);
   const workspaceCloseButton = useRef<HTMLButtonElement>(null);
   const workspaceFocusRequested = useRef(false);
+  const recoveredQuotaHandled = useRef<string | null>(null);
   const sidebarOverlayOpen = useConsoleUiStore((state) => state.sidebarOverlayOpen);
   const workspaceOpen = useConsoleUiStore((state) => state.workspaceOpen);
   const openSidebar = useConsoleUiStore((state) => state.openSidebar);
@@ -276,6 +278,9 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const [regionId, setRegionId] = useState("all");
   const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
   const principal = session.current;
+  const dataOwnerKey = roleSession.mode === "ROLE"
+    ? `ROLE:${roleSession.identity?.session.id ?? "unverified"}`
+    : `USER:${principal?.session.id ?? "none"}:${session.sessionRevision}`;
   const product = (pendingSelection ?? navigation.selection).product;
   const productReady = !product || Boolean(activationAccountId && serviceWorkspaceMayLoad(
     activation.state,
@@ -312,6 +317,15 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
 
   const workspaceKey = scene?.workspace ? `${scene.section}:${scene.workspace.kind}` : null;
   useEffect(() => { closeWorkspace(); }, [workspaceKey, closeWorkspace, productReady]);
+
+  const recoveredQuotaRequest = controlPlane.managedServiceCommand?.intent.kind === "ACTIVATE_QUOTA" &&
+    controlPlane.managedServiceCommand.phase === "completed" && controlPlane.managedServiceCommand.result?.state === "SUCCEEDED"
+    ? controlPlane.managedServiceCommand.intent.requestId : null;
+  useEffect(() => {
+    if (!recoveredQuotaRequest || recoveredQuotaHandled.current === recoveredQuotaRequest) return;
+    recoveredQuotaHandled.current = recoveredQuotaRequest;
+    if (scene?.workspace?.kind === "quota-order" && workspaceOpen) closeWorkspaceAndRestoreFocus();
+  }, [closeWorkspaceAndRestoreFocus, recoveredQuotaRequest, scene?.workspace?.kind, workspaceOpen]);
 
   useEffect(() => {
     if (!navigation.pendingHref) return;
@@ -370,9 +384,10 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   }, [roleSession, sessionLogout, router, setHeaderPanel]);
   const headerLogout = useCallback(() => { setHeaderPanel(null); requestLeave(logout); }, [setHeaderPanel, requestLeave, logout]);
 
-  const workspaceVisible = Boolean(productReady && scene?.workspace && workspaceOpen && !navigation.pendingHref);
-  const workspaceMounted = Boolean(productReady && scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
-  const workspaceAction = productReady && scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
+  const roleBlocked = roleSession.mode === "BLOCKED";
+  const workspaceVisible = !roleBlocked && Boolean(productReady && scene?.workspace && workspaceOpen && !navigation.pendingHref);
+  const workspaceMounted = !roleBlocked && Boolean(productReady && scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
+  const workspaceAction = !roleBlocked && productReady && scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
   const WorkspaceActionIcon = workspaceAction?.icon;
   const activeService = frame.preview ? serviceForSelection(pendingSelection ?? navigation.selection) : undefined;
   const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[frame.productIcon];
@@ -403,13 +418,13 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
   const pageContent = content ? <ConsoleContentRenderer accountId={activationAccountId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={pendingSelection ?? navigation.selection} /> : null;
-  const resourceContent = <>
+  const resourceContent = <Fragment key={dataOwnerKey}>
     {controlPlane.error ? scene ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : <div role="alert"><EmptyState title={t("loadFailed")} description={t(`errors.${controlPlane.error}`)} icon={<ServerCog />} action={<div className={styles.recoveryActions}>
       <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
       <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
     </div>} /></div> : null}
     {pageContent}
-  </>;
+  </Fragment>;
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
@@ -542,8 +557,8 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                 <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><ConsoleContentLoadingRenderer experience={Boolean(experience)} key={navigation.pendingHref} label={loadingLabel} selection={pendingSelection} /></div> : undefined}>
                   <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
                     {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
-                    {["catalog", "quotas", "installations"].includes(frame.section) && !workspaceVisible ? <ManagedServiceCommandNotice /> : null}
-                    {product ? <ManagedProductActivation account={{ id: activationAccountId ?? "", name: frame.scope?.organization.name }} activation={activation} preview={frame.preview} product={product}>
+                    {!roleBlocked && ["catalog", "quotas", "installations"].includes(frame.section) && !workspaceVisible ? <ManagedServiceCommandNotice /> : null}
+                    {roleBlocked ? <LiveRoleSelfService /> : product ? <ManagedProductActivation account={{ id: activationAccountId ?? "", name: frame.scope?.organization.name }} activation={activation} preview={frame.preview} product={product}>
                       {resourceContent}
                     </ManagedProductActivation> : resourceContent}
                   </div>
@@ -573,7 +588,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                 tabIndex={0}
               />
               <Button aria-label={t("closeWorkspace")} className={styles.workspaceCloseButton} onClick={closeWorkspaceAndRestoreFocus} ref={workspaceCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
-              {workspaceMounted && scene?.workspace ? <ConsoleWorkspaceRenderer scene={scene.workspace} showCommandRecovery={workspaceVisible} /> : null}
+              {workspaceMounted && scene?.workspace ? <ConsoleWorkspaceRenderer key={dataOwnerKey} scene={scene.workspace} showCommandRecovery={workspaceVisible} /> : null}
             </Layout.Workspace>
           </ServiceLayout>
         </App.Base>

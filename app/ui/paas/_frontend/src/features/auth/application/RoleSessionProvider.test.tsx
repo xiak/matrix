@@ -1,6 +1,7 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { AuthenticatedSession } from "../domain/session";
 import type { AssumableRole, CurrentRoleIdentity, LiveRoleSession } from "../domain/roles";
 import type { IamRepository } from "../repositories/iamRepository";
@@ -72,6 +73,8 @@ function Probe() {
   return <div>
     <output aria-label="stage">{roleSession.stage}</output>
     <output aria-label="credential">{credential ?? "none"}</output>
+    <output aria-label="busy">{roleSession.busy ?? "none"}</output>
+    <output aria-label="identity">{roleSession.identity?.role.name ?? "none"}</output>
     <output aria-label="request">{roleSession.intent?.requestId ?? "none"}</output>
     <button onClick={() => void roleSession.discover()}>discover</button>
     <button disabled={!roleSession.directory?.items[0]} onClick={() => void roleSession.assume(roleSession.directory!.items[0]!, 900)}>assume</button>
@@ -79,6 +82,7 @@ function Probe() {
     <button onClick={() => void roleSession.revokeOriginal()}>revoke</button>
     <button onClick={() => void roleSession.exitRole()}>exit</button>
     <button onClick={() => void roleSession.retryExit()}>retry-exit</button>
+    <button onClick={() => void roleSession.restoreSource()}>restore-source</button>
     <button onClick={() => roleSession.clearAttempt()}>clear</button>
     <button onClick={() => roleSession.expireCredential("role-secret")}>expire-role</button>
     <button onClick={() => roleSession.expireCredential("old-role-secret")}>expire-old-role</button>
@@ -122,6 +126,63 @@ describe("RoleSessionProvider", () => {
     await waitFor(() => expect(screen.getByLabelText("stage").textContent).toBe("idle"));
     expect(screen.getByLabelText("credential").textContent).toBe("user-secret");
     expect(iam.roleSelfService!.revalidateSource).toHaveBeenCalledWith("user-secret", "account-a", "user-a");
+  });
+
+  it("keeps business credentials and exit controls blocked until source validation finishes", async () => {
+    let validateSource!: () => void;
+    const revalidateSource = vi.fn(() => new Promise<void>(resolve => { validateSource = resolve; }));
+    const iam = repository({ revalidateSource }); const user = userEvent.setup();
+    const page = view(iam);
+    await user.click(screen.getByRole("button", { name: "discover" }));
+    await user.click(screen.getByRole("button", { name: "assume" }));
+    await user.click(screen.getByRole("button", { name: "exit" }));
+    await waitFor(() => expect(revalidateSource).toHaveBeenCalledTimes(1));
+    expect(screen.getByLabelText("stage").textContent).toBe("source-validation-unknown");
+    expect(screen.getByLabelText("busy").textContent).toBe("restore");
+    expect(screen.getByLabelText("credential").textContent).toBe("none");
+    await user.click(screen.getByRole("button", { name: "restore-source" }));
+    expect(revalidateSource).toHaveBeenCalledTimes(1);
+    await act(async () => validateSource());
+    expect(screen.getByLabelText("stage").textContent).toBe("idle");
+    expect(screen.getByLabelText("credential").textContent).toBe("user-secret");
+    expect(screen.getByLabelText("identity").textContent).toBe("none");
+    expect(page.expireSource).not.toHaveBeenCalled();
+  });
+
+  it("keeps a failed source check blocked and restores only after an explicit successful recheck", async () => {
+    const revalidateSource = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE")).mockResolvedValueOnce(undefined);
+    const iam = repository({ revalidateSource }); const user = userEvent.setup();
+    const page = view(iam);
+    await user.click(screen.getByRole("button", { name: "discover" }));
+    await user.click(screen.getByRole("button", { name: "assume" }));
+    await user.click(screen.getByRole("button", { name: "exit" }));
+    await waitFor(() => expect(screen.getByLabelText("stage").textContent).toBe("source-validation-unknown"));
+    expect(screen.getByLabelText("credential").textContent).toBe("none");
+    expect(screen.getByLabelText("busy").textContent).toBe("none");
+    expect(page.expireSource).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "retry-exit" }));
+    expect(iam.roleSelfService!.logout).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "restore-source" }));
+    await waitFor(() => expect(screen.getByLabelText("stage").textContent).toBe("idle"));
+    expect(revalidateSource).toHaveBeenCalledTimes(2);
+    expect(screen.getByLabelText("credential").textContent).toBe("user-secret");
+  });
+
+  it("does not let a late source check restore an identity after its source login was replaced", async () => {
+    let validateSource!: () => void;
+    const iam = repository({ revalidateSource: vi.fn(() => new Promise<void>(resolve => { validateSource = resolve; })) });
+    const user = userEvent.setup(); const expireSource = vi.fn(() => true);
+    const application = (credential: string) => <RoleSessionProvider current={current} expireSource={expireSource} repository={iam} sourceCredential={credential}><Probe /></RoleSessionProvider>;
+    const rendered = render(application("user-secret"));
+    await user.click(screen.getByRole("button", { name: "discover" }));
+    await user.click(screen.getByRole("button", { name: "assume" }));
+    await user.click(screen.getByRole("button", { name: "exit" }));
+    await waitFor(() => expect(screen.getByLabelText("busy").textContent).toBe("restore"));
+    rendered.rerender(application("replacement-user-secret"));
+    await act(async () => validateSource());
+    expect(screen.getByLabelText("credential").textContent).toBe("replacement-user-secret");
+    expect(screen.getByLabelText("identity").textContent).toBe("none");
+    expect(expireSource).not.toHaveBeenCalled();
   });
 
   it("freezes an uncertain issuance intent and revokes the located non-secret session", async () => {
