@@ -59,23 +59,24 @@ import (
 const (
 	authorityProcessDSN = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
 
-	iamAPILogin              = "matrix_authority_process_iam_api"
-	iamWorkerLogin           = "matrix_authority_process_iam_worker"
-	iamAccessAnalysisLogin   = "matrix_iam_access_analysis_worker_login"
-	auditRuntimeLogin        = "matrix_authority_process_audit_runtime"
-	paasAPILogin             = "matrix_authority_process_paas_api"
-	paasWorkerLogin          = "matrix_authority_process_paas_worker"
-	processDBPassword        = "matrix-authority-process-test-only"
-	initialAdminPassword     = "Initial-Process-Admin-Password-49!"
-	changedAdminPassword     = "Changed-Process-Admin-Password-73!"
-	initialReaderPassword    = "Initial-Process-Reader-Password-84!"
-	changedReaderPassword    = "Changed-Process-Reader-Password-95!"
-	initialDeveloperPassword = "Initial-Process-Developer-Password-57!"
-	changedDeveloperPassword = "Changed-Process-Developer-Password-61!"
-	browserAccountID         = "browser-live-account"
-	browserRootLoginName     = "browser.live.root"
-	browserUserLoginName     = "browser.live.user"
-	browserSecurityEmail     = "browser.live.user@matrix.test"
+	iamAPILogin                       = "matrix_authority_process_iam_api"
+	iamWorkerLogin                    = "matrix_authority_process_iam_worker"
+	iamAccessAnalysisLogin            = "matrix_iam_access_analysis_worker_login"
+	auditRuntimeLogin                 = "matrix_authority_process_audit_runtime"
+	paasAPILogin                      = "matrix_authority_process_paas_api"
+	paasWorkerLogin                   = "matrix_authority_process_paas_worker"
+	processDBPassword                 = "matrix-authority-process-test-only"
+	initialAdminPassword              = "Initial-Process-Admin-Password-49!"
+	changedAdminPassword              = "Changed-Process-Admin-Password-73!"
+	initialReaderPassword             = "Initial-Process-Reader-Password-84!"
+	changedReaderPassword             = "Changed-Process-Reader-Password-95!"
+	initialDeveloperPassword          = "Initial-Process-Developer-Password-57!"
+	changedDeveloperPassword          = "Changed-Process-Developer-Password-61!"
+	accountLifecycleRecoveredPassword = "Recovered-Browser-Root-Password-86!"
+	browserAccountID                  = "browser-live-account"
+	browserRootLoginName              = "browser.live.root"
+	browserUserLoginName              = "browser.live.user"
+	browserSecurityEmail              = "browser.live.user@matrix.test"
 
 	iamServiceCredential   = "mx1.ProcessIAMServiceCredential00000000000000001"
 	paasServiceCredential  = "mx1.ProcessPaaSServiceCredential0000000000000001"
@@ -179,6 +180,7 @@ const (
 	authorityProcessPersonalSecurityBrowser
 	authorityProcessBrowser
 	authorityProcessCommandRecoveryBrowser
+	authorityProcessAccountLifecycleRecoveryBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
@@ -260,6 +262,21 @@ func TestIAMManagedServiceCommandRecoveryConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessCommandRecoveryBrowser)
 }
 
+// This opt-in fixture proves that a platform operator can recover one
+// committed Account lifecycle command after losing its successful response.
+// Two isolated browser origins are required: the first exports only the
+// non-secret intent and the second authenticates the same USER and performs
+// only the exact completion read.
+func TestIAMAccountLifecycleRecoveryConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_ACCOUNT_LIFECYCLE_RECOVERY_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_ACCOUNT_LIFECYCLE_RECOVERY_BROWSER=1 for the bounded LIVE Account lifecycle recovery browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("Account lifecycle recovery browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessAccountLifecycleRecoveryBrowser)
+}
+
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
 // and RabbitMQ 4.1 product resources through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
@@ -301,7 +318,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		// deadlines remain unchanged.
 		duration = 8 * time.Minute
 	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser ||
-		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser {
+		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
+		mode == authorityProcessAccountLifecycleRecoveryBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -534,6 +552,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		changedReaderPassword,
 		initialDeveloperPassword,
 		changedDeveloperPassword,
+		accountLifecycleRecoveredPassword,
 		"Initial-Outage-User-Password-68!",
 		"Initial-Dead-Letter-Password-79!",
 		iamServiceCredential,
@@ -720,6 +739,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	if mode == authorityProcessCommandRecoveryBrowser {
 		sensitive = append(sensitive, runIAMManagedServiceCommandRecoveryConsoleBrowser(
 			t, ctx, admin, root, temporary, managedRuntime,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
+		return
+	}
+	if mode == authorityProcessAccountLifecycleRecoveryBrowser {
+		sensitive = append(sensitive, runIAMAccountLifecycleRecoveryConsoleBrowser(
+			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)...)
 		return
@@ -2926,6 +2952,282 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 	return []string{initial.Credential, memberLogin.Credential}
 }
 
+func runIAMAccountLifecycleRecoveryConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	operation := iamv1.AccountLifecycleOperation(strings.TrimSpace(os.Getenv("MATRIX_IAM_ACCOUNT_LIFECYCLE_RECOVERY_OPERATION")))
+	if operation == "" {
+		operation = iamv1.AccountLifecycleCreate
+	}
+	switch operation {
+	case iamv1.AccountLifecycleCreate, iamv1.AccountLifecycleSetStatus,
+		iamv1.AccountLifecycleRecoverRootCredentials:
+	default:
+		t.Fatalf("MATRIX_IAM_ACCOUNT_LIFECYCLE_RECOVERY_OPERATION is not a closed Account lifecycle operation: %q", operation)
+	}
+
+	const (
+		accountID       = iamv1.AccountID("browser-lifecycle-account")
+		accountName     = "Browser lifecycle Account"
+		rootLoginName   = "browser.lifecycle.root"
+		rootDisplayName = "Browser lifecycle Root"
+	)
+	var prepared iamv1.Account
+	var preparedRootInitial, preparedRoot loginResult
+	sensitive := []string{}
+	if operation != iamv1.AccountLifecycleCreate {
+		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/accounts", platformBearer, map[string]any{
+			"id": accountID, "displayName": accountName, "rootLoginName": rootLoginName,
+			"rootDisplayName": rootDisplayName, "initialPassword": initialReaderPassword,
+			"requestId": "browser-lifecycle-account-prepare",
+		})
+		if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &prepared) != nil ||
+			iamv1.ValidateAccount(prepared) != nil || prepared.ID != accountID || prepared.ResourceVersion != 1 {
+			t.Fatalf("prepare Account lifecycle target status=%d body=%s", response.Status, response.Body)
+		}
+		preparedRootInitial = loginIAM(t, iamEndpoint, rootLoginName, initialReaderPassword,
+			"browser-lifecycle-root-initial-login")
+		changePasswordIAM(t, iamEndpoint, preparedRootInitial.Credential, initialReaderPassword,
+			changedReaderPassword, "browser-lifecycle-root-password")
+		preparedRoot = loginIAM(t, iamEndpoint, rootLoginName, changedReaderPassword,
+			"browser-lifecycle-root-login")
+		sensitive = append(sensitive, preparedRootInitial.Credential, preparedRoot.Credential)
+	}
+
+	loss := &browserResponseLoss{postLossWritePrefix: "/api/iam/v1/accounts"}
+	switch operation {
+	case iamv1.AccountLifecycleCreate:
+		loss.method, loss.path = http.MethodPost, "/api/iam/v1/accounts"
+	case iamv1.AccountLifecycleSetStatus:
+		loss.method, loss.path = http.MethodPost, "/api/iam/v1/accounts/"+string(accountID)+":set-status"
+	case iamv1.AccountLifecycleRecoverRootCredentials:
+		loss.method, loss.path = http.MethodPost, "/api/iam/v1/accounts/"+string(accountID)+":recover-root-credentials"
+	}
+	loss.recoveryPathPrefix = "/api/iam/v1/accounts/" + string(accountID) + "/lifecycle-completions/"
+	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
+	)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-account-lifecycle-recovery-finished")
+	isolatedBrowserURL, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal("parse Account lifecycle recovery browser URL")
+	}
+	_, browserPort, err := net.SplitHostPort(isolatedBrowserURL.Host)
+	if err != nil {
+		t.Fatal("read Account lifecycle recovery browser port")
+	}
+	isolatedBrowserURL.Host = net.JoinHostPort("localhost", browserPort)
+	browserPath := "/console/access/tenants/"
+	recoveryHint := ""
+	if operation == iamv1.AccountLifecycleRecoverRootCredentials {
+		recoveryHint = "; Root recovery must use the fixture recovered Root password"
+	}
+	t.Logf("ACCOUNT_LIFECYCLE_RECOVERY_BROWSER_FIXTURE operation=%s browserA=%s%s browserB=%s%s finish=%s target=%s realm=admin; browser A must submit only this Account command and export the UNKNOWN non-secret intent, browser B must use the distinct localhost origin and import it; use the existing changed admin password%s",
+		operation, server.URL, browserPath, isolatedBrowserURL.String(), browserPath, finish, accountID,
+		recoveryHint)
+	waitForBrowserMarker(t, ctx, ui, finish, "isolated-browser Account lifecycle recovery completion")
+
+	observation := loss.snapshot()
+	defer clear(observation.RequestBody)
+	commandRequestID := ""
+	expectedVersion := uint64(0)
+	expectedStatus := iamv1.AccountActive
+	expectedAuditAction := auditv1.ActionIAMAccountCreated
+	switch operation {
+	case iamv1.AccountLifecycleCreate:
+		var request iamv1.CreateAccountRequest
+		if json.Unmarshal(observation.RequestBody, &request) != nil {
+			t.Fatal("browser submitted an undecodable Account creation")
+		}
+		password := request.InitialPassword.CopyBytes()
+		defer clear(password)
+		if iamv1.ValidateCreateAccountRequest(request) != nil ||
+			request.ID != accountID || request.DisplayName != accountName || request.RootLoginName != rootLoginName ||
+			request.RootDisplayName != rootDisplayName || !bytes.Equal(password, []byte(initialReaderPassword)) ||
+			!strings.HasPrefix(request.RequestID, "ui-account-create-") {
+			t.Fatal("browser submitted an invalid Account creation")
+		}
+		commandRequestID = request.RequestID
+	case iamv1.AccountLifecycleSetStatus:
+		var request iamv1.SetAccountStatusRequest
+		if json.Unmarshal(observation.RequestBody, &request) != nil || iamv1.ValidateSetAccountStatusRequest(request) != nil ||
+			request.Status != iamv1.AccountDisabled || request.ResourceVersion != prepared.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-account-status-") {
+			t.Fatal("browser submitted an invalid Account status change")
+		}
+		commandRequestID, expectedVersion, expectedStatus = request.RequestID, request.ResourceVersion, request.Status
+		expectedAuditAction = auditv1.ActionIAMAccountDisabled
+	case iamv1.AccountLifecycleRecoverRootCredentials:
+		var request iamv1.RecoverRootCredentialsRequest
+		if json.Unmarshal(observation.RequestBody, &request) != nil {
+			t.Fatal("browser submitted an undecodable Root credential recovery")
+		}
+		password := request.InitialPassword.CopyBytes()
+		defer clear(password)
+		if iamv1.ValidateRecoverRootCredentialsRequest(request) != nil ||
+			!bytes.Equal(password, []byte(accountLifecycleRecoveredPassword)) ||
+			request.ResourceVersion != prepared.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-account-recovery-") {
+			t.Fatal("browser submitted an invalid Root credential recovery")
+		}
+		commandRequestID, expectedVersion = request.RequestID, request.ResourceVersion
+		expectedAuditAction = auditv1.ActionIAMAccountRootCredentialsRecovered
+	}
+	if observation.Attempts != 1 || !observation.ResponseLost || observation.BackendStatus < http.StatusOK ||
+		observation.BackendStatus >= http.StatusMultipleChoices || observation.IdempotencyKey != "" ||
+		observation.MutationHost == "" || observation.RecoveryReads < 1 || observation.RecoveryHost == "" ||
+		observation.RecoveryHost == observation.MutationHost || observation.PostLossWrites != 0 {
+		t.Fatalf("Account lifecycle response-loss boundary was not exact: attempts=%d lost=%t backend=%d key_present=%t mutation_host=%q recovery_reads=%d recovery_host=%q post_loss_writes=%d post_loss_method=%q post_loss_path=%q post_loss_host=%q",
+			observation.Attempts, observation.ResponseLost, observation.BackendStatus, observation.IdempotencyKey != "",
+			observation.MutationHost, observation.RecoveryReads, observation.RecoveryHost, observation.PostLossWrites,
+			observation.PostLossMethod, observation.PostLossPath, observation.PostLossHost)
+	}
+	recoveryURL, err := url.Parse(observation.RecoveryRequestURI)
+	wantRecoveryPath := loss.recoveryPathPrefix + url.PathEscape(commandRequestID)
+	if err != nil || recoveryURL.Path != wantRecoveryPath || len(recoveryURL.Query()) != 2 ||
+		len(recoveryURL.Query()["operation"]) != 1 || recoveryURL.Query().Get("operation") != string(operation) ||
+		len(recoveryURL.Query()["expectedResourceVersion"]) != 1 ||
+		recoveryURL.Query().Get("expectedResourceVersion") != strconv.FormatUint(expectedVersion, 10) {
+		t.Fatalf("browser recovered a different Account lifecycle intent: %q", observation.RecoveryRequestURI)
+	}
+
+	completionResponse := performJSON(t, http.MethodGet,
+		fmt.Sprintf("%s/v1/accounts/%s/lifecycle-completions/%s?operation=%s&expectedResourceVersion=%d",
+			iamEndpoint, accountID, commandRequestID, operation, expectedVersion), platformBearer, nil)
+	var completion iamv1.AccountLifecycleCompletion
+	if completionResponse.Status != http.StatusOK || json.Unmarshal(completionResponse.Body, &completion) != nil ||
+		iamv1.ValidateAccountLifecycleCompletion(completion) != nil || completion.ActorAccountID != "organization-process" ||
+		completion.ActorPrincipalID != "principal-admin" || completion.Operation != operation || completion.AccountID != accountID ||
+		completion.CommandRequestID != commandRequestID || completion.ExpectedResourceVersion != expectedVersion ||
+		completion.ResultingResourceVersion != expectedVersion+1 || completion.Status != expectedStatus {
+		t.Fatalf("Account lifecycle completion lost its original command: status=%d body=%s", completionResponse.Status, completionResponse.Body)
+	}
+	if operation == iamv1.AccountLifecycleSetStatus {
+		if completion.RootPrincipalID != "" {
+			t.Fatal("Account status completion invented a Root identity")
+		}
+	} else if completion.RootPrincipalID == "" {
+		t.Fatal("Account lifecycle completion lost the immutable Root identity")
+	}
+
+	accountResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/accounts/"+string(accountID), platformBearer, nil)
+	var access iamv1.AccountAccess
+	if accountResponse.Status != http.StatusOK || json.Unmarshal(accountResponse.Body, &access) != nil ||
+		iamv1.ValidateAccountAccess(access) != nil || access.Account.ID != accountID ||
+		access.Account.ResourceVersion != completion.ResultingResourceVersion || access.Account.Status != expectedStatus ||
+		access.Account.RootIdentity.PrincipalID != completion.RootPrincipalID && operation != iamv1.AccountLifecycleSetStatus {
+		t.Fatalf("authoritative Account does not match the completion: status=%d body=%s", accountResponse.Status, accountResponse.Body)
+	}
+	if operation == iamv1.AccountLifecycleSetStatus && access.Account.RootIdentity != prepared.RootIdentity {
+		t.Fatal("Account status change replaced the immutable Root identity")
+	}
+	loginStatus := func(password, requestID string) processResponse {
+		return performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/login", "", map[string]any{
+			"loginName": rootLoginName, "password": password, "requestId": requestID,
+		})
+	}
+	switch operation {
+	case iamv1.AccountLifecycleCreate:
+		createdRoot := loginIAM(t, iamEndpoint, rootLoginName, initialReaderPassword,
+			"browser-lifecycle-created-root-login")
+		sensitive = append(sensitive, createdRoot.Credential)
+		identityResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", createdRoot.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil ||
+			iamv1.ValidateCurrentIdentity(identity) != nil || identity.Account.ID != accountID ||
+			identity.User.ID != completion.RootPrincipalID || !identity.User.MustChangePassword {
+			t.Fatal("created Root did not retain its restricted initial credential")
+		}
+	case iamv1.AccountLifecycleSetStatus:
+		if current := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", preparedRoot.Credential, nil); current.Status != http.StatusUnauthorized ||
+			loginStatus(changedReaderPassword, "browser-lifecycle-disabled-root-login").Status != http.StatusUnauthorized {
+			t.Fatal("Account suspension left an existing or new Root session active")
+		}
+	case iamv1.AccountLifecycleRecoverRootCredentials:
+		if current := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", preparedRoot.Credential, nil); current.Status != http.StatusUnauthorized ||
+			loginStatus(changedReaderPassword, "browser-lifecycle-old-root-login").Status != http.StatusUnauthorized {
+			t.Fatal("Root recovery retained the old credential or Session")
+		}
+		recoveredRoot := loginIAM(t, iamEndpoint, rootLoginName, accountLifecycleRecoveredPassword,
+			"browser-lifecycle-recovered-root-login")
+		sensitive = append(sensitive, recoveredRoot.Credential)
+		identityResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", recoveredRoot.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil ||
+			iamv1.ValidateCurrentIdentity(identity) != nil || identity.Account.ID != accountID ||
+			identity.User.ID != prepared.RootIdentity.PrincipalID || !identity.User.MustChangePassword {
+			t.Fatal("Root recovery transferred ownership or skipped the required password change")
+		}
+		for _, source := range identity.PolicySources {
+			if source.Attachment.PolicyID == iamv1.SystemPolicyPlatformOperator {
+				t.Fatal("Root recovery granted platform authority")
+			}
+		}
+	}
+
+	var retainedCompletions int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.account_lifecycle_completions
+		WHERE actor_account_id='organization-process' AND actor_principal_id='principal-admin'
+		  AND request_id=$1 AND operation=$2 AND account_id=$3 AND expected_version=$4
+		  AND resulting_version=$4+1 AND event_id=$5`, commandRequestID, operation, accountID,
+		expectedVersion, completion.EventID).Scan(&retainedCompletions); err != nil || retainedCompletions != 1 {
+		t.Fatalf("Account lifecycle completion is not the unique immutable receipt: count=%d err=%v", retainedCompletions, err)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	auditResponse := performJSON(t, http.MethodPost, auditEndpoint+"/v1/platform/records:query", platformBearer,
+		auditv1.QueryRecordsRequest{PageSize: 100, Action: expectedAuditAction})
+	var page auditv1.RecordPage
+	if auditResponse.Status != http.StatusOK || json.Unmarshal(auditResponse.Body, &page) != nil ||
+		auditv1.ValidateRecordPage(page) != nil || page.InstallationID != "installation-process" || page.TenantID != "" {
+		t.Fatalf("read Account lifecycle platform Audit status=%d body=%s", auditResponse.Status, auditResponse.Body)
+	}
+	matches := 0
+	for _, record := range page.Records {
+		if record.Event.EventID != auditv1.EventID(completion.EventID) {
+			continue
+		}
+		matches++
+		if record.Event.Action != expectedAuditAction || record.Event.RequestID != commandRequestID ||
+			record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != "principal-admin" ||
+			record.Event.InstallationID != "installation-process" || record.Event.TenantID != "" {
+			t.Fatal("Account lifecycle completion does not match its installation Audit fact")
+		}
+		if operation == iamv1.AccountLifecycleRecoverRootCredentials {
+			if record.Event.Target.Kind != auditv1.TargetUser || record.Event.Target.ID != string(completion.RootPrincipalID) ||
+				record.Event.Target.TenantID != auditv1.TenantID(accountID) {
+				t.Fatal("Root recovery Audit fact lost its Account namespace")
+			}
+		} else if record.Event.Target.Kind != auditv1.TargetAccount || record.Event.Target.ID != string(accountID) ||
+			record.Event.Target.TenantID != "" {
+			t.Fatal("Account lifecycle Audit fact changed its target")
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("Account lifecycle Audit fact matches=%d", matches)
+	}
+	verifyResponse := performJSON(t, http.MethodPost, auditEndpoint+"/v1/platform/integrity:verify", platformBearer,
+		auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: 100})
+	var chain auditv1.ChainVerification
+	if verifyResponse.Status != http.StatusOK || json.Unmarshal(verifyResponse.Body, &chain) != nil ||
+		auditv1.ValidateChainVerification(chain) != nil || chain.InstallationID != "installation-process" ||
+		chain.TenantID != "" || chain.State != auditv1.VerificationVerified || !chain.Complete {
+		t.Fatalf("Account lifecycle installation Audit chain is incomplete: status=%d body=%s", verifyResponse.Status, verifyResponse.Body)
+	}
+	t.Logf("two isolated browser origins recovered one committed %s after its successful response was truncated; exactly one lifecycle mutation, one immutable completion, current Account state, credential effects and the verified installation Audit chain all matched", operation)
+	return sensitive
+}
+
 func runIAMIdentityConsoleBrowser(
 	t *testing.T,
 	ctx context.Context,
@@ -3407,39 +3709,43 @@ func refreshPersonalSecurityBrowserCode(
 }
 
 type browserResponseLoss struct {
-	method       string
-	path         string
-	recoveryPath string
+	method              string
+	path                string
+	recoveryPath        string
+	recoveryPathPrefix  string
+	postLossWritePrefix string
 
-	mu             sync.Mutex
-	attempts       int
-	dropSelected   bool
-	responseLost   bool
-	backendStatus  int
-	idempotencyKey string
-	requestBody    []byte
-	mutationHost   string
-	recoveryReads  int
-	recoveryHost   string
-	postLossWrites int
-	postLossMethod string
-	postLossPath   string
-	postLossHost   string
+	mu                 sync.Mutex
+	attempts           int
+	dropSelected       bool
+	responseLost       bool
+	backendStatus      int
+	idempotencyKey     string
+	requestBody        []byte
+	mutationHost       string
+	recoveryReads      int
+	recoveryHost       string
+	recoveryRequestURI string
+	postLossWrites     int
+	postLossMethod     string
+	postLossPath       string
+	postLossHost       string
 }
 
 type browserResponseLossObservation struct {
-	Attempts       int
-	ResponseLost   bool
-	BackendStatus  int
-	IdempotencyKey string
-	RequestBody    []byte
-	MutationHost   string
-	RecoveryReads  int
-	RecoveryHost   string
-	PostLossWrites int
-	PostLossMethod string
-	PostLossPath   string
-	PostLossHost   string
+	Attempts           int
+	ResponseLost       bool
+	BackendStatus      int
+	IdempotencyKey     string
+	RequestBody        []byte
+	MutationHost       string
+	RecoveryReads      int
+	RecoveryHost       string
+	RecoveryRequestURI string
+	PostLossWrites     int
+	PostLossMethod     string
+	PostLossPath       string
+	PostLossHost       string
 }
 
 func (value *browserResponseLoss) matches(request *http.Request) bool {
@@ -3447,7 +3753,11 @@ func (value *browserResponseLoss) matches(request *http.Request) bool {
 }
 
 func (value *browserResponseLoss) matchesRecovery(request *http.Request) bool {
-	return value != nil && request.Method == http.MethodGet && request.URL.Path == value.recoveryPath
+	if value == nil || request.Method != http.MethodGet {
+		return false
+	}
+	return value.recoveryPath != "" && request.URL.Path == value.recoveryPath ||
+		value.recoveryPathPrefix != "" && strings.HasPrefix(request.URL.Path, value.recoveryPathPrefix)
 }
 
 func (value *browserResponseLoss) observe(request *http.Request, backendStatus int, requestBody []byte) bool {
@@ -3476,10 +3786,22 @@ func (value *browserResponseLoss) observeRecovery(request *http.Request, backend
 	}
 	value.recoveryReads++
 	value.recoveryHost = request.Host
+	value.recoveryRequestURI = request.URL.RequestURI()
 }
 
-func (value *browserResponseLoss) observePostLossManagedServiceWrite(request *http.Request) {
-	if value == nil || !strings.HasPrefix(request.URL.Path, "/api/managed-services/") ||
+func (value *browserResponseLoss) observePostLossWrite(request *http.Request) {
+	if value == nil {
+		return
+	}
+	prefix := value.postLossWritePrefix
+	if prefix == "" {
+		prefix = "/api/managed-services/"
+	}
+	pathMatches := strings.HasPrefix(request.URL.Path, prefix)
+	if !strings.HasSuffix(prefix, "/") {
+		pathMatches = request.URL.Path == prefix || strings.HasPrefix(request.URL.Path, prefix+"/")
+	}
+	if !pathMatches ||
 		request.Method == http.MethodGet || request.Method == http.MethodHead || request.Method == http.MethodOptions {
 		return
 	}
@@ -3510,7 +3832,8 @@ func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
 		BackendStatus: value.backendStatus, IdempotencyKey: value.idempotencyKey,
 		RequestBody:  bytes.Clone(value.requestBody),
 		MutationHost: value.mutationHost, RecoveryReads: value.recoveryReads,
-		RecoveryHost: value.recoveryHost, PostLossWrites: value.postLossWrites,
+		RecoveryHost: value.recoveryHost, RecoveryRequestURI: value.recoveryRequestURI,
+		PostLossWrites: value.postLossWrites,
 		PostLossMethod: value.postLossMethod, PostLossPath: value.postLossPath,
 		PostLossHost: value.postLossHost,
 	}
@@ -3518,7 +3841,7 @@ func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
 
 func TestBrowserResponseLossTracksAllPostLossManagedServiceWrites(t *testing.T) {
 	loss := &browserResponseLoss{}
-	loss.observePostLossManagedServiceWrite(httptest.NewRequest(http.MethodPost,
+	loss.observePostLossWrite(httptest.NewRequest(http.MethodPost,
 		"http://browser-a.example/api/managed-services/v1/quota-entitlements", nil))
 	loss.markLost()
 	for _, request := range []*http.Request{
@@ -3529,11 +3852,11 @@ func TestBrowserResponseLossTracksAllPostLossManagedServiceWrites(t *testing.T) 
 		httptest.NewRequest(http.MethodOptions,
 			"http://browser-b.example/api/managed-services/v1/service-installations", nil),
 	} {
-		loss.observePostLossManagedServiceWrite(request)
+		loss.observePostLossWrite(request)
 	}
-	loss.observePostLossManagedServiceWrite(httptest.NewRequest(http.MethodPost,
+	loss.observePostLossWrite(httptest.NewRequest(http.MethodPost,
 		"http://browser-b.example/api/managed-services/v1/service-installations", nil))
-	loss.observePostLossManagedServiceWrite(httptest.NewRequest(http.MethodDelete,
+	loss.observePostLossWrite(httptest.NewRequest(http.MethodDelete,
 		"http://browser-b.example/api/managed-services/v1/service-installations/install-one/service-role-bindings/binding-one", nil))
 
 	observation := loss.snapshot()
@@ -3541,6 +3864,41 @@ func TestBrowserResponseLossTracksAllPostLossManagedServiceWrites(t *testing.T) 
 		observation.PostLossPath != "/api/managed-services/v1/service-installations" ||
 		observation.PostLossHost != "browser-b.example" {
 		t.Fatalf("post-loss managed-service writes = %#v", observation)
+	}
+}
+
+func TestBrowserResponseLossTracksConfiguredAccountLifecycleWrites(t *testing.T) {
+	loss := &browserResponseLoss{
+		method: http.MethodPost, path: "/api/iam/v1/accounts",
+		recoveryPathPrefix:  "/api/iam/v1/accounts/account-one/lifecycle-completions/",
+		postLossWritePrefix: "/api/iam/v1/accounts",
+	}
+	mutation := httptest.NewRequest(http.MethodPost, "http://browser-a.example/api/iam/v1/accounts", nil)
+	if !loss.observe(mutation, http.StatusCreated, []byte(`{"requestId":"command-one"}`)) {
+		t.Fatal("Account lifecycle response loss was not selected")
+	}
+	loss.markLost()
+	recovery := httptest.NewRequest(http.MethodGet,
+		"http://browser-b.example/api/iam/v1/accounts/account-one/lifecycle-completions/command-one?operation=ACCOUNT_CREATE&expectedResourceVersion=0", nil)
+	if !loss.matchesRecovery(recovery) {
+		t.Fatal("exact Account lifecycle recovery path was not observed")
+	}
+	loss.observeRecovery(recovery, http.StatusOK)
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost, "http://browser-b.example/api/iam/v1/auth/login", nil),
+		httptest.NewRequest(http.MethodPost, "http://browser-b.example/api/iam/v1/accounts-other", nil),
+		httptest.NewRequest(http.MethodGet, "http://browser-b.example/api/iam/v1/accounts/account-one", nil),
+	} {
+		loss.observePostLossWrite(request)
+	}
+	loss.observePostLossWrite(httptest.NewRequest(http.MethodPost,
+		"http://browser-b.example/api/iam/v1/accounts/account-one:set-status", nil))
+
+	observation := loss.snapshot()
+	if observation.RecoveryReads != 1 || observation.RecoveryHost != "browser-b.example" ||
+		observation.RecoveryRequestURI != recovery.URL.RequestURI() || observation.PostLossWrites != 1 ||
+		observation.PostLossPath != "/api/iam/v1/accounts/account-one:set-status" {
+		t.Fatalf("configured Account lifecycle response loss = %#v", observation)
 	}
 }
 
@@ -3686,7 +4044,7 @@ func iamConsoleBrowserFixtureHandler(
 ) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if responseLoss != nil {
-			responseLoss.observePostLossManagedServiceWrite(r)
+			responseLoss.observePostLossWrite(r)
 		}
 		select {
 		case requests <- struct{}{}:
