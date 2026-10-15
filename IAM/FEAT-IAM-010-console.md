@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；受控真实浏览器已完成Account/Root/User、同名realm、本人TOTP与会话、正式PostgreSQL 18创建/READY/SQL读写、Group授权/撤权、页面终止、物理删除及完整Audit链，LIVE目录同时展示正式接入的MySQL、Elasticsearch和RabbitMQ。当前后端基线`c108dff3069c90bfd0c49eb868276d8d617face8`的独立CI已通过；`355815f3d992edaf4f677374d7407554bd96ec7f`又选择性采用UX/UI owner固定`3876516a902fd020d1ab1cd4be8f339f9a9034b1`，完成当前ACTIVE服务Role模板头、精确版本/摘要冻结及不同浏览器来源只读恢复，并在本地真实PG18+IAM/Audit/PaaS门禁通过。其独立CI最终为cancelled：16项业务作业成功，`authority-recovery-window`被外部取消，依赖汇总正确失败，不能记作精确SHA通过；后继`91af2972fb16d6727845fc06c9485f8ea62ca80c`及当前源码`c38a0093235bf3521c4ef32492d814d36f071a7e`的独立CI均已18项全部成功。当前完整Profile的同源签名A/B、APISIX后端消费者及离线生命周期已经实跑通过；当前源码的签名APISIX入口又完成真实子账号登录、四产品创建/READY/终止、三个产品的实际协议验证、服务Role精确绑定/撤销状态观察和完整Audit链。签名入口下IAM-UI-01–06的完整写入/错误矩阵、实际UNKNOWN恢复及升级中的旧页面资产恢复仍有缺口，因此整个FEAT仍未验收。
+- 状态：实施中；受控真实浏览器已完成Account/Root/User、同名realm、本人TOTP与会话、正式PostgreSQL 18创建/READY/SQL读写、Group授权/撤权、页面终止、物理删除及完整Audit链，LIVE目录同时展示正式接入的MySQL、Elasticsearch和RabbitMQ。当前后端基线`c108dff3069c90bfd0c49eb868276d8d617face8`的独立CI已通过；`355815f3d992edaf4f677374d7407554bd96ec7f`又选择性采用UX/UI owner固定`3876516a902fd020d1ab1cd4be8f339f9a9034b1`，完成当前ACTIVE服务Role模板头、精确版本/摘要冻结及不同浏览器来源只读恢复，并在本地真实PG18+IAM/Audit/PaaS门禁通过。其独立CI最终为cancelled：16项业务作业成功，`authority-recovery-window`被外部取消，依赖汇总正确失败，不能记作精确SHA通过；后继`91af2972fb16d6727845fc06c9485f8ea62ca80c`及此前固定源码`c38a0093235bf3521c4ef32492d814d36f071a7e`的独立CI均已18项全部成功。当前完整Profile的同源签名A/B、APISIX后端消费者及离线生命周期已经实跑通过；固定`c38a0093235bf3521c4ef32492d814d36f071a7e`的签名APISIX入口又完成真实子账号登录、四产品创建/READY/终止、三个产品的实际协议验证、服务Role精确绑定/撤销状态观察、SMTP通知地址验证、首次TOTP绑定与密码加TOTP重登，以及完整Audit链。UX/UI owner固定`7defb8fa5972540d56450c9cf776e99a61fd1d13`的旧资源恢复源码已按固定文件选择性采用并在本分支重建。签名入口下IAM-UI-01–06的完整写入/错误矩阵、实际UNKNOWN恢复及旧文档跨签名升级后的真实受控恢复仍有缺口，因此整个FEAT仍未验收。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -26,7 +26,7 @@
 | IAM-UI-03 | 实施中；Users、Groups、Membership、直接附件和权限来源已有LIVE页面，真实Group授予/撤权已在产品资源路径生效 | 完整CRUD、附件回执与不确定结果仍需浏览器门禁；批量User不是本轮需求，LIVE不得展示可提交MOCK |
 | IAM-UI-04 | 实施中；系统/自定义策略、版本、JSON/可视化编辑及User/Role边界已有LIVE客户端 | 策略、版本、默认切换、边界和错误/冲突的完整浏览器及只读结果恢复仍缺；产品AuthorizationProfile不伪装成租户策略 |
 | IAM-UI-05 | 实施中；Role/trust/AssumeRole、会话时长、原始/当前身份和返回入口已接入，成员发现→承担→返回已有真实浏览器证据 | Role写入、附件/边界、管理员撤销与Role凭据业务请求仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
-| IAM-UI-06 | 实施中；AccessKey、联系人、首次TOTP、恢复码和本人Session已有LIVE页面，首次绑定/MFA登录/结束其他Session已有真实浏览器证据；固定`d02c43c31861ba5639da12a416f654a9da9c92a4`已把TOTP换绑、主动移除和移除后的受限重新绑定挂入LIVE provider，后继真实PG18/Audit/浏览器门禁已通过换绑、主动移除和普通重新绑定 | 强制MFA下的重新绑定、真实SMTP/外部认证器及当前签名APISIX组合仍需验收；AccessKey一次性Secret/轮换/网络治理、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；WebAuthn明确Deferred |
+| IAM-UI-06 | 实施中；AccessKey、联系人、首次TOTP、恢复码和本人Session已有LIVE页面，首次绑定/MFA登录/结束其他Session已有真实浏览器证据；固定`d02c43c31861ba5639da12a416f654a9da9c92a4`已把TOTP换绑、主动移除和移除后的受限重新绑定挂入LIVE provider，后继真实PG18/Audit/浏览器门禁已通过换绑、主动移除和普通重新绑定；当前签名APISIX组合又完成真实SMTP投递、通知地址验证、首次TOTP绑定、恢复码一次性交付、旧Session撤销及密码加TOTP重登 | 强制MFA下的重新绑定与外部物理认证器仍需验收；AccessKey一次性Secret/轮换/网络治理、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；WebAuthn明确Deferred |
 | IAM-UI-07 | 实施中；真实PostgreSQL创建→READY→SQL→组授权/撤权→终止/物理删除已通过；配额激活、实例创建、服务Role BIND、实例终止及服务Role UNBIND五类封闭命令均已在响应半断后由另一浏览器来源只读恢复；401/403/409/503及非法结果的组件行为已有当前测试；当前签名APISIX入口已完成四产品真实创建/READY/终止，并通过同一子账号的公开契约完成服务Role BIND/UNBIND后由页面读取准确状态 | 上述错误矩阵和UNKNOWN恢复仍需在签名入口实跑；服务Role最终提交本轮由同一APISIX公开HTTP契约完成，不能冒充纯页面最终点击；不支持跨主体恢复 |
 | IAM-UI-08 | 实施中；LIVE失败不回退MOCK，未接入能力已有隔离EmptyState；签名APISIX入口已证明角色SSO、用户SSO和跨账号协作直达路由无可提交表单 | 企业微信/外部IdP、Passkey/WebAuthn、跨账号与角色链保持禁用和Deferred；新增Deferred入口仍须沿同一边界验收 |
 
@@ -194,4 +194,8 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 
 四次创建、READY和终止各产生4条准确租户事实，服务Role绑定与撤销各产生1条IAM事实；目标分别是四个真实实例ID和同一binding ID。使用同一User后续附加的`AuditReader`从APISIX查询这些事实，并验证`organization-default`租户链从sequence 1到307共307条记录为`VERIFIED`且`complete=true`。产品实例终止后再次核对本轮托管产品容器、网络和卷均为空，没有通过Docker清理伪造产品终态。
 
-浏览器日志保留一次发生在本轮产品写入前的旧资产`ChunkLoadError`：同一loopback origin此前加载旧控制台后切换到当前签名构建，旧文档引用的Next chunk已不存在；重新进入页面后上述四产品流程没有新增warning/error。该现象已交UX/UI owner在现有错误边界处理确定chunk失效的一次受控刷新或明确恢复页，必须防止刷新循环和敏感表单丢失。在固定修复及真实升级页面门禁完成前，不能把本轮描述为“签名控制台升级无错误”，也不能由用户手工刷新掩盖发布恢复缺口。
+浏览器日志保留一次发生在本轮产品写入前的旧资产`ChunkLoadError`：同一loopback origin此前加载旧控制台后切换到当前签名构建，旧文档引用的Next chunk已不存在；重新进入页面后上述四产品流程没有新增warning/error。UX/UI owner已在固定`7defb8fa5972540d56450c9cf776e99a61fd1d13`提供现有错误边界内的受控恢复；本分支只采用九个固定源码文件，不导入对方生成物、FEAT状态或checkpoint。实现仅识别真实`ChunkLoadError`和同源、无查询/片段的`/_next/static/chunks/*.js`，先明确提示内存Session、未保存表单与一次性材料可能丢失，再要求显式确认；每个Document至多请求一次刷新，不自动重载、不重放业务写入，普通渲染/API错误只允许局部reset。
+
+在受支持Node 24.19上，新增恢复组件25项测试及architecture通过；随后typecheck、lint、228组样式对比度、59页生产导出和57项路径规范化通过，322项Go嵌入文件在本分支连续两次从源码构建后逐文件一致，`app/ui/paas` Go test/vet通过。九个源码blob与固定UX对象逐项一致；嵌入产物按采用规则由本分支生成。该证据接受客户端识别、告知、单次刷新和不重放不变量，但尚未把旧签名页面保留到新签名UI并真实点击恢复，因此不能把本轮描述为“签名控制台升级无错误”，也不能由用户手工刷新掩盖剩余运行门禁。
+
+同一当前Profile签名Release A与APISIX入口的后继浏览器增量使用任务私有SMTP/Maildir接收真实八位验证码：普通User先验证安全通知地址，再从页面获取仅一次显示的TOTP种子，以仓库既有`pquerna/otp`认证器封装生成当前动态码完成绑定。页面随后只显示一次十条恢复码并明确撤销旧Session；确认保存后原会话结束，使用原密码进入MFA challenge并以新动态码成功重新登录，用户设置显示通知地址已验证、因子已绑定。种子、验证码、恢复码和密码均未进入文档、Git或普通运行日志。该证据关闭当前签名入口的首次SMTP→TOTP→MFA重登组合，不替代外部物理认证器、强制MFA重新绑定、恢复码消费/再生或AccessKey完整浏览器门禁。

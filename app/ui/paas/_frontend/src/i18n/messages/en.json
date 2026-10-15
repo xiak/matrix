@@ -311,6 +311,24 @@
       "enrollmentUnavailable": "IAM could not verify the current enrollment state."
     }
   },
+  "ApplicationRecovery": {
+    "title": "Console assets could not load",
+    "notice": "Some console assets could not load. The page will not reload automatically.",
+    "review": "Review recovery",
+    "close": "Close recovery prompt",
+    "cause": "An upgrade may have replaced older assets, or the network load may have failed. Reloading fetches the current page assets; it does not prove a previous operation succeeded or failed.",
+    "sensitive": "Reloading clears in-memory login, unsaved forms, and one-time keys or recovery codes. Save any necessary materials still visible first. Do not copy passwords or secrets into URLs or browser storage.",
+    "unknown": "For an uncertain write, retain its original request ID and inspect the original result after signing in again. Do not resubmit. This recovery replays no business request.",
+    "acknowledge": "I saved the necessary materials still visible and understand that reloading may discard in-memory content",
+    "stay": "Keep current page",
+    "reload": "Confirm page reload",
+    "requested": "Reload requested",
+    "reloadFailed": "The browser could not reload. Current content remains mounted. Handle unsaved content and use the browser reload; there is no automatic retry.",
+    "requestedHint": "This page requests one reload only. If the browser blocked leaving, handle unsaved content before using the browser reload. There are no automatic repeated attempts.",
+    "errorTitle": "This page cannot be displayed",
+    "errorHint": "A page runtime error occurred. You can explicitly retry rendering; this does not automatically reload the whole document or resubmit a business operation.",
+    "reset": "Retry displaying"
+  },
   "FirstEnrollment": {
     "title": "Set up your login authenticator",
     "hint": "This restricted challenge expires at {time}. Verifying an address and enrolling do not extend its lifetime.",
