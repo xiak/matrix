@@ -31,6 +31,7 @@ import { AccountPolicyDirectory } from "./AccountPolicyDirectory";
 import { LivePolicyCreationWizard } from "./LivePolicyCreationWizard";
 import { AccountTenantWorkspace } from "./AccountTenantWorkspace";
 import { LiveAccountTenants } from "./LiveAccountTenants";
+import { AccountLifecycleRecoveryNotice } from "./AccountLifecycleRecoveryNotice";
 import { OrganizationGovernancePreview } from "./OrganizationGovernancePreview";
 import { OwnSessionsPage } from "./OwnSessionsPage";
 import { LivePersonalSecuritySettings } from "./LivePersonalSecuritySettings";
@@ -227,6 +228,8 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)
   );
   return <section aria-label={t("title")} aria-busy={access.loading || access.busy} className={styles.stack}>
+    {access.accountLifecycle && (view === "tenants" || access.accountLifecycle.pending || access.accountLifecycle.recoveryError)
+      ? <AccountLifecycleRecoveryNotice client={access.accountLifecycle} key={session.sessionRevision} /> : null}
     {unknownReset ? <Alert status={resetLookup?.status === "confirmed" ? "success" : "warning"}><div className={styles.confirmation}>
       <strong>{t(resetLookup?.status === "confirmed" ? "resetConfirmedTitle" : "resetUnknownTitle")}</strong>
       <p>{t("resetUnknownTarget", { user: unknownReset.userQualifiedName, version: unknownReset.resourceVersion })}</p>

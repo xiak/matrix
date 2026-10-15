@@ -628,6 +628,36 @@ identity or credential carrier. This preview contract is aligned with
 S4; it does not invent that document's pending report API, score risk, infer
 effective access or automatically apply a recommendation.
 
+#### Account lifecycle recovery experience contract
+
+Account creation, status changes and Root-credential recovery retain their
+existing content-area forms and public controls. Before a write, the Provider
+saves only the original actor, operation, target, command identity and expected
+version, plus the intended status for a status change. Password fields clear
+on submission; passwords, bearers, complete commands and digests never enter
+the portable summary or persistent recovery state. Unavailable or invalid
+summary storage blocks dispatch instead of losing the original identity.
+
+An unknown result offers only original-completion inspection. The recovery
+block belongs to the USER content frame, independent of directory loading or
+`canReadAccounts`; the service still checks current authority on every query.
+A fresh same-actor Session may import or restore the original non-sensitive
+summary. Foreign, malformed or secret-bearing input never issues a request;
+missing, denied, unavailable or mismatched results retain UNKNOWN and never
+unlock a replacement write. The credential-bearing retry path is replaced,
+not renamed or retained as a compatibility path.
+
+A completion describes the original committed command, not current Account,
+credential or permission state. Root recovery preserves the actual ACTIVE or
+DISABLED status at commit and does not enable a suspended Account. Completion
+inspection neither reads the target nor projects Account facts or capabilities;
+pre-command detail/capability views retire, and subsequent resource work needs
+an independent authorized read. Acknowledgement clears only the exact local
+summary. Current-session fences discard late results after ownership changes.
+The existing isolated MOCK remains separate. A pre-fix client that never
+preserved a non-sensitive summary cannot recover missing command identity
+from current Account facts or have its lost inputs resurrected by this UI.
+
 #### MFA and self-session experience contract
 
 The login challenge, restricted first enrollment, personal TOTP lifecycle,
@@ -1936,6 +1966,43 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
+The current Account-lifecycle recovery candidate consumes only fixed IAM
+`23e389c735caad2ba52f4a955fa715562273c5d6`. Its strict client, persistent
+non-sensitive summary and content-area recovery replace the old frozen-secret
+write retry. The Account-owned block uses the public Card Header/Body/Footer;
+its local import/focus state stays outside Provider-wide data orchestration.
+Tests cover all three operations across independently mounted Sessions with
+different credentials and cleared site storage, including a directory-denied
+reader and a disabled Account's Root recovery. They also cover expiry followed
+by same-actor reauthentication, denied/missing/unavailable results, secret or
+foreign summaries, stale client responses, storage failure before dispatch,
+fresh target reads after acknowledgement, and stage-only keyboard focus.
+No recovered completion synthesizes Account facts, credential validity or
+capabilities, and imported recovery calls no writer or target/directory read.
+
+On 2026-10-15, the complete supported Node 22.22.2/npm 11.6.4 run covered
+73 files and 1,595 cases: 1,594 passed and the existing
+`AccessWorkspace.test.tsx` empty-group/multi-member case exceeded the unchanged
+5,000 ms budget. That file is unchanged from parent `33acaf493`; its same-budget
+isolated replay passed in 2.36 seconds. The replay does not replace a green
+complete run or prove that the original timeout is harmless. After the final
+phase-only Hook-dependency cleanup, all three affected files passed all 348
+cases. The complete frontend gate remains open; no test budget, untouched
+group scenario or failure was relaxed, and no second complete run was started.
+
+Final typecheck, full lint with zero allowed warnings, architecture, 234 theme
+contrast pairs and eight Node export-boundary cases passed. Both Windows and
+native Debian Linux used Node 22.22.2/npm 11.6.4 and independently built real
+unset/`0` production pairs, generating 59 pages. Windows used 17 workers and
+normalized 57 segment filenames; Linux used three workers and normalized zero.
+Both pairs, each local embed and all 324 cross-OS files matched byte-for-byte.
+Fresh Go 1.26.3 UI-host test/vet passed. No IAM/backend/API/SQL/profile,
+dependency, timeout configuration, checkpoint, shared DEV process or real
+account/resource changed. Isolated MOCK remains available; mandatory login or
+MFA was not enabled. Exact-source independent CI and real-IAM multi-origin,
+signed-browser, security/device and remaining release gates are not inherited
+from the contract donor or the component fixtures.
+
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
 at fixed IAM source `89505567643ed1c8e71d80277d5a3527d7987605`, which consumed the exact
@@ -2292,7 +2359,7 @@ browser warning/error log remained empty. The viewport was reset after the audit
 
 | Gate | Evidence |
 | --- | --- |
-| IAM Account lifecycle shell | The LIVE Account directory, detail and create journeys now keep their shared page frame and actions in the content area while only server-owned facts load. Exact target capabilities gate lifecycle actions; compact tables stack into labelled facts and page actions collapse into the shared overflow control without adding a per-row operation column. Existing isolated MOCK tenants remain separately inspectable. Source and synchronized embed are fixed at `249d43b74`; 255 focused cases, the complete 63-file/1,155-case frontend suite, three normalization cases, type/lint/architecture/228-pair style gates, 47-page export, 45 normalized paths, 259-file embed equality and repository Go test/vet passed. Desktop, `390 × 844` and `320 × 720` DEV checks had no page overflow or browser warning/error. This is shared shell, responsive and build evidence; exact commands, unknown-outcome ownership and remaining real-IAM acceptance belong to [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#account-生命周期-live-客户端的开发验收证据). |
+| IAM Account lifecycle shell and original-operation recovery | The LIVE Account directory, detail and create journeys retain their shared content frame, compact tables and independently read target capabilities. The Account-owned recovery block is visible outside directory-read gates in USER mode and reuses the public Card Header/Body/Footer. Before dispatch, only the non-sensitive original actor/operation/target/request/version summary is saved; unknown outcomes no longer retain or replay a credential-bearing command. A same-actor fresh Session may import the summary and consume the strict immutable completion contract at fixed IAM `23e389c735caad2ba52f4a955fa715562273c5d6`. Denial, absence and unavailable or mismatched results keep the original intent locked. Completion status is historical; Root recovery preserves DISABLED, and neither lookup nor acknowledgement supplies current Account facts or capabilities. Existing isolated MOCK tenants remain separately inspectable. Current UI gates are owned by the shared-navigation evidence above; exact authority and remaining real-IAM/signed-browser acceptance remain with [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#account-生命周期-live-客户端的开发验收证据). |
 | IAM customer policy versions | LIVE detail retains lazy exact-version inspection and inline default/retirement review. Its CUSTOMER/TENANT version author offers JSON plus a catalog-driven visual path for one to 128 compatible exact Actions per statement, with paged choices and a selected-only filter; unrepresentable JSON remains untouched, and catalog denial is local to the visual path. Publication remains separate from default selection and authorization. The explicit MOCK editor and usage view remain separate. The current UX source passed real IAM browser publication → explicit default selection → old-version retirement in an isolated synthetic fixture; switching and retirement also cleared the obsolete publication notice. The compact follow-up removes the generic operation column from both LIVE and isolated MOCK version directories: the version identifier remains the semantic inspection entry, the default marker stays adjacent to it, and only a mutable non-default version receives the overflow menu for default selection and retirement/deletion. The shared row-action cell also owns the Role-session lifecycle/menu pairing, avoiding a second near-identical layout helper. Source/embed `2072b3639` passed 284 focused cases and the complete 57-file/933-case suite plus three normalization cases, type/lint/architecture/228-pair style gates, 42-route export, 233-file embed equivalence and full repository Go test/vet. At `390 × 844`, the version table exposed only Version and Created facts, kept its menu beside the non-default version, matched document/body to the viewport, and produced no Dialog or browser warning/error. This does not establish cross-session unknown-result recovery, authorization effect at a subsequent business request, installation or release acceptance. Exact semantics and evidence belong to [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#策略版本读取与变更的开发验收证据). |
 | IAM customer policy creation | The LIVE content-area author reuses the JSON and catalog-driven visual editor, requires an explicit Action and exact instance target by default, supports compatible multi-Action statements, then separates review, creation and attachment. The strict response parser accepts only the current Account's matching CUSTOMER/TENANT Policy and default document; uncertain transport/protocol outcomes retain the original request across IAM navigation, with byte-equivalent retry and explicit acknowledgement. The four-method MOCK author remains isolated; the same editor has a separate zero-write preview route. The current UX source passed a real IAM browser visual creation with an exact product Action and resource in an isolated synthetic fixture; cross-login unknown-outcome recovery and real attachment to a principal remain unaccepted. Contract and UX evidence belong to [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#live-自定义策略新建的开发验收证据). |
 | Compact user-permission methods | The isolated MOCK user-creation flow keeps its three fixed authorization methods in one visible three-column choice at widths up to 560px, while dynamic tab sets elsewhere retain the shared scrollable Tabs behavior. Labels may wrap inside their own column instead of clipping the final method behind horizontal scrolling. At a `360 × 800` real DEV viewport all three Chinese labels were visible, the tab list measured `292px` for both client and scroll width, the document and body remained exactly `360px`, and no Dialog or browser warning/error appeared. No user was submitted. Source and synchronized embed are fixed at `f7e5edf8f`; the focused 198-case workspace run and complete 58-file/1010-case frontend suite passed with three normalization cases, typecheck/lint/architecture/228-pair style gates, 45 generated pages, 43 normalized segment files, 249 embedded files and full repository Go test/vet. This is compact MOCK UX evidence, not acceptance of live user creation or backend authorization. |

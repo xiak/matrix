@@ -59,24 +59,6 @@ function accountSummary(account: Account, previous?: AccountTenantScene | null):
   };
 }
 
-function PendingBoundary({ client, onOpen }: { client: AccountLifecycleClient; onOpen(accountId: string, create: boolean): void }) {
-  const t = useTranslations("AccountAccess");
-  const pending = client.pending;
-  if (!pending) return null;
-  return <Alert status="warning">
-    <div className={styles.confirmation}>
-      <strong>{t(pending.ownerCurrent ? "tenantMutationUnknownTitle" : "tenantMutationPreviousSessionTitle")}</strong>
-      <p>{t(pending.ownerCurrent ? "tenantMutationUnknownHint" : "tenantMutationPreviousSessionHint", { account: pending.accountId })}</p>
-      <p>{t("tenantMutationRequestId")} <code className={styles.resetRequestId}>{pending.requestId}</code></p>
-      {pending.ownerCurrent ? <div className={styles.actions}>
-        <Button onClick={() => onOpen(pending.accountId, pending.kind === "create")} size="small" variant="secondary">
-          {t("reviewTenantMutation")}
-        </Button>
-      </div> : null}
-    </div>
-  </Alert>;
-}
-
 function CreateLiveAccount({ client, onBack, onCreated }: {
   client: AccountLifecycleClient;
   onBack(): void;
@@ -95,8 +77,7 @@ function CreateLiveAccount({ client, onBack, onCreated }: {
   const [failure, setFailure] = useState<MutationFailure>(null);
   const [observed, setObserved] = useState<AccountAccess | null>(null);
   const pending = client.pending;
-  const pendingCreate = pending?.kind === "create" ? pending : null;
-  const frozen = Boolean(pending);
+  const frozen = Boolean(pending) || !client.ready;
   const rejected = failure === "conflict" ? null : rejectedFailure(failure);
 
   async function observeConflict(target: string) {
@@ -127,6 +108,8 @@ function CreateLiveAccount({ client, onBack, onCreated }: {
     event.preventDefault();
     if (busy || frozen || !withinNewPasswordProductBounds(password)) return;
     const target = accountId.trim();
+    const initialPassword = password;
+    setPassword("");
     setBusy(true); setFailure(null); setObserved(null);
     try {
       await finish(await client.create({
@@ -134,17 +117,10 @@ function CreateLiveAccount({ client, onBack, onCreated }: {
         displayName: accountName.trim(),
         rootLoginName: loginName.trim(),
         rootDisplayName: displayName.trim(),
-        initialPassword: password,
+        initialPassword,
         requestId: requestToken("ui-account-create-")
       }), target);
     } finally { setBusy(false); }
-  }
-
-  async function retry() {
-    if (busy || !pendingCreate?.ownerCurrent) return;
-    setBusy(true); setFailure(null);
-    try { await finish(await client.retry(), pendingCreate.accountId); }
-    finally { setBusy(false); }
   }
 
   useEffect(() => {
@@ -155,15 +131,6 @@ function CreateLiveAccount({ client, onBack, onCreated }: {
   return <WorkspaceDetail title={t("createTenantTitle")} onBack={onBack}>
     <form aria-busy={busy || undefined} aria-label={t("createTenantTitle")} className={styles.form} id={formId} onSubmit={submit} ref={form}>
       <Alert>{t("tenantNotice")}</Alert>
-      {pendingCreate ? <Alert status="warning" tabIndex={-1}>
-        <div className={styles.confirmation}>
-          <strong>{t(pendingCreate.ownerCurrent ? "tenantMutationUnknownTitle" : "tenantMutationPreviousSessionTitle")}</strong>
-          <p>{t(pendingCreate.ownerCurrent ? "tenantCreateUnknownHint" : "tenantMutationPreviousSessionHint", { account: pendingCreate.accountId })}</p>
-          <p>{t("tenantMutationRequestId")} <code className={styles.resetRequestId}>{pendingCreate.requestId}</code></p>
-          {pendingCreate.ownerCurrent ? <Button disabled={busy} onClick={() => void retry()} type="button" variant="secondary">{t("retryExactTenantMutation")}</Button> : null}
-        </div>
-      </Alert> : null}
-      {pending && !pendingCreate ? <Alert status="warning" tabIndex={-1}>{t("tenantMutationOtherTarget", { account: pending.accountId })}</Alert> : null}
       {failure === "conflict" ? <Alert status="warning" tabIndex={-1}>
         <div className={styles.confirmation}>
           <strong>{t("tenantMutationConflictTitle")}</strong>
@@ -212,8 +179,7 @@ function LiveAccountDetail({ access, client, error, loading, onBack, onRefresh, 
   const [failure, setFailure] = useState<MutationFailure>(null);
   const [notice, setNotice] = useState<MutationNotice>(null);
   const pending = client.pending;
-  const targetPending = pending && account && pending.accountId === account.id ? pending : null;
-  const blocked = Boolean(pending && !targetPending) || Boolean(targetPending && !targetPending.ownerCurrent);
+  const blocked = Boolean(pending) || !client.ready;
   const rejected = failure === "conflict" ? null : rejectedFailure(failure);
   const restriction = (reason: AccountTenantScene["statusRestrictionReason"]) => t(`restrictions.${reason ?? "AUTHORITY_REQUIRED"}`);
 
@@ -237,13 +203,6 @@ function LiveAccountDetail({ access, client, error, loading, onBack, onRefresh, 
     setFailure(result.reason); setNotice(null);
   }
 
-  async function retry() {
-    if (busy || !targetPending?.ownerCurrent) return;
-    setBusy(true); setFailure(null);
-    try { await finish(await client.retry(), targetPending.kind === "recover-root-credentials" ? "recovered" : "status"); }
-    finally { setBusy(false); }
-  }
-
   async function submitStatus() {
     if (!exact || busy || pending) return;
     setBusy(true); setFailure(null); setNotice(null);
@@ -259,10 +218,12 @@ function LiveAccountDetail({ access, client, error, loading, onBack, onRefresh, 
   async function recover(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!exact || busy || pending || !withinNewPasswordProductBounds(password)) return;
+    const initialPassword = password;
+    setPassword("");
     setBusy(true); setFailure(null); setNotice(null);
     try {
       await finish(await client.recoverRootCredentials(exact.id, {
-        initialPassword: password,
+        initialPassword,
         resourceVersion: exact.resourceVersion,
         requestId: requestToken("ui-account-recovery-")
       }), "recovered");
@@ -276,14 +237,6 @@ function LiveAccountDetail({ access, client, error, loading, onBack, onRefresh, 
     </div>
     {loading ? <LoadingNotice className={styles.note} label={t("tenantDetailLoading")} /> : null}
     {error ? <Alert status="danger"><div className={styles.confirmation}><span>{t(`errors.${error}`)}</span><Button onClick={() => void onRefresh()} size="small" variant="secondary">{t("retryTenantRead")}</Button></div></Alert> : null}
-    {targetPending ? <Alert status="warning">
-      <div className={styles.confirmation}>
-        <strong>{t(targetPending.ownerCurrent ? "tenantMutationUnknownTitle" : "tenantMutationPreviousSessionTitle")}</strong>
-        <p>{t(targetPending.ownerCurrent ? targetPending.kind === "recover-root-credentials" ? "tenantRecoveryUnknownHint" : "tenantStatusUnknownHint" : "tenantMutationPreviousSessionHint", { account: targetPending.accountId })}</p>
-        <p>{t("tenantMutationRequestId")} <code className={styles.resetRequestId}>{targetPending.requestId}</code></p>
-        {targetPending.ownerCurrent ? <Button disabled={busy} onClick={() => void retry()} variant="secondary">{t("retryExactTenantMutation")}</Button> : null}
-      </div>
-    </Alert> : pending ? <Alert status="warning">{t("tenantMutationOtherTarget", { account: pending.accountId })}</Alert> : null}
     {failure === "conflict" ? <Alert status="warning"><div className={styles.confirmation}><strong>{t("tenantMutationConflictTitle")}</strong><p>{t("tenantMutationConflictHint", { account: account?.id ?? "—" })}</p>{exact ? <p>{t("tenantObservedState", { status: t(exact.enabled ? "tenantActive" : "tenantDisabled"), version: exact.resourceVersion })}</p> : null}</div></Alert> : null}
     {failure === "refresh" ? <Alert status="warning">{t("tenantMutationRefreshFailed")}</Alert> : null}
     {rejected ? <Alert status="danger">{t(`errors.${rejected}`)}</Alert> : null}
@@ -432,21 +385,14 @@ function LiveAccountDirectoryGeneration({ client, initialAccounts, initialNextAf
     }
   }
 
-  function openPending(accountId: string, create: boolean) {
-    if (create) { setCreating(true); setSelectedId(null); return; }
-    const summary = accounts.find((item) => item.id === accountId) ?? null;
-    setSelectedSummary(summary); setSelectedAccess(null); setDetailError(null); setDetailLoading(true); setCreating(false); setSelectedId(accountId);
-  }
-
   if (creating) return <CreateLiveAccount client={client} onBack={() => setCreating(false)} onCreated={refreshAfterCreate} />;
   if (selectedId) return <LiveAccountDetail access={selectedAccess} client={client} error={detailError} loading={detailLoading}
     onBack={() => { detailRequest.current += 1; setSelectedId(null); setSelectedAccess(null); setDetailError(null); }}
     onRefresh={async () => { await readSelected(selectedId); }} onUpdated={updateAfterMutation} summary={selectedSummary} />;
 
   return <div className={styles.stack}>
-    <PendingBoundary client={client} onOpen={openPending} />
     <Card>
-      <ContentPage.Heading title={t("tenantAccounts")} scrollKey="live-tenant-directory" actions={client.canCreate ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: listLoading || Boolean(client.pending), onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
+      <ContentPage.Heading title={t("tenantAccounts")} scrollKey="live-tenant-directory" actions={client.canCreate ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: listLoading || Boolean(client.pending) || !client.ready, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
       <Alert>{t("tenantLiveBoundary")}</Alert>
       {listError ? <Alert status="danger"><div className={styles.confirmation}><span>{t(`errors.${listError}`)}</span><Button onClick={() => void loadPage(cursorStack[pageIndex], pageIndex)} size="small" variant="secondary">{t("retryTenantRead")}</Button></div></Alert> : null}
       {listLoading ? <LoadingNotice className={styles.note} label={t("loadingTenants")} /> : null}

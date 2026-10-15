@@ -21,6 +21,7 @@
 | IAM service-authorization observation, public product-write and service-session lineage sources | `a464299b6656becc73054cd53b4a31b44104540b` for the cumulative fixed read contract with terminal-success Verification `36779942782`; `92ea765b` for the public bind/unbind contract whose independent Verification `36701340805` has not passed; `aecc9f1c50f663af9a0bae8198bef0f66c9192af` for contract/Audit lineage acceptance only | Same repository, fixed Git objects. Adapt only the three current-`LOGIN_SESSION` customer reads and keep Account outside browser selection. Adapt only a strict, unmounted public write client while independent verification remains unaccepted. Use the service-source lineage slice only to constrain the MOCK information architecture until a customer-readable session projection is fixed; never call `/v1/internal/*` from the browser, expose an unaccepted LIVE action or inherit the donor UI/runtime. |
 | Managed-service Account activation and service-definition contract | `b015b07864c2fcdf85129d57a0babe8332e3356f` (public activation wire unchanged from parent `599d994cddda5f1cb2ee1b4f53b84eafd1458e58`) | `ADAPT` the public service-definition reference, sorted directory, exact `activationCapability`, Account-scoped activation read/create routes, caller-owned idempotency key and Offering-to-service commitment. `REFERENCE` the backend validation and authority tests for the distinction between activation visibility, activation authority and product-resource authority. `REJECT` the donor backend/runtime, IAM implementation, generated UI and any compatibility shape based on the superseded Offering `kind`; keep the existing renderer owners and isolated MOCK. The Elasticsearch credential-isolation fix at the fixed head changes no public activation wire. |
 | Managed-service bounded UNKNOWN recovery and service-template head contract | `964d7c85d2e9249541996d22b9b2d9b9189922ab` | `ADAPT` only the closed five public read-only command-result types, original `idempotencyKey`, opaque input commitment, strict non-secret result validation and current-bearer transport into the existing repository/provider/notice owners. `ADAPT` stable ACTIVE-template/workload semantic matching and preserve the exact received version/digest in product commands and portable intents. `REFERENCE` the server-owned current-head directory, Account/USER/Role-source isolation, seven-day/100-item window and immutable completion constraints. `REJECT` browser-pinned template versions, the superseded `f254f583c65546380a3a810e93c105667f6590ac` private-request-ID correlation, client-side hash derivation, caller selectors, generic receipt framework, donor backend/SQL/profile/runtime and copied UI. Local or cross-browser absence remains UNKNOWN, never proof that a new write is safe. |
+| IAM original Account-lifecycle completion | `23e389c735caad2ba52f4a955fa715562273c5d6` | Fixed Git objects only. Adapt the strict current-USER completion GET and operation-specific immutable projection into the existing Account client, Provider and content frame. The inspected `api/iam/v1/openapi.json` blob has SHA-256 `49f97a710f51ab141c3833990f1a260bc47f80cdcf829c75635bc3ebde9834ff`. Do not import backend, SQL, profile/readiness changes, donor UI, FEAT/checkpoint state or acceptance results. |
 
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
@@ -91,6 +92,23 @@ architecture, package or runtime dependency.
 | Viewport-only brand breakpoint and suppression of shell actions by every local heading | `REJECT` | This console already owns container-responsive branding; its local commands and global refresh are not interchangeable. |
 
 ## IAM fixed-contract integration
+
+The Account completion slice uses only fixed source
+`23e389c735caad2ba52f4a955fa715562273c5d6`. `REUSE` the existing Account
+repository/Provider, exact-target write forms and public themed Card, Alert and
+input controls. `ADAPT` unknown-outcome handling to a non-sensitive original
+actor/operation/target/request/version summary saved before dispatch, then a
+strict, independently authorized completion read after reauthentication or
+portable import. Replace the old credential-bearing frozen-command retry in
+the same slice; do not keep a replay alias. `REFERENCE` the permanent,
+operation-bound completion and actual commit-time Root-recovery status to
+distinguish an original outcome from current Account facts. `REJECT` password,
+bearer, complete-command or digest storage/export; caller identity selectors;
+current-target GET as completion evidence; a missing-result retry permit; a
+shared PaaS/IAM receipt framework; and the superseded ACTIVE-only Root-recovery
+constraint. The USER-only recovery presentation remains outside directory-read
+gates without manufacturing resource capabilities. The owning FEAT, not this
+adoption record, retains UI gates and remaining runtime acceptance.
 
 The production-export repair inspects only the fixed consumer
 `89505567643ed1c8e71d80277d5a3527d7987605` and its exact frontend donor

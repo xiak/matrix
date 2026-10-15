@@ -1,6 +1,8 @@
-import { HttpProblem, requestJSON, requestToken } from "@/infrastructure/http/jsonRequest";
+import { HttpProblem, requestJSON, requestJSONResponse, requestToken } from "@/infrastructure/http/jsonRequest";
 import type {
   Account,
+  AccountLifecycleCompletion,
+  AccountLifecycleIntent,
   AccountAccess,
   AccountIdentity,
   AccountSecuritySettings,
@@ -76,6 +78,7 @@ import type {
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
 import type { AuthenticatorRemoval, AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart, TOTPRemovalResponse } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
+import { parseAccountLifecycleIntent } from "./accountLifecycleRecoveryStorage";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDeletion, RoleDirectory, RoleListing, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
 import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
 import { sourceCidrValid } from "../domain/policyLanguage";
@@ -2806,6 +2809,38 @@ async function recoverAccountRootCredentials(
   return account;
 }
 
+async function readAccountLifecycleCompletion(credential: string, original: AccountLifecycleIntent): Promise<AccountLifecycleCompletion> {
+  const intent = parseAccountLifecycleIntent(original);
+  if (!intent) throw new Error("INVALID_ACCOUNT_LIFECYCLE_REQUEST");
+  const query = new URLSearchParams({ operation: intent.operation, expectedResourceVersion: String(intent.expectedResourceVersion) });
+  const response = await requestJSONResponse<unknown>(
+    `/api/iam/v1/accounts/${encodeURIComponent(intent.accountId)}/lifecycle-completions/${encodeURIComponent(intent.commandRequestId)}?${query}`,
+    { headers: accountHeaders(credential) }
+  );
+  if (response.status !== 200 || response.headers.get("Cache-Control") !== "no-store" ||
+      response.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") throw new Error("INVALID_IAM_RESPONSE");
+  const wire = accountRecord(response.body);
+  exactKeys(wire, ["apiVersion", "kind", "actorAccountId", "actorPrincipalId", "operation", "accountId", "commandRequestId",
+    "expectedResourceVersion", "resultingResourceVersion", "status", "eventId", "occurredAt",
+    ...(intent.operation === "ACCOUNT_SET_STATUS" ? [] : ["rootPrincipalId"])]);
+  requireAccountKind(wire, "AccountLifecycleCompletion");
+  if (wire.actorAccountId !== intent.actorAccountId || wire.actorPrincipalId !== intent.actorPrincipalId ||
+      wire.operation !== intent.operation || wire.accountId !== intent.accountId || wire.commandRequestId !== intent.commandRequestId ||
+      wire.expectedResourceVersion !== intent.expectedResourceVersion || wire.resultingResourceVersion !== intent.expectedResourceVersion + 1 ||
+      (intent.operation === "ACCOUNT_SET_STATUS" ? wire.status !== intent.intendedStatus
+        : intent.operation === "ACCOUNT_CREATE" ? wire.status !== "ACTIVE"
+          : wire.status !== "ACTIVE" && wire.status !== "DISABLED")) throw new Error("INVALID_IAM_RESPONSE");
+  const base = { actorAccountId: intent.actorAccountId, actorPrincipalId: intent.actorPrincipalId, accountId: intent.accountId,
+    commandRequestId: intent.commandRequestId, eventId: accountIdentifier(wire.eventId), occurredAt: accountTimestamp(wire.occurredAt) };
+  if (intent.operation === "ACCOUNT_SET_STATUS") return { ...base, operation: intent.operation, status: intent.intendedStatus,
+    expectedResourceVersion: intent.expectedResourceVersion, resultingResourceVersion: intent.expectedResourceVersion + 1 };
+  const rootPrincipalId = accountIdentifier(wire.rootPrincipalId);
+  if (intent.operation === "ACCOUNT_CREATE") return { ...base, operation: intent.operation, expectedResourceVersion: 0,
+    resultingResourceVersion: 1, status: "ACTIVE", rootPrincipalId };
+  return { ...base, operation: intent.operation, expectedResourceVersion: intent.expectedResourceVersion,
+    resultingResourceVersion: intent.expectedResourceVersion + 1, status: wire.status as Account["status"], rootPrincipalId };
+}
+
 export const httpAccountRepository: AccountRepository = {
   async createUser(credential, accountId, command) {
     if (command.permissionBoundary !== null || !command.requestId || !accountId) throw new Error("INVALID_IAM_REQUEST");
@@ -2824,7 +2859,8 @@ export const httpAccountRepository: AccountRepository = {
     read: readAccountLifecycle,
     create: createAccountLifecycle,
     setStatus: setAccountLifecycleStatus,
-    recoverRootCredentials: recoverAccountRootCredentials
+    recoverRootCredentials: recoverAccountRootCredentials,
+    readCompletion: readAccountLifecycleCompletion
   },
   securityReports: {
     async create(credential, accountId, command) {
