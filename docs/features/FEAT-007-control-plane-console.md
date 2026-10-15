@@ -1936,8 +1936,9 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-The production-export repair addresses the failed embedded check at fixed IAM
-source `89505567643ed1c8e71d80277d5a3527d7987605`, which consumed the exact
+The production-export repair in fixed UI source
+`8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
+at fixed IAM source `89505567643ed1c8e71d80277d5a3527d7987605`, which consumed the exact
 frontend from UI parent `859a82a4d88ca76a9a2b6e7f49fafb283554ff21`.
 [Verification 38707342304](https://github.com/xiak/matrix/actions/runs/38707342304)
 failed before Vitest. Windows supplied preview `0`, while the Linux runner
@@ -2081,8 +2082,8 @@ instances still perform an independently authorized detail read. Its IAM wire
 and recovery semantics are owned by FEAT-IAM-010, not by a second shared model.
 The active-template-head correction stays in those existing product owners;
 exact selection and reference semantics remain owned by FEAT-IAM-010. With
-Node 22.22.2 and npm 11.6.4, its six focused files passed all 282 cases plus
-three normalization cases, typecheck, full lint, architecture and 228
+Node 22.22.2 and npm 11.6.4, the fixed `3876516a` baseline's six focused files
+passed all 282 cases plus three normalization cases, typecheck, full lint, architecture and 228
 theme-contrast pairs. Production generated 59 pages and 57 normalized segments;
 all 319 embedded files match byte-for-byte. Fresh PaaS UI-host Go test and vet
 passed with bounded concurrency. Local complete regression is not
@@ -2100,6 +2101,26 @@ accepted as green:
   incompatible-conditions case still timed out in isolation. The other three
   second-attempt cases were not retried. No timeout or unrelated source/test
   was changed, and no third complete local run was started.
+
+The existing portable-summary component matrix now explicitly includes
+`TERMINATE_INSTALLATION`: one mounted Provider exports the exact non-secret
+intent, then a fresh Provider with cleared site storage imports it and reads
+`INSTALLATION_TERMINATE` exactly once. Both Providers' quota, create, terminate,
+bind and unbind writers remain uncalled; recovery does not issue an instance
+detail read or expose login material. The runtime mapping, strict summary
+parser, read-only command lookup and same-page lost-response handling already
+exist in fixed UI source `8a145922`; no production behavior was added.
+On 2026-10-15, the four focused notice, Provider, storage and HTTP files passed
+167 cases on Node 22.22.2/npm 11.6.4, followed by the single original-key
+termination/lost-response renderer case; the other 124 renderer cases were not
+run. Typecheck, lint, architecture, 234 theme contrast pairs and all eight Node
+export-boundary cases passed. Windows production export generated 59 pages
+and 57 normalized segments; actual unset/`0` builds and all 324 embedded files
+matched byte-for-byte, followed by fresh UI-host Go test/vet. This focused
+follow-up did not rerun the complete frontend suite or Linux builds, operate a
+real instance or prove two browser origins against signed APISIX. Those runtime
+gates remain with FEAT-IAM-010; no IAM FEAT, backend, API, SQL, profile,
+checkpoint or shared DEV process changed.
 
 The fixed UI candidate `3876516a902fd020d1ab1cd4be8f339f9a9034b1` was selectively
 adapted into IAM integration `355815f3d992edaf4f677374d7407554bd96ec7f` and is

@@ -32,20 +32,23 @@ function view(read: NonNullable<ControlPlaneRepository["listCommandResults"]>, o
     session: { id: "login-a", principalId: "user-a", organizationId: "account-a", status: "ACTIVE", issuedAt: "2026-10-13T10:00:00Z", expiresAt: "2099-10-13T20:00:00Z" } }),
     changePassword: vi.fn(), logout: vi.fn() };
   const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), createInstallation: vi.fn(), activateQuota: vi.fn(),
-    bindServiceRole: vi.fn(), unbindServiceRole: vi.fn(), listCommandResults: read };
+    terminateInstallation: vi.fn(), bindServiceRole: vi.fn(), unbindServiceRole: vi.fn(), listCommandResults: read };
   return { repository, ...render(<LocaleProvider><SessionProvider repository={iam}><ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Actions original={original} /></ControlPlaneProvider></SessionProvider></LocaleProvider>) };
 }
 
 afterEach(() => { cleanup(); localStorage.clear(); });
 
 describe("original-operation recovery experience", () => {
-  it.each(["CREATE_INSTALLATION", "BIND_SERVICE_ROLE", "UNBIND_SERVICE_ROLE"] as const)("carries non-secret %s input into a clean browser and confirms through a read-only query", async (kind) => {
+  it.each(["CREATE_INSTALLATION", "TERMINATE_INSTALLATION", "BIND_SERVICE_ROLE", "UNBIND_SERVICE_ROLE"] as const)("carries non-secret %s input into a clean browser and confirms through a read-only query", async (kind) => {
     const template = { id: "managedservice.installation-reader", version: 2, contentDigest: `sha256:${"c".repeat(64)}` };
     const original: ManagedServiceCommandIntent = kind === "CREATE_INSTALLATION" ? intent
-      : kind === "BIND_SERVICE_ROLE" ? { ...intent, kind, payload: { installationId: intent.targetId, template } }
+      : kind === "TERMINATE_INSTALLATION" ? { ...intent, kind, payload: { installationId: intent.targetId } }
+        : kind === "BIND_SERVICE_ROLE" ? { ...intent, kind, payload: { installationId: intent.targetId, template } }
         : { ...intent, kind, payload: { installationId: intent.targetId, bindingId: "binding-a", resourceVersion: 1, expectedTemplate: template } };
     const completion: ManagedServiceCommandResult = { ...result, commandType: managedServiceCommandType(kind),
-      operation: kind === "CREATE_INSTALLATION" ? result.operation : null, bindingId: kind === "CREATE_INSTALLATION" ? null : "binding-a" };
+      operation: kind === "CREATE_INSTALLATION" ? result.operation
+        : kind === "TERMINATE_INSTALLATION" ? { ...result.operation!, kind: "TERMINATE" } : null,
+      bindingId: kind === "CREATE_INSTALLATION" || kind === "TERMINATE_INSTALLATION" ? null : "binding-a" };
     const read = vi.fn(async () => [completion]);
     const first = view(read, original);
     await act(async () => { fireEvent.click(screen.getByText("login")); });
@@ -64,11 +67,15 @@ describe("original-operation recovery experience", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "带入摘要并检查" })); });
     expect(screen.getByText(/服务端已确认匹配的原操作成功/)).toBeTruthy();
     expect(screen.getByText(result.inputDigest)).toBeTruthy();
-    expect(second.repository.createInstallation).not.toHaveBeenCalled();
-    expect(second.repository.bindServiceRole).not.toHaveBeenCalled();
-    expect(second.repository.unbindServiceRole).not.toHaveBeenCalled();
+    for (const page of [first, second]) {
+      for (const write of [page.repository.activateQuota, page.repository.createInstallation,
+        page.repository.terminateInstallation, page.repository.bindServiceRole, page.repository.unbindServiceRole]) {
+        expect(write).not.toHaveBeenCalled();
+      }
+    }
     expect(second.repository.getInstallation).not.toHaveBeenCalled();
-    expect(read).toHaveBeenCalledExactlyOnceWith("never-persist-this-credential", managedServiceCommandType(kind));
+    expect(read).toHaveBeenCalledExactlyOnceWith("never-persist-this-credential",
+      kind === "TERMINATE_INSTALLATION" ? "INSTALLATION_TERMINATE" : managedServiceCommandType(kind));
     expect(document.querySelector("[role=dialog]")).toBeNull();
   });
 
