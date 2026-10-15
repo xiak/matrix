@@ -278,7 +278,7 @@ R3固定提交的开发schema为IAM26/Audit15/PaaS2，发布profile不变；后�
 
 附件会话基础沿原仓储/事务接口传递实际bearer的Session.ID，没有新增SessionStore、Redis依赖、北向selector或审计字段。私有`policy_attachment_contract_ready()`由迁移验证与实时readiness共用，检查唯一10/7参入口、精确返回列、无默认/可变参数、owner/ACL、SECURITY DEFINER、易变性/并行属性和安全search_path；元数据漂移失败关闭。新的输入缺失/错误引用门禁使用真实PDP及PostgreSQL适配器，仅在测试事务入口替换私有Session引用；过期/旧代际/NULL行是显式合成存储攻击，不声称为旧binary来源证据。
 
-2026-09-16受限PG18.6（1CPU/768MiB/128PIDs/64连接，Go2/768MiB、真实门禁串行race/p1）通过原策略保留数据门禁与附件会话门禁，合计301.225s。两者沿用同一integration owner，但使用独立数据库和原4分钟/2分钟预算，避免会话矩阵的测试用户混入策略目录/101成员规模fixture；CI在既有authority-process job运行两项，不放宽超时、密码成本或规模断言。附件矩阵包含用户、组、平台用户共48个安全变更先提交的可控交错：退出、改密省略/true/false、保留当前会话、重置/forced及停用/撤权；保留会话仍可写，失效会话拒绝，关系和成功事实无部分效果。双次迁移及等值bootstrap重放后再次检查原会话/撤权结果，原receipt不变、旧权限不复活。平台身份不可在线重置/停用继续由原凭据保护门禁验收，本矩阵不绕过它。
+当前附件会话门禁由`TestIAMUserPolicyAttachmentSessionPostgres`、`TestIAMGroupPolicyAttachmentSessionPostgres`和`TestIAMPlatformPolicyAttachmentSessionPostgres`分别拥有，各用独立空白PostgreSQL数据库和原两分钟fixture预算；三项在同一个已校验选择器中共享一次测试二进制准备，但不能共享数据或以另一项通过代替失败。USER/GROUP actor与目标先通过真实API取得相同CUSTOMER/TENANT boundary，再执行CREATE/REVOKE与退出、改密默认撤销、显式保留其他Session、保留当前Session、重置、forced、停用及撤权的32项交错；PLATFORM保留不适用在线重置/停用的10项，共42项。保留Session的改密竞争只能在整个Serializable事务重新求值后成功，完成证据必须保存改密后的当前`userResourceVersion`，不能复用屏障前旧boundary evidence；失效Session或已撤权限拒绝，原意图无关系、receipt或成功事实。失败后的夹具清理使用独立root requestId，不把另一actor的命令冒充原意图重放。三项均在双次迁移和等值bootstrap后复核Session/撤权终态，平台身份不可在线重置/停用仍由原凭据保护门禁负责。2026-10-15本机受限PG18、race/p1实际通过USER 72.03s、GROUP 69.15s、PLATFORM 50.36s；同一包选择器总计195.469s，三项均低于各自原120秒期限。
 
 18个私有引用用例覆盖缺失/畸形/未知/另一USER/已撤销/过期/旧或NULL代际及正常引用；四项北向selector注入拒绝。旧9/6参调用返回未定义函数，权限和入口配置漂移关闭readiness。原IAM HTTP/本地凭据恢复门禁141.053s，Audit双schema/HTTP分别11.384s/3.448s，独立IAM/Audit/PaaS进程77.478s通过，保留实际受限数据库登录、双账号资源/Operation/outbox和历史proof。全仓race/p2、vet/p2、模块校验、API生成字节稳定及Linux amd64构建通过；默认跳过的外部fixture不计为真实运行证据。此前原实现已能在两项退出竞争中经SERIALIZABLE重试拒绝，不把该回归声称为已复现漏洞；新参数提供显式数据库入口保证。此证据仍不是Role/STS、Redis替换、HA或发布验收；Role写入与原root恢复的竞争、写入先提交的Role交错及完整角色闭环按R1/R2继续完成。
 
@@ -304,7 +304,7 @@ R3固定提交的开发schema为IAM26/Audit15/PaaS2，发布profile不变；后�
 
 ### 当前管理门禁的独立测试范围
 
-角色管理和私有会话引用矩阵分别使用独立、全新PostgreSQL数据库，不再嵌套消耗原账号HTTP和附件会话矩阵的剩余总时限。沿用同一integration文件、原业务断言和受限runtime，每个新增独立fixture有120秒总预算；角色竞争的锁等待、密码成本、48项附件交错与81项私有引用均未减少或放宽。每个fixture末尾保留双次schema重放、等值bootstrap receipt及实际Role状态不变检查。
+角色管理、私有会话引用及USER/GROUP/PLATFORM附件会话矩阵分别使用独立、全新PostgreSQL数据库，不再嵌套消耗其他fixture的剩余总时限。沿用同一integration文件、原业务断言和受限runtime，每个独立fixture有120秒总预算；角色竞争的锁等待、密码成本、当前42项附件交错与81项私有引用均未减少或放宽。每个fixture末尾保留双次schema重放、等值bootstrap receipt及实际Role状态不变检查。
 
 2026-09-16，精确候选Git树`e496908ecea855d6300ad8e549774719f1d46b6a`的干净导出在独立PG18.4（1CPU/768MiB/PIDs128/64连接，Go2/512MiB、race/p1）通过原账号HTTP、附件会话及上述两项独立矩阵，合计263.159秒。同一干净导出随后通过全仓race/p2（含架构）、vet/p2、模块校验及Linux amd64构建。固定`d45402d91c89a5bb23f52fcfde65491435cd0f55`的[Verification35069879250](https://github.com/xiak/matrix/actions/runs/35069879250)已按精确SHA核实Go、authority-process、node-process全部completed/success。这只证明测试范围拆分后的当前R1及主体能力回归，不包含RoleBoundary/RoleSession。
 

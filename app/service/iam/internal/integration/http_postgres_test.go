@@ -14978,8 +14978,20 @@ func proveOwnSessionLocalRecovery(t *testing.T, ctx context.Context, handlers []
 	}
 }
 
-func TestIAMPolicyAttachmentSessionPostgres(t *testing.T) {
-	const environment = "MATRIX_IAM_ATTACHMENT_SESSION_POSTGRES_TEST_DSN"
+func TestIAMUserPolicyAttachmentSessionPostgres(t *testing.T) {
+	testIAMPolicyAttachmentSessionsPostgres(t, "MATRIX_IAM_ATTACHMENT_SESSION_POSTGRES_TEST_DSN", []string{"user"})
+}
+
+func TestIAMGroupPolicyAttachmentSessionPostgres(t *testing.T) {
+	testIAMPolicyAttachmentSessionsPostgres(t, "MATRIX_IAM_GROUP_ATTACHMENT_SESSION_POSTGRES_TEST_DSN", []string{"group"})
+}
+
+func TestIAMPlatformPolicyAttachmentSessionPostgres(t *testing.T) {
+	testIAMPolicyAttachmentSessionsPostgres(t, "MATRIX_IAM_PLATFORM_ATTACHMENT_SESSION_POSTGRES_TEST_DSN", []string{"platform"})
+}
+
+func testIAMPolicyAttachmentSessionsPostgres(t *testing.T, environment string, targetKinds []string) {
+	t.Helper()
 	dsn := os.Getenv(environment)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", environment)
@@ -15027,7 +15039,7 @@ func TestIAMPolicyAttachmentSessionPostgres(t *testing.T) {
 	})
 	root := localRecoveryLogin(t, handler, "admin", adminPassword, true)
 	root = localRecoveryChangePassword(t, handler, root, adminPassword, changedAdminPassword)
-	verify := provePolicyAttachmentSessions(t, ctx, handler, database, root)
+	verify := provePolicyAttachmentSessions(t, ctx, handler, database, root, attachmentFailures, targetKinds)
 	applyIAMSchema(t, ctx, database)
 	applyIAMSchema(t, ctx, database)
 	replayed, err := bootstrapIAMWithTOTP(t, ctx, workflow, document)
@@ -16038,7 +16050,15 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	}
 }
 
-func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root string) func() {
+func provePolicyAttachmentSessions(
+	t *testing.T,
+	ctx context.Context,
+	handler http.Handler,
+	database *pgx.Conn,
+	root string,
+	failures *iamTransactionFailureTrace,
+	targetKinds []string,
+) func() {
 	t.Helper()
 	var retainedChecks []func(*testing.T)
 	t.Run("private_abi_and_readiness", func(t *testing.T) {
@@ -16098,7 +16118,8 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 		t.Helper()
 		response := performIAMRequest(handler, http.MethodPost, path, bearer, mustIAMJSON(t, body))
 		if response.Code != want {
-			t.Fatalf("attachment session %s: status=%d want=%d", path, response.Code, want)
+			t.Fatalf("attachment session %s: status=%d want=%d sqlstate=%v body=%s",
+				path, response.Code, want, failures.lastSQLState.Load(), response.Body.String())
 		}
 		if result != nil && json.Unmarshal(response.Body.Bytes(), result) != nil {
 			t.Fatal("decode attachment session response")
@@ -16109,12 +16130,50 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-session-target"}, http.StatusCreated, &member)
 	memberBearer := localRecoveryLogin(t, handler, member.LoginName+"@"+string(member.AccountID), initialDeveloperPassword, true)
 	localRecoveryChangePassword(t, handler, memberBearer, initialDeveloperPassword, changedDeveloperPassword)
+	var setBoundary func(*testing.T, iamv1.User, string)
+	if slices.Contains(targetKinds, "user") || slices.Contains(targetKinds, "group") {
+		var delegationCeiling iamv1.PolicyDetail
+		call(t, "/v1/policies", root, iamv1.CreatePolicyRequest{
+			DisplayName: "Attachment session delegation ceiling",
+			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{
+					{SID: "direct-create", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyAttachmentCreate},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "direct-revoke", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyAttachmentRevoke},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicyAttachment, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "group-create", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMGroupPolicyAttachmentCreate},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceGroup, Match: iamv1.PolicyResourceAnyInAuthority}}},
+					{SID: "group-revoke", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMGroupPolicyAttachmentRevoke},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicyAttachment, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				}}, RequestID: "attachment-session-delegation-ceiling",
+		}, http.StatusCreated, &delegationCeiling)
+		setBoundary = func(t *testing.T, user iamv1.User, requestID string) {
+			t.Helper()
+			path := "/v1/users/" + string(user.ID) + "/permission-boundary"
+			response := performIAMRequest(handler, http.MethodGet, path, root, nil)
+			var current iamv1.UserPermissionBoundary
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &current) != nil {
+				t.Fatalf("read attachment session boundary: status=%d body=%s", response.Code, response.Body.String())
+			}
+			response = performIAMRequest(handler, http.MethodPut, path, root, mustIAMJSON(t, iamv1.SetUserPermissionBoundaryRequest{
+				PolicyID: delegationCeiling.Policy.ID, PolicyResourceVersion: delegationCeiling.Policy.ResourceVersion,
+				ResourceVersion: current.ResourceVersion, RequestID: requestID,
+			}))
+			if response.Code != http.StatusOK {
+				t.Fatalf("set attachment session boundary: status=%d sqlstate=%v body=%s",
+					response.Code, failures.lastSQLState.Load(), response.Body.String())
+			}
+		}
+		setBoundary(t, member, "attachment-session-target-boundary")
+	}
 	var group iamv1.Group
-	call(t, "/v1/groups", root, map[string]any{"name": "attachment-session-group", "description": "Session isolation",
-		"requestId": "attachment-session-group"}, http.StatusCreated, &group)
-	defer call(t, "/v1/groups/"+string(group.ID)+":delete", root,
-		iamv1.DeleteGroupRequest{ResourceVersion: group.ResourceVersion, RequestID: "attachment-session-group-cleanup"}, http.StatusOK, nil)
-	for _, targetKind := range []string{"user", "group", "platform"} {
+	if slices.Contains(targetKinds, "group") {
+		call(t, "/v1/groups", root, map[string]any{"name": "attachment-session-group", "description": "Session isolation",
+			"requestId": "attachment-session-group"}, http.StatusCreated, &group)
+		defer call(t, "/v1/groups/"+string(group.ID)+":delete", root,
+			iamv1.DeleteGroupRequest{ResourceVersion: group.ResourceVersion, RequestID: "attachment-session-group-cleanup"}, http.StatusOK, nil)
+	}
+	for _, targetKind := range targetKinds {
 		// The own-session concurrency owner proves that an explicit
 		// revokeOtherSessions=true is equivalent to the default. This matrix
 		// keeps the default revocation, explicit preservation and current-session
@@ -16147,6 +16206,9 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 						grantRequest = iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(actor.ID)},
 							PolicyID: iamv1.SystemPolicyAccountAdministrator, PolicyResourceVersion: 1, RequestID: "attachment-actor-grant-" + caseID}
 						call(t, "/v1/policy-attachments", root, grantRequest, http.StatusOK, &grant)
+						if targetKind != "platform" {
+							setBoundary(t, actor, "attachment-actor-boundary-"+caseID)
+						}
 						if targetKind == "platform" {
 							grantRequest.PolicyID = iamv1.SystemPolicyPlatformOperator
 							grantRequest.RequestID += "-platform"
@@ -16264,6 +16326,7 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 							}
 						}
 					}
+					sessionRetained := mutation == "change-false" || mutation == "change-current"
 					want := http.StatusUnauthorized
 					mutationID := "attachment-session-mutate-" + caseID
 					switch mutation {
@@ -16326,7 +16389,8 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 					select {
 					case response := <-completed:
 						if response.Code != want {
-							t.Fatalf("attachment after security change: status=%d want=%d", response.Code, want)
+							t.Fatalf("attachment after security change: status=%d want=%d sqlstate=%v body=%s",
+								response.Code, want, failures.lastSQLState.Load(), response.Body.String())
 						}
 						if want == http.StatusOK && operation == "create" && json.Unmarshal(response.Body.Bytes(), &attachment) != nil {
 							t.Fatal("decode retained-session attachment")
@@ -16351,20 +16415,45 @@ func provePolicyAttachmentSessions(t *testing.T, ctx context.Context, handler ht
 							t.Fatal("revoked bearer changed attachment")
 						}
 					}
+					if sessionRetained && targetKind != "platform" {
+						// The serializable retry must recompute the tenant delegation
+						// decision after the password transaction advances the USER
+						// revision. Preserving the Session must not preserve stale
+						// boundary evidence.
+						var currentVersion, evidenceVersion int64
+						if err := database.QueryRow(ctx, `SELECT principal.resource_version,
+							(change.actor_boundary_evidence->>'userResourceVersion')::bigint
+							FROM iam.principals principal JOIN iam.policy_attachment_changes change
+							  ON change.tenant_id=principal.tenant_id AND change.actor_principal_id=principal.id
+							WHERE principal.tenant_id=$1 AND principal.id=$2 AND change.request_id=$3`,
+							actor.AccountID, actor.ID, requestID).Scan(&currentVersion, &evidenceVersion); err != nil || evidenceVersion != currentVersion {
+							t.Fatalf("retained Session reused stale boundary evidence: current=%d evidence=%d err=%v",
+								currentVersion, evidenceVersion, err)
+						}
+					}
 					if want != http.StatusOK {
-						// A different, currently valid bearer performs the original intent.
 						var result any
 						if operation == "create" {
 							result = &attachment
 						}
-						call(t, path, root, body, http.StatusOK, result)
+						// Cleanup uses a distinct root intent. A rejected actor-bound
+						// request is never transferred to another principal.
+						if operation == "create" {
+							replacement := request
+							replacement.RequestID = requestID + "-replacement"
+							call(t, path, root, replacement, http.StatusOK, result)
+						} else {
+							replacement := iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion,
+								RequestID: requestID + "-replacement"}
+							call(t, path, root, replacement, http.StatusOK, result)
+						}
 					}
 					if operation == "create" {
 						call(t, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
 							iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "attachment-cleanup-" + caseID}, http.StatusOK, nil)
 					}
 					retainedChecks = append(retainedChecks, func(t *testing.T) {
-						if want == http.StatusOK {
+						if sessionRetained {
 							if response := performIAMRequest(handler, http.MethodGet, "/v1/auth/me", bearer, nil); response.Code != http.StatusOK {
 								t.Errorf("retained current session no longer usable after replay: %s", caseID)
 							}

@@ -322,6 +322,8 @@ Release D的配额恢复还证明命令回执与资源读取相互独立：既�
 
 前一固定`598b07543b6318c4dbb0caa4bd7d4c83e381d503`的[Verification 37612663234](https://github.com/xiak/matrix/actions/runs/37612663234)不能记为成功：`authority-runtime`的明文扫描发现平台Audit测试夹具把64字符边缘断言同时用作合成`requestDigest`正文，正确报告`audit.document $.requestDigest (credential)`，后继串行lane被取消，最终汇总失败。这不是生产凭据泄漏，也不能通过放宽扫描器解决。`b377d34a`改为散列独立的固定请求材料，并增加“完整凭据被用作digest正文时仍必须命中”的负向回归；聚焦race、全仓race/vet、稳定生成、Linux构建和模块校验在本地通过，随后上述独立CI的实际`authority-runtime`及全汇总成功，旧失败不回填。
 
+固定`93d5a97d6151aee4bc6f79c54e7b515ac90f833a`的[Verification 38740174740](https://github.com/xiak/matrix/actions/runs/38740174740)虽然GitHub API将19个job全部标为success，但不能作为整轮成功：`authority-storage`日志中的`TestIAMPolicyAttachmentSessionPostgres`实际FAIL，原shell在未启用`pipefail`时把`go test | tee`的末端`tee`状态当作命令成功，最终汇总只聚合了错误的job状态。当前workflow删除这条手写pipeline，统一使用已有`run-go-test-selection.sh`的`set -euo pipefail`和逐顶层RUN/PASS/非SKIP核对。实际测试缺口不是放宽403/409：后继委派契约要求非root USER/GROUP actor及目标有同ceiling boundary，旧fixture只授正向管理员Policy，未建立当前boundary；它已经按006当前owner替换为三项独立数据库矩阵，并核对保留Session的Serializable重试保存改密后USER修订。新固定SHA及独立CI成功前，本修正只算本地候选，旧API绿色状态不得回填真实测试失败。
+
 ## 运行约束
 
 只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额。每条重型数据库门禁内部保持`-race -p 1`串行、独立runner/PG、原期限和清理边界；CI只允许最多四条彼此隔离的lane并行，避免不可压缩的自然时间窗口把其余独立门禁全部排队。失败lane一旦给出明确证据即可在其现有owner聚焦修复，不等待无关lane完成；最终候选仍以全部lane及汇总成功为准。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
