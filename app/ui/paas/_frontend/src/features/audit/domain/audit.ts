@@ -70,6 +70,7 @@ export type AuditEvent = AuditAuthority & {
   target: AuditTarget;
   result: AuditResult;
   requestDigest: string;
+  authorityEvidenceDigest?: string;
   requestId: string;
   correlationId: string;
   operationId?: string;
@@ -196,7 +197,7 @@ function sourceForAction(action: AuditAction): AuditSource {
 }
 function parseEvent(value: unknown): AuditEvent {
   const data = object(value, "AUDIT_EVENT");
-  exactKeys(data, ["apiVersion", "kind", "eventId", "actor", "action", "target", "result", "requestDigest", "requestId", "correlationId", "occurredAt"], ["tenantId", "installationId", "iamDecisionId", "operationId", "traceparent"], "AUDIT_EVENT");
+  exactKeys(data, ["apiVersion", "kind", "eventId", "actor", "action", "target", "result", "requestDigest", "requestId", "correlationId", "occurredAt"], ["tenantId", "installationId", "iamDecisionId", "operationId", "traceparent", "authorityEvidenceDigest"], "AUDIT_EVENT");
   if (data.apiVersion !== AUDIT_API_VERSION || data.kind !== "AuditEvent") throw new Error("INVALID_AUDIT_EVENT_TYPE");
   const target = object(data.target, "AUDIT_TARGET");
   exactKeys(target, ["kind", "id"], ["tenantId"], "AUDIT_TARGET");
@@ -207,6 +208,7 @@ function parseEvent(value: unknown): AuditEvent {
     action: member(data.action, auditActions, "AUDIT_ACTION"),
     target: { kind: member(target.kind, auditTargetKinds, "AUDIT_TARGET_KIND"), id: text(target.id, "AUDIT_TARGET_ID", idPattern), tenantId: optionalText(target, "tenantId", "AUDIT_TARGET_TENANT_ID", idPattern) },
     result: member(data.result, auditResults, "AUDIT_RESULT"), requestDigest: text(data.requestDigest, "AUDIT_REQUEST_DIGEST", digestPattern),
+    authorityEvidenceDigest: optionalText(data, "authorityEvidenceDigest", "AUDIT_AUTHORITY_EVIDENCE_DIGEST", digestPattern),
     requestId: text(data.requestId, "AUDIT_REQUEST_ID", idPattern), correlationId: text(data.correlationId, "AUDIT_CORRELATION_ID", idPattern),
     operationId: optionalText(data, "operationId", "AUDIT_OPERATION_ID", idPattern), traceparent: optionalText(data, "traceparent", "AUDIT_TRACEPARENT", traceparentPattern),
     occurredAt: timestamp(data.occurredAt, "AUDIT_OCCURRED_AT")

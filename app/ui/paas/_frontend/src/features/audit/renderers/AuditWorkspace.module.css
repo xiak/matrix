@@ -39,6 +39,7 @@
 .facts dd strong, .facts dd small { display: block; }
 .facts dd small { margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .facts code, .evidence code { white-space: normal; overflow-wrap: anywhere; }
+.evidence dd small { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .evidence { display: grid; margin: 0; border-top: var(--xiak-border-subtle); }
 .evidence > div { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 2fr); gap: var(--xiak-spacing-default); padding-block: var(--xiak-spacing-default); border-bottom: var(--xiak-border-subtle); }
 .verifyForm { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)) auto; gap: var(--xiak-spacing-default); align-items: end; }

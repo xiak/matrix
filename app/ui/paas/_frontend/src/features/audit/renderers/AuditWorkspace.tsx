@@ -175,6 +175,7 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
             {event.operationId ? <div><dt>{t("detail.operationId")}</dt><dd><code>{event.operationId}</code></dd></div> : null}
             {event.iamDecisionId ? <div><dt>{t("detail.decisionId")}</dt><dd><code>{event.iamDecisionId}</code></dd></div> : null}
             <div><dt>{t("detail.requestDigest")}</dt><dd><code>{event.requestDigest}</code></dd></div>
+            {event.authorityEvidenceDigest ? <div><dt>{t("detail.authorityEvidenceDigest")}</dt><dd><code>{event.authorityEvidenceDigest}</code><small>{t("detail.authorityEvidenceHint")}</small></dd></div> : null}
           </dl>
         </section>
         <section aria-labelledby="audit-chain-evidence">
