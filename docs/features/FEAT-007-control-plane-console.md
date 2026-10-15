@@ -1909,26 +1909,42 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-The Role-exit and recovered-quota source and matching embed are fixed in
-[`a661779a5a00aa731544e86fc571ad5f4dcf8e68`](https://github.com/xiak/matrix/commit/a661779a5a00aa731544e86fc571ad5f4dcf8e68)
-and were verified on 2026-10-15
-with Node 22.22.2/npm 11.6.4. The complete frontend run passed 71 files and
-1,484 cases plus all three export-normalization cases. The twenty additional
-cases cover source-validation blocking/failure/late replies, same-route Audit
-re-entry with the USER Authorization header and cleared Role-local filters,
-successful/unknown exit recovery, authoritative quota reread, read failures,
-read-only retry and superseded/cross-session resource responses. The original
-window component cases simulate an activation committed before response loss;
-both list-success and list-failure paths keep the activation write count at
-one and retire the old confirmation workspace. Typecheck, lint, architecture
-and 228 contrast pairs passed. The production build generated 59 pages and
-57 normalized segment files; all 322 generated files match the Go embed
-byte-for-byte. Fresh UI-host test with `-count=1 -p 2` and vet with `-p 2`
-passed on Go 1.26.3. These are provider/component, source and export gates,
-not real-IAM or signed-APISIX acceptance. The IAM engineer owns replay of the
-reported signed Role-exit and original-window lost-response browser cases
-after selectively adapting this fixed source; this slice does not inherit
-the pre-fix installation's runtime evidence.
+The Audit reader consumes the optional `authorityEvidenceDigest` from public
+Audit Event at fixed IAM/Audit source
+`5effc802fa8116d14420188d9075d6fe3ab1ceaa`. A present value must match
+`sha256:[0-9a-f]{64}` and is preserved independently of `requestDigest`;
+historical omission remains valid. Empty, null, non-string or malformed
+values and every other unknown Event field remain rejected. The existing
+read-only detail conditionally displays the digest with a localized statement
+that it is not a current authorization permit. It does not expose producer
+evidence, invent a digest, verify a hash chain, alter query fields or add a
+directory column.
+
+Verified on 2026-10-15 with Node 22.22.2/npm 11.6.4: the focused Audit
+repository/renderer run passed 34 cases, and the complete frontend run passed
+71 files and 1,507 cases plus all three export-normalization cases. The 23
+added cases cover valid producer facts, historical omission, malformed and
+unknown fields, strict HTTP preservation and sanitized read-only rendering.
+Typecheck, lint, architecture and 228 contrast pairs passed. The production
+build generated 59 pages and 57 normalized segment files; all 322 generated
+files match the Go embed byte-for-byte. Fresh UI-host test with
+`-count=1 -p 2` and vet with `-p 2` passed on Go 1.26.3. These are client,
+source and export gates, not this candidate's independent CI, real-IAM or
+signed-APISIX browser acceptance. The integration owner must replay the
+exact adapted source against the fixed backend; no backend, API, SQL,
+profile, IAM FEAT, checkpoint or running environment changed in this slice.
+
+The retained Role-exit and recovered-quota behavior is fixed in
+[`a661779a5a00aa731544e86fc571ad5f4dcf8e68`](https://github.com/xiak/matrix/commit/a661779a5a00aa731544e86fc571ad5f4dcf8e68).
+Its regression cases continue to cover source-validation blocking/failure/late
+replies, same-route Audit re-entry with the USER Authorization header and
+cleared Role-local filters, successful/unknown exit recovery, authoritative
+quota reread, read failures, read-only retry and superseded/cross-session
+responses. The original-window component cases simulate an activation
+committed before response loss; both list-success and list-failure paths keep
+the activation write count at one and retire the old confirmation workspace.
+Their signed-runtime evidence remains owned by the IAM integration FEAT,
+not inferred from this frontend run.
 
 The application-load recovery source and matching embed are fixed in
 [`7defb8fa5972540d56450c9cf776e99a61fd1d13`](https://github.com/xiak/matrix/commit/7defb8fa5972540d56450c9cf776e99a61fd1d13)

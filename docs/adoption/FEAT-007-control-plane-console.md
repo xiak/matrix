@@ -92,6 +92,18 @@ architecture, package or runtime dependency.
 
 ## IAM fixed-contract integration
 
+The Audit evidence slice inspects only the public Event, validation and OpenAPI
+at fixed IAM/Audit source `5effc802fa8116d14420188d9075d6fe3ab1ceaa`.
+`REUSE` the console's exact-key reader, lowercase SHA-256 validation and
+read-only evidence detail. `ADAPT` only the optional `authorityEvidenceDigest`
+projection and its conditional localized display; historical omission remains
+valid, while malformed present values and other unknown fields remain rejected.
+`REFERENCE` the producer's evidence binding without copying its implementation
+or treating the digest as a current authorization permit. `REJECT` raw evidence,
+unknown-field bags, invented digests, authorization inference, new endpoints and
+backend/API/SQL/profile changes. This is client-contract adoption, not inherited
+signed-runtime acceptance.
+
 The Role exit slice uses the console owner fixed at
 `47d03fce2a04fba7a7d63b84397f094a1bcd0957`; the matching exit path was also
 inspected only at signed source `c38a0093235bf3521c4ef32492d814d36f071a7e`,

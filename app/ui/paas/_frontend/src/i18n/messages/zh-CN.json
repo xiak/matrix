@@ -3157,6 +3157,8 @@
       "operationId": "操作 ID",
       "decisionId": "IAM 决策 ID",
       "requestDigest": "请求摘要",
+      "authorityEvidenceDigest": "授权证据摘要",
+      "authorityEvidenceHint": "事件所记录证据的摘要，不是当前授权许可。",
       "chainEvidence": "哈希链证据",
       "sequence": "序列号",
       "previousHash": "前序哈希",

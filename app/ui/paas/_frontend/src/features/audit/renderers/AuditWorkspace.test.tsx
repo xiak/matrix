@@ -1,15 +1,84 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { SessionProvider, useSession } from "@/features/auth/application/SessionProvider";
+import type { IamRepository } from "@/features/auth/repositories/iamRepository";
+import { AUDIT_API_VERSION } from "../domain/audit";
 import { AuditWorkspace } from "./AuditWorkspace";
+
+const evidenceDigest = `sha256:${"a".repeat(64)}`;
+const hash = (character: string) => `sha256:${character.repeat(64)}`;
+
+function evidencePage(fields: Record<string, unknown>) {
+  return { apiVersion: AUDIT_API_VERSION, kind: "AuditRecordPage", tenantId: "organization-test", records: [{
+    apiVersion: AUDIT_API_VERSION, kind: "AuditRecord", source: "IAM", sequence: 42,
+    event: { apiVersion: AUDIT_API_VERSION, kind: "AuditEvent", eventId: "event-attachment", tenantId: "organization-test",
+      actor: { type: "USER", id: "principal-auditor" }, action: "iam.policy-attachment.created", target: { kind: "POLICY_ATTACHMENT", id: "attachment-example" },
+      result: "SUCCEEDED", requestDigest: hash("1"), requestId: "request-attachment", correlationId: "correlation-attachment",
+      occurredAt: "2026-10-09T01:02:03.000000Z", ...fields },
+    contentDigest: hash("2"), previousHash: hash("3"), recordHash: hash("4"), ingestedAt: "2026-10-09T01:02:04.000000Z", retention: "INDEFINITE"
+  }] };
+}
+
+function LiveAudit() {
+  const session = useSession();
+  return session.phase === "authenticated" ? <AuditWorkspace /> : <button onClick={() => void session.login("auditor", "synthetic-audit-password")}>start fixture session</button>;
+}
+
+async function renderLiveEvidence(fields: Record<string, unknown>) {
+  const repository: IamRepository = {
+    async login() { return { outcome: "AUTHENTICATED", credential: "synthetic-audit-session", mustChangePassword: false,
+      session: { id: "session-audit-fixture", organizationId: "organization-test", principalId: "principal-auditor", status: "ACTIVE",
+        issuedAt: "2026-10-09T01:00:00Z", expiresAt: "2099-10-09T02:00:00Z" } }; },
+    async changePassword() {}, async logout() {}
+  };
+  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(evidencePage(fields)), { status: 200, headers: { "Content-Type": "application/json" } }));
+  vi.stubGlobal("fetch", fetchMock);
+  const user = userEvent.setup();
+  render(<LocaleProvider><SessionProvider repository={repository}><LiveAudit /></SessionProvider></LocaleProvider>);
+  await user.click(screen.getByRole("button", { name: "start fixture session" }));
+  return { user, fetchMock };
+}
 
 afterEach(() => {
   cleanup();
   localStorage.clear();
+  vi.unstubAllGlobals();
 });
 
 describe("AuditWorkspace", () => {
+  it.each([true, false])("renders live facts with optional authority evidence present=%s", async present => {
+    const { user, fetchMock } = await renderLiveEvidence(present ? { authorityEvidenceDigest: evidenceDigest } : {});
+    const table = await screen.findByRole("table", { name: "审计记录" });
+    expect(new Headers(fetchMock.mock.calls[0]![1].headers).get("Authorization")).toBe("Bearer synthetic-audit-session");
+    await user.click(within(table).getByRole("button", { name: "iam.policy-attachment.created" }));
+    expect(screen.getByRole("heading", { level: 1, name: "审计记录 #42" })).toBeTruthy();
+    expect(screen.getByText(hash("1"))).toBeTruthy();
+    if (present) {
+      expect(screen.getByText("授权证据摘要")).toBeTruthy();
+      expect(screen.getByText(evidenceDigest)).toBeTruthy();
+      expect(screen.getByText("事件所记录证据的摘要，不是当前授权许可。")).toBeTruthy();
+    } else {
+      expect(screen.queryByText("授权证据摘要")).toBeNull();
+      expect(screen.queryByText(evidenceDigest)).toBeNull();
+    }
+    expect(screen.queryByText("审计服务返回了不符合契约的数据，页面已拒绝展示。")).toBeNull();
+  });
+
+  it.each([
+    { authorityEvidenceDigest: "sha256:short" },
+    { authorityEvidenceDigest: null },
+    { authorityEvidenceDigest: evidenceDigest, authorityProof: "synthetic-hidden-evidence" }
+  ])("rejects malformed or unsupported live evidence without rendering raw values %#", async fields => {
+    await renderLiveEvidence(fields);
+    expect(await screen.findByText("审计服务返回了不符合契约的数据，页面已拒绝展示。")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "审计记录" })).toBeNull();
+    expect(screen.queryByText("授权证据摘要")).toBeNull();
+    expect(screen.queryByText("synthetic-hidden-evidence")).toBeNull();
+    expect(screen.queryByText("sha256:short")).toBeNull();
+  });
+
   it("keeps the route chrome stable while paging an opaque tenant cursor", async () => {
     const user = userEvent.setup();
     render(<LocaleProvider><AuditWorkspace preview /></LocaleProvider>);

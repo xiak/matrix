@@ -3157,6 +3157,8 @@
       "operationId": "Operation ID",
       "decisionId": "IAM decision ID",
       "requestDigest": "Request digest",
+      "authorityEvidenceDigest": "Authority evidence digest",
+      "authorityEvidenceHint": "Digest of the recorded evidence, not a current authorization permit.",
       "chainEvidence": "Hash-chain evidence",
       "sequence": "Sequence",
       "previousHash": "Previous hash",
