@@ -1,10 +1,13 @@
 package authorityprocess
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -21,6 +24,8 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 )
+
+const accountLifecycleCompletionPredecessor = "5effc802fa8116d14420188d9075d6fe3ab1ceaa"
 
 // TestIAMAuthorizationProfileAdvanceProcess proves the current-schema release
 // boundary for one source-built future authorization declaration. It is not a
@@ -375,4 +380,348 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	decide(profile, request, false)
 	assertOriginal()
 	t.Logf("source-built Profile r%d: old family frozen; new publication does not select; explicit selection grants; restart/revocation hold; not a production PaaS inspect endpoint or release-upgrade gate", profile.Revision)
+}
+
+// TestIAMAccountLifecycleCompletionPredecessorProcess is the rolling, single
+// predecessor gate for the IAM86 account-command completion shape. The fixed
+// IAM85 executable creates real Account/Audit state; only the current
+// migrator and executable may create or read the new completion rows.
+func TestIAMAccountLifecycleCompletionPredecessorProcess(t *testing.T) {
+	const variable = "MATRIX_IAM_ACCOUNT_COMPLETION_UPGRADE_POSTGRES_TEST_DSN"
+	dsn := os.Getenv(variable)
+	if dsn == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
+	defer cancel()
+	config, err := pgx.ParseConfig(dsn)
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_account_completion_upgrade_") {
+		t.Fatal("account completion predecessor gate requires its own disposable database")
+	}
+	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
+	admin, err := pgx.ConnectConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect account completion predecessor database", err)
+	}
+	defer admin.Close(context.Background())
+	assertPostgres18(t, ctx, admin)
+	assertCleanSchemas(t, ctx, admin)
+
+	root, temporary := repositoryRoot(t), t.TempDir()
+	predecessorRoot := extractFixedIAMSource(t, ctx, root, temporary, accountLifecycleCompletionPredecessor)
+	predecessorMigrator := buildAuthorityBinary(t, ctx, predecessorRoot, temporary, "iam-account-completion-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	predecessorBinary := buildAuthorityBinary(t, ctx, predecessorRoot, temporary, "iam-account-completion-predecessor", "./app/service/iam/cmd/matrix-iam")
+	currentMigrator := buildAuthorityBinary(t, ctx, root, temporary, "iam-account-completion-current-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-account-completion-current", "./app/service/iam/cmd/matrix-iam")
+
+	const apiLogin = "matrix_iam_api_login"
+	var migrationEnvironment []string
+	for _, value := range []struct{ environment, login string }{
+		{"MATRIX_MIGRATION_DATABASE_DSN_FILE", ""},
+		{"MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE", "matrix_iam_access_analysis_worker_login"},
+		{"MATRIX_MIGRATION_IAM_API_DSN_FILE", apiLogin},
+		{installationv1.AuthenticationRecoveryMigrationDSNFileEnvironment, "matrix_iam_authentication_recovery_login"},
+		{"MATRIX_MIGRATION_IAM_WORKER_DSN_FILE", "matrix_iam_worker_login"},
+		{"MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE", localRecoveryProcessLogin},
+		{installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment, "matrix_iam_backup_custody_login"},
+		{"MATRIX_MIGRATION_IAM_NOTIFICATION_DSN_FILE", "matrix_iam_notification_worker_login"},
+	} {
+		valueDSN := dsn
+		if value.login != "" {
+			valueDSN = localRecoveryMigrationDSN(t, runtimeDSN(t, config, value.login, processDBPassword))
+		}
+		migrationEnvironment = append(migrationEnvironment,
+			value.environment+"="+writeProtectedFile(t, temporary, value.environment, []byte(valueDSN)))
+	}
+	productAuthorization, err := iamv1.EncodeProductAuthorizationReleaseCatalog(iamv1.ProductAuthorizationReleaseCatalog{
+		APIVersion: iamv1.APIVersion, Kind: iamv1.ProductAuthorizationReleaseCatalogKind,
+		Profiles: []iamv1.AuthorizationProfile{}, ProfileHistory: []iamv1.AuthorizationProfile{},
+		ServiceRolePolicies: []iamv1.ProductServiceRolePolicy{}, ServiceRoleTemplates: []iamv1.ServiceRoleTemplate{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	migrationEnvironment = append(migrationEnvironment,
+		installationv1.IAMProductAuthorizationMigrationFileEnvironment+"="+
+			writeProtectedFile(t, temporary, "iam-account-completion-product-authorization.json", productAuthorization))
+	clear(productAuthorization)
+
+	var children []*childProcess
+	sensitive := []string{initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword, processDBPassword}
+	defer func() {
+		for _, child := range children {
+			child.stop()
+		}
+		assertProcessOutputsSanitized(t, children, sensitive...)
+	}()
+	runMigration := func(workdir, binary, generation string) {
+		t.Helper()
+		for _, action := range []string{"apply", "apply", "verify"} {
+			child := startChild(t, workdir, binary, migrationEnvironment, action)
+			children = append(children, child)
+			if err := child.wait(45 * time.Second); err != nil {
+				t.Fatalf("%s migration %s failed: %v output=%q", generation, action, err, child.output())
+			}
+		}
+	}
+	runMigration(predecessorRoot, predecessorMigrator, "IAM85 predecessor")
+
+	bootstrap := processBootstrap(t)
+	encodedBootstrap, err := iamv1.EncodeBootstrapDocument(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrapPath := writeProtectedFile(t, temporary, "iam-account-completion-bootstrap", encodedBootstrap)
+	clear(encodedBootstrap)
+	digest, err := iamv1.BootstrapDigest(bootstrap)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mail := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring",
+		Purpose:        iamv1.EmailVerificationWrappingPurpose,
+		Scope:          iamv1.SecurityMailInstallationScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest},
+		KeysetRevision: 1, ActiveKeyID: "account-completion-mail", Keys: []iamv1.EmailVerificationWrappingKey{{
+			KeyID: "account-completion-mail", FormatVersion: 1,
+			KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x65}, 32))),
+		}}}
+	encodedMail, err := iamv1.EncodeEmailVerificationKeyring(mail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := freeAddress(t)
+	endpoint := "http://" + address
+	environment := []string{
+		"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-account-completion-api-dsn", []byte(runtimeDSN(t, config, apiLogin, processDBPassword))),
+		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
+		"MATRIX_IAM_LISTEN_ADDRESS=" + address,
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-account-completion-cursor", []byte(strings.Repeat("43", 32))),
+		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + writeProcessAccessKeyWrapping(t, temporary, bootstrap),
+		"MATRIX_IAM_TOTP_KEYRING_FILE=" + writeProcessTOTPKeyring(t, temporary, bootstrap),
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE=" + writeProtectedFile(t, temporary, "iam-account-completion-mail.json", encodedMail),
+	}
+	clear(encodedMail)
+	start := func(workdir, binary string, schema uint64) *childProcess {
+		t.Helper()
+		child := startChild(t, workdir, binary, environment)
+		children = append(children, child)
+		waitHTTPStatus(t, ctx, child, endpoint+"/ready", http.StatusOK)
+		assertRuntimeProcessLogins(t, ctx, admin, apiLogin)
+		response := performJSON(t, http.MethodGet, endpoint+"/ready", "", nil)
+		var readiness iamv1.Readiness
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &readiness) != nil || readiness.SchemaVersion != schema {
+			t.Fatalf("account completion process readiness schema=%d status=%d want=%d", readiness.SchemaVersion, response.Status, schema)
+		}
+		return child
+	}
+
+	predecessor := start(predecessorRoot, predecessorBinary, 85)
+	operator := loginIAM(t, endpoint, "admin", initialAdminPassword, "account-completion-operator-login")
+	changePasswordIAM(t, endpoint, operator.Credential, initialAdminPassword, changedAdminPassword, "account-completion-operator-password")
+	sensitive = append(sensitive, operator.Credential)
+	const accountID = "account-completion-retained"
+	const createRequest = "account-completion-predecessor-create"
+	createdResponse := performJSON(t, http.MethodPost, endpoint+"/v1/accounts", operator.Credential, map[string]any{
+		"id": accountID, "displayName": "Retained completion account", "rootLoginName": "completion.retained.root",
+		"rootDisplayName": "Retained completion root", "initialPassword": initialReaderPassword, "requestId": createRequest,
+	})
+	var retained iamv1.Account
+	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &retained) != nil ||
+		iamv1.ValidateAccount(retained) != nil || retained.ResourceVersion != 1 || retained.Status != iamv1.AccountActive {
+		t.Fatalf("IAM85 did not create retained Account: status=%d", createdResponse.Status)
+	}
+	rootID := retained.RootIdentity.PrincipalID
+	const disableRequest = "account-completion-predecessor-disable"
+	disabledResponse := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+accountID+":set-status", operator.Credential,
+		iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: retained.ResourceVersion, RequestID: disableRequest})
+	if disabledResponse.Status != http.StatusOK || json.Unmarshal(disabledResponse.Body, &retained) != nil ||
+		iamv1.ValidateAccount(retained) != nil || retained.ResourceVersion != 2 || retained.Status != iamv1.AccountDisabled || retained.RootIdentity.PrincipalID != rootID {
+		t.Fatalf("IAM85 did not pause retained Account: status=%d", disabledResponse.Status)
+	}
+	const predecessorRecoveryPassword = "Retained-Predecessor-Recovery-Password-76!"
+	const recoveryRequest = "account-completion-predecessor-recovery"
+	sensitive = append(sensitive, predecessorRecoveryPassword)
+	recoveryResponse := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+accountID+":recover-root-credentials", operator.Credential,
+		map[string]any{"initialPassword": predecessorRecoveryPassword, "resourceVersion": retained.ResourceVersion, "requestId": recoveryRequest})
+	if recoveryResponse.Status != http.StatusOK || json.Unmarshal(recoveryResponse.Body, &retained) != nil ||
+		iamv1.ValidateAccount(retained) != nil || retained.ResourceVersion != 3 || retained.Status != iamv1.AccountDisabled || retained.RootIdentity.PrincipalID != rootID {
+		t.Fatalf("IAM85 did not recover the retained disabled Account: status=%d", recoveryResponse.Status)
+	}
+
+	canonicalOutbox := func() map[string]string {
+		t.Helper()
+		rows, err := admin.Query(ctx, "SELECT event_document FROM iam.audit_outbox ORDER BY event_id")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		result := make(map[string]string)
+		for rows.Next() {
+			var encoded []byte
+			var event auditv1.Event
+			if rows.Scan(&encoded) != nil || json.Unmarshal(encoded, &event) != nil {
+				t.Fatal("decode retained IAM outbox fact")
+			}
+			document, contentDigest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+			eventID := string(event.EventID)
+			if err != nil || result[eventID] != "" {
+				t.Fatal("canonicalize retained IAM outbox fact", err)
+			}
+			result[eventID] = document + "\x00" + contentDigest
+		}
+		if rows.Err() != nil || len(result) == 0 {
+			t.Fatal("retained IAM outbox facts are unavailable", rows.Err())
+		}
+		return result
+	}
+	predecessorFacts := canonicalOutbox()
+	predecessor.stop()
+	runMigration(root, currentMigrator, "IAM86 current")
+
+	var schema uint64
+	var ready, contractReady bool
+	var completionCount int
+	if err := admin.QueryRow(ctx, "SELECT schema_version, ready, iam.account_lifecycle_completion_contract_ready() FROM iam.readiness()").Scan(&schema, &ready, &contractReady); err != nil || schema != 86 || !ready || !contractReady {
+		t.Fatal("IAM86 completion schema is not ready", err)
+	}
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.account_lifecycle_completions").Scan(&completionCount); err != nil || completionCount != 0 {
+		t.Fatal("IAM86 migration invented predecessor completion facts", err)
+	}
+	current := start(root, currentBinary, installationrelease.CurrentDatabaseProfile().Authorities.IAM)
+	currentFacts := canonicalOutbox()
+	if len(currentFacts) != len(predecessorFacts) {
+		t.Fatal("IAM86 migration or equal bootstrap changed retained Audit fact count")
+	}
+	for eventID, before := range predecessorFacts {
+		if currentFacts[eventID] != before {
+			t.Fatal("IAM86 migration or equal bootstrap rewrote retained Audit canonical bytes")
+		}
+	}
+
+	readAccount := func() iamv1.Account {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/accounts/"+accountID, operator.Credential, nil)
+		var access iamv1.AccountAccess
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &access) != nil ||
+			iamv1.ValidateAccountAccess(access) != nil || access.Account.ID != accountID {
+			t.Fatalf("read retained Account after IAM86 migration: status=%d", response.Status)
+		}
+		return access.Account
+	}
+	readCompletion := func(request string, operation iamv1.AccountLifecycleOperation, expectedVersion uint64, status int) iamv1.AccountLifecycleCompletion {
+		t.Helper()
+		path := endpoint + "/v1/accounts/" + accountID + "/lifecycle-completions/" + request +
+			"?operation=" + string(operation) + "&expectedResourceVersion=" + fmt.Sprint(expectedVersion)
+		response := performJSON(t, http.MethodGet, path, operator.Credential, nil)
+		if response.Status != status {
+			t.Fatalf("read account completion %s: status=%d want=%d", request, response.Status, status)
+		}
+		if status != http.StatusOK {
+			return iamv1.AccountLifecycleCompletion{}
+		}
+		var completion iamv1.AccountLifecycleCompletion
+		if json.Unmarshal(response.Body, &completion) != nil || iamv1.ValidateAccountLifecycleCompletion(completion) != nil {
+			t.Fatal("decode current account completion")
+		}
+		return completion
+	}
+	readCompletion(createRequest, iamv1.AccountLifecycleCreate, 0, http.StatusNotFound)
+	readCompletion(disableRequest, iamv1.AccountLifecycleSetStatus, 1, http.StatusNotFound)
+	readCompletion(recoveryRequest, iamv1.AccountLifecycleRecoverRootCredentials, 2, http.StatusNotFound)
+	if retained = readAccount(); retained.Status != iamv1.AccountDisabled || retained.ResourceVersion != 3 || retained.RootIdentity.PrincipalID != rootID {
+		t.Fatal("IAM86 migration changed retained Account identity or state")
+	}
+
+	const currentRecoveryPassword = "Retained-Current-Recovery-Password-87!"
+	sensitive = append(sensitive, currentRecoveryPassword)
+	var beforeCredentialVersion uint64
+	var beforePasswordHash string
+	if err := admin.QueryRow(ctx, "SELECT credential_version,password_hash FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", accountID, rootID).Scan(&beforeCredentialVersion, &beforePasswordHash); err != nil {
+		t.Fatal("read retained root credential state", err)
+	}
+	reused := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+accountID+":recover-root-credentials", operator.Credential,
+		map[string]any{"initialPassword": currentRecoveryPassword, "resourceVersion": retained.ResourceVersion, "requestId": recoveryRequest})
+	var afterCredentialVersion uint64
+	var afterPasswordHash string
+	if err := admin.QueryRow(ctx, "SELECT credential_version,password_hash FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", accountID, rootID).Scan(&afterCredentialVersion, &afterPasswordHash); err != nil {
+		t.Fatal("read rejected retained root credential state", err)
+	}
+	unchanged := readAccount()
+	if reused.Status != http.StatusConflict || unchanged.Status != retained.Status || unchanged.ResourceVersion != retained.ResourceVersion ||
+		unchanged.RootIdentity.PrincipalID != retained.RootIdentity.PrincipalID || afterCredentialVersion != beforeCredentialVersion || afterPasswordHash != beforePasswordHash {
+		t.Fatal("IAM86 reused a consumed predecessor request or changed retained state")
+	}
+	const currentRecoveryRequest = "account-completion-current-recovery"
+	completedResponse := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+accountID+":recover-root-credentials", operator.Credential,
+		map[string]any{"initialPassword": currentRecoveryPassword, "resourceVersion": retained.ResourceVersion, "requestId": currentRecoveryRequest})
+	var completedAccount iamv1.Account
+	if completedResponse.Status != http.StatusOK || json.Unmarshal(completedResponse.Body, &completedAccount) != nil ||
+		iamv1.ValidateAccount(completedAccount) != nil || completedAccount.ResourceVersion != 4 ||
+		completedAccount.Status != iamv1.AccountDisabled || completedAccount.RootIdentity.PrincipalID != rootID {
+		t.Fatalf("IAM86 did not recover retained disabled Account: status=%d", completedResponse.Status)
+	}
+	completion := readCompletion(currentRecoveryRequest, iamv1.AccountLifecycleRecoverRootCredentials, 3, http.StatusOK)
+	if completion.ResultingResourceVersion != 4 || completion.Status != iamv1.AccountDisabled || completion.RootPrincipalID != rootID {
+		t.Fatal("IAM86 retained-data completion implied enable or changed the root identity")
+	}
+	current.stop()
+	current = start(root, currentBinary, installationrelease.CurrentDatabaseProfile().Authorities.IAM)
+	defer current.stop()
+	if replay := readCompletion(currentRecoveryRequest, iamv1.AccountLifecycleRecoverRootCredentials, 3, http.StatusOK); replay != completion {
+		t.Fatal("IAM86 restart changed the immutable account completion")
+	}
+	restartedAccount := readAccount()
+	if restartedAccount.Status != completedAccount.Status || restartedAccount.ResourceVersion != completedAccount.ResourceVersion ||
+		restartedAccount.RootIdentity.PrincipalID != completedAccount.RootIdentity.PrincipalID {
+		t.Fatal("IAM86 restart changed retained Account state")
+	}
+	t.Log("fixed IAM85 process -> IAM86: old completions absent, old request consumed, canonical facts retained, new disabled-root completion survives restart")
+}
+
+// Fixed predecessor source is extracted into a bounded temporary directory;
+// it is test input only and never a build or runtime dependency.
+func extractFixedIAMSource(t *testing.T, ctx context.Context, root, temporary, fixedCommit string) string {
+	t.Helper()
+	command := exec.CommandContext(ctx, "git", "archive", "--format=zip", fixedCommit,
+		"go.mod", "go.sum", "api", "app/service/iam", "app/service/paas", "app/service/internal")
+	command.Dir = root
+	archive, err := command.Output()
+	if err != nil || len(archive) > 32<<20 {
+		t.Fatal("cannot read bounded fixed IAM source archive")
+	}
+	reader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(temporary, "iam-predecessor-"+fixedCommit[:12])
+	var extracted uint64
+	for _, entry := range reader.File {
+		path := filepath.FromSlash(entry.Name)
+		extracted += entry.UncompressedSize64
+		if !filepath.IsLocal(path) || entry.UncompressedSize64 > 8<<20 || extracted > 64<<20 || entry.Mode()&os.ModeSymlink != 0 {
+			t.Fatal("unsafe fixed IAM source entry")
+		}
+		target := filepath.Join(destination, path)
+		if entry.FileInfo().IsDir() {
+			if err := os.MkdirAll(target, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		source, err := entry.Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		content, readErr := io.ReadAll(io.LimitReader(source, 8<<20))
+		closeErr := source.Close()
+		if readErr != nil || closeErr != nil {
+			t.Fatal("cannot extract fixed IAM source entry")
+		}
+		if err := os.WriteFile(target, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return destination
 }
