@@ -1569,7 +1569,7 @@ func applySemanticOverlays(schemas object) {
 	schemas["ServiceLinkedRoleListing"].(object)["properties"].(object)["bindingCount"].(object)["minimum"] = 1
 	schemas["ServiceLinkedRoleList"].(object)["properties"].(object)["items"].(object)["maxItems"] = iamv1.DirectoryPageSize
 	schemas["UserPasswordResetCompletion"].(object)["description"] = "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion."
-	schemas["AccountLifecycleCompletion"].(object)["description"] = "Non-secret, permanently retained confirmation of one committed platform account command. commandRequestId is the original write body's requestId, not this GET's transport request ID. The value is not password-input equality, current account state, Audit delivery, authorization or permission to replay. Runtime validation binds the original actor, operation, target, request and version; creation uses expectedResourceVersion zero, while status and root recovery require resultingResourceVersion = expectedResourceVersion + 1. A missing or rejected read never authorizes a replacement intent."
+	schemas["AccountLifecycleCompletion"].(object)["description"] = "Non-secret, permanently retained confirmation of one committed platform account command. commandRequestId is the original write body's requestId, not this GET's transport request ID. The value is not password-input equality, current account state, Audit delivery, authorization or permission to replay. Runtime validation binds the original actor, operation, target, request and version; creation uses expectedResourceVersion zero, while status and root recovery require resultingResourceVersion = expectedResourceVersion + 1. Root recovery records the target Account status at commit and never implies that a disabled Account was enabled. A missing or rejected read never authorizes a replacement intent."
 	schemas["AccountLifecycleCompletion"].(object)["oneOf"] = []any{
 		object{"required": []string{"rootPrincipalId"}, "properties": object{
 			"operation": object{"const": string(iamv1.AccountLifecycleCreate)}, "expectedResourceVersion": object{"const": 0},
@@ -1581,7 +1581,6 @@ func applySemanticOverlays(schemas object) {
 		}},
 		object{"required": []string{"rootPrincipalId"}, "properties": object{
 			"operation": object{"const": string(iamv1.AccountLifecycleRecoverRootCredentials)}, "expectedResourceVersion": object{"minimum": 1},
-			"status": object{"const": string(iamv1.AccountActive)},
 		}},
 	}
 	schemas["PasswordRequirements"].(object)["description"] = "Current self-only password rules, measured in Unicode code points and UTF-8 bytes. An observation, never a write permit; final replacement rechecks current qualification and settings."

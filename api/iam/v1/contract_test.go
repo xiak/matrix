@@ -1765,6 +1765,9 @@ func TestAccountLifecycleCompletionIsClosedAndNonSecret(t *testing.T) {
 		{APIVersion: APIVersion, Kind: "AccountLifecycleCompletion", ActorAccountID: "platform-home", ActorPrincipalID: "operator-one",
 			Operation: AccountLifecycleRecoverRootCredentials, AccountID: "account-one", CommandRequestID: "recover-one",
 			ExpectedResourceVersion: 5, ResultingResourceVersion: 6, Status: AccountActive, RootPrincipalID: "root-one", EventID: "event-recover", OccurredAt: now},
+		{APIVersion: APIVersion, Kind: "AccountLifecycleCompletion", ActorAccountID: "platform-home", ActorPrincipalID: "operator-one",
+			Operation: AccountLifecycleRecoverRootCredentials, AccountID: "account-disabled", CommandRequestID: "recover-disabled",
+			ExpectedResourceVersion: 7, ResultingResourceVersion: 8, Status: AccountDisabled, RootPrincipalID: "root-disabled", EventID: "event-recover-disabled", OccurredAt: now},
 	}
 	for _, value := range valid {
 		if err := ValidateAccountLifecycleCompletion(value); err != nil {
@@ -1796,7 +1799,7 @@ func TestAccountLifecycleCompletionIsClosedAndNonSecret(t *testing.T) {
 		{"status expected", 1, func(v *AccountLifecycleCompletion) { v.ExpectedResourceVersion = 0 }},
 		{"status result", 1, func(v *AccountLifecycleCompletion) { v.ResultingResourceVersion++ }},
 		{"status root", 1, func(v *AccountLifecycleCompletion) { v.RootPrincipalID = "root-one" }},
-		{"recovery status", 2, func(v *AccountLifecycleCompletion) { v.Status = AccountDisabled }},
+		{"recovery status", 2, func(v *AccountLifecycleCompletion) { v.Status = "OTHER" }},
 		{"recovery root", 2, func(v *AccountLifecycleCompletion) { v.RootPrincipalID = "" }},
 		{"event", 0, func(v *AccountLifecycleCompletion) { v.EventID = "event/other" }},
 		{"time", 0, func(v *AccountLifecycleCompletion) { v.OccurredAt = time.Time{} }},

@@ -1633,7 +1633,7 @@ func ValidateAccountLifecycleCompletion(value AccountLifecycleCompletion) error 
 		if validatePositiveVersion(value.ExpectedResourceVersion) != nil ||
 			value.ExpectedResourceVersion >= 9007199254740991 ||
 			value.ResultingResourceVersion != value.ExpectedResourceVersion+1 ||
-			value.Status != AccountActive || value.RootPrincipalID == "" {
+			value.RootPrincipalID == "" {
 			return errors.New("account root recovery completion is invalid")
 		}
 	default:

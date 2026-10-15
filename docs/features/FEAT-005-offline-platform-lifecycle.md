@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation; current source profile is IAM/Audit/PaaS `85/39/7+r35`. The current signed four-product A/B offline lifecycle, APISIX consumer paths, restart verification and unchanged-production test-only successor independent CI have passed; installed-release browser acceptance remains owned by FEAT-IAM-010
+- Status: Accepted foundation at IAM/Audit/PaaS `85/39/7+r35`; current source candidate is `86/39/7+r36` after adding immutable Account lifecycle completion storage/read APIs. The accepted predecessor's signed four-product A/B offline lifecycle, APISIX consumer paths, restart verification and unchanged-production test-only successor independent CI have passed; the new candidate still requires its own same-profile signed lifecycle and installed-release browser acceptance remains owned by FEAT-IAM-010
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `85/39/7` revision 35; earlier accepted slices remain historical evidence, not an alternate current profile
+- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `86/39/7` revision 36 and its sole release predecessor is `85/39/7` revision 35; earlier accepted slices remain historical evidence, not an alternate current profile
 
 ## Outcome
 
@@ -159,6 +159,14 @@ installation identity and retains a sanitized journal for diagnosis.
 ## Operations, upgrade, rollback, and recovery
 
 The stable command tree is:
+
+The following lines define the CLI surface; they are not a shell transcript.
+For the current production operator profile, every one of these commands is
+run in the same `root#` shell after a named administrator executes `sudo -i`.
+The `--root` option names the installation directory and does not select the
+Linux root account. Account creation, password policy and the optional
+non-root evaluation path are specified in the
+[platform installation runbook](../runbooks/platform-installation.md).
 
 - `mx platform install --bundle <path> --root <path> --trust-key <path>
   --security-mail-configuration <path> --northbound-origin <origin>`;

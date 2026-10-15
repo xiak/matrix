@@ -22,6 +22,7 @@ func TestAccountLifecycleCompletionSchemaAndStrictCodec(t *testing.T) {
 		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountLifecycleCompletion","actorAccountId":"platform-home","actorPrincipalId":"operator-one","operation":"ACCOUNT_CREATE","accountId":"account-new","commandRequestId":"create-one","expectedResourceVersion":0,"resultingResourceVersion":1,"status":"ACTIVE","rootPrincipalId":"root-one","eventId":"event-create","occurredAt":"2026-10-15T12:00:00.123456Z"}`,
 		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountLifecycleCompletion","actorAccountId":"platform-home","actorPrincipalId":"operator-one","operation":"ACCOUNT_SET_STATUS","accountId":"account-one","commandRequestId":"disable-one","expectedResourceVersion":4,"resultingResourceVersion":5,"status":"DISABLED","eventId":"event-disable","occurredAt":"2026-10-15T12:00:00.123456Z"}`,
 		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountLifecycleCompletion","actorAccountId":"platform-home","actorPrincipalId":"operator-one","operation":"ACCOUNT_ROOT_CREDENTIALS_RECOVER","accountId":"account-one","commandRequestId":"recover-one","expectedResourceVersion":5,"resultingResourceVersion":6,"status":"ACTIVE","rootPrincipalId":"root-one","eventId":"event-recover","occurredAt":"2026-10-15T12:00:00.123456Z"}`,
+		`{"apiVersion":"iam.matrix.xiak.com/v1","kind":"AccountLifecycleCompletion","actorAccountId":"platform-home","actorPrincipalId":"operator-one","operation":"ACCOUNT_ROOT_CREDENTIALS_RECOVER","accountId":"account-disabled","commandRequestId":"recover-disabled","expectedResourceVersion":7,"resultingResourceVersion":8,"status":"DISABLED","rootPrincipalId":"root-disabled","eventId":"event-recover-disabled","occurredAt":"2026-10-15T12:00:00.123456Z"}`,
 	}
 	check := func(wire string, want bool) {
 		t.Helper()
@@ -40,7 +41,7 @@ func TestAccountLifecycleCompletionSchemaAndStrictCodec(t *testing.T) {
 		strings.Replace(valid[0], `,"rootPrincipalId":"root-one"`, ``, 1),
 		strings.Replace(valid[1], `"expectedResourceVersion":4`, `"expectedResourceVersion":0`, 1),
 		strings.Replace(valid[1], `"eventId":`, `"rootPrincipalId":"root-one","eventId":`, 1),
-		strings.Replace(valid[2], `"status":"ACTIVE"`, `"status":"DISABLED"`, 1),
+		strings.Replace(valid[2], `"status":"ACTIVE"`, `"status":"OTHER"`, 1),
 		strings.Replace(valid[2], `"ACCOUNT_ROOT_CREDENTIALS_RECOVER"`, `"OTHER"`, 1),
 		strings.Replace(valid[0], `"eventId":`, `"password":"forbidden","eventId":`, 1),
 	} {

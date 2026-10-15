@@ -1602,7 +1602,7 @@
       },
       "AccountLifecycleCompletion": {
         "additionalProperties": false,
-        "description": "Non-secret, permanently retained confirmation of one committed platform account command. commandRequestId is the original write body's requestId, not this GET's transport request ID. The value is not password-input equality, current account state, Audit delivery, authorization or permission to replay. Runtime validation binds the original actor, operation, target, request and version; creation uses expectedResourceVersion zero, while status and root recovery require resultingResourceVersion = expectedResourceVersion + 1. A missing or rejected read never authorizes a replacement intent.",
+        "description": "Non-secret, permanently retained confirmation of one committed platform account command. commandRequestId is the original write body's requestId, not this GET's transport request ID. The value is not password-input equality, current account state, Audit delivery, authorization or permission to replay. Runtime validation binds the original actor, operation, target, request and version; creation uses expectedResourceVersion zero, while status and root recovery require resultingResourceVersion = expectedResourceVersion + 1. Root recovery records the target Account status at commit and never implies that a disabled Account was enabled. A missing or rejected read never authorizes a replacement intent.",
         "oneOf": [
           {
             "properties": {
@@ -1641,9 +1641,6 @@
               },
               "operation": {
                 "const": "ACCOUNT_ROOT_CREDENTIALS_RECOVER"
-              },
-              "status": {
-                "const": "ACTIVE"
               }
             },
             "required": [

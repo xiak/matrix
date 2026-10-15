@@ -1435,7 +1435,7 @@ CREATE OR REPLACE FUNCTION iam.recover_root_credentials(tenant text, actor text,
     target_tenant text, primary_id text, expected_version bigint, new_password_hash text, new_binding_id text, event jsonb,
     expected_generation bigint, expected_password_hash text, expected_history_digest text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
-DECLARE credential iam.user_credentials%ROWTYPE;
+DECLARE credential iam.user_credentials%ROWTYPE; resulting_status text;
 BEGIN
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.account.recover-root-credentials','ACCOUNT',target_tenant,'INSTANCE',NULL);
     IF expected_version IS NULL OR expected_version < 1 OR new_password_hash IS NULL
@@ -1451,6 +1451,7 @@ BEGIN
     IF iam.lock_recoverable_root(target_tenant,expected_version) IS DISTINCT FROM primary_id THEN
         RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='root credential recovery is forbidden';
     END IF;
+    SELECT account.status INTO STRICT resulting_status FROM iam.accounts AS account WHERE account.id=target_tenant;
     SELECT * INTO credential FROM iam.user_credentials c WHERE c.tenant_id=target_tenant AND c.principal_id=primary_id FOR UPDATE;
     IF NOT FOUND OR credential.credential_version<>expected_generation OR credential.password_hash<>expected_password_hash
         OR expected_history_digest<>'sha256:'||encode(credential.password_history_digest,'hex')
@@ -1477,7 +1478,7 @@ BEGIN
     INSERT INTO iam.account_lifecycle_completions(actor_account_id,actor_principal_id,request_id,operation,account_id,
         expected_version,resulting_version,resulting_status,root_principal_id,event_id,occurred_at)
     VALUES(tenant,actor,event->>'requestId','ACCOUNT_ROOT_CREDENTIALS_RECOVER',target_tenant,expected_version,expected_version+1,
-        'ACTIVE',primary_id,event->>'eventId',transaction_timestamp());
+        resulting_status,primary_id,event->>'eventId',transaction_timestamp());
     RETURN iam.account_snapshot(target_tenant);
 END
 $function$;
@@ -1528,7 +1529,7 @@ CREATE TABLE IF NOT EXISTS iam.account_lifecycle_completions (
             AND resulting_version=expected_version+1 AND root_principal_id IS NULL
             AND display_name IS NULL AND root_login_name IS NULL AND root_display_name IS NULL
           WHEN 'ACCOUNT_ROOT_CREDENTIALS_RECOVER' THEN expected_version BETWEEN 1 AND 9007199254740990
-            AND resulting_version=expected_version+1 AND resulting_status='ACTIVE' AND root_principal_id IS NOT NULL
+            AND resulting_version=expected_version+1 AND root_principal_id IS NOT NULL
             AND display_name IS NULL AND root_login_name IS NULL AND root_display_name IS NULL
           ELSE false END))
 );

@@ -38,7 +38,7 @@ RootIdentity 仍由底层 USER principal 承载认证，但不出现在日常 Us
 首个纵向替换只改变已有账号/用户闭环的当前契约，不抢先实现 Group、Role 或 AccessKey：
 
 - 平台面：`GET|POST /v1/accounts`、`GET /v1/accounts/{accountId}`、`POST /v1/accounts/{accountId}:set-status`、`POST /v1/accounts/{accountId}:recover-root-credentials`。列表和详情返回 `AccountAccess`，把 Account 数据与该 actor 对该目标的状态/恢复能力分开。
-- 账号命令完成面：`GET /v1/accounts/{accountId}/lifecycle-completions/{commandRequestId}?operation=ACCOUNT_CREATE|ACCOUNT_SET_STATUS|ACCOUNT_ROOT_CREDENTIALS_RECOVER&expectedResourceVersion=...`。`commandRequestId` 是原写请求 body 的 `requestId`，不是本次 GET 的传输 request ID；开通的预期版本固定为 0，其他操作必须大于 0。响应只返回原 actor、操作、目标、原预期/结果版本、结果状态、可选原 root、事件和完成时间，不返回密码、哈希、输入 commitment、当前 Account 快照或授权结论。
+- 账号命令完成面：`GET /v1/accounts/{accountId}/lifecycle-completions/{commandRequestId}?operation=ACCOUNT_CREATE|ACCOUNT_SET_STATUS|ACCOUNT_ROOT_CREDENTIALS_RECOVER&expectedResourceVersion=...`。`commandRequestId` 是原写请求 body 的 `requestId`，不是本次 GET 的传输 request ID；开通的预期版本固定为 0，其他操作必须大于 0。响应只返回原 actor、操作、目标、原预期/结果版本、提交时结果状态、可选原 root、事件和完成时间，不返回密码、哈希、输入 commitment、当前 Account 快照或授权结论。Root 凭据恢复记录当时真实的 `ACTIVE|DISABLED` Account 状态，不能把恢复完成误写成账号已启用。
 - 当前账号面：`POST /v1/account:alias`；Account 只能由当前有效 session 推导，body/query 不接受 `accountId`。
 - 用户面：`GET|POST /v1/users`、`GET /v1/users/{userId}`、`POST /v1/users/{userId}:update`、`POST /v1/users/{userId}:delete`、`POST /v1/users/{userId}:set-status`、`POST /v1/users/{userId}:reset-password`。详情返回与列表同形的 `UserAccess`；资料更新首片只允许显示名称，登录名与 Account 不可变。
 - `GET /v1/auth/me` 返回 `Account`、当前 USER 投影、显式 identityKind、策略附件与完整当前能力集合；不再保留 `canCreateAccounts` 单一提示或任何角色枚举。
@@ -57,7 +57,9 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 管理路由从旧 principal/organization 命名到目标 account/users 的替换与 schema、UI、生成契约原子收口；没有平行兼容别名。公开历史 Audit action 不重命名；新删除/身份命令定义新的封闭事实。
 
-账号生命周期完成事实与对应成功 Audit outbox 在同一事务提交并永久保留，使用原 actor Account、原 USER、原 requestId 作为唯一意图边界；同一 actor 不能把已成功的生命周期 requestId 换操作、目标或版本再次使用。只为新命令生成完成事实；旧成功 Audit 不猜测缺失的原版本和开通显示输入，也不反向补造完成记录，但其 requestId 仍视为已消费。读取时重新验证当前 session、当前同一 action 权威、原 actor/目标/版本和不可变 Audit/decision 证据；当前 User 被停用、会话失效或权限撤销后失败关闭。`404`、`403`、`401`、协议错误和不确定响应都不能据此签发替代意图。完成事实不随 Account 后续状态变化而改写，也不能被 runtime role 直接读写、更新、删除或 truncate。
+账号生命周期完成事实与对应成功 Audit outbox 在同一事务提交并永久保留，使用原 actor Account、原 USER、原 requestId 作为唯一意图边界；同一 actor 不能把已成功的生命周期 requestId 换操作、目标或版本再次使用。只为新命令生成完成事实；旧成功 Audit 不猜测缺失的原版本和开通显示输入，也不反向补造完成记录，但其 requestId 仍视为已消费。读取时重新验证当前 session、当前同一 action 权威、原 actor/目标/版本和不可变 Audit/decision 证据；当前 User 被停用、会话失效或权限撤销后失败关闭。`404`、`403`、`401`、协议错误和不确定响应都不能据此签发替代意图。Root 凭据恢复只修复原 Root USER 的凭据/租户管理员关系并推进 Account 版本，完成记录必须保存恢复事务提交时的 Account 状态；即使目标为 `DISABLED` 也不能启用账号。完成事实不随 Account 后续状态变化而改写，也不能被 runtime role 直接读写、更新、删除或 truncate。
+
+该持久化表、受限读取函数和公开 GET 是新的数据库/wire 形状，当前未发布候选因此推进到 IAM86/Audit39/PaaS7、`contractRevision=36`；唯一发布前驱为已接受的 IAM85/Audit39/PaaS7+r35。开发期更早版本不继续累积兼容矩阵，前驱成功事实只按上述可证明字段迁移或明确不补造。
 
 ## 验收
 

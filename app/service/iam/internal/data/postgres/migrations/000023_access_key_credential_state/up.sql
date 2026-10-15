@@ -230,7 +230,8 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $functio
 DECLARE predecessor record;
 BEGIN
     SELECT * INTO predecessor FROM iam.readiness_v81();
-    RETURN QUERY SELECT predecessor.ready AND iam.access_key_credential_state_contract_ready(),85::bigint,predecessor.checked_at;
+    RETURN QUERY SELECT predecessor.ready AND iam.access_key_credential_state_contract_ready()
+      AND iam.account_lifecycle_completion_contract_ready(),86::bigint,predecessor.checked_at;
 END $function$;
 REVOKE ALL ON FUNCTION iam.readiness() FROM PUBLIC,matrix_iam_worker,matrix_iam_credential_recovery,
   matrix_iam_backup_custody,matrix_iam_notification_worker,matrix_iam_authentication_recovery,matrix_iam_access_analysis_worker;

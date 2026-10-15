@@ -35763,7 +35763,14 @@ func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Ha
 	login("lifecycle.primary", knownPassword, http.StatusUnauthorized)
 	login("shared.user@"+tenantID, changed, http.StatusUnauthorized)
 	recovered = "Lifecycle-Paused-Recovery-Password-94!"
-	recoverPrimary(tenantID, readAccount(tenantID).ResourceVersion, http.StatusOK)
+	pausedVersion := readAccount(tenantID).ResourceVersion
+	pausedRecoveryCommand := recoverPrimary(tenantID, pausedVersion, http.StatusOK)
+	pausedRecoveryCompletion := readCompletion(operatorObserver, tenantID, pausedRecoveryCommand,
+		iamv1.AccountLifecycleRecoverRootCredentials, pausedVersion, http.StatusOK)
+	if pausedRecoveryCompletion.ResultingResourceVersion != pausedVersion+1 ||
+		pausedRecoveryCompletion.Status != iamv1.AccountDisabled || pausedRecoveryCompletion.RootPrincipalID != primaryID {
+		t.Fatal("paused root recovery completion implied an account enable or lost its original root")
+	}
 	if readAccount(tenantID).Status != iamv1.AccountDisabled {
 		t.Fatal("recovery implicitly resumed tenant")
 	}
