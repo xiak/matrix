@@ -1909,7 +1909,9 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-The Role-exit and recovered-quota client slice was verified on 2026-10-15
+The Role-exit and recovered-quota source and matching embed are fixed in
+[`a661779a5a00aa731544e86fc571ad5f4dcf8e68`](https://github.com/xiak/matrix/commit/a661779a5a00aa731544e86fc571ad5f4dcf8e68)
+and were verified on 2026-10-15
 with Node 22.22.2/npm 11.6.4. The complete frontend run passed 71 files and
 1,484 cases plus all three export-normalization cases. The twenty additional
 cases cover source-validation blocking/failure/late replies, same-route Audit

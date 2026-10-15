@@ -6,8 +6,8 @@
 - Updated: 2026-10-15
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source/embed candidate: `7defb8fa5972540d56450c9cf776e99a61fd1d13`
-- Source parent: `901009da1fd9a4e94bc93c244f03855b8935e997`
+- Pushed source/embed candidate: `a661779a5a00aa731544e86fc571ad5f4dcf8e68`
+- Source parent: `47d03fce2a04fba7a7d63b84397f094a1bcd0957`
 
 ## Authoritative route
 
@@ -24,20 +24,20 @@
 
 ## Pushed milestone
 
-The shared console now offers explicit, document-latched recovery for proven
-same-origin chunk-load failures without automatic reload, secret persistence
-or business replay. The existing Session, draft and one-time-material owners
-remain unchanged. The inspectable MOCK remains separate and available; no
-mandatory preview login, backend, SQL, profile or shared DEV process was changed.
+The shared console now restores business data only after verified Role exit
+and revalidates observed quota data after recovered command completion.
+Existing session, command and resource owners remain authoritative, with no
+document reload or business replay. The inspectable MOCK stays available;
+no mandatory preview login, backend, SQL, profile or shared DEV process changed.
 
 Supported-runtime complete frontend checks, production export, embedded
-equality, fresh UI-host Go gates and task-owned in-app browser interaction
-checks passed. Exact evidence and limits stay with FEAT-007. The browser used
-synthetic failure events against the final production bundle, not a two-build
-upgrade or signed installation. The prior personal-security and managed-service
-milestones remain with their existing owners and are not reclassified by this
-slice. Older accepted console CI cannot be inherited by this new candidate;
-no workflow or unrelated timeout was changed.
+equality and fresh UI-host Go gates passed. Exact evidence and limits stay
+with FEAT-007. Current Role/Audit and original-window quota cases use real
+providers with test API/repository responses; they are not signed-APISIX browser
+acceptance. Prior chunk-load browser evidence, personal security and managed
+service milestones stay with their named fixed owners and are not reclassified.
+Older accepted console CI cannot be inherited by this candidate; no workflow
+or unrelated timeout was changed.
 
 ## Continuation boundary
 
@@ -47,8 +47,9 @@ mandatory authentication in the user's UX preview environment.
 
 The IAM engineer received the fixed source/embed candidate, exact ADAPT paths,
 validation results and remaining boundaries for selective integration and
-independent console CI. The engineer owns the real two-build upgrade, device,
-PG/IAM/Audit/PaaS and signed-install browser gates. This UI milestone does not
+independent console CI. The engineer owns signed Role-exit and response-loss
+quota replay, real two-build upgrade, device, PG/IAM/Audit/PaaS and signed-install
+browser gates. This UI milestone does not
 claim those results. Original personal-factor
 intents survive only in the current provider memory across content navigation
 and same-user reauthentication; do not claim reload or cross-browser recovery.
