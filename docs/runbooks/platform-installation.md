@@ -5,11 +5,24 @@ each Matrix platform lifecycle command. The release contract and acceptance
 status remain owned by
 [FEAT-005](../features/FEAT-005-offline-platform-lifecycle.md).
 
-## Current production recommendation
+## Choose the operating identity before installation
 
-Use a dedicated Matrix Linux host or virtual machine with the supported
-rootful Docker Engine, and run every `mx platform` lifecycle command as OS
-`root`.
+**For the current production release, use the root profile.** Use a dedicated
+Matrix Linux host or virtual machine with the supported rootful Docker Engine,
+and run every `mx platform` lifecycle command with effective UID 0. The
+optional non-root profile below is documented for evaluation and future
+acceptance; it is not the current production recommendation.
+
+| Profile | Human login | Identity that executes `mx` | Password | Current status |
+| --- | --- | --- | --- | --- |
+| Recommended root | A named administrator using `sudo -i`, or an already authenticated root console | OS `root` | Matrix creates no Linux password; the administrator uses the host's existing root or `sudo` authentication | Production profile |
+| Optional service account | A named administrator using `sudo -u matrix -- ...` | Locked `matrix` service account | **No password**; interactive login stays disabled | Not yet accepted by the full signed lifecycle gate |
+| Password-based human fallback | A separately named human such as `matrix-operator` | Still the locked `matrix` service account through audited `sudo -u matrix -- ...` | Password belongs only to the named human; never set one on the shared `matrix` account | Optional site policy within the unaccepted non-root profile |
+
+Choosing the root profile does not require enabling remote SSH login for
+`root`. A named human administrator may authenticate with their own account,
+run `sudo -i` once, and then execute the complete lifecycle in that root shell.
+Matrix neither creates nor manages Linux login passwords.
 
 This is the current release recommendation because Matrix deliberately uses
 the local `/var/run/docker.sock`, and the PaaS worker receives that same socket
@@ -30,7 +43,8 @@ Matrix requires the installation root and its managed files to remain owned by
 that UID with owner-only permissions. Do not repair an identity mismatch with
 `chown -R`; use the supported backup/recovery or reinstall path instead.
 
-The prompts below identify the required identity:
+The prompts below identify the required identity. They are labels and are not
+part of the command to copy:
 
 - `root#` means an authenticated root shell on the dedicated Matrix host.
 - `admin$` means a named human administrator with audited `sudo` access.
@@ -59,6 +73,11 @@ root# /usr/local/sbin/mx --format json platform install \
 root# /usr/local/sbin/mx --format json platform verify --root /var/lib/matrix
 root# /usr/local/sbin/mx --format json platform status --root /var/lib/matrix
 ```
+
+If the console is already an authenticated root shell, omit `sudo -i`. From
+`umask 077` onward, every command in this section runs as `root`; do not exit
+back to the administrator shell between lifecycle commands and then run `mx`
+without `sudo`.
 
 Keep using the same root identity for subsequent operations:
 
@@ -90,7 +109,8 @@ account remains host-root-equivalent while it can control Docker. The full
 signed lifecycle gate for this profile has not yet been accepted, so use the
 root profile for the current production release.
 
-Create one locked, non-login service account. It should not have a password:
+All account-creation commands in this section run once as `root`. Create one
+locked, non-login service account. It must not have a password:
 
 ```console
 root# groupadd --system matrix
@@ -109,8 +129,9 @@ root# sudo -u matrix -- docker version
 root# sudo -u matrix -- docker compose version
 ```
 
-After group membership is effective, a named administrator invokes every
-lifecycle command as that same account:
+After group membership is effective, a named administrator invokes the
+install and **every later** lifecycle command as that same service account.
+The administrator must never run `mx` directly under their own UID:
 
 ```console
 admin$ sudo -u matrix -- /usr/local/sbin/mx --format json platform install \
@@ -133,15 +154,28 @@ and use audited `sudo -u matrix` execution.
 `/usr/sbin/nologin` shell would still reject interactive login. Do not turn
 this shared service identity into a human login. If an organization requires
 password-based administration, create a separately named human operator and
-delegate audited `sudo -u matrix` execution instead:
+delegate audited `sudo -u matrix` execution instead. The following commands
+run as `root`; `passwd` prompts twice for the new human operator's password:
 
 ```console
 root# useradd --create-home --shell /bin/bash matrix-operator
 root# passwd matrix-operator
 ```
 
+The password does not grant Matrix access by itself. The site's administrator
+must separately authorize `matrix-operator` in the audited `sudo` policy to
+run `/usr/local/sbin/mx` as target user `matrix`, and should verify that policy
+before installation:
+
+```console
+root# sudo -l -U matrix-operator
+matrix-operator$ sudo -u matrix -- /usr/local/sbin/mx --help
+```
+
 SSH keys and MFA are preferred over that password fallback. The human account
-must not own `/var/lib/matrix`, and it must not invoke `mx` under its own UID.
+must not own `/var/lib/matrix`, must not join the `docker` group, and must not
+invoke `mx` under its own UID. Do not use `su - matrix`: the service account is
+intentionally non-login, and the supported invocation is `sudo -u matrix --`.
 
 ## Unsupported identity combinations
 

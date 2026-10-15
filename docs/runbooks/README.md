@@ -1,3 +1,4 @@
 # Operator runbooks
 
-- [Platform installation and operating user](platform-installation.md)
+- [Platform installation: root recommendation, optional non-root account,
+  password policy, and command identity](platform-installation.md)
