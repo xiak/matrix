@@ -92,6 +92,16 @@ architecture, package or runtime dependency.
 
 ## IAM fixed-contract integration
 
+The application-load recovery slice inspects the existing console owner at
+fixed `901009da1fd9a4e94bc93c244f03855b8935e997`, not the IAM engineer's WIP or
+signed runtime. `REUSE` its public Dialog/Alert/Card/Checkbox, appearance and
+Session composition; `ADAPT` only the application composition to attach one
+explicit recovery owner and root/console route-error entries. `REFERENCE` the
+fixed UI host's HTML no-store, immutable hash assets and unknown-asset 404, and
+the pinned Next 16.3.3 loader's named error shape. `REJECT` broad automatic
+reload, secret/draft persistence, replacement session models and preservation
+of superseded bundles. This reference is not signed-install acceptance.
+
 The IAM revisions are authority and transport donors, not another visual or
 application-architecture donor. The existing FEAT-007 provider/repository/
 scene/renderer chain and isolated UX preview remain the UI owners.

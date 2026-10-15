@@ -1428,6 +1428,36 @@ destination. Reduced-motion preferences disable skeleton and progress motion.
 Revalidating existing data retains the current page
 and draft instead of pretending to navigate again.
 
+### Console asset-load failure recovery
+
+An already-open client can reference a removed hash after a console upgrade.
+The application provider and Next root/console route error boundaries share
+one recovery owner. It recognizes only a named `ChunkLoadError` carrying the
+pinned loader's failure shape and a same-origin `/_next/static/chunks/*.js`
+path. API failures, arbitrary runtime exceptions, foreign URLs and string
+lookalikes do not become document-reload instructions. Ordinary render errors
+offer an explicit local boundary reset, not an automatic page refresh.
+
+Recovery never reloads automatically. The user may dismiss the prompt to save
+still-visible drafts and one-time materials; existing children and the Session
+provider are not replaced by the recovery signal. Refresh requires explicit
+acknowledgement of in-memory loss and is latched to one request per document,
+including application remount and browser refusal. The latch uses only an
+in-memory weak document reference, not browser storage. Duplicate errors do not
+stack prompts or reopen a dismissed one. No raw exception, secret, token or
+draft is copied to URL, storage or a diagnostic message. Reload is not proof
+that a prior write failed and never replays a business command.
+
+This does not resurrect material already lost to an independent fatal render,
+provide new command-result APIs, or retrofit a previously loaded pre-fix
+client. The first upgrade from such a client may still need the browser's
+manual refresh. Bootstrap or root-layout failures that prevent the owner
+itself from loading or installing its listeners are outside this React
+recovery surface. The UI host retains its existing HTML `no-store`, immutable
+hash assets and genuine unknown-asset 404; superseded bundles are not retained
+as an in-tree compatibility implementation. Signed-install upgrade/browser
+acceptance remains with its owning integration gate.
+
 Header open/close state is subscribed only by Header and its backdrop/inert
 boundaries, not by the service-page renderer. IAM navigation subscribes to
 stable capabilities independently of form pending/error state. Message details and their destination
@@ -1854,6 +1884,33 @@ and `git diff --check` gates must pass on the same committed worktree.
 ## Implementation status
 
 ### Current shared-navigation development evidence
+
+The application-load recovery candidate was verified on 2026-10-15 with
+Node 22.22.2/npm 11.6.4. The complete frontend run passed 71 files and 1,464
+cases, including 25 recovery-owner cases, followed by all three
+export-normalization cases. Typecheck, lint, architecture and 228 contrast
+pairs passed. The production build generated 59 pages and 57 normalized
+segment files; all 322 generated files match the Go embed byte-for-byte.
+Fresh UI-host `go test -count=1 -p 2` and `go vet -p 2` passed on Go 1.26.3.
+The owner tests include both Next route-error entries' shared component,
+ordinary explicit reset, refused reload and the document latch surviving a
+replacement application mount; a new document receives its own single attempt.
+
+In the in-app browser, the final production bundle was served by a task-owned
+UI host behind a memory-only localhost event fixture, with the original CSP
+unchanged and no real login or business command. Ordinary, foreign-URL, string
+and object-lookalike events remained unconsumed and opened no prompt. Named
+same-origin window-error and unhandled-rejection events shared one prompt;
+after dismissal, repeated events did not reopen it. The original synthetic
+password input kept its DOM identity/value and browser storage was unchanged.
+Acknowledgement enabled the reload button; one explicit click loaded the next
+document with an empty password field and no repeated prompt. Desktop and
+`390 x 844` inspection showed a readable shared Dialog; at the compact size,
+document width remained 390px with a 374px Dialog and no horizontal overflow.
+The browser warning/error log was empty. Both temporary listeners and tabs
+were stopped and the browser viewport override was reset. This is a real
+browser interaction check using synthetic failure events, not a two-build
+upgrade or signed-install acceptance; those remain with the integration owner.
 
 The current personal-factor and LIVE-entry closure is fixed in
 [`11151a06aa920438ae9d9f55252ec203a1f491d8`](https://github.com/xiak/matrix/commit/11151a06aa920438ae9d9f55252ec203a1f491d8)

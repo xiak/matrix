@@ -1,0 +1,4 @@
+.notice { position: fixed; z-index: var(--xiak-z-popover); inset-inline-end: var(--xiak-spacing-default); bottom: var(--xiak-spacing-default); max-width: min(480px, calc(100vw - var(--xiak-spacing-default) * 2)); }
+.content { display: grid; gap: var(--xiak-spacing-comfortable); }
+.content p { margin: 0; }
+.fallback { width: min(640px, 100%); padding: var(--xiak-spacing-roomy); margin-inline: auto; }
