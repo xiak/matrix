@@ -408,9 +408,15 @@ jobs:
           MATRIX_IAM_BACKUP_POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
           MATRIX_IAM_BACKUP_POSTGRES_TASK: iam-authority-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.lane }}
         run: |
+          # Pure authorityprocess unit tests already run under the required
+          # repository-wide Go/race job. Keep this database lane limited to
+          # the three roots that actually start retained/profile/runtime
+          # processes, while the selection wrapper still rejects missing,
+          # skipped or failed roots.
           time bash .github/scripts/run-go-test-selection.sh \
-            'TestRuntimeDSNBindsLeastPrivilegeLogin,TestIAMAuthorizationProfileAdvanceProcess,TestIndependentIAMAuditAndPaaSProcesses,TestIAMCapacityDecisionAttribution,TestIAMCapacityPercentiles,TestIAMCapacityScheduling,TestAuthorityPlaintextInspection,TestIAMTOTPBackupProcesses' \
-            -race -p 1 -count=1 ./test/authorityprocess
+            'TestIAMAuthorizationProfileAdvanceProcess,TestIndependentIAMAuditAndPaaSProcesses,TestIAMTOTPBackupProcesses' \
+            -race -p 1 -count=1 ./test/authorityprocess \
+            -run '^(TestIAMAuthorizationProfileAdvanceProcess|TestIndependentIAMAuditAndPaaSProcesses|TestIAMTOTPBackupProcesses)$'
 
       - name: Real managed product providers and IAM gate
         if: matrix.lane == 'authority-managed-products'

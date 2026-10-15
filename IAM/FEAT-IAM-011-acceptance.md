@@ -82,6 +82,8 @@ IAM82/Audit37/PaaS3、`contractRevision=30`的完整签名运行证据统一由[
 
 清理以当前行为价值而非测试数量为准：重复场景、废弃对象/接口和偶然实现快照删除；跨账号越权、撤权/会话不复活、MFA事实不补造、失败原子性、历史完成及Audit/outbox保留为当前门禁。产品声明变更不能自动扩大既有策略、不可忽略不兼容Deny等独立规则，须从旧版本外壳中移回当前产品行为测试，不能随历史路径一起丢掉。源码兼容、产品声明推进、同版本重放和受支持备份恢复是不同边界，不构造其全组合笛卡尔积。每个owner在自己分支审查并实跑保留门禁，不能为了通过失败测试或继承其他分支状态而删减。
 
+当前71个前端测试文件的结构审计没有发现`.snap`、快照API或读取源码文本的实现快照，也没有足够证据删除现行响应丢失、容量拒绝、TOTP、Audit、CSP、离线HTTP或嵌入等价测试。确认的重复仅在CI执行范围：必需的全仓Go/race门禁已运行`test/authorityprocess`纯单元，`authority-runtime`又因缺少`-run`重复运行同一批单元。当前候选保留全部测试源码，把runtime步骤的required清单和锚定选择器一起收窄为`TestIAMAuthorizationProfileAdvanceProcess`、`TestIndependentIAMAuditAndPaaSProcesses`和`TestIAMTOTPBackupProcesses`三个真实进程根；原数据库、race、`-p 1`、预算及选择脚本的RUN/非SKIP/PASS检查不变。该调整只消除纯单元重复，不声称缩短自然窗口或重型进程本身；独立CI仍须按精确提交确认。
+
 首版发布冻结实际完整 schema/profile、安装器和服务二进制；从该正式基线之后才维护已声明支持的升级、回滚和备份兼容窗口。首版产品版本不等于必须立即把当前各服务 schema 数字改成 1；发布前是否压缩/重编号要与安装及产品消费者一次性对齐。测试范围调整不授权删除用户数据，也不授予跨 profile 安装准入。
 
 ### 开发窗口收敛的固定证据
