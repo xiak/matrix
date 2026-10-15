@@ -1885,7 +1885,9 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-The application-load recovery candidate was verified on 2026-10-15 with
+The application-load recovery source and matching embed are fixed in
+[`7defb8fa5972540d56450c9cf776e99a61fd1d13`](https://github.com/xiak/matrix/commit/7defb8fa5972540d56450c9cf776e99a61fd1d13)
+and were verified on 2026-10-15 with
 Node 22.22.2/npm 11.6.4. The complete frontend run passed 71 files and 1,464
 cases, including 25 recovery-owner cases, followed by all three
 export-normalization cases. Typecheck, lint, architecture and 228 contrast
