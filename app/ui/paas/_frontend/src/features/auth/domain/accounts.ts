@@ -103,6 +103,32 @@ export type RecoverAccountRootCredentialsCommand = {
   requestId: string;
 };
 
+export type AccountLifecycleActor = Readonly<{ actorAccountId: string; actorPrincipalId: string }>;
+export type AccountLifecycleOperation = "ACCOUNT_CREATE" | "ACCOUNT_SET_STATUS" | "ACCOUNT_ROOT_CREDENTIALS_RECOVER";
+
+/** Portable original-command identity. Never contains the submitted credentials. */
+export type AccountLifecycleIntent = AccountLifecycleActor & Readonly<{
+  format: 1;
+  accountId: string;
+  commandRequestId: string;
+}> & (
+  | Readonly<{ operation: "ACCOUNT_CREATE"; expectedResourceVersion: 0 }>
+  | Readonly<{ operation: "ACCOUNT_SET_STATUS"; expectedResourceVersion: number; intendedStatus: Account["status"] }>
+  | Readonly<{ operation: "ACCOUNT_ROOT_CREDENTIALS_RECOVER"; expectedResourceVersion: number }>
+);
+
+/** Immutable completion fact, not present Account state or a resource-access permit. */
+export type AccountLifecycleCompletion = AccountLifecycleActor & Readonly<{
+  accountId: string;
+  commandRequestId: string;
+  eventId: string;
+  occurredAt: string;
+}> & (
+  | Readonly<{ operation: "ACCOUNT_CREATE"; expectedResourceVersion: 0; resultingResourceVersion: 1; status: "ACTIVE"; rootPrincipalId: string }>
+  | Readonly<{ operation: "ACCOUNT_SET_STATUS"; expectedResourceVersion: number; resultingResourceVersion: number; status: Account["status"] }>
+  | Readonly<{ operation: "ACCOUNT_ROOT_CREDENTIALS_RECOVER"; expectedResourceVersion: number; resultingResourceVersion: number; status: Account["status"]; rootPrincipalId: string }>
+);
+
 export type AccountSecuritySettings = {
   accountId: string;
   resourceVersion: number;

@@ -8,6 +8,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
 import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { AccountLifecycleCompletion, AccountLifecycleIntent } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { httpIamRepository } from "../repositories/httpIamRepository";
@@ -161,6 +162,7 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
 function liveAccountLifecycle(overrides: Partial<NonNullable<AccountRepository["accountLifecycle"]>> = {}): NonNullable<AccountRepository["accountLifecycle"]> {
   let current = structuredClone(account);
   return {
+    readCompletion: vi.fn().mockRejectedValue(new HttpProblem(404, "ORIGINAL_ACCOUNT_COMPLETION_UNOBSERVED")),
     list: vi.fn().mockImplementation(async () => ({ items: [accountAccess(current)], nextAfter: null })),
     read: vi.fn().mockImplementation(async (_credential: string, accountId: string) => {
       if (accountId !== current.id) throw new HttpProblem(404, "ACCOUNT_NOT_FOUND");
@@ -182,6 +184,29 @@ function liveAccountLifecycle(overrides: Partial<NonNullable<AccountRepository["
     }),
     ...overrides
   };
+}
+
+function lifecycleCompletion(intent: AccountLifecycleIntent, rootRecoveryStatus: Account["status"] = "ACTIVE"): AccountLifecycleCompletion {
+  const base = { actorAccountId: intent.actorAccountId, actorPrincipalId: intent.actorPrincipalId, accountId: intent.accountId,
+    commandRequestId: intent.commandRequestId, eventId: "account-completion-event", occurredAt: "2026-10-15T00:00:00Z" };
+  if (intent.operation === "ACCOUNT_CREATE") return { ...base, operation: intent.operation, expectedResourceVersion: 0,
+    resultingResourceVersion: 1, status: "ACTIVE", rootPrincipalId: "created-account-root" };
+  if (intent.operation === "ACCOUNT_SET_STATUS") return { ...base, operation: intent.operation,
+    expectedResourceVersion: intent.expectedResourceVersion, resultingResourceVersion: intent.expectedResourceVersion + 1, status: intent.intendedStatus };
+  return { ...base, operation: intent.operation, expectedResourceVersion: intent.expectedResourceVersion,
+    resultingResourceVersion: intent.expectedResourceVersion + 1, status: rootRecoveryStatus, rootPrincipalId: account.rootIdentity.principalId };
+}
+
+function originalAccountStatusIntent(): AccountLifecycleIntent {
+  return { format: 1, actorAccountId: account.id, actorPrincipalId: rootUser.id, operation: "ACCOUNT_SET_STATUS", accountId: account.id,
+    commandRequestId: "original-account-status-command", expectedResourceVersion: 1, intendedStatus: "DISABLED" };
+}
+
+async function importAccountSummary(user: ReturnType<typeof userEvent.setup>, summary: string) {
+  const trigger = screen.getByText("恢复原账号操作", { selector: "summary" });
+  if (!trigger.closest("details")?.open) await user.click(trigger);
+  fireEvent.change(screen.getByLabelText("原账号操作非敏感摘要"), { target: { value: summary } });
+  await user.click(screen.getByRole("button", { name: "带入摘要并只读检查" }));
 }
 
 function livePolicyVersions() {
@@ -359,13 +384,13 @@ function AuthenticatedAccess({ repository, initialView, active = true }: { repos
   return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider> : <LoginRenderer />;
 }
 
-async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users") {
+async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential) {
   const user = userEvent.setup({ delay: null });
   const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
   const view = render(tree(repository));
   await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
-  await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(credential));
+  await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(expectedCredential));
   return { user, view, repository, replaceRepository: (next: AccountRepository) => view.rerender(tree(next)), setAccessActive: (active: boolean) => view.rerender(tree(repository, active)) };
 }
 
@@ -909,15 +934,14 @@ describe("account access", () => {
     expect(lifecycle.read).toHaveBeenCalledWith(credential, account.id);
   });
 
-  it("locks an unknown account status result to the exact request and retries it byte-for-byte", async () => {
+  it("locks an unknown account status result to the original completion lookup without repeating the write", async () => {
     const disabled = { ...account, status: "DISABLED" as const, resourceVersion: 2 };
     const read = vi.fn()
       .mockResolvedValueOnce(accountAccess(structuredClone(account)))
       .mockResolvedValue(accountAccess(structuredClone(disabled)));
-    const setStatus = vi.fn()
-      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
-      .mockResolvedValueOnce(structuredClone(disabled));
-    const lifecycle = liveAccountLifecycle({ read, setStatus });
+    const setStatus = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const readCompletion = vi.fn(async (_credential: string, intent: AccountLifecycleIntent) => lifecycleCompletion(intent));
+    const lifecycle = liveAccountLifecycle({ read, setStatus, readCompletion });
     const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
     await user.click(await screen.findByRole("button", { name: "Team A" }));
     await user.click(await screen.findByRole("button", { name: "停用账户" }));
@@ -926,17 +950,206 @@ describe("account access", () => {
     expect(await screen.findByText("原操作结果未知")).toBeTruthy();
     const original = setStatus.mock.calls[0]![2];
     expect(original).toMatchObject({ status: "DISABLED", resourceVersion: 1, requestId: expect.any(String) });
-    await user.click(screen.getByRole("button", { name: "精确重试原请求" }));
-
-    await waitFor(() => expect(setStatus).toHaveBeenCalledTimes(2));
-    expect(setStatus.mock.calls[1]![2]).toEqual(original);
-    expect(await screen.findByText("账户状态已更新；目标能力已重新读取。")).toBeTruthy();
-    expect(screen.getAllByText("已停用")).toHaveLength(2);
+    await user.click(screen.getByRole("button", { name: "只读检查原账号操作" }));
+    expect(await screen.findByText("已确认原操作完成")).toBeTruthy();
+    expect(screen.getByText("已确认原操作完成")).toBe(document.activeElement);
+    expect(setStatus).toHaveBeenCalledTimes(1);
+    expect(readCompletion).toHaveBeenCalledExactlyOnceWith(credential, expect.objectContaining({
+      commandRequestId: original.requestId, accountId: account.id, operation: "ACCOUNT_SET_STATUS", expectedResourceVersion: 1, intendedStatus: "DISABLED"
+    }));
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "恢复账户访问" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "已知晓并关闭" }));
+    expect(screen.getByText("恢复原账号操作", { selector: "summary" })).toBe(document.activeElement);
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+    expect(await screen.findByRole("button", { name: "恢复账户访问" })).toBeTruthy();
+    expect(read).toHaveBeenCalledTimes(2);
 
     await user.click(screen.getByTestId("nav-roles"));
     await user.click(screen.getByTestId("nav-tenants"));
     const row = within(await screen.findByRole("table", { name: "租户账号列表" })).getByRole("row", { name: /Team A/ });
     expect(within(row).getByText("已停用")).toBeTruthy();
+  });
+
+  it.each(["ACCOUNT_CREATE", "ACCOUNT_SET_STATUS", "ACCOUNT_ROOT_CREDENTIALS_RECOVER"] as const)(
+    "recovers %s in a separate clean session through the original non-sensitive summary and no write", async (operation) => {
+      const secret = "Lifecycle-Password-Only-Test-49!";
+      const fail = vi.fn(async (...args: unknown[]) => {
+        const command = args[args.length - 1] as { requestId: string };
+        const saved = Array.from({ length: localStorage.length }, (_, index) => localStorage.getItem(localStorage.key(index)!)!).join("\n");
+        expect(saved).toContain(command.requestId);
+        expect(saved).not.toContain(secret);
+        expect(saved).not.toContain(credential);
+        throw new HttpProblem(503, "COMMITTED_RESPONSE_WAS_NOT_OBSERVED");
+      });
+      const firstLifecycle = liveAccountLifecycle(operation === "ACCOUNT_CREATE" ? { create: fail }
+        : operation === "ACCOUNT_SET_STATUS" ? { setStatus: fail }
+          : { recoverRootCredentials: fail, read: vi.fn().mockResolvedValue(accountAccess({ ...account, status: "DISABLED", resourceVersion: 3 })) });
+      const first = await openAccess(accounts({ accountLifecycle: firstLifecycle }), iam(), "tenants");
+      if (operation === "ACCOUNT_CREATE") {
+        await first.user.click(await screen.findByRole("button", { name: "开通租户" }));
+        const form = within(screen.getByRole("form", { name: "开通租户账号" }));
+        for (const [label, value] of [["主账号 ID", "cold-created-account"], ["租户名称", "Cold account"],
+          ["主账号登录名", "cold.owner"], ["用户显示名称", "Cold owner"], ["初始密码", secret]]) {
+          fireEvent.change(form.getByLabelText(label!, { exact: true }), { target: { value } });
+        }
+        await first.user.click(form.getByRole("button", { name: "确认开通" }));
+      } else {
+        await first.user.click(await screen.findByRole("button", { name: "Team A" }));
+        if (operation === "ACCOUNT_SET_STATUS") {
+          await first.user.click(await screen.findByRole("button", { name: "停用账户" }));
+          await first.user.click(screen.getByRole("button", { name: "确认停用账户" }));
+        } else {
+          await first.user.click(await screen.findByRole("button", { name: "恢复根身份凭据" }));
+          fireEvent.change(screen.getByLabelText("初始密码"), { target: { value: secret } });
+          await first.user.click(screen.getByRole("button", { name: "确认恢复根身份" }));
+        }
+      }
+      expect(await screen.findByText("原操作结果未知")).toBeTruthy();
+      const summary = (screen.getByLabelText("账号操作只读恢复摘要") as HTMLTextAreaElement).value;
+      const original = JSON.parse(summary) as AccountLifecycleIntent;
+      expect(original.operation).toBe(operation);
+      expect(summary).not.toContain(secret);
+      expect(summary).not.toContain(credential);
+      expect(summary).not.toContain("initialPassword");
+      if (operation !== "ACCOUNT_SET_STATUS") expect((screen.getByLabelText("初始密码") as HTMLInputElement).value).toBe("");
+      expect(fail).toHaveBeenCalledTimes(1);
+      first.view.unmount();
+      localStorage.clear();
+
+      const freshCredential = "separate-browser-fresh-user-credential";
+      const readCompletion = vi.fn(async (_credential: string, intent: AccountLifecycleIntent) => lifecycleCompletion(intent, "DISABLED"));
+      const secondLifecycle = liveAccountLifecycle({ readCompletion });
+      const deniedIdentity = { ...identity, capabilities: identity.capabilities.map((item) => item.action === "iam.account.read"
+        ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item) };
+      const secondRepository = accounts({ accountLifecycle: secondLifecycle, currentIdentity: vi.fn().mockResolvedValue(deniedIdentity) });
+      const secondIam = iam({ login: vi.fn().mockResolvedValue({ outcome: "AUTHENTICATED", credential: freshCredential,
+        mustChangePassword: false, session: { id: "separate-browser-session", principalId: rootUser.id, organizationId: account.id,
+          status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-01-01T00:00:00Z" } }) });
+      const second = await openAccess(secondRepository, secondIam, "tenants", freshCredential);
+      expect(await screen.findByTestId("can-read-accounts")).toHaveProperty("textContent", "false");
+      await second.user.click(screen.getByText("恢复原账号操作", { selector: "summary" }));
+      fireEvent.change(screen.getByLabelText("原账号操作非敏感摘要"), { target: { value: summary } });
+      await second.user.click(screen.getByRole("button", { name: "带入摘要并只读检查" }));
+      expect(await screen.findByText("已确认原操作完成")).toBeTruthy();
+      expect(readCompletion).toHaveBeenCalledExactlyOnceWith(freshCredential, original);
+      if (operation === "ACCOUNT_ROOT_CREDENTIALS_RECOVER") expect(screen.getByText("已停用")).toBeTruthy();
+      for (const write of [secondLifecycle.create, secondLifecycle.setStatus, secondLifecycle.recoverRootCredentials, secondRepository.execute]) {
+        expect(write).not.toHaveBeenCalled();
+      }
+      expect(secondLifecycle.read).not.toHaveBeenCalled();
+      expect(secondLifecycle.list).not.toHaveBeenCalled();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      const persisted = Array.from({ length: localStorage.length }, (_, index) => localStorage.getItem(localStorage.key(index)!)!).join("\n");
+      expect(persisted).not.toContain(freshCredential);
+      expect(persisted).not.toContain(secret);
+    }
+  );
+
+  it.each([403, 404, 503])("retains an unresolved account completion after %s without permitting a new command", async (status) => {
+    const readCompletion = vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE_FAILURE_DETAIL"));
+    const lifecycle = liveAccountLifecycle({ readCompletion });
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    const intent = originalAccountStatusIntent();
+    await importAccountSummary(user, JSON.stringify(intent));
+    expect(await screen.findByText("原操作结果未知")).toBeTruthy();
+    expect(readCompletion).toHaveBeenCalledExactlyOnceWith(credential, intent);
+    expect((screen.getByRole("button", { name: "开通租户" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByLabelText("账号操作只读恢复摘要") as HTMLTextAreaElement).value).toContain(intent.commandRequestId);
+    expect(screen.queryByRole("button", { name: "登录控制台" })).toBeNull();
+    expect(document.body.textContent).not.toContain("PRIVATE_FAILURE_DETAIL");
+    for (const write of [lifecycle.create, lifecycle.setStatus, lifecycle.recoverRootCredentials]) expect(write).not.toHaveBeenCalled();
+    expect(lifecycle.read).not.toHaveBeenCalled();
+    expect(lifecycle.list).not.toHaveBeenCalled();
+  });
+
+  it("rejects foreign, secret-bearing and replacement account summaries without querying or losing the original identity", async () => {
+    const lifecycle = liveAccountLifecycle();
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    const intent = originalAccountStatusIntent();
+    for (const invalid of [{ ...intent, initialPassword: "not-exportable" }, { ...intent, credential },
+      { ...intent, digest: "not-a-recovery-field" }, { ...intent, actorPrincipalId: "different-actor" }]) {
+      await importAccountSummary(user, JSON.stringify(invalid));
+      expect(screen.getByText(/摘要无效、含不支持字段/)).toBeTruthy();
+    }
+    expect(lifecycle.readCompletion).not.toHaveBeenCalled();
+    await importAccountSummary(user, JSON.stringify(intent));
+    expect(await screen.findByText("原操作结果未知")).toBeTruthy();
+    await importAccountSummary(user, JSON.stringify({ ...intent, commandRequestId: "replacement-command" }));
+    expect(screen.getByText(/摘要无效、含不支持字段/)).toBeTruthy();
+    expect(lifecycle.readCompletion).toHaveBeenCalledTimes(1);
+    expect((screen.getByLabelText("账号操作只读恢复摘要") as HTMLTextAreaElement).value).toContain(intent.commandRequestId);
+    for (const write of [lifecycle.create, lifecycle.setStatus, lifecycle.recoverRootCredentials]) expect(write).not.toHaveBeenCalled();
+  });
+
+  it("retains the original account summary across lookup expiry and reauthorizes it with a fresh same-actor session", async () => {
+    const intent = originalAccountStatusIntent();
+    const freshCredential = "fresh-account-completion-session-credential";
+    const login = vi.fn().mockResolvedValueOnce({ outcome: "AUTHENTICATED", credential, mustChangePassword: false,
+      session: { id: "first-account-session", organizationId: account.id, principalId: rootUser.id, status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-01-01T00:00:00Z" } })
+      .mockResolvedValueOnce({ outcome: "AUTHENTICATED", credential: freshCredential, mustChangePassword: false,
+        session: { id: "second-account-session", organizationId: account.id, principalId: rootUser.id, status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-01-01T00:00:00Z" } });
+    const readCompletion = vi.fn().mockRejectedValueOnce(new HttpProblem(401, "FIRST_SESSION_EXPIRED"))
+      .mockResolvedValue(lifecycleCompletion(intent));
+    const lifecycle = liveAccountLifecycle({ readCompletion });
+    const repository = accounts({ accountLifecycle: lifecycle });
+    const { user } = await openAccess(repository, iam({ login }), "tenants");
+    await importAccountSummary(user, JSON.stringify(intent));
+    expect(await screen.findByRole("button", { name: "登录控制台" })).toBeTruthy();
+    expect(screen.queryByText("Team A")).toBeNull();
+    await user.type(screen.getByLabelText("密码", { exact: true }), "Fresh-Login-Password-Only-Test-49!");
+    await user.click(screen.getByRole("button", { name: "登录控制台" }));
+    await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(freshCredential));
+    expect(await screen.findByText("原操作结果未知")).toBeTruthy();
+    expect(readCompletion).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("button", { name: "只读检查原账号操作" }));
+    expect(await screen.findByText("已确认原操作完成")).toBeTruthy();
+    expect(readCompletion).toHaveBeenNthCalledWith(2, freshCredential, intent);
+    for (const write of [lifecycle.create, lifecycle.setStatus, lifecycle.recoverRootCredentials]) expect(write).not.toHaveBeenCalled();
+    expect(lifecycle.read).not.toHaveBeenCalled();
+    const saved = Array.from({ length: localStorage.length }, (_, index) => localStorage.getItem(localStorage.key(index)!)!).join("\n");
+    expect(saved).not.toContain(freshCredential);
+    expect(saved).not.toContain("Fresh-Login-Password-Only-Test-49!");
+  });
+
+  it.each(["success", "expired"] as const)("discards a late account completion %s after the repository owner changes", async (outcome) => {
+    let finish!: (value: AccountLifecycleCompletion) => void;
+    let fail!: (reason: unknown) => void;
+    const readCompletion = vi.fn(() => new Promise<AccountLifecycleCompletion>((resolve, reject) => { finish = resolve; fail = reject; }));
+    const original = originalAccountStatusIntent();
+    const firstLifecycle = liveAccountLifecycle({ readCompletion });
+    const first = await openAccess(accounts({ accountLifecycle: firstLifecycle }), iam(), "tenants");
+    await importAccountSummary(first.user, JSON.stringify(original));
+    expect((screen.getByRole("button", { name: "正在只读检查原账号操作" }) as HTMLButtonElement).disabled).toBe(true);
+    const secondLifecycle = liveAccountLifecycle();
+    const secondRepository = accounts({ accountLifecycle: secondLifecycle });
+    first.replaceRepository(secondRepository);
+    await waitFor(() => expect(secondRepository.currentIdentity).toHaveBeenCalledWith(credential));
+    await act(async () => {
+      if (outcome === "success") finish(lifecycleCompletion(original));
+      else fail(new HttpProblem(401, "OLD_CLIENT_EXPIRED"));
+    });
+    expect(await screen.findByText("原操作结果未知")).toBeTruthy();
+    expect(screen.queryByText("已确认原操作完成")).toBeNull();
+    expect(screen.queryByRole("button", { name: "登录控制台" })).toBeNull();
+    expect(secondLifecycle.readCompletion).not.toHaveBeenCalled();
+    expect(secondLifecycle.setStatus).not.toHaveBeenCalled();
+    expect(firstLifecycle.setStatus).not.toHaveBeenCalled();
+  });
+
+  it("blocks an account write before dispatch when its non-sensitive summary cannot be saved", async () => {
+    const lifecycle = liveAccountLifecycle();
+    const { user } = await openAccess(accounts({ accountLifecycle: lifecycle }), iam(), "tenants");
+    await user.click(await screen.findByRole("button", { name: "Team A" }));
+    await user.click(await screen.findByRole("button", { name: "停用账户" }));
+    const unavailable = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => { throw new Error("STORAGE_BLOCKED"); });
+    try {
+      await user.click(screen.getByRole("button", { name: "确认停用账户" }));
+      expect(await screen.findByText(/无法读取或保存原操作摘要/)).toBeTruthy();
+      expect(lifecycle.setStatus).not.toHaveBeenCalled();
+      expect(lifecycle.readCompletion).not.toHaveBeenCalled();
+      expect((screen.getByRole("button", { name: "停用账户" }) as HTMLButtonElement).disabled).toBe(true);
+    } finally { unavailable.mockRestore(); }
   });
 
   it("keeps an unknown account mutation locked when the tenant view is left and reopened", async () => {
@@ -958,11 +1171,12 @@ describe("account access", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
   });
 
-  it("never replays an unknown account mutation through a replacement repository client", async () => {
+  it("uses a replacement repository only to inspect the original account completion, never to replay its command", async () => {
     const oldSetStatus = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
     const oldRepository = accounts({ accountLifecycle: liveAccountLifecycle({ setStatus: oldSetStatus }) });
     const newSetStatus = vi.fn();
-    const newRepository = accounts({ accountLifecycle: liveAccountLifecycle({ setStatus: newSetStatus }) });
+    const readCompletion = vi.fn(async (_credential: string, intent: AccountLifecycleIntent) => lifecycleCompletion(intent));
+    const newRepository = accounts({ accountLifecycle: liveAccountLifecycle({ setStatus: newSetStatus, readCompletion }) });
     const { user, replaceRepository } = await openAccess(oldRepository, iam(), "tenants");
     await user.click(await screen.findByRole("button", { name: "Team A" }));
     await user.click(await screen.findByRole("button", { name: "停用账户" }));
@@ -971,10 +1185,14 @@ describe("account access", () => {
 
     replaceRepository(newRepository);
     await waitFor(() => expect(newRepository.currentIdentity).toHaveBeenCalledWith(credential));
-    expect(await screen.findByText("原操作属于此前的客户端")).toBeTruthy();
+    expect(await screen.findByText("原操作结果未知")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "精确重试原请求" })).toBeNull();
     expect((screen.getByRole("button", { name: "开通租户" }) as HTMLButtonElement).disabled).toBe(true);
     expect(oldSetStatus).toHaveBeenCalledTimes(1);
+    expect(newSetStatus).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "只读检查原账号操作" }));
+    expect(await screen.findByText("已确认原操作完成")).toBeTruthy();
+    expect(readCompletion).toHaveBeenCalledTimes(1);
     expect(newSetStatus).not.toHaveBeenCalled();
   });
 

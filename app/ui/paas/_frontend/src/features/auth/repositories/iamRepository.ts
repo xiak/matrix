@@ -9,6 +9,8 @@ import type {
 } from "../domain/session";
 import type {
   Account,
+  AccountLifecycleCompletion,
+  AccountLifecycleIntent,
   AccountAccess,
   AccountCommand,
   AccountIdentity,
@@ -164,6 +166,7 @@ export interface AccountRepository {
     create(credential: string, command: CreateAccountLifecycleCommand): Promise<Account>;
     setStatus(credential: string, accountId: string, command: SetAccountLifecycleStatusCommand): Promise<Account>;
     recoverRootCredentials(credential: string, accountId: string, command: RecoverAccountRootCredentialsCommand): Promise<Account>;
+    readCompletion(credential: string, intent: AccountLifecycleIntent): Promise<AccountLifecycleCompletion>;
   };
   // Security reports have no collection endpoint. The authenticated Session
   // selects the account; accountId only binds returned resources locally.

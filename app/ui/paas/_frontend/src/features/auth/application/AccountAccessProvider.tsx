@@ -6,6 +6,8 @@ import { useSession, useSessionCredential } from "./SessionProvider";
 import { useLiveUserCreation, type UserCreationClient } from "./userCreation";
 import type {
   Account,
+  AccountLifecycleIntent,
+  AccountLifecycleCompletion,
   AccountAccess as AccountAccessResource,
   AccountCommand,
   AccountPolicyDetail,
@@ -43,6 +45,7 @@ import type { AccountRepository } from "../repositories/iamRepository";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange } from "../domain/accessKeys";
 import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
+import { clearAccountLifecycleIntent, parseAccountLifecycleIntent, readAccountLifecycleIntent, sameAccountLifecycleActor, writeAccountLifecycleIntent } from "../repositories/accountLifecycleRecoveryStorage";
 import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 import type { CreateRoleCommand, CreateRolePolicyAttachmentCommand, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand } from "../domain/roles";
@@ -285,11 +288,11 @@ export type AccountLifecycleMutation =
   | { kind: "recover-root-credentials"; accountId: string; command: RecoverAccountRootCredentialsCommand };
 
 export type AccountLifecyclePending = Readonly<{
-  kind: AccountLifecycleMutation["kind"];
-  accountId: string;
-  requestId: string;
-  phase: "submitting" | "unknown";
-  ownerCurrent: boolean;
+  intent: AccountLifecycleIntent;
+  phase: "submitting" | "unknown" | "confirmed" | "rejected";
+  checking: boolean;
+  error: "expired" | "forbidden" | "notFound" | "unavailable" | "invalid" | null;
+  completion: AccountLifecycleCompletion | null;
 }>;
 
 export type AccountLifecycleMutationResult =
@@ -305,24 +308,30 @@ export type AccountLifecycleClient = {
   canCreate: boolean;
   createRestrictionReason: CapabilityRestriction | null;
   pending: AccountLifecyclePending | null;
+  recoveryError: AccountError | null;
+  ready: boolean;
   list(after?: string): Promise<DirectoryPage<AccountAccessResource>>;
   read(accountId: string): Promise<AccountAccessResource>;
   create(command: CreateAccountLifecycleCommand): Promise<AccountLifecycleMutationResult>;
   setStatus(accountId: string, command: SetAccountLifecycleStatusCommand): Promise<AccountLifecycleMutationResult>;
   recoverRootCredentials(accountId: string, command: RecoverAccountRootCredentialsCommand): Promise<AccountLifecycleMutationResult>;
-  retry(): Promise<AccountLifecycleMutationResult>;
+  restore(summary: string): boolean;
+  inspect(): Promise<boolean>;
+  acknowledge(): boolean;
 };
 
 type AccountLifecycleOwner = Readonly<{
   repository: NonNullable<AccountRepository["accountLifecycle"]>;
   credential: string;
   sessionRevision: number;
+  actorAccountId: string;
+  actorPrincipalId: string;
 }>;
 
-type StoredAccountLifecycleMutation = {
+type AccountLifecycleObservation = {
   owner: AccountLifecycleOwner;
-  mutation: AccountLifecycleMutation;
-  phase: "submitting" | "unknown";
+  pending: AccountLifecyclePending | null;
+  error: AccountError | null;
 };
 
 export type AccessKeyCreateIntent = Readonly<{
@@ -678,14 +687,6 @@ export function accountError(error: unknown): AccountError {
   return "unavailable";
 }
 
-function accountLifecycleTarget(mutation: AccountLifecycleMutation): string {
-  return mutation.kind === "create" ? mutation.command.id : mutation.accountId;
-}
-
-function accountLifecycleRequestId(mutation: AccountLifecycleMutation): string {
-  return mutation.command.requestId;
-}
-
 function executeAccountLifecycleMutation(owner: AccountLifecycleOwner, mutation: AccountLifecycleMutation): Promise<Account> {
   if (mutation.kind === "create") return owner.repository.create(owner.credential, mutation.command);
   if (mutation.kind === "set-status") return owner.repository.setStatus(owner.credential, mutation.accountId, mutation.command);
@@ -745,12 +746,33 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const verifiedIdentitySession = useRef<typeof viewSession | null>(null);
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
   const accountLifecycleOwner = useMemo<AccountLifecycleOwner | null>(() => {
-    if (!active || !credential || !repository.accountLifecycle) return null;
-    return { repository: repository.accountLifecycle, credential, sessionRevision };
-  }, [active, credential, repository, sessionRevision]);
-  const accountLifecycleMutationRef = useRef<StoredAccountLifecycleMutation | null>(null);
-  const [storedAccountLifecycleMutation, setStoredAccountLifecycleMutation] = useState<StoredAccountLifecycleMutation | null>(null);
-  useLayoutEffect(() => { accountLifecycleMutationRef.current = storedAccountLifecycleMutation; }, [storedAccountLifecycleMutation]);
+    if (!active || !credential || !tenantId || !principalId || !repository.accountLifecycle || repository.workspace) return null;
+    return { repository: repository.accountLifecycle, credential, sessionRevision, actorAccountId: tenantId, actorPrincipalId: principalId };
+  }, [active, credential, tenantId, principalId, repository, sessionRevision]);
+  const currentLifecycleOwner = useRef(accountLifecycleOwner);
+  useLayoutEffect(() => { currentLifecycleOwner.current = accountLifecycleOwner; }, [accountLifecycleOwner]);
+  const lifecycleObservationRef = useRef<AccountLifecycleObservation | null>(null);
+  const [lifecycleObservation, setLifecycleObservation] = useState<AccountLifecycleObservation | null>(null);
+  const [lifecycleReadRevision, setLifecycleReadRevision] = useState(0);
+  const lifecycleViewIdentity = useMemo(() => ({ owner: accountLifecycleOwner, revision: lifecycleReadRevision }), [accountLifecycleOwner, lifecycleReadRevision]);
+  const commitLifecycleObservation = useCallback((observation: AccountLifecycleObservation) => {
+    lifecycleObservationRef.current = observation;
+    setLifecycleObservation(observation);
+  }, []);
+  useEffect(() => {
+    let current = true;
+    queueMicrotask(() => {
+      if (!current || !accountLifecycleOwner) return;
+      try {
+        const intent = readAccountLifecycleIntent(window.localStorage, accountLifecycleOwner);
+        commitLifecycleObservation({ owner: accountLifecycleOwner, error: null,
+          pending: intent ? { intent, phase: "unknown", checking: false, error: null, completion: null } : null });
+      } catch {
+        commitLifecycleObservation({ owner: accountLifecycleOwner, error: "unavailable", pending: null });
+      }
+    });
+    return () => { current = false; };
+  }, [accountLifecycleOwner, commitLifecycleObservation]);
   const [storedRoleSessionRevokeIntent, setStoredRoleSessionRevokeIntent] = useState<{ session: typeof viewSession; intent: RoleSessionRevokeIntent } | null>(null);
   const roleSessionRevokeIntent = storedRoleSessionRevokeIntent?.session === viewSession ? storedRoleSessionRevokeIntent.intent : null;
   const userPolicyChangeIdentityKey = active && tenantId && principalId && !repository.workspace
@@ -1069,65 +1091,76 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     });
   }, []);
 
-  const runAccountLifecycleMutation = useCallback(async (
-    mutation?: AccountLifecycleMutation
-  ): Promise<AccountLifecycleMutationResult> => {
-    const current = accountLifecycleMutationRef.current;
-    let submission: StoredAccountLifecycleMutation;
-    if (mutation) {
-      if (!accountLifecycleOwner) return { status: "rejected", reason: "unavailable" };
-      if (current) return { status: "blocked" };
-      submission = { owner: accountLifecycleOwner, mutation, phase: "submitting" };
-    } else {
-      if (!current || current.phase !== "unknown" || current.owner !== accountLifecycleOwner) return { status: "blocked" };
-      submission = { ...current, phase: "submitting" };
-    }
-    accountLifecycleMutationRef.current = submission;
-    setStoredAccountLifecycleMutation(submission);
+  const runAccountLifecycleMutation = useCallback(async (mutation: AccountLifecycleMutation): Promise<AccountLifecycleMutationResult> => {
+    const owner = accountLifecycleOwner, observation = lifecycleObservationRef.current;
+    if (!owner || observation?.owner !== owner || observation.error) return { status: "rejected", reason: "unavailable" };
+    if (observation.pending) return { status: "blocked" };
+    const base = { format: 1, actorAccountId: owner.actorAccountId, actorPrincipalId: owner.actorPrincipalId,
+      accountId: mutation.kind === "create" ? mutation.command.id : mutation.accountId, commandRequestId: mutation.command.requestId };
+    const intent = parseAccountLifecycleIntent(mutation.kind === "create"
+      ? { ...base, operation: "ACCOUNT_CREATE", expectedResourceVersion: 0 }
+      : mutation.kind === "set-status"
+        ? { ...base, operation: "ACCOUNT_SET_STATUS", expectedResourceVersion: mutation.command.resourceVersion, intendedStatus: mutation.command.status }
+        : { ...base, operation: "ACCOUNT_ROOT_CREDENTIALS_RECOVER", expectedResourceVersion: mutation.command.resourceVersion });
+    if (!intent) return { status: "rejected", reason: "invalid" };
     try {
-      const account = await executeAccountLifecycleMutation(submission.owner, submission.mutation);
-      if (accountLifecycleMutationRef.current !== submission) return { status: "blocked" };
-      accountLifecycleMutationRef.current = null;
-      setStoredAccountLifecycleMutation(null);
+      const existing = readAccountLifecycleIntent(window.localStorage, owner);
+      if (existing) {
+        commitLifecycleObservation({ owner, error: null, pending: { intent: existing, phase: "unknown", checking: false, error: null, completion: null } });
+        return { status: "blocked" };
+      }
+      writeAccountLifecycleIntent(window.localStorage, intent);
+    } catch {
+      commitLifecycleObservation({ owner, pending: null, error: "unavailable" });
+      return { status: "rejected", reason: "unavailable" };
+    }
+    const submission: AccountLifecycleObservation = { owner, error: null,
+      pending: { intent, phase: "submitting", checking: false, error: null, completion: null } };
+    commitLifecycleObservation(submission);
+    const isCurrent = () => currentLifecycleOwner.current === owner && lifecycleObservationRef.current === submission;
+    const clearKnownOutcome = (phase: "confirmed" | "rejected") => {
+      try {
+        clearAccountLifecycleIntent(window.localStorage, intent);
+        commitLifecycleObservation({ owner, error: null, pending: null });
+      } catch {
+        commitLifecycleObservation({ owner, error: null, pending: { intent, phase, checking: false, error: "unavailable", completion: null } });
+      }
+    };
+    try {
+      // The credential-bearing command exists only for this one dispatch. It is
+      // never retained in recovery state or available to a retry method.
+      const account = await executeAccountLifecycleMutation(owner, mutation);
+      if (!isCurrent()) return { status: "blocked" };
+      clearKnownOutcome("confirmed");
       projectAccountSnapshot(account);
       return { status: "applied", account };
     } catch (failure) {
-      if (accountLifecycleMutationRef.current !== submission) return { status: "blocked" };
-      if (failure instanceof HttpProblem && failure.status === 409) {
-        accountLifecycleMutationRef.current = null;
-        setStoredAccountLifecycleMutation(null);
-        return { status: "conflict" };
-      }
-      if (failure instanceof HttpProblem && [400, 401, 403, 404, 413, 415, 422].includes(failure.status)) {
-        accountLifecycleMutationRef.current = null;
-        setStoredAccountLifecycleMutation(null);
-        const reason = accountError(failure);
-        if (failure.status === 401 && expireSession(submission.owner.credential, submission.owner.sessionRevision)) {
+      if (!isCurrent()) return { status: "blocked" };
+      if (failure instanceof HttpProblem && [400, 401, 403, 404, 409, 413, 415, 422].includes(failure.status)) {
+        clearKnownOutcome("rejected");
+        if (failure.status === 401 && expireSession(owner.credential, owner.sessionRevision)) {
           verifiedIdentitySession.current = null;
           setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
         }
-        return { status: "rejected", reason };
+        return failure.status === 409 ? { status: "conflict" } : { status: "rejected", reason: accountError(failure) };
       }
-      const unknown: StoredAccountLifecycleMutation = { ...submission, phase: "unknown" };
-      accountLifecycleMutationRef.current = unknown;
-      setStoredAccountLifecycleMutation(unknown);
+      commitLifecycleObservation({ ...submission, pending: { ...submission.pending!, phase: "unknown" } });
       return { status: "unknown" };
     }
-  }, [accountLifecycleOwner, expireSession, projectAccountSnapshot]);
+  }, [accountLifecycleOwner, commitLifecycleObservation, expireSession, projectAccountSnapshot]);
 
   const accountLifecycle = useMemo<AccountLifecycleClient | null>(() => {
-    if (!accountLifecycleOwner || !scene || repository.workspace || !scene.canReadAccounts) return null;
+    if (!accountLifecycleOwner) return null;
     const owner = accountLifecycleOwner;
-    const pending = storedAccountLifecycleMutation ? {
-      kind: storedAccountLifecycleMutation.mutation.kind,
-      accountId: accountLifecycleTarget(storedAccountLifecycleMutation.mutation),
-      requestId: accountLifecycleRequestId(storedAccountLifecycleMutation.mutation),
-      phase: storedAccountLifecycleMutation.phase,
-      ownerCurrent: storedAccountLifecycleMutation.owner === owner
-    } satisfies AccountLifecyclePending : null;
+    const observation = lifecycleObservation?.owner === owner ? lifecycleObservation : null;
     const read = async <T,>(request: Promise<T>): Promise<T> => {
-      try { return await request; }
+      try {
+        const value = await request;
+        if (currentLifecycleOwner.current !== owner) throw new Error("STALE_IAM_STATE");
+        return value;
+      }
       catch (failure) {
+        if (currentLifecycleOwner.current !== owner) throw failure;
         if (failure instanceof HttpProblem && failure.status === 401 && expireSession(owner.credential, owner.sessionRevision)) {
           verifiedIdentitySession.current = null;
           setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
@@ -1136,11 +1169,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
     };
     return {
-      identity: owner,
+      identity: lifecycleViewIdentity,
       sessionRevision,
-      canCreate: scene.canCreateAccounts,
-      createRestrictionReason: scene.createAccountsRestrictionReason,
-      pending,
+      canCreate: scene?.canCreateAccounts ?? false,
+      createRestrictionReason: scene ? scene.createAccountsRestrictionReason : "AUTHORITY_REQUIRED",
+      ready: Boolean(observation && !observation.error),
+      recoveryError: observation?.error ?? null,
+      pending: observation?.pending ?? null,
       list: async (after) => {
         const page = await read(owner.repository.list(owner.credential, after));
         if (after === undefined) {
@@ -1160,9 +1195,65 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       create: (command) => runAccountLifecycleMutation({ kind: "create", command }),
       setStatus: (accountId, command) => runAccountLifecycleMutation({ kind: "set-status", accountId, command }),
       recoverRootCredentials: (accountId, command) => runAccountLifecycleMutation({ kind: "recover-root-credentials", accountId, command }),
-      retry: () => runAccountLifecycleMutation()
+      restore: (summary) => {
+        if (summary.length > 16_384 || currentLifecycleOwner.current !== owner) return false;
+        let intent: AccountLifecycleIntent | null;
+        try { intent = parseAccountLifecycleIntent(JSON.parse(summary)); } catch { return false; }
+        if (!intent || !sameAccountLifecycleActor(intent, owner)) return false;
+        const current = lifecycleObservationRef.current;
+        if (current?.owner !== owner) return false;
+        if (current?.owner === owner && current.pending && (current.pending.checking || current.pending.phase !== "unknown" ||
+            JSON.stringify(current.pending.intent) !== JSON.stringify(intent))) return false;
+        try { writeAccountLifecycleIntent(window.localStorage, intent); } catch { return false; }
+        commitLifecycleObservation({ owner, error: null, pending: { intent, phase: "unknown", checking: false, error: null, completion: null } });
+        return true;
+      },
+      inspect: async () => {
+        const current = lifecycleObservationRef.current;
+        if (currentLifecycleOwner.current !== owner || current?.owner !== owner || !current.pending ||
+            current.pending.phase !== "unknown" || current.pending.checking) return false;
+        const intent = current.pending.intent;
+        const checking = { ...current, pending: { ...current.pending, checking: true, error: null } };
+        commitLifecycleObservation(checking);
+        const isCurrent = () => currentLifecycleOwner.current === owner && lifecycleObservationRef.current === checking;
+        try {
+          const completion = await owner.repository.readCompletion(owner.credential, intent);
+          if (!isCurrent()) return false;
+          if (completion.actorAccountId !== intent.actorAccountId || completion.actorPrincipalId !== intent.actorPrincipalId ||
+              completion.accountId !== intent.accountId || completion.commandRequestId !== intent.commandRequestId ||
+              completion.operation !== intent.operation || completion.expectedResourceVersion !== intent.expectedResourceVersion ||
+              completion.resultingResourceVersion !== intent.expectedResourceVersion + 1 ||
+              (intent.operation === "ACCOUNT_SET_STATUS" && completion.status !== intent.intendedStatus)) throw new Error("INVALID_IAM_RESPONSE");
+          // A completion is never projected into Account facts or capabilities.
+          commitLifecycleObservation({ owner, error: null, pending: { intent, phase: "confirmed", checking: false, error: null, completion } });
+          // Retire any pre-command detail/capability view without performing a
+          // resource read as part of original-command inspection.
+          setLifecycleReadRevision((revision) => revision + 1);
+          return true;
+        } catch (failure) {
+          if (!isCurrent()) return false;
+          const reason = failure instanceof HttpProblem && failure.status === 401 ? "expired"
+            : failure instanceof HttpProblem && failure.status === 403 ? "forbidden"
+              : failure instanceof HttpProblem && failure.status === 404 ? "notFound" : "unavailable";
+          commitLifecycleObservation({ owner, error: null, pending: { intent, phase: "unknown", checking: false, error: reason, completion: null } });
+          if (reason === "expired" && expireSession(owner.credential, owner.sessionRevision)) {
+            verifiedIdentitySession.current = null;
+            setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+          }
+          return false;
+        }
+      },
+      acknowledge: () => {
+        const current = lifecycleObservationRef.current;
+        if (currentLifecycleOwner.current !== owner || current?.owner !== owner || !current.pending || current.pending.checking ||
+            !["confirmed", "rejected"].includes(current.pending.phase)) return false;
+        try { clearAccountLifecycleIntent(window.localStorage, current.pending.intent); }
+        catch { commitLifecycleObservation({ ...current, pending: { ...current.pending, error: "unavailable" } }); return false; }
+        commitLifecycleObservation({ owner, error: null, pending: null });
+        return true;
+      }
     };
-  }, [accountLifecycleOwner, expireSession, projectAccountSnapshot, repository.workspace, runAccountLifecycleMutation, scene, sessionRevision, storedAccountLifecycleMutation]);
+  }, [accountLifecycleOwner, commitLifecycleObservation, expireSession, lifecycleObservation, lifecycleViewIdentity, projectAccountSnapshot, runAccountLifecycleMutation, scene, sessionRevision]);
 
   const groups = useMemo<GroupAccessClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId) return null;

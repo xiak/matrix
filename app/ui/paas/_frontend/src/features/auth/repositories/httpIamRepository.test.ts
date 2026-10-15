@@ -1,8 +1,113 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { httpAccountRepository, httpIamRepository } from "./httpIamRepository";
+import type { AccountLifecycleIntent } from "../domain/accounts";
 
 const apiVersion = "iam.matrix.xiak.com/v1";
 const timestamp = "2026-09-11T08:00:00Z";
+
+describe("account lifecycle completion read contract", () => {
+  const base = { format: 1 as const, actorAccountId: "platform-account", actorPrincipalId: "platform-user",
+    accountId: "customer-account", commandRequestId: "original-account-command" };
+  const intents: AccountLifecycleIntent[] = [
+    { ...base, operation: "ACCOUNT_CREATE", expectedResourceVersion: 0 },
+    { ...base, operation: "ACCOUNT_SET_STATUS", expectedResourceVersion: 4, intendedStatus: "DISABLED" },
+    { ...base, operation: "ACCOUNT_ROOT_CREDENTIALS_RECOVER", expectedResourceVersion: 4 }
+  ];
+  function completion(intent = intents[0]!) {
+    return { apiVersion, kind: "AccountLifecycleCompletion", actorAccountId: intent.actorAccountId, actorPrincipalId: intent.actorPrincipalId,
+      operation: intent.operation, accountId: intent.accountId, commandRequestId: intent.commandRequestId,
+      expectedResourceVersion: intent.expectedResourceVersion, resultingResourceVersion: intent.expectedResourceVersion + 1,
+      status: intent.operation === "ACCOUNT_SET_STATUS" ? intent.intendedStatus : "ACTIVE",
+      ...(intent.operation === "ACCOUNT_SET_STATUS" ? {} : { rootPrincipalId: "customer-root" }),
+      eventId: "original-audit-event", occurredAt: "2026-10-15T00:00:00.123456Z" };
+  }
+  function answer(body: unknown, headers: Record<string, string> = {}, status = 200) {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...headers } }));
+    vi.stubGlobal("fetch", fetcher);
+    return fetcher;
+  }
+
+  it.each(intents)("reads only the exact original $operation completion under the current bearer", async (intent) => {
+    const fetcher = answer(completion(intent));
+    const result = await httpAccountRepository.accountLifecycle!.readCompletion("current-user-bearer", intent);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(
+      `/api/iam/v1/accounts/customer-account/lifecycle-completions/original-account-command?operation=${intent.operation}&expectedResourceVersion=${intent.expectedResourceVersion}`,
+      { cache: "no-store", headers: { Accept: "application/json", Authorization: "Bearer current-user-bearer" } }
+    );
+    expect(result).toMatchObject({ operation: intent.operation, commandRequestId: intent.commandRequestId,
+      expectedResourceVersion: intent.expectedResourceVersion, resultingResourceVersion: intent.expectedResourceVersion + 1 });
+    expect(result).not.toHaveProperty("password");
+    expect(result).not.toHaveProperty("credential");
+  });
+
+  it.each([
+    { apiVersion: "other/v1" }, { kind: "Account" }, { actorAccountId: "foreign-account" }, { actorPrincipalId: "foreign-user" },
+    { accountId: "foreign-target" }, { commandRequestId: "other-command" }, { requestId: "compatibility-alias" },
+    { operation: "ACCOUNT_SET_STATUS" }, { expectedResourceVersion: 1 }, { resultingResourceVersion: 2 },
+    { resultingResourceVersion: "1" }, { status: "DISABLED" }, { rootPrincipalId: "" }, { eventId: "" },
+    { occurredAt: "2026-02-30T00:00:00Z" }, { occurredAt: "2026-10-15T00:00:00+00:00" },
+    { initialPassword: "not-a-result" }, { digest: "not-a-password-proof" }, { decision: "not-a-permit" }, { permit: true }
+  ])("rejects mismatched, malformed or secret-bearing completion fields: %j", async (change) => {
+    answer({ ...completion(), ...change });
+    await expect(httpAccountRepository.accountLifecycle!.readCompletion("bearer", intents[0]!)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
+  it("requires Root identity only for creation and root recovery, and matches the intended status exactly", async () => {
+    for (const intent of [intents[0]!, intents[2]!]) {
+      const missing: Record<string, unknown> = completion(intent);
+      delete missing.rootPrincipalId;
+      answer(missing);
+      await expect(httpAccountRepository.accountLifecycle!.readCompletion("bearer", intent)).rejects.toThrow();
+    }
+    answer({ ...completion(intents[1]!), rootPrincipalId: "unexpected-root" });
+    await expect(httpAccountRepository.accountLifecycle!.readCompletion("bearer", intents[1]!)).rejects.toThrow();
+    answer({ ...completion(intents[1]!), status: "ACTIVE" });
+    await expect(httpAccountRepository.accountLifecycle!.readCompletion("bearer", intents[1]!)).rejects.toThrow();
+  });
+
+  const invalidHeaders: Record<string, string>[] = [
+    { "Cache-Control": "public, max-age=60" }, { "Cache-Control": "" }, { "Content-Type": "text/plain" }
+  ];
+  it.each(invalidHeaders)("refuses cacheable or wrong-media completion responses: %j", async (headers) => {
+    answer(completion(), headers);
+    await expect(httpAccountRepository.accountLifecycle!.readCompletion("bearer", intents[0]!)).rejects.toThrow();
+  });
+
+  it("does not accept another successful HTTP status as a completion", async () => {
+    answer(completion(), {}, 201);
+    await expect(httpAccountRepository.accountLifecycle!.readCompletion("bearer", intents[0]!)).rejects.toThrow();
+  });
+
+  it.each([401, 403, 404, 503])("preserves a %s lookup failure without issuing a write or a fallback resource read", async (status) => {
+    const fetcher = answer({ code: "UNOBSERVED_OR_UNAVAILABLE" }, {}, status);
+    await expect(httpAccountRepository.accountLifecycle!.readCompletion("bearer", intents[0]!)).rejects.toMatchObject({ status });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+    expect(fetcher.mock.calls[0]![1].method).toBeUndefined();
+    expect(fetcher.mock.calls[0]![1].body).toBeUndefined();
+  });
+
+  it("does not invent a client expiry for a permanently retained completion", async () => {
+    answer({ ...completion(), occurredAt: "2020-01-01T00:00:00Z" });
+    expect((await httpAccountRepository.accountLifecycle!.readCompletion("bearer", intents[0]!)).occurredAt).toBe("2020-01-01T00:00:00Z");
+  });
+
+  it("preserves a disabled Account's root-recovery completion without treating recovery as activation", async () => {
+    const fetcher = answer({ ...completion(intents[2]!), status: "DISABLED" });
+    const result = await httpAccountRepository.accountLifecycle!.readCompletion("bearer", intents[2]!);
+    expect(result).toMatchObject({ operation: "ACCOUNT_ROOT_CREDENTIALS_RECOVER", status: "DISABLED", rootPrincipalId: "customer-root" });
+    expect(fetcher).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([{ expectedResourceVersion: -1 }, { expectedResourceVersion: Number.MAX_SAFE_INTEGER },
+    { commandRequestId: "../foreign" }, { operation: "ACCOUNT_DELETE" }, { password: "must-not-send" }])(
+    "rejects invalid or secret-bearing imported identities before fetch: %j", async (change) => {
+      const fetcher = answer(completion());
+      await expect(httpAccountRepository.accountLifecycle!.readCompletion("bearer", { ...intents[0], ...change } as AccountLifecycleIntent)).rejects.toThrow();
+      expect(fetcher).not.toHaveBeenCalled();
+    }
+  );
+});
 const user = {
   apiVersion, kind: "User", id: "user-alex", accountId: "account-acme",
   loginName: "alex", displayName: "Alex", status: "ACTIVE", mustChangePassword: false, resourceVersion: 2,
