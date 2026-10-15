@@ -276,6 +276,8 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 同一Release D还完成IAM-UI-01–06与组织治理Deferred入口的签名只读巡检：Root/Account、User、直接附件、Group、Policy默认版本和原始声明、Role、AccessKey入口、本人Session/通知/TOTP、平台Account目录与准确目标能力均由LIVE接口返回；无显式AccessKey/security-settings权限时真实403且页面不提升本地权限。系统归属Account保护与普通Account可用能力分开，组织治理页面没有后端或提交入口。该窗口除一次公开登录外没有管理写，准确路径和仍未完成的写入边界归010；因此本文件只接受当前只读投影与最小权限失败关闭，不将其扩大为IAM-UI-01–06完整验收。
 
+Release D的配额恢复还证明命令回执与资源读取相互独立：既有成功配额意图只读匹配唯一服务端结果后，测试专属relay对随后的权威配额目录GET精确返回一次503；页面保留成功回执，却移除额度投影并显示控制面不可用，没有重发命令、沿用陈旧额度或补MOCK。数据库配额事实不变，窗口唯一API写为登录。准确计数和适用限制归010；本文件据此关闭IAM-UI-07的签名额度读取失败隔离缺口，不外推跨主体或跨签名文档成功回执恢复。
+
 签名位之后的测试owner修正固定到`91af2972fb16d6727845fc06c9485f8ea62ca80c`，不改变生产镜像或profile；其[Verification 38511351736](https://github.com/xiak/matrix/actions/runs/38511351736)已核实18项、333个步骤终态为165 success、168个非适用矩阵步骤按设计skip，零失败/取消/未完成；自然窗口的TOTP恢复耗尽门禁实际运行1241.46秒并通过，`console`为69个文件、1391项测试全过。由此接受该测试后继的IAM-AC-09，但默认CI明确跳过opt-in跨浏览器与签名生命周期fixture，不能替代各自本地运行证据。前一`355815f`运行中console、go、runtime、roles、managed-products等16项业务作业成功，但`authority-recovery-window`被外部取消、依赖汇总失败，整轮终态为cancelled，不能用局部成功覆盖。
 
 固定源码`c38a0093235bf3521c4ef32492d814d36f071a7e`的[Verification 38612137181](https://github.com/xiak/matrix/actions/runs/38612137181)在attempt 1完成：18项job全部success，333个step为165 success、168个非适用矩阵step按设计skip，零失败、取消或未完成。`console`实际匹配319个嵌入文件并通过70个测试文件、1439项测试；Role真库、独立authority进程、四产品provider、受限容量和真实恢复码窗口均实际运行成功。默认CI仍明确跳过浏览器与签名生命周期opt-in入口，故IAM-AC-09只据此接受该固定源码；页面和签名运行仍分别使用010与FEAT-005的真实证据。
