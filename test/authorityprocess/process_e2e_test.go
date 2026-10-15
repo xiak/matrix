@@ -9136,22 +9136,22 @@ func proveTenantAccountProcesses(
 		}
 		return access.Account
 	}
-	setStatus := func(id string, status iamv1.AccountStatus, expected int) {
+	setStatus := func(id string, status iamv1.AccountStatus, requestID string, expected int) {
 		t.Helper()
 		current := readAccount(id)
-		response := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+id+":set-status", bearer, iamv1.SetAccountStatusRequest{Status: status, ResourceVersion: current.ResourceVersion, RequestID: "request-process-tenant-status"})
+		response := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+id+":set-status", bearer, iamv1.SetAccountStatusRequest{Status: status, ResourceVersion: current.ResourceVersion, RequestID: requestID})
 		if response.Status != expected {
 			t.Fatalf("set tenant status=%d want=%d", response.Status, expected)
 		}
 	}
-	setStatus("organization-process", iamv1.AccountDisabled, http.StatusForbidden)
+	setStatus("organization-process", iamv1.AccountDisabled, "request-process-system-tenant-disable", http.StatusForbidden)
 	var retainedApplication string
 	if err := admin.QueryRow(ctx, "SELECT document::text FROM paas.applications WHERE tenant_id=$1 AND id='application-customer-only'", crossTenantID).Scan(&retainedApplication); err != nil {
 		t.Fatal(err)
 	}
 	withAuditOutage(func() {
 		createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-before-tenant-pause", "before-tenant-pause", "create-before-tenant-pause", http.StatusCreated)
-		setStatus(crossTenantID, iamv1.AccountDisabled, http.StatusOK)
+		setStatus(crossTenantID, iamv1.AccountDisabled, "request-process-customer-tenant-disable", http.StatusOK)
 		createPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-after-tenant-pause", "after-tenant-pause", "create-after-tenant-pause", http.StatusUnauthorized)
 		assertPaaSApplicationAbsent(t, ctx, admin, "application-after-tenant-pause")
 	})
@@ -9192,7 +9192,7 @@ func proveTenantAccountProcesses(
 	if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]any{"loginName": "customer.primary", "password": recoveryPassword, "requestId": "request-paused-primary-login"}); response.Status != http.StatusUnauthorized {
 		t.Fatal("recovered primary bypassed tenant suspension")
 	}
-	setStatus(crossTenantID, iamv1.AccountActive, http.StatusOK)
+	setStatus(crossTenantID, iamv1.AccountActive, "request-process-customer-tenant-enable", http.StatusOK)
 	getPaaSApplication(t, paasEndpoint, childLogin.Credential, "application-customer-only", http.StatusUnauthorized)
 	if response := performJSON(t, http.MethodPost, endpoint+"/v1/auth/login", "", map[string]any{"loginName": "customer.primary", "password": changed, "requestId": "request-old-primary-login"}); response.Status != http.StatusUnauthorized {
 		t.Fatal("primary recovery retained old password")
@@ -9291,7 +9291,7 @@ func proveTenantAccountProcesses(
 	if chain.TenantID != crossTenantID || !chain.Complete {
 		t.Fatal("recovery broke original tenant audit chain")
 	}
-	setStatus(crossTenantID, iamv1.AccountDisabled, http.StatusOK)
+	setStatus(crossTenantID, iamv1.AccountDisabled, "request-process-customer-tenant-disable-final", http.StatusOK)
 	restartIAM()
 	getPaaSApplication(t, paasEndpoint, primary.Credential, "application-customer-only", http.StatusUnauthorized)
 	if readAccount(crossTenantID).Status != iamv1.AccountDisabled {
