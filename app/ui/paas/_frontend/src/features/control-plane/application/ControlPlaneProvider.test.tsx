@@ -5,6 +5,7 @@ import { SessionProvider, useSession } from "@/features/auth/application/Session
 import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
+import type { ControlPlaneRouteSelection } from "../domain/selection";
 import { managedServiceCommandType, type ManagedServiceCommandIntent, type ManagedServiceCommandResult } from "../domain/managedServiceCommand";
 import type {
   ControlPlaneRepository,
@@ -146,6 +147,8 @@ function Probe() {
       <span data-testid="command-restored">{String(controlPlane.managedServiceCommand?.restored ?? false)}</span>
       <span data-testid="command-error">{controlPlane.managedServiceCommand?.error ?? "none"}</span>
       <span data-testid="command-result">{controlPlane.managedServiceCommand?.result?.target.id ?? "none"}</span>
+      <span data-testid="command-checking">{String(controlPlane.managedServiceCommand?.checking ?? false)}</span>
+      <span data-testid="quota-records">{controlPlane.scene?.content.kind === "quotas" ? JSON.stringify(controlPlane.scene.content.entitlements) : "unavailable"}</span>
       <span data-testid="projections">{JSON.stringify(projections)}</span>
     </div>
   );
@@ -194,10 +197,10 @@ function originalResult(intent: ManagedServiceCommandIntent): ManagedServiceComm
     completedAt: "2026-10-13T10:01:00Z" };
 }
 
-function recoveryView(read: NonNullable<ControlPlaneRepository["listCommandResults"]>, iam = iamRepository()) {
-  const repository: ControlPlaneRepository = { load: vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn(),
+function recoveryView(read: NonNullable<ControlPlaneRepository["listCommandResults"]>, iam = iamRepository(), options: { load?: ControlPlaneRepository["load"]; selection?: ControlPlaneRouteSelection } = {}) {
+  const repository: ControlPlaneRepository = { load: options.load ?? vi.fn(), getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn(),
     terminateInstallation: vi.fn(), bindServiceRole: vi.fn(), unbindServiceRole: vi.fn(), listCommandResults: read };
-  return { repository, ...render(<SessionProvider repository={iam}><ControlPlaneProvider repository={repository} selection={{ section: "access" }}><Probe /></ControlPlaneProvider></SessionProvider>) };
+  return { repository, ...render(<SessionProvider repository={iam}><ControlPlaneProvider repository={repository} selection={options.selection ?? { section: "access" }}><Probe /></ControlPlaneProvider></SessionProvider>) };
 }
 
 async function bringOriginal(screen: ReturnType<typeof recoveryView>, intent: ManagedServiceCommandIntent) {
@@ -213,6 +216,136 @@ afterEach(() => {
 });
 
 describe("ControlPlaneProvider", () => {
+  describe("quota recovery", () => {
+    const quotaIntent = (): ManagedServiceCommandIntent => ({ ...originalCommand("ACTIVATE_QUOTA"), kind: "ACTIVATE_QUOTA", targetId: "postgresql-18", payload: { offeringId: "postgresql-18", quotaShapeId: "pg-small", instanceCount: 1 } });
+    const base = snapshot(readyInstallation, 0);
+    const quota = { ...base.entitlements[0]!, id: "server-allocated-entitlement", reservedCount: 0, consumedCount: 0 };
+    const page = (resources: readonly ControlPlaneResourceKind[], visible: boolean, purchasedCount = 1) => resourceSlice({ ...base, entitlements: visible ? [{ ...quota, purchasedCount }] : [] }, resources);
+    const records = (screen: ReturnType<typeof recoveryView>) => JSON.parse(screen.getByTestId("quota-records").textContent!);
+
+    it("rereads the original window's entitlements after SUCCEEDED without replaying activation", async () => {
+      let visible = false;
+      const intent = quotaIntent();
+      const load = vi.fn(async (_credential: string, resources: readonly ControlPlaneResourceKind[]) => page(resources, visible));
+      const read = vi.fn(async () => { visible = true; return [originalResult(intent)]; });
+      const screen = recoveryView(read, iamRepository(), { load, selection: { section: "quotas" } });
+      await bringOriginal(screen, intent);
+      await waitFor(() => expect(records(screen)).toEqual([]));
+      await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+      expect(load).toHaveBeenLastCalledWith("memory-only-session", ["entitlements"]);
+      expect(records(screen)[0]).toMatchObject({ id: quota.id, purchased: 1, inUse: 0, available: 1 });
+      expect(screen.getByTestId("command-phase").textContent).toBe("completed");
+      expect(screen.repository.activateQuota).not.toHaveBeenCalled();
+    });
+
+    it("keeps a confirmed command completed while the independent list read is pending", async () => {
+      let finishRead!: (result: ControlPlaneResourceSnapshot) => void;
+      const intent = quotaIntent();
+      const load = vi.fn((_credential: string, resources: readonly ControlPlaneResourceKind[]) => resources.length === 1
+        ? new Promise<ControlPlaneResourceSnapshot>(resolve => { finishRead = resolve; }) : Promise.resolve(page(resources, false)));
+      const screen = recoveryView(vi.fn(async () => [originalResult(intent)]), iamRepository(), { load, selection: { section: "quotas" } });
+      await bringOriginal(screen, intent);
+      await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+      expect(screen.getByTestId("command-phase").textContent).toBe("completed");
+      expect(screen.getByTestId("command-checking").textContent).toBe("true");
+      expect(screen.getByTestId("quota-records").textContent).toBe("unavailable");
+      await act(async () => { fireEvent.click(screen.getByText("create recovery installation")); });
+      expect(screen.repository.createInstallation).not.toHaveBeenCalled();
+      await act(async () => finishRead(page(["entitlements"], true)));
+      expect(screen.getByTestId("command-checking").textContent).toBe("false");
+      expect(records(screen)[0].available).toBe(1);
+    });
+
+    it.each([401, 403, 503, "protocol"] as const)("keeps completion separate from a failed %s entitlement read", async failure => {
+      const intent = quotaIntent();
+      const load = vi.fn(async (_credential: string, resources: readonly ControlPlaneResourceKind[]) => {
+        if (resources.length === 1) {
+          if (failure === "protocol") return {};
+          throw new HttpProblem(failure, "PRIVATE_READ_DIAGNOSTIC");
+        }
+        return page(resources, false);
+      });
+      const screen = recoveryView(vi.fn(async () => [originalResult(intent)]), iamRepository(), { load, selection: { section: "quotas" } });
+      await bringOriginal(screen, intent);
+      await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+      expect(screen.getByTestId("command-phase").textContent).toBe("completed");
+      expect(screen.getByTestId("command-error").textContent).toBe("none");
+      expect(screen.getByTestId("command-checking").textContent).toBe("false");
+      expect(screen.getByTestId("quota-records").textContent).toBe("unavailable");
+      expect(screen.getByTestId("error").textContent).toBe(failure === 401 ? "expired" : failure === 403 ? "forbidden" : "unavailable");
+      expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBeNull();
+      expect(screen.repository.activateQuota).not.toHaveBeenCalled();
+    });
+
+    it("retries only the list read after a read failure and retains the original completion", async () => {
+      let visible = false;
+      const intent = quotaIntent();
+      const load = vi.fn(async (_credential: string, resources: readonly ControlPlaneResourceKind[]) => {
+        if (resources.length === 1) throw new HttpProblem(503, "READ_UNAVAILABLE");
+        return page(resources, visible);
+      });
+      const read = vi.fn(async () => { visible = true; return [originalResult(intent)]; });
+      const screen = recoveryView(read, iamRepository(), { load, selection: { section: "quotas" } });
+      await bringOriginal(screen, intent);
+      await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+      await act(async () => { fireEvent.click(screen.getByText("refresh current page")); });
+      expect(records(screen)[0].purchased).toBe(1);
+      expect(screen.getByTestId("error").textContent).toBe("none");
+      expect(screen.getByTestId("command-phase").textContent).toBe("completed");
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(screen.repository.activateQuota).not.toHaveBeenCalled();
+    });
+
+    it.each(["IN_PROGRESS", "FAILED"] as const)("does not invalidate quota data from a %s receipt", async state => {
+      const intent = quotaIntent();
+      const load = vi.fn(async (_credential: string, resources: readonly ControlPlaneResourceKind[]) => page(resources, false));
+      const result = { ...originalResult(intent), state, completedAt: state === "IN_PROGRESS" ? null : "2026-10-13T10:01:00Z" };
+      const screen = recoveryView(vi.fn(async () => [result]), iamRepository(), { load, selection: { section: "quotas" } });
+      await bringOriginal(screen, intent);
+      await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(records(screen)).toEqual([]);
+      expect(screen.repository.activateQuota).not.toHaveBeenCalled();
+    });
+
+    it("ignores an old session's late quota read after a new User session loads its own list", async () => {
+      let finishRead!: (result: ControlPlaneResourceSnapshot) => void; let login = 0;
+      const iam = iamRepository(); const firstLogin = iam.login;
+      iam.login = async command => ({ ...await firstLogin(command), credential: `quota-session-${++login}` });
+      const intent = quotaIntent();
+      const load = vi.fn((credential: string, resources: readonly ControlPlaneResourceKind[]) => credential === "quota-session-1" && resources.length === 1
+        ? new Promise<ControlPlaneResourceSnapshot>(resolve => { finishRead = resolve; }) : Promise.resolve(page(resources, credential === "quota-session-2", 7)));
+      const screen = recoveryView(vi.fn(async () => [originalResult(intent)]), iam, { load, selection: { section: "quotas" } });
+      await bringOriginal(screen, intent);
+      await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+      await act(async () => { fireEvent.click(screen.getByText("logout")); });
+      await act(async () => { fireEvent.click(screen.getByText("login")); });
+      await waitFor(() => expect(records(screen)[0].purchased).toBe(7));
+      await act(async () => finishRead(page(["entitlements"], true)));
+      expect(records(screen)[0].purchased).toBe(7);
+      expect(screen.getByTestId("error").textContent).toBe("none");
+      expect(screen.repository.activateQuota).not.toHaveBeenCalled();
+    });
+
+    it("does not let an older in-flight page read overwrite the recovered quota list", async () => {
+      let finishOldPage!: (result: ControlPlaneResourceSnapshot) => void; let pageReads = 0;
+      const intent = quotaIntent();
+      const load = vi.fn((_credential: string, resources: readonly ControlPlaneResourceKind[]) => {
+        if (resources.length === 1) return Promise.resolve(page(resources, true));
+        if (++pageReads === 2) return new Promise<ControlPlaneResourceSnapshot>(resolve => { finishOldPage = resolve; });
+        return Promise.resolve(page(resources, false));
+      });
+      const screen = recoveryView(vi.fn(async () => [originalResult(intent)]), iamRepository(), { load, selection: { section: "quotas" } });
+      await bringOriginal(screen, intent);
+      await act(async () => { fireEvent.click(screen.getByText("refresh current page")); });
+      await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+      expect(records(screen)[0].purchased).toBe(1);
+      await act(async () => finishOldPage(page(["offerings", "entitlements"], false)));
+      expect(records(screen)[0].purchased).toBe(1);
+      expect(screen.repository.activateQuota).not.toHaveBeenCalled();
+    });
+  });
+
   it.each(["ACTIVATE_QUOTA", "CREATE_INSTALLATION", "TERMINATE_INSTALLATION", "BIND_SERVICE_ROLE", "UNBIND_SERVICE_ROLE"] as const)(
     "recovers %s in a clean browser from the original non-secret intent without any write", async (kind) => {
       const intent = originalCommand(kind), result = originalResult(intent), read = vi.fn(async () => [result]);

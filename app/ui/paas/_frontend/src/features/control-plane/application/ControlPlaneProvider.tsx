@@ -386,7 +386,8 @@ export function ControlPlaneProvider({
 
   const readResources = useCallback(async (
     resources: readonly ControlPlaneResourceKind[],
-    force: boolean
+    force: boolean,
+    mayCommit?: () => boolean
   ) => {
     if (!credential || resources.length === 0) return;
     let current = cacheRef.current;
@@ -408,7 +409,11 @@ export function ControlPlaneProvider({
 
     if (missing.length > 0) {
       const request = repository.load(credential, missing)
-        .then((loaded) => commitResources(credential, missing, loaded))
+        .then((loaded) => {
+          if (mayCommit && !mayCommit()) return;
+          const owned = missing.filter(resource => inFlight.current.get(resource)?.promise === request);
+          if (owned.length > 0) commitResources(credential, owned, loaded);
+        })
         .finally(() => {
           for (const resource of missing) {
             if (inFlight.current.get(resource)?.promise === request) inFlight.current.delete(resource);
@@ -982,14 +987,38 @@ export function ControlPlaneProvider({
       if (matches.length === 0) { unknown("notFound"); return false; }
       const result: ManagedServiceCommandResult = matches[0]!;
       if (matches.length !== 1 || !matchesManagedServiceCommandResult(intent, result)) { unknown("mismatch"); return false; }
+      const quotaCache = cacheRef.current;
+      const refreshQuota = intent.kind === "ACTIVATE_QUOTA" && result.state === "SUCCEEDED" && quotaCache?.owner === credential &&
+        (quotaCache.loaded.has("entitlements") || inFlight.current.get("entitlements")?.owner === credential);
       if (result.state !== "IN_PROGRESS") clearPersistedManagedServiceCommand(intent);
-      commitManagedServiceCommand({ ...state, phase: result.state === "IN_PROGRESS" ? "inProgress" : result.state === "SUCCEEDED" ? "completed" : "failed",
-        result, error: result.state === "FAILED" ? "operationFailed" : null, checking: false, slow: false });
+      const settled: ManagedServiceCommandState = { ...state, phase: result.state === "IN_PROGRESS" ? "inProgress" : result.state === "SUCCEEDED" ? "completed" : "failed",
+        result, error: result.state === "FAILED" ? "operationFailed" : null, checking: refreshQuota, slow: false };
+      commitManagedServiceCommand(settled);
       if (installationTerminationIntentRef.current?.requestId === intent.requestId) commitInstallationTerminationIntent(null);
       if (serviceAuthorizationIntentRef.current?.requestId === intent.requestId) commitServiceAuthorizationIntent(null);
       // A command result proves only this operation. Resource details still
       // require their independently authorized reads; never synthesize a cache.
-      return true;
+      if (refreshQuota) {
+        const loaded = new Set(quotaCache.loaded);
+        loaded.delete("entitlements");
+        const invalidated = { ...quotaCache, loaded };
+        cacheRef.current = invalidated;
+        setCache(invalidated);
+        const revision = ++prepareRevision.current;
+        setLoading(true);
+        setError(null);
+        try {
+          await readResources(["entitlements"], true, isCurrent);
+        } catch (readError) {
+          if (isCurrent() && revision === prepareRevision.current) setError(loadMessage(readError));
+        } finally {
+          if (isCurrent()) {
+            commitManagedServiceCommand({ ...settled, checking: false });
+            if (revision === prepareRevision.current) setLoading(false);
+          }
+        }
+      }
+      return isCurrent();
     } catch (failure) {
       if (!isCurrent()) return false;
       const reason = failure instanceof HttpProblem && failure.status === 401 ? "expired"
@@ -1002,7 +1031,7 @@ export function ControlPlaneProvider({
       }
       return false;
     }
-  }, [clearPersistedManagedServiceCommand, commitInstallationTerminationIntent, commitManagedServiceCommand, commitServiceAuthorizationIntent, credential, expire, managedServiceCommandOwner, repository, roleSession]);
+  }, [clearPersistedManagedServiceCommand, commitInstallationTerminationIntent, commitManagedServiceCommand, commitServiceAuthorizationIntent, credential, expire, managedServiceCommandOwner, readResources, repository, roleSession]);
 
   const clearManagedServiceCommandNotice = useCallback(() => {
     const state = managedServiceCommandRef.current;

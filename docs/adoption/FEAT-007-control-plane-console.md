@@ -92,6 +92,26 @@ architecture, package or runtime dependency.
 
 ## IAM fixed-contract integration
 
+The Role exit slice uses the console owner fixed at
+`47d03fce2a04fba7a7d63b84397f094a1bcd0957`; the matching exit path was also
+inspected only at signed source `c38a0093235bf3521c4ef32492d814d36f071a7e`,
+not the IAM engineer's WIP. `REUSE` the existing RoleSessionProvider identity
+fences and LiveRoleSelfService recovery UI; `ADAPT` only source-validation
+completion and the shared shell's blocked data/workspace boundary. `REFERENCE`
+the fixed same-Account/source-User checks and current Audit bearer boundary.
+`REJECT` keeping the Role bearer active during logout, early USER fallback,
+automatic source logout, document reload, write replay and new backend routes.
+
+The quota-recovery companion uses the same fixed console baseline. `REUSE`
+the existing command commitment/owner checks, resource repository, cache merge,
+read errors and workspace dismissal. `ADAPT` the matched successful quota
+recovery to invalidate and reread the observed entitlement field, retaining
+per-resource latest-request and original-command fences. `REFERENCE` the fixed
+separation between a command receipt and independently authorized resource
+data. `REJECT` synthesizing a quota row from the receipt, retaining a stale
+directory after read failure, replaying activation, or introducing another
+cache/recovery framework or backend contract.
+
 The application-load recovery slice inspects the existing console owner at
 fixed `901009da1fd9a4e94bc93c244f03855b8935e997`, not the IAM engineer's WIP or
 signed runtime. `REUSE` its public Dialog/Alert/Card/Checkbox, appearance and

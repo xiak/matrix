@@ -1428,6 +1428,30 @@ destination. Reduced-motion preferences disable skeleton and progress motion.
 Revalidating existing data retains the current page
 and draft instead of pretending to navigate again.
 
+### Recovered quota activation and list freshness
+
+A matching `QUOTA_ACTIVATE/SUCCEEDED` result proves the original command,
+not the current entitlement directory. When the current caller has a cached
+or pending entitlement read, recovery invalidates that data field and starts
+one independently authorized entitlement read with the current credential.
+It never constructs an entitlement, available count or resource version from
+the receipt. A recovery on a page that has not loaded that directory does not
+eagerly acquire unrelated resource data; a later visit performs its ordinary
+authoritative read.
+
+The confirmed command remains completed while this read is pending or fails.
+Pending inspection blocks a second command; read failure leaves the directory
+unavailable with the existing read retry, not an old empty state or a fabricated
+row. Retry reads resource data only and never repeats activation or turns a
+known completion back into UNKNOWN. The original quota workspace closes once
+on recovered completion without preventing an explicit later new workflow.
+
+Only the latest in-flight owner may commit each resource field. The recovered
+read additionally retains the original credential, session revision, actor and
+intent fence, so a superseded page read, changed login or different command
+cannot overwrite newer quota data. Role/User data and workspaces use their
+existing verified identity boundary; no backend, API or storage model is added.
+
 ### Console asset-load failure recovery
 
 An already-open client can reference a removed hash after a console upgrade.
@@ -1884,6 +1908,25 @@ and `git diff --check` gates must pass on the same committed worktree.
 ## Implementation status
 
 ### Current shared-navigation development evidence
+
+The Role-exit and recovered-quota client slice was verified on 2026-10-15
+with Node 22.22.2/npm 11.6.4. The complete frontend run passed 71 files and
+1,484 cases plus all three export-normalization cases. The twenty additional
+cases cover source-validation blocking/failure/late replies, same-route Audit
+re-entry with the USER Authorization header and cleared Role-local filters,
+successful/unknown exit recovery, authoritative quota reread, read failures,
+read-only retry and superseded/cross-session resource responses. The original
+window component cases simulate an activation committed before response loss;
+both list-success and list-failure paths keep the activation write count at
+one and retire the old confirmation workspace. Typecheck, lint, architecture
+and 228 contrast pairs passed. The production build generated 59 pages and
+57 normalized segment files; all 322 generated files match the Go embed
+byte-for-byte. Fresh UI-host test with `-count=1 -p 2` and vet with `-p 2`
+passed on Go 1.26.3. These are provider/component, source and export gates,
+not real-IAM or signed-APISIX acceptance. The IAM engineer owns replay of the
+reported signed Role-exit and original-window lost-response browser cases
+after selectively adapting this fixed source; this slice does not inherit
+the pre-fix installation's runtime evidence.
 
 The application-load recovery source and matching embed are fixed in
 [`7defb8fa5972540d56450c9cf776e99a61fd1d13`](https://github.com/xiak/matrix/commit/7defb8fa5972540d56450c9cf776e99a61fd1d13)
