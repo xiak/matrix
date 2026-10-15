@@ -163,39 +163,43 @@ jobs:
       max-parallel: 4
       matrix:
         include:
-          - lane: authority-storage
-            minutes: 20
-          - lane: authority-recovery-storage
-            minutes: 15
-          - lane: authority-roles
-            minutes: 15
+          # Schedule the longest natural-window and database lanes first.
+          # This is longest-processing-time ordering only: every lane keeps
+          # its own runner, tests, limits, timeout and fail-closed result, and
+          # the four-lane concurrency ceiling remains unchanged.
+          - lane: authority-recovery-window
+            minutes: 30
           - lane: authority-runtime
             # The two runtime groups passed in 19m27s on run 37540304178, but
             # job setup/cleanup reached the old 20m orchestration ceiling.
             # Keep every fixture deadline unchanged and reserve bounded cleanup.
             minutes: 25
+          - lane: authority-storage
+            minutes: 20
+          - lane: authority-step-up
+            minutes: 20
+          - lane: authority-replacement
+            minutes: 20
+          - lane: authority-removal-security
+            minutes: 15
+          - lane: authority-roles
+            minutes: 15
+          - lane: authority-session-idle
+            minutes: 15
+          - lane: authority-recovery-storage
+            minutes: 15
+          - lane: authority-replacement-qualification
+            minutes: 15
+          - lane: authority-removal
+            minutes: 15
+          - lane: authority-capacity
+            minutes: 15
           - lane: authority-managed-products
             # Four real provider resources: production worker, immutable PG18,
             # MySQL 8.4, Elasticsearch 8.19 and RabbitMQ 4.1 images, protocol
             # round trips, exact IAM revoke, termination and the tenant Audit
             # chain. Keep the database-heavy lane serial.
             minutes: 20
-          - lane: authority-session-idle
-            minutes: 15
-          - lane: authority-capacity
-            minutes: 15
-          - lane: authority-step-up
-            minutes: 20
-          - lane: authority-replacement
-            minutes: 20
-          - lane: authority-replacement-qualification
-            minutes: 15
-          - lane: authority-removal
-            minutes: 15
-          - lane: authority-removal-security
-            minutes: 15
-          - lane: authority-recovery-window
-            minutes: 30
     timeout-minutes: ${{ matrix.minutes }}
     services:
       postgres:
