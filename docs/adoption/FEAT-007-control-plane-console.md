@@ -92,6 +92,20 @@ architecture, package or runtime dependency.
 
 ## IAM fixed-contract integration
 
+The production-export repair inspects only the fixed consumer
+`89505567643ed1c8e71d80277d5a3527d7987605` and its exact frontend donor
+`859a82a4d88ca76a9a2b6e7f49fafb283554ff21`. `REUSE` the existing static
+export, filename normalizer, deterministic build-ID owner and strict embedded
+inventory comparison. `ADAPT` the single Next.js configuration boundary so
+the compiler and build ID share the same preview `1`/`0` interpretation, and
+extend the owning embedded gate with actual unset/`0` production builds and
+path/digest mismatch diagnostics. `REFERENCE` the fixed runner failure and
+chunk/reference diff to distinguish a compiler-input mismatch from an OS
+filename defect. `REJECT` a CI-only environment workaround, payload
+normalization, one-sided OS asset replacement, QR-library replacement or
+changes to component, IAM, API, SQL, profile and runtime behavior. Exact gate
+results and remaining acceptance boundaries belong to the FEAT owner.
+
 The authenticator setup slice reviews IAM-UI-01–06 only at fixed source
 `9dd117e918aadfd6b0459e591d263dc98de99090`, against console owner
 `dc6410238f40d1a91bdb236fa030a584d4703b0f`. `REUSE` the existing four LIVE

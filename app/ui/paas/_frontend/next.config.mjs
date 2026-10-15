@@ -4,6 +4,9 @@ import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const project = dirname(fileURLToPath(import.meta.url));
+// Missing and explicit zero mean the same mode. Supply that same canonical
+// compiler value instead of retaining an unset process.env read in one build.
+const uxPreviewMode = process.env.NEXT_PUBLIC_MATRIX_UX_PREVIEW === "1" ? "1" : "0";
 
 function addTree(digest, target) {
   for (const entry of readdirSync(target, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
@@ -23,7 +26,7 @@ function staticBuildId() {
   const digest = createHash("sha256");
   digest.update("NEXT_PUBLIC_MATRIX_UX_PREVIEW");
   digest.update("\0");
-  digest.update(process.env.NEXT_PUBLIC_MATRIX_UX_PREVIEW === "1" ? "enabled" : "disabled");
+  digest.update(uxPreviewMode === "1" ? "enabled" : "disabled");
   digest.update("\0");
   for (const file of ["package.json", "package-lock.json", "next.config.mjs", "tsconfig.json"]) {
     digest.update(file);
@@ -41,6 +44,7 @@ function staticBuildId() {
 const nextConfig = {
   agentRules: false,
   allowedDevOrigins: ["127.0.0.1"],
+  env: { NEXT_PUBLIC_MATRIX_UX_PREVIEW: uxPreviewMode },
   generateBuildId: async () => staticBuildId(),
   output: "export",
   reactStrictMode: true,

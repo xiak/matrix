@@ -294,6 +294,14 @@ Already-correct exports are unchanged and target collisions fail before moves.
 Go embeds underscore-prefixed files throughout this owned generated directory,
 as required by [Go's directory embedding rules](https://pkg.go.dev/embed#hdr-Directives).
 Source, assets and build scripts participate in the deterministic build ID.
+The preview flag has one compiler-boundary interpretation: only explicit `1`
+enables it; unset, `0` and other values compile as `0`. The build ID and Next.js
+environment replacement consume that same canonical value without changing
+the caller's environment or the runtime's independent development-mode branch.
+The embedded-export gate builds real production output twice, with the flag
+unset and explicitly `0`, and requires both inventories and the committed
+embed to match by path and SHA-256. Drift remains an error, with bounded
+missing/unexpected/changed diagnostics rather than rewritten asset payloads.
 
 The static host admits only bounded, singleton `id` queries on owned IAM
 workspace routes and the four `method` values on policy creation. Invalid UTF-8,
@@ -1928,16 +1936,38 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-The shared authenticator setup material is a UI candidate, not an accepted
-release. On 2026-10-15, Node 22.22.2/npm 11.6.4 passed its 67-case focused
-login/setup/replacement run, typecheck, lint, architecture and 234 theme
+The production-export repair addresses the failed embedded check at fixed IAM
+source `89505567643ed1c8e71d80277d5a3527d7987605`, which consumed the exact
+frontend from UI parent `859a82a4d88ca76a9a2b6e7f49fafb283554ff21`.
+[Verification 38707342304](https://github.com/xiak/matrix/actions/runs/38707342304)
+failed before Vitest. Windows supplied preview `0`, while the Linux runner
+left it unset: the build ID already treated both as disabled, but the compiler
+retained an environment read only in the unset case. One changed chunk then
+propagated references into HTML and router payloads. Segment-path normalization
+and the QR dependency were not the cause and remain unchanged.
+
+On 2026-10-15, Windows and native Debian Linux independently passed all eight
+Node boundary cases on Node 22.22.2/npm 11.6.4. Windows also passed typecheck,
+lint, architecture and 234 theme contrast pairs. Actual production builds on
+both systems exported 59 pages; each system's unset/`0` outputs matched, and
+the Linux output matched the Windows-generated embed across all 324 files
+byte-for-byte. Windows used 17 workers and normalized 57 segment filenames;
+Linux used three workers and correctly normalized zero. Fresh UI-host
+`go test -count=1 -p 2` and `go vet -p 2` passed on Go 1.26.3. These local
+results do not turn the failed Ubuntu CI run into a pass; the receiving branch
+still requires its own fixed-source CI. This build-only repair did not rerun
+the complete Vitest suite or close its outstanding gate.
+
+The unchanged authenticator source is fixed in UI parent `859a82a`; it remains
+a UI candidate, not an accepted release. Node 22.22.2/npm 11.6.4 passed its
+67-case focused login/setup/replacement run, typecheck, lint, architecture and 234 theme
 contrast pairs. Ten new component cases independently decode the rendered
 vector, preserve exact UTF-8 URI bytes, replace/discard old material, retain
 manual setup for oversized input and reject unsupported/ambiguous QR payloads.
 The original ceremonies still own first-response material, Session and intent
 custody; these checks are not a physical-device or signed-browser acceptance.
 
-The final complete run covered 72 files and 1,517 cases: 1,514 passed and
+That parent's complete run covered 72 files and 1,517 cases: 1,514 passed and
 three exceeded the unchanged five-second test budget. The failures were the
 existing full-page create-user wizard and UNKNOWN notification-address
 replacement/navigation cases in `AccessWorkspace.test.tsx`, and explicit
@@ -1950,11 +1980,7 @@ the remaining timeouts are harmless flakes; the complete frontend gate
 remains open. No timeout, untouched page contract or failing scenario was
 relaxed to accept this candidate.
 
-All three export-normalization cases passed separately. The production
-preview-disabled build generated 59 pages and 57 normalized segment files;
-all 324 generated files, including the offline encoding-library notice, match
-the Go embed byte-for-byte. Fresh UI-host `go test -count=1 -p 2` and
-`go vet -p 2` passed on Go 1.26.3. Installation-time npm audit reported nine
+Installation-time npm audit for that parent reported nine
 high and one critical advisory in unchanged Next/toolchain dependencies;
 neither newly pinned QR package appears in that report. This slice neither
 silently upgrades them nor claims their applicability or release acceptance
