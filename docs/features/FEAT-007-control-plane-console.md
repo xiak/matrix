@@ -2009,7 +2009,7 @@ historical completion into current Account facts or capabilities. Its existing
 cross-Session, actor, expiry, disabled-Root, storage and focus tests remain
 required.
 
-The test-only follow-up is fixed at
+The latest complete dual-platform unit snapshot covers the test-only baseline at
 `f9fa91691467f1a4be47754270cd14ce0f7e4fab`, whose frontend tree is
 `1032f436286a7d2b2a89980a8582e69708b5af50`. Only existing test owners changed:
 `AccessWorkspace`, `AccountAccessRenderer`, `ConsoleShellRenderer`,
@@ -2073,7 +2073,7 @@ queries are observed performance influences, not a proven unique cause. All
 temporary profiling probes were removed; no GC, scheduling, async-leak or
 production-root-cause claim is made from these results.
 
-Current typecheck, changed-owner zero-warning lint, full lint, architecture and
+The `f9` typecheck, changed-owner zero-warning lint, full lint, architecture and
 234 theme contrast pairs pass. All eight Windows Node export-boundary cases
 also pass, independently of the failed Vitest gate. Three actual Windows
 production builds exported 59 pages with one worker and 57 segment-path
@@ -2082,7 +2082,7 @@ all 324 files byte-for-byte. Fresh UI-host `go test -count=1 -p=2 ./...`
 (web package 2.460 seconds) and `go vet -p=2 ./...` passed with process-local
 resource limits.
 
-This remains an implementation/export candidate, not an accepted release.
+This baseline remains an implementation/export candidate, not an accepted release.
 No backend/API/SQL/profile, production frontend behavior, dependency, checkpoint,
 shared DEV process or real account/resource changed. It does not inherit IAM
 CI, signed-runtime or browser acceptance; warning-free browser/runtime
@@ -2090,6 +2090,43 @@ acceptance is not inferred from the unit runs. Mandatory login/MFA was not
 enabled. Windows complete-frontend stability, independent fixed-source CI,
 signed-browser and remaining release gates stay open; physical-phone
 integration remains deferred by the explicit Phase 1 scope above.
+
+#### LIVE deletion-confirmation follow-up
+
+Fixed UI source `029a6ec3b9061efe46c30bfd496ece4135390926` (frontend tree
+`f2c8209a190a3c23a4ec684552cd41271e230d59`) corrects a shared warning that
+claimed deletion affected only a MOCK record. `WorkspaceDelete` is reused by
+both adapters; its default translation must not assume an execution mode or
+promise unspecified configuration cascades. The existing default is now
+mode-neutral in both locales. LIVE Group deletion supplies its own `hint`
+through the existing component contract: a real IAM command removes the Group
+from the active list, retains Audit history and has no supported restore action.
+The existing authoritative membership/attachment impact warning remains,
+including that Users, Policies and business resources are not deleted. The UI
+does not call this a recoverable soft deletion or invent a recovery control.
+
+The existing AccessWorkspace and translation test owners cover both locales,
+wrong-name rejection, cancellation without a write, cleared confirmation on
+reopening, and one exact named/versioned/request-identified call to the test
+adapter. Related Group read/refresh and MOCK/LIVE Role deletion contracts were
+included: **16 selected cases passed** across three files in 35.66 seconds;
+227 other cases were not selected. Result JSON SHA-256 is
+`251465a3265aeca54f918161273857df671189177bb3c4ccd955fa425114bbda`.
+No existing assertion, deletion guard, API or backend contract changed, and no
+real deletion or inspection of the IAM engineer's retained Group/Session was
+performed. The explicit isolated MOCK and Phase 1 scope remain in force.
+
+On this later source, typecheck, changed-owner zero-warning lint, architecture,
+234 theme contrast pairs and eight Node export-boundary cases pass. Three
+actual Windows production builds exported 59 pages with one worker and 57
+segment-path normalizations each; unset/`0` and the Go embed matched all 324
+files byte-for-byte. Fresh UI-host `go test -count=1 -p=2 ./...` (web package
+1.720 seconds) and `go vet -p=2 ./...` pass with process-local resource limits.
+
+The complete frontend suite was not rerun on this later copy source. The
+preceding `f9` full results remain a baseline, not its complete-suite, CI or
+signed-browser acceptance. The real Group deletion browser gate remains with
+[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md).
 
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
