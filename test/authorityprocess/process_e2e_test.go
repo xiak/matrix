@@ -3986,6 +3986,52 @@ func TestBrowserResponseLossTracksWriteRejectedByFixtureCapacity(t *testing.T) {
 	}
 }
 
+func TestBrowserResponseLossTracksRecoveryRejectedByFixtureCapacity(t *testing.T) {
+	loss := &browserResponseLoss{
+		method: http.MethodPost, path: "/api/iam/v1/accounts",
+		recoveryPathPrefix: "/api/iam/v1/accounts/account-one/lifecycle-completions/",
+	}
+	mutation := httptest.NewRequest(http.MethodPost, "http://browser-a.example/api/iam/v1/accounts", nil)
+	if !loss.observe(mutation, http.StatusCreated, []byte(`{"requestId":"command-one"}`)) {
+		t.Fatal("Account lifecycle response loss was not selected")
+	}
+	loss.markLost()
+	requests := make(chan struct{}, 1)
+	requests <- struct{}{}
+	backendCalls := 0
+	handler := iamConsoleBrowserFixtureHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backendCalls++
+		w.WriteHeader(http.StatusOK)
+	}), requests, loss)
+	recovery := httptest.NewRequest(http.MethodGet,
+		"http://browser-b.example/api/iam/v1/accounts/account-one/lifecycle-completions/command-one?operation=ACCOUNT_CREATE&expectedResourceVersion=0", nil)
+	rejected := httptest.NewRecorder()
+	handler.ServeHTTP(rejected, recovery)
+	if rejected.Code != http.StatusServiceUnavailable || backendCalls != 0 {
+		t.Fatalf("capacity-rejected recovery: status=%d backend_calls=%d", rejected.Code, backendCalls)
+	}
+	first := loss.snapshot()
+	if first.RecoveryReads != 0 || len(first.RecoveryAttempts) != 1 ||
+		first.RecoveryAttempts[0].Method != http.MethodGet ||
+		first.RecoveryAttempts[0].RequestURI != recovery.URL.RequestURI() ||
+		first.RecoveryAttempts[0].BackendStatus != http.StatusServiceUnavailable {
+		t.Fatalf("capacity-rejected recovery attempt was hidden: %#v", first)
+	}
+
+	<-requests
+	succeeded := httptest.NewRecorder()
+	handler.ServeHTTP(succeeded, recovery)
+	observation := loss.snapshot()
+	if succeeded.Code != http.StatusOK || backendCalls != 1 || observation.RecoveryReads != 1 ||
+		len(observation.RecoveryAttempts) != 2 ||
+		observation.RecoveryAttempts[0].BackendStatus != http.StatusServiceUnavailable ||
+		observation.RecoveryAttempts[1].BackendStatus != http.StatusOK ||
+		observation.RecoveryAttempts[0].RequestURI != observation.RecoveryAttempts[1].RequestURI {
+		t.Fatalf("failed recovery followed by success was collapsed: status=%d backend_calls=%d observation=%#v",
+			succeeded.Code, backendCalls, observation)
+	}
+}
+
 func loseBrowserFixtureResponse(target http.ResponseWriter, source *httptest.ResponseRecorder) bool {
 	body := source.Body.Bytes()
 	if len(body) < 2 {
@@ -4136,6 +4182,9 @@ func iamConsoleBrowserFixtureHandler(
 			}
 			mux.ServeHTTP(w, r)
 		default:
+			if responseLoss != nil && responseLoss.matchesRecovery(r) {
+				responseLoss.observeRecovery(r, http.StatusServiceUnavailable)
+			}
 			http.Error(w, "browser fixture capacity exceeded", http.StatusServiceUnavailable)
 		}
 	})
