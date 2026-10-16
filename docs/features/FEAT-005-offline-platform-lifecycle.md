@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted foundation at IAM/Audit/PaaS `85/39/7+r35`; current source candidate is `86/39/7+r36` after adding immutable Account lifecycle completion storage/read APIs. The accepted predecessor's signed four-product A/B offline lifecycle, APISIX consumer paths, restart verification and unchanged-production test-only successor independent CI have passed; the new candidate still requires its own same-profile signed lifecycle and installed-release browser acceptance remains owned by FEAT-IAM-010
+- Status: Accepted current release consumer at IAM/Audit/PaaS `86/39/7+r36`. Its sole predecessor is fixed `85/39/7+r35`; the current source's signed four-product A/B offline lifecycle, APISIX consumer paths, restart verification, rolling-predecessor gate and independent CI have passed. Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by this lifecycle result
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `86/39/7` revision 36 and its sole release predecessor is `85/39/7` revision 35; earlier accepted slices remain historical evidence, not an alternate current profile
@@ -898,6 +898,63 @@ This accepts the current same-profile signed lifecycle and APISIX consumer
 paths. It does not admit a cross-profile transition, arbitrary historical
 N-1 operation, database HA or browser interaction with the installed release.
 FEAT-IAM-010 continues to own that final browser path.
+
+### Current IAM86 Account-lifecycle release-consumer gate
+
+On 2026-10-16, fixed source
+`08e1dc4a6ce81386ea7223e62d03356f82aeee58` assembled and authenticated
+Release A `matrix-v0.1.0-iam.r36.1-08e1dc4a6ce8` and its immediate
+same-source successor B `matrix-v0.1.0-iam.r36.2-08e1dc4a6ce8`. B names A by
+its exact release ID and version. Both carry IAM/Audit/PaaS `86/39/7+r36`,
+the unchanged topology digest
+`sha256:ca31ccec97d52776d61c8bdcea0be04b2d5a6fe7fc28d9d0055c4d2a3ff75c30`,
+12 signed files and ten pinned images. The public 279-byte trust document has
+SHA-256 `3bba9482574fc6d556b07193fa2a61bc1429e77ee0211c7ce96002d0afad5f7b`.
+The private signing key, protected mail configuration and installation state
+are outside both release trees.
+
+The releases ran in a fresh task-owned, network-disabled Docker 27.5.1
+engine constrained to 2 CPUs, 6 GiB memory, 1024 PIDs and a private cgroup
+namespace. The 1271.55-second effectful gate passed A installation,
+restricted runtime database identities, APISIX USER and AccessKey paths,
+two-Account primary/member revocation, real STARTTLS/SASL SMTP contact
+verification, TOTP login and security notice, access-analysis disposition,
+all four signed managed-product provider lifecycles, explicit service-role
+authority, two application generations, complete tenant and installation
+Audit chains, protected backup, injected-upgrade automatic rollback, B
+upgrade, explicit platform rollback, selected-backup recovery with permanent
+AccessKey fencing, application rollback and stop/capacity release, and bounded
+support zero-leakage checks. The offline mail fixture archive used only by the
+gate has SHA-256
+`20d890545ed758797d6de3725c1a8992ee1c95478b203cfaecb94e4435a3d1d0`;
+its channel certificate was freshly bounded to this run, and its protected
+configuration was removed from the installation data volume before restart.
+
+Only that exact task-owned outer engine was then stopped and started. The
+107.32-second read-only gate proved the retired AccessKey stayed unusable,
+MFA required a fresh login, tenant primary recovery and revocation remained
+terminal, and repeated status/verify completed the offline lifecycle. No
+Docker Desktop daemon, remote machine, shared service or unrelated Docker
+object was restarted or modified. A later task-only loopback attachment used
+to expose the already-verified APISIX endpoint to FEAT-IAM-010 does not become
+part of this network-disabled lifecycle evidence.
+
+The exact source's
+[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)
+completed successfully on attempt 1 with all 19 jobs successful. The real
+authority process, rolling predecessor, four-product provider, bounded
+capacity, recovery-window, recovery-storage, removal, replacement, console,
+PostgreSQL-HA fixture, Go and node-process jobs all executed successfully.
+The workflow's browser and signed-lifecycle roots remain explicitly opt-in,
+so this CI accepts the committed source and single-predecessor/runtime owners;
+the 1271.55/107.32-second runs above remain the effectful release-consumer
+evidence.
+
+This accepts the current same-profile release lifecycle and current rolling
+predecessor at their respective owners. It does not admit an `85+r35` signed
+release directly into an `86+r36` runtime, arbitrary historical N-1 support,
+production database HA or browser interaction. FEAT-IAM-010 owns the latter
+and must record every completed LIVE path without inheriting this result.
 
 ### Gate A: release and CLI contract
 
