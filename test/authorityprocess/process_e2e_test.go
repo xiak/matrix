@@ -183,6 +183,7 @@ const (
 	authorityProcessAccountLifecycleRecoveryBrowser
 	authorityProcessPolicyMutationRecoveryBrowser
 	authorityProcessGroupDeletionBrowser
+	authorityProcessPasswordChangeBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
@@ -307,6 +308,20 @@ func TestIAMGroupDeletionConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessGroupDeletionBrowser)
 }
 
+// This opt-in fixture proves the first-login password ceremony in the real
+// browser. A successful change must advance the credential epoch, retain only
+// the exact calling restricted Session, revoke its peer and never treat the
+// old password or the changed-password response as a second login.
+func TestIAMPasswordChangeConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_PASSWORD_CHANGE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_PASSWORD_CHANGE_BROWSER=1 for the bounded LIVE password-change browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("password-change browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessPasswordChangeBrowser)
+}
+
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
 // and RabbitMQ 4.1 product resources through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
@@ -350,7 +365,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser ||
 		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
 		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser ||
-		mode == authorityProcessGroupDeletionBrowser {
+		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -790,6 +805,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	if mode == authorityProcessGroupDeletionBrowser {
 		runIAMGroupDeletionConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)
+		return
+	}
+	if mode == authorityProcessPasswordChangeBrowser {
+		runIAMPasswordChangeConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)
@@ -3627,6 +3649,139 @@ func runIAMGroupDeletionConsoleBrowser(
 		t.Fatalf("Group deletion tenant Audit chain is incomplete: %#v", chain)
 	}
 	t.Log("the live Group workspace deleted one versioned Group, atomically removed its one membership and revoked its one direct policy attachment, navigated to the live directory, preserved the User and system Policy, and emitted exactly one decision-bound fact in the verified tenant Audit chain")
+}
+
+func runIAMPasswordChangeConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	const loginName = "browser.password.member"
+	realm := loginName + "@organization-process"
+	member := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser password member",
+		initialReaderPassword, "browser-password-user-create")
+	peer := loginIAM(t, iamEndpoint, realm, initialReaderPassword, "browser-password-peer-login")
+	if peer.Session.PrincipalID != member.ID || peer.Session.AccountID != member.AccountID ||
+		peer.Session.Status != iamv1.SessionActive {
+		t.Fatal("password-change peer Session does not belong to the prepared User")
+	}
+
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-password-change-finished")
+	t.Logf("PASSWORD_CHANGE_BROWSER_FIXTURE url=%s/console/access/ finish=%s realm=%s; sign in with the existing initial reader password, complete the required password change with the existing changed reader password, and confirm the browser enters the requested console route",
+		server.URL, finish, realm)
+	waitForBrowserMarker(t, ctx, ui, finish, "first-login password change browser completion")
+
+	var mustChange bool
+	var principalVersion, credentialVersion int64
+	if err := database.QueryRow(ctx, `SELECT p.must_change_password,p.resource_version,c.credential_version
+		FROM iam.principals AS p JOIN iam.user_credentials AS c
+		  ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
+		WHERE p.tenant_id=$1 AND p.id=$2 AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL`,
+		member.AccountID, member.ID).Scan(&mustChange, &principalVersion, &credentialVersion); err != nil ||
+		mustChange || principalVersion != 2 || credentialVersion != 2 {
+		t.Fatalf("browser password change did not advance the exact User credential epoch: mustChange=%t principalVersion=%d credentialVersion=%d err=%v",
+			mustChange, principalVersion, credentialVersion, err)
+	}
+	var peerStatus string
+	var peerVersion, peerCredentialVersion int64
+	var peerRevokedAt time.Time
+	if err := database.QueryRow(ctx, `SELECT status,resource_version,credential_version,revoked_at FROM iam.sessions
+		WHERE tenant_id=$1 AND principal_id=$2 AND id=$3`, member.AccountID, member.ID, peer.Session.ID).
+		Scan(&peerStatus, &peerVersion, &peerCredentialVersion, &peerRevokedAt); err != nil ||
+		peerStatus != string(iamv1.SessionRevoked) || peerVersion != 2 || peerCredentialVersion != 1 || peerRevokedAt.IsZero() {
+		t.Fatalf("forced password change did not revoke the other restricted Session: status=%q version=%d generation=%d revoked=%s err=%v",
+			peerStatus, peerVersion, peerCredentialVersion, peerRevokedAt, err)
+	}
+	var activeSessions, totalSessions int
+	var activeCredentialVersion, activeResourceVersion int64
+	if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),count(*),
+		COALESCE(max(credential_version) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),0),
+		COALESCE(max(resource_version) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),0)
+		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, member.AccountID, member.ID).
+		Scan(&activeSessions, &totalSessions, &activeCredentialVersion, &activeResourceVersion); err != nil ||
+		activeSessions != 1 || totalSessions != 2 || activeCredentialVersion != 2 || activeResourceVersion != 2 {
+		t.Fatalf("password change retained the wrong Session set: active=%d total=%d generation=%d version=%d err=%v",
+			activeSessions, totalSessions, activeCredentialVersion, activeResourceVersion, err)
+	}
+
+	oldPassword := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/login", "", struct {
+		LoginName string `json:"loginName"`
+		Password  string `json:"password"`
+		RequestID string `json:"requestId"`
+	}{LoginName: realm, Password: initialReaderPassword, RequestID: "browser-password-old-login"})
+	if oldPassword.Status != http.StatusUnauthorized || bytes.Contains(oldPassword.Body, []byte(initialReaderPassword)) {
+		t.Fatalf("old password was not rejected without disclosure: status=%d body=%s", oldPassword.Status, oldPassword.Body)
+	}
+	fresh := loginIAM(t, iamEndpoint, realm, changedReaderPassword, "browser-password-new-login")
+	if fresh.Session.PrincipalID != member.ID || fresh.Session.AccountID != member.AccountID ||
+		fresh.Session.Status != iamv1.SessionActive {
+		t.Fatal("changed password did not create a normal Session for the same User and Account")
+	}
+	identityResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", fresh.Credential, nil)
+	var identity iamv1.CurrentIdentity
+	if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil ||
+		iamv1.ValidateCurrentIdentity(identity) != nil || identity.User.ID != member.ID ||
+		identity.User.MustChangePassword || identity.Account.ID != member.AccountID {
+		t.Fatalf("changed password did not reauthenticate the exact current identity: status=%d body=%s", identityResponse.Status, identityResponse.Body)
+	}
+
+	var factCount int
+	var eventID, requestID string
+	var eventDocument []byte
+	if err := database.QueryRow(ctx, `SELECT count(*),min(event_id),min(event_document->>'requestId'),min(event_document::text)::jsonb
+		FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'=$2
+		  AND event_document#>>'{target,kind}'='USER' AND event_document#>>'{target,id}'=$3`,
+		member.AccountID, auditv1.ActionIAMUserPasswordChanged, member.ID).
+		Scan(&factCount, &eventID, &requestID, &eventDocument); err != nil || factCount != 1 {
+		t.Fatalf("browser password change success fact count=%d err=%v", factCount, err)
+	}
+	defer clear(eventDocument)
+	var event auditv1.Event
+	if !strings.HasPrefix(requestID, "ui-password-") || iamv1.ValidateID("requestId", requestID) != nil ||
+		auditv1.DecodeRequest(bytes.NewReader(eventDocument), &event) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil || string(event.EventID) != eventID ||
+		event.RequestID != requestID || event.Action != auditv1.ActionIAMUserPasswordChanged ||
+		event.Actor.Type != auditv1.ActorUser || event.Actor.ID != auditv1.ActorID(member.ID) ||
+		event.TenantID != auditv1.TenantID(member.AccountID) || event.InstallationID != "" ||
+		event.Target.Kind != auditv1.TargetUser || event.Target.ID != string(member.ID) ||
+		event.Result != auditv1.ResultSucceeded || event.IAMDecisionID != "" {
+		t.Fatal("password change fact changed its browser request, self actor, Account scope or USER target")
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, ownerBearer,
+		auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMUserPasswordChanged}, http.StatusOK)
+	matches := 0
+	for _, record := range page.Records {
+		if record.Event.EventID != event.EventID {
+			continue
+		}
+		matches++
+		storedEvent, storedErr := json.Marshal(event)
+		recordedEvent, recordedErr := json.Marshal(record.Event)
+		if record.Source != auditv1.SourceIAM || storedErr != nil || recordedErr != nil ||
+			!bytes.Equal(storedEvent, recordedEvent) {
+			t.Fatal("password change Audit record no longer matches the immutable IAM success fact")
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("password change Audit fact matches=%d", matches)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(member.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("password change tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Log("the live first-login flow changed one User password, advanced its credential epoch, revoked the other restricted Session, retained only the calling Session, rejected the old password, accepted a fresh login with the new password and emitted one self-authenticated fact in the verified tenant Audit chain")
 }
 
 func runIAMIdentityConsoleBrowser(
