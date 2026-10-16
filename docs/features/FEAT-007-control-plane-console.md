@@ -2008,7 +2008,11 @@ typecheck, full zero-warning lint, architecture and 234 theme contrast pairs
 passed. Template loading, search, filtering, detail and pagination each have
 an independent interaction check. Password-reset reminder recovery separately
 checks same-actor, foreign-actor and malformed records through the original
-uncertain-write journey. Fixture sizes, assertions, user input and the
+uncertain-write journey. Five focused MOCK wizard/rule checks also passed:
+localized validation, retained drafts and complete reviewed creation are
+separate contracts; the actual UNKNOWN rule save still proves its lock across
+navigation, while factor-replacement blocking has its own guarded-state check.
+Fixture sizes, assertions, user input and the
 five-second per-case budget are preserved. Complete frontend regression and the final
 source/export/embed/Go gates are still pending for this candidate; neither
 targeted replay nor the parent candidate's production output substitutes for
