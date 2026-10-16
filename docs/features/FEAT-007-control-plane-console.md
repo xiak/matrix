@@ -2175,6 +2175,39 @@ The protocol and authorization rules remain with
 [IAM-005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md). This is a
 frontend implementation status, not inherited backend/runtime acceptance.
 
+The Policy candidate is fixed at UI source
+`a0ade1100d1a009d57bcdb519b796093efa7293c` (frontend tree
+`91614a258dd04660ba79aa1f451cdaafaf212ac7`). Its complete Windows Vitest run
+passed all 75 files and 1709 cases in 531.00 seconds, with zero failures or
+skipped cases and no timeout/worker/configuration changes. The JSON report's
+SHA-256 is
+`e2605a8f033abd97c82a2a098fdf85b216259d2a2db46d15979f4c079e618de1`.
+This includes the original-command storage, equal replay, rejection/UNKNOWN
+distinction, new-bearer recovery, cross-owner/repository late-response fences,
+two-client lock contention, stale-reader write exclusion, inline reviews,
+exact-name retirement, no-write cancellation, stable retry region and existing
+IAM/preview regressions. Browser coordination is modeled in jsdom for these
+tests; it does not prove the real-browser gates above.
+
+Typecheck, zero-warning changed-owner ESLint, architecture, 234 theme contrast
+pairs and the eight Node export-boundary tests also pass. A typecheck attempt
+with a process-local 1536 MiB heap ceiling exhausted that heap; the unchanged
+typecheck passed with a 3072 MiB process-local ceiling. No repository compiler,
+assertion, timeout, worker, dependency or application-memory setting was changed.
+Three actual Windows production builds each exported 59 pages with one worker
+and 57 segment-path normalizations; production preview unset/`0` outputs and
+the synchronized Go embed matched all 324 files byte-for-byte. With the new
+assets stable, fresh UI-host `go test -count=1 -p=2 ./...` passed (web package
+1.647 seconds), followed by `go vet -p=2 ./...`.
+
+These are local UI implementation/export gates, not release acceptance. The
+current complete Windows pass neither rewrites the earlier fixed-source `f9`
+failure report nor establishes a unique cause for those failures. Independent
+fixed-source CI, supported-browser cross-tab/closed-tab recovery and signed IAM
+runtime acceptance remain open. No backend, API, SQL, shared DEV process, real
+Account/resource or mandatory authentication configuration changed. The full
+Account security-settings editor remains the separate, unimplemented gap above.
+
 #### LIVE deletion-confirmation follow-up
 
 Fixed UI source `029a6ec3b9061efe46c30bfd496ece4135390926` (frontend tree
