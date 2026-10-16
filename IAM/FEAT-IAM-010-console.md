@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；当前固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7、`contractRevision=36`同源签名A/B完整离线生命周期和[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业均已通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个Deferred直达入口，并从纯页面创建RabbitMQ 4.1.8实例至RUNNING；IAM-UI-01三类Account生命周期的签名响应丢失恢复、实例终止UNKNOWN及其余非Deferred写路径仍未全部验收，因此整个FEAT仍为实施中。
+- 状态：实施中；当前固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7、`contractRevision=36`同源签名A/B完整离线生命周期和[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业均已通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个Deferred直达入口，从纯页面创建RabbitMQ 4.1.8实例至RUNNING，并完成Account停用的响应丢失、跨来源只读恢复和权威状态/Audit核对；Account开通与原Root凭据恢复的同组合证据、实例终止UNKNOWN及其余非Deferred写路径仍未全部验收，因此整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -21,7 +21,7 @@
 
 | ID | 当前结论 | 仍需闭合或明确延期的边界 |
 | --- | --- | --- |
-| IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复 | 当前IAM86+r36签名APISIX仍须实跑开通、停复用和原Root凭据恢复的响应半断、第二来源只读恢复及权威状态/Audit核对 |
+| IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX又证明停用命令的相同组合 | 当前签名组合仍须实跑Account开通和原Root凭据恢复的响应半断、第二来源只读恢复及权威状态/Audit核对；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备 | 最终改密的纯页面提交、过期会话和权威异常恢复仍需组合门禁 |
 | IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，没有补MOCK | 完整CRUD、Membership、附件回执和不确定结果仍需浏览器门禁；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON | 策略创建/版本切换/边界、语法错误、冲突和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略 |
@@ -251,3 +251,5 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 2026-10-16，本任务在三个独立PostgreSQL 18数据库分别启动隔离的IAM、Audit、PaaS、dispatcher和真实控制台，以`127.0.0.1`与`localhost`形成两个不共享浏览器存储的来源。测试代理只在后端成功提交后截断开通Account、停用Account和原Root凭据恢复三类响应；来源A页面均进入UNKNOWN、冻结唯一公开命令标识并导出不含密码、Bearer或私有request ID的摘要，来源B重新认证同一`admin` USER后仅调用精确completion GET。收紧后的三项fixture分别以67.20秒、222.06秒和132.50秒通过；代理逐项记录结果丢失后的每一次有界读取，并要求总数恰好为一、方法为`GET`、Host为另一浏览器来源、URI精确绑定原operation/requestId/expectedResourceVersion且后端返回200，同时证明恰好一次生命周期写和结果丢失后零次账号生命周期写入。错误Host、错误URI、失败后再成功或重复GET都不能满足该门禁。
 
 后端在同一门禁中逐字段核对不可变完成记录的actor Account/Principal、目标Account、operation、原请求及前后修订，并独立读取权威Account状态和installation Audit链。开通结果的原Root初始凭据只能进入强制改密；停用结果把版本推进到2、拒绝新登录并撤销既有Root Session；凭据恢复结果保留相同原Root principal，旧密码和旧Session均拒绝，新临时凭据只能进入强制改密，且没有新增`PLATFORM_OPERATOR`。因此本地真实进程、浏览器半断、第二来源重新认证和零写重放已完成；它仍是loopback测试代理而不是当前Profile签名APISIX安装，签名复验和实例终止UNKNOWN继续保留为发布缺口。
+
+同日，当前IAM86/Audit39/PaaS7、`contractRevision=36`签名安装经任务私有代理完成Account停用的同组合复验。来源A以真实`admin`会话在页面审阅并确认停用`phase1-tenant-alpha`；APISIX后端返回200后代理截断回包，页面保留原资源投影并进入UNKNOWN，冻结公开命令`ui-account-status-83058517b056130779953b51dc6c5b2d`及预期版本1。来源B使用不共享浏览器存储的`localhost`重新认证同一USER，导入不含密码、Bearer或私有request ID的摘要，只调用一次精确completion GET；页面确认完成版本2和`DISABLED`，没有把回执补造为当前资源投影。代理观测为`attempts=1`、`responseLost=true`、后端状态200、`recoveryReads=1`、`postLossWrites=0`，mutation Host为`127.0.0.1`、recovery Host为`localhost`，恢复URI准确绑定原operation、requestId和版本。独立权威读取确认Account为`DISABLED`/版本2，installation Audit中恰有一条`iam.account.disabled`成功事实，目标为该Account、actor为`principal-admin`，整条installation chain为`VERIFIED`且`complete=true`。门禁结束后使用新的明确意图恢复为`ACTIVE`/版本3，并核对唯一`iam.account.enabled`成功事实；该受控收尾不是原UNKNOWN写入的重放。此证据只关闭当前签名组合的`ACCOUNT_SET_STATUS`响应丢失路径，Account开通、原Root凭据恢复及实例终止仍各自保留。
