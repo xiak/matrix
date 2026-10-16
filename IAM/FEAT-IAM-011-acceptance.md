@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；当前未发布形状为IAM86/Audit39/PaaS7、`contractRevision=36`，唯一直接前驱是IAM85/Audit39/PaaS7+r35。固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的同源签名A/B完整离线生命周期、重启复验、单前驱门禁及[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业已经通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个明确禁用入口，并从纯页面创建RabbitMQ实例至RUNNING；Account开通与停用的跨来源响应丢失恢复也已完成，同一运行时的原Root凭据恢复及RabbitMQ终止服务端UNKNOWN、安全效果、物理收尾和权威Audit边界已经补齐。原Root恢复与终止的纯页面最终提交、IAM-UI-01–08其余非Deferred写路径仍未完成，因此整体需求仍为实施中；生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
+- 状态：实施中；当前未发布形状为IAM86/Audit39/PaaS7、`contractRevision=36`，唯一直接前驱是IAM85/Audit39/PaaS7+r35。固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的同源签名A/B完整离线生命周期、重启复验、单前驱门禁及[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业已经通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个明确禁用入口，并从纯页面创建RabbitMQ实例至RUNNING及创建一个不授予身份权限的自定义策略；Account开通与停用的跨来源响应丢失恢复也已完成，同一运行时的原Root凭据恢复及RabbitMQ终止服务端UNKNOWN、安全效果、物理收尾和权威Audit边界已经补齐。原Root恢复与终止的纯页面最终提交、IAM-UI-01–08其余非Deferred写路径仍未完成，因此整体需求仍为实施中；生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -29,8 +29,8 @@
 | 总体架构、高可用与容量边界 | [000总体架构](FEAT-IAM-000-product-contract.md#总体架构)及其可用性、容量与一致性段落，跨产品边界由ADR-0002拥有 | 设计已完成；当前多IAM副本、失败关闭、受限容量与数据库切换夹具已有证据，部署尚不支持的完整数据库HA继续明确列为缺口，不虚构SLO |
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
-| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM86+r36后端、当前单前驱、同Profile签名A/B和离线生命周期已经实现并通过。当前签名APISIX页面也重新证明IAM-UI-02–06权威只读投影、IAM-UI-08禁用态、RabbitMQ创建至RUNNING，以及Account开通和停用的跨来源UNKNOWN恢复；原Root凭据恢复与RabbitMQ终止的服务端UNKNOWN、安全效果、物理清理和权威Audit边界同样完成。外部物理认证器、强制MFA重新绑定继续按设计延期；原Root恢复和终止的纯页面提交，以及010矩阵列出的其余非Deferred写路径仍缺验收 |
-| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由当前IAM86+r36同源签名A/B、完整离线生命周期和重启复验接受；IAM-AC-09由固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的十九项独立CI接受；IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。当前签名浏览器只读投影、RabbitMQ创建及Account开通/停用UNKNOWN恢复已有证据，原Root凭据恢复与RabbitMQ终止也已有签名APISIX服务端证据，但其纯页面最终提交及其余IAM-UI-01–08非Deferred效果仍未完成。生产账号公平性SLO和安装级数据库HA保持Deferred，不冒充已交付能力 |
+| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM86+r36后端、当前单前驱、同Profile签名A/B和离线生命周期已经实现并通过。当前签名APISIX页面也重新证明IAM-UI-02–06权威只读投影、IAM-UI-08禁用态、RabbitMQ创建至RUNNING、自定义策略创建且零附件不授予权限，以及Account开通和停用的跨来源UNKNOWN恢复；原Root凭据恢复与RabbitMQ终止的服务端UNKNOWN、安全效果、物理清理和权威Audit边界同样完成。外部物理认证器、强制MFA重新绑定继续按设计延期；原Root恢复和终止的纯页面提交，以及010矩阵列出的其余非Deferred写路径仍缺验收 |
+| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由当前IAM86+r36同源签名A/B、完整离线生命周期和重启复验接受；IAM-AC-09由固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的十九项独立CI接受；IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。当前签名浏览器只读投影、RabbitMQ创建、自定义策略页面创建及Account开通/停用UNKNOWN恢复已有证据，原Root凭据恢复与RabbitMQ终止也已有签名APISIX服务端证据，但其纯页面最终提交及其余IAM-UI-01–08非Deferred效果仍未完成。生产账号公平性SLO和安装级数据库HA保持Deferred，不冒充已交付能力 |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
 
