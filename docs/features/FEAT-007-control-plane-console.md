@@ -2010,79 +2010,80 @@ cross-Session, actor, expiry, disabled-Root, storage and focus tests remain
 required.
 
 The test-only follow-up is fixed at
-`08f72781a20f405ac5d0b6a7deb0bd2c7110fa32`, whose frontend tree is
-`7106198cc5feab4bc188ef67e5710a73151bc19c`. It changes only the existing
-`AccessWorkspace` and `AccountAccessRenderer` test owners, not production
-behavior. Selection drives the visible listbox rather than enumerating every
-native option retained for form submission; stable controls and workflow-local
-queries avoid repeated whole-document work. Fixed-value setup uses paste or
-the owner's synchronous change pattern where keyboard behavior is not the
-contract; keyboard, Escape and focus checks remain. Publishing, history,
-cancel/retry, declaration inspection and reviewed submission have independent
-checks with the same business inputs and all original assertions. Ten further
-assertions check unchanged documents or absence of premature writes. The
-default five-second deadline, existing per-case budgets, isolation, single
-worker, default `forks` pool, dependencies and Vitest configuration are unchanged.
+`f9fa91691467f1a4be47754270cd14ce0f7e4fab`, whose frontend tree is
+`1032f436286a7d2b2a89980a8582e69708b5af50`. Only existing test owners changed:
+`AccessWorkspace`, `AccountAccessRenderer`, `ConsoleShellRenderer`,
+`LoginRenderer`, `ServiceAuthorizationPreview` and the public `Transfer`.
+Selection drives the visible listbox rather than every native option retained
+for form submission; stable controls and workflow-local queries avoid repeated
+whole-document work. Fixed-value setup uses paste or the owner's synchronous
+change pattern where keyboard behavior is not the contract. Business inputs,
+assertions, keyboard, Escape and focus checks remain, including the complete
+2,500-option Transfer fixture and its Unicode search. Publishing, history,
+cancel/retry, directory metadata, chooser focus, service observation, session
+queries and lifecycle review have independently owned checks. The default
+five-second deadline, existing per-case budgets, isolation, single worker,
+default `forks` pool, dependencies and Vitest configuration are unchanged.
 
-Query range and repeated queries are observed performance influences, not a
-proven unique root cause. An isolated two-case stage probe measured the body
-crossing its deadline before cleanup; cleanup took 7–9 ms. The combination of
-scoping and cached controls subsequently reached final assertions at 2,591 and
-2,697 ms. These are observations, not a decomposition of each optimization's
-contribution or evidence about GC. All temporary CPU/stage probes were removed.
-The Windows complete two-owner run now passes **402/402 cases** (210/210 and
-192/192) in 303.03 seconds. The two remaining IAM paths retain the full
-incompatible-condition validation and conflict/reload/fresh-proof journeys;
-only their fixed-value setup and visible-option query scope changed. Their
-complete-sequence durations were 1,865 and 2,072 ms. The JSON result SHA-256 is
-`22c830fd6708e98f7187804aaee7cd4b3bf29bc232739e2813e07da8b2b18c77`.
-
-The earlier `8d851fdff5867ebf5fb6d963634839f368107295` baseline archive (SHA-256
-`0cbb385417ee2aca38c4ea8aeabf08eadad08b4de1cfd0eb11458887fd81ab10`)
-completed a native Debian comparison on the user-authorized `.161` host in an
-independent temporary directory and cache. Node 22.22.2, npm 11.6.4 and Vitest
-4.1.11 used the original default pool/isolation and `maxWorkers=1`, with process
-affinity to two CPUs and a 1,536 MiB Node old-space cap. The lockfile SHA-256 is
+The same fixed source completed both full platform runs on Node 22.22.2,
+npm 11.6.4 and Vitest 4.1.11. The native Debian fixture used a clean install,
+task-owned runtime/cache, two-CPU affinity and a 1,536 MiB Node old-space cap.
+The source archive SHA-256 is
+`e9186341672704e2d081833dc5282926964bbfb32f171d88341fbc17db13b01e`;
+the unchanged lockfile SHA-256 is
 `e6734c8c8a24193bfe410ae22fd6d0ff46fbe1bb4508623628856175e5019404`.
-The complete run passed **73 files / 1,645 cases** in 328.89 seconds, followed
-by all eight Node export-boundary cases. Its four relevant file results were
-210/210 for `AccessWorkspace`, 192/192 for `AccountAccessRenderer`, 125/125 for
-`ConsoleShellRenderer` and 22/22 for `LoginRenderer`. The generated JSON result
-SHA-256 is `31d9e7a8438b74c0f32efcdd298eb244a9a790046579b2bd4430a30b67e873b3`.
-The runtime, dependencies, caches and test scratch space are task-owned; no
-existing host service, port or global configuration was changed.
+Native Debian passed **73 files / 1,649 cases** in 328.25 seconds, followed by
+all eight Node export-boundary cases. Its JSON result SHA-256 is
+`fdfa2e2af9af3d0c1d84d588d145af8220a5c451887b0525d3e91229ca804eff`.
+Reports and source archives were preserved and hashes matched before removing
+the exact task-owned remote directory, runtime, dependencies, cache and scratch
+space. No host service, port, Docker resource or global configuration changed.
 
-That native baseline is not a newer-source native result and does **not**
-replace its same-source Windows failures. The newer Windows two-owner result
-settles those two files, not the unchanged Shell/Login owners or the complete
-73-file gate. Windows complete frontend verification remains **not accepted**:
+The Windows full run reached its terminal result, without early interruption:
+**70/73 files and 1,640/1,649 cases passed** in 1,223.21 seconds. The JSON
+result SHA-256 is
+`b40e60400fcd521694cada29b2fba2dde273114b07ac5460aac2af7472afd6d1`.
+The nine failures are not all timeouts: the final CLI reports eight
+`Error: Test timed out in 5000ms.` failures and one
+`TestingLibraryElementError` for the expected `进入实例` link. The latter is
+not reclassified as a timeout. JSON preserves the missing-link message and
+DOM; its timeout `failureMessages` contain stack placeholders rather than the
+CLI's original message. Current same-source results are:
 
-| Existing test owner / case | Windows `8d` failed duration | Windows `08f` owner result | Native Debian `8d` passed duration |
-| --- | ---: | --- | ---: |
-| `AccessWorkspace`: retains incompatible conditions and restricts resource choices to the selected operation capabilities | 5,460 ms | Passed, 1,865 ms | 1,163 ms |
-| `AccessWorkspace`: discards a stale account-rule review and its operation-bound proof after conflict | 5,254 ms | Passed, 2,072 ms | 915 ms |
-| `ConsoleShellRenderer`: drops Role-owned Audit filters when exit and source validation settle immediately | 5,163 ms | Not rerun | 578 ms |
-| `LoginRenderer`: returns an IAM user to /console/ only after required password replacement | 5,022 ms | Not rerun | 773 ms |
+| Existing test owner / case | Windows result and duration | Native Debian passed duration |
+| --- | --- | ---: |
+| `AccessWorkspace`: incompatible conditions and operation-specific resource choices | Timeout, 5,112 ms | 969 ms |
+| `AccessWorkspace`: complete User policy and Group relationship pagination | Timeout, 5,735 ms | 578 ms |
+| `AccessWorkspace`: draft identity and independent selections across navigation | Timeout, 6,531 ms | 1,105 ms |
+| `AccessWorkspace`: reviewed full-page User with policy, Group, boundary and tags | Timeout, 5,066 ms | 961 ms |
+| `AccessWorkspace`: nominated nondefault version replacement and retained failed review | Timeout, 6,038 ms | 988 ms |
+| `AccountAccessRenderer`: LIVE child creation, password removal and exact identity reread | Timeout, 5,686 ms | 716 ms |
+| `AccountAccessRenderer`: UNKNOWN creation and original frozen request after remount | Timeout, 6,154 ms | 756 ms |
+| `ConsoleShellRenderer`: LIVE permission-only activation without browser MOCK consent | Missing expected instance link, 5,483 ms | 316 ms |
+| `ConsoleShellRenderer`: exact application-tag deletion and invalid-key rejection | Timeout, 5,072 ms | 743 ms |
 
-The stopped Windows `8d` two-owner run reported 208/210 for `AccessWorkspace`; the
-192-case Account renderer did not reach an observed terminal result. The
-separate stopped complete run reported 124/125 for the Shell and 21/22 for
-Login. Neither stopped run is a complete 73-file result. Their default reporter
-emitted failed names and durations beyond the deadline, but not the original
-Error objects before interruption; an exact error class is therefore not
-asserted. These four paths do not share a proven single cause, and neither
-native success nor a focused pass establishes Windows stability.
+Windows file results are 206/211 for `AccessWorkspace`, 190/192 for
+`AccountAccessRenderer`, 123/125 for `ConsoleShellRenderer`, 22/22 for
+`LoginRenderer`, 7/7 for `ServiceAuthorizationPreview` and 7/7 for `Transfer`.
+The refined policy-preview, multi-statement review, directory/chooser, service
+consent/observation and Transfer cases passed, but this does not settle other
+failed paths or make a previous focused/owner pass current complete evidence.
+Native success does **not** replace Windows failure. Query range and repeated
+queries are observed performance influences, not a proven unique cause. All
+temporary profiling probes were removed; no GC, scheduling, async-leak or
+production-root-cause claim is made from these results.
 
-The current source passes typecheck and changed-owner zero-warning lint;
-the `8d` baseline additionally passed full lint, architecture and 234 theme
-contrast pairs. Three actual production builds of the current source exported 59 pages
-with 57 segment-path normalizations each; unset/`0` outputs and the synchronized
-Go embed matched all 324 files byte-for-byte. Fresh UI-host
-`go test -count=1 -p=2 ./...` (web package 3.369 seconds), eight Node export-boundary cases and
-`go vet -p=2 ./...` passed with process-local resource limits.
+Current typecheck, changed-owner zero-warning lint, full lint, architecture and
+234 theme contrast pairs pass. All eight Windows Node export-boundary cases
+also pass, independently of the failed Vitest gate. Three actual Windows
+production builds exported 59 pages with one worker and 57 segment-path
+normalizations each; unset/`0` outputs and the synchronized Go embed matched
+all 324 files byte-for-byte. Fresh UI-host `go test -count=1 -p=2 ./...`
+(web package 2.460 seconds) and `go vet -p=2 ./...` passed with process-local
+resource limits.
 
 This remains an implementation/export candidate, not an accepted release.
-No backend/API/SQL/profile, production frontend, dependency, checkpoint,
+No backend/API/SQL/profile, production frontend behavior, dependency, checkpoint,
 shared DEV process or real account/resource changed. It does not inherit IAM
 CI, signed-runtime or browser acceptance; warning-free browser/runtime
 acceptance is not inferred from the unit runs. Mandatory login/MFA was not
