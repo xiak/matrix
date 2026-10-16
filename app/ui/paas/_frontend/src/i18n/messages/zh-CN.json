@@ -4266,7 +4266,10 @@
     "unresolvedUser": "身份摘要尚未载入，稳定用户 ID 仍是权威标识。",
     "singleRelationImpact": "本次请求只变更一条关系，不修改用户、策略或其拥有的资源。",
     "liveDeleteConfirmHint": "这是连接 IAM 的真实删除命令。该用户组将从活动列表移除，操作记录保留用于审计；当前不支持恢复。确认前请检查依赖关系。",
-    "liveDeleteImpact": "服务端会返回解除成员关系和撤销直接策略关联的权威数量；不会删除用户、策略或资源。"
+    "liveDeleteImpact": "服务端会返回解除成员关系和撤销直接策略关联的权威数量；不会删除用户、策略或资源。",
+    "liveDeleteReceiptTitle": "用户组删除回执",
+    "liveDeleteReceipt": "已删除 {name}（{id}），资源修订号 v{revision}；已解除 {members} 个成员关系，撤销 {policies} 条直接策略关联。删除时间：",
+    "liveDeleteUnconfirmed": "未取得可确认的用户组删除回执，结果未确认。本窗口保留原请求 ID；关闭或刷新不会撤销服务器操作，重新读取或 404 不能证明原命令成功。"
   },
   "RelationshipDirectory": {
     "searchPlaceholder": "搜索名称、ID、类型或状态",

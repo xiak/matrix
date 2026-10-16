@@ -2210,40 +2210,53 @@ Account security-settings editor remains the separate, unimplemented gap above.
 
 #### LIVE deletion-confirmation follow-up
 
-Fixed UI source `029a6ec3b9061efe46c30bfd496ece4135390926` (frontend tree
-`f2c8209a190a3c23a4ec684552cd41271e230d59`) corrects a shared warning that
-claimed deletion affected only a MOCK record. `WorkspaceDelete` is reused by
-both adapters; its default translation must not assume an execution mode or
-promise unspecified configuration cascades. The existing default is now
-mode-neutral in both locales. LIVE Group deletion supplies its own `hint`
-through the existing component contract: a real IAM command removes the Group
-from the active list, retains Audit history and has no supported restore action.
-The existing authoritative membership/attachment impact warning remains,
-including that Users, Policies and business resources are not deleted. The UI
-does not call this a recoverable soft deletion or invent a recovery control.
+LIVE Group deletion consumes the strict command receipt before navigating.
+The detail stores the non-sensitive result and closes its operation dialog;
+ordinary guarded navigation runs only after that dialog and its busy/draft
+registration unmount. A Session-scoped Group workspace retains the receipt
+across entity-query changes while a separately mounted directory performs an
+independent authoritative read. Success feedback uses the returned stable ID,
+name, resulting revision, removed-membership and revoked-attachment counts,
+and deletion time, not preview counts or a later GET/404. Failure, conflict,
+malformed replies and late old-owner replies never navigate or invent success.
+No timeout, forced history, guard bypass or new recovery framework is used.
 
-The existing AccessWorkspace and translation test owners cover both locales,
-wrong-name rejection, cancellation without a write, cleared confirmation on
-reopening, and one exact named/versioned/request-identified call to the test
-adapter. Related Group read/refresh and MOCK/LIVE Role deletion contracts were
-included: **16 selected cases passed** across three files in 35.66 seconds;
-227 other cases were not selected. Result JSON SHA-256 is
-`251465a3265aeca54f918161273857df671189177bb3c4ccd955fa425114bbda`.
-No existing assertion, deletion guard, API or backend contract changed, and no
-real deletion or inspection of the IAM engineer's retained Group/Session was
-performed. The explicit isolated MOCK and Phase 1 scope remain in force.
+Shared `WorkspaceDelete` copy remains mode-neutral in both locales. LIVE Group
+deletion supplies its own explicit IAM warning: the Group leaves the active
+list, Audit history remains, and no restore action is supported. Users, Policies
+and business resources are not deleted. The UI does not invent soft-delete
+recovery or replace authoritative impact counts with preview counts.
 
-On this later source, typecheck, changed-owner zero-warning lint, architecture,
-234 theme contrast pairs and eight Node export-boundary cases pass. Three
-actual Windows production builds exported 59 pages with one worker and 57
-segment-path normalizations each; unset/`0` and the Go embed matched all 324
-files byte-for-byte. Fresh UI-host `go test -count=1 -p=2 ./...` (web package
-1.720 seconds) and `go vet -p=2 ./...` pass with process-local resource limits.
+The Group-only frontend tree is
+`526b583b4bd6b1e5f24612b722ecaac7f1189eae`; the independently archived snapshot
+excludes the separate Account security-settings WIP. All 75 Windows Vitest files
+and 1716 cases pass in 442.51 seconds, with zero failures, skipped cases or
+timeout/worker/configuration changes. Result JSON SHA-256 is
+`26964b44d7790698322c4fcd6b17ef680414c566236fca71e4bfdcf4a0a763a2`.
+The real ConsoleNavigation/UnsavedChanges combination proves ordinary successful
+navigation, fresh directory reads, exact returned counts, no navigation for
+403/409/503/malformed receipts, and old Session/repository late-response fences.
+Existing name-confirmation, no-write cancellation, locale and MOCK/LIVE deletion
+contracts remain covered. Typecheck, changed-owner zero-warning lint,
+architecture, 234 contrast pairs and eight Node export-boundary cases pass.
+Three actual Windows production builds export 59 pages with one worker and 57
+segment-path normalizations each; unset/`0` and the Go embed match all 324 files
+byte-for-byte. Fresh UI-host Go test (web package 1.427 seconds) and vet pass.
 
-The complete frontend suite was not rerun on this later copy source. The
-preceding `f9` full results remain a baseline, not its complete-suite, CI or
-signed-browser acceptance. The real Group deletion browser gate remains with
-[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md).
+An isolated in-app-browser fixture mounts the fixed Group renderer and actual
+ConsoleNavigation/UnsavedChanges providers against RAM-only responses. Success
+visibly clears the entity URL, closes the dialog, rereads the empty directory
+and shows returned revision v2, three removed memberships and two revoked direct
+attachments instead of the zero-count preview. A 409 or wrong-target receipt
+keeps the original detail URL and displays an error without success. A clean
+successful tab emits no warning/error. The waiting-response case confirms the
+busy dialog stays protected; late-owner behavior is covered by Vitest, not a
+completed browser Session-switch case. This component-browser fixture is not
+the production Next shell, an HTTP/backend deletion, signed-runtime or CI gate.
+No real resource or the IAM engineer's retained Group/Session was inspected or
+changed. Remaining combined runtime acceptance belongs to
+[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md); isolated MOCK and Phase 1 scope
+remain unchanged.
 
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
