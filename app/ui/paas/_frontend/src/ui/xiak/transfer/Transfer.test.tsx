@@ -19,7 +19,9 @@ it("keeps selections across searches and supports removing and clearing them", a
   render(<Example options={sample.slice(0, 2)} />);
   await user.click(screen.getByText("Alpha", { exact: true }));
   expect(screen.getByRole("checkbox", { name: "Alpha" })).toHaveProperty("checked", true);
-  await user.type(screen.getByRole("searchbox"), "Beta");
+  const search = screen.getByRole("searchbox");
+  await user.click(search);
+  await user.paste("Beta");
   expect(screen.queryByRole("checkbox", { name: "Alpha" })).toBeNull();
   expect(within(screen.getByRole("region", { name: "Selected" })).getByText("Alpha")).toBeTruthy();
   await user.click(screen.getByRole("checkbox", { name: "Beta" }));
@@ -27,8 +29,8 @@ it("keeps selections across searches and supports removing and clearing them", a
   expect(within(screen.getByRole("region", { name: "Selected" })).queryByText("Alpha")).toBeNull();
   await user.click(screen.getByRole("button", { name: "Clear all" }));
   expect(screen.getByText("No selection")).toBeTruthy();
-  await user.clear(screen.getByRole("searchbox"));
-  await user.type(screen.getByRole("searchbox"), "ＡＬＰＨＡ resources");
+  await user.clear(search);
+  await user.paste("ＡＬＰＨＡ resources");
   expect(screen.getByRole("checkbox", { name: "Alpha" })).toBeTruthy();
   expect(screen.queryByRole("checkbox", { name: "Beta" })).toBeNull();
 });
@@ -47,7 +49,9 @@ it("bounds large available lists while searching all options and retaining off-p
   await user.click(screen.getByRole("checkbox", { name: "Policy 20" }));
   expect(onSelect).toHaveBeenCalledWith(["20"], true);
   expect(within(screen.getByRole("region", { name: "Selected" })).getByText("Policy 0")).toBeTruthy();
-  await user.type(screen.getByRole("searchbox"), "Policy 2499");
+  // Keep the full 2,500-option fixture; this contract searches a complete value.
+  await user.click(screen.getByRole("searchbox"));
+  await user.paste("Policy 2499");
   expect(screen.getAllByRole("checkbox")).toHaveLength(2);
   expect((screen.getByRole("checkbox", { name: "Policy 2499" }) as HTMLInputElement).checked).toBe(true);
   await user.click(screen.getByRole("button", { name: labels.clearSearch }));

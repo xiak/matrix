@@ -586,10 +586,11 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.getByRole("heading", { name: "体验 IAM 策略声明" })).toBeTruthy();
     expect(screen.getByText(/审阅与完成体验均不调用真实 IAM/)).toBeTruthy();
     expect(repository.listAuthorizationProfiles).not.toHaveBeenCalled();
-    await user.type(screen.getByRole("textbox", { name: "策略名称" }), "DemoReader");
+    // This journey checks authoring/review boundaries, not per-keystroke entry.
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "DemoReader" } });
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     await user.click(await screen.findByRole("radio", { name: /paas.application.read/ }));
-    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-demo");
+    fireEvent.change(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), { target: { value: "app-demo" } });
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
     const summary = screen.getByRole("region", { name: "声明摘要" });
@@ -612,13 +613,13 @@ describe("policy creation entry and directory contract", () => {
   it("reviews one visual statement at a time when a policy has multiple statements", async () => {
     const { user } = await open("policies");
     await user.click(screen.getByRole("button", { name: "体验新版策略编辑" }));
-    await user.type(screen.getByRole("textbox", { name: "策略名称" }), "Two statements");
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Two statements" } });
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     await user.click(await screen.findByRole("radio", { name: /paas.application.read/ }));
-    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-first");
+    fireEvent.change(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), { target: { value: "app-first" } });
     await user.click(screen.getByRole("button", { name: "添加声明" }));
     await user.click(screen.getByRole("radio", { name: /paas.application.read/ }));
-    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-second");
+    fireEvent.change(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), { target: { value: "app-second" } });
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     const summary = screen.getByRole("region", { name: "声明摘要" });
     expect(within(summary).getByText("共 2 条声明")).toBeTruthy();
@@ -628,8 +629,8 @@ describe("policy creation entry and directory contract", () => {
     expect(within(summary).getByText("app-second", { selector: "code" })).toBeTruthy();
     expect(within(summary).queryByText("app-first", { selector: "code" })).toBeNull();
   });
-  it("matches CAM directory columns, omits preset metadata in custom view and restores chooser focus", async () => {
-    const { user, repository } = await open("policies");
+  it("matches CAM directory columns and omits preset metadata in custom view", async () => {
+    const { user } = await open("policies");
     const headings = () => within(screen.getByRole("table", { name: "策略" })).getAllByRole("columnheader").slice(1).map((cell) => cell.textContent).filter(Boolean);
     const table = screen.getByRole("table", { name: "策略" });
     expect(table.getAttribute("data-mobile-layout")).toBe("stack");
@@ -646,6 +647,11 @@ describe("policy creation entry and directory contract", () => {
     expect(headings()).toEqual(["策略名", "描述", "上次修改时间"]);
     expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
     expect(screen.queryByRole("combobox", { name: "权限级别" })).toBeNull();
+  });
+  it("opens the in-content policy method chooser and restores custom-directory focus", async () => {
+    const { user, repository } = await open("policies");
+    await select(user, "权限级别", "全局权限");
+    await user.click(screen.getByRole("tab", { name: "自定义策略" }));
     const create = screen.getByRole("button", { name: "新建自定义策略" });
     await user.click(create);
     expect(screen.queryByRole("dialog")).toBeNull();
