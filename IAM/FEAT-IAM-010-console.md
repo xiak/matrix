@@ -267,3 +267,5 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分支生成资产和FEAT证据；其完整前端源码tree与`1090fcaf`相同。本分支没有复制该分支专属build identity，而是从上述二十个最终源码blob重建324个嵌入文件。聚焦的目录/详情/服务授权及新增向导/UNKNOWN用例、typecheck、完整lint、architecture、234组对比度、生产导出/嵌入一致性、Go UI test/vet均已通过。
 
 该候选尚未通过完整前端门禁，不能标为发布可用。UX/UI owner在独占单worker、原五秒预算下的默认fork运行于`AccessWorkspace`出现一个未改业务用例5715ms超时；相同固定归档的threads对照出现另外两个未改业务用例6338ms和5048ms超时。随后本分支在Node22.22.2/npm11.6.4、配置内`maxWorkers=1`和默认fork下独立运行，又在`AccountAccessRenderer`的188项中得到185项通过、三个不同未改业务用例分别5763ms、5362ms和5037ms超时，发现失败后主动停止。三个运行的失败集合不相同，且两个pool均不能稳定通过；因此没有把它解释成新增功能回归或某个执行器的已证实问题，也没有提高超时、删除断言、缩小fixture或改生产代码。测试执行/异步稳定性须由既有测试owner查明并使全部当前文件在冻结预算下通过；聚焦成功、生成稳定或旧提交全绿均不能替代该门禁。
+
+上述选择性采用及本分支重建固定为`2c60db2dabff618cc7841a7cefc3b253b13bc618`；其[Verification 38865790823](https://github.com/xiak/matrix/actions/runs/38865790823)已按精确SHA核实十八项作业全部`completed/success`，包括受支持Node上的`console`、独立`authority-capacity`及最终汇总。该次`console`通过只证明这一次Linux运行得到成功终态，不能覆盖前述相同源码在隔离运行中已观察到的多处五秒边缘超时，也不能把后继尚未固定的测试owner调整倒推为本候选已经稳定。因此该CI接受本提交的后端、生成物和一次完整控制台回归证据，但完整前端稳定性及签名浏览器剩余写路径继续保持未验收。
