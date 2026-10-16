@@ -1,15 +1,17 @@
 "use client";
 
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, Table, TablePagination, TableSkeleton, TableToolbar, Tabs, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad, type PolicyVersionMutationClient, type PolicyVersionMutationResult } from "../application/AccountAccessProvider";
+import type { PolicyMutationClient } from "../application/policyMutation";
+import { policyDisplayNameValid } from "../domain/accounts";
 import type { AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AuthorizationProfileDirectory } from "../domain/accounts";
 import { visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAuthoring";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { WorkspaceDetail, WorkspaceInlineForm, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccountAuthorizationProfileCatalog } from "./AccountAuthorizationProfileCatalog";
 import { AccountPolicyDocumentAuthor, type PolicyAuthorMode } from "./AccountPolicyDocumentAuthor";
 import { PolicyVisualReview } from "./AccountPolicyVisualEditor";
@@ -21,6 +23,106 @@ import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
 type PolicyDetailState = { status: "loading" } | AccountPolicyReadLoad;
 type PolicyVersionDirectoryState = { status: "loading" } | AccountPolicyVersionDirectoryLoad;
 type VersionReview = { kind: "set-default" | "retire"; versionId: string };
+
+function PolicyMetadataEditor({ detail, kind, mutation, onBack, onApplied }: {
+  detail: AccountPolicyDetail; kind: "update" | "retire"; mutation: PolicyMutationClient;
+  onBack(outcome?: "known" | "unknown"): void; onApplied(): void;
+}) {
+  const t = useTranslations("AccountPolicyDirectory.metadata");
+  const id = useId();
+  const [displayName, setDisplayName] = useState(detail.policy.displayName);
+  const [typedName, setTypedName] = useState("");
+  const [review, setReview] = useState(kind === "retire");
+  const [failure, setFailure] = useState<string | undefined>();
+  const [stale, setStale] = useState(false);
+  const outcome = useRef<"known" | "unknown" | undefined>(undefined);
+  const clearError = useCallback(() => setFailure(undefined), []);
+  const valid = kind === "update" ? policyDisplayNameValid(displayName) && displayName !== detail.policy.displayName : typedName === detail.policy.displayName;
+  const title = t(kind === "retire" ? "retireTitle" : review ? "renameReview" : "renameTitle", { name: detail.policy.displayName });
+  return <WorkspaceInlineForm title={title} onClose={() => onBack(outcome.current)}
+    operation={{ busy: mutation.busy, error: failure, clearError }}
+    draft={{ dirty: kind === "update" ? displayName !== detail.policy.displayName : Boolean(typedName), title, description: t("leaveHint") }}
+    submitLabel={t(kind === "retire" ? "confirmRetire" : review ? "confirmRename" : "review")}
+    submitVariant={kind === "retire" ? "danger" : "primary"}
+    submitDisabled={!valid || stale || !mutation.ready || Boolean(mutation.pending)} onSubmit={async () => {
+      if (!valid || stale) return false;
+      if (!review) { setReview(true); return false; }
+      const result = await mutation.begin(detail, kind === "update" ? { kind, displayName } : { kind });
+      if (result.status === "applied") { outcome.current = "known"; onApplied(); return true; }
+      if (result.status === "unknown") { outcome.current = "unknown"; return true; }
+      if (result.status === "rejected") {
+        setFailure(t(`errors.${result.reason}`));
+        if (result.reason === "conflict" || result.reason === "notFound") setStale(true);
+      } else setFailure(t("blocked"));
+      return false;
+    }}>
+    <p className={styles.note}>{t("authorizationNotice")}</p>
+    <dl className={styles.catalogFacts}>
+      <div><dt>{t("policyId")}</dt><dd><code>{detail.policy.id}</code></dd></div>
+      <div><dt>{t("accountId")}</dt><dd><code>{detail.policy.accountId}</code></dd></div>
+      <div><dt>{t("revision")}</dt><dd>{detail.policy.resourceVersion}</dd></div>
+    </dl>
+    {kind === "update" ? <>
+      <Alert status="info">{t("renameImpact")}</Alert>
+      {review ? <><dl className={styles.catalogFacts}>
+        <div><dt>{t("previousName")}</dt><dd>{detail.policy.displayName}</dd></div>
+        <div><dt>{t("nextName")}</dt><dd>{displayName}</dd></div>
+      </dl><Button variant="ghost" onClick={() => setReview(false)}>{t("editName")}</Button></> : <FormField id={`${id}-name`} label={t("nextName")} hint={t("nameHint")} error={displayName && !policyDisplayNameValid(displayName) ? t("invalidName") : undefined}>
+        <Input id={`${id}-name`} value={displayName} onChange={(event) => setDisplayName(event.target.value)}
+          aria-describedby={`${id}-name-hint`} invalid={Boolean(displayName && !policyDisplayNameValid(displayName))} autoComplete="off" />
+      </FormField>}
+    </> : <>
+      <Alert status="warning">{t("retireImpact")}</Alert>
+      <p>{t("retireReferences")}</p>
+      <FormField id={`${id}-confirm`} label={t("typeName", { name: detail.policy.displayName })} hint={t("typeNameHint")}>
+        <Input id={`${id}-confirm`} value={typedName} onChange={(event) => setTypedName(event.target.value)} aria-describedby={`${id}-confirm-hint`} autoComplete="off" />
+      </FormField>
+    </>}
+  </WorkspaceInlineForm>;
+}
+
+function PolicyMetadataRecovery({ mutation, onApplied, onInspect }: { mutation: PolicyMutationClient; onApplied(kind: "update" | "retire"): void; onInspect(id: string): void }) {
+  const t = useTranslations("AccountPolicyDirectory.metadata");
+  const pending = mutation.pending;
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [showBusy, setShowBusy] = useState(false);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!mutation.busy) return;
+    const timer = window.setTimeout(() => setShowBusy(true), 250);
+    return () => window.clearTimeout(timer);
+  }, [mutation.busy]);
+  useEffect(() => {
+    if (!pending || mutation.busy) return;
+    heading.current?.focus({ preventScroll: true });
+  }, [pending?.requestId, mutation.busy, pending]);
+  if (mutation.recoveryError) return <Alert status="danger">{t("recoveryUnavailable")}</Alert>;
+  if (!pending || mutation.busy && !showBusy) return null;
+  return <section className={styles.policyVersionRecovery} aria-label={t("recoveryTitle")} aria-busy={mutation.busy || undefined}>
+    <h2 ref={heading} tabIndex={-1} className={styles.stepTitle}>{t("recoveryTitle")}</h2>
+    <Alert status="warning">{t(mutation.busy ? "submitting" : "unknown")}</Alert>
+    <dl className={styles.catalogFacts}>
+      <div><dt>{t("originalOperation")}</dt><dd>{t(pending.kind === "update" ? "renameAction" : "retireAction")}</dd></div>
+      <div><dt>{t("policyId")}</dt><dd><code>{pending.policy.id}</code></dd></div>
+      <div><dt>{t("requestId")}</dt><dd><code>{pending.requestId}</code></dd></div>
+      <div><dt>{t("previousName")}</dt><dd>{pending.policy.displayName}</dd></div>
+      {pending.kind === "update" ? <div><dt>{t("nextName")}</dt><dd>{pending.displayName}</dd></div> : null}
+      <div><dt>{t("revision")}</dt><dd>{pending.policy.resourceVersion}</dd></div>
+    </dl>
+    <p className={styles.note}>{t("recoveryHint")}</p>
+    {mutation.lastError ? <Alert status="warning">{t(`errors.${mutation.lastError}`)}</Alert> : null}
+    <div className={styles.actions}>
+      <Button variant="secondary" disabled={mutation.busy || !mutation.ready} onClick={async () => {
+        setAcknowledged(false); setShowBusy(true); const result = await mutation.retry(); if (result.status === "applied") onApplied(pending.kind);
+      }}>{t("retryOriginal")}</Button>
+      <Button variant="ghost" disabled={mutation.busy} onClick={() => onInspect(pending.policy.id)}>{t("inspect")}</Button>
+    </div>
+    <div className={styles.policyVersionAcknowledge}>
+      <label><input type="checkbox" checked={acknowledged} disabled={mutation.busy} onChange={(event) => setAcknowledged(event.target.checked)} /> {t("abandonAcknowledgement")}</label>
+      <Button variant="secondary" disabled={!acknowledged || mutation.busy} onClick={async () => { setShowBusy(true); if (await mutation.abandon()) onInspect(pending.policy.id); }}>{t("abandon")}</Button>
+    </div>
+  </section>;
+}
 
 function PolicyVersionRecovery({ mutation, onApplied, onInspect }: { mutation: PolicyVersionMutationClient; onApplied(): void; onInspect(policyId: string): void }) {
   const t = useTranslations("AccountPolicyDirectory");
@@ -72,8 +174,8 @@ function PolicyVersionRecovery({ mutation, onApplied, onInspect }: { mutation: P
   </section>;
 }
 
-function VersionMutationReview({ review, policy, versions, busy, error, onSubmit, onCancel }: {
-  review: VersionReview; policy: AccountPolicy; versions: AccountPolicyVersion[]; busy: boolean; error: string | null;
+function VersionMutationReview({ review, policy, versions, busy, blocked, error, onSubmit, onCancel }: {
+  review: VersionReview; policy: AccountPolicy; versions: AccountPolicyVersion[]; busy: boolean; blocked: boolean; error: string | null;
   onSubmit(): void; onCancel(): void;
 }) {
   const t = useTranslations("AccountPolicyDirectory");
@@ -96,7 +198,8 @@ function VersionMutationReview({ review, policy, versions, busy, error, onSubmit
       <section><h4>{t("targetDocument", { version: target.versionId })}</h4><pre tabIndex={0}>{JSON.stringify(target.document, null, 2)}</pre></section>
     </div></details>
     {error ? <Alert status="danger">{error}</Alert> : null}
-    <div className={styles.actions}><Button variant={review.kind === "retire" ? "danger" : "primary"} disabled={busy || Boolean(error)} onClick={onSubmit}>{t(review.kind === "set-default" ? "confirmSetDefault" : "confirmRetire")}</Button><Button variant="secondary" disabled={busy} onClick={onCancel}>{t("cancel")}</Button></div>
+    {blocked ? <Alert status="warning">{t("metadata.blocked")}</Alert> : null}
+    <div className={styles.actions}><Button variant={review.kind === "retire" ? "danger" : "primary"} disabled={busy || blocked || Boolean(error)} onClick={onSubmit}>{t(review.kind === "set-default" ? "confirmSetDefault" : "confirmRetire")}</Button><Button variant="secondary" disabled={busy} onClick={onCancel}>{t("cancel")}</Button></div>
   </section>;
 }
 
@@ -201,7 +304,7 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
   };
   const publish = async () => {
     if (!review || busy) return;
-    if (mutation.pending || review.resourceVersion !== policy.resourceVersion || review.defaultVersionId !== policy.defaultVersionId) {
+    if (mutation.pending || mutation.blockedByMetadata || review.resourceVersion !== policy.resourceVersion || review.defaultVersionId !== policy.defaultVersionId) {
       setError(t("reviewStale")); return;
     }
     setBusy(true); setError(null);
@@ -237,8 +340,9 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, onPublished,
       mode={editorMode} onModeChange={setEditorMode} onVisualReadyChange={setVisualReady} onVisualDirectoryChange={setVisualDirectory}
       label={t("proposedDocument")} hint={t("publishEditorHint")} /></div>
     {error ? <Alert status="danger">{error}</Alert> : null}
+    {mutation.blockedByMetadata ? <Alert status="warning">{t("metadata.blocked")}</Alert> : null}
     <div className={styles.actions}>
-      {review ? <><Button disabled={busy || Boolean(error)} onClick={() => void publish()}>{t("confirmPublish")}</Button>
+      {review ? <><Button disabled={busy || mutation.blockedByMetadata || Boolean(error)} onClick={() => void publish()}>{t("confirmPublish")}</Button>
         <Button variant="secondary" disabled={busy} onClick={() => { setReview(null); setError(null); }}>{t("editDraft")}</Button></> :
         <Button disabled={busy} onClick={openReview}>{t("reviewDraft")}</Button>}
       <Button variant="ghost" disabled={busy} onClick={() => requestLeave(onClose)}>{t("cancel")}</Button>
@@ -306,7 +410,7 @@ function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, on
     if (!review || !mutation || state.status !== "ready" || mutationBusy) return;
     const snapshot = state.directory;
     if (!snapshot.items.some((item) => item.versionId === review.versionId) ||
-        snapshot.policy.defaultVersionId === review.versionId || mutation.pending) {
+        snapshot.policy.defaultVersionId === review.versionId || mutation.pending || mutation.blockedByMetadata) {
       setMutationError(t("reviewStale")); return;
     }
     setMutationBusy(true); setMutationError(null);
@@ -333,7 +437,7 @@ function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, on
   };
   if (review && state.status === "ready") return <div className={styles.catalogNotice}>
     <Button variant="ghost" onClick={() => { setReview(null); setMutationError(null); }} disabled={mutationBusy}>{t("backToVersions")}</Button>
-    <VersionMutationReview review={review} policy={state.directory.policy} versions={state.directory.items} busy={mutationBusy} error={mutationError} onSubmit={() => void submit()} onCancel={() => { setReview(null); setMutationError(null); }} />
+    <VersionMutationReview review={review} policy={state.directory.policy} versions={state.directory.items} busy={mutationBusy} blocked={mutation?.blockedByMetadata ?? false} error={mutationError} onSubmit={() => void submit()} onCancel={() => { setReview(null); setMutationError(null); }} />
   </div>;
   if (publisherOpen && state.status === "ready" && mutation) {
     const defaultVersion = state.directory.items.find((item) => item.versionId === state.directory.policy.defaultVersionId);
@@ -362,14 +466,14 @@ function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, on
       state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${state.status}`)}</Alert>
         {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> : <>
         <div className={styles.catalogDetailHeading}><p>{t("versionCount", { count: state.directory.items.length })}</p>
-          {mutation?.canPublish && state.directory.items.length < 5 ? <Button ref={publishButton} variant="secondary" disabled={Boolean(mutation.pending)} onClick={() => { setPublished(null); setMutationError(null); setPublisherOpen(true); }}>{t("publishVersion")}</Button> : null}
+          {mutation?.canPublish && state.directory.items.length < 5 ? <Button ref={publishButton} variant="secondary" disabled={Boolean(mutation.pending) || mutation.blockedByMetadata} onClick={() => { setPublished(null); setMutationError(null); setPublisherOpen(true); }}>{t("publishVersion")}</Button> : null}
         </div>
         <Table aria-label={t("versionTable")} mobileLayout="stack" className={styles.policyVersionTable}>
           <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th></tr></thead>
           <tbody>{state.directory.items.map((item) => <tr key={item.versionId}>
             <td data-label={t("versionId")}><div className={styles.rowActionCell}><Table.PrimaryAction data-version-id={item.versionId} onClick={() => { opener.current = item.versionId; setSelected({ status: "loading" }); setSelectedId(item.versionId); }}>{item.versionId}</Table.PrimaryAction>{mutation && item.versionId !== state.directory.policy.defaultVersionId ? <ActionMenu iconOnly label={t("versionActions", { version: item.versionId })} actions={[
-              { id: "set-default", label: t("setDefault"), disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "set-default", versionId: item.versionId }); } },
-              { id: "retire", label: t("retireVersion"), danger: true, disabledReason: mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "retire", versionId: item.versionId }); } }
+              { id: "set-default", label: t("setDefault"), disabledReason: mutation.blockedByMetadata ? t("metadata.blocked") : mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "set-default", versionId: item.versionId }); } },
+              { id: "retire", label: t("retireVersion"), danger: true, disabledReason: mutation.blockedByMetadata ? t("metadata.blocked") : mutation.pending ? t("mutationBlocked") : undefined, onSelect: () => { reviewOpener.current = item.versionId; setPublished(null); setMutationError(null); setReview({ kind: "retire", versionId: item.versionId }); } }
             ]} /> : null}</div></td>
             <td data-label={t("defaultVersion")}>{item.versionId === state.directory.policy.defaultVersionId ? <Badge status="success">{t("currentDefault")}</Badge> : "—"}</td>
             <td data-label={t("versionContract")}>{t("contractVersion", { version: item.contractVersion })}</td>
@@ -380,26 +484,43 @@ function AccountPolicyVersions({ policy, listVersions, readVersion, mutation, on
   </div>;
 }
 
-function AccountPolicyDetailView({ policy, client, mutation, refreshRevision, onApplied, onBack }: { policy: AccountPolicy; client: AccountPolicyReadClient | null; mutation: PolicyVersionMutationClient | null; refreshRevision: number; onApplied(): void; onBack(): void }) {
+function AccountPolicyDetailView({ policy, client, mutation, metadataMutation, refreshRevision, onApplied, onMetadataApplied, onBack }: {
+  policy: AccountPolicy; client: AccountPolicyReadClient | null; mutation: PolicyVersionMutationClient | null;
+  metadataMutation: PolicyMutationClient | null; refreshRevision: number; onApplied(): void; onMetadataApplied(kind: "update" | "retire"): void; onBack(): void;
+}) {
   const t = useTranslations("AccountPolicyDirectory");
-  const [state, setState] = useState<PolicyDetailState>({ status: "loading" });
+  const [snapshot, setSnapshot] = useState<{ client: AccountPolicyReadClient; revision: number; refreshRevision: number; state: PolicyDetailState } | null>(null);
   const [revision, setRevision] = useState(0);
   const [section, setSection] = useState("document");
   const [versionsMounted, setVersionsMounted] = useState(false);
+  const [workflow, setWorkflow] = useState<{ identity: object; detail: AccountPolicyDetail; kind: "update" | "retire" } | null>(null);
+  const actionFocus = useRef<PageCommandsHandle>(null);
   useEffect(() => {
     if (policy.scope !== "TENANT" || !client) return;
     let current = true;
-    void client.read(policy.id).then((result) => { if (current) setState(result); });
+    void client.read(policy.id).then((result) => { if (current) setSnapshot({ client, revision, refreshRevision, state: result }); });
     return () => { current = false; };
   }, [client, policy.id, policy.scope, revision, refreshRevision]);
+  const state: PolicyDetailState = snapshot?.client === client && snapshot.revision === revision && snapshot.refreshRevision === refreshRevision
+    ? snapshot.state : { status: "loading" };
   const detail = state.status === "ready" ? state.detail : null;
+  if (workflow && metadataMutation && workflow.identity === metadataMutation.identity) return <PolicyMetadataEditor
+    detail={workflow.detail} kind={workflow.kind} mutation={metadataMutation} onApplied={() => onMetadataApplied(workflow.kind)}
+    onBack={(outcome) => { setWorkflow(null); setRevision((value) => value + 1); if (outcome !== "unknown") window.requestAnimationFrame(() => actionFocus.current?.focus()); }} />;
+  const source = detail?.policy ?? policy;
+  const disabledReason = source.management !== "CUSTOMER" || source.scope !== "TENANT" || source.accountId !== client?.accountId || source.status !== "ACTIVE"
+    ? t("metadata.ineligible") : !detail ? t("metadata.readRequired") : metadataMutation && (!metadataMutation.ready || metadataMutation.recoveryError)
+      ? t("metadata.recoveryUnavailable") : metadataMutation?.pending || mutation?.pending ? t("metadata.blocked") : undefined;
   const documentRegion = policy.scope === "INSTALLATION" ? <Alert status="info">{t("platformDetailUnavailable")}</Alert> :
     !client ? <Alert status="danger">{t("errors.unavailable")}</Alert> :
     state.status === "loading" ? <TableSkeleton label={t("loadingDetail")} rows={3} header={false} /> :
     state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`errors.${state.status}`)}</Alert>
-      {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> :
+      {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => setRevision((value) => value + 1)}>{t("retry")}</Button></div> : null}</div> :
     detail ? <PolicyVersionDocument version={detail.version} title={t("defaultDocument")} /> : null;
-  return <WorkspaceDetail title={policy.displayName} onBack={onBack}>
+  return <WorkspaceDetail title={source.displayName} onBack={onBack} actionFocusRef={actionFocus} actions={metadataMutation ? { secondary: [
+    { id: "rename-policy", label: t("metadata.renameAction"), disabledReason, onSelect: () => { if (detail) setWorkflow({ identity: metadataMutation.identity, detail: structuredClone(detail), kind: "update" }); } },
+    { id: "retire-policy", label: t("metadata.retireAction"), danger: true, disabledReason, onSelect: () => { if (detail) setWorkflow({ identity: metadataMutation.identity, detail: structuredClone(detail), kind: "retire" }); } }
+  ] } : undefined}>
     <p className={styles.note}>{t("detailNotice")}</p>
     <dl className={styles.catalogFacts}>
       <div><dt>{t("policyId")}</dt><dd><code>{policy.id}</code></dd></div>
@@ -424,8 +545,16 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
   const access = useAccountAccess();
   const client = access.policyRead;
   const mutation = access.policyVersionMutation;
+  const metadataMutation = access.policyMutation;
   const [refreshRevision, setRefreshRevision] = useState(0);
+  const [retiredPolicyId, setRetiredPolicyId] = useState<string | null>(null);
+  useEffect(() => { if (retiredPolicyId && entityId === retiredPolicyId) onOpen(); }, [retiredPolicyId, entityId, onOpen]);
   const onApplied = () => setRefreshRevision((value) => value + 1);
+  const onMetadataApplied = (kind?: "update" | "retire") => {
+    onApplied();
+    void access.refreshPolicyDirectory();
+    if (kind === "retire") setRetiredPolicyId(entityId ?? null);
+  };
   const selected = entityId ? scene.policies.find((policy) => policy.id === entityId) : null;
   const [query, setQuery] = useState("");
   const [management, setManagement] = useState("all");
@@ -454,11 +583,13 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
   const recovery = mutation?.pending ? <PolicyVersionRecovery key={mutation.pending.requestId} mutation={mutation} onApplied={onApplied} onInspect={(id) => onOpen(id)} /> : null;
   const createRecovery = access.policyCreate?.pending ? <PolicyCreateRecovery key={access.policyCreate.pending.requestId} client={access.policyCreate}
     pending={access.policyCreate.pending} onDone={(id) => onOpen(id)} onInspect={() => onOpen()} /> : null;
-  if (entityId) return <>{recovery}{createRecovery}{selected
-    ? <AccountPolicyDetailView key={`${client?.accountId ?? scene.accountId}:${client?.sessionRevision ?? "none"}:${entityId}`} policy={selected} client={client} mutation={mutation} refreshRevision={refreshRevision} onApplied={onApplied} onBack={() => onOpen()} />
+  const metadataRecovery = metadataMutation ? <PolicyMetadataRecovery key={metadataMutation.pending?.requestId ?? "none"} mutation={metadataMutation} onApplied={onMetadataApplied} onInspect={(id) => { onApplied(); onOpen(id); }} /> : null;
+  if (entityId) return <>{metadataRecovery}{recovery}{createRecovery}{selected
+    ? <AccountPolicyDetailView key={`${client?.accountId ?? scene.accountId}:${client?.sessionRevision ?? "none"}:${entityId}`} policy={selected} client={client} mutation={mutation} metadataMutation={metadataMutation} refreshRevision={refreshRevision} onApplied={onApplied} onMetadataApplied={onMetadataApplied} onBack={() => onOpen()} />
+    : failedDirectory ? <AccountDirectoryReadFailure kind={failedDirectory} />
     : <EmptyState title={t("notFound")} description={t("notFoundHint")} action={<Button variant="secondary" onClick={() => onOpen()}>{t("back")}</Button>} />}</>;
 
-  return <>{recovery}{createRecovery}<Card>
+  return <>{metadataRecovery}{recovery}{createRecovery}<Card>
     <ContentPage.Heading title={t("title")} scrollKey="policy-directory" actions={access.policyCreate ?
       <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create", label: t("createPolicy"), icon: <Plus aria-hidden="true" />,
         disabled: Boolean(access.policyCreate.pending), onSelect: onCreate }} /> : undefined} />

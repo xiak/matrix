@@ -283,6 +283,37 @@ function livePolicyVersions() {
   return { repository, readPolicy, listPolicyVersions, createPolicyVersion, setDefaultPolicyVersion, retirePolicyVersion };
 }
 
+function livePolicyMetadata() {
+  let policy: AccountPolicy = { ...tenantPolicy, id: "customer.logs", management: "CUSTOMER", accountId: account.id,
+    displayName: "LogBoundary", defaultVersionId: "version-logs", resourceVersion: 4 };
+  const version = { ...tenantPolicyDetail.version, policyId: policy.id, versionId: policy.defaultVersionId };
+  const readPolicy = vi.fn(async (_credential: string, _accountId: string, id: string) => id === tenantPolicy.id
+    ? structuredClone(tenantPolicyDetail) : { policy: structuredClone(policy), version: structuredClone(version) });
+  const updatePolicy = vi.fn(async (_credential: string, _accountId: string, _source: { policy: AccountPolicy; contentDigest: string }, command: { displayName: string; resourceVersion: number; requestId: string }) => {
+    if (command.resourceVersion !== policy.resourceVersion) throw new HttpProblem(409, "STALE");
+    policy = { ...policy, displayName: command.displayName, resourceVersion: policy.resourceVersion + 1 };
+    return { policy: structuredClone(policy), version: structuredClone(version) };
+  });
+  const deletePolicy = vi.fn(async (_credential: string, _accountId: string, _source: AccountPolicy, command: { resourceVersion: number; requestId: string }) => {
+    if (command.resourceVersion !== policy.resourceVersion) throw new HttpProblem(409, "STALE");
+    policy = { ...policy, status: "RETIRED", resourceVersion: policy.resourceVersion + 1 };
+    return structuredClone(policy);
+  });
+  const listPolicies = vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) :
+    { ...directory(false), items: [tenantPolicy, ...(policy.status === "ACTIVE" ? [structuredClone(policy)] : [])] });
+  const repository = accounts({ readPolicy, updatePolicy, deletePolicy, listPolicies });
+  return { repository, readPolicy, updatePolicy, deletePolicy, listPolicies, version };
+}
+
+const originalPolicyLocks = Object.getOwnPropertyDescriptor(navigator, "locks");
+function enablePolicyLocks() {
+  const held = new Set<string>();
+  Object.defineProperty(navigator, "locks", { configurable: true, value: { request: async (name: string, _options: LockOptions, run: (lock: Lock | null) => unknown) => {
+    if (held.has(name)) return run(null);
+    held.add(name); try { return await run({ name, mode: "exclusive" }); } finally { held.delete(name); }
+  } } });
+}
+
 function boundaryFixture() {
   const target = structuredClone(child);
   let boundary: UserPermissionBoundary = { accountId: account.id, userId: target.user.id, resourceVersion: target.user.resourceVersion, policy: null };
@@ -449,7 +480,10 @@ async function reviewLiveNewUser(user: ReturnType<typeof userEvent.setup>) {
   expect(document.body.textContent).not.toContain("Initial-password-for-browser-1!");
 }
 
-afterEach(() => { cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); sessionStorage.clear(); });
+afterEach(() => {
+  cleanup(); vi.clearAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); sessionStorage.clear();
+  if (originalPolicyLocks) Object.defineProperty(navigator, "locks", originalPolicyLocks); else Reflect.deleteProperty(navigator, "locks");
+});
 
 describe("qualified login", () => {
   it("returns a primary user to the originally requested console page", async () => {
@@ -2975,6 +3009,181 @@ describe("account access", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "返回版本目录" }));
     expect(within(screen.getByRole("table", { name: "策略版本目录" })).getByRole("button", { name: "version-a" })).toBe(document.activeElement);
+  });
+
+  it("renames live Policy metadata inline with old/new review, byte validation and a stable target", async () => {
+    enablePolicyLocks(); const fixture = livePolicyMetadata();
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await screen.findByRole("table", { name: "策略声明" });
+    await invokeMoreAction(user, "修改显示名");
+    const group = screen.getByRole("group", { name: "修改显示名 · LogBoundary" });
+    expect(within(group).getByRole("heading", { name: "修改显示名 · LogBoundary" })).toBe(document.activeElement);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const field = within(group).getByRole("textbox", { name: "新显示名" });
+    for (const value of ["", " space ", "汉".repeat(43)]) {
+      fireEvent.change(field, { target: { value } });
+      expect(within(group).getByRole("button", { name: "审阅修改" }).hasAttribute("disabled")).toBe(true);
+    }
+    expect(fixture.updatePolicy).not.toHaveBeenCalled();
+    fireEvent.change(field, { target: { value: "Production log reader" } });
+    await user.click(within(group).getByRole("button", { name: "审阅修改" }));
+    const review = screen.getByRole("group", { name: "审阅显示名修改 · LogBoundary" });
+    expect(within(review).getByText("LogBoundary")).toBeTruthy(); expect(within(review).getByText("Production log reader")).toBeTruthy();
+    expect(fixture.updatePolicy).not.toHaveBeenCalled();
+    await user.click(within(review).getByRole("button", { name: "确认修改显示名" }));
+    expect(await screen.findByRole("heading", { name: "Production log reader" })).toBeTruthy();
+    expect(fixture.updatePolicy).toHaveBeenCalledTimes(1);
+    expect(fixture.updatePolicy.mock.calls[0]![3]).toEqual({ displayName: "Production log reader", resourceVersion: 4, requestId: expect.stringMatching(/^ui-policy-metadata-/) });
+    expect(fixture.updatePolicy.mock.calls[0]![2]).toEqual({ policy: expect.objectContaining({ id: "customer.logs", defaultVersionId: "version-logs", displayName: "LogBoundary" }), contentDigest: fixture.version.contentDigest });
+    await waitFor(() => expect(fixture.readPolicy.mock.calls.length).toBeGreaterThan(1));
+    expect(fixture.listPolicies.mock.calls.length).toBeGreaterThan(2); expect(fixture.deletePolicy).not.toHaveBeenCalled();
+  });
+
+  it("cancels a whole-Policy review without writes and requires an exact typed name before terminal retirement", async () => {
+    enablePolicyLocks(); const fixture = livePolicyMetadata(); const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await invokeMoreAction(user, "退役整条策略");
+    let group = screen.getByRole("group", { name: "退役整条策略 · LogBoundary" });
+    expect(within(group).getByText(/保留版本和审计，不支持恢复/)).toBeTruthy();
+    expect(within(group).getByText(/不会自动解除任何关联/)).toBeTruthy();
+    await user.click(within(group).getByRole("button", { name: "取消" }));
+    expect(fixture.deletePolicy).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "更多操作" })).toBe(document.activeElement));
+    await invokeMoreAction(user, "退役整条策略"); group = screen.getByRole("group", { name: "退役整条策略 · LogBoundary" });
+    const field = within(group).getByRole("textbox", { name: "输入策略显示名「LogBoundary」确认" });
+    for (const value of ["logboundary", "LogBoundary ", "different"]) {
+      fireEvent.change(field, { target: { value } });
+      expect(within(group).getByRole("button", { name: "确认退役整条策略" }).hasAttribute("disabled")).toBe(true);
+    }
+    expect(fixture.deletePolicy).not.toHaveBeenCalled(); fireEvent.change(field, { target: { value: "LogBoundary" } });
+    await user.click(within(group).getByRole("button", { name: "确认退役整条策略" }));
+    await screen.findByRole("table", { name: "策略元数据目录" });
+    expect(screen.queryByRole("button", { name: "LogBoundary" })).toBeNull();
+    expect(fixture.deletePolicy).toHaveBeenCalledTimes(1); expect(fixture.updatePolicy).not.toHaveBeenCalled();
+    expect(fixture.deletePolicy.mock.calls[0]![3]).toEqual({ resourceVersion: 4, requestId: expect.stringMatching(/^ui-policy-metadata-/) });
+    expect(screen.queryByRole("button", { name: /恢复策略|回收站/ })).toBeNull();
+  });
+
+  it("keeps system Policy actions disabled with a reason rather than treating Root as an unrestricted editor", async () => {
+    enablePolicyLocks(); const fixture = livePolicyMetadata(); const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "ReadOnlyAccess" }));
+    await user.click(await screen.findByRole("button", { name: "更多操作" }));
+    const menu = await screen.findByRole("menu", { name: "更多操作" });
+    expect(within(menu).getByRole("menuitem", { name: "修改显示名" }).getAttribute("aria-disabled")).toBe("true");
+    expect(within(menu).getByRole("menuitem", { name: "退役整条策略" }).getAttribute("aria-disabled")).toBe("true");
+    expect(within(menu).getByText(/系统、平台、其他账户或已退役策略/)).toBeTruthy();
+    expect(fixture.updatePolicy).not.toHaveBeenCalled(); expect(fixture.deletePolicy).not.toHaveBeenCalled();
+  });
+
+  it("lets a delegated identity request the same Policy rename path but reports a definite IAM denial without inventing a capability", async () => {
+    enablePolicyLocks(); const fixture = livePolicyMetadata();
+    fixture.repository.currentIdentity = vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER",
+      permissionBoundary: { accountId: account.id, userId: childUser.id, resourceVersion: childUser.resourceVersion, policy: null } });
+    fixture.updatePolicy.mockRejectedValueOnce(new HttpProblem(403, "DENIED"));
+    const { user } = await openAccess(fixture.repository, iam({}, childUser.id), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" })); await invokeMoreAction(user, "修改显示名");
+    fireEvent.change(screen.getByRole("textbox", { name: "新显示名" }), { target: { value: "Proposed name" } });
+    await user.click(screen.getByRole("button", { name: "审阅修改" })); await user.click(screen.getByRole("button", { name: "确认修改显示名" }));
+    expect(await screen.findByText(/IAM 拒绝了本次尝试的权限/)).toBeTruthy();
+    expect(screen.getByRole("group", { name: "审阅显示名修改 · LogBoundary" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "策略操作结果未确认" })).toBeNull();
+    expect(fixture.updatePolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a whole-Policy UNKNOWN after a later conflict and requires an explicit acknowledgement to abandon only local recovery", async () => {
+    enablePolicyLocks(); const fixture = livePolicyMetadata();
+    fixture.deletePolicy.mockRejectedValueOnce(new HttpProblem(503, "LOST")).mockRejectedValueOnce(new HttpProblem(409, "REFERENCED"));
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" })); await invokeMoreAction(user, "退役整条策略");
+    fireEvent.change(screen.getByRole("textbox", { name: "输入策略显示名「LogBoundary」确认" }), { target: { value: "LogBoundary" } });
+    await user.click(screen.getByRole("button", { name: "确认退役整条策略" }));
+    const recovery = await screen.findByRole("region", { name: "策略操作结果未确认" });
+    expect(within(recovery).getByRole("button", { name: "仅放弃本地恢复" }).hasAttribute("disabled")).toBe(true);
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "重试完全相同的原命令" }).hasAttribute("disabled")).toBe(false));
+    await user.click(within(recovery).getByRole("button", { name: "重试完全相同的原命令" }));
+    await waitFor(() => expect(fixture.deletePolicy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("region", { name: "策略操作结果未确认" }).textContent).toContain("未知原请求仍然未知"));
+    expect(fixture.deletePolicy.mock.calls[1]).toEqual(fixture.deletePolicy.mock.calls[0]);
+    const currentRecovery = screen.getByRole("region", { name: "策略操作结果未确认" });
+    await user.click(within(currentRecovery).getByRole("checkbox")); await user.click(within(currentRecovery).getByRole("button", { name: "仅放弃本地恢复" }));
+    await waitFor(() => expect(screen.queryByRole("region", { name: "策略操作结果未确认" })).toBeNull());
+    expect(fixture.deletePolicy).toHaveBeenCalledTimes(2); expect(fixture.updatePolicy).not.toHaveBeenCalled();
+  });
+
+  it("does not borrow an old Policy detail to enable writes after the repository changes", async () => {
+    enablePolicyLocks(); const fixture = livePolicyMetadata();
+    const { user, replaceRepository } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" })); await screen.findByRole("table", { name: "策略声明" });
+    const next = livePolicyMetadata(); const fresh = await next.readPolicy(credential, account.id, "customer.logs"); let complete!: (value: AccountPolicyDetail) => void;
+    const read = vi.fn(() => new Promise<AccountPolicyDetail>((resolve) => { complete = resolve; }));
+    const repository = { ...next.repository, readPolicy: read };
+    replaceRepository(repository); await waitFor(() => expect(read).toHaveBeenCalled());
+    await user.click(await screen.findByRole("button", { name: "更多操作" }));
+    let menu = await screen.findByRole("menu", { name: "更多操作" });
+    expect(within(menu).getByRole("menuitem", { name: "修改显示名" }).getAttribute("aria-disabled")).toBe("true");
+    expect(within(menu).getByText(/请先成功读取该策略的当前默认版本/)).toBeTruthy();
+    expect(next.updatePolicy).not.toHaveBeenCalled(); expect(next.deletePolicy).not.toHaveBeenCalled();
+    await user.keyboard("{Escape}"); await act(async () => { complete(fresh); });
+    await screen.findByRole("table", { name: "策略声明" });
+    await user.click(screen.getByRole("button", { name: "更多操作" })); menu = await screen.findByRole("menu", { name: "更多操作" });
+    expect(within(menu).getByRole("menuitem", { name: "修改显示名" }).getAttribute("aria-disabled")).not.toBe("true");
+  });
+
+  it("keeps the same Policy recovery region visible while an exact retry is in flight", async () => {
+    enablePolicyLocks(); const fixture = livePolicyMetadata(); let failRetry!: (reason: unknown) => void;
+    fixture.deletePolicy.mockRejectedValueOnce(new HttpProblem(503, "LOST"))
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { failRetry = reject; }));
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" })); await invokeMoreAction(user, "退役整条策略");
+    fireEvent.change(screen.getByRole("textbox", { name: "输入策略显示名「LogBoundary」确认" }), { target: { value: "LogBoundary" } });
+    await user.click(screen.getByRole("button", { name: "确认退役整条策略" }));
+    const region = await screen.findByRole("region", { name: "策略操作结果未确认" });
+    await waitFor(() => expect(within(region).getByRole("button", { name: "重试完全相同的原命令" }).hasAttribute("disabled")).toBe(false));
+    await user.click(within(region).getByRole("button", { name: "重试完全相同的原命令" }));
+    expect(screen.getByRole("region", { name: "策略操作结果未确认" })).toBe(region);
+    expect(region.getAttribute("aria-busy")).toBe("true");
+    expect(within(region).getByText("LogBoundary")).toBeTruthy();
+    expect(within(region).getByRole("button", { name: "仅放弃本地恢复" }).hasAttribute("disabled")).toBe(true);
+    await act(async () => { failRetry(new HttpProblem(503, "STILL_UNKNOWN")); });
+    expect(screen.getByRole("region", { name: "策略操作结果未确认" })).toBe(region);
+    expect(fixture.deletePolicy).toHaveBeenCalledTimes(2);
+  });
+
+  it("blocks live version writes while Policy metadata recovery remains unresolved", async () => {
+    enablePolicyLocks(); const fixture = livePolicyVersions();
+    fixture.repository.updatePolicy = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "LOST"));
+    fixture.repository.deletePolicy = vi.fn();
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" })); await invokeMoreAction(user, "修改显示名");
+    fireEvent.change(screen.getByRole("textbox", { name: "新显示名" }), { target: { value: "Changed name" } });
+    await user.click(screen.getByRole("button", { name: "审阅修改" })); await user.click(screen.getByRole("button", { name: "确认修改显示名" }));
+    await screen.findByRole("heading", { name: "策略操作结果未确认" });
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    expect(screen.getByRole("button", { name: "发布新版本" }).hasAttribute("disabled")).toBe(true);
+    await user.click(screen.getByRole("button", { name: "版本 version-a 的操作" }));
+    const menu = await screen.findByRole("menu", { name: "版本 version-a 的操作" });
+    expect(within(menu).getByRole("menuitem", { name: "切换默认版本" }).getAttribute("aria-disabled")).toBe("true");
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled(); expect(fixture.setDefaultPolicyVersion).not.toHaveBeenCalled(); expect(fixture.retirePolicyVersion).not.toHaveBeenCalled();
+  });
+
+  it("restores a Policy UNKNOWN after reopening the authenticated UI and retries with the new verified bearer only", async () => {
+    enablePolicyLocks(); const fixture = livePolicyMetadata(); fixture.updatePolicy.mockRejectedValueOnce(new Error("lost"));
+    const first = await openAccess(fixture.repository, iam(), "policies");
+    await first.user.click(await screen.findByRole("button", { name: "LogBoundary" })); await invokeMoreAction(first.user, "修改显示名");
+    fireEvent.change(screen.getByRole("textbox", { name: "新显示名" }), { target: { value: "Recovered name" } });
+    await first.user.click(screen.getByRole("button", { name: "审阅修改" })); await first.user.click(screen.getByRole("button", { name: "确认修改显示名" }));
+    await screen.findByRole("heading", { name: "策略操作结果未确认" }); const original = fixture.updatePolicy.mock.calls[0]!; first.view.unmount();
+    const authentication = iam({ login: vi.fn().mockResolvedValue({ credential: "new-verified-bearer", mustChangePassword: false,
+      session: { id: "new-session", organizationId: account.id, principalId: rootUser.id, status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } }) });
+    const second = await openAccess(fixture.repository, authentication, "policies", "new-verified-bearer");
+    const recovery = await screen.findByRole("region", { name: "策略操作结果未确认" });
+    expect(fixture.updatePolicy).toHaveBeenCalledTimes(1);
+    await second.user.click(within(recovery).getByRole("button", { name: "重试完全相同的原命令" }));
+    await waitFor(() => expect(fixture.updatePolicy).toHaveBeenCalledTimes(2));
+    expect(fixture.updatePolicy.mock.calls[1]).toEqual(["new-verified-bearer", ...original.slice(1)]);
+    expect(await screen.findByRole("button", { name: "Recovered name" })).toBeTruthy();
   });
 
   it("reviews a live default switch and retirement inline against the exact resource revision", async () => {

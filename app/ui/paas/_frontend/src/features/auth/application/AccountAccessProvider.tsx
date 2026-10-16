@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useLayoutEffect, use
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
 import { useLiveUserCreation, type UserCreationClient } from "./userCreation";
+import { useLivePolicyMutation, type PolicyMutationClient } from "./policyMutation";
 import type {
   Account,
   AccountLifecycleIntent,
@@ -199,6 +200,7 @@ export type PolicyVersionMutationResult =
 
 export type PolicyVersionMutationClient = {
   pending: PolicyVersionMutationIntent | null;
+  blockedByMetadata: boolean;
   canPublish: boolean;
   begin(input: PolicyVersionMutationInput): Promise<PolicyVersionMutationResult>;
   retry(): Promise<PolicyVersionMutationResult>;
@@ -633,6 +635,7 @@ type AccountAccess = {
   serviceLinkedRoles: ServiceLinkedRoleClient | null;
   policyRead: AccountPolicyReadClient | null;
   policyCreate: PolicyCreateClient | null;
+  policyMutation: PolicyMutationClient | null;
   policyVersionMutation: PolicyVersionMutationClient | null;
   accountLifecycle: AccountLifecycleClient | null;
   userCreation: UserCreationClient | null;
@@ -659,6 +662,7 @@ type AccountAccess = {
   usersPage(after: string): void;
   accountsPage(after: string): void;
   retryDirectory(kind: AccountDirectoryKind): Promise<void>;
+  refreshPolicyDirectory(): Promise<void>;
   loadUser(userId: string): Promise<AccountUserScene>;
   passwordResetUnknown: PasswordResetUnknown | null;
   passwordResetLookup: PasswordResetLookup | null;
@@ -1576,6 +1580,20 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, policyCreateIntent, rememberPolicyCreate, repository, scene, sessionRevision, tenantId, viewSession]);
 
+  const expirePolicyMutationOwner = useCallback((originalCredential: string, revision: number) => {
+    if (expireSession(originalCredential, revision)) {
+      verifiedIdentitySession.current = null;
+      setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+    }
+  }, [expireSession]);
+  const policyMutation = useLivePolicyMutation({
+    enabled: Boolean(active && !repository.workspace && scene?.accountId === tenantId &&
+      verifiedIdentityOwner?.session === viewSession && verifiedIdentityOwner.repository === repository),
+    accountId: tenantId, actorPrincipalId: principalId, credential: credential ?? undefined,
+    sessionRevision, repository, protect: protectedMutation, onExpired: expirePolicyMutationOwner,
+    versionPolicyId: versionMutationIntent?.policyId
+  });
+
   const policyVersionMutation = useMemo<PolicyVersionMutationClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace ||
         !repository.setDefaultPolicyVersion || !repository.retirePolicyVersion || !repository.readPolicy || !repository.listPolicyVersions) return null;
@@ -1621,9 +1639,11 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
     return {
       pending: versionMutationIntent,
+      blockedByMetadata: Boolean(policyMutation && (!policyMutation.ready || policyMutation.pending)),
       canPublish: Boolean(repository.createPolicyVersion),
       begin(input) {
-        if (input.kind === "publish" && !repository.createPolicyVersion ||
+        if (policyMutation && (!policyMutation.ready || policyMutation.pending) ||
+            input.kind === "publish" && !repository.createPolicyVersion ||
             input.kind === "retire" && input.versionId === input.expectedDefaultVersionId ||
             input.kind === "set-default" && input.versionId === input.expectedDefaultVersionId ||
             !scene.policies.some((policy) => policy.id === input.policyId && policy.management === "CUSTOMER" && policy.accountId === accountId && policy.scope === "TENANT" && policy.status === "ACTIVE")) {
@@ -1640,7 +1660,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       },
       retry() {
         const current = versionMutationRef.current;
-        if (current?.session !== viewSession || current.intent.phase !== "unknown") return Promise.resolve({ status: "blocked" });
+        if (policyMutation && (!policyMutation.ready || policyMutation.pending) ||
+            current?.session !== viewSession || current.intent.phase !== "unknown") return Promise.resolve({ status: "blocked" });
         const intent = { ...current.intent, phase: "submitting" as const, observation: null, observationError: null };
         if (!rememberVersionMutation(intent.requestId, intent)) return Promise.resolve({ status: "blocked" });
         return attempt(intent, true);
@@ -1680,7 +1701,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         return rememberVersionMutation(current.intent.requestId, null);
       }
     };
-  }, [active, credential, expireSession, rememberVersionMutation, repository, scene, sessionRevision, tenantId, versionMutationIntent, viewSession]);
+  }, [active, credential, expireSession, policyMutation, rememberVersionMutation, repository, scene, sessionRevision, tenantId, versionMutationIntent, viewSession]);
 
   const accountSecuritySettings = useMemo<AccountSecuritySettingsClient | null>(() => {
     const reader = repository.accountSecuritySettings;
@@ -2148,10 +2169,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     }
   }, [active, credential, exactUsers, expireSession, loading, repository, scene, sessionRevision, viewSession]);
 
-  const retryDirectory = useCallback(async (kind: AccountDirectoryKind) => {
-    if (!active || !credential || !scene || loading || mutationPending.current || !scene.directoryFailures[kind]) return;
-    if (kind === "users") return loadUsersPage("");
-    if (kind === "accounts") return loadAccountsPage("");
+  const loadPolicyDirectory = useCallback(async (kind: "tenantPolicies" | "platformPolicies") => {
+    if (!active || !credential || !scene || loading || mutationPending.current ||
+        currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return;
     const request = ++directoryRequest.current[kind];
     const isCurrent = () => request === directoryRequest.current[kind] && currentViewSession.current === viewSession && currentExactUsers.current === exactUsers;
     const platform = kind === "platformPolicies";
@@ -2182,7 +2202,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         setScene(null); setWorkspace(null); expireSession(credential, sessionRevision);
       }
     } finally { if (isCurrent()) setLoading(false); }
-  }, [active, credential, exactUsers, expireSession, loadAccountsPage, loadUsersPage, loading, repository, scene, sessionRevision, viewSession]);
+  }, [active, credential, exactUsers, expireSession, loading, repository, scene, sessionRevision, viewSession]);
+
+  const retryDirectory = useCallback(async (kind: AccountDirectoryKind) => {
+    if (!scene?.directoryFailures[kind]) return;
+    if (kind === "users") return loadUsersPage("");
+    if (kind === "accounts") return loadAccountsPage("");
+    return loadPolicyDirectory(kind);
+  }, [loadAccountsPage, loadPolicyDirectory, loadUsersPage, scene]);
 
   const beginUserPolicyAttachment = useCallback((user: AccountUserScene, policyId: string): boolean => {
     if (!active || !credential || !scene || loading || mutationPending.current || !tenantId || !principalId) return false;
@@ -2348,6 +2375,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       finally { mutationPending.current = false; setBusy(false); }
     },
     policyDirectoryView,
+    refreshPolicyDirectory: () => loadPolicyDirectory("tenantPolicies"),
     userDirectoryView,
     groups,
     permissionBoundaries,
@@ -2356,6 +2384,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     serviceLinkedRoles,
     policyRead,
     policyCreate,
+    policyMutation,
     policyVersionMutation,
     accountLifecycle,
     accessAnalysis,
@@ -2509,7 +2538,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

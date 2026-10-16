@@ -248,6 +248,29 @@ export type AccountPolicyVersion = {
 export type AccountPolicyDetail = { policy: AccountPolicy; version: AccountPolicyVersion };
 export type AccountPolicyVersionDirectory = { policy: AccountPolicy; items: AccountPolicyVersion[] };
 
+/** Non-secret original command metadata, never a receipt or authorization permit. */
+export type PolicyMutationIntent = Readonly<{
+  format: 1;
+  accountId: string;
+  actorPrincipalId: string;
+  policy: AccountPolicy;
+  contentDigest: string;
+  requestId: string;
+  createdAt: string;
+  state: "UNKNOWN";
+} & ({ kind: "update"; displayName: string } | { kind: "retire" })>;
+
+export function policyDisplayNameValid(value: string): boolean {
+  return Boolean(value) && value.trim() === value && !/\p{Cc}/u.test(value) && new TextEncoder().encode(value).length <= 128;
+}
+
+export function policyMetadataResultMatches(result: AccountPolicy, source: AccountPolicy, displayName: string, status: PolicyStatus): boolean {
+  return result.id === source.id && result.accountId === source.accountId && result.management === "CUSTOMER" &&
+    result.scope === "TENANT" && result.status === status && result.displayName === displayName &&
+    result.resourceVersion === source.resourceVersion + 1 && result.defaultVersionId === source.defaultVersionId &&
+    result.createdAt === source.createdAt;
+}
+
 // Product-owned authorization declarations are policy-authoring metadata. They
 // are not Policy records, grants, effective permissions or tenant-owned
 // registration state, so keep their open action namespace separate from the

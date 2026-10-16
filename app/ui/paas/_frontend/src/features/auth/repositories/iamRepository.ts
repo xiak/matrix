@@ -14,6 +14,7 @@ import type {
   AccountAccess,
   AccountCommand,
   AccountIdentity,
+  AccountPolicy,
   AccountPolicyDetail,
   AccountPolicyDocument,
   AccountPolicyVersionDirectory,
@@ -36,6 +37,7 @@ import type {
   PolicyAttachmentChangeExpectation,
   PolicyAttachmentRevocation,
   PolicyDirectory,
+  PolicyMutationIntent,
   AuthorizationProfileDirectory,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
@@ -276,6 +278,12 @@ export interface AccountRepository {
   readPolicy?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyDetail>;
   createPolicy?(credential: string, accountId: string,
     command: { displayName: string; document: AccountPolicyDocument; requestId: string }): Promise<AccountPolicyDetail>;
+  // The source snapshot binds the target/result locally; it is not sent as
+  // authority or substituted for the server's current authorization.
+  updatePolicy?(credential: string, accountId: string, source: Pick<PolicyMutationIntent, "policy" | "contentDigest">,
+    command: { displayName: string; resourceVersion: number; requestId: string }): Promise<AccountPolicyDetail>;
+  deletePolicy?(credential: string, accountId: string, source: AccountPolicy,
+    command: { resourceVersion: number; requestId: string }): Promise<AccountPolicy>;
   listPolicyVersions?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyVersionDirectory>;
   readPolicyVersion?(credential: string, accountId: string, policyId: string, versionId: string): Promise<AccountPolicyDetail>;
   createPolicyVersion?(credential: string, accountId: string, policyId: string,
