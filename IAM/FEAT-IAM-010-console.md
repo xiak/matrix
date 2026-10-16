@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果 | 最终改密的纯页面提交、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
-| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变 | User修改/停复用、Group页面删除、Membership、附件回执和不确定结果仍需浏览器门禁；批量User不在本轮需求 |
+| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变 | User修改/停复用、Membership、附件回执和不确定结果仍需浏览器门禁；Group删除确认当前错误声称操作对象是“模拟记录”，修复并复验最终删除前不得接受；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；当前IAM86+r36签名页面读取已验证通知地址、本人TOTP状态、六个有效Session，并对缺少`iam.access-key.list`和`iam.security-settings.read`显示真实权限拒绝 | 强制MFA重新绑定、外部物理认证器、AccessKey全生命周期、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；WebAuthn明确Deferred |
@@ -271,6 +271,8 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 策略编辑器还以名称`UIRuntimeInvalidPolicy`审阅仅含`{"languageVersion":"1"}`的文档。页面明确拒绝缺少非空statement的内容，并同时提示当前只支持语言版本1和TENANT范围；随后权威库中同名Policy与PolicyVersion计数均为0。该结果只接受这一项客户端语义失败和无持久化副作用，不外推为服务端语法攻击、其他错误类别或完整策略错误矩阵。
 
 同一已认证页面把该草稿修正为有效TENANT文档，并以新名称`UIRuntimeMetadataPolicy`进入最终审阅；提交时原Session已自然过期，APISIX准确记录唯一`POST /api/iam/v1/policies`返回401，页面回到登录入口。权威库中同名Policy与PolicyVersion仍为0，IAM outbox和Audit也没有任何包含该名称的记录。该证据接受策略最终创建遇到过期Session时失败关闭且无部分效果，不把一次自然窗口外推为改密、附件、Role或其他敏感写入的完整过期矩阵。
+
+重新认证后，页面创建第三个零成员、零附件用户组`ui-runtime-delete-gate`，稳定ID为`group-f1753c5017b98dbedce6b6245c50c071c4800171dfce4af72fe9b7d691a895b6`。详情的“更多操作→删除”确认框第二条准确说明服务端会返回解除Membership和撤销直接附件的权威数量，但第一条仍错误显示“此操作只删除模拟记录”；英文默认文案同样声称`mock record`。因此没有输入确认名称，也没有执行最终删除；关闭对话框后权威库仍为ACTIVE版本1、授权代次1、有效Membership和附件均为0，只有一次已投递的`iam.group.created`。错误默认文案由现有`zh-CN.json`、`en.json`的`deleteHint`及`AccessWorkspaceUi`删除确认owner持有；必须在该owner删除MOCK语义并保留真实影响说明后，再对同一路径执行页面最终删除、返回计数、outbox/Audit及目录消失门禁。当前发现是明确发布阻塞，不得以服务端API删除或第二条正确提示覆盖。
 
 ### 精确目标读取与目录故障隔离
 
