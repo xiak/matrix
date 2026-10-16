@@ -162,6 +162,7 @@ export function buildAccountAccessScene(
     identityLabel: identity.user.displayName,
     currentUserId: identity.user.id,
     currentLoginName: identity.user.loginName,
+    currentUserEnabled: identity.user.status === "ACTIVE",
     identityKind: identity.identityKind,
     permissionBoundary: identity.permissionBoundary,
     isRoot: rootIsCurrent,

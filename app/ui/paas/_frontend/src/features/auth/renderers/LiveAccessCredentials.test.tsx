@@ -18,7 +18,7 @@ const owner = {
   canSetPermissionBoundary: true, permissionBoundarySetRestrictionReason: null, canRemovePermissionBoundary: true, permissionBoundaryRemoveRestrictionReason: null,
   attachments: []
 } as const;
-const scene = { accountId: "account-acme", accountOwner: { id: "root-acme" }, users: [owner] } as unknown as AccountAccessScene;
+const scene = { accountId: "account-acme", accountOwner: { id: "root-acme" }, canListUsers: true, isRoot: true, users: [owner] } as unknown as AccountAccessScene;
 const key = { id: "mak1.alex-primary", accountId: scene.accountId, userId: owner.id, status: "ENABLED" as const, resourceVersion: 1,
   credentialState: "CURRENT" as const,
   networkRestrictions: { allowedSourceCidrs: ["198.51.100.0/24"] },

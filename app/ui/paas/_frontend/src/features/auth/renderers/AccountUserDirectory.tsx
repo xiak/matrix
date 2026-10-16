@@ -138,9 +138,9 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
   const blocked = access.busy || access.loading || filtering || !access.supportsUserBatch;
   const batchContext = { canListUsers: scene.canListUsers, supported: access.supportsUserBatch, rootId: scene.accountOwner.id, actorId: scene.currentUserId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled, canSetStatus: user.canSetStatus, canAttachPolicy: user.canAttachTenantPolicy, protected: user.protected })) };
   if (entityId === scene.accountOwner.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
+  if (entityId && !workspace) return <AccountLiveUserWorkspace key={entityId} userId={entityId} summary={detail} onBack={() => onOpen("users")} />;
   if (entityId && !detail) return <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   if (detail && access.workspace) return <AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} initialTab={initialDetailTab} onBack={() => onOpen("users")} onOpen={onOpen} />;
-  if (detail) return detail.canRead ? <AccountLiveUserWorkspace key={`${detail.id}:${detail.resourceVersion}`} summary={detail} onBack={() => onOpen("users")} /> : <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   if (batchOperation && isUserBatchAssociationAction(batchOperation.action)) return <div className={styles.userDirectory}><Card><Card.Body>
     <UserBatchWorkflow action={batchOperation.action} users={batchOperation.users} onClose={closeBatch} onCompleted={completeBatch} />
   </Card.Body></Card></div>;

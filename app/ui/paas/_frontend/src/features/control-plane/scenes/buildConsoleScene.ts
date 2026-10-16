@@ -201,7 +201,7 @@ function navigation(
   const selectedView = view === "create-user" ? "users"
     : view === "create-policy" ? "policies"
       : view === "create-group" ? "groups"
-        : view === "create-role" || view === "service-authorizations" ? "roles"
+        : view === "create-role" ? "roles"
           : view;
   return service ? serviceNavigation[service.id].map((page) => ({
     id: page.id, messageKey: page.id,

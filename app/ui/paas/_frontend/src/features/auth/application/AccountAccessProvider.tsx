@@ -674,6 +674,7 @@ type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canListGro
   supportsLiveAccessKeys: boolean;
   supportsLiveAccessAnalysis: boolean;
   supportsLiveSecurityReports: boolean;
+  supportsLiveServiceAuthorizations: boolean;
 };
 const AccountCapabilitiesContext = createContext<AccountCapabilities | null>(null);
 
@@ -702,14 +703,14 @@ async function readWhenAuthorized<T>(read: () => Promise<T>): Promise<T | null> 
   }
 }
 
-function accountCommandAvailable(scene: AccountAccessScene, command: AccountCommand): boolean {
+function accountCommandAvailable(scene: AccountAccessScene, command: AccountCommand, exactUsers: ReadonlyMap<string, AccountUserScene>): boolean {
   if (command.kind === "create-account") return scene.canCreateAccounts;
   if (command.kind === "set-alias") return scene.canSetAlias;
   if (command.kind === "set-account-status" || command.kind === "recover-root-credentials") {
     const account = scene.accounts.find((item) => item.id === command.accountId);
     return command.kind === "set-account-status" ? account?.canSetStatus === true : account?.canRecoverRoot === true;
   }
-  const user = scene.users.find((item) => item.id === command.userId);
+  const user = exactUsers.get(command.userId) ?? scene.users.find((item) => item.id === command.userId);
   if (!user) return false;
   if (command.kind === "update-user") return user.canUpdate;
   if (command.kind === "delete-user") return user.canDelete;
@@ -743,8 +744,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const viewSession = useMemo(() => ({ credential, tenantId, principalId, sessionRevision }), [credential, tenantId, principalId, sessionRevision]);
   const [verifiedIdentityOwner, setVerifiedIdentityOwner] = useState<{ session: typeof viewSession; repository: AccountRepository } | null>(null);
   const currentViewSession = useRef(viewSession);
+  // Exact target reads are not members of the signed directory. Retain only
+  // advisory UI facts for this Session, repository and read generation.
+  const exactUsers = useMemo(() => ({ active, repository, revision, viewSession,
+    users: new Map<string, AccountUserScene>(), requests: new Map<string, number>() }), [active, repository, revision, viewSession]);
+  const currentExactUsers = useRef(exactUsers);
   const verifiedIdentitySession = useRef<typeof viewSession | null>(null);
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
+  useLayoutEffect(() => { currentExactUsers.current = exactUsers; }, [exactUsers]);
   const accountLifecycleOwner = useMemo<AccountLifecycleOwner | null>(() => {
     if (!active || !credential || !tenantId || !principalId || !repository.accountLifecycle || repository.workspace) return null;
     return { repository: repository.accountLifecycle, credential, sessionRevision, actorAccountId: tenantId, actorPrincipalId: principalId };
@@ -958,7 +965,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const canViewPolicies = Boolean(scene?.canViewPolicies);
   const hasPreviewWorkspace = Boolean(repository.workspace);
   const supportsLiveRoles = Boolean(repository.roles);
-  const supportsLiveAccessKeys = Boolean(!repository.workspace && repository.accessKeys && canListUsers);
+  const supportsLiveAccessKeys = Boolean(!repository.workspace && repository.accessKeys);
+  const supportsLiveServiceAuthorizations = Boolean(!repository.workspace && (repository.listServiceRoleTemplates || repository.listServiceLinkedRoles));
   const supportsLiveAccessAnalysis = Boolean(!repository.workspace && repository.accessAnalysis);
   const supportsLiveSecurityReports = Boolean(!repository.workspace && repository.securityReports);
   // Navigation observes permission changes, not every form's pending/error state.
@@ -973,9 +981,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     supportsLiveRoles,
     supportsLiveAccessKeys,
     supportsLiveAccessAnalysis,
-    supportsLiveSecurityReports
+    supportsLiveSecurityReports,
+    supportsLiveServiceAuthorizations
   }), [canCreateAccounts, canListGroups, canListRoles, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace,
-    supportsLiveAccessAnalysis, supportsLiveAccessKeys, supportsLiveRoles, supportsLiveSecurityReports]);
+    supportsLiveAccessAnalysis, supportsLiveAccessKeys, supportsLiveRoles, supportsLiveSecurityReports, supportsLiveServiceAuthorizations]);
 
   useEffect(() => {
     if (!active || !credential || !tenantId) return;
@@ -1037,11 +1046,25 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   }, [active, credential, principalId, repository, revision, tenantId, viewSession]);
 
   const loadUser = useCallback(async (userId: string): Promise<AccountUserScene> => {
-    if (!active || !credential || !scene || !userId || userId === scene.accountOwner.id) throw new Error("INVALID_IAM_USER_TARGET");
-    const access = await repository.getUser(credential, userId);
-    if (access.user.id !== userId || access.user.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
-    return buildAccountUserScene({ id: scene.accountId, loginAlias: scene.loginAlias }, scene.policies, access);
-  }, [active, credential, repository, scene, tenantId]);
+    if (!active || !credential || !scene || !userId || userId === scene.accountOwner.id ||
+        currentExactUsers.current !== exactUsers || currentViewSession.current !== viewSession) throw new Error("INVALID_IAM_USER_TARGET");
+    const request = (exactUsers.requests.get(userId) ?? 0) + 1;
+    exactUsers.requests.set(userId, request);
+    exactUsers.users.delete(userId);
+    try {
+      const access = await repository.getUser(credential, userId);
+      if (currentExactUsers.current !== exactUsers || currentViewSession.current !== viewSession ||
+          exactUsers.requests.get(userId) !== request) throw new Error("STALE_IAM_STATE");
+      if (access.user.id !== userId || access.user.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
+      const user = buildAccountUserScene({ id: scene.accountId, loginAlias: scene.loginAlias }, scene.policies, access);
+      exactUsers.users.set(userId, user);
+      return user;
+    } catch (failure) {
+      if (currentExactUsers.current === exactUsers && currentViewSession.current === viewSession && exactUsers.requests.get(userId) === request &&
+          failure instanceof HttpProblem && failure.status === 401) expireSession(credential, sessionRevision);
+      throw failure;
+    }
+  }, [active, credential, exactUsers, expireSession, repository, scene, sessionRevision, tenantId, viewSession]);
 
   const inspectPolicyAttachmentChange = useCallback(async (expectation: PolicyAttachmentChangeOperationExpectation): Promise<PolicyAttachmentChange> => {
     const read = repository.readPolicyAttachmentChange;
@@ -1299,20 +1322,19 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       accountId,
       load: (userId) => scoped((async () => {
-        const access = await repository.getUser(credential, target(userId));
-        if (access.user.id !== userId || access.user.accountId !== accountId) throw new Error("INVALID_IAM_TENANT");
+        const user = await loadUser(target(userId));
         const boundary = await boundaryRepository.read(credential, accountId, userId);
         if (boundary.accountId !== accountId || boundary.userId !== userId) throw new Error("INVALID_IAM_TENANT");
-        if (boundary.resourceVersion !== access.user.resourceVersion) throw new HttpProblem(409, "IAM_USER_REVISION_CHANGED");
+        if (boundary.resourceVersion !== user.resourceVersion) throw new HttpProblem(409, "IAM_USER_REVISION_CHANGED");
         const directory = scene.tenantPoliciesAvailable ? await readWhenAuthorized(() => repository.listPolicies(credential, false)) : null;
         if (directory && (directory.accountId !== accountId || directory.scope !== "TENANT")) throw new Error("INVALID_IAM_TENANT");
         const policies = directory?.items ?? [];
-        return { user: buildAccountUserScene({ id: accountId, loginAlias: scene.loginAlias }, policies, access), boundary, policies, policiesAvailable: directory !== null };
+        return { user, boundary, policies, policiesAvailable: directory !== null };
       })()),
       set: (userId, command) => protectedMutation(() => scoped(boundaryRepository.set(credential, accountId, target(userId), command))),
       remove: (userId, command) => protectedMutation(() => scoped(boundaryRepository.remove(credential, accountId, target(userId), command)))
     };
-  }, [active, credential, expireSession, protectedMutation, repository, scene, tenantId]);
+  }, [active, credential, expireSession, loadUser, protectedMutation, repository, scene, tenantId]);
 
   const authorizationProfiles = useMemo<AuthorizationProfileClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canViewPolicies) return null;
@@ -1870,16 +1892,22 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   const accessKeys = useMemo<AccessKeyClient | null>(() => {
     const keyRepository = repository.accessKeys;
-    if (!active || !credential || !principalId || !scene || scene.accountId !== tenantId || !keyRepository || !scene.canListUsers) return null;
+    if (!active || !credential || !principalId || !scene || scene.accountId !== tenantId || !keyRepository) return null;
     const accountId = scene.accountId;
     const target = (userId: string) => {
-      if (!userId || userId === scene.accountOwner.id || !scene.users.some((user) => user.id === userId)) throw new Error("INVALID_IAM_USER_TARGET");
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(userId) || userId === scene.accountOwner.id ||
+          currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) throw new Error("INVALID_IAM_USER_TARGET");
       return userId;
     };
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
-      try { return await request; }
+      try {
+        const value = await request;
+        if (currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) throw new Error("STALE_IAM_STATE");
+        return value;
+      }
       catch (failure) {
-        if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential)) {
+        if (currentViewSession.current === viewSession && currentExactUsers.current === exactUsers &&
+            failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
           setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
         }
         throw failure;
@@ -1959,7 +1987,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         return result;
       }
     };
-  }, [active, credential, expireSession, principalId, repository, scene, tenantId, viewSession]);
+  }, [active, credential, exactUsers, expireSession, principalId, repository, scene, sessionRevision, tenantId, viewSession]);
 
   const roles = useMemo<RoleAccessClient | null>(() => {
     const roleRepository = repository.roles;
@@ -2297,7 +2325,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         kind: "reset-password", userId: user.id, resourceVersion: user.resourceVersion,
         initialPassword, requestId: requestToken("ui-user-reset-")
       };
-      if (!scene || verifiedIdentitySession.current !== viewSession || scene.accountId !== tenantId || scene.currentUserId !== principalId || !accountCommandAvailable(scene, command)) { setError("forbidden"); return "rejected"; }
+      if (!scene || verifiedIdentitySession.current !== viewSession || scene.accountId !== tenantId || scene.currentUserId !== principalId || !accountCommandAvailable(scene, command, exactUsers.users)) { setError("forbidden"); return "rejected"; }
       mutationPending.current = true;
       setBusy(true); setError(null); setSuccess(null);
       try {
@@ -2355,7 +2383,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     async execute(command) {
       if (!active || !credential || loading || mutationPending.current) return false;
       if (workspace?.personalMfa.reauthenticationRequired) { setWorkspaceError("reauthenticationRequired"); return false; }
-      if (!scene || !accountCommandAvailable(scene, command)) { setError("forbidden"); return false; }
+      if (!scene || !accountCommandAvailable(scene, command, exactUsers.users)) { setError("forbidden"); return false; }
       mutationPending.current = true;
       setBusy(true); setError(null); setSuccess(null);
       try {
@@ -2366,7 +2394,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } catch (failure) { setError(accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, exactUsers, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

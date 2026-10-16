@@ -1966,42 +1966,40 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### Current shared-navigation development evidence
 
-The current Account-lifecycle recovery candidate consumes only fixed IAM
-`23e389c735caad2ba52f4a955fa715562273c5d6`. Its strict client, persistent
-non-sensitive summary and content-area recovery replace the old frozen-secret
-write retry. The Account-owned block uses the public Card Header/Body/Footer;
-its local import/focus state stays outside Provider-wide data orchestration.
-Tests cover all three operations across independently mounted Sessions with
-different credentials and cleared site storage, including a directory-denied
-reader and a disabled Account's Root recovery. They also cover expiry followed
-by same-actor reauthentication, denied/missing/unavailable results, secret or
-foreign summaries, stale client responses, storage failure before dispatch,
-fresh target reads after acknowledgement, and stage-only keyboard focus.
-No recovered completion synthesizes Account facts, credential validity or
-capabilities, and imported recovery calls no writer or target/directory read.
+The current independent-read slice revalidates existing public contracts at
+fixed IAM `08e1dc4a6ce81386ea7223e62d03356f82aeee58`. An exact User detail is
+read by stable ID, independently of the current directory page or its list
+permission. Its advisory facts are scoped to the Session, repository and read
+generation, never appended to the signed directory or used as authorization.
+AccessKey reads retain target-ID, Root and Account checks without requiring a
+User listing; a known ordinary current identity can open its own inventory.
+Service authorization has an independent navigation entry and consumes its
+own template and relation contracts rather than the ordinary Role list.
+Existing public detail frames, forms, controls and local focus owners remain
+in place. Deferred entries still expose no LIVE submission, and MOCK remains
+separate.
 
-On 2026-10-15, the complete supported Node 22.22.2/npm 11.6.4 run covered
-73 files and 1,595 cases: 1,594 passed and the existing
-`AccessWorkspace.test.tsx` empty-group/multi-member case exceeded the unchanged
-5,000 ms budget. That file is unchanged from parent `33acaf493`; its same-budget
-isolated replay passed in 2.36 seconds. The replay does not replace a green
-complete run or prove that the original timeout is harmless. After the final
-phase-only Hook-dependency cleanup, all three affected files passed all 348
-cases. The complete frontend gate remains open; no test budget, untouched
-group scenario or failure was relaxed, and no second complete run was started.
+The original Account-lifecycle summary and strict completion GET remain
+unchanged. Recovery does not store credentials, replay a write or project a
+historical completion into current Account facts or capabilities. Its existing
+cross-Session, actor, expiry, disabled-Root, storage and focus tests remain
+required.
 
-Final typecheck, full lint with zero allowed warnings, architecture, 234 theme
-contrast pairs and eight Node export-boundary cases passed. Both Windows and
-native Debian Linux used Node 22.22.2/npm 11.6.4 and independently built real
-unset/`0` production pairs, generating 59 pages. Windows used 17 workers and
-normalized 57 segment filenames; Linux used three workers and normalized zero.
-Both pairs, each local embed and all 324 cross-OS files matched byte-for-byte.
-Fresh Go 1.26.3 UI-host test/vet passed. No IAM/backend/API/SQL/profile,
-dependency, timeout configuration, checkpoint, shared DEV process or real
-account/resource changed. Isolated MOCK remains available; mandatory login or
-MFA was not enabled. Exact-source independent CI and real-IAM multi-origin,
-signed-browser, security/device and remaining release gates are not inherited
-from the contract donor or the component fixtures.
+Development checks use Node 22.22.2/npm 11.6.4. Final typecheck, full
+zero-warning lint, architecture and 234 theme contrast pairs passed. Four
+related files passed all 208 cases; the exact-read selection passed 19 and
+the complete shared-shell file passed all 125. Three actual production builds
+exported 59 pages with 57 segment-path normalizations each; unset/`0` exports
+and the regenerated Go embed matched all 324 files byte-for-byte. The complete
+UI-host Go test/vet and eight Node export-boundary cases also passed. The
+complete frontend suite has not yet been rerun for this slice:
+the previous UI source's 1,594/1,595 run retained an unchanged group timeout,
+and targeted replay is not a substitute for a green complete run. No test
+budget, backend/API/SQL/profile, dependency, checkpoint, shared DEV process or
+real account/resource changed. This evidence does not inherit the IAM branch's
+CI, signed-runtime or browser acceptance, and mandatory login/MFA was not
+enabled. Current full-suite, independent fixed-source CI, signed-browser,
+security/device and remaining release gates stay open.
 
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check

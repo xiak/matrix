@@ -289,7 +289,7 @@ type ProgrammaticGuideResult = {
 };
 
 export function ProgrammaticAccessGuide({ owner, client, onInspectPermissions }: {
-  owner: AccountUserScene;
+  owner: Pick<AccountUserScene, "id" | "name" | "loginName">;
   client: AuthorizationProfileClient | null;
   onInspectPermissions?(ownerId: string): void;
 }) {

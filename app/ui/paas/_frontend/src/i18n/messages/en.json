@@ -1096,6 +1096,10 @@
         "label": "Roles",
         "hint": "Trust and permissions"
       },
+      "service-authorizations": {
+        "label": "Service authorizations",
+        "hint": "Account consent and workload bindings"
+      },
       "providers": {
         "label": "Role SSO",
         "hint": "Identity providers"
@@ -4600,6 +4604,8 @@
     "providers": "Role SSO",
     "federations": "External collaboration",
     "keys": "Access keys",
+    "keyOwnerDirectoryUnavailable": "User listing is unavailable. Account owners do not hold access keys; keys for another known user can be read independently from that user's details.",
+    "keyViewOwn": "View my access keys",
     "userSso": "User SSO",
     "settings": "User settings",
     "identity": "Identities",

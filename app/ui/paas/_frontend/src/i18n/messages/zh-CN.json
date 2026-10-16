@@ -1096,6 +1096,10 @@
         "label": "角色",
         "hint": "信任关系与授权"
       },
+      "service-authorizations": {
+        "label": "服务授权",
+        "hint": "账号同意与服务资源绑定"
+      },
       "providers": {
         "label": "角色 SSO",
         "hint": "身份提供商"
@@ -4600,6 +4604,8 @@
     "providers": "角色 SSO",
     "federations": "跨账号协作",
     "keys": "访问密钥",
+    "keyOwnerDirectoryUnavailable": "用户目录当前不可用。主账号不持有访问密钥；其他已知用户的密钥可从其详情独立读取。",
+    "keyViewOwn": "查看本人访问密钥",
     "userSso": "用户 SSO",
     "settings": "用户设置",
     "identity": "身份管理",

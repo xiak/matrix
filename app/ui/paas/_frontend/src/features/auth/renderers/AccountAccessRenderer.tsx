@@ -216,11 +216,11 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
   const previewOnly = ["create-policy", "policy-language", "policy-configuration", "access-diagnosis", "access-analysis", "security-reports", "roles", "create-role", "service-authorizations", "providers", "user-sso", "federations", "keys", "authorization-profiles"].includes(view);
   const denied = scene && (
-    (view === "users" && !scene.canListUsers) ||
+    (view === "users" && !entityId && !scene.canListUsers) ||
     (view === "create-user" && !scene.canCreateUsers) ||
     (view === "groups" && !(workspace ? scene.canListUsers : scene.canListGroups)) ||
     (view === "roles" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
-    (view === "service-authorizations" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
+    (view === "service-authorizations" && workspace && !scene.canListUsers) ||
     (view === "create-role" && !workspace && (!access.roles || !scene.canCreateRoles)) ||
     (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
     (view === "tenants" && !scene.canReadAccounts) ||
@@ -260,7 +260,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "groups" && access.groups ? <AccountLiveGroups key={`${access.groups.accountId}:${entityId ?? "groups"}`} client={access.groups} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "roles" && !workspace && access.roles ? <AccountLiveRoles key={`${access.roles.accountId}:${access.roles.sessionRevision}:${entityId ?? "roles"}`} client={access.roles} serviceRoleTemplates={access.serviceRoleTemplates} serviceLinkedRoles={access.serviceLinkedRoles} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} revokeIntent={access.roleSessionRevokeIntent} onRevokeIntentChange={access.changeRoleSessionRevokeIntent} /> :
-      view === "service-authorizations" && !workspace && (access.serviceLinkedRoles || access.serviceRoleTemplates) ? <AccountServiceAuthorizations key={access.serviceLinkedRoles?.sessionRevision ?? access.serviceRoleTemplates?.sessionRevision} relations={access.serviceLinkedRoles ?? null} templates={access.serviceRoleTemplates ?? null} onBack={() => onNavigate("roles")} /> :
+      view === "service-authorizations" && !workspace && (access.serviceLinkedRoles || access.serviceRoleTemplates) ? <AccountServiceAuthorizations key={access.serviceLinkedRoles?.sessionRevision ?? access.serviceRoleTemplates?.sessionRevision} relations={access.serviceLinkedRoles ?? null} templates={access.serviceRoleTemplates ?? null} onBack={scene.canListRoles ? () => onNavigate("roles") : undefined} /> :
       view === "create-role" && !workspace && access.roles ? <LiveRoleCreationWizard client={access.roles} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
       view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={scene} createIntent={access.accessKeyCreateIntent}
         userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :

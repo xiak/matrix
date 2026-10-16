@@ -376,17 +376,17 @@ function SecuritySettingsIntentProbe() {
   </>;
 }
 
-function AuthenticatedAccess({ repository, initialView, active = true }: { repository: AccountRepository; initialView: AccountAccessView; active?: boolean }) {
+function AuthenticatedAccess({ repository, initialView, initialEntityId, active = true }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string; active?: boolean }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
   const [view, setView] = useState(initialView);
-  const [entityId, setEntityId] = useState<string>();
+  const [entityId, setEntityId] = useState<string | undefined>(initialEntityId);
   return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider> : <LoginRenderer />;
 }
 
-async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential) {
+async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential, initialEntityId?: string) {
   const user = userEvent.setup({ delay: null });
-  const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
+  const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} initialEntityId={initialEntityId} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
   const view = render(tree(repository));
   await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
@@ -1338,6 +1338,97 @@ describe("account access", () => {
     expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
     expect(listUsers).toHaveBeenCalledTimes(2);
     expect(listPolicies).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false])("reads a stable user ID outside the current directory page with user-list permission=%s", async (canList) => {
+    const otherUser = { ...childUser, id: "child-other", loginName: "other", displayName: "Other User" };
+    const listUsers = vi.fn().mockResolvedValue({ items: [{ user: otherUser, policyAttachments: [], capabilities: userCapabilities(otherUser) }], nextAfter: "next-user-page" });
+    const target = structuredClone(child);
+    target.capabilities = userCapabilities(childUser, target.policyAttachments, "AUTHORITY_REQUIRED").map((entry) => entry.action === "iam.user.read" ? { ...entry, available: true, restrictionReason: null } : entry);
+    const repository = accounts({ listUsers, currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(canList) }), getUser: vi.fn().mockResolvedValue(target) });
+    await openAccess(repository, iam(), "users", credential, childUser.id);
+    expect(await screen.findByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", true);
+    expect(repository.getUser).toHaveBeenCalledExactlyOnceWith(credential, childUser.id);
+    expect(listUsers).toHaveBeenCalledTimes(canList ? 1 : 0);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    expect(screen.queryByText("对象不可用")).toBeNull();
+  });
+
+  it.each([403, 404])("keeps an unavailable stable user ID private after an exact %s", async (status) => {
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }), getUser: vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE_TARGET")) });
+    await openAccess(repository, iam(), "users", credential, "known-user-id");
+    expect(await screen.findByText("对象不可用")).toBeTruthy();
+    expect(repository.getUser).toHaveBeenCalledExactlyOnceWith(credential, "known-user-id");
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(screen.queryByText("PRIVATE_TARGET")).toBeNull();
+    expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull();
+  });
+
+  it("reads service consent independently without ordinary Role-list authority", async () => {
+    const roleRepository = { list: vi.fn() } as unknown as NonNullable<AccountRepository["roles"]>;
+    const listServiceLinkedRoles = vi.fn().mockResolvedValue({ accountId: account.id, items: [], nextAfter: null });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }), roles: roleRepository,
+      listServiceLinkedRoles, getServiceLinkedRole: vi.fn(), listServiceRoleTemplates: vi.fn().mockResolvedValue({ accountId: account.id, items: [] }) });
+    await openAccess(repository, iam(), "service-authorizations");
+    expect(await screen.findByText("当前账号暂无服务授权")).toBeTruthy();
+    expect(listServiceLinkedRoles).toHaveBeenCalledExactlyOnceWith(credential, account.id, undefined);
+    expect(roleRepository.list).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "返回角色列表" })).toBeNull();
+  });
+
+  it("does not let a previous repository's late exact User response restore old controls", async () => {
+    let finish!: (value: UserAccess) => void;
+    const first = accounts({ getUser: vi.fn(() => new Promise<UserAccess>((resolve) => { finish = resolve; })) });
+    const next = structuredClone(child);
+    next.user.displayName = "Current read-only identity";
+    next.capabilities = userCapabilities(next.user, next.policyAttachments, "AUTHORITY_REQUIRED");
+    const replacement = accounts({ getUser: vi.fn().mockResolvedValue(next) });
+    const opened = await openAccess(first, iam(), "users", credential, childUser.id);
+    await waitFor(() => expect(first.getUser).toHaveBeenCalledTimes(1));
+    opened.replaceRepository(replacement);
+    await screen.findByText("Current read-only identity");
+    await act(async () => { finish(structuredClone(child)); });
+    expect(screen.getByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", true);
+    expect(screen.queryByText("Developer A")).toBeNull();
+    expect(first.execute).not.toHaveBeenCalled();
+    expect(replacement.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not render a foreign Account's exact User result as the requested target", async () => {
+    const foreign = structuredClone(child);
+    foreign.user.accountId = "foreign-account";
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }), getUser: vi.fn().mockResolvedValue(foreign) });
+    await openAccess(repository, iam(), "users", credential, childUser.id);
+    expect(await screen.findByText("对象不可用")).toBeTruthy();
+    expect(screen.queryByText("foreign-account")).toBeNull();
+    expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("opens another known user's keys from an exact detail without listing the users", async () => {
+    const list = vi.fn().mockResolvedValue({ accountId: account.id, userId: childUser.id, userResourceVersion: childUser.resourceVersion, capabilities: [], items: [] });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }),
+      accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const { user } = await openAccess(repository, iam(), "users", credential, childUser.id);
+    await user.click(await screen.findByRole("button", { name: "查看/管理访问密钥" }));
+    expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
+    expect(list).toHaveBeenCalledExactlyOnceWith(credential, account.id, childUser.id);
+    expect(repository.getUser).toHaveBeenCalledTimes(1);
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(repository.accessKeys!.create).not.toHaveBeenCalled();
+  });
+
+  it("reads a member's own keys without any user-list or user-detail request", async () => {
+    const list = vi.fn().mockResolvedValue({ accountId: account.id, userId: childUser.id, userResourceVersion: childUser.resourceVersion, capabilities: [], items: [] });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: childUser.id, resourceVersion: childUser.resourceVersion, policy: null }, capabilities: currentCapabilities(false) }),
+      accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    await openAccess(repository, iam({}, childUser.id), "keys");
+    expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
+    expect(list).toHaveBeenCalledExactlyOnceWith(credential, account.id, childUser.id);
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(repository.getUser).not.toHaveBeenCalled();
+    expect(repository.accessKeys!.create).not.toHaveBeenCalled();
   });
 
   it("keeps the verified directory identity visible while loading the exact live user detail", async () => {
