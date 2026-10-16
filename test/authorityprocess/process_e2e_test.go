@@ -182,6 +182,7 @@ const (
 	authorityProcessCommandRecoveryBrowser
 	authorityProcessAccountLifecycleRecoveryBrowser
 	authorityProcessPolicyMutationRecoveryBrowser
+	authorityProcessGroupDeletionBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
@@ -292,6 +293,20 @@ func TestIAMPolicyMutationRecoveryConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessPolicyMutationRecoveryBrowser)
 }
 
+// This opt-in fixture proves the destructive Group workspace against real
+// IAM, Audit and PostgreSQL authority. The browser must show the exact cascade
+// impact, require the Group name, submit one versioned command and return to
+// the live directory only after the authoritative deletion receipt succeeds.
+func TestIAMGroupDeletionConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_GROUP_DELETION_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_GROUP_DELETION_BROWSER=1 for the bounded LIVE Group deletion browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("Group deletion browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessGroupDeletionBrowser)
+}
+
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
 // and RabbitMQ 4.1 product resources through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
@@ -334,7 +349,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		duration = 8 * time.Minute
 	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser ||
 		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
-		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser {
+		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser ||
+		mode == authorityProcessGroupDeletionBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -767,6 +783,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	if mode == authorityProcessPolicyMutationRecoveryBrowser {
 		runIAMPolicyMutationRecoveryConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)
+		return
+	}
+	if mode == authorityProcessGroupDeletionBrowser {
+		runIAMGroupDeletionConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)
@@ -3431,6 +3454,179 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 		t.Fatalf("Policy replay tenant Audit chain is incomplete: %#v", chain)
 	}
 	t.Logf("two same-origin tabs recovered one committed Policy %s after the first tab closed a held partial response; the competing tab produced no queued write, the surviving tab replayed exactly one byte-identical command, and the authoritative Policy, immutable version, unique outbox fact and verified tenant Audit chain all matched", operation)
+}
+
+func runIAMGroupDeletionConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	const groupName = "Browser deletion operators"
+	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups", ownerBearer,
+		iamv1.CreateGroupRequest{Name: groupName, Description: "Deletion must preserve users, policies and resources.", RequestID: "browser-group-delete-create"})
+	var group iamv1.Group
+	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &group) != nil ||
+		iamv1.ValidateGroup(group) != nil || group.AccountID != "organization-process" ||
+		group.Name != groupName || group.ResourceVersion != 1 {
+		t.Fatalf("prepare Group deletion target status=%d body=%s", createdResponse.Status, createdResponse.Body)
+	}
+	member := createIAMUser(t, iamEndpoint, ownerBearer, "browser.group.member", "Browser group member",
+		initialDeveloperPassword, "browser-group-delete-member")
+	membershipResponse := performJSON(t, http.MethodPost,
+		iamEndpoint+"/v1/groups/"+string(group.ID)+"/memberships", ownerBearer,
+		iamv1.CreateGroupMembershipRequest{UserID: member.ID, RequestID: "browser-group-delete-membership"})
+	var membership iamv1.GroupMembership
+	if membershipResponse.Status != http.StatusOK || json.Unmarshal(membershipResponse.Body, &membership) != nil ||
+		iamv1.ValidateGroupMembership(membership) != nil || membership.AccountID != group.AccountID ||
+		membership.GroupID != group.ID || membership.UserID != member.ID || membership.ResourceVersion != 1 ||
+		membership.RemovedAt != nil {
+		t.Fatalf("prepare Group deletion membership status=%d body=%s", membershipResponse.Status, membershipResponse.Body)
+	}
+	attachmentResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", ownerBearer,
+		iamv1.CreatePolicyAttachmentRequest{
+			Target:                iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)},
+			PolicyID:              iamv1.SystemPolicyPaaSViewer,
+			PolicyResourceVersion: 1,
+			RequestID:             "browser-group-delete-attachment",
+		})
+	var attachment iamv1.PolicyAttachment
+	if attachmentResponse.Status != http.StatusOK || json.Unmarshal(attachmentResponse.Body, &attachment) != nil ||
+		iamv1.ValidatePolicyAttachment(attachment) != nil || attachment.AccountID != group.AccountID ||
+		attachment.Target.Kind != iamv1.PolicyTargetGroup || attachment.Target.ID != string(group.ID) ||
+		attachment.PolicyID != iamv1.SystemPolicyPaaSViewer || attachment.ResourceVersion != 1 || attachment.RevokedAt != nil {
+		t.Fatalf("prepare Group deletion attachment status=%d body=%s", attachmentResponse.Status, attachmentResponse.Body)
+	}
+
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-group-deletion-finished")
+	browserPath := "/console/access/groups/?id=" + url.QueryEscape(string(group.ID))
+	t.Logf("GROUP_DELETION_BROWSER_FIXTURE url=%s%s finish=%s group=%s name=%q realm=admin; review the one-member and one-policy cascade, type the exact Group name, delete it, and confirm navigation to the live Group directory using the existing changed admin password",
+		server.URL, browserPath, finish, group.ID, groupName)
+	waitForBrowserMarker(t, ctx, ui, finish, "Group deletion browser completion")
+
+	var storedName string
+	var groupVersion int64
+	var deletedAt time.Time
+	var removedMemberships, revokedAttachments int
+	if err := database.QueryRow(ctx, `SELECT name,resource_version,deleted_at,deleted_memberships_count,revoked_attachments_count
+		FROM iam.groups WHERE tenant_id=$1 AND id=$2`, group.AccountID, group.ID).
+		Scan(&storedName, &groupVersion, &deletedAt, &removedMemberships, &revokedAttachments); err != nil ||
+		storedName != groupName || groupVersion != 2 || deletedAt.IsZero() ||
+		removedMemberships != 1 || revokedAttachments != 1 {
+		t.Fatalf("Group deletion was not one atomic 1+1 cascade: name=%q version=%d deleted=%s memberships=%d attachments=%d err=%v",
+			storedName, groupVersion, deletedAt, removedMemberships, revokedAttachments, err)
+	}
+	var membershipVersion int64
+	var removedBy string
+	var membershipRemovedAt time.Time
+	if err := database.QueryRow(ctx, `SELECT resource_version,removed_by,removed_at FROM iam.group_memberships
+		WHERE tenant_id=$1 AND id=$2 AND group_id=$3 AND user_id=$4`, group.AccountID, membership.ID, group.ID, member.ID).
+		Scan(&membershipVersion, &removedBy, &membershipRemovedAt); err != nil || membershipVersion != 2 ||
+		removedBy != "principal-admin" || membershipRemovedAt.IsZero() || !membershipRemovedAt.Equal(deletedAt) {
+		t.Fatalf("Group deletion did not terminate the exact membership: version=%d removedBy=%q removed=%s err=%v",
+			membershipVersion, removedBy, membershipRemovedAt, err)
+	}
+	var attachmentVersion int64
+	var attachmentRevokedAt time.Time
+	if err := database.QueryRow(ctx, `SELECT resource_version,revoked_at FROM iam.policy_attachments
+		WHERE tenant_id=$1 AND id=$2 AND target_kind='GROUP' AND target_id=$3 AND policy_id=$4`,
+		group.AccountID, attachment.ID, group.ID, attachment.PolicyID).
+		Scan(&attachmentVersion, &attachmentRevokedAt); err != nil || attachmentVersion != 2 ||
+		attachmentRevokedAt.IsZero() || !attachmentRevokedAt.Equal(deletedAt) {
+		t.Fatalf("Group deletion did not terminate the exact policy attachment: version=%d revoked=%s err=%v",
+			attachmentVersion, attachmentRevokedAt, err)
+	}
+
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/groups/"+string(group.ID), ownerBearer, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("deleted Group remained readable: status=%d body=%s", response.Status, response.Body)
+	}
+	directoryResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/groups", ownerBearer, nil)
+	var directory iamv1.GroupList
+	if directoryResponse.Status != http.StatusOK || json.Unmarshal(directoryResponse.Body, &directory) != nil ||
+		iamv1.ValidateGroupList(directory) != nil {
+		t.Fatalf("read Group directory after deletion status=%d body=%s", directoryResponse.Status, directoryResponse.Body)
+	}
+	for _, item := range directory.Items {
+		if item.Group.ID == group.ID {
+			t.Fatal("deleted Group remained in the live directory")
+		}
+	}
+	userResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/users/"+string(member.ID), ownerBearer, nil)
+	var userAccess iamv1.UserAccess
+	if userResponse.Status != http.StatusOK || json.Unmarshal(userResponse.Body, &userAccess) != nil ||
+		iamv1.ValidateUserAccess(userAccess) != nil || userAccess.User.ID != member.ID ||
+		userAccess.User.Status != iamv1.PrincipalActive {
+		t.Fatalf("Group deletion changed its member User status=%d body=%s", userResponse.Status, userResponse.Body)
+	}
+	var memberLive bool
+	if err := database.QueryRow(ctx, `SELECT status='ACTIVE' AND deleted_at IS NULL FROM iam.principals
+		WHERE tenant_id=$1 AND id=$2 AND principal_type='USER'`, group.AccountID, member.ID).Scan(&memberLive); err != nil || !memberLive {
+		t.Fatalf("Group deletion deleted or disabled its member User: live=%t err=%v", memberLive, err)
+	}
+	policyResponse := performJSON(t, http.MethodGet,
+		iamEndpoint+"/v1/policies/"+string(iamv1.SystemPolicyPaaSViewer), ownerBearer, nil)
+	var policy iamv1.PolicyDetail
+	if policyResponse.Status != http.StatusOK || json.Unmarshal(policyResponse.Body, &policy) != nil ||
+		iamv1.ValidatePolicyDetail(policy) != nil || policy.Policy.ID != iamv1.SystemPolicyPaaSViewer ||
+		policy.Policy.Status != iamv1.PolicyActive {
+		t.Fatalf("Group deletion changed its referenced system Policy status=%d body=%s", policyResponse.Status, policyResponse.Body)
+	}
+
+	var factCount int
+	var eventID, requestID string
+	var eventDocument []byte
+	if err := database.QueryRow(ctx, `SELECT count(*),min(event_id),min(event_document->>'requestId'),min(event_document::text)::jsonb
+		FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'=$2
+		  AND event_document#>>'{target,kind}'='GROUP' AND event_document#>>'{target,id}'=$3`,
+		group.AccountID, auditv1.ActionIAMGroupDeleted, group.ID).
+		Scan(&factCount, &eventID, &requestID, &eventDocument); err != nil || factCount != 1 {
+		t.Fatalf("Group deletion success fact count=%d err=%v", factCount, err)
+	}
+	defer clear(eventDocument)
+	var event auditv1.Event
+	if iamv1.ValidateID("requestId", requestID) != nil || auditv1.DecodeRequest(bytes.NewReader(eventDocument), &event) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil || string(event.EventID) != eventID ||
+		event.RequestID != requestID || event.Action != auditv1.ActionIAMGroupDeleted ||
+		event.Actor.Type != auditv1.ActorUser || event.Actor.ID != "principal-admin" ||
+		event.TenantID != auditv1.TenantID(group.AccountID) || event.InstallationID != "" ||
+		event.Target.Kind != auditv1.TargetGroup || event.Target.ID != string(group.ID) ||
+		event.Result != auditv1.ResultSucceeded || event.IAMDecisionID == "" {
+		t.Fatal("Group deletion outbox fact changed its exact browser command, actor, scope, target or decision correlation")
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, ownerBearer,
+		auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMGroupDeleted}, http.StatusOK)
+	matches := 0
+	for _, record := range page.Records {
+		if record.Event.EventID != event.EventID {
+			continue
+		}
+		matches++
+		storedEvent, storedErr := json.Marshal(event)
+		recordedEvent, recordedErr := json.Marshal(record.Event)
+		if record.Source != auditv1.SourceIAM || storedErr != nil || recordedErr != nil ||
+			!bytes.Equal(storedEvent, recordedEvent) {
+			t.Fatal("Group deletion Audit record no longer matches the immutable IAM success fact")
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("Group deletion Audit fact matches=%d", matches)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(group.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("Group deletion tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Log("the live Group workspace deleted one versioned Group, atomically removed its one membership and revoked its one direct policy attachment, navigated to the live directory, preserved the User and system Policy, and emitted exactly one decision-bound fact in the verified tenant Audit chain")
 }
 
 func runIAMIdentityConsoleBrowser(
