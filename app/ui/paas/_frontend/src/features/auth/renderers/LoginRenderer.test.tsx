@@ -53,17 +53,20 @@ describe("branded sign-in flows", () => {
   it.each(["/console/", "/console/resources/"])("returns an IAM user to %s only after required password replacement", async (returnTo) => {
     const { user, iam } = open(repository(true), returnTo);
     await user.click(screen.getByRole("tab", { name: "IAM 子账号" }));
-    await user.type(screen.getByLabelText("子账号登录名"), "developer@tenant-a");
-    await user.type(screen.getByLabelText("密码", { exact: true }), "Initial-Password-49!");
+    // This journey owns submitted values and guarded navigation, not typing speed.
+    fireEvent.change(screen.getByLabelText("子账号登录名"), { target: { value: "developer@tenant-a" } });
+    fireEvent.change(screen.getByLabelText("密码", { exact: true }), { target: { value: "Initial-Password-49!" } });
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
     await screen.findByRole("heading", { name: "设置你的正式密码" });
     expect(navigation.replace).not.toHaveBeenCalled();
-    await user.type(screen.getByLabelText("当前初始密码"), "Initial-Password-49!");
-    await user.type(screen.getByLabelText("新密码", { exact: true }), "Permanent-Password-49!");
-    await user.type(screen.getByLabelText("确认新密码"), "Permanent-Password-49!");
+    fireEvent.change(screen.getByLabelText("当前初始密码"), { target: { value: "Initial-Password-49!" } });
+    fireEvent.change(screen.getByLabelText("新密码", { exact: true }), { target: { value: "Permanent-Password-49!" } });
+    fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "Permanent-Password-49!" } });
     await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith(returnTo, { scroll: false }));
     expect(iam.changePassword).toHaveBeenCalledOnce();
+    expect(iam.login).toHaveBeenCalledWith({ loginName: "developer@tenant-a", password: "Initial-Password-49!" });
+    expect(iam.changePassword).toHaveBeenCalledWith("memory-only-token", { currentPassword: "Initial-Password-49!", newPassword: "Permanent-Password-49!" });
   });
 
   it("keeps the preview a separate explicit action and does not persist credentials", async () => {
