@@ -931,13 +931,16 @@ its channel certificate was freshly bounded to this run, and its protected
 configuration was removed from the installation data volume before restart.
 
 Only that exact task-owned outer engine was then stopped and started. The
-107.32-second read-only gate proved the retired AccessKey stayed unusable,
-MFA required a fresh login, tenant primary recovery and revocation remained
-terminal, and repeated status/verify completed the offline lifecycle. No
-Docker Desktop daemon, remote machine, shared service or unrelated Docker
-object was restarted or modified. A later task-only loopback attachment used
-to expose the already-verified APISIX endpoint to FEAT-IAM-010 does not become
-part of this network-disabled lifecycle evidence.
+107.32-second post-restart verification and controlled-cleanup gate repeated
+status/verify, proved the retained MFA required a fresh login, then explicitly
+disabled and deleted the retained AccessKey, revoked its custodian attachment,
+resumed the paused tenant, completed the recovered primary's required password
+change, and explicitly resumed its disabled member while proving the old
+sessions and passwords stayed unusable. No Docker Desktop daemon, remote
+machine, shared service or unrelated Docker object was restarted or modified.
+A later task-only loopback attachment used to expose the already-verified
+APISIX endpoint to FEAT-IAM-010 does not become part of this network-disabled
+lifecycle evidence.
 
 The exact source's
 [Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)
