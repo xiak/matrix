@@ -181,6 +181,7 @@ const (
 	authorityProcessBrowser
 	authorityProcessCommandRecoveryBrowser
 	authorityProcessAccountLifecycleRecoveryBrowser
+	authorityProcessPolicyMutationRecoveryBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
@@ -277,6 +278,20 @@ func TestIAMAccountLifecycleRecoveryConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessAccountLifecycleRecoveryBrowser)
 }
 
+// This opt-in fixture proves that Policy metadata mutations retain one closed
+// command across a committed truncated response. Two same-origin tabs must
+// contend on the browser Web Lock before the surviving tab explicitly replays
+// the exact PATCH or DELETE request with its current valid Session.
+func TestIAMPolicyMutationRecoveryConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_POLICY_MUTATION_RECOVERY_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_POLICY_MUTATION_RECOVERY_BROWSER=1 for the bounded LIVE Policy mutation recovery browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("Policy mutation recovery browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessPolicyMutationRecoveryBrowser)
+}
+
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
 // and RabbitMQ 4.1 product resources through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
@@ -319,7 +334,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		duration = 8 * time.Minute
 	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser ||
 		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
-		mode == authorityProcessAccountLifecycleRecoveryBrowser {
+		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -748,6 +763,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)...)
+		return
+	}
+	if mode == authorityProcessPolicyMutationRecoveryBrowser {
+		runIAMPolicyMutationRecoveryConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)
 		return
 	}
 	if mode == authorityProcessManagedProducts {
@@ -3230,6 +3252,185 @@ func runIAMAccountLifecycleRecoveryConsoleBrowser(
 	}
 	t.Logf("two isolated browser origins recovered one committed %s after its successful response was truncated; exactly one lifecycle mutation, one immutable completion, current Account state, credential effects and the verified installation Audit chain all matched", operation)
 	return sensitive
+}
+
+func runIAMPolicyMutationRecoveryConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	operation := strings.ToUpper(strings.TrimSpace(os.Getenv("MATRIX_IAM_POLICY_MUTATION_RECOVERY_OPERATION")))
+	if operation == "" {
+		operation = "UPDATE"
+	}
+	if operation != "UPDATE" && operation != "RETIRE" {
+		t.Fatalf("MATRIX_IAM_POLICY_MUTATION_RECOVERY_OPERATION is not UPDATE or RETIRE: %q", operation)
+	}
+
+	const (
+		originalName = "Browser Policy response-loss target"
+		updatedName  = "Browser Policy response-loss renamed"
+	)
+	document := iamv1.PolicyDocument{
+		LanguageVersion: iamv1.PolicyLanguageVersion,
+		Scope:           iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{
+			SID:       "read-applications",
+			Effect:    iamv1.PolicyAllow,
+			Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}},
+		}},
+	}
+	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer,
+		iamv1.CreatePolicyRequest{DisplayName: originalName, Document: document,
+			RequestID: "browser-policy-response-loss-create-" + strings.ToLower(operation)})
+	var created iamv1.PolicyDetail
+	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &created) != nil ||
+		iamv1.ValidatePolicyDetail(created) != nil || created.Policy.AccountID != "organization-process" ||
+		created.Policy.DisplayName != originalName || created.Policy.ResourceVersion != 1 {
+		t.Fatalf("prepare Policy response-loss target status=%d body=%s", createdResponse.Status, createdResponse.Body)
+	}
+
+	mutationPath := "/api/iam/v1/policies/" + string(created.Policy.ID)
+	reached, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	loss := &browserResponseLoss{
+		path: mutationPath, postLossWritePrefix: mutationPath,
+		holdAfterPartialResponse: true, holdReached: reached, holdRelease: release,
+		holdFinished: finished, holdTimeout: 5 * time.Minute,
+	}
+	if operation == "UPDATE" {
+		loss.method = http.MethodPatch
+	} else {
+		loss.method = http.MethodDelete
+	}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
+	)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-policy-mutation-recovery-finished")
+	browserPath := "/console/access/policies/?id=" + url.QueryEscape(string(created.Policy.ID))
+	t.Logf("POLICY_MUTATION_RECOVERY_BROWSER_FIXTURE operation=%s browserA=%s%s browserB=%s%s finish=%s policy=%s realm=admin; open two same-origin tabs, submit the mutation in A, attempt the pending retry in B while A is still busy, close A, then retry the unchanged intent in B with the current or newly authenticated admin Session; use the existing changed admin password",
+		operation, server.URL, browserPath, server.URL, browserPath, finish, created.Policy.ID)
+	waitForBrowserMarker(t, ctx, ui, finish, "same-origin Policy mutation recovery completion")
+
+	observation := loss.snapshot()
+	defer clear(observation.RequestBody)
+	requestID := ""
+	wantDisplayName := originalName
+	wantStatus := iamv1.PolicyActive
+	wantAction := auditv1.ActionIAMPolicyUpdated
+	if operation == "UPDATE" {
+		var request iamv1.UpdatePolicyRequest
+		if json.Unmarshal(observation.RequestBody, &request) != nil || iamv1.ValidateUpdatePolicyRequest(request) != nil ||
+			request.DisplayName != updatedName || request.ResourceVersion != created.Policy.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-policy-metadata-") {
+			t.Fatal("browser replayed an invalid Policy metadata update")
+		}
+		requestID, wantDisplayName = request.RequestID, request.DisplayName
+	} else {
+		var request iamv1.DeletePolicyRequest
+		if json.Unmarshal(observation.RequestBody, &request) != nil || iamv1.ValidateDeletePolicyRequest(request) != nil ||
+			request.ResourceVersion != created.Policy.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-policy-metadata-") {
+			t.Fatal("browser replayed an invalid Policy retirement")
+		}
+		requestID, wantStatus, wantAction = request.RequestID, iamv1.PolicyRetired, auditv1.ActionIAMPolicyDeleted
+	}
+	if observation.Attempts != 2 || observation.SelectedAttempt != 1 || observation.MutationOverflow ||
+		!observation.ResponseLost || observation.BackendStatus != http.StatusOK || observation.IdempotencyKey != "" ||
+		!observation.PartialHoldEntered || observation.PartialHoldReleased ||
+		!observation.PartialHoldClientClosed || observation.PartialHoldTimedOut || observation.PartialHoldInvalid ||
+		observation.RecoveryReads != 0 || len(observation.RecoveryAttempts) != 0 ||
+		observation.PostLossWrites != 1 || observation.PostLossMethod != loss.method ||
+		observation.PostLossPath != mutationPath || observation.PostLossHost != observation.MutationHost ||
+		len(observation.MutationAttempts) != 2 {
+		t.Fatalf("Policy mutation response-loss boundary was not exact: attempts=%d selected=%d overflow=%t lost=%t backend=%d key_present=%t entered=%t released=%t client_closed=%t timed_out=%t invalid=%t recovery_reads=%d post_loss_writes=%d post_loss_method=%q post_loss_path=%q same_host=%t ledger=%d",
+			observation.Attempts, observation.SelectedAttempt, observation.MutationOverflow,
+			observation.ResponseLost, observation.BackendStatus, observation.IdempotencyKey != "",
+			observation.PartialHoldEntered, observation.PartialHoldReleased,
+			observation.PartialHoldClientClosed, observation.PartialHoldTimedOut, observation.PartialHoldInvalid,
+			observation.RecoveryReads, observation.PostLossWrites, observation.PostLossMethod,
+			observation.PostLossPath, observation.PostLossHost == observation.MutationHost,
+			len(observation.MutationAttempts))
+	}
+	for index, attempt := range observation.MutationAttempts {
+		if attempt.Sequence != index+1 || attempt.Method != loss.method || attempt.Host != observation.MutationHost ||
+			attempt.RequestURI != mutationPath || !attempt.BackendCalled || attempt.BackendStatus != http.StatusOK ||
+			!attempt.RequestBodyCompared || !attempt.RequestBodyMatchesSelected ||
+			!attempt.IdempotencyKeyCompared || !attempt.IdempotencyKeyMatchesSelected ||
+			attempt.SelectedForLoss != (index == 0) {
+			t.Fatalf("Policy mutation attempt %d did not preserve the exact original command: %#v", index, attempt)
+		}
+	}
+
+	var storedName, storedStatus, storedDefaultVersion string
+	var storedVersion uint64
+	if err := database.QueryRow(ctx, `SELECT display_name,status,default_version_id,resource_version
+		FROM iam.policies WHERE owner_tenant_id=$1 AND id=$2`, created.Policy.AccountID, created.Policy.ID).
+		Scan(&storedName, &storedStatus, &storedDefaultVersion, &storedVersion); err != nil ||
+		storedName != wantDisplayName || storedStatus != string(wantStatus) ||
+		storedDefaultVersion != string(created.Policy.DefaultVersionID) || storedVersion != created.Policy.ResourceVersion+1 {
+		t.Fatalf("Policy replay changed the authoritative result: name=%q status=%q default=%q version=%d err=%v",
+			storedName, storedStatus, storedDefaultVersion, storedVersion, err)
+	}
+	var retainedVersion int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_versions
+		WHERE policy_id=$1 AND id=$2 AND content_digest=$3`,
+		created.Policy.ID, created.Version.ID, created.Version.ContentDigest).
+		Scan(&retainedVersion); err != nil || retainedVersion != 1 {
+		t.Fatalf("Policy replay changed immutable content: retained=%d err=%v", retainedVersion, err)
+	}
+	if operation == "UPDATE" {
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID), ownerBearer, nil)
+		var current iamv1.PolicyDetail
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &current) != nil ||
+			iamv1.ValidatePolicyDetail(current) != nil || current.Policy.DisplayName != updatedName ||
+			current.Policy.ResourceVersion != 2 || current.Version.ID != created.Version.ID ||
+			current.Version.ContentDigest != created.Version.ContentDigest {
+			t.Fatalf("read replayed Policy update status=%d body=%s", response.Status, response.Body)
+		}
+	}
+
+	var outboxFacts int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox
+		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3
+		  AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$4`,
+		created.Policy.AccountID, wantAction, requestID, created.Policy.ID).Scan(&outboxFacts); err != nil || outboxFacts != 1 {
+		t.Fatalf("Policy replay did not retain one outbox fact: count=%d err=%v", outboxFacts, err)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, ownerBearer,
+		auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}, http.StatusOK)
+	auditMatches := 0
+	for _, record := range page.Records {
+		if record.Event.Target.ID != string(created.Policy.ID) || record.Event.RequestID != requestID {
+			continue
+		}
+		auditMatches++
+		if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(created.Policy.AccountID) ||
+			record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
+			record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetPolicy ||
+			record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
+			t.Fatal("Policy replay Audit fact changed its actor, scope, target or result")
+		}
+	}
+	if auditMatches != 1 {
+		t.Fatalf("Policy replay Audit fact matches=%d", auditMatches)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(created.Policy.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("Policy replay tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Logf("two same-origin tabs recovered one committed Policy %s after the first tab closed a held partial response; the competing tab produced no queued write, the surviving tab replayed exactly one byte-identical command, and the authoritative Policy, immutable version, unique outbox fact and verified tenant Audit chain all matched", operation)
 }
 
 func runIAMIdentityConsoleBrowser(
