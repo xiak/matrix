@@ -7,13 +7,14 @@ import { accountError, type GroupAccessClient } from "../application/AccountAcce
 import type {
   AccountAccessView,
   GroupAccess,
+  GroupDeletion,
   GroupMembershipAccess,
   IamAction,
   PolicyAttachmentChangeOperationExpectation
 } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { findActionCapability } from "../scenes/accountAccessScene";
-import { WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceSelection } from "./AccessWorkspaceUi";
+import { WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceSelection, WorkspaceTime } from "./AccessWorkspaceUi";
 import {
   GroupDetail,
   GroupDirectory,
@@ -239,17 +240,18 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
   </WorkspaceInlineForm>;
 }
 
-function LiveGroupDelete({ client, access, onClose, onDeleted, onStale }: {
+function LiveGroupDelete({ client, access, onClose, onDeleted }: {
   client: GroupAccessClient;
   access: GroupAccess;
   onClose(): void;
-  onDeleted(): void;
-  onStale(): void;
+  onDeleted(result: GroupDeletion): void;
 }) {
   const t = useTranslations("GroupWorkspace");
   const w = useTranslations("IamWorkspace");
   const [operation, setOperation] = useState<OperationState>({ busy: false, error: null });
   const requestId = useRef(commandId());
+  const currentClient = useRef<GroupAccessClient | null>(client);
+  useLayoutEffect(() => { currentClient.current = client; return () => { currentClient.current = null; }; }, [client]);
   const clearError = useCallback(() => setOperation((current) => current.error ? { ...current, error: null } : current), []);
 
   return <WorkspaceDelete
@@ -261,13 +263,17 @@ function LiveGroupDelete({ client, access, onClose, onDeleted, onStale }: {
     onConfirm={async () => {
       setOperation({ busy: true, error: null });
       try {
-        await client.delete(access.group.id, { resourceVersion: access.group.resourceVersion, requestId: requestId.current });
-        onDeleted();
+        const result = await client.delete(access.group.id, { resourceVersion: access.group.resourceVersion, requestId: requestId.current });
+        if (currentClient.current !== client) return false;
+        if (result.id !== access.group.id || result.accountId !== client.accountId || result.name !== access.group.name ||
+            result.resourceVersion !== access.group.resourceVersion + 1 || !Number.isSafeInteger(result.removedMemberships) || result.removedMemberships < 0 ||
+            !Number.isSafeInteger(result.revokedPolicyAttachments) || result.revokedPolicyAttachments < 0 || !Number.isFinite(Date.parse(result.deletedAt))) throw new Error("INVALID_IAM_GROUP_DELETION");
+        onDeleted(structuredClone(result));
         return true;
       } catch (failure) {
+        if (currentClient.current !== client) return false;
         const code = accountError(failure);
-        if (code === "conflict") onStale();
-        else setOperation({ busy: false, error: w(`errors.${code}`) });
+        setOperation({ busy: false, error: code === "unavailable" ? t("liveDeleteUnconfirmed") : w(`errors.${code}`) });
         return false;
       } finally {
         setOperation((current) => current.busy ? { ...current, busy: false } : current);
@@ -276,12 +282,12 @@ function LiveGroupDelete({ client, access, onClose, onDeleted, onStale }: {
   />;
 }
 
-function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
+function LiveGroupWorkspace({ client, entityId, scene, onOpen, onDeleted }: {
   client: GroupAccessClient;
   entityId: string;
-  summary?: GroupAccess;
   scene: AccountAccessScene;
   onOpen: OpenGroupEntity;
+  onDeleted(result: GroupDeletion): void;
 }) {
   const t = useTranslations("GroupWorkspace");
   const a = useTranslations("AccountAccess");
@@ -298,6 +304,16 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
   const [change, setChange] = useState<GroupChange | null>(null);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [deleted, setDeleted] = useState<{ client: GroupAccessClient; result: GroupDeletion } | null>(null);
+  const deletionNavigationStarted = useRef(false);
+  useEffect(() => {
+    if (!deleted || deleted.client !== client || deleting || deletionNavigationStarted.current) return;
+    deletionNavigationStarted.current = true;
+    // The dialog has unmounted and its busy/draft registration has cleaned up.
+    // Only the actual command receipt triggers this ordinary guarded navigation.
+    onDeleted(deleted.result);
+    onOpen("groups");
+  }, [client, deleted, deleting, onDeleted, onOpen]);
   const [loadingMore, setLoadingMore] = useState(false);
   const editTrigger = useRef<HTMLButtonElement>(null);
   const pageActionFocus = useRef<{ focus(): void }>(null);
@@ -436,7 +452,7 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
     if (wasEditing && !editing) pageActionFocus.current?.focus();
   }, [editing]);
 
-  const stableTitle = access?.group.name ?? summary?.group.name ?? w("groups");
+  const stableTitle = access?.group.name ?? w("groups");
   if (phase === "loading") return <WorkspaceDetail title={stableTitle} onBack={() => onOpen("groups")}>
     <TableSkeleton label={t("loadingGroup")} rows={4} header={false} />
   </WorkspaceDetail>;
@@ -490,7 +506,7 @@ function LiveGroupWorkspace({ client, entityId, summary, scene, onOpen }: {
       onOpenMember={(userId) => onOpen("users", userId)}
       onOpenPolicy={(policyId) => onOpen("policies", policyId)}
     />
-    {deleting ? <LiveGroupDelete client={client} access={access} onClose={() => setDeleting(false)} onDeleted={() => onOpen("groups")} onStale={stale} /> : null}
+    {deleting ? <LiveGroupDelete client={client} access={access} onClose={() => setDeleting(false)} onDeleted={(result) => setDeleted({ client, result })} /> : null}
   </>;
 }
 
@@ -502,6 +518,20 @@ export function AccountLiveGroups({ client, entityId, scene, onCreate, onOpen }:
   onOpen: OpenGroupEntity;
 }) {
   const t = useTranslations("GroupWorkspace");
+  const [receipt, setReceipt] = useState<{ client: GroupAccessClient; result: GroupDeletion } | null>(null);
+  if (entityId) return <LiveGroupWorkspace key={entityId} client={client} entityId={entityId} scene={scene} onOpen={onOpen}
+    onDeleted={(result) => setReceipt({ client, result })} />;
+  return <>
+    {receipt?.client === client ? <Alert status="success" role="status" aria-label={t("liveDeleteReceiptTitle")}>
+      {t("liveDeleteReceipt", { name: receipt.result.name, id: receipt.result.id, revision: receipt.result.resourceVersion,
+        members: receipt.result.removedMemberships, policies: receipt.result.revokedPolicyAttachments })} <WorkspaceTime value={receipt.result.deletedAt} />
+    </Alert> : null}
+    <LiveGroupDirectory client={client} onCreate={onCreate} onOpen={onOpen} />
+  </>;
+}
+
+function LiveGroupDirectory({ client, onCreate, onOpen }: { client: GroupAccessClient; onCreate(): void; onOpen: OpenGroupEntity }) {
+  const t = useTranslations("GroupWorkspace");
   const a = useTranslations("AccountAccess");
   const [groups, setGroups] = useState<GroupAccess[]>([]);
   const [nextAfter, setNextAfter] = useState<string | null>(null);
@@ -511,10 +541,6 @@ export function AccountLiveGroups({ client, entityId, scene, onCreate, onOpen }:
   const directoryRequestVersion = useRef(0);
 
   useEffect(() => {
-    if (entityId) {
-      directoryRequestVersion.current += 1;
-      return;
-    }
     const version = ++directoryRequestVersion.current;
     client.list().then((page) => {
       if (version !== directoryRequestVersion.current) return;
@@ -527,9 +553,7 @@ export function AccountLiveGroups({ client, entityId, scene, onCreate, onOpen }:
       setPhase("error");
     });
     return () => { directoryRequestVersion.current += 1; };
-  }, [a, client, entityId]);
-
-  if (entityId) return <LiveGroupWorkspace key={entityId} client={client} entityId={entityId} summary={groups.find((entry) => entry.group.id === entityId)} scene={scene} onOpen={onOpen} />;
+  }, [a, client]);
 
   const directory: GroupDirectoryRecord[] = groups.map((entry) => ({
     id: entry.group.id,

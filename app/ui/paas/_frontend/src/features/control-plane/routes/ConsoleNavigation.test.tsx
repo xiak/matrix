@@ -1,5 +1,5 @@
 import { Suspense, useEffect, useRef, useState } from "react";
-import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ConsoleLink, ConsoleNavigationProvider, useConsoleNavigation } from "./ConsoleNavigation";
@@ -7,6 +7,12 @@ import { parseControlPlanePathname } from "./parseControlPlaneRoute";
 import { useUnsavedChanges } from "@ui/xiak";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { ConsoleHeader } from "../renderers/ConsoleHeader";
+import { AccountLiveGroups } from "@/features/auth/renderers/AccountLiveGroups";
+import type { GroupAccessClient } from "@/features/auth/application/AccountAccessProvider";
+import type { AccountIdentity, GroupAccess, GroupDeletion } from "@/features/auth/domain/accounts";
+import { buildAccountAccessScene } from "@/features/auth/scenes/accountAccessScene";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import messages from "@/i18n/messages/zh-CN.json";
 
 const router = vi.hoisted(() => ({ push: vi.fn(), replace: vi.fn() }));
 const staticHeaderRender = vi.hoisted(() => vi.fn());
@@ -60,6 +66,51 @@ function NavigationControls({ onAccepted }: { onAccepted?(): void }) {
 }
 
 const draftCopy = { title: "Leave workflow?", description: "The draft is not saved.", stay: "Keep editing", leave: "Leave", close: "Close", busyTitle: "Saving", busyDescription: "Wait", failure: "Navigation failed", retry: "Retry" };
+
+const deletionGroup: GroupAccess = {
+  group: { id: "group-delete-proof", accountId: "account-proof", name: "Disposable review group", description: "Owned test fixture",
+    resourceVersion: 1, createdAt: "2026-10-16T08:00:00Z", updatedAt: "2026-10-16T08:00:00Z" }, policyAttachments: [],
+  capabilities: ["iam.group.read", "iam.group.delete", "iam.group-membership.list"].map((action) => ({ action: action as GroupAccess["capabilities"][number]["action"], resource: { kind: "GROUP", id: "group-delete-proof" }, available: true, restrictionReason: null }))
+};
+const deletionReceipt: GroupDeletion = { id: deletionGroup.group.id, accountId: deletionGroup.group.accountId, name: deletionGroup.group.name,
+  resourceVersion: 2, removedMemberships: 3, revokedPolicyAttachments: 2, deletedAt: "2026-10-16T09:00:00Z" };
+function deletionFixture() {
+  let active = true;
+  const identity: AccountIdentity = {
+    account: { id: deletionGroup.group.accountId, displayName: "Test account", status: "ACTIVE", rootIdentity: { principalId: "root-proof", loginName: "admin" }, loginAlias: null, resourceVersion: 1 },
+    user: { id: "root-proof", accountId: deletionGroup.group.accountId, loginName: "admin", displayName: "Test owner", status: "ACTIVE", resourceVersion: 1, mustChangePassword: false },
+    identityKind: "ROOT_IDENTITY", policySources: [], permissionBoundary: { accountId: deletionGroup.group.accountId, userId: "root-proof", resourceVersion: 1, policy: null }, capabilities: []
+  };
+  const scene = buildAccountAccessScene(identity, { items: [], nextAfter: null }, null,
+    { accountId: identity.account.id, scope: "TENANT", installationId: null, items: [] },
+    { accountId: identity.account.id, scope: "INSTALLATION", installationId: "test-installation", items: [] });
+  const client: GroupAccessClient = { accountId: identity.account.id, actorPrincipalId: identity.user.id, canList: true, listRestrictionReason: null, canCreate: false, createRestrictionReason: "AUTHORITY_REQUIRED",
+    list: vi.fn(async () => ({ items: active ? [deletionGroup] : [], nextAfter: null })), get: vi.fn(async () => deletionGroup),
+    delete: vi.fn(async () => { active = false; return structuredClone(deletionReceipt); }),
+    create: vi.fn(), update: vi.fn(), listMemberships: vi.fn(async () => ({ accountId: identity.account.id, groupId: deletionGroup.group.id, items: [], nextAfter: null })),
+    createMembership: vi.fn(), removeMembership: vi.fn(), createPolicyAttachment: vi.fn(), revokePolicyAttachment: vi.fn(), inspectPolicyAttachmentChange: vi.fn()
+  };
+  return { client, scene };
+}
+function GroupDeletionRoute({ client, scene, onAccepted }: ReturnType<typeof deletionFixture> & { onAccepted(): void }) {
+  const [entityId, setEntityId] = useState<string | undefined>(deletionGroup.group.id);
+  const navigation = useConsoleNavigation();
+  return <AccountLiveGroups client={client} scene={scene} entityId={entityId} onCreate={() => {}} onOpen={(view, id) => {
+    navigation.navigate(`/console/access/${view}/${id ? `?id=${encodeURIComponent(id)}` : ""}`, { onAccepted: () => { onAccepted(); setEntityId(id); } });
+  }} />;
+}
+function GroupDeletionHarness({ fixture, owner = "session-one", onAccepted }: { fixture: ReturnType<typeof deletionFixture>; owner?: string; onAccepted(): void }) {
+  return <LocaleProvider><ConsoleNavigationProvider selection={{ section: "access", view: "groups" }}>
+    <GroupDeletionRoute key={owner} {...fixture} onAccepted={onAccepted} />
+  </ConsoleNavigationProvider></LocaleProvider>;
+}
+async function confirmGroupDeletion(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(await screen.findByRole("button", { name: "更多操作" }));
+  await user.click(within(await screen.findByRole("menu", { name: "更多操作" })).getByRole("menuitem", { name: "删除" }));
+  const dialog = await screen.findByRole("dialog");
+  await user.click(within(dialog).getByRole("textbox")); await user.paste(deletionGroup.group.name);
+  await user.click(within(dialog).getByRole("button", { name: "确认删除" }));
+}
 function DraftProbe() {
   const [value, setValue] = useState("");
   const form = useRef<HTMLFormElement>(null);
@@ -85,6 +136,47 @@ function Harness({ initialHref = "/console/", onAccepted, withDraft = false, wit
 afterEach(() => { cleanup(); requests.clear(); vi.clearAllMocks(); window.history.replaceState(null, "", "/"); });
 
 describe("Console navigation", () => {
+  it("accepts successful LIVE Group deletion navigation after the busy guard unmounts and retains the exact receipt counts", async () => {
+    const fixture = deletionFixture(); const accepted = vi.fn(); const user = userEvent.setup({ delay: null });
+    window.history.replaceState(null, "", `/console/access/groups/?id=${deletionGroup.group.id}`);
+    const history = vi.spyOn(window.history, "pushState");
+    render(<GroupDeletionHarness fixture={fixture} onAccepted={accepted} />);
+    await confirmGroupDeletion(user);
+    await waitFor(() => expect(window.location.pathname + window.location.search).toBe("/console/access/groups/"));
+    expect(accepted).toHaveBeenCalledOnce(); expect(history).toHaveBeenCalledExactlyOnceWith(null, "", "/console/access/groups/");
+    const receipt = screen.getByRole("status", { name: "用户组删除回执" });
+    expect(receipt.textContent).toContain("解除 3 个成员关系"); expect(receipt.textContent).toContain("撤销 2 条直接策略关联");
+    expect(receipt.textContent).toContain(deletionGroup.group.id); expect(receipt.textContent).toContain("v2");
+    expect(receipt.querySelector("time")?.dateTime).toBe(deletionReceipt.deletedAt);
+    await waitFor(() => expect(fixture.client.list).toHaveBeenCalledOnce());
+    expect(screen.queryByRole("heading", { name: deletionGroup.group.name })).toBeNull(); expect(screen.queryByRole("dialog")).toBeNull();
+    expect(fixture.client.get).toHaveBeenCalledTimes(1); expect(router.push).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 409, 503, "mismatched-receipt"] as const)("does not navigate or report success for a %s Group deletion result", async (failure) => {
+    const fixture = deletionFixture(); const accepted = vi.fn(); const user = userEvent.setup({ delay: null });
+    if (typeof failure === "number") vi.mocked(fixture.client.delete).mockRejectedValueOnce(new HttpProblem(failure, "REJECTED"));
+    else vi.mocked(fixture.client.delete).mockResolvedValueOnce({ ...deletionReceipt, id: "wrong-group" });
+    window.history.replaceState(null, "", `/console/access/groups/?id=${deletionGroup.group.id}`);
+    const history = vi.spyOn(window.history, "pushState"); render(<GroupDeletionHarness fixture={fixture} onAccepted={accepted} />);
+    await confirmGroupDeletion(user);
+    const dialog = screen.getByRole("dialog");
+    expect(await within(dialog).findByText(typeof failure !== "number" || failure === 503 ? messages.GroupWorkspace.liveDeleteUnconfirmed : messages.IamWorkspace.errors[failure === 403 ? "forbidden" : "conflict"])).toBeTruthy();
+    expect(accepted).not.toHaveBeenCalled(); expect(history).not.toHaveBeenCalled(); expect(fixture.client.list).not.toHaveBeenCalled();
+    expect(window.location.search).toBe(`?id=${deletionGroup.group.id}`); expect(screen.queryByRole("status", { name: "用户组删除回执" })).toBeNull();
+  });
+
+  it.each(["Session", "repository"])("drops a late successful Group deletion reply after the originating %s view is replaced", async (change) => {
+    const fixture = deletionFixture(); let release!: (value: GroupDeletion) => void;
+    vi.mocked(fixture.client.delete).mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+    const accepted = vi.fn(); const user = userEvent.setup({ delay: null }); window.history.replaceState(null, "", `/console/access/groups/?id=${deletionGroup.group.id}`);
+    const view = render(<GroupDeletionHarness fixture={fixture} onAccepted={accepted} />); await confirmGroupDeletion(user);
+    view.rerender(<GroupDeletionHarness fixture={deletionFixture()} owner={change === "Session" ? "session-two" : "session-one"} onAccepted={accepted} />);
+    await act(async () => { release(structuredClone(deletionReceipt)); });
+    expect(accepted).not.toHaveBeenCalled(); expect(window.location.search).toBe(`?id=${deletionGroup.group.id}`);
+    expect(screen.queryByRole("status", { name: "用户组删除回执" })).toBeNull();
+  });
+
   it("updates only the header's route-progress subscriber while a destination is pending", async () => {
     const user = userEvent.setup(), request = hold("/console/resources/");
     render(<LocaleProvider><Harness withHeader /></LocaleProvider>);
