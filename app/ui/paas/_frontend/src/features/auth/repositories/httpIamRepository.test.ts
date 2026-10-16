@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { httpAccountRepository, httpIamRepository } from "./httpIamRepository";
-import type { AccountLifecycleIntent } from "../domain/accounts";
+import type { AccountLifecycleIntent, AccountPolicyDetail } from "../domain/accounts";
 
 const apiVersion = "iam.matrix.xiak.com/v1";
 const timestamp = "2026-09-11T08:00:00Z";
@@ -2368,6 +2368,76 @@ describe("IAM HTTP account boundary", () => {
     ]) {
       fetcher = reply(invalid);
       await expect(httpAccountRepository.createPolicy!("bearer", account.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
+
+  it("renames only current customer metadata through the public Policy PATCH", async () => {
+    const source: AccountPolicyDetail & { contentDigest: string } = { policy: { ...customerPolicy, management: "CUSTOMER", scope: "TENANT", status: "ACTIVE" },
+      contentDigest: `sha256:${"a".repeat(64)}`,
+      version: { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, contractVersion: 1,
+        contentDigest: `sha256:${"a".repeat(64)}`, document: { languageVersion: "1", scope: "TENANT", statements: [{
+          sid: "application-read", effect: "ALLOW", actions: ["paas.application.read"], resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }]
+        }] } } };
+    const command = { displayName: "Renamed policy", resourceVersion: source.policy.resourceVersion, requestId: "rename-original" };
+    const renamed = { apiVersion, kind: "PolicyDetail", policy: { ...customerPolicy, displayName: command.displayName,
+      resourceVersion: source.policy.resourceVersion + 1 }, version: source.version };
+    const fetcher = reply(renamed);
+    const result = await httpAccountRepository.updatePolicy!("bearer", account.id, source, command);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies/customer.build");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ method: "PATCH", cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(requestBody(fetcher)).toEqual(command);
+    expect(result.version).toEqual(source.version);
+    expect(source.policy.displayName).toBe(customerPolicy.displayName);
+    for (const invalid of [
+      { ...renamed, policy: { ...renamed.policy, id: "another-policy" } },
+      { ...renamed, policy: { ...renamed.policy, accountId: "foreign-account" } },
+      { ...renamed, policy: { ...renamed.policy, status: "RETIRED" } },
+      { ...renamed, policy: { ...renamed.policy, displayName: "Unexpected name" } },
+      { ...renamed, policy: { ...renamed.policy, resourceVersion: source.policy.resourceVersion + 2 } },
+      { ...renamed, policy: { ...renamed.policy, createdAt: "2026-09-12T08:00:00Z" } },
+      { ...renamed, version: { ...source.version, contentDigest: `sha256:${"b".repeat(64)}` } },
+      { ...renamed, version: { ...source.version, document: { ...source.version.document, statements: [{
+        ...source.version.document.statements[0]!, resources: []
+      }] } } },
+      { ...renamed, policy: { ...renamed.policy, attachments: [] } }
+    ]) {
+      reply(invalid);
+      await expect(httpAccountRepository.updatePolicy!("bearer", account.id, source, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const displayName of ["", " leading", "trailing ", "a\nb", "界".repeat(43), source.policy.displayName]) {
+      const noWrite = vi.fn(); vi.stubGlobal("fetch", noWrite);
+      await expect(httpAccountRepository.updatePolicy!("bearer", account.id, source, { ...command, displayName })).rejects.toThrow("INVALID_IAM_REQUEST");
+      expect(noWrite).not.toHaveBeenCalled();
+    }
+  });
+
+  it("retires a whole customer Policy without deleting a version or sending detach selectors", async () => {
+    const source = { ...customerPolicy, management: "CUSTOMER" as const, scope: "TENANT" as const, status: "ACTIVE" as const };
+    const command = { resourceVersion: source.resourceVersion, requestId: "retire-original" };
+    const retired = { ...customerPolicy, status: "RETIRED", resourceVersion: source.resourceVersion + 1 };
+    const fetcher = reply(retired);
+    const result = await httpAccountRepository.deletePolicy!("bearer", account.id, source, command);
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies/customer.build");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ method: "DELETE", cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(requestBody(fetcher)).toEqual(command);
+    expect(result.status).toBe("RETIRED");
+    expect(result.defaultVersionId).toBe(source.defaultVersionId);
+    for (const change of [
+      { id: "another-policy" }, { accountId: "foreign-account" }, { status: "ACTIVE" },
+      { displayName: "Unexpected name" }, { defaultVersionId: "other-default" },
+      { resourceVersion: source.resourceVersion + 2 }, { createdAt: "2026-09-12T08:00:00Z" }, { restored: true }
+    ]) {
+      reply({ ...retired, ...change });
+      await expect(httpAccountRepository.deletePolicy!("bearer", account.id, source, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    for (const invalid of [
+      { ...source, management: "SYSTEM" as const }, { ...source, accountId: "foreign-account" },
+      { ...source, scope: "INSTALLATION" as const }, { ...source, status: "RETIRED" as const },
+      { ...source, resourceVersion: source.resourceVersion + 1 }
+    ]) {
+      const noWrite = vi.fn(); vi.stubGlobal("fetch", noWrite);
+      await expect(httpAccountRepository.deletePolicy!("bearer", account.id, invalid, command)).rejects.toThrow("INVALID_IAM_REQUEST");
+      expect(noWrite).not.toHaveBeenCalled();
     }
   });
 

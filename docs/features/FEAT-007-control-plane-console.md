@@ -867,8 +867,10 @@ The completed editor contract is:
   read/list coverage and explicit high-privilege warnings. Do not generate a
   fake thousand-policy catalog for services the platform does not offer.
 
-Custom-policy names are immutable; description-only edits do not manufacture
-a new authorization revision. Content edits create a new immutable revision.
+Policy identity and immutable content versions remain stable. LIVE display-name
+changes use the separate versioned metadata command, not a content publication;
+preview description-only edits likewise do not manufacture a content version.
+Content edits create a new immutable revision.
 Retain at most five revisions, block removal of the effective revision, and
 require an explicit choice of a nondefault revision to delete when full.
 Revision identifiers increase monotonically and are not reused after deletion.
@@ -884,6 +886,53 @@ equivalent group grant. Policy deletion is blocked while referenced, including
 as a boundary. Selection is bounded and paginated, retains selections across
 searches, counts selected items explicitly and distinguishes no data from no
 search results. Initial selection grants nothing automatically.
+
+LIVE metadata rename and whole-Policy retirement share the current detail's
+conditional request actions, not guessed permission capabilities. Only a
+same-Account ACTIVE CUSTOMER/TENANT target is eligible for review; IAM still
+authorizes the actual command. Rename reviews the old/new display names and
+freezes stable ID, current revision and request ID without changing content,
+default version or attachments. Whole-Policy retirement has a distinct
+irreversible-impact review and exact-name confirmation; references are rejected
+by IAM rather than implicitly revoked, and immutable history is retained.
+Neither action is the nondefault-version retirement in the versions tab.
+Cancellation and invalid names never issue a write. An uncertain response
+retains the original intent and offers only explicit equal retry; current reads
+are not original-command completion evidence, and no completion route is
+invented. Every retry retains its target/version/request ID and is independently
+authorized by the server. Full reload or a different authentication owner must
+not reconstruct or silently replay a lost intent from current directory facts.
+The same controlled browser profile retains one closed metadata-only recovery
+record per Account and principal: original Policy metadata, default-version
+digest, operation, proposed display name when applicable, resource revision,
+request ID and local creation time. It contains no declaration, credential,
+Session ID, decision or proof. UNKNOWN has no automatic TTL eviction. After
+reload or re-login, only the same verified Account/principal may explicitly
+retry with its current bearer; storage is not an authorization permit. A
+different Account/principal cannot inspect or replay that owner's record.
+
+Claim, equal retry and exact-record removal require an exclusive, nonwaiting
+browser [Web Lock](https://w3c.github.io/web-locks/), held through the network
+attempt. This coordinates tabs of the same origin/profile, not devices or
+server authorization. Missing secure-context/browser support, unavailable or
+full storage, and malformed/oversized records fail closed; no unlocked fallback
+or silent cleanup admits a replacement write. Storage events make the pending
+intent visible to other tabs without replay. A late response from an old
+Session/repository cannot clear recovery or publish into the new owner. The
+recovery region stays mounted during explicit retry. Explicitly abandoning a
+matching local record requires acknowledgement that it neither undoes server
+effects nor proves failure. Clearing browser data can lose this record; the UI
+does not rebuild it from current facts. A pending metadata intent blocks new
+Policy/version changes in that view, while independent reads remain available.
+
+Only a strictly correlated successful response confirms the metadata command.
+Rename correlates Policy metadata plus the original default-version identity
+and digest. Whole-Policy retirement returns only Policy metadata; the UI must
+not claim that this response verifies version content. After success, the
+existing Account policy-directory read owner refreshes independently of the
+failure-retry control; a failed refresh is unavailable data, not fabricated
+success, emptiness or an inferred original-command outcome. A later 401, 403 or
+409 on an equal retry leaves the original UNKNOWN unchanged.
 
 For the supported same-tenant identity-policy subset, evaluation is default
 deny, any applicable explicit deny wins, otherwise an applicable allow is
@@ -2091,12 +2140,13 @@ enabled. Windows complete-frontend stability, independent fixed-source CI,
 signed-browser and remaining release gates stay open; physical-phone
 integration remains deferred by the explicit Phase 1 scope above.
 
-#### Remaining LIVE management integration gaps
+#### LIVE management integration status
 
-Read-only inspection of fixed UI `06198d737851eea032c2a15750a83fa3c5a721f7`
-against the requirement owners at fixed IAM
-`02f4d65e01fe98646ebc4900cab11a70edd72f4f` identifies two integration gaps,
-not unpublished-backend placeholders:
+The current UI follows the requirement owners at fixed IAM
+`02f4d65e01fe98646ebc4900cab11a70edd72f4f`, and consumes the published Policy
+metadata/terminal-retirement wire contract at
+`94cabe999378b7fdae9b5074546aab156e1d7553`. Remaining UI work is not an
+unpublished-backend placeholder:
 
 - Account security settings already have a LIVE read surface and a dedicated
   AccessKey source-network edit/review/proof/completion workflow. The mounted
@@ -2108,17 +2158,22 @@ not unpublished-backend placeholders:
   Session from inspecting history after a new login. This assessment does not
   enable mandatory login/MFA or relax the existing UX-acceptance boundary.
 - Policy reads, creation, version publication, explicit default selection and
-  nondefault-version retirement have LIVE paths. Policy metadata renaming and
-  whole-Policy retirement do not yet have a LIVE repository/Provider/form path;
-  a MOCK action or version retirement does not supply that behavior. Later
-  slices must retain stable identity/versioned intent and server authorization,
-  reject retirement with current references rather than silently detach them,
-  and avoid inventing restoration, a recycle bin or a historical directory.
+  nondefault-version retirement retain their LIVE paths. The separate Policy
+  metadata/whole-retirement candidate now adds strict public-repository calls,
+  an original-command workflow mounted by the Provider, metadata-only recovery
+  storage and content-area detail forms. The existing shared commands, fields,
+  leave/focus handling and localized messages are reused. Current detail reads
+  are bound to their reader and generation before a new review can enable a
+  write; an old repository's successful read cannot enable the new one. The
+  isolated MOCK is unchanged. This implementation is not accepted browser,
+  runtime or release evidence: real supported-browser cross-tab exclusion,
+  closing a held tab, re-authentication and signed IAM flows remain independent
+  gates. No backend/API/SQL contract or real resource was changed.
 
 The protocol and authorization rules remain with
 [IAM-009](../../IAM/FEAT-IAM-009-security-governance.md) and
 [IAM-005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md). This is a
-frontend gap assessment, not implementation or inherited runtime acceptance.
+frontend implementation status, not inherited backend/runtime acceptance.
 
 #### LIVE deletion-confirmation follow-up
 

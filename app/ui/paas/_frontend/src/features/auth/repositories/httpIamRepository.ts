@@ -1,4 +1,5 @@
 import { HttpProblem, requestJSON, requestJSONResponse, requestToken } from "@/infrastructure/http/jsonRequest";
+import { policyDisplayNameValid, policyMetadataResultMatches } from "../domain/accounts";
 import type {
   Account,
   AccountLifecycleCompletion,
@@ -2262,6 +2263,13 @@ function parsePolicyDetail(value: unknown, accountId: string, policyId: string):
   return { policy, version };
 }
 
+function customerPolicyMutationTarget(source: AccountPolicy, accountId: string, resourceVersion: number) {
+  if (source.management !== "CUSTOMER" || source.scope !== "TENANT" || source.status !== "ACTIVE" ||
+      source.accountId !== accountIdentifier(accountId) || source.resourceVersion !== accountVersion(resourceVersion) ||
+      resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+  return accountIdentifier(source.id);
+}
+
 function parseCreatedPolicyDetail(value: unknown, accountId: string, command: { displayName: string; document: AccountPolicyDocument }): AccountPolicyDetail {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "policy", "version"]);
@@ -3367,6 +3375,34 @@ export const httpAccountRepository: AccountRepository = {
       method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
       body: JSON.stringify({ displayName, document: command.document, requestId: accountIdentifier(command.requestId) })
     }), accountIdentifier(accountId), command);
+  },
+  async updatePolicy(credential, accountId, source, command) {
+    const before = structuredClone(source);
+    const policyId = customerPolicyMutationTarget(before.policy, accountId, command.resourceVersion);
+    const displayName = command.displayName;
+    if (!policyDisplayNameValid(displayName) || displayName === before.policy.displayName ||
+        !/^sha256:[a-f0-9]{64}$/.test(before.contentDigest)) {
+      throw new Error("INVALID_IAM_REQUEST");
+    }
+    const detail = parsePolicyDetail(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(policyId)}`, {
+      method: "PATCH", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+      body: JSON.stringify({ displayName, resourceVersion: command.resourceVersion, requestId: accountIdentifier(command.requestId) })
+    }), accountId, policyId);
+    if (!policyMetadataResultMatches(detail.policy, before.policy, displayName, "ACTIVE") ||
+        detail.version.contentDigest !== before.contentDigest) {
+      throw new Error("INVALID_IAM_RESPONSE");
+    }
+    return detail;
+  },
+  async deletePolicy(credential, accountId, source, command) {
+    const before = { ...source };
+    const policyId = customerPolicyMutationTarget(before, accountId, command.resourceVersion);
+    const policy = parsePolicy(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(policyId)}`, {
+      method: "DELETE", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+      body: JSON.stringify({ resourceVersion: command.resourceVersion, requestId: accountIdentifier(command.requestId) })
+    }));
+    if (!policyMetadataResultMatches(policy, before, before.displayName, "RETIRED")) throw new Error("INVALID_IAM_RESPONSE");
+    return policy;
   },
   async listPolicyVersions(credential, accountId, policyId) {
     return parsePolicyVersionDirectory(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}/versions`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId);
