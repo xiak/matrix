@@ -3719,28 +3719,40 @@ type browserResponseLoss struct {
 	recoveryPathPrefix  string
 	postLossWritePrefix string
 
-	mu                 sync.Mutex
-	attempts           int
-	dropSelected       bool
-	responseLost       bool
-	backendStatus      int
-	idempotencyKey     string
-	requestBody        []byte
-	mutationHost       string
-	mutationAttempts   []browserResponseLossMutationAttempt
-	mutationBodies     [][]byte
-	mutationBodyKnown  []bool
-	mutationKeys       []string
-	mutationOverflow   bool
-	selectedAttempt    int
-	recoveryReads      int
-	recoveryHost       string
-	recoveryRequestURI string
-	recoveryAttempts   []browserResponseLossRecoveryAttempt
-	postLossWrites     int
-	postLossMethod     string
-	postLossPath       string
-	postLossHost       string
+	mu                       sync.Mutex
+	attempts                 int
+	dropSelected             bool
+	responseLost             bool
+	backendStatus            int
+	idempotencyKey           string
+	requestBody              []byte
+	mutationHost             string
+	mutationAttempts         []browserResponseLossMutationAttempt
+	mutationBodies           [][]byte
+	mutationBodyKnown        []bool
+	mutationKeys             []string
+	mutationOverflow         bool
+	selectedAttempt          int
+	holdAfterPartialResponse bool
+	holdReached              chan struct{}
+	holdRelease              chan struct{}
+	holdFinished             chan struct{}
+	holdTimeout              time.Duration
+	holdSignal               sync.Once
+	holdDoneSignal           sync.Once
+	partialHoldEntered       bool
+	partialHoldReleased      bool
+	partialHoldClientClosed  bool
+	partialHoldTimedOut      bool
+	partialHoldInvalid       bool
+	recoveryReads            int
+	recoveryHost             string
+	recoveryRequestURI       string
+	recoveryAttempts         []browserResponseLossRecoveryAttempt
+	postLossWrites           int
+	postLossMethod           string
+	postLossPath             string
+	postLossHost             string
 }
 
 type browserResponseLossMutationAttempt struct {
@@ -3765,23 +3777,28 @@ type browserResponseLossRecoveryAttempt struct {
 }
 
 type browserResponseLossObservation struct {
-	Attempts           int
-	ResponseLost       bool
-	BackendStatus      int
-	IdempotencyKey     string
-	RequestBody        []byte
-	MutationHost       string
-	MutationAttempts   []browserResponseLossMutationAttempt
-	MutationOverflow   bool
-	SelectedAttempt    int
-	RecoveryReads      int
-	RecoveryHost       string
-	RecoveryRequestURI string
-	RecoveryAttempts   []browserResponseLossRecoveryAttempt
-	PostLossWrites     int
-	PostLossMethod     string
-	PostLossPath       string
-	PostLossHost       string
+	Attempts                int
+	ResponseLost            bool
+	BackendStatus           int
+	IdempotencyKey          string
+	RequestBody             []byte
+	MutationHost            string
+	MutationAttempts        []browserResponseLossMutationAttempt
+	MutationOverflow        bool
+	SelectedAttempt         int
+	PartialHoldEntered      bool
+	PartialHoldReleased     bool
+	PartialHoldClientClosed bool
+	PartialHoldTimedOut     bool
+	PartialHoldInvalid      bool
+	RecoveryReads           int
+	RecoveryHost            string
+	RecoveryRequestURI      string
+	RecoveryAttempts        []browserResponseLossRecoveryAttempt
+	PostLossWrites          int
+	PostLossMethod          string
+	PostLossPath            string
+	PostLossHost            string
 }
 
 func (value *browserResponseLoss) matches(request *http.Request) bool {
@@ -3932,19 +3949,31 @@ func (value *browserResponseLoss) markLost() {
 	value.responseLost = true
 }
 
+func (value *browserResponseLoss) markPartialResponseComplete() {
+	if value == nil || value.holdFinished == nil {
+		return
+	}
+	value.holdDoneSignal.Do(func() { close(value.holdFinished) })
+}
+
 func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
 	value.mu.Lock()
 	defer value.mu.Unlock()
 	return browserResponseLossObservation{
 		Attempts: value.attempts, ResponseLost: value.responseLost,
 		BackendStatus: value.backendStatus, IdempotencyKey: value.idempotencyKey,
-		RequestBody:      bytes.Clone(value.requestBody),
-		MutationHost:     value.mutationHost,
-		MutationAttempts: append([]browserResponseLossMutationAttempt(nil), value.mutationAttempts...),
-		MutationOverflow: value.mutationOverflow,
-		SelectedAttempt:  value.selectedAttempt,
-		RecoveryReads:    value.recoveryReads,
-		RecoveryHost:     value.recoveryHost, RecoveryRequestURI: value.recoveryRequestURI,
+		RequestBody:             bytes.Clone(value.requestBody),
+		MutationHost:            value.mutationHost,
+		MutationAttempts:        append([]browserResponseLossMutationAttempt(nil), value.mutationAttempts...),
+		MutationOverflow:        value.mutationOverflow,
+		SelectedAttempt:         value.selectedAttempt,
+		PartialHoldEntered:      value.partialHoldEntered,
+		PartialHoldReleased:     value.partialHoldReleased,
+		PartialHoldClientClosed: value.partialHoldClientClosed,
+		PartialHoldTimedOut:     value.partialHoldTimedOut,
+		PartialHoldInvalid:      value.partialHoldInvalid,
+		RecoveryReads:           value.recoveryReads,
+		RecoveryHost:            value.recoveryHost, RecoveryRequestURI: value.recoveryRequestURI,
 		RecoveryAttempts: append([]browserResponseLossRecoveryAttempt(nil), value.recoveryAttempts...),
 		PostLossWrites:   value.postLossWrites,
 		PostLossMethod:   value.postLossMethod, PostLossPath: value.postLossPath,
@@ -4286,9 +4315,72 @@ func TestBrowserResponseLossTracksRecoveryRejectedByFixtureCapacity(t *testing.T
 	}
 }
 
-func loseBrowserFixtureResponse(target http.ResponseWriter, source *httptest.ResponseRecorder) bool {
+type browserResponseLossHoldOutcome uint8
+
+const (
+	browserResponseLossHoldDisabled browserResponseLossHoldOutcome = iota
+	browserResponseLossHoldReleased
+	browserResponseLossHoldClientClosed
+	browserResponseLossHoldTimedOut
+	browserResponseLossHoldInvalid
+)
+
+func (value *browserResponseLoss) awaitPartialResponseRelease(ctx context.Context) browserResponseLossHoldOutcome {
+	if value == nil {
+		return browserResponseLossHoldDisabled
+	}
+	value.mu.Lock()
+	if !value.holdAfterPartialResponse {
+		value.mu.Unlock()
+		return browserResponseLossHoldDisabled
+	}
+	reached, release, timeout := value.holdReached, value.holdRelease, value.holdTimeout
+	if reached == nil || release == nil || timeout <= 0 {
+		value.partialHoldInvalid = true
+		value.mu.Unlock()
+		return browserResponseLossHoldInvalid
+	}
+	value.partialHoldEntered = true
+	value.holdSignal.Do(func() { close(reached) })
+	value.mu.Unlock()
+
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	outcome := browserResponseLossHoldTimedOut
+	select {
+	case <-release:
+		outcome = browserResponseLossHoldReleased
+	case <-ctx.Done():
+		outcome = browserResponseLossHoldClientClosed
+	case <-timer.C:
+		outcome = browserResponseLossHoldTimedOut
+	}
+	value.mu.Lock()
+	switch outcome {
+	case browserResponseLossHoldReleased:
+		value.partialHoldReleased = true
+	case browserResponseLossHoldClientClosed:
+		value.partialHoldClientClosed = true
+	case browserResponseLossHoldTimedOut:
+		value.partialHoldTimedOut = true
+	}
+	value.mu.Unlock()
+	return outcome
+}
+
+func loseBrowserFixtureResponse(
+	target http.ResponseWriter,
+	source *httptest.ResponseRecorder,
+	requestContext context.Context,
+	responseLoss *browserResponseLoss,
+) bool {
 	body := source.Body.Bytes()
 	if len(body) < 2 {
+		return false
+	}
+	flusher, flushOK := target.(http.Flusher)
+	hijacker, hijackOK := target.(http.Hijacker)
+	if !flushOK || !hijackOK {
 		return false
 	}
 	for key, values := range source.Header() {
@@ -4297,22 +4389,135 @@ func loseBrowserFixtureResponse(target http.ResponseWriter, source *httptest.Res
 	target.Header().Set("Content-Length", strconv.Itoa(len(body)))
 	target.WriteHeader(source.Code)
 	_, _ = target.Write(body[:len(body)/2])
-	flusher, flushOK := target.(http.Flusher)
-	hijacker, hijackOK := target.(http.Hijacker)
-	if !flushOK || !hijackOK {
-		return false
-	}
 	// Commit the successful status and part of its body before closing. A
 	// pre-header close may be transparently retried by Chromium's transport,
 	// which would not be an application-level replay. The truncated committed
 	// response instead proves the UI's UNKNOWN -> read-only recovery contract.
 	flusher.Flush()
+	holdOutcome := responseLoss.awaitPartialResponseRelease(requestContext)
 	connection, _, err := hijacker.Hijack()
 	if err != nil {
-		return false
+		return holdOutcome == browserResponseLossHoldClientClosed
 	}
 	_ = connection.Close()
-	return true
+	return holdOutcome != browserResponseLossHoldTimedOut &&
+		holdOutcome != browserResponseLossHoldInvalid
+}
+
+func TestBrowserResponseLossPartialResponseHold(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name          string
+		release       bool
+		cancel        bool
+		wantLost      bool
+		wantReleased  bool
+		wantCancelled bool
+		wantTimedOut  bool
+	}{
+		{name: "released", release: true, wantLost: true, wantReleased: true},
+		{name: "client-closed", cancel: true, wantLost: true, wantCancelled: true},
+		{name: "timed-out", wantTimedOut: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			const mutationPath = "/api/iam/v1/policies/policy-one"
+			body := []byte(`{"resourceVersion":2,"requestId":"ui-policy-metadata-retire"}`)
+			reached, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			loss := &browserResponseLoss{
+				method: http.MethodDelete, path: mutationPath,
+				holdAfterPartialResponse: true, holdReached: reached, holdRelease: release,
+				holdFinished: finished, holdTimeout: 200 * time.Millisecond,
+			}
+			backendCalls := atomic.Int32{}
+			server := httptest.NewServer(iamConsoleBrowserFixtureHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				backendCalls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"apiVersion":"matrix.iam/v1","kind":"Policy"}`)
+			}), make(chan struct{}, 2), loss))
+			defer server.Close()
+
+			requestContext, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			request, err := http.NewRequestWithContext(requestContext, http.MethodDelete,
+				server.URL+mutationPath, bytes.NewReader(body))
+			if err != nil {
+				t.Fatal("create partial-response request")
+			}
+			type clientResult struct {
+				status int
+				body   []byte
+				err    error
+			}
+			done := make(chan clientResult, 1)
+			go func() {
+				response, requestErr := server.Client().Do(request)
+				if requestErr != nil {
+					done <- clientResult{err: requestErr}
+					return
+				}
+				responseBody, readErr := io.ReadAll(response.Body)
+				_ = response.Body.Close()
+				done <- clientResult{status: response.StatusCode, body: responseBody, err: readErr}
+			}()
+
+			select {
+			case <-reached:
+			case <-time.After(time.Second):
+				t.Fatal("partial response never entered the bounded hold")
+			}
+			if test.release {
+				close(release)
+			}
+			if test.cancel {
+				cancel()
+			}
+			var result clientResult
+			select {
+			case result = <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("partial-response client did not finish")
+			}
+			select {
+			case <-finished:
+			case <-time.After(time.Second):
+				t.Fatal("partial-response fixture did not publish its terminal outcome")
+			}
+			if test.cancel {
+				if result.err == nil {
+					t.Fatal("cancelled client unexpectedly accepted the partial response")
+				}
+			} else if result.status != http.StatusOK || result.err == nil || len(result.body) == 0 {
+				t.Fatalf("client did not observe one committed truncated response: status=%d bytes=%d err=%t",
+					result.status, len(result.body), result.err != nil)
+			}
+			observation := loss.snapshot()
+			defer clear(observation.RequestBody)
+			if backendCalls.Load() != 1 || !observation.PartialHoldEntered ||
+				observation.ResponseLost != test.wantLost ||
+				observation.PartialHoldReleased != test.wantReleased ||
+				observation.PartialHoldClientClosed != test.wantCancelled ||
+				observation.PartialHoldTimedOut != test.wantTimedOut || observation.PartialHoldInvalid {
+				t.Fatalf("partial-response hold outcome was inexact: backend=%d lost=%t entered=%t released=%t client_closed=%t timed_out=%t invalid=%t",
+					backendCalls.Load(), observation.ResponseLost, observation.PartialHoldEntered,
+					observation.PartialHoldReleased, observation.PartialHoldClientClosed,
+					observation.PartialHoldTimedOut, observation.PartialHoldInvalid)
+			}
+		})
+	}
+}
+
+func TestBrowserResponseLossRejectsUnsupportedPartialWriter(t *testing.T) {
+	source := httptest.NewRecorder()
+	source.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(source, `{}`)
+	target := httptest.NewRecorder()
+	if loseBrowserFixtureResponse(target, source, context.Background(), nil) {
+		t.Fatal("ResponseRecorder was accepted as a flushable hijackable connection")
+	}
+	if target.Code != http.StatusOK || target.Body.Len() != 0 {
+		t.Fatalf("unsupported partial writer received committed bytes: status=%d bytes=%d", target.Code, target.Body.Len())
+	}
 }
 
 func copyBrowserFixtureResponse(target http.ResponseWriter, source *httptest.ResponseRecorder) {
@@ -4424,9 +4629,10 @@ func iamConsoleBrowserFixtureHandler(
 				captured := httptest.NewRecorder()
 				mux.ServeHTTP(captured, r)
 				if responseLoss.observe(r, captured.Code, requestBody) {
-					if loseBrowserFixtureResponse(w, captured) {
+					if loseBrowserFixtureResponse(w, captured, r.Context(), responseLoss) {
 						responseLoss.markLost()
 					}
+					responseLoss.markPartialResponseComplete()
 					// The later fixture assertion treats a false return as a failed
 					// loss injection. Never expose the committed success response.
 					return
