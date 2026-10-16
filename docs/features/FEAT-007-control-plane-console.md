@@ -2010,13 +2010,14 @@ cross-Session, actor, expiry, disabled-Root, storage and focus tests remain
 required.
 
 The test-only follow-up is fixed at
-`8d851fdff5867ebf5fb6d963634839f368107295`, whose frontend tree is
-`50180c7fbbead10f3ec0ee6f70d28a34bfea04fd`. It changes only the existing
+`08f72781a20f405ac5d0b6a7deb0bd2c7110fa32`, whose frontend tree is
+`7106198cc5feab4bc188ef67e5710a73151bc19c`. It changes only the existing
 `AccessWorkspace` and `AccountAccessRenderer` test owners, not production
 behavior. Selection drives the visible listbox rather than enumerating every
 native option retained for form submission; stable controls and workflow-local
-queries avoid repeated whole-document work. Fixed-value setup uses real paste
-events where keyboard behavior is not the contract. Publishing, history,
+queries avoid repeated whole-document work. Fixed-value setup uses paste or
+the owner's synchronous change pattern where keyboard behavior is not the
+contract; keyboard, Escape and focus checks remain. Publishing, history,
 cancel/retry, declaration inspection and reviewed submission have independent
 checks with the same business inputs and all original assertions. Ten further
 assertions check unchanged documents or absence of premature writes. The
@@ -2029,9 +2030,14 @@ crossing its deadline before cleanup; cleanup took 7–9 ms. The combination of
 scoping and cached controls subsequently reached final assertions at 2,591 and
 2,697 ms. These are observations, not a decomposition of each optimization's
 contribution or evidence about GC. All temporary CPU/stage probes were removed.
-The final Windows focused run passed 17 cases, with a slowest case of 3,397 ms.
+The Windows complete two-owner run now passes **402/402 cases** (210/210 and
+192/192) in 303.03 seconds. The two remaining IAM paths retain the full
+incompatible-condition validation and conflict/reload/fresh-proof journeys;
+only their fixed-value setup and visible-option query scope changed. Their
+complete-sequence durations were 1,865 and 2,072 ms. The JSON result SHA-256 is
+`22c830fd6708e98f7187804aaee7cd4b3bf29bc232739e2813e07da8b2b18c77`.
 
-The identical fixed Git archive (SHA-256
+The earlier `8d851fdff5867ebf5fb6d963634839f368107295` baseline archive (SHA-256
 `0cbb385417ee2aca38c4ea8aeabf08eadad08b4de1cfd0eb11458887fd81ab10`)
 completed a native Debian comparison on the user-authorized `.161` host in an
 independent temporary directory and cache. Node 22.22.2, npm 11.6.4 and Vitest
@@ -2046,17 +2052,19 @@ SHA-256 is `31d9e7a8438b74c0f32efcdd298eb244a9a790046579b2bd4430a30b67e873b3`.
 The runtime, dependencies, caches and test scratch space are task-owned; no
 existing host service, port or global configuration was changed.
 
-The native result does **not** replace the Windows failures from the same
-source. Windows complete frontend verification remains **not accepted**:
+That native baseline is not a newer-source native result and does **not**
+replace its same-source Windows failures. The newer Windows two-owner result
+settles those two files, not the unchanged Shell/Login owners or the complete
+73-file gate. Windows complete frontend verification remains **not accepted**:
 
-| Existing test owner / case | Windows failed duration | Native Debian passed duration |
-| --- | ---: | ---: |
-| `AccessWorkspace`: retains incompatible conditions and restricts resource choices to the selected operation capabilities | 5,460 ms | 1,163 ms |
-| `AccessWorkspace`: discards a stale account-rule review and its operation-bound proof after conflict | 5,254 ms | 915 ms |
-| `ConsoleShellRenderer`: drops Role-owned Audit filters when exit and source validation settle immediately | 5,163 ms | 578 ms |
-| `LoginRenderer`: returns an IAM user to /console/ only after required password replacement | 5,022 ms | 773 ms |
+| Existing test owner / case | Windows `8d` failed duration | Windows `08f` owner result | Native Debian `8d` passed duration |
+| --- | ---: | --- | ---: |
+| `AccessWorkspace`: retains incompatible conditions and restricts resource choices to the selected operation capabilities | 5,460 ms | Passed, 1,865 ms | 1,163 ms |
+| `AccessWorkspace`: discards a stale account-rule review and its operation-bound proof after conflict | 5,254 ms | Passed, 2,072 ms | 915 ms |
+| `ConsoleShellRenderer`: drops Role-owned Audit filters when exit and source validation settle immediately | 5,163 ms | Not rerun | 578 ms |
+| `LoginRenderer`: returns an IAM user to /console/ only after required password replacement | 5,022 ms | Not rerun | 773 ms |
 
-The stopped Windows two-owner run reported 208/210 for `AccessWorkspace`; the
+The stopped Windows `8d` two-owner run reported 208/210 for `AccessWorkspace`; the
 192-case Account renderer did not reach an observed terminal result. The
 separate stopped complete run reported 124/125 for the Shell and 21/22 for
 Login. Neither stopped run is a complete 73-file result. Their default reporter
@@ -2065,11 +2073,12 @@ Error objects before interruption; an exact error class is therefore not
 asserted. These four paths do not share a proven single cause, and neither
 native success nor a focused pass establishes Windows stability.
 
-The fixed source passes typecheck, full zero-warning lint, architecture and
-234 theme contrast pairs. Three actual production builds exported 59 pages
+The current source passes typecheck and changed-owner zero-warning lint;
+the `8d` baseline additionally passed full lint, architecture and 234 theme
+contrast pairs. Three actual production builds of the current source exported 59 pages
 with 57 segment-path normalizations each; unset/`0` outputs and the synchronized
 Go embed matched all 324 files byte-for-byte. Fresh UI-host
-`go test -count=1 -p=2 ./...` (web package 3.224 seconds) and
+`go test -count=1 -p=2 ./...` (web package 3.369 seconds), eight Node export-boundary cases and
 `go vet -p=2 ./...` passed with process-local resource limits.
 
 This remains an implementation/export candidate, not an accepted release.
