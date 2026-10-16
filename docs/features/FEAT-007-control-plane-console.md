@@ -2002,7 +2002,7 @@ historical completion into current Account facts or capabilities. Its existing
 cross-Session, actor, expiry, disabled-Root, storage and focus tests remain
 required.
 
-Source-only candidate checks use Node 22.22.2/npm 11.6.4. The focused selection
+Candidate checks use Node 22.22.2/npm 11.6.4. The focused selection
 passed 54 cases across the directory/detail and service-authorization owners;
 typecheck, full zero-warning lint, architecture and 234 theme contrast pairs
 passed. Template loading, search, filtering, detail and pagination each have
@@ -2012,15 +2012,34 @@ uncertain-write journey. Five focused MOCK wizard/rule checks also passed:
 localized validation, retained drafts and complete reviewed creation are
 separate contracts; the actual UNKNOWN rule save still proves its lock across
 navigation, while factor-replacement blocking has its own guarded-state check.
-Fixture sizes, assertions, user input and the
-five-second per-case budget are preserved. Complete frontend regression and the final
-source/export/embed/Go gates are still pending for this candidate; neither
-targeted replay nor the parent candidate's production output substitutes for
-them. No test budget, backend/API/SQL/profile, dependency, checkpoint, shared
-DEV process or real account/resource changed. This evidence does not inherit
-the IAM branch's CI, signed-runtime or browser acceptance, and mandatory
-login/MFA was not enabled. Independent fixed-source CI, signed-browser,
-security/device and remaining release gates stay open.
+Fixture sizes, assertions, user input and the five-second per-case budget are
+preserved. Three actual production builds from fixed source
+`1090fcafabc14b541c70a41968d485cde5c347e7` exported 59 pages with 57 segment-path
+normalizations each. The unset/`0` outputs and synchronized Go embed matched
+all 324 files byte-for-byte. Eight Node export-boundary cases and fresh
+UI-host `go test -count=1 -p=2 ./...` plus `go vet -p=2 ./...` passed.
+
+The complete frontend gate is **not accepted**. On the same fixed Git archive
+in native Debian, the default single-worker `forks` run was stopped after
+`AccessWorkspace` reported 204/205 with a five-second timeout in
+`retains incompatible conditions and restricts resource choices to the selected
+operation capabilities` (5,715 ms). A CLI-only `--pool=threads` comparison,
+with the same worker count, isolation, assertions and time budgets, was also
+stopped after a known failure: that file reported 203/205, with timeouts in
+`searches products and descriptions in both languages without confusing action
+types with policy categories` (6,338 ms) and `previews service authorization as
+an inline consent review without creating a role or grant` (5,048 ms).
+Its complete Account renderer file passed 188/188. Neither stopped run is a
+complete 73-file pass, and neither pool is established as a stable remedy.
+No Vitest configuration was changed. React `act` warnings were also observed;
+warning-free browser/runtime acceptance is not inferred from these tests.
+
+This is an implementation/export candidate, not an accepted release. No test
+budget, backend/API/SQL/profile, dependency, checkpoint, shared DEV process or
+real account/resource changed. This evidence does not inherit the IAM branch's
+CI, signed-runtime or browser acceptance, and mandatory login/MFA was not
+enabled. Complete-frontend stability, independent fixed-source CI,
+signed-browser, security/device and remaining release gates stay open.
 
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
