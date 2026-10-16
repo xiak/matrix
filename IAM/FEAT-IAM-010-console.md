@@ -22,7 +22,7 @@
 | ID | 当前结论 | 仍需闭合或明确延期的边界 |
 | --- | --- | --- |
 | IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
-| IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备 | 最终改密的纯页面提交、过期会话和权威异常恢复仍需组合门禁 |
+| IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果 | 最终改密的纯页面提交、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
 | IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变 | User修改/停复用、Group页面删除、Membership、附件回执和不确定结果仍需浏览器门禁；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
@@ -269,6 +269,8 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 同一签名页面随后创建第二个空用户组`ui-runtime-editors`，详情返回稳定ID `group-144637ff6282d1aa0b4a86898a4e4533e333133f4b3e36a9b29875e862c5420a`；页面编辑把名称与描述更新为`ui-runtime-reviewers`和`after-update`，返回同一ID。权威库证明更新后资源版本2、授权代次仍为1、有效Membership和附件均为0；`iam.group.created`与`iam.group.updated`各一次投递，对应租户Audit sequence 426和430均为IAM来源及SUCCEEDED。验收后另一个公开API会话按版本2软删除并注销，最终资源版本3、移除Membership与撤销附件均为0，`iam.group.deleted`一次投递且Audit sequence 434成功。本片接受纯页面Group元数据更新、稳定身份及无授权副作用；公开API收尾不冒充页面删除，Membership、附件、并发冲突及UNKNOWN恢复仍未验收。
 
 策略编辑器还以名称`UIRuntimeInvalidPolicy`审阅仅含`{"languageVersion":"1"}`的文档。页面明确拒绝缺少非空statement的内容，并同时提示当前只支持语言版本1和TENANT范围；随后权威库中同名Policy与PolicyVersion计数均为0。该结果只接受这一项客户端语义失败和无持久化副作用，不外推为服务端语法攻击、其他错误类别或完整策略错误矩阵。
+
+同一已认证页面把该草稿修正为有效TENANT文档，并以新名称`UIRuntimeMetadataPolicy`进入最终审阅；提交时原Session已自然过期，APISIX准确记录唯一`POST /api/iam/v1/policies`返回401，页面回到登录入口。权威库中同名Policy与PolicyVersion仍为0，IAM outbox和Audit也没有任何包含该名称的记录。该证据接受策略最终创建遇到过期Session时失败关闭且无部分效果，不把一次自然窗口外推为改密、附件、Role或其他敏感写入的完整过期矩阵。
 
 ### 精确目标读取与目录故障隔离
 
