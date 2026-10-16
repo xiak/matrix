@@ -152,7 +152,9 @@ async function select(user: ReturnType<typeof userEvent.setup>, label: string, o
     trigger = screen.getByRole("combobox", { name: label });
   }
   await user.click(trigger);
-  await user.click(screen.getByRole("option", { name: option }));
+  // Select also renders aria-hidden native options for submission. Drive the
+  // visible popup, not every native option in the surrounding wizard.
+  await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: option }));
 }
 
 async function openPageActionMenu(user: ReturnType<typeof userEvent.setup>) {
@@ -177,7 +179,7 @@ async function openSecuritySection(user: ReturnType<typeof userEvent.setup>, nam
 }
 async function logActions(user: ReturnType<typeof userEvent.setup>, actions: string[]) {
   await select(user, "产品服务", "日志服务");
-  for (const action of actions) await user.click(screen.getByRole("checkbox", { name: action }));
+  for (const action of actions) await user.click(screen.getByLabelText(action, { selector: "input" }));
 }
 async function expectRetainedFailure(dialog: HTMLElement) {
   await waitFor(() => expect(within(dialog).getByRole("alert").textContent).toContain("重试"));
@@ -290,7 +292,7 @@ describe("selection-driven user directory", () => {
     await user.click(screen.getByRole("button", { name: "更多操作" }));
     await user.click(screen.getByRole("menuitem", { name: label }));
   }
-  it("keeps criteria distinct from an empty-result reset and clears batch targets across details", async () => {
+  it("keeps criteria distinct from an empty-result reset", async () => {
     const { user } = await openBatch();
     await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
     await select(user, "筛选用户状态", "已禁用");
@@ -298,6 +300,9 @@ describe("selection-driven user directory", () => {
     expect(screen.getAllByRole("button", { name: "清除筛选" })).toHaveLength(1);
     await user.click(screen.getByRole("button", { name: "重置查询" }));
     expect((screen.getByRole("searchbox", { name: "搜索用户" }) as HTMLInputElement).value).toBe("");
+  });
+  it("retains the user query but clears batch targets across details", async () => {
+    const { user } = await openBatch();
     await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
     await user.click(screen.getByRole("checkbox", { name: "选择用户 lin" }));
     await user.click(screen.getByRole("button", { name: "查看用户 lin" }));
@@ -519,7 +524,7 @@ describe("policy creation entry and directory contract", () => {
     expect(screen.queryByLabelText("名称", { exact: true })).toBeNull();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
-  it("keeps cleared feature selections and incomplete conditions editable across JSON tabs", async () => {
+  it("keeps cleared feature selections editable across JSON tabs", async () => {
     const { user, repository } = await open("create-policy");
     await user.click(screen.getByRole("tab", { name: "产品功能" }));
     const logs = within(screen.getByRole("region", { name: "日志服务" }));
@@ -529,13 +534,19 @@ describe("policy creation entry and directory contract", () => {
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     expect((screen.getByRole("tab", { name: "可视化编辑" }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("tab", { name: "产品功能" }) as HTMLButtonElement).disabled).toBe(false);
-    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
-    await user.click(screen.getByRole("button", { name: "添加授权声明" }));
+    expect(JSON.parse((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value).statement).toEqual([]);
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+  });
+  it("keeps incomplete conditions editable across JSON and tag tabs without saving", async () => {
+    const { user, repository } = await open("create-policy");
+    // The default single blank statement is the same editor state as the
+    // cleared feature document after adding one statement; no grant is seeded.
     await logActions(user, ["logs:search"]);
-    await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
+    await user.click(screen.getByLabelText("按资源标签限制", { selector: "input" }));
     await user.click(screen.getByLabelText("标签值 1"));
     await user.paste("production");
-    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    const jsonTab = screen.getByRole("tab", { name: "JSON 编辑" });
+    await user.click(jsonTab);
     const text = (screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value;
     expect((screen.getByRole("tab", { name: "可视化编辑" }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("tab", { name: "按资源标签" }) as HTMLButtonElement).disabled).toBe(false);
@@ -543,9 +554,9 @@ describe("policy creation entry and directory contract", () => {
     await user.click(screen.getByRole("tab", { name: "按资源标签" }));
     expect((screen.getByLabelText("标签键 1") as HTMLInputElement).value).toBe("");
     expect((screen.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("production");
-    await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+    await user.click(jsonTab);
     expect((screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value).toBe(text);
-    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(within(screen.getByRole("form")).getByRole("button", { name: "下一步" }));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
   it("leaves malformed or unrepresentable drafts in JSON without discarding their content", async () => {
@@ -2730,7 +2741,7 @@ describe("CAM-style access workspace", () => {
     expect(document.activeElement).toBe(screen.getByLabelText("来源 IP 范围（CIDR）"));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   }, 10_000);
-  it("confirms a service change, retaining other statements and condition restrictions", async () => {
+  it.each(["cancel", "confirm"] as const)("%s of a service change retains unrelated statements and conditions", async (outcome) => {
     const { user } = await open("create-policy");
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     const initial = { version: "1", statement: [
@@ -2740,14 +2751,19 @@ describe("CAM-style access workspace", () => {
     const json = () => screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement;
     await user.clear(json()); await user.paste(JSON.stringify(initial));
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
-    await user.click(within(screen.getByRole("region", { name: "声明 1" })).getByRole("combobox", { name: "产品服务" }));
+    const statement = within(screen.getByRole("region", { name: "声明 1" }));
+    const product = statement.getByRole("combobox", { name: "产品服务" });
+    await user.click(product);
     await user.click(screen.getByRole("option", { name: "PostgreSQL 数据库" }));
-    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
-    expect((screen.getByLabelText("资源 ID 或前缀 1") as HTMLInputElement).value).toBe("production/*");
-    await user.click(within(screen.getByRole("region", { name: "声明 1" })).getByRole("combobox", { name: "产品服务" }));
-    await user.click(screen.getByRole("option", { name: "PostgreSQL 数据库" }));
-    await user.click(screen.getByRole("button", { name: "切换服务" }));
-    await user.click(within(screen.getByRole("region", { name: "声明 1" })).getByRole("checkbox", { name: "database:read" }));
+    if (outcome === "cancel") {
+      await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "取消" }));
+      expect((screen.getByLabelText("资源 ID 或前缀 1") as HTMLInputElement).value).toBe("production/*");
+      await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
+      expect(JSON.parse(json().value)).toEqual(initial);
+      return;
+    }
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "切换服务" }));
+    await user.click(statement.getByRole("checkbox", { name: "database:read" }));
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     expect(JSON.parse(json().value).statement).toEqual([{ ...initial.statement[0], action: ["database:read"], resource: ["*"] }, initial.statement[1]]);
   });

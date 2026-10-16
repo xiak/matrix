@@ -3043,7 +3043,7 @@ describe("account access", () => {
     expect(screen.queryByText(/当前默认版本仍是 version-logs/)).toBeNull();
   });
 
-  it("loads the live permission catalog only for visual authoring and publishes the reviewed exact declaration", async () => {
+  async function openVisualVersionDraft() {
     const fixture = livePolicyVersions();
     const catalog = profileDirectory();
     catalog.items[0]!.profile.actions.push({ action: "paas.application.list", resourceKind: "APPLICATION", scope: "TENANT",
@@ -3055,28 +3055,39 @@ describe("account access", () => {
     await screen.findByRole("table", { name: "策略版本目录" });
     await user.click(screen.getByRole("button", { name: "发布新版本" }));
     expect(listAuthorizationProfiles).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    const publisher = within(screen.getByRole("region", { name: "编写新版本" }));
+    await user.click(publisher.getByRole("tab", { name: "可视化编辑" }));
     expect(await screen.findByRole("checkbox", { name: /paas.application.read/ })).toBeTruthy();
     const authoringSnapshot = screen.getByRole("region", { name: "当前声明依赖的产品目录" });
     expect(within(authoringSnapshot).getByText("paas @ r1", { selector: "code" })).toBeTruthy();
     expect(within(authoringSnapshot).getByText(/提交时 IAM 会重新校验目录并冻结精确 Action 集/)).toBeTruthy();
     expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("combobox", { name: "授权效果" }));
-    await user.click(screen.getByRole("option", { name: "拒绝" }));
-    await user.click(screen.getByRole("combobox", { name: "资源选择器 1" }));
-    await user.click(screen.getByRole("option", { name: "精确 ID" }));
-    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(publisher.getByLabelText("授权效果", { selector: "button" }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "拒绝" }));
+    await user.click(publisher.getByLabelText("资源选择器 1", { selector: "button" }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "精确 ID" }));
+    return { user, fixture, listAuthorizationProfiles, publisher };
+  }
+  it("loads the catalog only for visual version authoring and rejects incomplete or incompatible resource choices", async () => {
+    const { user, fixture, publisher } = await openVisualVersionDraft();
+    await user.click(publisher.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByText(/可视化草稿还有未完成/)).toBeTruthy();
     expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("textbox", { name: "资源 ID 或前缀" }));
+    await user.click(publisher.getByLabelText("资源 ID 或前缀", { selector: "input" }));
     await user.paste("app-prod");
     expect(screen.getByRole("checkbox", { name: /paas.application.list/ })).toHaveProperty("disabled", true);
     expect(screen.getByText("当前 1 个操作可共享本声明的资源与条件；1 个需调整当前声明或另建声明。")).toBeTruthy();
     expect(screen.getByText("资源形状与当前所选操作不同；请另建声明。")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "仅看已选" }));
+    await user.click(publisher.getByRole("button", { name: "仅看已选" }));
     expect(screen.queryByRole("checkbox", { name: /paas.application.list/ })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "显示全部操作" }));
-    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(publisher.getByRole("button", { name: "显示全部操作" }));
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+  });
+  it("reviews visual version semantics and the exact comparison while retaining the draft on back", async () => {
+    const { user, fixture, listAuthorizationProfiles, publisher } = await openVisualVersionDraft();
+    await user.click(publisher.getByLabelText("资源 ID 或前缀", { selector: "input" }));
+    await user.paste("app-prod");
+    await user.click(publisher.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBeTruthy();
     const summary = screen.getByRole("region", { name: "声明摘要" });
     const reviewSnapshot = within(summary).getByRole("region", { name: "待 IAM 校验的产品声明" });
@@ -3096,12 +3107,20 @@ describe("account access", () => {
     expect(within(comparison!).getByRole("heading", { name: /当前默认版本/ })).toBeTruthy();
     expect(within(comparison!).getByRole("heading", { name: "待发布声明 JSON" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    await user.click(publisher.getByRole("button", { name: "返回编辑" }));
     expect(screen.getByRole("checkbox", { name: /paas.application.read/ })).toHaveProperty("checked", true);
     expect((screen.getByRole("textbox", { name: "资源 ID 或前缀" }) as HTMLInputElement).value).toBe("app-prod");
     expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "审阅变更" }));
-    await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+  });
+  it("publishes the reviewed exact visual declaration without switching the default", async () => {
+    const { user, fixture, publisher } = await openVisualVersionDraft();
+    await user.click(publisher.getByLabelText("资源 ID 或前缀", { selector: "input" }));
+    await user.paste("app-prod");
+    await user.click(publisher.getByRole("button", { name: "审阅变更" }));
+    await user.click(publisher.getByRole("button", { name: "返回编辑" }));
+    await user.click(publisher.getByRole("button", { name: "审阅变更" }));
+    await user.click(publisher.getByRole("button", { name: "确认发布新版本" }));
     await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1));
     const submitted = fixture.createPolicyVersion.mock.calls[0]![3].document;
     expect(submitted).toEqual({ languageVersion: "1", scope: "TENANT", statements: [{ sid: "read-applications", effect: "DENY",
@@ -3139,7 +3158,7 @@ describe("account access", () => {
       .toEqual(["paas.application.inspect", "paas.application.read"]);
   });
 
-  it("creates a live custom policy from an explicitly selected catalog Action without attaching it", async () => {
+  async function openVisualPolicyDraft() {
     const createPolicy = vi.fn(async (_credential: string, _accountId: string,
       command: { displayName: string; document: AccountPolicyDocument; requestId: string }): Promise<AccountPolicyDetail> => {
       const policy: AccountPolicy = { ...tenantPolicy, id: "customer.new", management: "CUSTOMER", accountId: account.id,
@@ -3160,6 +3179,17 @@ describe("account access", () => {
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     const action = await screen.findByRole("radio", { name: /paas.application.read/ });
     await user.click(action);
+    return { user, createPolicy, listAuthorizationProfiles };
+  }
+  async function enterVisualPolicyConstraints(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("textbox", { name: "资源 ID 或前缀" }));
+    await user.paste("app-prod");
+    await user.click(screen.getByRole("button", { name: "添加条件" }));
+    await user.click(screen.getByRole("textbox", { name: "条件值" }));
+    await user.paste("tenant-a");
+  }
+  it("inspects a selected catalog Action's declaration without treating it as authorization", async () => {
+    const { user, createPolicy } = await openVisualPolicyDraft();
     expect(within(screen.getByRole("region", { name: "当前声明依赖的产品目录" }))
       .getByText("paas @ r1", { selector: "code" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "已选 Action 的产品声明" })).toBeNull();
@@ -3174,13 +3204,13 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "收起声明详情" }));
     expect(screen.queryByRole("region", { name: "已选 Action 的产品声明" })).toBeNull();
     expect(screen.getAllByText("paas.application.read", { selector: "code" }).length).toBeGreaterThan(0);
+    expect(createPolicy).not.toHaveBeenCalled();
+  });
+  it("retains a complete visual policy draft across review and back without creating or attaching it", async () => {
+    const { user, createPolicy, listAuthorizationProfiles } = await openVisualPolicyDraft();
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByText(/可视化声明还有未完成/)).toBeTruthy();
-    await user.click(screen.getByRole("textbox", { name: "资源 ID 或前缀" }));
-    await user.paste("app-prod");
-    await user.click(screen.getByRole("button", { name: "添加条件" }));
-    await user.click(screen.getByRole("textbox", { name: "条件值" }));
-    await user.paste("tenant-a");
+    await enterVisualPolicyConstraints(user);
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
     const summary = screen.getByRole("region", { name: "声明摘要" });
@@ -3202,7 +3232,15 @@ describe("account access", () => {
     expect(screen.getByRole("checkbox", { name: /paas.application.read/ })).toHaveProperty("checked", true);
     expect((screen.getByRole("textbox", { name: "资源 ID 或前缀" }) as HTMLInputElement).value).toBe("app-prod");
     expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    expect(createPolicy).not.toHaveBeenCalled();
+  });
+  it("creates a live custom policy from the reviewed catalog declaration without attaching it", async () => {
+    const { user, createPolicy } = await openVisualPolicyDraft();
+    await enterVisualPolicyConstraints(user);
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    expect(createPolicy).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认创建" }));
     await waitFor(() => expect(createPolicy).toHaveBeenCalledTimes(1));
     const submitted = createPolicy.mock.calls[0]![2];
