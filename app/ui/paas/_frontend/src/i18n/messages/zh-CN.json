@@ -4217,6 +4217,7 @@
     "loadedUsersOnly": "选择器仅包含当前账号目录中已经载入的用户；未出现的用户不会被判断为已删除。",
     "unresolvedUser": "身份摘要尚未载入，稳定用户 ID 仍是权威标识。",
     "singleRelationImpact": "本次请求只变更一条关系，不修改用户、策略或其拥有的资源。",
+    "liveDeleteConfirmHint": "这是连接 IAM 的真实删除命令。该用户组将从活动列表移除，操作记录保留用于审计；当前不支持恢复。确认前请检查依赖关系。",
     "liveDeleteImpact": "服务端会返回解除成员关系和撤销直接策略关联的权威数量；不会删除用户、策略或资源。"
   },
   "RelationshipDirectory": {
@@ -4666,7 +4667,7 @@
     "pending": "待配置",
     "selectCount": "已选择 {count} 项",
     "deleteTitle": "删除 {name}",
-    "deleteHint": "此操作只删除模拟记录，但相关配置也会一并移除。确认前请检查依赖关系。",
+    "deleteHint": "删除前请核对目标对象及本页说明的影响，确认后再提交。",
     "confirmName": "输入名称以确认",
     "deleteConfirm": "确认删除",
     "members": "成员",
