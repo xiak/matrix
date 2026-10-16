@@ -3086,16 +3086,20 @@ func runIAMAccountLifecycleRecoveryConsoleBrowser(
 	}
 	if observation.Attempts != 1 || !observation.ResponseLost || observation.BackendStatus < http.StatusOK ||
 		observation.BackendStatus >= http.StatusMultipleChoices || observation.IdempotencyKey != "" ||
-		observation.MutationHost == "" || observation.RecoveryReads < 1 || observation.RecoveryHost == "" ||
+		observation.MutationHost == "" || observation.RecoveryReads != 1 || observation.RecoveryHost == "" ||
+		len(observation.RecoveryAttempts) != 1 ||
 		observation.RecoveryHost == observation.MutationHost || observation.PostLossWrites != 0 {
-		t.Fatalf("Account lifecycle response-loss boundary was not exact: attempts=%d lost=%t backend=%d key_present=%t mutation_host=%q recovery_reads=%d recovery_host=%q post_loss_writes=%d post_loss_method=%q post_loss_path=%q post_loss_host=%q",
+		t.Fatalf("Account lifecycle response-loss boundary was not exact: attempts=%d lost=%t backend=%d key_present=%t mutation_host=%q recovery_reads=%d recovery_attempts=%v recovery_host=%q post_loss_writes=%d post_loss_method=%q post_loss_path=%q post_loss_host=%q",
 			observation.Attempts, observation.ResponseLost, observation.BackendStatus, observation.IdempotencyKey != "",
-			observation.MutationHost, observation.RecoveryReads, observation.RecoveryHost, observation.PostLossWrites,
+			observation.MutationHost, observation.RecoveryReads, observation.RecoveryAttempts, observation.RecoveryHost, observation.PostLossWrites,
 			observation.PostLossMethod, observation.PostLossPath, observation.PostLossHost)
 	}
 	recoveryURL, err := url.Parse(observation.RecoveryRequestURI)
 	wantRecoveryPath := loss.recoveryPathPrefix + url.PathEscape(commandRequestID)
-	if err != nil || recoveryURL.Path != wantRecoveryPath || len(recoveryURL.Query()) != 2 ||
+	recoveryAttempt := observation.RecoveryAttempts[0]
+	if recoveryAttempt.Method != http.MethodGet || recoveryAttempt.Host != observation.RecoveryHost ||
+		recoveryAttempt.RequestURI != observation.RecoveryRequestURI || recoveryAttempt.BackendStatus != http.StatusOK ||
+		err != nil || recoveryURL.Path != wantRecoveryPath || len(recoveryURL.Query()) != 2 ||
 		len(recoveryURL.Query()["operation"]) != 1 || recoveryURL.Query().Get("operation") != string(operation) ||
 		len(recoveryURL.Query()["expectedResourceVersion"]) != 1 ||
 		recoveryURL.Query().Get("expectedResourceVersion") != strconv.FormatUint(expectedVersion, 10) {
@@ -3726,10 +3730,18 @@ type browserResponseLoss struct {
 	recoveryReads      int
 	recoveryHost       string
 	recoveryRequestURI string
+	recoveryAttempts   []browserResponseLossRecoveryAttempt
 	postLossWrites     int
 	postLossMethod     string
 	postLossPath       string
 	postLossHost       string
+}
+
+type browserResponseLossRecoveryAttempt struct {
+	Method        string
+	Host          string
+	RequestURI    string
+	BackendStatus int
 }
 
 type browserResponseLossObservation struct {
@@ -3742,6 +3754,7 @@ type browserResponseLossObservation struct {
 	RecoveryReads      int
 	RecoveryHost       string
 	RecoveryRequestURI string
+	RecoveryAttempts   []browserResponseLossRecoveryAttempt
 	PostLossWrites     int
 	PostLossMethod     string
 	PostLossPath       string
@@ -3780,7 +3793,13 @@ func (value *browserResponseLoss) observe(request *http.Request, backendStatus i
 func (value *browserResponseLoss) observeRecovery(request *http.Request, backendStatus int) {
 	value.mu.Lock()
 	defer value.mu.Unlock()
-	if !value.responseLost || value.mutationHost == "" || request.Host == value.mutationHost ||
+	if !value.responseLost {
+		return
+	}
+	value.recoveryAttempts = append(value.recoveryAttempts, browserResponseLossRecoveryAttempt{
+		Method: request.Method, Host: request.Host, RequestURI: request.URL.RequestURI(), BackendStatus: backendStatus,
+	})
+	if value.mutationHost == "" || request.Host == value.mutationHost ||
 		backendStatus < http.StatusOK || backendStatus >= http.StatusMultipleChoices {
 		return
 	}
@@ -3833,8 +3852,9 @@ func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
 		RequestBody:  bytes.Clone(value.requestBody),
 		MutationHost: value.mutationHost, RecoveryReads: value.recoveryReads,
 		RecoveryHost: value.recoveryHost, RecoveryRequestURI: value.recoveryRequestURI,
-		PostLossWrites: value.postLossWrites,
-		PostLossMethod: value.postLossMethod, PostLossPath: value.postLossPath,
+		RecoveryAttempts: append([]browserResponseLossRecoveryAttempt(nil), value.recoveryAttempts...),
+		PostLossWrites:   value.postLossWrites,
+		PostLossMethod:   value.postLossMethod, PostLossPath: value.postLossPath,
 		PostLossHost: value.postLossHost,
 	}
 }
@@ -3896,9 +3916,46 @@ func TestBrowserResponseLossTracksConfiguredAccountLifecycleWrites(t *testing.T)
 
 	observation := loss.snapshot()
 	if observation.RecoveryReads != 1 || observation.RecoveryHost != "browser-b.example" ||
-		observation.RecoveryRequestURI != recovery.URL.RequestURI() || observation.PostLossWrites != 1 ||
+		observation.RecoveryRequestURI != recovery.URL.RequestURI() || len(observation.RecoveryAttempts) != 1 ||
+		observation.RecoveryAttempts[0].Method != http.MethodGet ||
+		observation.RecoveryAttempts[0].Host != "browser-b.example" ||
+		observation.RecoveryAttempts[0].RequestURI != recovery.URL.RequestURI() ||
+		observation.RecoveryAttempts[0].BackendStatus != http.StatusOK || observation.PostLossWrites != 1 ||
 		observation.PostLossPath != "/api/iam/v1/accounts/account-one:set-status" {
 		t.Fatalf("configured Account lifecycle response loss = %#v", observation)
+	}
+}
+
+func TestBrowserResponseLossDoesNotHideAccountLifecycleRecoveryAttempts(t *testing.T) {
+	loss := &browserResponseLoss{
+		method: http.MethodPost, path: "/api/iam/v1/accounts",
+		recoveryPathPrefix: "/api/iam/v1/accounts/account-one/lifecycle-completions/",
+	}
+	mutation := httptest.NewRequest(http.MethodPost, "http://browser-a.example/api/iam/v1/accounts", nil)
+	if !loss.observe(mutation, http.StatusCreated, []byte(`{"requestId":"command-one"}`)) {
+		t.Fatal("Account lifecycle response loss was not selected")
+	}
+	loss.markLost()
+	wrong := httptest.NewRequest(http.MethodGet,
+		"http://browser-b.example/api/iam/v1/accounts/account-one/lifecycle-completions/command-one?operation=ACCOUNT_CREATE&expectedResourceVersion=9", nil)
+	right := httptest.NewRequest(http.MethodGet,
+		"http://browser-b.example/api/iam/v1/accounts/account-one/lifecycle-completions/command-one?operation=ACCOUNT_CREATE&expectedResourceVersion=0", nil)
+	for _, attempt := range []struct {
+		request *http.Request
+		status  int
+	}{{wrong, http.StatusBadRequest}, {right, http.StatusOK}, {right, http.StatusOK}} {
+		if !loss.matchesRecovery(attempt.request) {
+			t.Fatal("bounded Account lifecycle recovery attempt was not observed")
+		}
+		loss.observeRecovery(attempt.request, attempt.status)
+	}
+	observation := loss.snapshot()
+	if observation.RecoveryReads != 2 || len(observation.RecoveryAttempts) != 3 ||
+		observation.RecoveryAttempts[0].RequestURI != wrong.URL.RequestURI() ||
+		observation.RecoveryAttempts[0].BackendStatus != http.StatusBadRequest ||
+		observation.RecoveryAttempts[1].RequestURI != right.URL.RequestURI() ||
+		observation.RecoveryAttempts[2].RequestURI != right.URL.RequestURI() {
+		t.Fatalf("Account lifecycle recovery attempts were hidden or overwritten: %#v", observation)
 	}
 }
 
@@ -14255,6 +14312,7 @@ func assertAuthorityPlaintextAbsent(
 	}
 	managedServiceRoleSessions := readManagedServiceRoleSessionRequests(t, ctx, admin)
 	roleActors := readRoleActorReferences(t, ctx, admin)
+	policyAttachmentTargets := readPolicyAttachmentTargetAuthorities(t, ctx, admin)
 	paasOperations := readPaaSOperationAuthorities(t, ctx, admin)
 	rows, err := admin.Query(ctx, `SELECT 'iam.outbox',event_document::text,''::text FROM iam.audit_outbox
 		UNION ALL SELECT 'paas.outbox',document::text,''::text FROM paas.audit_outbox
@@ -14328,6 +14386,15 @@ func assertAuthorityPlaintextAbsent(
 			t.Fatalf("invalid Role actor plaintext inspection source %q: %v", source, err)
 		}
 		for value := range roleActorStructural {
+			structuralLowEntropy[value] = struct{}{}
+		}
+		policyAttachmentStructural, err := policyAttachmentTargetStructuralLowEntropy(
+			source, document, auditAuthorityDocument, policyAttachmentTargets,
+		)
+		if err != nil {
+			t.Fatalf("invalid PolicyAttachment target plaintext inspection source %q: %v", source, err)
+		}
+		for value := range policyAttachmentStructural {
 			structuralLowEntropy[value] = struct{}{}
 		}
 		location, err := authorityPlaintextLocationWithStructural(document, beforeOTP, structuralLowEntropy, plaintexts...)
@@ -14623,6 +14690,158 @@ func readRoleActorReferences(
 		t.Fatal("incomplete Role actor authority")
 	}
 	return result
+}
+
+// A dynamic PolicyAttachment target is a server-generated SHA-256 identity,
+// but a random six-digit TOTP can still occur inside those hexadecimal bytes.
+// Trust only identities carried by an immutable, contract-valid CREATE
+// receipt; a shape match or a current attachment row alone is not authority.
+func readPolicyAttachmentTargetAuthorities(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+) map[string]struct{} {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT result_document::text FROM iam.policy_attachment_changes
+		WHERE operation='CREATE'`)
+	if err != nil {
+		t.Fatal("read PolicyAttachment target authorities")
+	}
+	defer rows.Close()
+	result := make(map[string]struct{})
+	for rows.Next() {
+		var document string
+		if rows.Scan(&document) != nil {
+			t.Fatal("read PolicyAttachment target authority row")
+		}
+		change, err := iamv1.DecodePolicyAttachmentChange(strings.NewReader(document))
+		if err != nil || change.Operation != iamv1.PolicyAttachmentChangeCreate || change.Attachment == nil {
+			t.Fatal("invalid PolicyAttachment target authority receipt")
+		}
+		attachment := *change.Attachment
+		if !isGeneratedPolicyAttachmentID(string(attachment.ID)) {
+			continue
+		}
+		key, ok := policyAttachmentAuthorityKey(attachment.Scope, attachment.AccountID,
+			attachment.InstallationID, string(attachment.ID))
+		if !ok {
+			t.Fatal("invalid PolicyAttachment target authority scope")
+		}
+		result[key] = struct{}{}
+	}
+	if rows.Err() != nil {
+		t.Fatal("incomplete PolicyAttachment target authorities")
+	}
+	return result
+}
+
+func policyAttachmentTargetStructuralLowEntropy(
+	source, inspectedDocument, authorityDocument string,
+	known map[string]struct{},
+) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	authority := inspectedDocument
+	prefix := ""
+	switch source {
+	case "iam.outbox":
+		if authorityDocument != "" {
+			return nil, errors.New("IAM outbox has an unexpected authority copy")
+		}
+		prefix = "$."
+	case "audit.document.IAM":
+		if inspectedDocument != authorityDocument {
+			return nil, errors.New("IAM Audit record document differs from its authority")
+		}
+		authority = authorityDocument
+		prefix = "$."
+	case "audit.canonical.IAM":
+		authority = authorityDocument
+		prefix = "$.event."
+	default:
+		return result, nil
+	}
+	var event auditv1.Event
+	if auditv1.DecodeRequest(strings.NewReader(authority), &event) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+		return nil, errors.New("invalid PolicyAttachment target Audit authority")
+	}
+	if source == "audit.canonical.IAM" {
+		canonical, _, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+		if err != nil || canonical != inspectedDocument {
+			return nil, errors.New("IAM Audit canonical document differs from its authority")
+		}
+	}
+	if event.Target.Kind != auditv1.TargetPolicyAttachment ||
+		!isPolicyAttachmentAuditAction(event.Action) ||
+		!isGeneratedPolicyAttachmentID(event.Target.ID) {
+		return result, nil
+	}
+	key, ok := policyAttachmentEventAuthorityKey(event)
+	if !ok {
+		return nil, errors.New("invalid PolicyAttachment target Audit scope")
+	}
+	if _, found := known[key]; !found {
+		return result, nil
+	}
+	result[structuralLowEntropyPathKey(prefix+"target.id", event.Target.ID)] = struct{}{}
+	return result, nil
+}
+
+func isPolicyAttachmentAuditAction(action auditv1.Action) bool {
+	switch action {
+	case auditv1.ActionIAMPolicyAttachmentCreated,
+		auditv1.ActionIAMPolicyAttachmentRevoked,
+		auditv1.ActionIAMPlatformPolicyAttachmentCreated,
+		auditv1.ActionIAMPlatformPolicyAttachmentRevoked:
+		return true
+	default:
+		return false
+	}
+}
+
+func isGeneratedPolicyAttachmentID(value string) bool {
+	const prefix = "attachment-"
+	if len(value) != len(prefix)+sha256.Size*2 || !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	for _, character := range value[len(prefix):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func policyAttachmentAuthorityKey(
+	scope iamv1.AuthorityScope,
+	accountID iamv1.AccountID,
+	installationID string,
+	attachmentID string,
+) (string, bool) {
+	switch scope {
+	case iamv1.AuthorityScopeTenant:
+		if accountID == "" || installationID != "" {
+			return "", false
+		}
+		return "tenant\x00" + string(accountID) + "\x00" + attachmentID, true
+	case iamv1.AuthorityScopeInstallation:
+		if accountID == "" || installationID == "" {
+			return "", false
+		}
+		return "installation\x00" + installationID + "\x00" + attachmentID, true
+	default:
+		return "", false
+	}
+}
+
+func policyAttachmentEventAuthorityKey(event auditv1.Event) (string, bool) {
+	if event.TenantID != "" && event.InstallationID == "" {
+		return "tenant\x00" + string(event.TenantID) + "\x00" + event.Target.ID, true
+	}
+	if event.TenantID == "" && event.InstallationID != "" {
+		return "installation\x00" + event.InstallationID + "\x00" + event.Target.ID, true
+	}
+	return "", false
 }
 
 type storedPaaSOperationAuthority struct {
@@ -15620,6 +15839,84 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 			if marshalErr != nil || scanErr != nil || structuralErr == nil && location == "" {
 				t.Fatal("caller-controlled or noncanonical Audit access identity escaped plaintext inspection")
 			}
+		}
+	})
+	t.Run("policy-attachment-target-authority", func(t *testing.T) {
+		attachmentID := "attachment-" + strings.Repeat("a", 29) + code + strings.Repeat("b", 29)
+		for _, fixture := range []struct {
+			name   string
+			action auditv1.Action
+			setup  func(*auditv1.Event)
+		}{
+			{"tenant", auditv1.ActionIAMPolicyAttachmentCreated, func(value *auditv1.Event) {}},
+			{"installation", auditv1.ActionIAMPlatformPolicyAttachmentCreated, func(value *auditv1.Event) {
+				value.TenantID, value.InstallationID = "", "installation-one"
+			}},
+		} {
+			t.Run(fixture.name, func(t *testing.T) {
+				attachment := event
+				attachment.EventID = auditv1.EventID("event-policy-attachment-" + fixture.name)
+				attachment.Action = fixture.action
+				attachment.Target = auditv1.TargetReference{Kind: auditv1.TargetPolicyAttachment, ID: attachmentID}
+				attachment.IAMDecisionID = "decision-policy-attachment"
+				attachment.RequestID = "request-policy-attachment-" + fixture.name
+				attachment.CorrelationID = attachment.RequestID
+				fixture.setup(&attachment)
+				encoded, marshalErr := json.Marshal(attachment)
+				canonical, _, canonicalErr := auditv1.CanonicalizeEvent(auditv1.SourceIAM, attachment)
+				key, keyOK := policyAttachmentEventAuthorityKey(attachment)
+				if marshalErr != nil || canonicalErr != nil || !keyOK ||
+					auditv1.ValidateEventForSource(auditv1.SourceIAM, attachment) != nil {
+					t.Fatal("invalid PolicyAttachment target authority fixture")
+				}
+				known := map[string]struct{}{key: {}}
+				for _, sample := range []struct{ source, document, authority string }{
+					{"iam.outbox", string(encoded), ""},
+					{"audit.document.IAM", string(encoded), string(encoded)},
+					{"audit.canonical.IAM", canonical, string(encoded)},
+				} {
+					structural, structuralErr := policyAttachmentTargetStructuralLowEntropy(
+						sample.source, sample.document, sample.authority, known,
+					)
+					location, scanErr := authorityPlaintextLocationWithStructural(
+						sample.document, nil, structural, code,
+					)
+					if structuralErr != nil || scanErr != nil || location != "" || len(structural) != 1 {
+						t.Fatal("verified PolicyAttachment target identity was treated as persisted OTP")
+					}
+					if location, scanErr = authorityPlaintextLocationWithStructural(
+						sample.document, nil, structural, attachmentID,
+					); scanErr != nil || location == "" {
+						t.Fatal("PolicyAttachment target authority hid an exact longer credential")
+					}
+				}
+				structural, structuralErr := policyAttachmentTargetStructuralLowEntropy(
+					"iam.outbox", string(encoded), "", nil,
+				)
+				location, scanErr := authorityPlaintextLocationWithStructural(
+					string(encoded), nil, structural, code,
+				)
+				if structuralErr != nil || scanErr != nil || location == "" {
+					t.Fatal("unproved PolicyAttachment target identity escaped plaintext inspection")
+				}
+				caller := attachment
+				caller.RequestID, caller.CorrelationID = "request-"+code, "request-"+code
+				callerEncoded, marshalErr := json.Marshal(caller)
+				structural, structuralErr = policyAttachmentTargetStructuralLowEntropy(
+					"iam.outbox", string(callerEncoded), "", known,
+				)
+				location, scanErr = authorityPlaintextLocationWithStructural(
+					string(callerEncoded), nil, structural, code,
+				)
+				if marshalErr != nil || structuralErr != nil || scanErr != nil || location == "" {
+					t.Fatal("caller-controlled PolicyAttachment request escaped plaintext inspection")
+				}
+				if _, err := policyAttachmentTargetStructuralLowEntropy(
+					"audit.canonical.IAM", canonical+" ", string(encoded), known,
+				); err == nil {
+					t.Fatal("mismatched IAM canonical document obtained a PolicyAttachment target exception")
+				}
+			})
 		}
 	})
 	t.Run("managed-service-role-exit-request-id", func(t *testing.T) {

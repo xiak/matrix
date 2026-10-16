@@ -248,6 +248,6 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 
 ### Account 生命周期跨浏览器真实门禁
 
-2026-10-16，本任务在三个独立PostgreSQL 18数据库分别启动隔离的IAM、Audit、PaaS、dispatcher和真实控制台，以`127.0.0.1`与`localhost`形成两个不共享浏览器存储的来源。测试代理只在后端成功提交后截断开通Account、停用Account和原Root凭据恢复三类响应；来源A页面均进入UNKNOWN、冻结唯一公开命令标识并导出不含密码、Bearer或私有request ID的摘要，来源B重新认证同一`admin` USER后仅调用精确completion GET。三项fixture分别以206.02秒、142.77秒和104.45秒通过；代理逐项证明恰好一次生命周期写、一次跨Host恢复读取、结果丢失后零次账号生命周期写入。
+2026-10-16，本任务在三个独立PostgreSQL 18数据库分别启动隔离的IAM、Audit、PaaS、dispatcher和真实控制台，以`127.0.0.1`与`localhost`形成两个不共享浏览器存储的来源。测试代理只在后端成功提交后截断开通Account、停用Account和原Root凭据恢复三类响应；来源A页面均进入UNKNOWN、冻结唯一公开命令标识并导出不含密码、Bearer或私有request ID的摘要，来源B重新认证同一`admin` USER后仅调用精确completion GET。收紧后的三项fixture分别以67.20秒、222.06秒和132.50秒通过；代理逐项记录结果丢失后的每一次有界读取，并要求总数恰好为一、方法为`GET`、Host为另一浏览器来源、URI精确绑定原operation/requestId/expectedResourceVersion且后端返回200，同时证明恰好一次生命周期写和结果丢失后零次账号生命周期写入。错误Host、错误URI、失败后再成功或重复GET都不能满足该门禁。
 
 后端在同一门禁中逐字段核对不可变完成记录的actor Account/Principal、目标Account、operation、原请求及前后修订，并独立读取权威Account状态和installation Audit链。开通结果的原Root初始凭据只能进入强制改密；停用结果把版本推进到2、拒绝新登录并撤销既有Root Session；凭据恢复结果保留相同原Root principal，旧密码和旧Session均拒绝，新临时凭据只能进入强制改密，且没有新增`PLATFORM_OPERATOR`。因此本地真实进程、浏览器半断、第二来源重新认证和零写重放已完成；它仍是loopback测试代理而不是当前Profile签名APISIX安装，签名复验和实例终止UNKNOWN继续保留为发布缺口。
