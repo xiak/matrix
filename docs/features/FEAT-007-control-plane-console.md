@@ -2091,6 +2091,35 @@ enabled. Windows complete-frontend stability, independent fixed-source CI,
 signed-browser and remaining release gates stay open; physical-phone
 integration remains deferred by the explicit Phase 1 scope above.
 
+#### Remaining LIVE management integration gaps
+
+Read-only inspection of fixed UI `06198d737851eea032c2a15750a83fa3c5a721f7`
+against the requirement owners at fixed IAM
+`02f4d65e01fe98646ebc4900cab11a70edd72f4f` identifies two integration gaps,
+not unpublished-backend placeholders:
+
+- Account security settings already have a LIVE read surface and a dedicated
+  AccessKey source-network edit/review/proof/completion workflow. The mounted
+  editor and Provider `begin` boundary accept only the next network layer,
+  retaining the current MFA, password and Session settings unchanged. Controls
+  for the other supported rule changes are missing. Each later slice must
+  verify its then-current public schema, reuse the dedicated step-up and
+  original-intent recovery owners, and distinguish ending the original caller
+  Session from inspecting history after a new login. This assessment does not
+  enable mandatory login/MFA or relax the existing UX-acceptance boundary.
+- Policy reads, creation, version publication, explicit default selection and
+  nondefault-version retirement have LIVE paths. Policy metadata renaming and
+  whole-Policy retirement do not yet have a LIVE repository/Provider/form path;
+  a MOCK action or version retirement does not supply that behavior. Later
+  slices must retain stable identity/versioned intent and server authorization,
+  reject retirement with current references rather than silently detach them,
+  and avoid inventing restoration, a recycle bin or a historical directory.
+
+The protocol and authorization rules remain with
+[IAM-009](../../IAM/FEAT-IAM-009-security-governance.md) and
+[IAM-005](../../IAM/FEAT-IAM-005-policy-versions-and-boundaries.md). This is a
+frontend gap assessment, not implementation or inherited runtime acceptance.
+
 #### LIVE deletion-confirmation follow-up
 
 Fixed UI source `029a6ec3b9061efe46c30bfd496ece4135390926` (frontend tree
