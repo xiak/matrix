@@ -26,7 +26,7 @@
 | IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变 | User修改/停复用、Membership、附件回执和不确定结果仍需浏览器门禁；Group删除确认当前错误声称操作对象是“模拟记录”，修复并复验最终删除前不得接受；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
-| IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；当前IAM86+r36签名页面读取已验证通知地址、本人TOTP状态、六个有效Session，并对缺少`iam.access-key.list`和`iam.security-settings.read`显示真实权限拒绝 | 强制MFA重新绑定、外部物理认证器、AccessKey全生命周期、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；WebAuthn明确Deferred |
+| IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；当前IAM86+r36签名页面读取已验证通知地址、本人TOTP状态、六个有效Session，并对缺少`iam.access-key.list`和`iam.security-settings.read`显示真实权限拒绝 | 账号强制MFA下普通User首次绑定、普通User换绑/解绑后的受限重新绑定、AccessKey全生命周期、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、外部物理认证器及WebAuthn明确Deferred |
 | IAM-UI-07 | 四个真实产品、协议、授权/撤权、错误矩阵和五类命令恢复已有分层证据；当前IAM86+r36签名页面又以`offline.alpha.primary`从真实RabbitMQ配额创建`iam-r36-terminate-test`并观察QUEUED→INSTALLING→RUNNING和AMQP端点，同一签名运行时已证明终止单写响应丢失、跨来源结果恢复、物理清理与配额归还 | 终止的纯页面最终提交与UNKNOWN呈现仍须实跑；不支持跨主体恢复，查无结果不得推断原写未发生 |
 | IAM-UI-08 | 当前IAM86+r36签名入口再次证明角色SSO、用户SSO和跨账号协作直达路由只有明确“尚未接入后端”EmptyState且没有提交控件 | 企业微信/外部IdP、Passkey/WebAuthn、跨账号与角色链保持禁用和Deferred；新增Deferred入口仍须沿同一边界验收 |
 
@@ -140,7 +140,7 @@ UX/UI固定`1fa26c88469ae6f77960e381ca852fe1e7c029a7`在当前集成树上的四
 
 2026-10-14，扩展后的同一显式opt-in门禁在全新专属PostgreSQL 18数据库上通过：fixture为1296.36秒，race package为1299.901秒。浏览器A完成通知地址验证、首次TOTP绑定及第一次MFA登录；不同`localhost`来源的浏览器B完成第二次MFA登录，并通过“结束其他会话”原子保留当前会话、结束另一个会话，产生唯一`iam.session.others-revoked`事实。B随后用当前密码和原因子完成用途限定证明，换绑到新因子并重新登录；再主动移除该因子，验证密码登录只恢复当前身份、不复活旧因子或恢复码，最后用已验证通知地址和当前密码重新绑定第三个因子并完成第四次MFA登录。
 
-门禁最终核对通知地址修订1、TOTP状态修订5、三代因子中一项ACTIVE/两项REVOKED、三批恢复码中一批有效/两批撤销、唯一当前`PASSWORD_TOTP`会话且没有有效纯密码会话，以及contact/bound/replaced/removed/session-others-revoked事实的准确数量和完整租户Audit链。测试遵守服务端共享的五次/十分钟TOTP尝试预算，在真实窗口到期后继续，没有改数据库时钟、预算行或业务状态；观察器只跟踪尚未过期的登录challenge，并按因子代次复用对应测试码，不能把重试误记成后续因子。该证据接受普通换绑、主动移除和移除后的受限重新绑定，不替代真实SMTP、外部认证器、强制MFA重新绑定或当前签名APISIX页面门禁。
+门禁最终核对通知地址修订1、TOTP状态修订5、三代因子中一项ACTIVE/两项REVOKED、三批恢复码中一批有效/两批撤销、唯一当前`PASSWORD_TOTP`会话且没有有效纯密码会话，以及contact/bound/replaced/removed/session-others-revoked事实的准确数量和完整租户Audit链。测试遵守服务端共享的五次/十分钟TOTP尝试预算，在真实窗口到期后继续，没有改数据库时钟、预算行或业务状态；观察器只跟踪尚未过期的登录challenge，并按因子代次复用对应测试码，不能把重试误记成后续因子。该证据接受普通换绑、主动移除和移除后的受限重新绑定，不替代真实SMTP、外部认证器、受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定，或当前签名APISIX页面门禁。
 
 ### 真实产品资源闭环
 
@@ -198,7 +198,7 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 
 在受支持Node 24.19上，新增恢复组件25项测试及architecture通过；随后typecheck、lint、228组样式对比度、59页生产导出和57项路径规范化通过，322项Go嵌入文件在本分支连续两次从源码构建后逐文件一致，`app/ui/paas` Go test/vet通过。九个源码blob与固定UX对象逐项一致；嵌入产物按采用规则由本分支生成。该证据接受客户端识别、告知、单次刷新和不重放不变量，但尚未把旧签名页面保留到新签名UI并真实点击恢复，因此不能把本轮描述为“签名控制台升级无错误”，也不能由用户手工刷新掩盖剩余运行门禁。
 
-同一当前Profile签名Release A与APISIX入口的后继浏览器增量使用任务私有SMTP/Maildir接收真实八位验证码：普通User先验证安全通知地址，再从页面获取仅一次显示的TOTP种子，以仓库既有`pquerna/otp`认证器封装生成当前动态码完成绑定。页面随后只显示一次十条恢复码并明确撤销旧Session；确认保存后原会话结束，使用原密码进入MFA challenge并以新动态码成功重新登录，用户设置显示通知地址已验证、因子已绑定。种子、验证码、恢复码和密码均未进入文档、Git或普通运行日志。该证据关闭当前签名入口的首次SMTP→TOTP→MFA重登组合，不替代外部物理认证器、强制MFA重新绑定、恢复码消费/再生或AccessKey完整浏览器门禁。
+同一当前Profile签名Release A与APISIX入口的后继浏览器增量使用任务私有SMTP/Maildir接收真实八位验证码：普通User先验证安全通知地址，再从页面获取仅一次显示的TOTP种子，以仓库既有`pquerna/otp`认证器封装生成当前动态码完成绑定。页面随后只显示一次十条恢复码并明确撤销旧Session；确认保存后原会话结束，使用原密码进入MFA challenge并以新动态码成功重新登录，用户设置显示通知地址已验证、因子已绑定。种子、验证码、恢复码和密码均未进入文档、Git或普通运行日志。该证据关闭当前签名入口的首次SMTP→TOTP→MFA重登组合，不替代外部物理认证器、受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、恢复码消费/再生或AccessKey完整浏览器门禁。
 
 同一任务自有合成Account随后由Root在浏览器创建最长三十分钟的Role、只信任该Account一个普通User，并为Role附加仅允许`managedservice.service-installation.read`的自定义Policy及同一权限边界；另一个只允许该精确Role执行`iam.role.assume`的自定义Policy通过Group授给该User。该User经密码与TOTP登录后只发现一个可承担Role，审阅页冻结Role版本、来源User、Account和时长，提交后账号菜单准确显示临时Role与来源身份；IAM管理面只保留Role会话入口，Audit读取返回403。托管服务整页同样返回403，因为规格、区域和配额是独立资源动作；客户端没有把单一实例读动作偷换成完整产品页权限。
 
@@ -230,7 +230,7 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 
 统一的认证器材料组件只在本地使用零远端依赖的`qrcode-generator@2.0.4`渲染服务端返回的准确`otpauth://totp` URI；首次绑定、换绑和恢复页继续由原流程拥有挑战、一次性种子、意图、期限和提交。组件拒绝HOTP、重复或冲突参数、URI密钥与响应种子不一致、歧义路径以及超过1024 UTF-8字节的材料；无法安全渲染时保留准确手工密钥和明确提示，不调用外部二维码服务、不持久化种子，也不把二维码显示冒充绑定成功。MIT许可证随静态产物交付，测试用`jsqr`不进入运行时依赖。
 
-本分支使用隔离子进程中的Node 22.22.2/npm 11.6.4完成67项聚焦测试、类型检查、lint、架构、234组样式对比度、3项静态归一化、59页面构建、57条分段规范化和324个嵌入文件一致性；Go UI测试与vet也通过。全量Vitest实际结果为1516/1517：唯一失败是未由本切片修改的`AccountAccessRenderer`既有5秒超时；同一精确测试独立重跑以3.80秒通过，只说明未稳定复现，不能把全量执行回填为成功。依赖审计仍报告既有9项high和1项critical，本片没有自动改写依赖树。该证据只关闭本地离线二维码呈现与严格材料解析，不替代真实手机/外部认证器扫描、当前Profile签名APISIX页面、强制MFA重新绑定或整个IAM-UI-06验收。
+本分支使用隔离子进程中的Node 22.22.2/npm 11.6.4完成67项聚焦测试、类型检查、lint、架构、234组样式对比度、3项静态归一化、59页面构建、57条分段规范化和324个嵌入文件一致性；Go UI测试与vet也通过。全量Vitest实际结果为1516/1517：唯一失败是未由本切片修改的`AccountAccessRenderer`既有5秒超时；同一精确测试独立重跑以3.80秒通过，只说明未稳定复现，不能把全量执行回填为成功。依赖审计仍报告既有9项high和1项critical，本片没有自动改写依赖树。该证据只关闭本地离线二维码呈现与严格材料解析，不替代真实手机/外部认证器扫描、当前Profile签名APISIX页面、受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定，或整个IAM-UI-06验收。
 
 固定`89505567643ed1c8e71d80277d5a3527d7987605`的独立[Verification 38707342304](https://github.com/xiak/matrix/actions/runs/38707342304)准确在Linux完成59页生产构建后，因已提交的Windows嵌入资产与CI产物不一致而失败；Vitest尚未执行，不能把该CI失败误记为上述本地既有超时。隔离Linux复现证明缺失的`NEXT_PUBLIC_MATRIX_UX_PREVIEW`与显式`0`取得同一Build ID却产生不同编译字节、一个chunk替换及234个引用文件变化。随后只选择性采用UX/UI owner固定`8a14592223dbfa943ce9d653db34778f381d1790`的六个既有构建配置、检查脚本和测试路径，不导入其业务源码、后端、API、SQL、FEAT、adoption、checkpoint或生成资产；嵌入资产仍由本分支最终源码重新生成。配置现在把未设置、`0`及其他非启用值统一编译为`0`，门禁分别执行未设置与显式`0`两次真实production export并逐字节比较，漂移诊断明确区分缺失、新增和内容变化。Node 22.22.2/npm 11.6.4下新增8项边界测试、类型、lint、架构、234组样式、两次59页/57路径构建、324项跨模式及嵌入等价和Go UI test/vet均通过；最终前端树`268739c3eb5ce7480e11d3ae22642fda3ff28383`、业务源码树`3137cf1e8754fc947692d97591a13f2c68eabf2b`、资产树`9ab18fca2d5f84afcd61f19645a25e7642214363`与固定对象一致。该本地结果修复可重复构建根因，但不能在后继固定SHA独立CI完成前回填为CI成功，也不扩大二维码的物理认证器或签名页面验收范围。
 
