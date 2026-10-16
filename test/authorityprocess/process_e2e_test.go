@@ -3727,6 +3727,12 @@ type browserResponseLoss struct {
 	idempotencyKey     string
 	requestBody        []byte
 	mutationHost       string
+	mutationAttempts   []browserResponseLossMutationAttempt
+	mutationBodies     [][]byte
+	mutationBodyKnown  []bool
+	mutationKeys       []string
+	mutationOverflow   bool
+	selectedAttempt    int
 	recoveryReads      int
 	recoveryHost       string
 	recoveryRequestURI string
@@ -3735,6 +3741,20 @@ type browserResponseLoss struct {
 	postLossMethod     string
 	postLossPath       string
 	postLossHost       string
+}
+
+type browserResponseLossMutationAttempt struct {
+	Sequence                      int
+	Method                        string
+	Host                          string
+	RequestURI                    string
+	BackendCalled                 bool
+	BackendStatus                 int
+	SelectedForLoss               bool
+	RequestBodyCompared           bool
+	RequestBodyMatchesSelected    bool
+	IdempotencyKeyCompared        bool
+	IdempotencyKeyMatchesSelected bool
 }
 
 type browserResponseLossRecoveryAttempt struct {
@@ -3751,6 +3771,9 @@ type browserResponseLossObservation struct {
 	IdempotencyKey     string
 	RequestBody        []byte
 	MutationHost       string
+	MutationAttempts   []browserResponseLossMutationAttempt
+	MutationOverflow   bool
+	SelectedAttempt    int
 	RecoveryReads      int
 	RecoveryHost       string
 	RecoveryRequestURI string
@@ -3776,18 +3799,84 @@ func (value *browserResponseLoss) matchesRecovery(request *http.Request) bool {
 func (value *browserResponseLoss) observe(request *http.Request, backendStatus int, requestBody []byte) bool {
 	value.mu.Lock()
 	defer value.mu.Unlock()
-	value.attempts++
-	if value.idempotencyKey == "" {
-		value.idempotencyKey = request.Header.Get("Idempotency-Key")
-		value.requestBody = bytes.Clone(requestBody)
-		value.mutationHost = request.Host
+	attemptIndex, recorded := value.recordMutationAttemptLocked(request, backendStatus, requestBody, true, true)
+	if !recorded {
+		return false
 	}
-	value.backendStatus = backendStatus
 	if value.dropSelected || backendStatus < http.StatusOK || backendStatus >= http.StatusMultipleChoices {
+		value.compareMutationAttemptsLocked()
 		return false
 	}
 	value.dropSelected = true
+	value.selectedAttempt = value.mutationAttempts[attemptIndex].Sequence
+	value.mutationAttempts[attemptIndex].SelectedForLoss = true
+	if value.requestBody != nil {
+		clear(value.requestBody)
+	}
+	value.idempotencyKey = request.Header.Get("Idempotency-Key")
+	value.requestBody = bytes.Clone(requestBody)
+	value.mutationHost = request.Host
+	value.backendStatus = backendStatus
+	value.compareMutationAttemptsLocked()
 	return true
+}
+
+func (value *browserResponseLoss) observeFixtureRejection(
+	request *http.Request,
+	status int,
+	requestBody []byte,
+	bodyKnown bool,
+) {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	if _, recorded := value.recordMutationAttemptLocked(request, status, requestBody, bodyKnown, false); recorded {
+		value.compareMutationAttemptsLocked()
+	}
+}
+
+const browserResponseLossMutationAttemptLimit = 16
+
+func (value *browserResponseLoss) recordMutationAttemptLocked(
+	request *http.Request,
+	backendStatus int,
+	requestBody []byte,
+	bodyKnown bool,
+	backendCalled bool,
+) (int, bool) {
+	value.attempts++
+	if len(value.mutationAttempts) >= browserResponseLossMutationAttemptLimit {
+		value.mutationOverflow = true
+		return -1, false
+	}
+	value.mutationAttempts = append(value.mutationAttempts, browserResponseLossMutationAttempt{
+		Sequence: value.attempts, Method: request.Method, Host: request.Host,
+		RequestURI: request.URL.RequestURI(), BackendCalled: backendCalled, BackendStatus: backendStatus,
+	})
+	value.mutationBodies = append(value.mutationBodies, bytes.Clone(requestBody))
+	value.mutationBodyKnown = append(value.mutationBodyKnown, bodyKnown)
+	value.mutationKeys = append(value.mutationKeys, request.Header.Get("Idempotency-Key"))
+	return len(value.mutationAttempts) - 1, true
+}
+
+func (value *browserResponseLoss) compareMutationAttemptsLocked() {
+	if value.selectedAttempt == 0 {
+		return
+	}
+	for index := range value.mutationAttempts {
+		attempt := &value.mutationAttempts[index]
+		if !attempt.IdempotencyKeyCompared {
+			attempt.IdempotencyKeyCompared = true
+			attempt.IdempotencyKeyMatchesSelected = value.mutationKeys[index] == value.idempotencyKey
+		}
+		if !attempt.RequestBodyCompared && value.mutationBodyKnown[index] {
+			attempt.RequestBodyCompared = true
+			attempt.RequestBodyMatchesSelected = bytes.Equal(value.mutationBodies[index], value.requestBody)
+		}
+		clear(value.mutationBodies[index])
+		value.mutationBodies[index] = nil
+		value.mutationBodyKnown[index] = false
+		value.mutationKeys[index] = ""
+	}
 }
 
 func (value *browserResponseLoss) observeRecovery(request *http.Request, backendStatus int) {
@@ -3849,13 +3938,93 @@ func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
 	return browserResponseLossObservation{
 		Attempts: value.attempts, ResponseLost: value.responseLost,
 		BackendStatus: value.backendStatus, IdempotencyKey: value.idempotencyKey,
-		RequestBody:  bytes.Clone(value.requestBody),
-		MutationHost: value.mutationHost, RecoveryReads: value.recoveryReads,
-		RecoveryHost: value.recoveryHost, RecoveryRequestURI: value.recoveryRequestURI,
+		RequestBody:      bytes.Clone(value.requestBody),
+		MutationHost:     value.mutationHost,
+		MutationAttempts: append([]browserResponseLossMutationAttempt(nil), value.mutationAttempts...),
+		MutationOverflow: value.mutationOverflow,
+		SelectedAttempt:  value.selectedAttempt,
+		RecoveryReads:    value.recoveryReads,
+		RecoveryHost:     value.recoveryHost, RecoveryRequestURI: value.recoveryRequestURI,
 		RecoveryAttempts: append([]browserResponseLossRecoveryAttempt(nil), value.recoveryAttempts...),
 		PostLossWrites:   value.postLossWrites,
 		PostLossMethod:   value.postLossMethod, PostLossPath: value.postLossPath,
 		PostLossHost: value.postLossHost,
+	}
+}
+
+func TestBrowserResponseLossPreservesHeaderlessPolicyMutationAttempts(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name   string
+		method string
+		body   string
+	}{
+		{"update", http.MethodPatch, `{"displayName":"renamed","resourceVersion":2,"requestId":"ui-policy-metadata-update"}`},
+		{"retire", http.MethodDelete, `{"resourceVersion":2,"requestId":"ui-policy-metadata-retire"}`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			const policyPath = "/api/iam/v1/policies/policy-one"
+			loss := &browserResponseLoss{method: test.method, path: policyPath}
+			unauthorizedBody := []byte(`{"resourceVersion":1,"requestId":"unauthorized-attempt"}`)
+			unauthorized := httptest.NewRequest(test.method, "http://browser-a.example"+policyPath,
+				bytes.NewReader(unauthorizedBody))
+			if !loss.matches(unauthorized) || loss.observe(unauthorized, http.StatusUnauthorized, unauthorizedBody) {
+				t.Fatal("unauthorized Policy request was selected for response loss")
+			}
+			selected := httptest.NewRequest(test.method, "http://browser-a.example"+policyPath,
+				strings.NewReader(test.body))
+			if !loss.matches(selected) || !loss.observe(selected, http.StatusOK, []byte(test.body)) {
+				t.Fatal("successful Policy response loss was not selected")
+			}
+			loss.markLost()
+			replay := httptest.NewRequest(test.method, "http://browser-b.example"+policyPath,
+				strings.NewReader(test.body))
+			if !loss.matches(replay) || loss.observe(replay, http.StatusOK, []byte(test.body)) {
+				t.Fatal("exact Policy replay was not observed as a later attempt")
+			}
+			changedBody := []byte(test.body + " ")
+			changed := httptest.NewRequest(test.method, "http://browser-b.example"+policyPath,
+				bytes.NewReader(changedBody))
+			if loss.observe(changed, http.StatusConflict, changedBody) {
+				t.Fatal("changed Policy replay was selected for response loss")
+			}
+
+			observation := loss.snapshot()
+			defer clear(observation.RequestBody)
+			if observation.Attempts != 4 || observation.SelectedAttempt != 2 || observation.MutationOverflow ||
+				observation.IdempotencyKey != "" ||
+				observation.MutationHost != "browser-a.example" ||
+				!bytes.Equal(observation.RequestBody, []byte(test.body)) ||
+				len(observation.MutationAttempts) != 4 {
+				t.Fatalf("headerless Policy baseline was overwritten: attempts=%d selected=%d overflow=%t host=%q body_match=%t ledger=%d",
+					observation.Attempts, observation.SelectedAttempt, observation.MutationOverflow,
+					observation.MutationHost, bytes.Equal(observation.RequestBody, []byte(test.body)),
+					len(observation.MutationAttempts))
+			}
+			for index, attempt := range observation.MutationAttempts {
+				wantHost := "browser-a.example"
+				if index >= 2 {
+					wantHost = "browser-b.example"
+				}
+				if attempt.Method != test.method || attempt.Host != wantHost ||
+					attempt.RequestURI != policyPath || !attempt.BackendCalled ||
+					!attempt.RequestBodyCompared || !attempt.IdempotencyKeyCompared ||
+					!attempt.IdempotencyKeyMatchesSelected {
+					t.Fatalf("Policy mutation attempt %d was not exact: %#v", index, attempt)
+				}
+			}
+			if first, selected, replayed, changed := observation.MutationAttempts[0], observation.MutationAttempts[1],
+				observation.MutationAttempts[2], observation.MutationAttempts[3]; first.Sequence != 1 || first.BackendStatus != http.StatusUnauthorized || first.SelectedForLoss ||
+				first.RequestBodyMatchesSelected || selected.Sequence != 2 || selected.BackendStatus != http.StatusOK ||
+				!selected.SelectedForLoss || !selected.RequestBodyMatchesSelected || replayed.Sequence != 3 ||
+				replayed.BackendStatus != http.StatusOK || replayed.SelectedForLoss || !replayed.RequestBodyMatchesSelected ||
+				changed.Sequence != 4 || changed.BackendStatus != http.StatusConflict || changed.SelectedForLoss ||
+				changed.RequestBodyMatchesSelected {
+				t.Fatalf("Policy mutation sequence did not preserve the selected command: first=%#v selected=%#v replay=%#v changed=%#v",
+					first, selected, replayed, changed)
+			}
+		})
 	}
 }
 
@@ -3983,6 +4152,91 @@ func TestBrowserResponseLossTracksWriteRejectedByFixtureCapacity(t *testing.T) {
 		observation.PostLossPath != "/api/managed-services/v1/service-installations" ||
 		observation.PostLossHost != "browser-b.example" {
 		t.Fatalf("capacity-rejected post-loss write = %#v", observation)
+	}
+}
+
+func TestBrowserResponseLossTracksPolicyRetryRejectedByFixtureCapacity(t *testing.T) {
+	const policyPath = "/api/iam/v1/policies/policy-one"
+	requestBody := []byte(`{"resourceVersion":2,"requestId":"ui-policy-metadata-retire"}`)
+	loss := &browserResponseLoss{method: http.MethodDelete, path: policyPath}
+	selected := httptest.NewRequest(http.MethodDelete, "http://browser-a.example"+policyPath,
+		bytes.NewReader(requestBody))
+	if !loss.observe(selected, http.StatusOK, requestBody) {
+		t.Fatal("successful Policy response loss was not selected")
+	}
+	loss.markLost()
+	requests := make(chan struct{}, 1)
+	requests <- struct{}{}
+	backendCalls := 0
+	handler := iamConsoleBrowserFixtureHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backendCalls++
+		_, _ = io.WriteString(w, `{}`)
+	}), requests, loss)
+
+	rejected := httptest.NewRecorder()
+	handler.ServeHTTP(rejected, httptest.NewRequest(http.MethodDelete,
+		"http://browser-b.example"+policyPath, bytes.NewReader(requestBody)))
+	if rejected.Code != http.StatusServiceUnavailable || backendCalls != 0 {
+		t.Fatalf("capacity-rejected Policy retry: status=%d backend_calls=%d", rejected.Code, backendCalls)
+	}
+	first := loss.snapshot()
+	if first.Attempts != 2 || len(first.MutationAttempts) != 2 || first.MutationOverflow ||
+		first.MutationAttempts[1].BackendCalled ||
+		first.MutationAttempts[1].BackendStatus != http.StatusServiceUnavailable ||
+		!first.MutationAttempts[1].RequestBodyCompared ||
+		!first.MutationAttempts[1].RequestBodyMatchesSelected {
+		t.Fatalf("capacity-rejected Policy retry was hidden: attempts=%d ledger=%d overflow=%t rejected=%#v",
+			first.Attempts, len(first.MutationAttempts), first.MutationOverflow, first.MutationAttempts[1])
+	}
+
+	<-requests
+	succeeded := httptest.NewRecorder()
+	handler.ServeHTTP(succeeded, httptest.NewRequest(http.MethodDelete,
+		"http://browser-b.example"+policyPath, bytes.NewReader(requestBody)))
+	observation := loss.snapshot()
+	defer clear(observation.RequestBody)
+	if succeeded.Code != http.StatusOK || backendCalls != 1 || observation.Attempts != 3 ||
+		observation.SelectedAttempt != 1 || len(observation.MutationAttempts) != 3 || observation.MutationOverflow ||
+		!observation.MutationAttempts[2].BackendCalled ||
+		observation.MutationAttempts[2].BackendStatus != http.StatusOK ||
+		!observation.MutationAttempts[2].RequestBodyCompared ||
+		!observation.MutationAttempts[2].RequestBodyMatchesSelected {
+		t.Fatalf("Policy retry after fixture capacity was not exact: status=%d backend_calls=%d attempts=%d selected=%d ledger=%d overflow=%t retry=%#v",
+			succeeded.Code, backendCalls, observation.Attempts, observation.SelectedAttempt,
+			len(observation.MutationAttempts), observation.MutationOverflow, observation.MutationAttempts[2])
+	}
+}
+
+func TestBrowserResponseLossBoundsAndCopiesMutationEvidence(t *testing.T) {
+	const policyPath = "/api/iam/v1/policies/policy-one"
+	requestBody := []byte(`{"resourceVersion":2,"requestId":"ui-policy-metadata-retire"}`)
+	loss := &browserResponseLoss{method: http.MethodDelete, path: policyPath}
+	selected := httptest.NewRequest(http.MethodDelete, "http://browser-a.example"+policyPath,
+		bytes.NewReader(requestBody))
+	if !loss.observe(selected, http.StatusOK, requestBody) {
+		t.Fatal("successful Policy response loss was not selected")
+	}
+	loss.markLost()
+	for attempt := 0; attempt < browserResponseLossMutationAttemptLimit; attempt++ {
+		request := httptest.NewRequest(http.MethodDelete,
+			fmt.Sprintf("http://browser-b.example%s?attempt=%d", policyPath, attempt), bytes.NewReader(requestBody))
+		if loss.observe(request, http.StatusConflict, requestBody) {
+			t.Fatal("later Policy conflict was selected for response loss")
+		}
+	}
+
+	first := loss.snapshot()
+	defer clear(first.RequestBody)
+	if first.Attempts != browserResponseLossMutationAttemptLimit+1 ||
+		len(first.MutationAttempts) != browserResponseLossMutationAttemptLimit || !first.MutationOverflow {
+		t.Fatalf("Policy mutation evidence was not bounded: attempts=%d ledger=%d overflow=%t",
+			first.Attempts, len(first.MutationAttempts), first.MutationOverflow)
+	}
+	first.MutationAttempts[0].Host = "mutated.example"
+	second := loss.snapshot()
+	defer clear(second.RequestBody)
+	if second.MutationAttempts[0].Host != "browser-a.example" {
+		t.Fatal("Policy mutation observation exposed mutable ledger state")
 	}
 }
 
@@ -4182,6 +4436,14 @@ func iamConsoleBrowserFixtureHandler(
 			}
 			mux.ServeHTTP(w, r)
 		default:
+			if responseLoss != nil && responseLoss.matches(r) {
+				requestBody, err := io.ReadAll(r.Body)
+				_ = r.Body.Close()
+				responseLoss.observeFixtureRejection(
+					r, http.StatusServiceUnavailable, requestBody, err == nil,
+				)
+				clear(requestBody)
+			}
 			if responseLoss != nil && responseLoss.matchesRecovery(r) {
 				responseLoss.observeRecovery(r, http.StatusServiceUnavailable)
 			}
