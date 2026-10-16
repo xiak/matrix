@@ -12,6 +12,13 @@ function leafKeys(messages: Record<string, unknown>, prefix = ""): string[] {
 }
 
 describe("translation contracts", () => {
+  it.each([{ locale: "en", messages: en }, { locale: "zh-CN", messages: zhCN }])("keeps $locale shared deletion guidance independent of execution mode", ({ messages }) => {
+    expect(messages.IamWorkspace.deleteHint).not.toMatch(/mock|模拟/i);
+    expect(messages.GroupWorkspace.liveDeleteConfirmHint).toMatch(/live IAM|真实删除命令/);
+    expect(messages.GroupWorkspace.liveDeleteImpact).toMatch(/authoritative counts|权威数量/);
+    expect(messages.GroupWorkspace.liveDeleteImpact).toMatch(/Users, policies and resources are not deleted|不会删除用户、策略或资源/);
+  });
+
   it("provides names, descriptions and condition labels for every registered capability", () => {
     for (const messages of [en, zhCN]) {
       for (const service of policyServices) expect(messages.PolicyRules.services[service]).toBeTruthy();

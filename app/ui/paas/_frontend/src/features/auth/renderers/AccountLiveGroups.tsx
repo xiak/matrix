@@ -255,6 +255,7 @@ function LiveGroupDelete({ client, access, onClose, onDeleted, onStale }: {
   return <WorkspaceDelete
     name={access.group.name}
     onClose={onClose}
+    hint={t("liveDeleteConfirmHint")}
     operation={operationProps(operation, clearError)}
     impact={<Alert status="warning">{t("liveDeleteImpact")}</Alert>}
     onConfirm={async () => {

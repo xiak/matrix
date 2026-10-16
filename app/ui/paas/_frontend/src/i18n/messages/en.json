@@ -4217,6 +4217,7 @@
     "loadedUsersOnly": "This selector contains only users already loaded in the current account directory. A missing user is not treated as deleted.",
     "unresolvedUser": "Identity details are not loaded; the stable user ID remains authoritative.",
     "singleRelationImpact": "This request changes exactly one relationship. It does not modify the user, policy or owned resources.",
+    "liveDeleteConfirmHint": "This is a live IAM delete command. The group will leave the active group list. Audit history is retained; restoring the group is not supported. Review dependencies before confirming.",
     "liveDeleteImpact": "The service returns authoritative counts for removed memberships and revoked direct policy attachments. Users, policies and resources are not deleted."
   },
   "RelationshipDirectory": {
@@ -4666,7 +4667,7 @@
     "pending": "Not configured",
     "selectCount": "{count} selected",
     "deleteTitle": "Delete {name}",
-    "deleteHint": "This removes the mock record and its configuration. Review dependencies before confirming.",
+    "deleteHint": "Before confirming deletion, review the target object and the impact described on this page.",
     "confirmName": "Type the name to confirm",
     "deleteConfirm": "Confirm deletion",
     "members": "Members",

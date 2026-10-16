@@ -2269,6 +2269,60 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
     expect(screen.queryByRole("button", { name: "编辑" })).toBeNull();
   });
+  it.each([
+    { locale: "zh-CN", more: "更多操作", remove: "删除", confirm: "确认删除", cancel: "取消", confirmation: "输入名称以确认",
+      hint: "这是连接 IAM 的真实删除命令。该用户组将从活动列表移除，操作记录保留用于审计；当前不支持恢复。确认前请检查依赖关系。",
+      impact: "服务端会返回解除成员关系和撤销直接策略关联的权威数量；不会删除用户、策略或资源。" },
+    { locale: "en", more: "More actions", remove: "Delete", confirm: "Confirm deletion", cancel: "Cancel", confirmation: "Type the name to confirm",
+      hint: "This is a live IAM delete command. The group will leave the active group list. Audit history is retained; restoring the group is not supported. Review dependencies before confirming.",
+      impact: "The service returns authoritative counts for removed memberships and revoked direct policy attachments. Users, policies and resources are not deleted." }
+  ])("identifies $locale LIVE group deletion without weakening typed confirmation or cancellation", async (labels) => {
+    localStorage.setItem("matrix.locale", labels.locale);
+    const liveGroup: GroupAccess = {
+      group: { id: "group-delete", accountId: account.id, name: "DeleteTeam", description: "Backend-owned group", resourceVersion: 4, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      policyAttachments: [], capabilities: [
+        capability("iam.group.read", "GROUP", "group-delete"),
+        capability("iam.group.delete", "GROUP", "group-delete")
+      ]
+    };
+    let deleted = false;
+    const deleteGroup = vi.fn(async () => {
+      deleted = true;
+      return { id: liveGroup.group.id, accountId: account.id, name: liveGroup.group.name, resourceVersion: 5,
+        removedMemberships: 0, revokedPolicyAttachments: 0, deletedAt: "2026-09-11T08:05:00Z" };
+    });
+    const { user, repository } = await open("groups", { live: true, entityId: liveGroup.group.id, repository: {
+      getGroup: vi.fn().mockResolvedValue(liveGroup),
+      listGroups: vi.fn(async () => ({ items: deleted ? [] : [liveGroup], nextAfter: null })),
+      deleteGroup
+    } });
+    await screen.findByRole("heading", { name: liveGroup.group.name });
+    await user.click(screen.getByRole("button", { name: labels.more }));
+    await user.click(screen.getByRole("menuitem", { name: labels.remove }));
+    let panel = within(screen.getByRole("dialog"));
+    expect(panel.getByText(labels.hint)).toBeTruthy();
+    expect(panel.getByText(labels.impact)).toBeTruthy();
+    expect(panel.queryByText(/mock record|只删除模拟记录/i)).toBeNull();
+    fireEvent.change(panel.getByLabelText(labels.confirmation), { target: { value: "wrong-name" } });
+    await user.click(panel.getByRole("button", { name: labels.confirm }));
+    expect(deleteGroup).not.toHaveBeenCalled();
+    fireEvent.change(panel.getByLabelText(labels.confirmation), { target: { value: liveGroup.group.name } });
+    await user.click(panel.getByRole("button", { name: labels.cancel }));
+    expect(deleteGroup).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: labels.more }));
+    await user.click(screen.getByRole("menuitem", { name: labels.remove }));
+    panel = within(screen.getByRole("dialog"));
+    expect(panel.getByLabelText(labels.confirmation)).toHaveProperty("value", "");
+    fireEvent.change(panel.getByLabelText(labels.confirmation), { target: { value: liveGroup.group.name } });
+    await user.click(panel.getByRole("button", { name: labels.confirm }));
+    await waitFor(() => expect(deleteGroup).toHaveBeenCalledExactlyOnceWith("preview-only", account.id, liveGroup.group.id,
+      { resourceVersion: 4, requestId: expect.any(String) }));
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(repository.workspace).toBeUndefined();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
   it("uses the fixed live group contract without inventing totals and retries one unchanged relation intent", async () => {
     const liveGroup: GroupAccess = {
       group: { id: "group-live", accountId: account.id, name: "LiveOperators", description: "Backend-owned group", resourceVersion: 4, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
