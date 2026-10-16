@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；当前固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7、`contractRevision=36`同源签名A/B完整离线生命周期和[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业均已通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个Deferred直达入口，从纯页面创建RabbitMQ 4.1.8实例至RUNNING，并完成Account开通与停用的响应丢失、跨来源只读恢复和权威状态/Audit核对；同一签名运行时又完成原Root凭据恢复及该RabbitMQ实例终止的单次写入响应丢失、跨来源结果读取、安全效果和权威Audit核对，终止已物理释放运行对象和配额。当前签名页面还已创建不自动关联身份的自定义策略和空用户组，分别核对默认版本/冻结产品声明、零成员/零附件和不可变Audit，测试对象随后经公开API安全退役。原Root恢复及实例终止的纯页面最终提交与UNKNOWN呈现、其余非Deferred写路径仍未全部验收，因此整个FEAT仍为实施中。
+- 状态：实施中；当前固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7、`contractRevision=36`同源签名A/B完整离线生命周期和[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业均已通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个Deferred直达入口，从纯页面创建RabbitMQ 4.1.8实例至RUNNING，并完成Account开通与停用的响应丢失、跨来源只读恢复和权威状态/Audit核对；同一签名运行时又完成原Root凭据恢复及该RabbitMQ实例终止的单次写入响应丢失、跨来源结果读取、安全效果和权威Audit核对，终止已物理释放运行对象和配额。当前签名页面还已创建不自动关联身份的自定义策略和空用户组、发布不可变策略后继版本、更新空用户组元数据，并在持久化前拒绝缺少statement的策略文档；默认版本/冻结产品声明、稳定Group ID、零成员/零附件和不可变Audit均已核对，测试对象随后经公开API安全退役。原Root恢复及实例终止的纯页面最终提交与UNKNOWN呈现、其余非Deferred写路径仍未全部验收，因此整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -23,8 +23,8 @@
 | --- | --- | --- |
 | IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备 | 最终改密的纯页面提交、过期会话和权威异常恢复仍需组合门禁 |
-| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件 | User和Group的剩余修改/停复用/删除、Membership、附件回执和不确定结果仍需浏览器门禁；批量User不在本轮需求 |
-| IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本 | 默认版本的纯页面最终切换、边界、语法错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略 |
+| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变 | User修改/停复用、Group页面删除、Membership、附件回执和不确定结果仍需浏览器门禁；批量User不在本轮需求 |
+| IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；当前IAM86+r36签名页面读取已验证通知地址、本人TOTP状态、六个有效Session，并对缺少`iam.access-key.list`和`iam.security-settings.read`显示真实权限拒绝 | 强制MFA重新绑定、外部物理认证器、AccessKey全生命周期、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；WebAuthn明确Deferred |
 | IAM-UI-07 | 四个真实产品、协议、授权/撤权、错误矩阵和五类命令恢复已有分层证据；当前IAM86+r36签名页面又以`offline.alpha.primary`从真实RabbitMQ配额创建`iam-r36-terminate-test`并观察QUEUED→INSTALLING→RUNNING和AMQP端点，同一签名运行时已证明终止单写响应丢失、跨来源结果恢复、物理清理与配额归还 | 终止的纯页面最终提交与UNKNOWN呈现仍须实跑；不支持跨主体恢复，查无结果不得推断原写未发生 |
@@ -265,6 +265,10 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 随后同一签名页面从权威空目录进入两步用户组向导，创建`ui-runtime-readers`。审阅页明确本次只创建空组，不添加成员或策略；完成页与独立详情读取返回稳定ID `group-2c2965bd9e9af25e729081d6f36795d20da8e77198759691684ea138be2577c6`、描述`runtime-gate`、零成员和零直接附件，并说明Group不能登录、承担Role或拥有资源。权威库证明版本1、授权代次1、有效Membership和附件均为0，`iam.group.created` outbox一次投递，租户Audit sequence 384为IAM来源、原USER actor、准确GROUP目标和SUCCEEDED。验收后另一个公开API会话按版本1软删除该空组并注销会话；删除结果版本2、移除Membership为0、撤销附件为0，`iam.group.deleted`也一次投递并写入同一租户链。收尾不冒充页面删除；本片接受纯页面空组创建和详情投影，不接受Membership、附件、修改/删除页面、权限效果或UNKNOWN恢复。
 
 策略版本后继继续使用零附件测试策略`policy-b2a4e0c61e15651f6c8f39ace067e76ec006ddac3a6966c48f91f8abf00a4d1d`。页面以ALLOW读取版本为默认起点，审阅并发布第二个不可变版本`version-cebec66533433d99c8881cb2475e2814cfb3784f53f2ee24426f45bd714808f9-2`，声明改为对同一`managedservice.service-installation.read`和本权限域全部`SERVICE_INSTALLATION`显式DENY；完成页明确发布本身不切换默认、不关联身份也不改变授权。页面进入默认切换审阅后没有执行最终点击；另一个公开API会话在再次核对有效附件为0后按策略版本2切换，结果策略版本3、默认版本指向新摘要。浏览器返回目录后重新读取详情，准确显示新默认ID、DENY声明、契约v2及同一`managedservice`修订7冻结来源。创建、版本发布、默认切换三项outbox均一次投递，对应租户Audit sequence 394、399、404均为IAM来源和SUCCEEDED。测试策略随后经公开API按版本3退役为版本4，附件仍为0，删除事实也一次投递。该结果接受纯页面不可变版本发布和切换后的权威投影；默认切换的纯页面最终提交、被引用策略的授权效果、退休版本、版本上限/冲突及UNKNOWN恢复仍未验收。
+
+同一签名页面随后创建第二个空用户组`ui-runtime-editors`，详情返回稳定ID `group-144637ff6282d1aa0b4a86898a4e4533e333133f4b3e36a9b29875e862c5420a`；页面编辑把名称与描述更新为`ui-runtime-reviewers`和`after-update`，返回同一ID。权威库证明更新后资源版本2、授权代次仍为1、有效Membership和附件均为0；`iam.group.created`与`iam.group.updated`各一次投递，对应租户Audit sequence 426和430均为IAM来源及SUCCEEDED。验收后另一个公开API会话按版本2软删除并注销，最终资源版本3、移除Membership与撤销附件均为0，`iam.group.deleted`一次投递且Audit sequence 434成功。本片接受纯页面Group元数据更新、稳定身份及无授权副作用；公开API收尾不冒充页面删除，Membership、附件、并发冲突及UNKNOWN恢复仍未验收。
+
+策略编辑器还以名称`UIRuntimeInvalidPolicy`审阅仅含`{"languageVersion":"1"}`的文档。页面明确拒绝缺少非空statement的内容，并同时提示当前只支持语言版本1和TENANT范围；随后权威库中同名Policy与PolicyVersion计数均为0。该结果只接受这一项客户端语义失败和无持久化副作用，不外推为服务端语法攻击、其他错误类别或完整策略错误矩阵。
 
 ### 精确目标读取与目录故障隔离
 
