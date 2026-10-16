@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；当前固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7、`contractRevision=36`同源签名A/B完整离线生命周期和[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业均已通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个Deferred直达入口，从纯页面创建RabbitMQ 4.1.8实例至RUNNING，并完成Account开通与停用的响应丢失、跨来源只读恢复和权威状态/Audit核对；同一签名运行时又完成原Root凭据恢复的单次写入响应丢失、跨来源完成读取、强制改密限制及权威状态/Audit核对。原Root恢复的纯页面最终提交与UNKNOWN呈现、实例终止UNKNOWN及其余非Deferred写路径仍未全部验收，因此整个FEAT仍为实施中。
+- 状态：实施中；当前固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7、`contractRevision=36`同源签名A/B完整离线生命周期和[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业均已通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个Deferred直达入口，从纯页面创建RabbitMQ 4.1.8实例至RUNNING，并完成Account开通与停用的响应丢失、跨来源只读恢复和权威状态/Audit核对；同一签名运行时又完成原Root凭据恢复及该RabbitMQ实例终止的单次写入响应丢失、跨来源结果读取、安全效果和权威Audit核对，终止已物理释放运行对象和配额。原Root恢复及实例终止的纯页面最终提交与UNKNOWN呈现、其余非Deferred写路径仍未全部验收，因此整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -27,7 +27,7 @@
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON | 策略创建/版本切换/边界、语法错误、冲突和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；当前IAM86+r36签名页面读取已验证通知地址、本人TOTP状态、六个有效Session，并对缺少`iam.access-key.list`和`iam.security-settings.read`显示真实权限拒绝 | 强制MFA重新绑定、外部物理认证器、AccessKey全生命周期、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；WebAuthn明确Deferred |
-| IAM-UI-07 | 四个真实产品、协议、授权/撤权、错误矩阵和五类命令恢复已有分层证据；当前IAM86+r36签名页面又以`offline.alpha.primary`从真实RabbitMQ配额创建`iam-r36-terminate-test`并观察QUEUED→INSTALLING→RUNNING和AMQP端点 | 该实例的终止UNKNOWN仍须从签名页面实跑并物理清理；不支持跨主体恢复，查无结果不得推断原写未发生 |
+| IAM-UI-07 | 四个真实产品、协议、授权/撤权、错误矩阵和五类命令恢复已有分层证据；当前IAM86+r36签名页面又以`offline.alpha.primary`从真实RabbitMQ配额创建`iam-r36-terminate-test`并观察QUEUED→INSTALLING→RUNNING和AMQP端点，同一签名运行时已证明终止单写响应丢失、跨来源结果恢复、物理清理与配额归还 | 终止的纯页面最终提交与UNKNOWN呈现仍须实跑；不支持跨主体恢复，查无结果不得推断原写未发生 |
 | IAM-UI-08 | 当前IAM86+r36签名入口再次证明角色SSO、用户SSO和跨账号协作直达路由只有明确“尚未接入后端”EmptyState且没有提交控件 | 企业微信/外部IdP、Passkey/WebAuthn、跨账号与角色链保持禁用和Deferred；新增Deferred入口仍须沿同一边界验收 |
 
 ## 详细设计
@@ -257,6 +257,8 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 同一签名组合随后完成Account开通的同边界复验。来源A第一次提交因已有会话失效在任何效果前得到401，权威Account不存在；重新认证后以新的公开命令开通`ui-r36-account-create-gate`，APISIX后端返回201后代理截断回包，页面只显示原操作结果未知并冻结公开命令、目标Account与预期版本0。来源B在不共享浏览器存储的`localhost`重新认证同一`admin` USER，导入不含密码、Bearer或私有request ID的摘要并只调用一次精确completion GET；页面确认完成版本1、状态`ACTIVE`、原Root principal及关联事件，同时明确完成回执不代表当前投影且不能恢复初始密码。代理最终观测为两次POST尝试（效果前401和唯一成功201）、`responseLost=true`、`recoveryReads=1`、恢复GET后端200、`postLossWrites=0`，mutation与recovery Host分别为`127.0.0.1`和`localhost`。独立数据库权威读取确认Account与原Root均为`ACTIVE`、Account版本1、原Root类型为USER；原命令不可变完成记录恰好一条。installation Audit中恰有一条`iam.account.created`成功事实，来源IAM、actor为`principal-admin`、目标为该ACCOUNT且事件ID与完成记录一致；从序号1到当前25逐条重算previous hash和record hash，连续性与哈希失败均为0，chain head与末条记录一致。此证据只关闭当前签名组合的`ACCOUNT_CREATE`响应丢失路径；原Root凭据恢复的服务端组合由下一段拥有，其纯页面最终提交、实例终止UNKNOWN及其余非Deferred写路径继续保留。
 
 同日，同一签名运行时经APISIX补齐原Root凭据恢复的服务端组合门禁。测试专属代理只截断`phase1-tenant-beta`版本4的唯一恢复POST：后端200提交后客户端得到UNKNOWN，随后使用另一Host且同一当前有权`admin`身份只读取一次原`requestId`、`ACCOUNT_ROOT_CREDENTIALS_RECOVER`与预期版本4绑定的completion；代理观测`attempts=1`、`responseLost=true`、`recoveryReads=1`、`postLossWrites=0`。完成记录返回版本5、状态`ACTIVE`、原Root `principal-3dd3f1fff83a133fcc8035b534f9200e`及事件`event-3c3e637c11359ef1a8a2cff7d1c0d5e5`，没有重发写请求。独立数据库权威读取证明Account保持`ACTIVE`、原Root关系和登录名不变，凭据代次仅从6推进到7、Root资源版本从5推进到6、`must_change_password=true`、有效Session为0且平台角色绑定为0；新临时凭据只能建立该Account/Root的强制改密Session，普通受保护API返回403，随后已登出。原命令完成记录、outbox和installation Audit各恰好一条，outbox一次投递后为`DELIVERED`；Audit事实来源IAM、actor为`principal-admin`、目标为原USER并携带准确目标Account，27条installation chain逐条重算的序号、previous hash和record hash失败均为0，chain head与末条一致。该证据证明签名APISIX服务端、UNKNOWN恢复和安全效果，不冒充尚未执行的纯页面密码提交与UNKNOWN视觉验收。
+
+同一签名运行时随后对页面创建的`iam-r36-terminate-test`补齐终止服务端组合门禁。目标在写入前是RabbitMQ 4.1.8、`READY`且可经当前`offline.alpha.primary`授权读取；测试代理仅接受带唯一公开幂等键的终止POST，PaaS返回202后截断回包，客户端得到UNKNOWN。门禁只读等待原Operation完成，再以另一Host调用一次`INSTALLATION_TERMINATE`命令结果目录；结果唯一匹配原幂等键、目标实例和`TERMINATE` Operation，状态`SUCCEEDED`。代理观测`attempts=1`、`responseLost=true`、`recoveryReads=1`、`postLossWrites=0`，没有用第二次终止写入猜测结果。权威状态为实例`TERMINATED`/版本6、Operation `operation-c4994c70357258a614f0d293896cd7ac`/`READY`且实际尝试一次；配额恢复为购买1、预留0、消费0。按租户和实例派生的Compose项目下已无容器、网络、卷，受保护项目目录、数据及凭据文件也已删除。`termination-requested`与`terminated`两条outbox均一次投递为`DELIVERED`；租户Audit对应为同一Operation、原USER actor和准确SERVICE_INSTALLATION目标，结果分别`ACCEPTED`与`SUCCEEDED`。`tenant:phase1-tenant-alpha`当前1060条记录逐条重算的序号、previous hash和record hash失败均为0，chain head与末条一致。该证据关闭当前签名组合的终止服务端UNKNOWN及物理收尾边界，不冒充尚未执行的纯页面最终点击和UNKNOWN视觉验收。
 
 ### 精确目标读取与目录故障隔离
 
