@@ -40,6 +40,10 @@
 
 当前固定`2c60db2dabff618cc7841a7cefc3b253b13bc618`的独立CI已全部成功，准确运行范围和不能覆盖前述多次前端边缘超时的边界由[010当前控制台证据](FEAT-IAM-010-console.md#精确目标读取与目录故障隔离)拥有。本候选仍不能取得IAM-AC-02或整体发布结论；后继必须在不提高单用例预算、不删除/跳过断言、不缩小业务fixture和不改变生产行为的条件下查明执行/异步根因，并以当前全部前端文件真实通过为准。任何测试调整都由既有测试owner承担并单独固定；签名APISIX浏览器、Account与产品命令UNKNOWN门禁仍按010独立验收，不能用组件测试补齐。
 
+后继固定`94cabe999378b7fdae9b5074546aab156e1d7553`选择性采用UX/UI owner的五个Group删除文案、renderer与测试路径，当前独立运行时已验证真实删除语义、精确名称确认和权威影响范围；最终删除尚未点击。其[Verification 38889687143](https://github.com/xiak/matrix/actions/runs/38889687143)在Vitest前因直接取得的donor生成资产与本分支完整源码build identity不一致而失败：三项manifest及292个内容文件漂移。固定`d7f182be308b63bfa7867b0bfdc16577faae16f2`从消费分支最终源码在Linux重新生成295个嵌入文件，不改变业务源码；[Verification 38892035119](https://github.com/xiak/matrix/actions/runs/38892035119)按精确SHA核实十九项作业全部`completed/success`，包括73/73个Vitest文件、1640/1640项测试、8/8项Node测试及324文件的双模式导出/嵌入逐字一致。
+
+该成功终态只接受当前候选的Linux控制台回归和生成物闭合：日志仍有33条既有React `act`警告，不能抹掉此前Windows完整套件已经观察到的五秒边缘超时。Group最终页面提交、返回计数、唯一outbox/Audit和目录消失尚待点击当刻确认后实跑；独立CI跳过七项专属Postfix真实邮件子测试，也不能用当前结果宣称真实SMTP验收或IAM-AC-02/整体发布完成。
+
 ## 高风险测试矩阵
 
 - Tenant/Account：相同用户名、组名、策略名、资源 ID/key，错误 header/body/path/cursor 不能切换。

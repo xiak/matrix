@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果 | 最终改密的纯页面提交、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
-| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变 | User修改/停复用、Membership、附件回执和不确定结果仍需浏览器门禁；Group删除确认当前错误声称操作对象是“模拟记录”，修复并复验最终删除前不得接受；批量User不在本轮需求 |
+| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变。当前控制台候选已删除Group确认框的MOCK语义，并在真实运行时核对精确名称确认、不可恢复、审计保留、服务端权威影响计数及不删除User/Policy/租户资源的边界 | User修改/停复用、Membership、附件回执和不确定结果仍需浏览器门禁；Group最终页面提交、返回计数、outbox/Audit及目录消失仍待点击当刻确认后实跑；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；当前IAM86+r36签名页面读取已验证通知地址、本人TOTP状态、六个有效Session，并对缺少`iam.access-key.list`和`iam.security-settings.read`显示真实权限拒绝 | 账号强制MFA下普通User首次绑定、普通User换绑/解绑后的受限重新绑定、AccessKey全生命周期、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、外部物理认证器及WebAuthn明确Deferred |
@@ -274,6 +274,8 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 
 重新认证后，页面创建第三个零成员、零附件用户组`ui-runtime-delete-gate`，稳定ID为`group-f1753c5017b98dbedce6b6245c50c071c4800171dfce4af72fe9b7d691a895b6`。详情的“更多操作→删除”确认框第二条准确说明服务端会返回解除Membership和撤销直接附件的权威数量，但第一条仍错误显示“此操作只删除模拟记录”；英文默认文案同样声称`mock record`。因此没有输入确认名称，也没有执行最终删除；关闭对话框后权威库仍为ACTIVE版本1、授权代次1、有效Membership和附件均为0，只有一次已投递的`iam.group.created`。错误默认文案由现有`zh-CN.json`、`en.json`的`deleteHint`及`AccessWorkspaceUi`删除确认owner持有；必须在该owner删除MOCK语义并保留真实影响说明后，再对同一路径执行页面最终删除、返回计数、outbox/Audit及目录消失门禁。当前发现是明确发布阻塞，不得以服务端API删除或第二条正确提示覆盖。
 
+UX/UI owner后继固定`029a6ec3b9061efe46c30bfd496ece4135390926`只修改现有Group renderer、交互测试和中英文消息五个路径。本分支固定`94cabe999378b7fdae9b5074546aab156e1d7553`选择性采用这些源码后，在当前独立运行时重新打开上述精确Group的删除确认框并输入`ui-runtime-delete-gate`；确认按钮准确启用，页面明确说明这是实际IAM删除、对象会从有效目录移除、审计记录保留、删除不可恢复、服务端返回解除Membership/撤销直接附件数量，且不会删除User、Policy或租户资源。该核对关闭了错误MOCK文案阻塞，但尚未点击最终删除；因此Group仍为ACTIVE版本1，最终返回计数、唯一outbox/Audit事实和目录消失仍是未完成门禁，不能把对话框截图冒充删除成功。
+
 ### 精确目标读取与目录故障隔离
 
 2026-10-16，本分支继续`ADAPT` UX/UI owner固定`45251050879e23d23bb3fc7982ab8f7718bfbca9`、后继`ddd1a7760e2560e2ad2b2ea5fbe9ddffb27d6761`及纯测试后继`14811b6118f39ca30d012d9fb54e1997cb1f4e3f`、`1090fcafabc14b541c70a41968d485cde5c347e7`。只采用二十个既有auth/control-plane源码、测试和消息路径；最终二十个工作树blob与最后一个固定对象逐项一致。没有导入对方FEAT、adoption、checkpoint或生成资产；完整嵌入资产仍从本分支最终源码重建。
@@ -289,3 +291,7 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 该候选尚未通过完整前端门禁，不能标为发布可用。UX/UI owner在独占单worker、原五秒预算下的默认fork运行于`AccessWorkspace`出现一个未改业务用例5715ms超时；相同固定归档的threads对照出现另外两个未改业务用例6338ms和5048ms超时。随后本分支在Node22.22.2/npm11.6.4、配置内`maxWorkers=1`和默认fork下独立运行，又在`AccountAccessRenderer`的188项中得到185项通过、三个不同未改业务用例分别5763ms、5362ms和5037ms超时，发现失败后主动停止。三个运行的失败集合不相同，且两个pool均不能稳定通过；因此没有把它解释成新增功能回归或某个执行器的已证实问题，也没有提高超时、删除断言、缩小fixture或改生产代码。测试执行/异步稳定性须由既有测试owner查明并使全部当前文件在冻结预算下通过；聚焦成功、生成稳定或旧提交全绿均不能替代该门禁。
 
 上述选择性采用及本分支重建固定为`2c60db2dabff618cc7841a7cefc3b253b13bc618`；其[Verification 38865790823](https://github.com/xiak/matrix/actions/runs/38865790823)已按精确SHA核实十九项作业全部`completed/success`，包括受支持Node上的`console`、独立`authority-capacity`及最终汇总。`console`实际运行73/73个Vitest文件、1636/1636项测试和8/8项Node测试并通过，仍输出33条既有React `act`警告，不能写成零警告门禁。该次通过只证明这一次Linux运行得到成功终态，不能覆盖前述相同源码在隔离运行中已观察到的多处五秒边缘超时，也不能把后继尚未固定的测试owner调整倒推为本候选已经稳定。因此该CI接受本提交的后端、生成物和一次完整控制台回归证据，但完整前端稳定性及签名浏览器剩余写路径继续保持未验收。
+
+`94cabe9`的独立[Verification 38889687143](https://github.com/xiak/matrix/actions/runs/38889687143)在Vitest前准确失败：从UX/UI分支固定`06198d737851eea032c2a15750a83fa3c5a721f7`取得的生成物携带该分支完整`src`树的build identity，而本分支有五个未采用的测试文件差异，导致三项manifest及292个内容文件与本分支重新导出不一致。这不是Group业务源码失败，也不是Windows/Linux生成差异；生成资产不能跨分支直接复制。本分支随后只从最终源码在受支持的Node 22.22.2/npm 11.6.4 Linux环境重新生成295个嵌入文件，固定为`d7f182be308b63bfa7867b0bfdc16577faae16f2`。
+
+`d7f182b`的[Verification 38892035119](https://github.com/xiak/matrix/actions/runs/38892035119)已按精确SHA核实十九项作业全部`completed/success`。`console`实际通过73/73个Vitest文件、1640/1640项测试和8/8项Node测试，未设置与显式`0`两次生产导出的324个文件逐字一致，提交的嵌入资产与导出一致；仍有33条既有React `act`警告。该结果接受当前Group删除文案源码、生成资产和一次完整Linux控制台回归，不覆盖此前Windows完整套件的五秒边缘超时，不代表页面已执行最终删除；同一CI明确跳过七项需要专属Postfix的真实邮件子测试，也不能登记真实SMTP已验收。
