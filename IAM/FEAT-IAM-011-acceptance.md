@@ -46,7 +46,7 @@
 
 Policy元数据与整策略退役候选固定为`a12093895ca7461c15f50b8ca0ff5ddbe01e7803`；其[Verification 38916417206](https://github.com/xiak/matrix/actions/runs/38916417206) attempt 1已按精确SHA核实十九项作业全部`completed/success`，370个步骤均终态为175 success和195个矩阵条件skip，零失败、取消或job skip。十四个authority lane的57个顶层根均实际RUN/PASS且无SKIP/FAIL；`console`在Node22.22.2/npm11.6.4实际通过75/75个Vitest文件、1696/1696项测试、8/8项Node测试、234组对比度和324项两次生产导出/嵌入逐字一致，仍有33条既有React `act`警告。该CI同样明确跳过七项缺少专属Postfix的真实邮件子测试，默认工作流也不执行六个opt-in浏览器fixture；因此不能用本轮成功替代真实SMTP、Policy Web Locks、签名浏览器或UNKNOWN视觉验收。
 
-后继固定`f529279db3911e4c104d14d00f2c186dde306e0a`只在既有`authorityprocess` owner增加Policy mutation真实浏览器门禁及其响应丢失夹具，不改变生产代码、API、数据库或发布Profile。两个独立空白PostgreSQL 18运行已分别证明UPDATE和RETIRE在后端2xx后半响应丢失、同源双标签Web Lock排他、关闭持锁标签及完全相同原命令单次恢复；每次只有一个权威状态推进、一条outbox事实、一条成功Audit记录，稳定Policy/不可变版本或活动目录退役结果及完整租户链准确。UPDATE fixture/race package为179.86/183.424秒，RETIRE为209.35/212.884秒；本轮专属容器、网络和卷在零外部数据库连接后已精确删除。该固定源的独立CI仍以自己的最终终态为准，不能由`a120`成功或本地浏览器运行代替。
+后继固定`f529279db3911e4c104d14d00f2c186dde306e0a`只在既有`authorityprocess` owner增加Policy mutation真实浏览器门禁及其响应丢失夹具，不改变生产代码、API、数据库或发布Profile。两个独立空白PostgreSQL 18运行已分别证明UPDATE和RETIRE在后端2xx后半响应丢失、同源双标签Web Lock排他、关闭持锁标签及完全相同原命令单次恢复；每次只有一个权威状态推进、一条outbox事实、一条成功Audit记录，稳定Policy/不可变版本或活动目录退役结果及完整租户链准确。UPDATE fixture/race package为179.86/183.424秒，RETIRE为209.35/212.884秒；本轮专属容器、网络和卷在零外部数据库连接后已精确删除。[Verification 38936057920](https://github.com/xiak/matrix/actions/runs/38936057920)已通过GitHub API核实精确SHA，19个job全部`completed/success`；该独立结果只接受该固定源包含的门禁，不替代默认CI跳过的opt-in浏览器场景或当前后继工作树的发布验收。
 
 ## 高风险测试矩阵
 
