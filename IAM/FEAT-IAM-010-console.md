@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；当前固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7、`contractRevision=36`同源签名A/B完整离线生命周期和[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业均已通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个Deferred直达入口，从纯页面创建RabbitMQ 4.1.8实例至RUNNING，并完成Account开通与停用的响应丢失、跨来源只读恢复和权威状态/Audit核对；原Root凭据恢复的同组合证据、实例终止UNKNOWN及其余非Deferred写路径仍未全部验收，因此整个FEAT仍为实施中。
+- 状态：实施中；当前固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7、`contractRevision=36`同源签名A/B完整离线生命周期和[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业均已通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个Deferred直达入口，从纯页面创建RabbitMQ 4.1.8实例至RUNNING，并完成Account开通与停用的响应丢失、跨来源只读恢复和权威状态/Audit核对；同一签名运行时又完成原Root凭据恢复的单次写入响应丢失、跨来源完成读取、强制改密限制及权威状态/Audit核对。原Root恢复的纯页面最终提交与UNKNOWN呈现、实例终止UNKNOWN及其余非Deferred写路径仍未全部验收，因此整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -21,7 +21,7 @@
 
 | ID | 当前结论 | 仍需闭合或明确延期的边界 |
 | --- | --- | --- |
-| IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX又证明Account开通和停用的相同组合 | 当前签名组合仍须实跑原Root凭据恢复的响应半断、第二来源只读恢复及权威状态/Audit核对；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
+| IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备 | 最终改密的纯页面提交、过期会话和权威异常恢复仍需组合门禁 |
 | IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，没有补MOCK | 完整CRUD、Membership、附件回执和不确定结果仍需浏览器门禁；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON | 策略创建/版本切换/边界、语法错误、冲突和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略 |
@@ -254,7 +254,9 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 
 同日，当前IAM86/Audit39/PaaS7、`contractRevision=36`签名安装经任务私有代理完成Account停用的同组合复验。来源A以真实`admin`会话在页面审阅并确认停用`phase1-tenant-alpha`；APISIX后端返回200后代理截断回包，页面保留原资源投影并进入UNKNOWN，冻结公开命令`ui-account-status-83058517b056130779953b51dc6c5b2d`及预期版本1。来源B使用不共享浏览器存储的`localhost`重新认证同一USER，导入不含密码、Bearer或私有request ID的摘要，只调用一次精确completion GET；页面确认完成版本2和`DISABLED`，没有把回执补造为当前资源投影。代理观测为`attempts=1`、`responseLost=true`、后端状态200、`recoveryReads=1`、`postLossWrites=0`，mutation Host为`127.0.0.1`、recovery Host为`localhost`，恢复URI准确绑定原operation、requestId和版本。独立权威读取确认Account为`DISABLED`/版本2，installation Audit中恰有一条`iam.account.disabled`成功事实，目标为该Account、actor为`principal-admin`，整条installation chain为`VERIFIED`且`complete=true`。门禁结束后使用新的明确意图恢复为`ACTIVE`/版本3，并核对唯一`iam.account.enabled`成功事实；该受控收尾不是原UNKNOWN写入的重放。此证据只关闭当前签名组合的`ACCOUNT_SET_STATUS`响应丢失路径，Account开通、原Root凭据恢复及实例终止仍各自保留。
 
-同一签名组合随后完成Account开通的同边界复验。来源A第一次提交因已有会话失效在任何效果前得到401，权威Account不存在；重新认证后以新的公开命令开通`ui-r36-account-create-gate`，APISIX后端返回201后代理截断回包，页面只显示原操作结果未知并冻结公开命令、目标Account与预期版本0。来源B在不共享浏览器存储的`localhost`重新认证同一`admin` USER，导入不含密码、Bearer或私有request ID的摘要并只调用一次精确completion GET；页面确认完成版本1、状态`ACTIVE`、原Root principal及关联事件，同时明确完成回执不代表当前投影且不能恢复初始密码。代理最终观测为两次POST尝试（效果前401和唯一成功201）、`responseLost=true`、`recoveryReads=1`、恢复GET后端200、`postLossWrites=0`，mutation与recovery Host分别为`127.0.0.1`和`localhost`。独立数据库权威读取确认Account与原Root均为`ACTIVE`、Account版本1、原Root类型为USER；原命令不可变完成记录恰好一条。installation Audit中恰有一条`iam.account.created`成功事实，来源IAM、actor为`principal-admin`、目标为该ACCOUNT且事件ID与完成记录一致；从序号1到当前25逐条重算previous hash和record hash，连续性与哈希失败均为0，chain head与末条记录一致。此证据只关闭当前签名组合的`ACCOUNT_CREATE`响应丢失路径；原Root凭据恢复、实例终止UNKNOWN及其余非Deferred写路径继续保留。
+同一签名组合随后完成Account开通的同边界复验。来源A第一次提交因已有会话失效在任何效果前得到401，权威Account不存在；重新认证后以新的公开命令开通`ui-r36-account-create-gate`，APISIX后端返回201后代理截断回包，页面只显示原操作结果未知并冻结公开命令、目标Account与预期版本0。来源B在不共享浏览器存储的`localhost`重新认证同一`admin` USER，导入不含密码、Bearer或私有request ID的摘要并只调用一次精确completion GET；页面确认完成版本1、状态`ACTIVE`、原Root principal及关联事件，同时明确完成回执不代表当前投影且不能恢复初始密码。代理最终观测为两次POST尝试（效果前401和唯一成功201）、`responseLost=true`、`recoveryReads=1`、恢复GET后端200、`postLossWrites=0`，mutation与recovery Host分别为`127.0.0.1`和`localhost`。独立数据库权威读取确认Account与原Root均为`ACTIVE`、Account版本1、原Root类型为USER；原命令不可变完成记录恰好一条。installation Audit中恰有一条`iam.account.created`成功事实，来源IAM、actor为`principal-admin`、目标为该ACCOUNT且事件ID与完成记录一致；从序号1到当前25逐条重算previous hash和record hash，连续性与哈希失败均为0，chain head与末条记录一致。此证据只关闭当前签名组合的`ACCOUNT_CREATE`响应丢失路径；原Root凭据恢复的服务端组合由下一段拥有，其纯页面最终提交、实例终止UNKNOWN及其余非Deferred写路径继续保留。
+
+同日，同一签名运行时经APISIX补齐原Root凭据恢复的服务端组合门禁。测试专属代理只截断`phase1-tenant-beta`版本4的唯一恢复POST：后端200提交后客户端得到UNKNOWN，随后使用另一Host且同一当前有权`admin`身份只读取一次原`requestId`、`ACCOUNT_ROOT_CREDENTIALS_RECOVER`与预期版本4绑定的completion；代理观测`attempts=1`、`responseLost=true`、`recoveryReads=1`、`postLossWrites=0`。完成记录返回版本5、状态`ACTIVE`、原Root `principal-3dd3f1fff83a133fcc8035b534f9200e`及事件`event-3c3e637c11359ef1a8a2cff7d1c0d5e5`，没有重发写请求。独立数据库权威读取证明Account保持`ACTIVE`、原Root关系和登录名不变，凭据代次仅从6推进到7、Root资源版本从5推进到6、`must_change_password=true`、有效Session为0且平台角色绑定为0；新临时凭据只能建立该Account/Root的强制改密Session，普通受保护API返回403，随后已登出。原命令完成记录、outbox和installation Audit各恰好一条，outbox一次投递后为`DELIVERED`；Audit事实来源IAM、actor为`principal-admin`、目标为原USER并携带准确目标Account，27条installation chain逐条重算的序号、previous hash和record hash失败均为0，chain head与末条一致。该证据证明签名APISIX服务端、UNKNOWN恢复和安全效果，不冒充尚未执行的纯页面密码提交与UNKNOWN视觉验收。
 
 ### 精确目标读取与目录故障隔离
 
