@@ -2009,44 +2009,77 @@ historical completion into current Account facts or capabilities. Its existing
 cross-Session, actor, expiry, disabled-Root, storage and focus tests remain
 required.
 
-Candidate checks use Node 22.22.2/npm 11.6.4. The focused selection
-passed 54 cases across the directory/detail and service-authorization owners;
-typecheck, full zero-warning lint, architecture and 234 theme contrast pairs
-passed. Template loading, search, filtering, detail and pagination each have
-an independent interaction check. Password-reset reminder recovery separately
-checks same-actor, foreign-actor and malformed records through the original
-uncertain-write journey. Five focused MOCK wizard/rule checks also passed:
-localized validation, retained drafts and complete reviewed creation are
-separate contracts; the actual UNKNOWN rule save still proves its lock across
-navigation, while factor-replacement blocking has its own guarded-state check.
-Fixture sizes, assertions, user input and the five-second per-case budget are
-preserved. Three actual production builds from fixed source
-`1090fcafabc14b541c70a41968d485cde5c347e7` exported 59 pages with 57 segment-path
-normalizations each. The unset/`0` outputs and synchronized Go embed matched
-all 324 files byte-for-byte. Eight Node export-boundary cases and fresh
-UI-host `go test -count=1 -p=2 ./...` plus `go vet -p=2 ./...` passed.
+The test-only follow-up is fixed at
+`8d851fdff5867ebf5fb6d963634839f368107295`, whose frontend tree is
+`50180c7fbbead10f3ec0ee6f70d28a34bfea04fd`. It changes only the existing
+`AccessWorkspace` and `AccountAccessRenderer` test owners, not production
+behavior. Selection drives the visible listbox rather than enumerating every
+native option retained for form submission; stable controls and workflow-local
+queries avoid repeated whole-document work. Fixed-value setup uses real paste
+events where keyboard behavior is not the contract. Publishing, history,
+cancel/retry, declaration inspection and reviewed submission have independent
+checks with the same business inputs and all original assertions. Ten further
+assertions check unchanged documents or absence of premature writes. The
+default five-second deadline, existing per-case budgets, isolation, single
+worker, default `forks` pool, dependencies and Vitest configuration are unchanged.
 
-The complete frontend gate is **not accepted**. On the same fixed Git archive
-in native Debian, the default single-worker `forks` run was stopped after
-`AccessWorkspace` reported 204/205 with a five-second timeout in
-`retains incompatible conditions and restricts resource choices to the selected
-operation capabilities` (5,715 ms). A CLI-only `--pool=threads` comparison,
-with the same worker count, isolation, assertions and time budgets, was also
-stopped after a known failure: that file reported 203/205, with timeouts in
-`searches products and descriptions in both languages without confusing action
-types with policy categories` (6,338 ms) and `previews service authorization as
-an inline consent review without creating a role or grant` (5,048 ms).
-Its complete Account renderer file passed 188/188. Neither stopped run is a
-complete 73-file pass, and neither pool is established as a stable remedy.
-No Vitest configuration was changed. React `act` warnings were also observed;
-warning-free browser/runtime acceptance is not inferred from these tests.
+Query range and repeated queries are observed performance influences, not a
+proven unique root cause. An isolated two-case stage probe measured the body
+crossing its deadline before cleanup; cleanup took 7–9 ms. The combination of
+scoping and cached controls subsequently reached final assertions at 2,591 and
+2,697 ms. These are observations, not a decomposition of each optimization's
+contribution or evidence about GC. All temporary CPU/stage probes were removed.
+The final Windows focused run passed 17 cases, with a slowest case of 3,397 ms.
 
-This is an implementation/export candidate, not an accepted release. No test
-budget, backend/API/SQL/profile, dependency, checkpoint, shared DEV process or
-real account/resource changed. This evidence does not inherit the IAM branch's
-CI, signed-runtime or browser acceptance, and mandatory login/MFA was not
-enabled. Complete-frontend stability, independent fixed-source CI,
-signed-browser, security/device and remaining release gates stay open.
+The identical fixed Git archive (SHA-256
+`0cbb385417ee2aca38c4ea8aeabf08eadad08b4de1cfd0eb11458887fd81ab10`)
+completed a native Debian comparison on the user-authorized `.161` host in an
+independent temporary directory and cache. Node 22.22.2, npm 11.6.4 and Vitest
+4.1.11 used the original default pool/isolation and `maxWorkers=1`, with process
+affinity to two CPUs and a 1,536 MiB Node old-space cap. The lockfile SHA-256 is
+`e6734c8c8a24193bfe410ae22fd6d0ff46fbe1bb4508623628856175e5019404`.
+The complete run passed **73 files / 1,645 cases** in 328.89 seconds, followed
+by all eight Node export-boundary cases. Its four relevant file results were
+210/210 for `AccessWorkspace`, 192/192 for `AccountAccessRenderer`, 125/125 for
+`ConsoleShellRenderer` and 22/22 for `LoginRenderer`. The generated JSON result
+SHA-256 is `31d9e7a8438b74c0f32efcdd298eb244a9a790046579b2bd4430a30b67e873b3`.
+The runtime, dependencies, caches and test scratch space are task-owned; no
+existing host service, port or global configuration was changed.
+
+The native result does **not** replace the Windows failures from the same
+source. Windows complete frontend verification remains **not accepted**:
+
+| Existing test owner / case | Windows failed duration | Native Debian passed duration |
+| --- | ---: | ---: |
+| `AccessWorkspace`: retains incompatible conditions and restricts resource choices to the selected operation capabilities | 5,460 ms | 1,163 ms |
+| `AccessWorkspace`: discards a stale account-rule review and its operation-bound proof after conflict | 5,254 ms | 915 ms |
+| `ConsoleShellRenderer`: drops Role-owned Audit filters when exit and source validation settle immediately | 5,163 ms | 578 ms |
+| `LoginRenderer`: returns an IAM user to /console/ only after required password replacement | 5,022 ms | 773 ms |
+
+The stopped Windows two-owner run reported 208/210 for `AccessWorkspace`; the
+192-case Account renderer did not reach an observed terminal result. The
+separate stopped complete run reported 124/125 for the Shell and 21/22 for
+Login. Neither stopped run is a complete 73-file result. Their default reporter
+emitted failed names and durations beyond the deadline, but not the original
+Error objects before interruption; an exact error class is therefore not
+asserted. These four paths do not share a proven single cause, and neither
+native success nor a focused pass establishes Windows stability.
+
+The fixed source passes typecheck, full zero-warning lint, architecture and
+234 theme contrast pairs. Three actual production builds exported 59 pages
+with 57 segment-path normalizations each; unset/`0` outputs and the synchronized
+Go embed matched all 324 files byte-for-byte. Fresh UI-host
+`go test -count=1 -p=2 ./...` (web package 3.224 seconds) and
+`go vet -p=2 ./...` passed with process-local resource limits.
+
+This remains an implementation/export candidate, not an accepted release.
+No backend/API/SQL/profile, production frontend, dependency, checkpoint,
+shared DEV process or real account/resource changed. It does not inherit IAM
+CI, signed-runtime or browser acceptance; warning-free browser/runtime
+acceptance is not inferred from the unit runs. Mandatory login/MFA was not
+enabled. Windows complete-frontend stability, independent fixed-source CI,
+signed-browser and remaining release gates stay open; physical-phone
+integration remains deferred by the explicit Phase 1 scope above.
 
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
