@@ -424,7 +424,10 @@ async function openAccess(repository = accounts(), iamRepository = iam(), initia
   const user = userEvent.setup({ delay: null });
   const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} initialEntityId={initialEntityId} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
   const view = render(tree(repository));
-  await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
+  // These feature tests need an authenticated Session, not a keystroke-by-
+  // keystroke login journey; the qualified-login owner covers that separately.
+  await user.click(screen.getByLabelText("密码", { exact: true }));
+  await user.paste("Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
   await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(expectedCredential));
   return { user, view, repository, replaceRepository: (next: AccountRepository) => view.rerender(tree(next)), setAccessActive: (active: boolean) => view.rerender(tree(repository, active)) };
@@ -3065,7 +3068,8 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByText(/可视化草稿还有未完成/)).toBeTruthy();
     expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
-    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
+    await user.click(screen.getByRole("textbox", { name: "资源 ID 或前缀" }));
+    await user.paste("app-prod");
     expect(screen.getByRole("checkbox", { name: /paas.application.list/ })).toHaveProperty("disabled", true);
     expect(screen.getByText("当前 1 个操作可共享本声明的资源与条件；1 个需调整当前声明或另建声明。")).toBeTruthy();
     expect(screen.getByText("资源形状与当前所选操作不同；请另建声明。")).toBeTruthy();
@@ -3172,9 +3176,11 @@ describe("account access", () => {
     expect(screen.getAllByText("paas.application.read", { selector: "code" }).length).toBeGreaterThan(0);
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByText(/可视化声明还有未完成/)).toBeTruthy();
-    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
+    await user.click(screen.getByRole("textbox", { name: "资源 ID 或前缀" }));
+    await user.paste("app-prod");
     await user.click(screen.getByRole("button", { name: "添加条件" }));
-    await user.type(screen.getByRole("textbox", { name: "条件值" }), "tenant-a");
+    await user.click(screen.getByRole("textbox", { name: "条件值" }));
+    await user.paste("tenant-a");
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
     const summary = screen.getByRole("region", { name: "声明摘要" });
@@ -3826,8 +3832,10 @@ describe("account access", () => {
     expect(screen.getByRole("alert").textContent).toContain("至少选择一名");
     await user.click(screen.getByRole("checkbox", { name: "developer" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    await user.type(screen.getByLabelText("名称", { exact: true }), "IncidentResponder");
-    await user.type(screen.getByLabelText("描述", { exact: true }), "Temporary incident response");
+    await user.click(screen.getByLabelText("名称", { exact: true }));
+    await user.paste("IncidentResponder");
+    await user.click(screen.getByLabelText("描述", { exact: true }));
+    await user.paste("Temporary incident response");
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(create).not.toHaveBeenCalled();
     expect(screen.getByText("本次 Root 命令只创建角色元数据", { exact: false })).toBeTruthy();

@@ -146,8 +146,12 @@ async function seedUnknownAccountRuleChange(extension: ReturnType<typeof createP
   await extension.execute("preview", { kind: "save-account-rule", requestId: "seed-unknown-account-rule", expectedRuleVersion: 1, expectedLoginProtection: false, loginProtection: true, responseMode: "response-lost" });
 }
 async function select(user: ReturnType<typeof userEvent.setup>, label: string, option: string) {
-  if (!screen.queryByRole("combobox", { name: label })) await user.click(screen.getByRole("button", { name: /^筛选(?: \d+)?$/ }));
-  await user.click(screen.getByRole("combobox", { name: label }));
+  let trigger = screen.queryByRole("combobox", { name: label });
+  if (!trigger) {
+    await user.click(screen.getByRole("button", { name: /^筛选(?: \d+)?$/ }));
+    trigger = screen.getByRole("combobox", { name: label });
+  }
+  await user.click(trigger);
   await user.click(screen.getByRole("option", { name: option }));
 }
 
@@ -518,8 +522,10 @@ describe("policy creation entry and directory contract", () => {
   it("keeps cleared feature selections and incomplete conditions editable across JSON tabs", async () => {
     const { user, repository } = await open("create-policy");
     await user.click(screen.getByRole("tab", { name: "产品功能" }));
-    await user.click(screen.getByRole("checkbox", { name: /^检索日志/ }));
-    await user.click(screen.getByRole("checkbox", { name: /^检索日志/ }));
+    const logs = within(screen.getByRole("region", { name: "日志服务" }));
+    const search = logs.getByRole("checkbox", { name: /^检索日志/ });
+    await user.click(search);
+    await user.click(search);
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     expect((screen.getByRole("tab", { name: "可视化编辑" }) as HTMLButtonElement).disabled).toBe(false);
     expect((screen.getByRole("tab", { name: "产品功能" }) as HTMLButtonElement).disabled).toBe(false);
@@ -527,7 +533,8 @@ describe("policy creation entry and directory contract", () => {
     await user.click(screen.getByRole("button", { name: "添加授权声明" }));
     await logActions(user, ["logs:search"]);
     await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
-    await user.type(screen.getByLabelText("标签值 1"), "production");
+    await user.click(screen.getByLabelText("标签值 1"));
+    await user.paste("production");
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     const text = (screen.getByLabelText("策略内容", { selector: "textarea" }) as HTMLTextAreaElement).value;
     expect((screen.getByRole("tab", { name: "可视化编辑" }) as HTMLButtonElement).disabled).toBe(false);
@@ -1063,12 +1070,14 @@ describe("CAM-style access workspace", () => {
     const row = within(table).getByRole("button", { name: "ProductionLogReader" }).closest("tr")!;
     expect(within(row).queryByText("读取")).toBeNull();
     expect(within(table).getAllByText("全局权限")).toHaveLength(2);
-    await user.type(screen.getByRole("searchbox", { name: "搜索策略名称、描述或标签" }), "日志服务 production");
+    await user.click(screen.getByRole("searchbox", { name: "搜索策略名称、描述或标签" }));
+    await user.paste("日志服务 production");
     expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "MatrixAuditReadOnly" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "Language" }));
     await user.clear(screen.getByRole("searchbox"));
-    await user.type(screen.getByRole("searchbox"), "Log read");
+    await user.click(screen.getByRole("searchbox"));
+    await user.paste("Log read");
     expect(screen.getByRole("button", { name: "ProductionLogReader" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "MatrixAuditReadOnly" })).toBeNull();
   });
@@ -3053,14 +3062,26 @@ describe("CAM-style access workspace", () => {
     expect(after.groups).toEqual(before.groups);
     expect(after.roles).toEqual(before.roles);
   });
-  it("inspects history without activating it and reviews both documents before rollback", async () => {
-    const { user, repository, extension } = await open("policies");
+  const historicalPolicyText = '{"version":"1","statement":[{"effect":"allow","action":["logs:search"],"resource":["matrix:logs:org-xiak:*:topic/production/*"]},{"effect":"deny","action":["logs:delete"],"resource":["*"]}]}';
+  async function openVersionHistory() {
+    // Publishing is exercised through the wizard below. History consumers
+    // start from the same published document through the existing domain owner.
+    const opened = await open("policies", { seed: async (extension) => {
+      const policy = (await extension.read("preview")).policies.find((entry) => entry.id === "policy-prod-logs")!;
+      await extension.execute("preview", { kind: "save-policy", id: policy.id, name: policy.name, description: policy.description,
+        document: JSON.parse(historicalPolicyText) as PolicyDocument });
+    } });
+    await opened.user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
+    await opened.user.click(screen.getByRole("tab", { name: "策略版本" }));
+    return opened;
+  }
+  it("publishes edited MOCK policy content as a new default without changing its name", async () => {
+    const { user, extension } = await open("policies");
     await user.click(await screen.findByRole("button", { name: "ProductionLogReader" }));
     await invokePageAction(user, "编辑");
     await user.click(screen.getByRole("tab", { name: "JSON 编辑" }));
     const editor = screen.getByLabelText("策略内容", { selector: "textarea" });
-    const text = '{"version":"1","statement":[{"effect":"allow","action":["logs:search"],"resource":["matrix:logs:org-xiak:*:topic/production/*"]},{"effect":"deny","action":["logs:delete"],"resource":["*"]}]}';
-    await user.clear(editor); await user.paste(text);
+    await user.clear(editor); await user.paste(historicalPolicyText);
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect((screen.getByLabelText("名称", { exact: true }) as HTMLInputElement).readOnly).toBe(true);
     await user.click(screen.getByRole("button", { name: "下一步" }));
@@ -3068,7 +3089,12 @@ describe("CAM-style access workspace", () => {
     await user.click(await screen.findByRole("button", { name: "完成并查看策略" }));
     expect(screen.getByRole("button", { name: "查看日志服务的允许操作" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "查看日志服务的拒绝操作" })).toBeTruthy();
-    await user.click(screen.getByRole("tab", { name: "策略版本" }));
+    const published = (await extension.read("preview")).policies.find((policy) => policy.id === "policy-prod-logs")!;
+    expect(published.defaultVersion).toBe(2);
+    expect(published.versions.find((version) => version.id === 2)?.document).toEqual(JSON.parse(historicalPolicyText));
+  });
+  it("inspects history without activating it and reviews both documents before cancelling rollback", async () => {
+    const { user, extension } = await openVersionHistory();
     expect(within(screen.getByRole("table", { name: "策略版本" })).queryByRole("columnheader", { name: "操作" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "查看版本 v1" }));
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -3088,6 +3114,9 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect((await extension.read("preview")).policies.find((policy) => policy.id === "policy-prod-logs")?.defaultVersion).toBe(2);
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "版本 v1 的更多操作" }));
+  });
+  it("retries a failed MOCK rollback before deleting the superseded version without removing associations", async () => {
+    const { user, repository, extension } = await openVersionHistory();
     await user.click(screen.getByRole("button", { name: "版本 v1 的更多操作" }));
     await user.click(screen.getByRole("menuitem", { name: "将 v1 设为默认版本" }));
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("retry"));
