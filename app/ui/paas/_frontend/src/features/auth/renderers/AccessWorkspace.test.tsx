@@ -928,8 +928,8 @@ describe("CAM-style access workspace", () => {
     expect((screen.getByRole("checkbox", { name: "限制来源 IP" }) as HTMLInputElement).disabled).toBe(true);
     await logActions(user, ["logs:search"]);
     await user.click(screen.getByRole("checkbox", { name: "按资源标签限制" }));
-    await user.type(screen.getByLabelText("标签键 1"), "env");
-    await user.type(screen.getByLabelText("标签值 1"), "prod");
+    fireEvent.change(screen.getByLabelText("标签键 1"), { target: { value: "env" } });
+    fireEvent.change(screen.getByLabelText("标签值 1"), { target: { value: "prod" } });
     await user.click(screen.getByRole("checkbox", { name: "logs:list" }));
     expect((screen.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("prod");
     expect(screen.getByText(/现有条件不被全部所选操作支持/)).toBeTruthy();
@@ -940,10 +940,10 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByText(/现有条件不被全部所选操作支持/)).toBeNull();
     await select(user, "资源授权范围", "指定资源");
     await user.click(screen.getByRole("combobox", { name: "资源服务 1" }));
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["日志服务"]);
+    expect(within(screen.getByRole("listbox")).getAllByRole("option").map((option) => option.textContent)).toEqual(["日志服务"]);
     await user.keyboard("{Escape}");
     await user.click(screen.getByRole("combobox", { name: "资源类型 1" }));
-    expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["日志主题"]);
+    expect(within(screen.getByRole("listbox")).getAllByRole("option").map((option) => option.textContent)).toEqual(["日志主题"]);
     await user.keyboard("{Escape}");
   });
 
@@ -4101,8 +4101,8 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }));
     await user.click(screen.getByRole("button", { name: "审阅规则变更" }));
     await user.click(screen.getByRole("button", { name: "继续验证身份" }));
-    await user.type(screen.getByLabelText("当前密码"), "demo-password");
-    await user.type(screen.getByLabelText("6 位动态验证码"), "624810");
+    fireEvent.change(screen.getByLabelText("当前密码"), { target: { value: "demo-password" } });
+    fireEvent.change(screen.getByLabelText("6 位动态验证码"), { target: { value: "624810" } });
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new HttpProblem(409, "IAM_STATE_CONFLICT"));
     await user.click(screen.getByRole("button", { name: "验证并继续" }));
 
