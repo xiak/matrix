@@ -1830,8 +1830,8 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "完成并返回" }));
     expect(await screen.findByRole("heading", { name: "lin" })).toBeTruthy();
   });
-  it("creates through a full-page wizard with inline validation, preserved selections and localized errors", async () => {
-    const { user, repository, extension } = await open("create-user");
+  it("validates access methods inline and preserves identity fields while localizing the error", async () => {
+    const { user, repository } = await open("create-user");
     await screen.findByRole("heading", { name: "选择使用场景" });
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "下一步" }));
@@ -1842,8 +1842,25 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("alert").textContent).toBe("访问方式必须选择一个。");
     await user.click(screen.getByRole("button", { name: "Language" }));
     expect(screen.getByRole("alert").textContent).toBe("Select at least one access method.");
+    expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Wizard User");
     await user.click(screen.getByRole("checkbox", { name: "Console access" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  async function openNamedMockUserPermissions() {
+    const opened = await open("create-user");
+    await opened.user.click(await screen.findByRole("button", { name: "下一步" }));
+    await opened.user.type(screen.getByLabelText("子用户名"), "wizard.new");
+    await opened.user.type(screen.getByLabelText("用户显示名称"), "Wizard User");
+    await opened.user.click(screen.getByRole("button", { name: "Language" }));
+    await opened.user.click(screen.getByRole("button", { name: "Next" }));
+    return opened;
+  }
+
+  it("keeps draft identity and independent policy/group selections across search, tabs and backward navigation", async () => {
+    const { user, repository } = await openNamedMockUserPermissions();
     await user.click(screen.getByRole("checkbox", { name: "Select all on this page" }));
     expect(screen.getByText(/Selected policies or groups include an all-action wildcard grant/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Clear page selection" }));
@@ -1861,6 +1878,17 @@ describe("CAM-style access workspace", () => {
     expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Wizard User");
     await user.click(screen.getByRole("button", { name: "Next" }));
     expect(screen.getByRole("button", { name: "Remove DeliveryTeam" })).toBeTruthy();
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("creates the reviewed full-page user with its direct policy, group, boundary and tags", async () => {
+    const { user, repository, extension } = await openNamedMockUserPermissions();
+    await user.click(screen.getByRole("checkbox", { name: "MatrixReadOnlyAccess" }));
+    await user.click(screen.getByRole("tab", { name: "Join groups" }));
+    await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
+    await user.click(screen.getByLabelText("Permission boundary"));
+    await user.click(screen.getByRole("option", { name: /ReleaseOperatorBoundary/ }));
     await user.click(screen.getByRole("button", { name: "Next" }));
     await user.click(screen.getByRole("button", { name: "Add tag" }));
     await user.type(screen.getByLabelText("Tag key 1"), "team");
@@ -3899,14 +3927,23 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
     expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
     expect(screen.queryByText(/身份验证方法或账号规则的变更已生效/)).toBeNull();
-    await openSecuritySection(user, "本人安全");
-    expect(screen.getByRole("button", { name: "替换验证器" }).getAttribute("title")).toContain("账号规则结果尚未确定");
-
     await user.click(screen.getByTestId("go-users"));
     await user.click(screen.getByTestId("go-settings"));
     await openSecuritySection(user, "账号策略");
     expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
     expect((await extension.read("preview")).pendingAccountRuleChange).toEqual(pending);
+  });
+  it("blocks factor replacement while the original account-rule result requires reauthentication", async () => {
+    const { user, repository } = await open("settings", { seed: seedUnknownAccountRuleChange });
+    await openSecuritySection(user, "账号策略");
+    expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
+    expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
+    expect(screen.queryByText(/身份验证方法或账号规则的变更已生效/)).toBeNull();
+    await openSecuritySection(user, "本人安全");
+    expect(screen.getByRole("button", { name: "替换验证器" }).getAttribute("title")).toContain("账号规则结果尚未确定");
+    expect(repository.workspace!.execute).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
   });
   it("recovers an unknown account-rule only through the original intent", async () => {
     const { user, extension } = await open("settings", { seed: seedUnknownAccountRuleChange });

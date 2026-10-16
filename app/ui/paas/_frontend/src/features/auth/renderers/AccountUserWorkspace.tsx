@@ -1,5 +1,5 @@
 "use client";
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Badge, Button, EmptyState, FormField, Input, Table, TableSkeleton, Tabs } from "@ui/xiak";
 import { useAccountAccess, type UserBoundarySnapshot } from "../application/AccountAccessProvider";
@@ -21,12 +21,12 @@ export function AccountUserAccessMethods({ user, workspace }: { user: AccountUse
   const a = useTranslations("AccountAccess");
   const profile = workspace?.userProfiles[user.id];
   return <ul className={styles.accessMethods}>
-    <li data-enabled={profile?.consoleAccess}><span>{t("consoleAccess")}</span><span>{profile ? t(profile.consoleAccess ? "enabled" : "disabled") : workspace ? a("accessUnknown") : a("accessUnsupported")}</span></li>
-    <li data-enabled={profile?.programmaticAccess}><span>{t("programmaticAccess")}</span><span>{profile ? t(profile.programmaticAccess ? "enabled" : "disabled") : workspace ? a("accessUnknown") : a("accessUnsupported")}</span></li>
+    <li data-enabled={profile?.consoleAccess}><span>{t("consoleAccess")}</span><span>{profile ? t(profile.consoleAccess ? "enabled" : "disabled") : workspace ? a("accessUnknown") : a("accessSwitchUnreported")}</span></li>
+    <li data-enabled={profile?.programmaticAccess}><span>{t("programmaticAccess")}</span><span>{profile ? t(profile.programmaticAccess ? "enabled" : "disabled") : workspace ? a("accessUnknown") : a("accessSwitchUnreported")}</span></li>
   </ul>;
 }
 
-function AccountUserSnapshot({ user, busy, children }: { user: AccountUserScene; busy: boolean; children: ReactNode }) {
+function AccountUserSnapshot({ user, busy, children }: { user: AccountUserScene; busy: boolean; children?: ReactNode }) {
   const t = useTranslations("AccountAccess");
   return <div className={styles.detail} aria-busy={busy || undefined}>
     <div className={styles.userSummary}>
@@ -43,31 +43,40 @@ function AccountUserSnapshot({ user, busy, children }: { user: AccountUserScene;
   </div>;
 }
 
-export function AccountLiveUserWorkspace({ summary, onBack }: { summary: AccountUserScene; onBack(): void }) {
+export function AccountLiveUserWorkspace({ userId, summary, onBack }: { userId: string; summary?: AccountUserScene; onBack(): void }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const { loadUser, permissionBoundaries } = useAccountAccess();
-  const [loaded, setLoaded] = useState<{ state: "loading" } | { state: "ready"; user: AccountUserScene; boundary?: UserBoundarySnapshot } | { state: "error" }>({ state: "loading" });
   const [loadVersion, setLoadVersion] = useState(0);
-  const boundaryChanged = useCallback((boundary: UserBoundarySnapshot) => setLoaded({ state: "ready", user: boundary.user, boundary }), []);
+  const owner = useMemo(() => ({ loadUser, permissionBoundaries, userId, loadVersion }), [loadUser, loadVersion, permissionBoundaries, userId]);
+  type UserRead = { state: "loading" } | { state: "ready"; user: AccountUserScene; boundary?: UserBoundarySnapshot } | { state: "error" };
+  const [snapshot, setSnapshot] = useState<{ owner: typeof owner; value: UserRead }>({ owner, value: { state: "loading" } });
+  const loaded: UserRead = snapshot.owner === owner ? snapshot.value : { state: "loading" };
+  const currentOwner = useRef(owner);
+  useLayoutEffect(() => { currentOwner.current = owner; }, [owner]);
+  const boundaryChanged = useCallback((boundary: UserBoundarySnapshot) => {
+    if (currentOwner.current === owner) setSnapshot({ owner, value: { state: "ready", user: boundary.user, boundary } });
+  }, [owner]);
   useEffect(() => {
     let current = true;
-    const read = permissionBoundaries ? permissionBoundaries.load(summary.id).then((boundary) => ({ state: "ready" as const, user: boundary.user, boundary })) : loadUser(summary.id).then((user) => ({ state: "ready" as const, user }));
+    const read = permissionBoundaries ? permissionBoundaries.load(userId).then((boundary) => ({ state: "ready" as const, user: boundary.user, boundary })) : loadUser(userId).then((user) => ({ state: "ready" as const, user }));
     void read.then(
-      (result) => { if (current) setLoaded(result); },
-      () => { if (current) setLoaded({ state: "error" }); }
+      (result) => { if (current) setSnapshot({ owner, value: result }); },
+      () => { if (current) setSnapshot({ owner, value: { state: "error" } }); }
     );
     return () => { current = false; };
-  }, [loadUser, loadVersion, permissionBoundaries, summary.id, summary.resourceVersion]);
-  if (loaded.state === "loading") return <WorkspaceDetail title={summary.loginName} onBack={onBack}><AccountUserSnapshot user={summary} busy>
+  }, [loadUser, owner, permissionBoundaries, userId]);
+  const title = summary?.loginName ?? userId;
+  if (loaded.state === "loading") return <WorkspaceDetail title={title} onBack={onBack}>{summary ? <AccountUserSnapshot user={summary} busy>
     <TableSkeleton label={t("loadingUser")} rows={3} header={false} />
-  </AccountUserSnapshot></WorkspaceDetail>;
-  if (loaded.state === "error") return <WorkspaceDetail title={summary.loginName} onBack={onBack}><AccountUserSnapshot user={summary} busy={false}>
+  </AccountUserSnapshot> : <TableSkeleton label={t("loadingUser")} rows={3} header={false} />}</WorkspaceDetail>;
+  if (loaded.state === "error") return <WorkspaceDetail title={title} onBack={onBack}>
+    {summary ? <AccountUserSnapshot user={summary} busy={false} /> : null}
     <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<div className={styles.actions}>
-      <Button onClick={() => { setLoaded({ state: "loading" }); setLoadVersion((current) => current + 1); }}>{t("retryUser")}</Button>
+      <Button onClick={() => setLoadVersion((current) => current + 1)}>{t("retryUser")}</Button>
       <Button variant="secondary" onClick={onBack}>{w("back")}</Button>
     </div>} />
-  </AccountUserSnapshot></WorkspaceDetail>;
+  </WorkspaceDetail>;
   return <WorkspaceDetail title={loaded.user.loginName} onBack={onBack}>
     <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} deleteAction profileActions showLiveEvidenceBoundary user={loaded.user} onDeleted={onBack} />
     {permissionBoundaries && loaded.boundary ? <LivePermissionBoundary key={`${permissionBoundaries.accountId}:${loaded.user.id}`} client={permissionBoundaries} snapshot={loaded.boundary} onChanged={boundaryChanged} /> : null}

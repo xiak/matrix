@@ -13,6 +13,14 @@ import type {
   UserPolicyAttachment
 } from "../domain/accounts";
 
+export type AccountDirectoryKind = "users" | "accounts" | "tenantPolicies" | "platformPolicies";
+export type AccountDirectoryFailures = Partial<Record<AccountDirectoryKind, "unavailable">>;
+
+export function buildAccountPolicyScene(policy: AccountPolicy) {
+  return { ...policy, owner: policy.management === "SYSTEM" ? "system" as const : "tenant" as const,
+    scopeKind: policy.scope === "INSTALLATION" ? "platform" as const : "tenant" as const, available: policy.status === "ACTIVE" };
+}
+
 export function findActionCapability(
   capabilities: ActionCapability[],
   action: IamAction,
@@ -139,7 +147,8 @@ export function buildAccountAccessScene(
   users: DirectoryPage<UserAccess> | null,
   accounts: DirectoryPage<AccountAccess> | null,
   tenantPolicies: PolicyDirectory | null,
-  platformPolicies: PolicyDirectory | null
+  platformPolicies: PolicyDirectory | null,
+  directoryFailures: AccountDirectoryFailures = {}
 ) {
   const account = identity.account;
   if (!identity.permissionBoundary || identity.permissionBoundary.accountId !== account.id ||
@@ -162,11 +171,13 @@ export function buildAccountAccessScene(
     identityLabel: identity.user.displayName,
     currentUserId: identity.user.id,
     currentLoginName: identity.user.loginName,
+    currentUserEnabled: identity.user.status === "ACTIVE",
     identityKind: identity.identityKind,
     permissionBoundary: identity.permissionBoundary,
     isRoot: rootIsCurrent,
     identityAttachments: identity.policySources.map((source) => describeIdentitySource(source, policyById)),
-    canListUsers: identityCapability("iam.user.list")?.available === true && users !== null,
+    directoryFailures,
+    canListUsers: identityCapability("iam.user.list")?.available === true && (users !== null || Boolean(directoryFailures.users)),
     canCreateUsers: identityCapability("iam.user.create")?.available === true,
     createUsersRestrictionReason: identityCapability("iam.user.create")?.restrictionReason ?? null,
     canListGroups: identityCapability("iam.group.list")?.available === true,
@@ -179,18 +190,14 @@ export function buildAccountAccessScene(
     createRolesRestrictionReason: identityCapability("iam.role.create")?.restrictionReason ?? null,
     canSetAlias: identityCapability("iam.account.alias-set")?.available === true,
     setAliasRestrictionReason: identityCapability("iam.account.alias-set")?.restrictionReason ?? null,
-    canReadAccounts: identityCapability("iam.account.read", "collection")?.available === true && accounts !== null,
+    canReadAccounts: identityCapability("iam.account.read", "collection")?.available === true && (accounts !== null || Boolean(directoryFailures.accounts)),
     canCreateAccounts: identityCapability("iam.account.create", "collection")?.available === true,
     createAccountsRestrictionReason: identityCapability("iam.account.create", "collection")?.restrictionReason ?? null,
-    canViewPolicies: (identityCapability("iam.policy.list")?.available === true && tenantPolicies !== null) || platformPolicies !== null,
+    canViewPolicies: (identityCapability("iam.policy.list")?.available === true && tenantPolicies !== null) || platformPolicies !== null ||
+      Boolean(directoryFailures.tenantPolicies || directoryFailures.platformPolicies),
     tenantPoliciesAvailable: tenantPolicies !== null,
     platformPoliciesAvailable: platformPolicies !== null,
-    policies: policies.map((policy) => ({
-      ...policy,
-      owner: policy.management === "SYSTEM" ? "system" as const : "tenant" as const,
-      scopeKind: policy.scope === "INSTALLATION" ? "platform" as const : "tenant" as const,
-      available: policy.status === "ACTIVE"
-    })),
+    policies: policies.map(buildAccountPolicyScene),
     accountOwner: {
       id: account.rootIdentity.principalId,
       accountType: "primary" as const,

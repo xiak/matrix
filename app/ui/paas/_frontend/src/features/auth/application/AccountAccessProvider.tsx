@@ -46,7 +46,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { clearAccountLifecycleIntent, parseAccountLifecycleIntent, readAccountLifecycleIntent, sameAccountLifecycleActor, writeAccountLifecycleIntent } from "../repositories/accountLifecycleRecoveryStorage";
-import { buildAccountAccessScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene } from "../scenes/accountAccessScene";
+import { buildAccountAccessScene, buildAccountPolicyScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene, type AccountDirectoryKind, type AccountDirectoryFailures } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 import type { CreateRoleCommand, CreateRolePolicyAttachmentCommand, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand } from "../domain/roles";
 import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
@@ -658,6 +658,7 @@ type AccountAccess = {
   reload(): void;
   usersPage(after: string): void;
   accountsPage(after: string): void;
+  retryDirectory(kind: AccountDirectoryKind): Promise<void>;
   loadUser(userId: string): Promise<AccountUserScene>;
   passwordResetUnknown: PasswordResetUnknown | null;
   passwordResetLookup: PasswordResetLookup | null;
@@ -674,6 +675,7 @@ type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canListGro
   supportsLiveAccessKeys: boolean;
   supportsLiveAccessAnalysis: boolean;
   supportsLiveSecurityReports: boolean;
+  supportsLiveServiceAuthorizations: boolean;
 };
 const AccountCapabilitiesContext = createContext<AccountCapabilities | null>(null);
 
@@ -702,14 +704,25 @@ async function readWhenAuthorized<T>(read: () => Promise<T>): Promise<T | null> 
   }
 }
 
-function accountCommandAvailable(scene: AccountAccessScene, command: AccountCommand): boolean {
+// LIVE collection availability is not the mandatory current-identity boundary.
+// Keep denial distinct from an unavailable projection; neither supplies data.
+async function observeDirectory<T>(read: () => Promise<T>, isolate: boolean): Promise<{ value: T | null; failed: boolean }> {
+  try { return { value: await read(), failed: false }; }
+  catch (failure) {
+    if (failure instanceof HttpProblem && failure.status === 403) return { value: null, failed: false };
+    if (!isolate || failure instanceof HttpProblem && failure.status === 401) throw failure;
+    return { value: null, failed: true };
+  }
+}
+
+function accountCommandAvailable(scene: AccountAccessScene, command: AccountCommand, exactUsers: ReadonlyMap<string, AccountUserScene>): boolean {
   if (command.kind === "create-account") return scene.canCreateAccounts;
   if (command.kind === "set-alias") return scene.canSetAlias;
   if (command.kind === "set-account-status" || command.kind === "recover-root-credentials") {
     const account = scene.accounts.find((item) => item.id === command.accountId);
     return command.kind === "set-account-status" ? account?.canSetStatus === true : account?.canRecoverRoot === true;
   }
-  const user = scene.users.find((item) => item.id === command.userId);
+  const user = exactUsers.get(command.userId) ?? scene.users.find((item) => item.id === command.userId);
   if (!user) return false;
   if (command.kind === "update-user") return user.canUpdate;
   if (command.kind === "delete-user") return user.canDelete;
@@ -737,14 +750,22 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const [success, setSuccess] = useState<"completed" | null>(null);
   const [revision, setRevision] = useState(0);
   const mutationPending = useRef(false);
-  const directoryRequest = useRef({ users: 0, accounts: 0 });
+  const directoryRequest = useRef({ users: 0, accounts: 0, tenantPolicies: 0, platformPolicies: 0 });
   // View context survives list/detail navigation, not account/session changes.
   // Keeping it outside React state avoids rerendering the shell on each keystroke.
   const viewSession = useMemo(() => ({ credential, tenantId, principalId, sessionRevision }), [credential, tenantId, principalId, sessionRevision]);
   const [verifiedIdentityOwner, setVerifiedIdentityOwner] = useState<{ session: typeof viewSession; repository: AccountRepository } | null>(null);
   const currentViewSession = useRef(viewSession);
+  // Exact target reads are not members of the signed directory. Retain only
+  // advisory UI facts for this Session, repository and read generation.
+  const exactUsers = useMemo(() => ({ active, repository, revision, viewSession,
+    users: new Map<string, AccountUserScene>(), requests: new Map<string, number>() }), [active, repository, revision, viewSession]);
+  const currentExactUsers = useRef(exactUsers);
+  const currentScene = useRef(scene);
   const verifiedIdentitySession = useRef<typeof viewSession | null>(null);
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
+  useLayoutEffect(() => { currentExactUsers.current = exactUsers; }, [exactUsers]);
+  useLayoutEffect(() => { currentScene.current = scene; }, [scene]);
   const accountLifecycleOwner = useMemo<AccountLifecycleOwner | null>(() => {
     if (!active || !credential || !tenantId || !principalId || !repository.accountLifecycle || repository.workspace) return null;
     return { repository: repository.accountLifecycle, credential, sessionRevision, actorAccountId: tenantId, actorPrincipalId: principalId };
@@ -958,7 +979,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const canViewPolicies = Boolean(scene?.canViewPolicies);
   const hasPreviewWorkspace = Boolean(repository.workspace);
   const supportsLiveRoles = Boolean(repository.roles);
-  const supportsLiveAccessKeys = Boolean(!repository.workspace && repository.accessKeys && canListUsers);
+  const supportsLiveAccessKeys = Boolean(!repository.workspace && repository.accessKeys);
+  const supportsLiveServiceAuthorizations = Boolean(!repository.workspace && (repository.listServiceRoleTemplates || repository.listServiceLinkedRoles));
   const supportsLiveAccessAnalysis = Boolean(!repository.workspace && repository.accessAnalysis);
   const supportsLiveSecurityReports = Boolean(!repository.workspace && repository.securityReports);
   // Navigation observes permission changes, not every form's pending/error state.
@@ -973,9 +995,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     supportsLiveRoles,
     supportsLiveAccessKeys,
     supportsLiveAccessAnalysis,
-    supportsLiveSecurityReports
+    supportsLiveSecurityReports,
+    supportsLiveServiceAuthorizations
   }), [canCreateAccounts, canListGroups, canListRoles, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace,
-    supportsLiveAccessAnalysis, supportsLiveAccessKeys, supportsLiveRoles, supportsLiveSecurityReports]);
+    supportsLiveAccessAnalysis, supportsLiveAccessKeys, supportsLiveRoles, supportsLiveSecurityReports, supportsLiveServiceAuthorizations]);
 
   useEffect(() => {
     if (!active || !credential || !tenantId) return;
@@ -983,17 +1006,46 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     let mounted = true;
     directoryRequest.current.users += 1;
     directoryRequest.current.accounts += 1;
+    directoryRequest.current.tenantPolicies += 1;
+    directoryRequest.current.platformPolicies += 1;
     async function read() {
       const identity = await repository.currentIdentity(credential!);
       if (identity.account.id !== tenantId || identity.user.id !== principalId) throw new Error("INVALID_IAM_IDENTITY");
       const currentCapability = (action: Parameters<typeof findActionCapability>[1], id = identity.account.id) =>
         findActionCapability(identity.capabilities, action, "ACCOUNT", id)?.available === true;
-      const [users, accounts, tenantPolicies, platformPolicies] = await Promise.all([
-        currentCapability("iam.user.list") ? readWhenAuthorized(() => repository.listUsers(credential!)) : null,
-        currentCapability("iam.account.read", "collection") ? readWhenAuthorized(() => repository.listAccounts(credential!)) : null,
-        currentCapability("iam.policy.list") ? readWhenAuthorized(() => repository.listPolicies(credential!, false)) : null,
-        readWhenAuthorized(() => repository.listPolicies(credential!, true))
+      const absent = { value: null, failed: false };
+      const isolate = !repository.workspace;
+      const [userRead, accountRead, tenantRead, platformRead] = await Promise.all([
+        currentCapability("iam.user.list") ? observeDirectory(async () => {
+          const page = await repository.listUsers(credential!);
+          if (page.items.some((entry) => entry.user.accountId !== tenantId || entry.user.id === identity.account.rootIdentity.principalId)) throw new Error("INVALID_IAM_TENANT");
+          return page;
+        }, isolate) : absent,
+        currentCapability("iam.account.read", "collection") ? observeDirectory(() => repository.listAccounts(credential!), isolate) : absent,
+        currentCapability("iam.policy.list") ? observeDirectory(async () => {
+          const directory = await repository.listPolicies(credential!, false);
+          if (directory.accountId !== tenantId || directory.scope !== "TENANT") throw new Error("INVALID_IAM_TENANT");
+          return directory;
+        }, isolate) : absent,
+        observeDirectory(async () => {
+          const directory = await repository.listPolicies(credential!, true);
+          if (directory.accountId !== tenantId || directory.scope !== "INSTALLATION") throw new Error("INVALID_IAM_TENANT");
+          return directory;
+        }, isolate)
       ]);
+      const users = userRead.value, accounts = accountRead.value;
+      let tenantPolicies = tenantRead.value, platformPolicies = platformRead.value;
+      const failures: AccountDirectoryFailures = {};
+      if (userRead.failed) failures.users = "unavailable";
+      if (accountRead.failed) failures.accounts = "unavailable";
+      if (tenantRead.failed) failures.tenantPolicies = "unavailable";
+      if (platformRead.failed) failures.platformPolicies = "unavailable";
+      const combinedPolicies = [...(tenantPolicies?.items ?? []), ...(platformPolicies?.items ?? [])];
+      if (new Set(combinedPolicies.map((policy) => policy.id)).size !== combinedPolicies.length) {
+        if (!isolate) throw new Error("INVALID_IAM_POLICY_DIRECTORY");
+        tenantPolicies = null; platformPolicies = null;
+        failures.tenantPolicies = "unavailable"; failures.platformPolicies = "unavailable";
+      }
       // The advanced workspace is an explicit preview capability. Do not fetch its
       // larger graph unless the live directory boundary has authorized management.
       let extension = users !== null && repository.workspace ? await repository.workspace.read(credential!) : null;
@@ -1002,11 +1054,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         if (extension.pendingAccountRuleChange && extension.pendingAccountRuleChange.requestId !== localLock.requestId) throw new Error("INVALID_PREVIEW_RECOVERY_STATE");
         extension = { ...extension, pendingAccountRuleChange: extension.pendingAccountRuleChange ?? localLock };
       }
-      if (users?.items.some((entry) => entry.user.accountId !== tenantId || entry.user.id === identity.account.rootIdentity.principalId)) throw new Error("INVALID_IAM_TENANT");
-      if (tenantPolicies && tenantPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
-      if (platformPolicies && platformPolicies.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
       if (extension && (extension.accountId !== tenantId || extension.mode !== "preview")) throw new Error("INVALID_IAM_TENANT");
-      return { scene: buildAccountAccessScene(identity, users, accounts, tenantPolicies, platformPolicies), extension };
+      return { scene: buildAccountAccessScene(identity, users, accounts, tenantPolicies, platformPolicies, failures), extension };
     }
     read().then((loaded) => { if (mounted && currentViewSession.current === viewSession) {
       verifiedIdentitySession.current = viewSession;
@@ -1031,17 +1080,34 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
       setScene(loaded.scene); setWorkspace(loaded.extension); setError(null);
     } },
-      (failure: unknown) => { if (mounted && currentViewSession.current === viewSession) { verifiedIdentitySession.current = null; setScene(null); setWorkspace(null); setError(accountError(failure)); } })
+      (failure: unknown) => { if (mounted && currentViewSession.current === viewSession) {
+        verifiedIdentitySession.current = null; setScene(null); setWorkspace(null); setError(accountError(failure));
+        if (failure instanceof HttpProblem && failure.status === 401) expireSession(credential!, sessionRevision);
+      } })
       .finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
-  }, [active, credential, principalId, repository, revision, tenantId, viewSession]);
+  }, [active, credential, expireSession, principalId, repository, revision, sessionRevision, tenantId, viewSession]);
 
   const loadUser = useCallback(async (userId: string): Promise<AccountUserScene> => {
-    if (!active || !credential || !scene || !userId || userId === scene.accountOwner.id) throw new Error("INVALID_IAM_USER_TARGET");
-    const access = await repository.getUser(credential, userId);
-    if (access.user.id !== userId || access.user.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
-    return buildAccountUserScene({ id: scene.accountId, loginAlias: scene.loginAlias }, scene.policies, access);
-  }, [active, credential, repository, scene, tenantId]);
+    if (!active || !credential || !scene || !userId || userId === scene.accountOwner.id ||
+        currentExactUsers.current !== exactUsers || currentViewSession.current !== viewSession) throw new Error("INVALID_IAM_USER_TARGET");
+    const request = (exactUsers.requests.get(userId) ?? 0) + 1;
+    exactUsers.requests.set(userId, request);
+    exactUsers.users.delete(userId);
+    try {
+      const access = await repository.getUser(credential, userId);
+      if (currentExactUsers.current !== exactUsers || currentViewSession.current !== viewSession ||
+          exactUsers.requests.get(userId) !== request) throw new Error("STALE_IAM_STATE");
+      if (access.user.id !== userId || access.user.accountId !== tenantId) throw new Error("INVALID_IAM_TENANT");
+      const user = buildAccountUserScene({ id: scene.accountId, loginAlias: scene.loginAlias }, scene.policies, access);
+      exactUsers.users.set(userId, user);
+      return user;
+    } catch (failure) {
+      if (currentExactUsers.current === exactUsers && currentViewSession.current === viewSession && exactUsers.requests.get(userId) === request &&
+          failure instanceof HttpProblem && failure.status === 401) expireSession(credential, sessionRevision);
+      throw failure;
+    }
+  }, [active, credential, exactUsers, expireSession, repository, scene, sessionRevision, tenantId, viewSession]);
 
   const inspectPolicyAttachmentChange = useCallback(async (expectation: PolicyAttachmentChangeOperationExpectation): Promise<PolicyAttachmentChange> => {
     const read = repository.readPolicyAttachmentChange;
@@ -1182,7 +1248,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           setScene((current) => current ? {
             ...current,
             accounts: page.items.map(buildAccountTenantScene),
-            nextAccountPage: page.nextAfter
+            nextAccountPage: page.nextAfter,
+            directoryFailures: { ...current.directoryFailures, accounts: undefined }
           } : current);
         }
         return page;
@@ -1299,20 +1366,23 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       accountId,
       load: (userId) => scoped((async () => {
-        const access = await repository.getUser(credential, target(userId));
-        if (access.user.id !== userId || access.user.accountId !== accountId) throw new Error("INVALID_IAM_TENANT");
+        const user = await loadUser(target(userId));
         const boundary = await boundaryRepository.read(credential, accountId, userId);
         if (boundary.accountId !== accountId || boundary.userId !== userId) throw new Error("INVALID_IAM_TENANT");
-        if (boundary.resourceVersion !== access.user.resourceVersion) throw new HttpProblem(409, "IAM_USER_REVISION_CHANGED");
-        const directory = scene.tenantPoliciesAvailable ? await readWhenAuthorized(() => repository.listPolicies(credential, false)) : null;
-        if (directory && (directory.accountId !== accountId || directory.scope !== "TENANT")) throw new Error("INVALID_IAM_TENANT");
+        if (boundary.resourceVersion !== user.resourceVersion) throw new HttpProblem(409, "IAM_USER_REVISION_CHANGED");
+        const policyRead = scene.tenantPoliciesAvailable ? await observeDirectory(async () => {
+          const directory = await repository.listPolicies(credential, false);
+          if (directory.accountId !== accountId || directory.scope !== "TENANT") throw new Error("INVALID_IAM_TENANT");
+          return directory;
+        }, !repository.workspace) : null;
+        const directory = policyRead?.value ?? null;
         const policies = directory?.items ?? [];
-        return { user: buildAccountUserScene({ id: accountId, loginAlias: scene.loginAlias }, policies, access), boundary, policies, policiesAvailable: directory !== null };
+        return { user, boundary, policies, policiesAvailable: directory !== null };
       })()),
       set: (userId, command) => protectedMutation(() => scoped(boundaryRepository.set(credential, accountId, target(userId), command))),
       remove: (userId, command) => protectedMutation(() => scoped(boundaryRepository.remove(credential, accountId, target(userId), command)))
     };
-  }, [active, credential, expireSession, protectedMutation, repository, scene, tenantId]);
+  }, [active, credential, expireSession, loadUser, protectedMutation, repository, scene, tenantId]);
 
   const authorizationProfiles = useMemo<AuthorizationProfileClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canViewPolicies) return null;
@@ -1818,10 +1888,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, principalId, rememberSecuritySettingsIntent, repository, scene, securitySettingsIntent, sessionId, sessionRevision, tenantId, viewSession]);
 
+  // Unrelated collection retries must not replace these independent clients.
+  const observedAccountId = scene && scene.accountId === tenantId ? scene.accountId : null;
   const accessAnalysis = useMemo<AccessAnalysisClient | null>(() => {
     const analysisRepository = repository.accessAnalysis;
-    if (!active || !credential || !scene || scene.accountId !== tenantId || !analysisRepository || repository.workspace) return null;
-    const accountId = scene.accountId;
+    if (!active || !credential || !observedAccountId || !analysisRepository || repository.workspace) return null;
+    const accountId = observedAccountId;
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
       try { return await request; }
       catch (failure) {
@@ -1844,12 +1916,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       archiveFinding: (analyzerId, findingId, command) => scoped(analysisRepository.archiveFinding(credential, accountId, analyzerId, findingId, command)),
       unarchiveFinding: (analyzerId, findingId, command) => scoped(analysisRepository.unarchiveFinding(credential, accountId, analyzerId, findingId, command))
     };
-  }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
+  }, [active, credential, expireSession, observedAccountId, repository, sessionRevision]);
 
   const securityReports = useMemo<SecurityReportClient | null>(() => {
     const reportRepository = repository.securityReports;
-    if (!active || !credential || !scene || scene.accountId !== tenantId || !reportRepository || repository.workspace) return null;
-    const accountId = scene.accountId;
+    if (!active || !credential || !observedAccountId || !reportRepository || repository.workspace) return null;
+    const accountId = observedAccountId;
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
       try { return await request; }
       catch (failure) {
@@ -1866,20 +1938,26 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       read: (reportId) => scoped(reportRepository.read(credential, accountId, reportId)),
       download: (reportId) => scoped(reportRepository.download(credential, accountId, reportId))
     };
-  }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
+  }, [active, credential, expireSession, observedAccountId, repository, sessionRevision]);
 
   const accessKeys = useMemo<AccessKeyClient | null>(() => {
     const keyRepository = repository.accessKeys;
-    if (!active || !credential || !principalId || !scene || scene.accountId !== tenantId || !keyRepository || !scene.canListUsers) return null;
+    if (!active || !credential || !principalId || !scene || scene.accountId !== tenantId || !keyRepository) return null;
     const accountId = scene.accountId;
     const target = (userId: string) => {
-      if (!userId || userId === scene.accountOwner.id || !scene.users.some((user) => user.id === userId)) throw new Error("INVALID_IAM_USER_TARGET");
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(userId) || userId === scene.accountOwner.id ||
+          currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) throw new Error("INVALID_IAM_USER_TARGET");
       return userId;
     };
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
-      try { return await request; }
+      try {
+        const value = await request;
+        if (currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) throw new Error("STALE_IAM_STATE");
+        return value;
+      }
       catch (failure) {
-        if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential)) {
+        if (currentViewSession.current === viewSession && currentExactUsers.current === exactUsers &&
+            failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
           setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
         }
         throw failure;
@@ -1959,7 +2037,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         return result;
       }
     };
-  }, [active, credential, expireSession, principalId, repository, scene, tenantId, viewSession]);
+  }, [active, credential, exactUsers, expireSession, principalId, repository, scene, sessionRevision, tenantId, viewSession]);
 
   const roles = useMemo<RoleAccessClient | null>(() => {
     const roleRepository = repository.roles;
@@ -2011,44 +2089,100 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     if (!active || !credential || !scene || loading || mutationPending.current) return;
     const source = scene;
     const request = ++directoryRequest.current.users;
+    const isCurrent = () => request === directoryRequest.current.users && currentViewSession.current === viewSession && currentExactUsers.current === exactUsers;
     setLoading(true); setError(null); setSuccess(null);
     try {
       const users = await repository.listUsers(credential, after || undefined);
-      if (request !== directoryRequest.current.users) return;
+      if (!isCurrent()) return;
       if (users.items.some((entry) => entry.user.accountId !== tenantId || entry.user.id === source.accountOwner.id)) throw new Error("INVALID_IAM_TENANT");
       const items = users.items.map((entry) => buildAccountUserScene({ id: source.accountId, loginAlias: source.loginAlias }, source.policies, entry));
       setScene((current) => current?.accountId === source.accountId ? {
         ...current,
         users: items,
         nextUserPage: users.nextAfter,
-        directoryComplete: !after && !users.nextAfter
+        directoryComplete: !after && !users.nextAfter,
+        canListUsers: true,
+        directoryFailures: { ...current.directoryFailures, users: undefined }
       } : current);
     } catch (failure) {
-      if (request === directoryRequest.current.users) setError(accountError(failure));
+      if (!isCurrent()) return;
+      if (repository.workspace) { setError(accountError(failure)); return; }
+      exactUsers.users.clear();
+      for (const [userId, version] of exactUsers.requests) exactUsers.requests.set(userId, version + 1);
+      const denied = failure instanceof HttpProblem && [401, 403].includes(failure.status);
+      setScene((current) => current?.accountId === source.accountId ? { ...current, users: [], nextUserPage: null, directoryComplete: false,
+        canListUsers: denied ? false : current.canListUsers,
+        directoryFailures: { ...current.directoryFailures, users: denied ? undefined : "unavailable" } } : current);
+      if (failure instanceof HttpProblem && failure.status === 401) expireSession(credential, sessionRevision);
     } finally {
-      if (request === directoryRequest.current.users) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [active, credential, loading, repository, scene, tenantId]);
+  }, [active, credential, exactUsers, expireSession, loading, repository, scene, sessionRevision, tenantId, viewSession]);
 
   const loadAccountsPage = useCallback(async (after: string) => {
     if (!active || !credential || !scene || loading || mutationPending.current) return;
     const source = scene;
     const request = ++directoryRequest.current.accounts;
+    const isCurrent = () => request === directoryRequest.current.accounts && currentViewSession.current === viewSession && currentExactUsers.current === exactUsers;
     setLoading(true); setError(null); setSuccess(null);
     try {
       const accounts = await repository.listAccounts(credential, after || undefined);
-      if (request !== directoryRequest.current.accounts) return;
+      if (!isCurrent()) return;
       setScene((current) => current?.accountId === source.accountId ? {
         ...current,
         accounts: accounts.items.map(buildAccountTenantScene),
-        nextAccountPage: accounts.nextAfter
+        nextAccountPage: accounts.nextAfter,
+        canReadAccounts: true,
+        directoryFailures: { ...current.directoryFailures, accounts: undefined }
       } : current);
     } catch (failure) {
-      if (request === directoryRequest.current.accounts) setError(accountError(failure));
+      if (!isCurrent()) return;
+      if (repository.workspace) { setError(accountError(failure)); return; }
+      const denied = failure instanceof HttpProblem && [401, 403].includes(failure.status);
+      setScene((current) => current?.accountId === source.accountId ? { ...current, accounts: [], nextAccountPage: null,
+        canReadAccounts: denied ? false : current.canReadAccounts,
+        directoryFailures: { ...current.directoryFailures, accounts: denied ? undefined : "unavailable" } } : current);
+      if (failure instanceof HttpProblem && failure.status === 401) expireSession(credential, sessionRevision);
     } finally {
-      if (request === directoryRequest.current.accounts) setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
-  }, [active, credential, loading, repository, scene]);
+  }, [active, credential, exactUsers, expireSession, loading, repository, scene, sessionRevision, viewSession]);
+
+  const retryDirectory = useCallback(async (kind: AccountDirectoryKind) => {
+    if (!active || !credential || !scene || loading || mutationPending.current || !scene.directoryFailures[kind]) return;
+    if (kind === "users") return loadUsersPage("");
+    if (kind === "accounts") return loadAccountsPage("");
+    const request = ++directoryRequest.current[kind];
+    const isCurrent = () => request === directoryRequest.current[kind] && currentViewSession.current === viewSession && currentExactUsers.current === exactUsers;
+    const platform = kind === "platformPolicies";
+    setLoading(true);
+    try {
+      const observed = await observeDirectory(async () => {
+        const directory = await repository.listPolicies(credential, platform);
+        if (directory.accountId !== scene.accountId || directory.scope !== (platform ? "INSTALLATION" : "TENANT")) throw new Error("INVALID_IAM_TENANT");
+        return directory;
+      }, true);
+      if (!isCurrent()) return;
+      setScene((current) => {
+        if (!current || current.accountId !== scene.accountId) return current;
+        const directoryFailures = { ...current.directoryFailures, [kind]: observed.failed ? "unavailable" as const : undefined };
+        const tenantPoliciesAvailable = platform ? current.tenantPoliciesAvailable : observed.value !== null;
+        const platformPoliciesAvailable = platform ? observed.value !== null : current.platformPoliciesAvailable;
+        const policies = [...current.policies.filter((policy) => policy.scope !== (platform ? "INSTALLATION" : "TENANT")), ...(observed.value?.items ?? []).map(buildAccountPolicyScene)];
+        if (new Set(policies.map((policy) => policy.id)).size !== policies.length) return {
+          ...current, policies: [], tenantPoliciesAvailable: false, platformPoliciesAvailable: false, canViewPolicies: true,
+          directoryFailures: { ...directoryFailures, tenantPolicies: "unavailable", platformPolicies: "unavailable" }
+        };
+        return { ...current, directoryFailures, tenantPoliciesAvailable, platformPoliciesAvailable,
+          canViewPolicies: tenantPoliciesAvailable || platformPoliciesAvailable || Boolean(directoryFailures.tenantPolicies || directoryFailures.platformPolicies),
+          policies };
+      });
+    } catch (failure) {
+      if (isCurrent() && failure instanceof HttpProblem && failure.status === 401) {
+        setScene(null); setWorkspace(null); expireSession(credential, sessionRevision);
+      }
+    } finally { if (isCurrent()) setLoading(false); }
+  }, [active, credential, exactUsers, expireSession, loadAccountsPage, loadUsersPage, loading, repository, scene, sessionRevision, viewSession]);
 
   const beginUserPolicyAttachment = useCallback((user: AccountUserScene, policyId: string): boolean => {
     if (!active || !credential || !scene || loading || mutationPending.current || !tenantId || !principalId) return false;
@@ -2286,28 +2420,31 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     reload() { directoryRequest.current.users += 1; directoryRequest.current.accounts += 1; setLoading(true); setRevision((current) => current + 1); },
     usersPage(after) { void loadUsersPage(after); },
     accountsPage(after) { void loadAccountsPage(after); },
+    retryDirectory,
     loadUser,
     passwordResetUnknown,
     passwordResetLookup,
     async resetUserPassword(user, initialPassword) {
-      if (!active || !credential || !tenantId || !principalId || loading || mutationPending.current) return "rejected";
+      if (!active || !credential || !tenantId || !principalId || loading || mutationPending.current ||
+          currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return "rejected";
       if (passwordResetUnknownRef.current?.session === viewSession) return "unknown";
       if (workspace?.personalMfa.reauthenticationRequired) { setWorkspaceError("reauthenticationRequired"); return "rejected"; }
       const command: Extract<AccountCommand, { kind: "reset-password" }> = {
         kind: "reset-password", userId: user.id, resourceVersion: user.resourceVersion,
         initialPassword, requestId: requestToken("ui-user-reset-")
       };
-      if (!scene || verifiedIdentitySession.current !== viewSession || scene.accountId !== tenantId || scene.currentUserId !== principalId || !accountCommandAvailable(scene, command)) { setError("forbidden"); return "rejected"; }
+      const observed = currentScene.current;
+      if (!observed || verifiedIdentitySession.current !== viewSession || observed.accountId !== tenantId || observed.currentUserId !== principalId || !accountCommandAvailable(observed, command, exactUsers.users)) { setError("forbidden"); return "rejected"; }
       mutationPending.current = true;
       setBusy(true); setError(null); setSuccess(null);
       try {
         await repository.execute(credential, command);
-        if (currentViewSession.current !== viewSession) return "rejected";
+        if (currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return "rejected";
         setSuccess("completed");
         setLoading(true); setRevision((current) => current + 1);
         return "applied";
       } catch (failure) {
-        if (currentViewSession.current !== viewSession) return "rejected";
+        if (currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return "rejected";
         if (failure instanceof HttpProblem && [400, 401, 403, 409, 422].includes(failure.status)) {
           setError(accountError(failure));
           return "rejected";
@@ -2353,20 +2490,26 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       return true;
     },
     async execute(command) {
-      if (!active || !credential || loading || mutationPending.current) return false;
+      if (!active || !credential || loading || mutationPending.current ||
+          currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return false;
       if (workspace?.personalMfa.reauthenticationRequired) { setWorkspaceError("reauthenticationRequired"); return false; }
-      if (!scene || !accountCommandAvailable(scene, command)) { setError("forbidden"); return false; }
+      const observed = currentScene.current;
+      if (!observed || verifiedIdentitySession.current !== viewSession || observed.accountId !== tenantId || observed.currentUserId !== principalId || !accountCommandAvailable(observed, command, exactUsers.users)) { setError("forbidden"); return false; }
       mutationPending.current = true;
       setBusy(true); setError(null); setSuccess(null);
       try {
         await repository.execute(credential, command);
+        if (currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return false;
         setSuccess("completed");
         setLoading(true); setRevision((current) => current + 1);
         return true;
-      } catch (failure) { setError(accountError(failure)); return false; }
+      } catch (failure) {
+        if (currentViewSession.current === viewSession && currentExactUsers.current === exactUsers) setError(accountError(failure));
+        return false;
+      }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, loading, repository, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

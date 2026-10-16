@@ -253,3 +253,17 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 后端在同一门禁中逐字段核对不可变完成记录的actor Account/Principal、目标Account、operation、原请求及前后修订，并独立读取权威Account状态和installation Audit链。开通结果的原Root初始凭据只能进入强制改密；停用结果把版本推进到2、拒绝新登录并撤销既有Root Session；凭据恢复结果保留相同原Root principal，旧密码和旧Session均拒绝，新临时凭据只能进入强制改密，且没有新增`PLATFORM_OPERATOR`。因此本地真实进程、浏览器半断、第二来源重新认证和零写重放已完成；它仍是loopback测试代理而不是当前Profile签名APISIX安装，签名复验和实例终止UNKNOWN继续保留为发布缺口。
 
 同日，当前IAM86/Audit39/PaaS7、`contractRevision=36`签名安装经任务私有代理完成Account停用的同组合复验。来源A以真实`admin`会话在页面审阅并确认停用`phase1-tenant-alpha`；APISIX后端返回200后代理截断回包，页面保留原资源投影并进入UNKNOWN，冻结公开命令`ui-account-status-83058517b056130779953b51dc6c5b2d`及预期版本1。来源B使用不共享浏览器存储的`localhost`重新认证同一USER，导入不含密码、Bearer或私有request ID的摘要，只调用一次精确completion GET；页面确认完成版本2和`DISABLED`，没有把回执补造为当前资源投影。代理观测为`attempts=1`、`responseLost=true`、后端状态200、`recoveryReads=1`、`postLossWrites=0`，mutation Host为`127.0.0.1`、recovery Host为`localhost`，恢复URI准确绑定原operation、requestId和版本。独立权威读取确认Account为`DISABLED`/版本2，installation Audit中恰有一条`iam.account.disabled`成功事实，目标为该Account、actor为`principal-admin`，整条installation chain为`VERIFIED`且`complete=true`。门禁结束后使用新的明确意图恢复为`ACTIVE`/版本3，并核对唯一`iam.account.enabled`成功事实；该受控收尾不是原UNKNOWN写入的重放。此证据只关闭当前签名组合的`ACCOUNT_SET_STATUS`响应丢失路径，Account开通、原Root凭据恢复及实例终止仍各自保留。
+
+### 精确目标读取与目录故障隔离
+
+2026-10-16，本分支继续`ADAPT` UX/UI owner固定`45251050879e23d23bb3fc7982ab8f7718bfbca9`、后继`ddd1a7760e2560e2ad2b2ea5fbe9ddffb27d6761`及纯测试后继`14811b6118f39ca30d012d9fb54e1997cb1f4e3f`、`1090fcafabc14b541c70a41968d485cde5c347e7`。只采用二十个既有auth/control-plane源码、测试和消息路径；最终二十个工作树blob与最后一个固定对象逐项一致。没有导入对方FEAT、adoption、checkpoint或生成资产；完整嵌入资产仍从本分支最终源码重建。
+
+已知User详情现在由稳定User ID独立读取，不要求目标仍出现在当前目录页，也不把目录可见性当作存在性或授权。目标User的AccessKey读取继续核对准确Account、Root/普通User边界与目标ID，但不要求调用方同时具备User列表权限；当前普通User可以在没有目录权限时进入自己的凭据入口。服务授权保留独立导航和模板/关系读取，不再依赖普通Role目录是否可见。以上变化没有新增后端契约、客户端授权判断或调用方Account selector。
+
+直接策略附件的计数、筛选和空态现在明确只表示直接来源；空直接附件不得抹掉已知Group来源或冒充有效权限结论。控制台登录和编程访问开关在权威读取不可用时显示“不可用”，不能伪装成已关闭。可选User、Account和各策略来源读取各自失败关闭：失败区域清除旧行和提示性命令快照，仅暴露该读取的重试；旧callback、并发中的过期精确读取和另一来源的重试均不能恢复已失效数据或重放业务写。当前身份读取仍是强制边界，当前Session得到401仍使整个会话失效；Analyzer、报告和命令结果继续由各自owner读取。
+
+`14811b61`只把服务模板加载/搜索/筛选/详情/分页及密码重置回执恢复拆为独立交互用例；`1090fcaf`再把完整User向导的校验、草稿导航和最终创建，以及账号规则UNKNOWN的路由保锁与因子替换保护分到独立用例。原fixture规模、输入、断言和单用例五秒预算均未放宽，生产源码没有变化。该切片只修正IAM-UI-02/03/05/06的读取组合与失败隔离，不替代当前签名APISIX的Account开通、原Root恢复、RabbitMQ终止UNKNOWN或其余写路径验收。
+
+UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分支生成资产和FEAT证据；其完整前端源码tree与`1090fcaf`相同。本分支没有复制该分支专属build identity，而是从上述二十个最终源码blob重建324个嵌入文件。聚焦的目录/详情/服务授权及新增向导/UNKNOWN用例、typecheck、完整lint、architecture、234组对比度、生产导出/嵌入一致性、Go UI test/vet均已通过。
+
+该候选尚未通过完整前端门禁，不能标为发布可用。UX/UI owner在独占单worker、原五秒预算下的默认fork运行于`AccessWorkspace`出现一个未改业务用例5715ms超时；相同固定归档的threads对照出现另外两个未改业务用例6338ms和5048ms超时。随后本分支在Node22.22.2/npm11.6.4、配置内`maxWorkers=1`和默认fork下独立运行，又在`AccountAccessRenderer`的188项中得到185项通过、三个不同未改业务用例分别5763ms、5362ms和5037ms超时，发现失败后主动停止。三个运行的失败集合不相同，且两个pool均不能稳定通过；因此没有把它解释成新增功能回归或某个执行器的已证实问题，也没有提高超时、删除断言、缩小fixture或改生产代码。测试执行/异步稳定性须由既有测试owner查明并使全部当前文件在冻结预算下通过；聚焦成功、生成稳定或旧提交全绿均不能替代该门禁。

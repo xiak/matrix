@@ -49,6 +49,7 @@ import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
 import { AuthorizationProfilePublishingWorkspace } from "./AccountAuthorizationProfileCatalog";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
+import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
 
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
 const accountSignInSettingsId = "account-sign-in-settings";
@@ -130,13 +131,13 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
     <Tabs.Content value="accounts"><div className={styles.stack}>
       <Card>
         <ContentPage.Heading title={t("tenantAccounts")} scrollKey="tenant-directory" actions={scene.canCreateAccounts ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
-        <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
+        {scene.directoryFailures?.accounts ? <AccountDirectoryReadFailure kind="accounts" /> : <><Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
             <tbody>{scene.accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><Table.PrimaryAction onClick={() => { setSelectedId(account.id); setCreating(false); }}>{account.name}</Table.PrimaryAction><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
           </Table>
           {!scene.accounts.length ? <EmptyState title={t("noTenants")} /> : null}
         <Table.Footer note={t("tenantScopeHint")}><TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}
           previous={{ label: t("firstPage"), disabled: cursorPage <= 1, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage(1); access.accountsPage(""); } }}
-          next={{ label: t("nextPage"), disabled: !scene.nextAccountPage, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage((current) => current + 1); access.accountsPage(scene.nextAccountPage!); } }} /></Table.Footer>
+          next={{ label: t("nextPage"), disabled: !scene.nextAccountPage, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage((current) => current + 1); access.accountsPage(scene.nextAccountPage!); } }} /></Table.Footer></>}
       </Card>
     </div></Tabs.Content>
     <Tabs.Content value="governance"><OrganizationGovernancePreview /></Tabs.Content>
@@ -216,11 +217,11 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
   const previewOnly = ["create-policy", "policy-language", "policy-configuration", "access-diagnosis", "access-analysis", "security-reports", "roles", "create-role", "service-authorizations", "providers", "user-sso", "federations", "keys", "authorization-profiles"].includes(view);
   const denied = scene && (
-    (view === "users" && !scene.canListUsers) ||
+    (view === "users" && !entityId && !scene.canListUsers) ||
     (view === "create-user" && !scene.canCreateUsers) ||
     (view === "groups" && !(workspace ? scene.canListUsers : scene.canListGroups)) ||
     (view === "roles" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
-    (view === "service-authorizations" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
+    (view === "service-authorizations" && workspace && !scene.canListUsers) ||
     (view === "create-role" && !workspace && (!access.roles || !scene.canCreateRoles)) ||
     (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
     (view === "tenants" && !scene.canReadAccounts) ||
@@ -260,7 +261,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "groups" && access.groups ? <AccountLiveGroups key={`${access.groups.accountId}:${entityId ?? "groups"}`} client={access.groups} entityId={entityId} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
       view === "roles" && !workspace && access.roles ? <AccountLiveRoles key={`${access.roles.accountId}:${access.roles.sessionRevision}:${entityId ?? "roles"}`} client={access.roles} serviceRoleTemplates={access.serviceRoleTemplates} serviceLinkedRoles={access.serviceLinkedRoles} entityId={entityId} onCreate={() => onNavigate("create-role")} onOpen={onNavigate} revokeIntent={access.roleSessionRevokeIntent} onRevokeIntentChange={access.changeRoleSessionRevokeIntent} /> :
-      view === "service-authorizations" && !workspace && (access.serviceLinkedRoles || access.serviceRoleTemplates) ? <AccountServiceAuthorizations key={access.serviceLinkedRoles?.sessionRevision ?? access.serviceRoleTemplates?.sessionRevision} relations={access.serviceLinkedRoles ?? null} templates={access.serviceRoleTemplates ?? null} onBack={() => onNavigate("roles")} /> :
+      view === "service-authorizations" && !workspace && (access.serviceLinkedRoles || access.serviceRoleTemplates) ? <AccountServiceAuthorizations key={access.serviceLinkedRoles?.sessionRevision ?? access.serviceRoleTemplates?.sessionRevision} relations={access.serviceLinkedRoles ?? null} templates={access.serviceRoleTemplates ?? null} onBack={scene.canListRoles ? () => onNavigate("roles") : undefined} /> :
       view === "create-role" && !workspace && access.roles ? <LiveRoleCreationWizard client={access.roles} scene={scene} onBack={() => onNavigate("roles")} onDone={(id) => onNavigate("roles", id)} /> :
       view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={scene} createIntent={access.accessKeyCreateIntent}
         userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :

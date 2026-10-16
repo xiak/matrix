@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { Profiler, useState } from "react";
+import { Profiler, useRef, useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
@@ -16,7 +16,8 @@ import type { RoleAccess, RoleCapabilityAction, RoleDirectory } from "../domain/
 import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
 import { LoginRenderer } from "./LoginRenderer";
-import { buildAccountAccessScene } from "../scenes/accountAccessScene";
+import { buildAccountAccessScene, type AccountDirectoryKind } from "../scenes/accountAccessScene";
+import { AccountUserAccessMethods } from "./AccountUserWorkspace";
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
@@ -157,6 +158,41 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
     revokePolicyAttachment: vi.fn().mockResolvedValue({ id: "attachment-child-a-system.paas-viewer", resourceVersion: 2, revokedAt: "2026-08-27T00:00:00Z" }),
     ...overrides
   } as AccountRepository;
+}
+
+function liveAnalysis(): NonNullable<AccountRepository["accessAnalysis"]> {
+  return {
+    listAnalyzers: vi.fn().mockResolvedValue({ accountId: account.id, items: [], nextAfter: null }),
+    readAnalyzer: vi.fn(), createAnalyzer: vi.fn(), updateAnalyzer: vi.fn(), setDisposition: vi.fn(),
+    listFindings: vi.fn(), readFinding: vi.fn(), archiveFinding: vi.fn(), unarchiveFinding: vi.fn()
+  };
+}
+
+function DirectoryGuardProbe({ view }: { view: AccountAccessView }) {
+  const session = useSession();
+  const access = useAccountAccess();
+  const [exactReady, setExactReady] = useState(false);
+  const [result, setResult] = useState("");
+  const retainedCommand = useRef<typeof access.execute | null>(null);
+  return <>
+    <button onClick={() => void session.login("admin", "password")}>login-directory-probe</button>
+    <button onClick={() => void access.loadUser(childUser.id).then(() => { retainedCommand.current = access.execute; setExactReady(true); }).catch(() => setExactReady(false))}>read-exact-user</button>
+    <button onClick={() => access.usersPage("next-user-page")}>read-next-user-page</button>
+    <button disabled={access.loading} onClick={() => void access.retryDirectory("users")}>retry-user-directory</button>
+    <button onClick={() => void (retainedCommand.current ?? access.execute)({ kind: "set-status", userId: childUser.id, resourceVersion: childUser.resourceVersion, status: "DISABLED" }).then((value) => setResult(String(value)))}>attempt-old-user-command</button>
+    <output aria-label="exact-user-ready">{String(exactReady)}</output>
+    <output aria-label="old-user-command-result">{result}</output>
+    <AccountAccessRenderer view={view} onNavigate={() => {}} />
+  </>;
+}
+
+async function openDirectoryGuard(repository: AccountRepository, view: AccountAccessView) {
+  const user = userEvent.setup({ delay: null });
+  render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}>
+    <DirectoryGuardProbe view={view} />
+  </AccountAccessProvider></SessionProvider></LocaleProvider>);
+  await user.click(screen.getByRole("button", { name: "login-directory-probe" }));
+  return user;
 }
 
 function liveAccountLifecycle(overrides: Partial<NonNullable<AccountRepository["accountLifecycle"]>> = {}): NonNullable<AccountRepository["accountLifecycle"]> {
@@ -376,17 +412,17 @@ function SecuritySettingsIntentProbe() {
   </>;
 }
 
-function AuthenticatedAccess({ repository, initialView, active = true }: { repository: AccountRepository; initialView: AccountAccessView; active?: boolean }) {
+function AuthenticatedAccess({ repository, initialView, initialEntityId, active = true }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string; active?: boolean }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
   const [view, setView] = useState(initialView);
-  const [entityId, setEntityId] = useState<string>();
+  const [entityId, setEntityId] = useState<string | undefined>(initialEntityId);
   return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider> : <LoginRenderer />;
 }
 
-async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential) {
+async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential, initialEntityId?: string) {
   const user = userEvent.setup({ delay: null });
-  const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
+  const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} initialEntityId={initialEntityId} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
   const view = render(tree(repository));
   await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
@@ -636,15 +672,202 @@ describe("account access", () => {
     expect(admin.queryByText("主账号")).toBeNull();
     const userTable = screen.getByRole("table", { name: "租户用户列表" });
     expect(userTable.getAttribute("data-mobile-layout")).toBe("stack");
-    expect(admin.getByText("ReadOnlyAccess").closest("td")?.getAttribute("data-label")).toBe("策略关联");
+    expect(admin.getByText("ReadOnlyAccess").closest("td")?.getAttribute("data-label")).toBe("直接关联策略");
     expect(admin.getByText("控制台访问").closest("td")?.getAttribute("data-label")).toBe("访问方式");
     await user.click(screen.getByRole("button", { name: "筛选" }));
     await user.click(screen.getByRole("combobox", { name: "筛选策略来源" }));
-    await user.click(screen.getByRole("option", { name: "未关联授权策略" }));
+    await user.click(screen.getByRole("option", { name: "无直接关联策略" }));
     expect(screen.getByRole("button", { name: "查看用户 new.user" })).toBeTruthy();
     expect(within(screen.getByRole("region", { name: "账号所有者" })).getByRole("button", { name: "查看用户 admin" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "清除筛选" }));
     expect(within(screen.getByRole("table", { name: "租户用户列表" })).getAllByRole("row")).toHaveLength(3);
+  });
+
+  it("never calls a group-inherited user ungranted when the direct attachment list is empty", async () => {
+    const member: AccountIdentity = { ...identity, user: childUser, identityKind: "USER",
+      permissionBoundary: { accountId: account.id, userId: childUser.id, resourceVersion: childUser.resourceVersion, policy: null },
+      policySources: [{ kind: "GROUP", attachment: { ...attachment("child-a", tenantPolicy), scope: "TENANT", installationId: null, target: { kind: "GROUP", id: "group-operations" } },
+        membership: { id: "membership-group-child", accountId: account.id, groupId: "group-operations", userId: childUser.id, createdBy: rootUser.id, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp } }] };
+    const withoutDirect: UserAccess = { ...child, policyAttachments: [], capabilities: userCapabilities(childUser) };
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(member), listUsers: vi.fn().mockResolvedValue({ items: [withoutDirect], nextAfter: null }) });
+    const { user } = await openAccess(repository, iam({}, childUser.id));
+    const table = await screen.findByRole("table", { name: "租户用户列表" });
+    expect(within(table).getByText("无直接关联策略")).toBeTruthy();
+    expect(screen.queryByText("未授权", { exact: true })).toBeNull();
+    expect(screen.getByText(/用户仍可能通过用户组继承权限/)).toBeTruthy();
+    await user.click(screen.getByTestId("nav-overview"));
+    expect(await screen.findByText("无直接策略的子用户")).toBeTruthy();
+    expect(screen.getByText(/group-operations/)).toBeTruthy();
+    expect(screen.queryByText("未授权", { exact: true })).toBeNull();
+    expect(repository.getUser).not.toHaveBeenCalled();
+    expect(repository.listUsers).toHaveBeenCalledTimes(1);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it.each((["users", "accounts", "tenantPolicies", "platformPolicies"] as const).flatMap((kind) =>
+    (["503", "protocol"] as const).map((failure) => ({ kind, failure }))
+  ))("isolates the $kind directory's $failure without hiding independent access analysis", async ({ kind, failure }) => {
+    const unavailable = failure === "503" ? new HttpProblem(503, "PRIVATE_DIRECTORY_DIAGNOSTIC") : new Error("INVALID_IAM_RESPONSE");
+    const analysis = liveAnalysis();
+    const repository = accounts({
+      listUsers: kind === "users" ? vi.fn().mockRejectedValue(unavailable) : vi.fn().mockResolvedValue({ items: [child], nextAfter: null }),
+      listAccounts: kind === "accounts" ? vi.fn().mockRejectedValue(unavailable) : vi.fn().mockResolvedValue({ items: [accountAccess(account)], nextAfter: null }),
+      listPolicies: vi.fn(async (_credential: string, platform: boolean) => {
+        if (kind === (platform ? "platformPolicies" : "tenantPolicies")) throw unavailable;
+        return directory(platform);
+      }),
+      accessAnalysis: analysis
+    });
+    await openAccess(repository, iam(), "access-analysis");
+    await waitFor(() => expect(analysis.listAnalyzers).toHaveBeenCalledExactlyOnceWith(credential, account.id, undefined));
+    expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
+    expect(screen.queryByText(/PRIVATE_DIRECTORY_DIAGNOSTIC|INVALID_IAM_RESPONSE/)).toBeNull();
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
+    expect(repository.listUsers).toHaveBeenCalledTimes(1);
+    expect(repository.listAccounts).toHaveBeenCalledTimes(1);
+    expect(repository.listPolicies).toHaveBeenCalledTimes(2);
+    expect(repository.getUser).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed user read rather than an empty table and retries only that directory", async () => {
+    const repository = accounts({ listUsers: vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockResolvedValue({ items: [child], nextAfter: null }) });
+    const { user } = await openAccess(repository);
+    expect(await screen.findByText("用户目录暂时不可用")).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "查看用户 developer" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "重试读取目录" }));
+    expect(await screen.findByRole("button", { name: "查看用户 developer" })).toBeTruthy();
+    expect(repository.listUsers).toHaveBeenCalledTimes(2);
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
+    expect(repository.listAccounts).toHaveBeenCalledTimes(1);
+    expect(repository.listPolicies).toHaveBeenCalledTimes(2);
+    expect(repository.getUser).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not re-read an already mounted Analyzer when an unrelated directory recovers", async () => {
+    const analysis = liveAnalysis();
+    const repository = accounts({ accessAnalysis: analysis, listUsers: vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE")).mockResolvedValue({ items: [child], nextAfter: null }) });
+    const user = await openDirectoryGuard(repository, "access-analysis");
+    await waitFor(() => expect(analysis.listAnalyzers).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "retry-user-directory" }));
+    await waitFor(() => expect(repository.listUsers).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByRole("button", { name: "retry-user-directory" })).toHaveProperty("disabled", false));
+    expect(analysis.listAnalyzers).toHaveBeenCalledTimes(1);
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
+    expect(repository.listPolicies).toHaveBeenCalledTimes(2);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it.each(["503", "protocol"])("clears old User rows and exact-target command snapshots after a fresh %s directory failure", async (failure) => {
+    const unavailable = failure === "503" ? new HttpProblem(503, "IAM_UNAVAILABLE") : new Error("INVALID_IAM_RESPONSE");
+    const repository = accounts({ listUsers: vi.fn().mockResolvedValueOnce({ items: [child], nextAfter: "next-user-page" }).mockRejectedValue(unavailable) });
+    const user = await openDirectoryGuard(repository, "users");
+    await screen.findByRole("button", { name: "查看用户 developer" });
+    await user.click(screen.getByRole("button", { name: "read-exact-user" }));
+    await waitFor(() => expect(screen.getByLabelText("exact-user-ready").textContent).toBe("true"));
+    await user.click(screen.getByRole("button", { name: "read-next-user-page" }));
+    await screen.findByText("用户目录暂时不可用");
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "查看用户 developer" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "attempt-old-user-command" }));
+    await waitFor(() => expect(screen.getByLabelText("old-user-command-result").textContent).toBe("false"));
+    expect(repository.getUser).toHaveBeenCalledTimes(1);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not let a pre-failure exact User read reintroduce capabilities after the directory fails", async () => {
+    let finish!: (value: UserAccess) => void;
+    const repository = accounts({
+      getUser: vi.fn(() => new Promise<UserAccess>((resolve) => { finish = resolve; })),
+      listUsers: vi.fn().mockResolvedValueOnce({ items: [child], nextAfter: "next-user-page" }).mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"))
+    });
+    const user = await openDirectoryGuard(repository, "users");
+    await screen.findByRole("button", { name: "查看用户 developer" });
+    await user.click(screen.getByRole("button", { name: "read-exact-user" }));
+    await waitFor(() => expect(repository.getUser).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "read-next-user-page" }));
+    await screen.findByText("用户目录暂时不可用");
+    await act(async () => { finish(structuredClone(child)); });
+    expect(screen.getByLabelText("exact-user-ready").textContent).toBe("false");
+    await user.click(screen.getByRole("button", { name: "attempt-old-user-command" }));
+    await waitFor(() => expect(screen.getByLabelText("old-user-command-result").textContent).toBe("false"));
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it.each(["tenantPolicies", "platformPolicies"] as const)("retries the failed %s source without reloading the healthy directory or identity", async (kind: AccountDirectoryKind) => {
+    const platformFailure = kind === "platformPolicies";
+    let fail = true;
+    const listPolicies = vi.fn(async (_credential: string, platform: boolean) => {
+      if (platform === platformFailure && fail) throw new HttpProblem(503, "IAM_UNAVAILABLE");
+      return directory(platform);
+    });
+    const repository = accounts({ listPolicies });
+    const { user } = await openAccess(repository, iam(), "policies");
+    await screen.findByText(platformFailure ? "平台策略目录暂时不可用" : "租户策略目录暂时不可用");
+    fail = false;
+    await user.click(screen.getByRole("button", { name: "重试读取目录" }));
+    await screen.findByText("ReadOnlyAccess", { exact: true });
+    expect(listPolicies).toHaveBeenCalledTimes(3);
+    expect(listPolicies).toHaveBeenLastCalledWith(credential, platformFailure);
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
+    expect(repository.listUsers).toHaveBeenCalledTimes(1);
+    expect(repository.listAccounts).toHaveBeenCalledTimes(1);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("keeps report and personal/account settings entry points independent of unavailable directories", async () => {
+    const repository = accounts({ listUsers: vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE")),
+      listAccounts: vi.fn().mockRejectedValue(new Error("INVALID_IAM_RESPONSE")),
+      listPolicies: vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE")),
+      securityReports: { create: vi.fn(), read: vi.fn(), download: vi.fn() } });
+    const { user } = await openAccess(repository, iam(), "security-reports");
+    expect(await screen.findByRole("button", { name: "生成当前账号安全报告" })).toBeTruthy();
+    await user.click(screen.getByTestId("nav-settings"));
+    expect(await screen.findByRole("button", { name: "保存别名" })).toBeTruthy();
+    expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
+    expect(repository.securityReports?.create).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it.each(["503", "protocol"])("keeps a mandatory identity %s failure global and starts no optional reads", async (failure) => {
+    const analysis = liveAnalysis();
+    const repository = accounts({ currentIdentity: vi.fn().mockRejectedValue(failure === "503" ? new HttpProblem(503, "PRIVATE_IDENTITY_DIAGNOSTIC") : new Error("INVALID_IAM_IDENTITY")), accessAnalysis: analysis });
+    await openAccess(repository, iam(), "access-analysis");
+    await screen.findByRole("alert");
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(repository.listAccounts).not.toHaveBeenCalled();
+    expect(repository.listPolicies).not.toHaveBeenCalled();
+    expect(analysis.listAnalyzers).not.toHaveBeenCalled();
+    expect(screen.queryByText(/PRIVATE_IDENTITY_DIAGNOSTIC|INVALID_IAM_IDENTITY/)).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("keeps exact User and boundary facts readable when their optional fresh policy directory fails", async () => {
+    const fixture = boundaryFixture();
+    const read = fixture.repository.listPolicies;
+    let tenantReads = 0;
+    fixture.repository.listPolicies = vi.fn(async (credential: string, platform: boolean) => {
+      if (!platform && ++tenantReads > 1) throw new HttpProblem(503, "IAM_UNAVAILABLE");
+      return read(credential, platform);
+    });
+    await openBoundary(fixture);
+    expect(await screen.findByText("用户资料")).toBeTruthy();
+    expect(screen.queryByText("对象不可用")).toBeNull();
+    expect(fixture.repository.getUser).toHaveBeenCalledTimes(1);
+    expect(fixture.boundaries.read).toHaveBeenCalledTimes(1);
+    expect(fixture.repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("labels missing access switches as unreported instead of claiming login and API access are not integrated", () => {
+    const scene = buildAccountAccessScene(identity, { items: [child], nextAfter: null }, null, directory(false), directory(true));
+    render(<LocaleProvider><AccountUserAccessMethods user={scene.users[0]!} workspace={null} /></LocaleProvider>);
+    expect(screen.getAllByText("开关状态未提供")).toHaveLength(2);
+    expect(screen.queryByText("当前未接入")).toBeNull();
+    expect(document.querySelectorAll("[data-enabled]")).toHaveLength(0);
   });
 
   it("keeps navigation out of mutation renders and preserves unrelated exact capabilities", async () => {
@@ -1338,6 +1561,126 @@ describe("account access", () => {
     expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
     expect(listUsers).toHaveBeenCalledTimes(2);
     expect(listPolicies).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([true, false])("reads a stable user ID outside the current directory page with user-list permission=%s", async (canList) => {
+    const otherUser = { ...childUser, id: "child-other", loginName: "other", displayName: "Other User" };
+    const listUsers = vi.fn().mockResolvedValue({ items: [{ user: otherUser, policyAttachments: [], capabilities: userCapabilities(otherUser) }], nextAfter: "next-user-page" });
+    const target = structuredClone(child);
+    target.capabilities = userCapabilities(childUser, target.policyAttachments, "AUTHORITY_REQUIRED").map((entry) => entry.action === "iam.user.read" ? { ...entry, available: true, restrictionReason: null } : entry);
+    const repository = accounts({ listUsers, currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(canList) }), getUser: vi.fn().mockResolvedValue(target) });
+    await openAccess(repository, iam(), "users", credential, childUser.id);
+    expect(await screen.findByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", true);
+    expect(repository.getUser).toHaveBeenCalledExactlyOnceWith(credential, childUser.id);
+    expect(listUsers).toHaveBeenCalledTimes(canList ? 1 : 0);
+    expect(repository.execute).not.toHaveBeenCalled();
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    expect(screen.queryByText("对象不可用")).toBeNull();
+  });
+
+  it.each([403, 404])("keeps an unavailable stable user ID private after an exact %s", async (status) => {
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }), getUser: vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE_TARGET")) });
+    await openAccess(repository, iam(), "users", credential, "known-user-id");
+    expect(await screen.findByText("对象不可用")).toBeTruthy();
+    expect(repository.getUser).toHaveBeenCalledExactlyOnceWith(credential, "known-user-id");
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(screen.queryByText("PRIVATE_TARGET")).toBeNull();
+    expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull();
+  });
+
+  it("reads service consent independently without ordinary Role-list authority", async () => {
+    const roleRepository = { list: vi.fn() } as unknown as NonNullable<AccountRepository["roles"]>;
+    const listServiceLinkedRoles = vi.fn().mockResolvedValue({ accountId: account.id, items: [], nextAfter: null });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }), roles: roleRepository,
+      listServiceLinkedRoles, getServiceLinkedRole: vi.fn(), listServiceRoleTemplates: vi.fn().mockResolvedValue({ accountId: account.id, items: [] }) });
+    await openAccess(repository, iam(), "service-authorizations");
+    expect(await screen.findByText("当前账号暂无服务授权")).toBeTruthy();
+    expect(listServiceLinkedRoles).toHaveBeenCalledExactlyOnceWith(credential, account.id, undefined);
+    expect(roleRepository.list).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "返回角色列表" })).toBeNull();
+  });
+
+  it("does not let a previous repository's late exact User response restore old controls", async () => {
+    let finish!: (value: UserAccess) => void;
+    const first = accounts({ getUser: vi.fn(() => new Promise<UserAccess>((resolve) => { finish = resolve; })) });
+    const next = structuredClone(child);
+    next.user.displayName = "Current read-only identity";
+    next.capabilities = userCapabilities(next.user, next.policyAttachments, "AUTHORITY_REQUIRED");
+    const replacement = accounts({ getUser: vi.fn().mockResolvedValue(next) });
+    const opened = await openAccess(first, iam(), "users", credential, childUser.id);
+    await waitFor(() => expect(first.getUser).toHaveBeenCalledTimes(1));
+    opened.replaceRepository(replacement);
+    await screen.findByText("Current read-only identity");
+    await act(async () => { finish(structuredClone(child)); });
+    expect(screen.getByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", true);
+    expect(screen.queryByText("Developer A")).toBeNull();
+    expect(first.execute).not.toHaveBeenCalled();
+    expect(replacement.execute).not.toHaveBeenCalled();
+  });
+
+  it("hides the previous repository's verified User controls while the replacement exact read is pending", async () => {
+    const first = accounts();
+    let finish!: (value: UserAccess) => void;
+    const pending = new Promise<UserAccess>((resolve) => { finish = resolve; });
+    const replacement = accounts({ getUser: vi.fn().mockReturnValue(pending) });
+    const opened = await openAccess(first, iam(), "users", credential, childUser.id);
+    expect(await screen.findByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", false);
+    opened.replaceRepository(replacement);
+    await waitFor(() => expect(replacement.getUser).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull();
+    const readonly = structuredClone(child);
+    readonly.capabilities = userCapabilities(readonly.user, readonly.policyAttachments, "AUTHORITY_REQUIRED");
+    await act(async () => { finish(readonly); });
+    expect(await screen.findByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", true);
+    expect(first.execute).not.toHaveBeenCalled();
+    expect(replacement.execute).not.toHaveBeenCalled();
+  });
+
+  it("quarantines a foreign User directory but still reads an independently known exact User", async () => {
+    const foreign = structuredClone(child);
+    foreign.user.accountId = "foreign-directory-account";
+    const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [foreign], nextAfter: null }) });
+    await openAccess(repository, iam(), "users", credential, childUser.id);
+    expect(await screen.findByText("用户资料")).toBeTruthy();
+    expect(screen.queryByText("foreign-directory-account")).toBeNull();
+    expect(repository.getUser).toHaveBeenCalledExactlyOnceWith(credential, childUser.id);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("does not render a foreign Account's exact User result as the requested target", async () => {
+    const foreign = structuredClone(child);
+    foreign.user.accountId = "foreign-account";
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }), getUser: vi.fn().mockResolvedValue(foreign) });
+    await openAccess(repository, iam(), "users", credential, childUser.id);
+    expect(await screen.findByText("对象不可用")).toBeTruthy();
+    expect(screen.queryByText("foreign-account")).toBeNull();
+    expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("opens another known user's keys from an exact detail without listing the users", async () => {
+    const list = vi.fn().mockResolvedValue({ accountId: account.id, userId: childUser.id, userResourceVersion: childUser.resourceVersion, capabilities: [], items: [] });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }),
+      accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const { user } = await openAccess(repository, iam(), "users", credential, childUser.id);
+    await user.click(await screen.findByRole("button", { name: "查看/管理访问密钥" }));
+    expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
+    expect(list).toHaveBeenCalledExactlyOnceWith(credential, account.id, childUser.id);
+    expect(repository.getUser).toHaveBeenCalledTimes(1);
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(repository.accessKeys!.create).not.toHaveBeenCalled();
+  });
+
+  it("reads a member's own keys without any user-list or user-detail request", async () => {
+    const list = vi.fn().mockResolvedValue({ accountId: account.id, userId: childUser.id, userResourceVersion: childUser.resourceVersion, capabilities: [], items: [] });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: childUser.id, resourceVersion: childUser.resourceVersion, policy: null }, capabilities: currentCapabilities(false) }),
+      accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    await openAccess(repository, iam({}, childUser.id), "keys");
+    expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
+    expect(list).toHaveBeenCalledExactlyOnceWith(credential, account.id, childUser.id);
+    expect(repository.listUsers).not.toHaveBeenCalled();
+    expect(repository.getUser).not.toHaveBeenCalled();
+    expect(repository.accessKeys!.create).not.toHaveBeenCalled();
   });
 
   it("keeps the verified directory identity visible while loading the exact live user detail", async () => {
@@ -3830,13 +4173,13 @@ describe("account access", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
-  it("fails the live scene without substituting MOCK data when a policy directory has a non-authorization error", async () => {
+  it("fails only the policy directory region without substituting MOCK data after a non-authorization error", async () => {
     const repository = accounts({ listPolicies: vi.fn(async (_credential: string, platform: boolean) => {
       if (platform) throw new HttpProblem(503, "UPSTREAM_UNAVAILABLE");
       return directory(false);
     }) });
     await openAccess(repository, iam(), "policies");
-    expect((await screen.findByRole("alert")).textContent).toContain("访问管理暂时不可用");
+    expect(await screen.findByText("平台策略目录暂时不可用")).toBeTruthy();
     expect(screen.queryByRole("table", { name: "策略元数据目录" })).toBeNull();
     expect(screen.queryByText("ReadOnlyAccess")).toBeNull();
   });
@@ -4168,7 +4511,7 @@ describe("account access", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("restores only a same-identity live reset reminder after reload and ignores malformed or foreign records", async () => {
+  it.each(["same-identity", "foreign", "malformed"])("restores only a same-identity live reset reminder after reload: %s record", async (recordKind) => {
     const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
       if (command.kind === "reset-password") throw new Error("connection lost after dispatch");
     });
@@ -4184,21 +4527,15 @@ describe("account access", () => {
     const record = JSON.parse(sessionStorage.getItem(key)!);
     first.view.unmount();
 
+    if (recordKind === "foreign") sessionStorage.setItem(key, JSON.stringify({ ...record, actorId: "different-actor" }));
+    if (recordKind === "malformed") sessionStorage.setItem(key, "{not-json");
     const resumed = await openAccess(repository);
-    expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
-    expect(screen.getByText(/本地提醒丢失也不能证明结果/)).toBeTruthy();
+    if (recordKind === "same-identity") {
+      expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
+      expect(screen.getByText(/本地提醒丢失也不能证明结果/)).toBeTruthy();
+    } else expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
     expect(execute).toHaveBeenCalledTimes(1);
     resumed.view.unmount();
-
-    sessionStorage.setItem(key, JSON.stringify({ ...record, actorId: "different-actor" }));
-    const foreign = await openAccess(repository);
-    expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
-    foreign.view.unmount();
-
-    sessionStorage.setItem(key, "{not-json");
-    await openAccess(repository);
-    expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
-    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("treats an explicit reset version conflict as rejected, not an unconfirmed outcome", async () => {
@@ -4307,8 +4644,12 @@ describe("account access", () => {
       : { user: foreignUser, policyAttachments: [], capabilities: userCapabilities(foreignUser) };
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(other), ...(["directory", "root-directory"].includes(mismatch) ? { listUsers: vi.fn().mockResolvedValue({ items: [directoryUser], nextAfter: null }) } : {}) });
     await openAccess(repository);
-    expect((await screen.findByRole("alert")).textContent).toContain("暂时不可用");
+    const failedDirectory = mismatch === "directory" || mismatch === "root-directory";
+    if (failedDirectory) expect(await screen.findByText("用户目录暂时不可用")).toBeTruthy();
+    else expect((await screen.findByRole("alert")).textContent).toContain("暂时不可用");
     expect(screen.queryByText("PRIVATE OTHER USER")).toBeNull();
-    expect(screen.queryByRole("button", { name: "创建用户" })).toBeNull();
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    if (!failedDirectory) expect(screen.queryByRole("button", { name: "创建用户" })).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
   });
 });

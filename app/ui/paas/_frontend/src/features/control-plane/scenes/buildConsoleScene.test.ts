@@ -211,12 +211,12 @@ describe("buildConsoleScene", () => {
     expect(scene.navigation.map((item) => item.id)).not.toContain("installations");
   });
 
-  it("keeps the roles navigation selected for the addressable service authorization workspace", () => {
+  it("keeps service authorization addressable independently of the ordinary Role directory", () => {
     const unavailable = new Proxy(snapshot, { get() { throw new Error("PaaS unavailable"); } });
     const scene = buildConsoleScene("access", unavailable, undefined, "service-authorizations");
 
     expect(scene.content).toEqual({ kind: "access", view: "service-authorizations" });
-    expect(scene.navigation.filter((item) => item.selected).map((item) => item.id)).toEqual(["roles"]);
+    expect(scene.navigation.filter((item) => item.selected).map((item) => item.id)).toEqual(["service-authorizations"]);
   });
 
 

@@ -169,7 +169,7 @@ function ConsolePageHeader({ selection, pendingHref, title, ...props }: Omit<Com
   const { navigate } = useConsoleNavigation();
   const navigationText = useTranslations("ServiceNavigation");
   const w = useTranslations("IamWorkspace");
-  const workflowParents = { "create-user": "users", "create-group": "groups", "create-policy": "policies", "policy-language": "policies", "create-role": "roles", "service-authorizations": "roles" } as const;
+  const workflowParents = { "create-user": "users", "create-group": "groups", "create-policy": "policies", "policy-language": "policies", "create-role": "roles" } as const;
   const view = selection.view;
   const id = pendingHref ? new URL(pendingHref, "https://matrix.invalid").searchParams.get("id") : query.get("id");
   const parent = selection.section !== "access" || !view ? null : view in workflowParents ? workflowParents[view as keyof typeof workflowParents] : id && ["users", "groups", "policies", "roles"].includes(view) ? view : null;
@@ -400,6 +400,8 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
     if (item.id === "groups") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canListGroups;
     if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canViewPolicies;
     if (item.id === "roles") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.supportsLiveRoles && accountCapabilities.canListRoles;
+    if (item.id === "service-authorizations") return accountCapabilities.hasPreviewWorkspace
+      ? accountCapabilities.canListUsers : accountCapabilities.supportsLiveServiceAuthorizations;
     if (item.id === "keys") return accountCapabilities.hasPreviewWorkspace
       ? accountCapabilities.canListUsers
       : accountCapabilities.supportsLiveAccessKeys;
