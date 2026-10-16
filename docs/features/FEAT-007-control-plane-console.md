@@ -2003,8 +2003,13 @@ cross-Session, actor, expiry, disabled-Root, storage and focus tests remain
 required.
 
 Source-only candidate checks use Node 22.22.2/npm 11.6.4. The focused selection
-passed 39 cases; typecheck, full zero-warning lint, architecture and 234 theme
-contrast pairs passed. Complete frontend regression and the final
+passed 54 cases across the directory/detail and service-authorization owners;
+typecheck, full zero-warning lint, architecture and 234 theme contrast pairs
+passed. Template loading, search, filtering, detail and pagination each have
+an independent interaction check. Password-reset reminder recovery separately
+checks same-actor, foreign-actor and malformed records through the original
+uncertain-write journey. Fixture sizes, assertions, user input and the
+five-second per-case budget are preserved. Complete frontend regression and the final
 source/export/embed/Go gates are still pending for this candidate; neither
 targeted replay nor the parent candidate's production output substitutes for
 them. No test budget, backend/API/SQL/profile, dependency, checkpoint, shared

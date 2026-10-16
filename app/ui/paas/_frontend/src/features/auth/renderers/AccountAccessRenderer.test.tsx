@@ -4511,7 +4511,7 @@ describe("account access", () => {
     expect(sessionStorage.length).toBe(0);
   });
 
-  it("restores only a same-identity live reset reminder after reload and ignores malformed or foreign records", async () => {
+  it.each(["same-identity", "foreign", "malformed"])("restores only a same-identity live reset reminder after reload: %s record", async (recordKind) => {
     const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
       if (command.kind === "reset-password") throw new Error("connection lost after dispatch");
     });
@@ -4527,21 +4527,15 @@ describe("account access", () => {
     const record = JSON.parse(sessionStorage.getItem(key)!);
     first.view.unmount();
 
+    if (recordKind === "foreign") sessionStorage.setItem(key, JSON.stringify({ ...record, actorId: "different-actor" }));
+    if (recordKind === "malformed") sessionStorage.setItem(key, "{not-json");
     const resumed = await openAccess(repository);
-    expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
-    expect(screen.getByText(/本地提醒丢失也不能证明结果/)).toBeTruthy();
+    if (recordKind === "same-identity") {
+      expect(await screen.findByText("重置密码结果尚未确认")).toBeTruthy();
+      expect(screen.getByText(/本地提醒丢失也不能证明结果/)).toBeTruthy();
+    } else expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
     expect(execute).toHaveBeenCalledTimes(1);
     resumed.view.unmount();
-
-    sessionStorage.setItem(key, JSON.stringify({ ...record, actorId: "different-actor" }));
-    const foreign = await openAccess(repository);
-    expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
-    foreign.view.unmount();
-
-    sessionStorage.setItem(key, "{not-json");
-    await openAccess(repository);
-    expect(screen.queryByText("重置密码结果尚未确认")).toBeNull();
-    expect(execute).toHaveBeenCalledTimes(1);
   });
 
   it("treats an explicit reset version conflict as rejected, not an unconfirmed outcome", async () => {
