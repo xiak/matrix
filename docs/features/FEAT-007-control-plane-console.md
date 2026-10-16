@@ -673,6 +673,13 @@ acceptance. These are not future API placeholders. Existing or subsequently
 reported IAM browser evidence must not be inherited as a new UX candidate's
 independent browser, device, CI or signed-install acceptance.
 
+Phase 1 uses email as the contact-verification and security-notification
+delivery channel, not as an alternative login or MFA factor. Phone-number
+login, SMS delivery, phone-number binding and physical-phone integration are
+deferred until a later explicit business requirement. Existing authenticator
+pages and the isolated MOCK remain available; this scope decision does not
+enable mandatory login or MFA in the UX preview.
+
 - When IAM requires MFA, password success enters a challenge or restricted enrollment state without
   creating a normal login session. Only a fresh, unused authenticator code may
   complete login. A forced password change invalidates the old challenge and
