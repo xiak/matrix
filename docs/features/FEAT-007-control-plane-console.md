@@ -77,9 +77,14 @@ generic provider schemas before a real second implementation exists.
     identity type or effective access from a policy or role display name.
     Policy-list metadata is a management snapshot, not policy content, a list
     of affected subjects or an authorization decision. Tenant and installation
-    directories are independently authorized: a 403 removes only that section;
-    every other failure makes the live scene unavailable without substituting
-    preview data. Attach and revoke commands bind exact policy/attachment
+    directories are independently authorized: a 403 removes only that section.
+    An unavailable or invalid LIVE collection clears its own rows and command
+    snapshots and exposes a source-specific read retry, not an empty directory
+    or a whole-scene failure. The mandatory current-identity read remains
+    strict and a current-session 401 expires that Session. No failed read
+    substitutes preview data. Direct attachments are labelled as direct-only;
+    their absence does not establish the absence of inherited or effective
+    access. Attach and revoke commands bind exact policy/attachment
     resource versions, and a changed directory version requires reselection.
     The service opens an overview followed by bookmarkable user, group,
     policy, role, role-SSO, user-SSO, federated-account, API-key, login-session,
@@ -1979,26 +1984,33 @@ Existing public detail frames, forms, controls and local focus owners remain
 in place. Deferred entries still expose no LIVE submission, and MOCK remains
 separate.
 
+LIVE direct-policy counts and filters describe only direct attachments; an
+empty direct list is not an effective-access verdict and does not erase known
+group policy sources. Independent console/programmatic switch state remains
+unreported, not disabled or unimplemented login/key support. Optional User,
+Account and each policy-source read now fail locally without replacing the
+mandatory current identity. A failed region exposes a shared read-failure and
+source-specific retry surface, clears old rows and advisory command snapshots,
+and rejects retained callbacks or pre-failure exact reads that could restore
+them. The known exact User/boundary read remains independent of an unavailable
+optional policy picker. Retrying a collection does not replace the independent
+Analyzer/report clients or replay a business command.
+
 The original Account-lifecycle summary and strict completion GET remain
 unchanged. Recovery does not store credentials, replay a write or project a
 historical completion into current Account facts or capabilities. Its existing
 cross-Session, actor, expiry, disabled-Root, storage and focus tests remain
 required.
 
-Development checks use Node 22.22.2/npm 11.6.4. Final typecheck, full
-zero-warning lint, architecture and 234 theme contrast pairs passed. Four
-related files passed all 208 cases; the exact-read selection passed 19 and
-the complete shared-shell file passed all 125. Three actual production builds
-exported 59 pages with 57 segment-path normalizations each; unset/`0` exports
-and the regenerated Go embed matched all 324 files byte-for-byte. The complete
-UI-host Go test/vet and eight Node export-boundary cases also passed. The
-complete frontend suite has not yet been rerun for this slice:
-the previous UI source's 1,594/1,595 run retained an unchanged group timeout,
-and targeted replay is not a substitute for a green complete run. No test
-budget, backend/API/SQL/profile, dependency, checkpoint, shared DEV process or
-real account/resource changed. This evidence does not inherit the IAM branch's
-CI, signed-runtime or browser acceptance, and mandatory login/MFA was not
-enabled. Current full-suite, independent fixed-source CI, signed-browser,
+Source-only candidate checks use Node 22.22.2/npm 11.6.4. The focused selection
+passed 39 cases; typecheck, full zero-warning lint, architecture and 234 theme
+contrast pairs passed. Complete frontend regression and the final
+source/export/embed/Go gates are still pending for this candidate; neither
+targeted replay nor the parent candidate's production output substitutes for
+them. No test budget, backend/API/SQL/profile, dependency, checkpoint, shared
+DEV process or real account/resource changed. This evidence does not inherit
+the IAM branch's CI, signed-runtime or browser acceptance, and mandatory
+login/MFA was not enabled. Independent fixed-source CI, signed-browser,
 security/device and remaining release gates stay open.
 
 The production-export repair in fixed UI source

@@ -49,6 +49,7 @@ import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
 import { AuthorizationProfilePublishingWorkspace } from "./AccountAuthorizationProfileCatalog";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
+import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
 
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
 const accountSignInSettingsId = "account-sign-in-settings";
@@ -130,13 +131,13 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
     <Tabs.Content value="accounts"><div className={styles.stack}>
       <Card>
         <ContentPage.Heading title={t("tenantAccounts")} scrollKey="tenant-directory" actions={scene.canCreateAccounts ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
-        <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
+        {scene.directoryFailures?.accounts ? <AccountDirectoryReadFailure kind="accounts" /> : <><Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
             <tbody>{scene.accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><Table.PrimaryAction onClick={() => { setSelectedId(account.id); setCreating(false); }}>{account.name}</Table.PrimaryAction><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
           </Table>
           {!scene.accounts.length ? <EmptyState title={t("noTenants")} /> : null}
         <Table.Footer note={t("tenantScopeHint")}><TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}
           previous={{ label: t("firstPage"), disabled: cursorPage <= 1, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage(1); access.accountsPage(""); } }}
-          next={{ label: t("nextPage"), disabled: !scene.nextAccountPage, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage((current) => current + 1); access.accountsPage(scene.nextAccountPage!); } }} /></Table.Footer>
+          next={{ label: t("nextPage"), disabled: !scene.nextAccountPage, onClick: () => { setSelectedId(null); setCreating(false); setCursorPage((current) => current + 1); access.accountsPage(scene.nextAccountPage!); } }} /></Table.Footer></>}
       </Card>
     </div></Tabs.Content>
     <Tabs.Content value="governance"><OrganizationGovernancePreview /></Tabs.Content>

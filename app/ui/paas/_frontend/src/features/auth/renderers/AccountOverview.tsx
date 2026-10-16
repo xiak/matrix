@@ -15,6 +15,7 @@ import { UserBoundarySummary } from "./PermissionBoundary";
 import { policyUsageCounts } from "../domain/accessWorkspace";
 import { policyDocumentDiagnostics } from "../domain/policyDocument";
 import styles from "./AccountAccessRenderer.module.css";
+import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
 
 // Only non-secret account identifiers may be passed to this control.
 export function AccountIdentifier({ value, label }: { value: string; label: string }) {
@@ -64,7 +65,7 @@ export function AccountOverview({ scene, onNavigate }: { scene: AccountAccessSce
   const reportTrigger = useRef<HTMLButtonElement>(null);
   const restoreReportFocus = useRef(false);
   const pending = scene.users.filter((user) => user.state === "passwordChangeRequired").length;
-  const ungranted = scene.users.filter((user) => user.attachments.length === 0).length;
+  const withoutDirectPolicies = scene.users.filter((user) => user.attachments.length === 0).length;
   const reviewPolicies = workspace?.policies.filter((policy) => {
     const document = policy.versions.find((version) => version.id === policy.defaultVersion)?.document;
     return document && policyDocumentDiagnostics(document).some((entry) => entry.severity === "security-warning");
@@ -92,11 +93,11 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
           <div><Typography.Title as="h2" level={3}>{t("overviewSummary")}</Typography.Title><p className={styles.note}>{t("accountWide")}</p></div>
           {scene.canCreateUsers ? <Button disabled={access.busy || access.loading} onClick={() => onNavigate("create-user")}><Plus aria-hidden="true" />{t("createUser")}</Button> : null}
         </div>
-        {scene.canListUsers ? <>
+        {scene.directoryFailures?.users ? <Card><Card.Body><AccountDirectoryReadFailure kind="users" /></Card.Body></Card> : scene.canListUsers ? <>
           {!workspace ? <div aria-label={t("userSummary")} className={styles.overviewMetrics}>
             <Statistic label={t("totalUsers")} value={format.number(scene.users.length)} icon={<Users />} />
             <Statistic label={t("enabledUsers")} value={format.number(active)} icon={<UserCheck />} status="success" />
-            <Statistic label={t("ungrantedUsers")} value={format.number(ungranted)} icon={<ShieldCheck />} />
+            <Statistic label={t("usersWithoutDirectPolicies")} value={format.number(withoutDirectPolicies)} icon={<ShieldCheck />} />
             <Statistic label={t("pendingPasswords")} value={format.number(pending)} icon={<KeyRound />} status={pending ? "warning" : "neutral"} />
           </div> : null}
           {!scene.directoryComplete ? <Alert status="info">{t("partialSummary")}</Alert> : null}

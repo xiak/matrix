@@ -13,6 +13,7 @@ import { AccountLiveUserWorkspace, AccountPrimaryWorkspace, AccountUserAccessMet
 import { isUserBatchAssociationAction, UserBatchConfirmationDialog, UserBatchWorkflow, type DirectoryUser } from "./UserBatchOperation";
 import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
 import styles from "./AccountAccessRenderer.module.css";
+import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
 
 function AccountUserRow({ user, principalId, workspace, grants, checked, disabled, onSelect, onOpen }: {
   user: DirectoryUser; principalId: string; workspace: AccessWorkspace | null;
@@ -28,14 +29,14 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
     </div><small className={styles.userIdentifier}>{user.id}</small></td>
     <td>{t("child")}{user.id === principalId ? <small>{t("signedIn")}</small> : null}</td>
     <td data-label={t("accessMethods")}><AccountUserAccessMethods user={user} workspace={workspace} /></td>
-    <td data-label={w("policyAssociations")}>{workspace ? <div className={styles.permissionSources}>
+    <td data-label={workspace ? w("policyAssociations") : t("directPolicyAttachments")}>{workspace ? <div className={styles.permissionSources}>
       {grants!.direct > 0 ? <span>{w("directPolicyCount", { count: grants!.direct })}</span> : null}
       {grants!.inherited > 0 ? <span>{w("groupPolicyCount", { count: grants!.inherited })}</span> : null}
       {!grants!.direct && !grants!.inherited ? w("noPolicyGrants") : null}
     </div> : <div className={styles.roleTags}>{user.attachments.length ? <>
       {user.attachments.slice(0, 2).map((attachment) => <Badge key={attachment.id} status={attachment.policyStatus === "RETIRED" ? "neutral" : undefined}>{attachment.label}</Badge>)}
       {user.attachments.length > 2 ? <span>{t("morePolicyAttachments", { count: user.attachments.length - 2 })}</span> : null}
-    </> : t("noGrantLabel")}</div>}</td>
+    </> : t("noDirectPolicyAttachments")}</div>}</td>
     <td>{user.state ? <Badge status={user.state === "disabled" ? "neutral" : user.state === "passwordChangeRequired" ? "warning" : "success"}>{t(`states.${user.state}`)}</Badge> : t("unknown")}</td>
   </tr>;
 }
@@ -68,6 +69,7 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
   const toolbarLabels = useTableToolbarLabels();
   const access = useAccountAccess();
   const workspace = access.workspace;
+  const directoryFailed = Boolean(scene.directoryFailures?.users);
   const { userDirectoryView } = access;
   const [query, setQuery] = useState(() => userDirectoryView.read().query);
   const [state, setState] = useState(() => userDirectoryView.read().state);
@@ -123,7 +125,7 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
     const grants = associations.get(user.id);
     const roleMatches = workspace ?
       role === "all" || (role === "ungranted" ? !grants!.direct && !grants!.inherited : role === "direct" ? grants!.direct > 0 : grants!.inherited > 0) :
-      role === "all" || (role === "ungranted" ? !user.attachments.length : role === "direct" ? user.attachments.length > 0 : user.attachments.some((attachment) => attachment.scope === "INSTALLATION"));
+      role === "all" || (role === "no-direct" ? !user.attachments.length : role === "direct" ? user.attachments.length > 0 : user.attachments.some((attachment) => attachment.scope === "INSTALLATION"));
     return words.every((word) => text.includes(word)) && (state === "all" || state === user.state) && roleMatches;
   }), [associations, role, scene.users, state, t, words, workspace]);
   const hasFilters = Boolean(query || state !== "all" || role !== "all");
@@ -154,20 +156,21 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
       />} />
       <AccountOwnerSummary scene={scene} onOpen={() => onOpen("users", scene.accountOwner.id)} />
       <TableToolbar labels={toolbarLabels} search={{ label: t("searchUsers"), placeholder: t("searchUsersPlaceholder"), value: query, onChange: (value) => changeFilter(() => setQuery(value)) }}
-        status={[t("userResults", { shown: filtered.length, loaded: scene.users.length }), ...(checkedUsers.length ? [batch("selected", { count: checkedUsers.length })] : [])].join(" · ")} filters={[
+        status={directoryFailed ? undefined : [t("userResults", { shown: filtered.length, loaded: scene.users.length }), ...(checkedUsers.length ? [batch("selected", { count: checkedUsers.length })] : [])].join(" · ")} filters={[
           { id: "state", label: t("filterUserState"), value: state, onChange: (value) => changeFilter(() => setState(value)), options: [{ value: "all", label: t("allStates") }, ...(["active", "passwordChangeRequired", "disabled"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] },
-          { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
+          { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "no-direct", label: t("noDirectPolicyAttachments") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
         ]} />
+      {!workspace ? <p className={styles.note}>{t("directPolicySourcesHint")}</p> : null}
       {!access.supportsUserBatch || visible.length > userBatchLimit ? <p className={styles.selectionHint}>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
-      {filtered.length ? <Table aria-label={t("userTable")} aria-busy={filtering || undefined} className={styles.userTable} mobileLayout="stack">
-          <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : visibleCheckedUsers.length ? "mixed" : false} disabled={blocked || visible.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? visible.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{w("policyAssociations")}</th><th scope="col">{t("status")}</th></tr></thead>
+      {directoryFailed ? <AccountDirectoryReadFailure kind="users" onRetry={() => { clearSelection(); setCursorPage(1); setPage(1); }} /> : filtered.length ? <Table aria-label={t("userTable")} aria-busy={filtering || undefined} className={styles.userTable} mobileLayout="stack">
+          <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : visibleCheckedUsers.length ? "mixed" : false} disabled={blocked || visible.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? visible.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{workspace ? w("policyAssociations") : t("directPolicyAttachments")}</th><th scope="col">{t("status")}</th></tr></thead>
           <tbody>{visible.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.currentUserId} workspace={workspace} grants={associations.get(user.id)}
             checked={checkedIds.has(user.id)} disabled={blocked || !checkedIds.has(user.id) && checkedUsers.length >= userBatchLimit}
             onSelect={(checked) => setSelection({ scene, ids: checked ? [...checkedIds, user.id] : [...checkedIds].filter((id) => id !== user.id) })}
             onOpen={() => onOpen("users", user.id)} />)}</tbody>
         </Table> : <EmptyState title={t(hasFilters ? "noMatchingUsers" : "noUsers")} description={t(hasFilters ? "noMatchingUsersHint" : "noUsersHint")} action={hasFilters ? <Button onClick={clearFilters} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
       <Table.Footer note={t("userPageHint")}>
-        {cursorMode ? <TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}
+        {directoryFailed ? null : cursorMode ? <TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}
           previous={{ label: t("firstPage"), disabled: cursorPage <= 1, onClick: () => { clearSelection(); setCursorPage(1); setPage(1); access.usersPage(""); } }}
           next={{ label: t("nextPage"), disabled: !scene.nextUserPage, onClick: () => { clearSelection(); setCursorPage((current) => current + 1); setPage(1); access.usersPage(scene.nextUserPage!); } }} />
           : <TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={access.busy || access.loading}

@@ -16,6 +16,7 @@ import { PolicyVisualReview } from "./AccountPolicyVisualEditor";
 import { PolicyCreateRecovery } from "./LivePolicyCreationWizard";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
+import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
 
 type PolicyDetailState = { status: "loading" } | AccountPolicyReadLoad;
 type PolicyVersionDirectoryState = { status: "loading" } | AccountPolicyVersionDirectoryLoad;
@@ -448,6 +449,7 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
   const change = (update: () => void) => { update(); setPage(1); };
   const reset = () => { setQuery(""); setManagement("all"); setScope("all"); setStatus("all"); setPage(1); };
   const partial = !scene.tenantPoliciesAvailable || !scene.platformPoliciesAvailable;
+  const failedDirectory = scene.directoryFailures?.tenantPolicies ? "tenantPolicies" : scene.directoryFailures?.platformPolicies ? "platformPolicies" : null;
 
   const recovery = mutation?.pending ? <PolicyVersionRecovery key={mutation.pending.requestId} mutation={mutation} onApplied={onApplied} onInspect={(id) => onOpen(id)} /> : null;
   const createRecovery = access.policyCreate?.pending ? <PolicyCreateRecovery key={access.policyCreate.pending.requestId} client={access.policyCreate}
@@ -470,13 +472,13 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
         {partial ? <Alert status="warning">{t(scene.tenantPoliciesAvailable ? "platformUnavailable" : "tenantUnavailable")}</Alert> : null}
         <TableToolbar labels={toolbarLabels}
           search={{ label: t("search"), placeholder: t("searchPlaceholder"), value: query, onChange: (value) => change(() => setQuery(value)) }}
-          status={t("resultCount", { count: filtered.length })}
+          status={failedDirectory ? undefined : t("resultCount", { count: filtered.length })}
           filters={[
             { id: "management", label: t("management"), value: management, onChange: (value) => change(() => setManagement(value)), options: [{ value: "all", label: t("all") }, { value: "SYSTEM", label: t("system") }, { value: "CUSTOMER", label: t("customer") }] },
             { id: "scope", label: t("scope"), value: scope, onChange: (value) => change(() => setScope(value)), options: [{ value: "all", label: t("all") }, { value: "TENANT", label: t("tenant") }, { value: "INSTALLATION", label: t("installation") }] },
             { id: "status", label: t("status"), value: status, onChange: (value) => change(() => setStatus(value)), options: [{ value: "all", label: t("all") }, { value: "ACTIVE", label: t("active") }, { value: "RETIRED", label: t("retired") }] }
           ]} />
-        {rows.length ? <Table aria-label={t("table")} className={styles.policyMetadataTable} mobileLayout="stack">
+        {failedDirectory ? <AccountDirectoryReadFailure kind={failedDirectory} /> : rows.length ? <Table aria-label={t("table")} className={styles.policyMetadataTable} mobileLayout="stack">
           <thead><tr><th scope="col">{t("policy")}</th><th scope="col">{t("management")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("status")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
           <tbody>{rows.map((policy) => <tr key={policy.id}>
             <td data-label={t("policy")}><Table.PrimaryAction onClick={() => onOpen(policy.id)}>{policy.displayName}</Table.PrimaryAction><small className={styles.userIdentifier}>{policy.id}</small></td>
@@ -487,7 +489,7 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
             <td data-label={t("updated")}><WorkspaceTime value={policy.updatedAt} /></td>
           </tr>)}</tbody>
         </Table> : <EmptyState title={t(scene.policies.length ? "noResults" : "empty")} description={t(scene.policies.length ? "noResultsHint" : "emptyHint")} action={scene.policies.length ? <Button variant="secondary" onClick={reset}>{toolbarLabels.resetQuery}</Button> : undefined} />}
-        <Table.Footer note={t("completeSnapshot", { count: scene.policies.length })}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+        <Table.Footer note={failedDirectory ? undefined : t("completeSnapshot", { count: scene.policies.length })}>{failedDirectory ? null : <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />}</Table.Footer>
       </Tabs.Content>
       <Tabs.Content forceMount={catalogMounted || undefined} value="profiles">{catalogMounted ? <AccountAuthorizationProfileCatalog /> : null}</Tabs.Content>
     </Tabs.Root>
