@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；当前固定源码`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7、`contractRevision=36`同源签名A/B完整离线生命周期和[Verification 38840517569](https://github.com/xiak/matrix/actions/runs/38840517569)十九项作业均已通过。当前签名APISIX真实浏览器已重新核对IAM-UI-02–06的LIVE只读投影、IAM-UI-08三个Deferred直达入口，从纯页面创建RabbitMQ 4.1.8实例至RUNNING，并完成Account开通与停用的响应丢失、跨来源只读恢复和权威状态/Audit核对；同一签名运行时又完成原Root凭据恢复及该RabbitMQ实例终止的单次写入响应丢失、跨来源结果读取、安全效果和权威Audit核对，终止已物理释放运行对象和配额。当前签名页面还已创建不自动关联身份的自定义策略和空用户组、发布不可变策略后继版本、更新空用户组元数据，并在持久化前拒绝缺少statement的策略文档；默认版本/冻结产品声明、稳定Group ID、零成员/零附件和不可变Audit均已核对，测试对象随后经公开API安全退役。原Root恢复及实例终止的纯页面最终提交与UNKNOWN呈现、其余非Deferred写路径仍未全部验收，因此整个FEAT仍为实施中。
+- 状态：实施中；当前固定产品源码`741dceb6f0092fbc33706842862980816fe72d15`的IAM87/Audit39/PaaS7、`contractRevision=37`已通过[Verification 39012317180](https://github.com/xiak/matrix/actions/runs/39012317180)十九项独立作业、同源签名A/B完整离线生命周期和重启后复验。该源码上的User资料/状态只读原结果恢复及Group Membership显式等值重放，已在全新PostgreSQL 18与真实IAM/Audit/PaaS/dispatcher/嵌入控制台中完成四条真实浏览器门禁；原Root恢复、实例终止等其余已验签路径沿用各自下述证据。Account安全设置、日常改密等仍列出的非Deferred页面写路径尚未全部验收，因此整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果；后继独立真实浏览器已从普通User首次登录完成纯页面强制改密，并验证仅保留调用Session、撤销另一受限Session、旧密码失效和新密码重新登录 | 日常主动改密的可选会话处置、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
-| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变。当前控制台候选已删除Group确认框的MOCK语义，并在真实运行时核对精确名称确认、不可恢复、审计保留、服务端权威影响计数及不删除User/Policy/租户资源的边界；后继源码已接入User资料/状态的只读原结果恢复与Membership显式等值重放 | User修改/停复用与Membership新恢复协议仍需消费分支完整构建、独立CI和浏览器门禁；附件回执和不确定结果仍需浏览器门禁；Group最终页面提交、返回计数、outbox/Audit及目录消失仍待点击当刻确认后实跑；批量User不在本轮需求 |
+| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM87+r37产品源码已通过完整前端/嵌入构建与独立CI。User显示名更新和停用各自在一次成功写入响应丢失后，只以原Account/actor/User/operation/requestId/expected version读取一次不可变完成结果且零目标写重放；停用立即撤销旧Session，恢复User不复活旧Session。Membership添加和移除各自在一次成功写入响应丢失后，只显式等值重放一次原method/path/Host/requestId/version/body，最终各只有一个成员关系效果、一个outbox/Audit事实，组权限在下一次PaaS请求生效或撤销 | 附件回执和不确定结果仍需浏览器门禁；Group最终页面删除、返回计数、outbox/Audit及目录消失仍待点击当刻确认后实跑；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version。后继候选UI已在同一r36后端从页面创建零附件Policy、改名并整策略退役，稳定ID/默认版本/摘要及不可变版本保持，活动目录移除且三条outbox/Audit事实和完整租户链均已核对；独立真实浏览器门禁进一步证明改名与整策略退役各自在响应半断后的双标签排他、关闭持锁标签和完全相同原命令恢复 | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略；候选UI尚未随完整签名release重打，不能冒充签名组合验收 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；当前IAM86+r36签名页面读取已验证通知地址、本人TOTP状态、六个有效Session，并对缺少`iam.access-key.list`和`iam.security-settings.read`显示真实权限拒绝 | 账号强制MFA下普通User首次绑定、普通User换绑/解绑后的受限重新绑定、AccessKey全生命周期、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、外部物理认证器及WebAuthn明确Deferred |
@@ -318,7 +318,17 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 
 2026-10-17，本分支从已固定UX/UI源码`343622a11d0ce4c65c763de0e717505e0b8dae9a`（父`c8981dd160474710868bf84712f2b7792f283973`）选择性`ADAPT`十五个frontend路径，不导入donor文档、生成资产或验收状态。显示名更新与启停在发送前持久化原Account、actor、User、operation、request ID、expected resource version及非秘密目标值；UNKNOWN只允许以当前有效Session读取准确`UserManagementCompletion`，不得重新POST、自动换request ID或用当前User状态猜测原结果。完成回执与独立当前详情读取分离，404/403/409/503不释放原意图，401只失效准确旧Session；Account、actor、User、repository和Session换主均围栏迟到响应。存储不可读写或后端未提供completion client时，页面在网络写入前降为只读。无消费者的旧泛型`update-user`分支及Preview死路径同步删除，隔离MOCK继续使用其原工作区命令。
 
-消费分支以三方增量保留本分支renderer测试，并与前述Membership切片共同在Node22.22.2/npm11.6.4下通过五个聚焦文件、772项测试、typecheck、architecture、234组主题对比度和二十个变更TypeScript路径的零警告lint。随后完整门禁通过77个Vitest文件、1954项测试及8项Node导出边界测试；两次59页production export在未设置与显式`0`预览模式下得到324个逐字一致文件，本分支重建的嵌入资产与最终导出完全一致，Go UI test/vet通过。UX固定源的1967项结果属于其完整分支；本分支保留既有三方测试owner且不继承donor测试计数。该证据接受选择性集成、生产构建和嵌入交付，不接受尚未完成的独立CI、真实User写入/响应丢失恢复或签名IAM浏览器组合。
+消费分支以三方增量保留本分支renderer测试，并与前述Membership切片共同在Node22.22.2/npm11.6.4下通过五个聚焦文件、772项测试、typecheck、architecture、234组主题对比度和二十个变更TypeScript路径的零警告lint。随后完整门禁通过77个Vitest文件、1954项测试及8项Node导出边界测试；两次59页production export在未设置与显式`0`预览模式下得到324个逐字一致文件，本分支重建的嵌入资产与最终导出完全一致，Go UI test/vet通过。UX固定源的1967项结果属于其完整分支；本分支保留既有三方测试owner且不继承donor测试计数。该选择性集成、生产构建和嵌入交付已由固定`741dceb`的独立CI接受；真实User写入与Membership响应丢失恢复由下一节的独立浏览器门禁拥有，二者都不能单独冒充签名IAM浏览器组合。
+
+### User 与 Group 恢复真实浏览器验收
+
+固定产品源码`741dceb6f0092fbc33706842862980816fe72d15`已通过[Verification 39012317180](https://github.com/xiak/matrix/actions/runs/39012317180)：十九项作业全部`completed/success`，其中`console`在Node 22.22.2/npm 11.6.4下通过77个Vitest文件、1954项测试、8项Node边界、234组对比度及两次324文件逐字一致的production export/嵌入核对。该固定源随后组装IAM87/Audit39/PaaS7+r37同源签名A/B并完成完整离线生命周期与重启后复验；本节的后继只增加现有`authorityprocess`真实浏览器门禁，不改变产品代码、API、SQL或发布Profile。
+
+四个场景分别从全新数据库启动受限runtime登录、真实IAM/Audit/PaaS、双dispatcher和嵌入控制台。`USER_UPDATE`和`USER_SET_STATUS`都只允许第一个目标POST到达后端；代理在2xx提交后丢弃响应，页面保持UNKNOWN。刷新同源页面和重新认证不会被计作目标命令重放，浏览器只调用一次绑定原operation/requestId/expected resourceVersion的completion GET。显示名场景的原完成结果保持版本3，后继另一次资料修改不会改写它；停用场景在下一受保护请求拒绝旧Session，随后以新意图恢复User也不复活该Session。两条fixture/package分别为152.29/154.718秒和188.49/191.769秒，最终各只有一条原outbox事实、一条准确租户Audit记录及完整链。
+
+`GROUP_MEMBERSHIP CREATE`和`REMOVE`同样在第一个POST成功后丢弃响应，但Membership没有completion读接口；页面冻结原Group/User/Membership/version/requestId并只允许操作者显式等值重放一次。代理逐字核对两个请求的method、path、Host、body及原requestId完全相同，拒绝自动重试、当前目录推断或改变目标。CREATE最终只有一个活动Membership且下一次PaaS读取从403变为200；REMOVE只推进同一Membership至移除状态且下一次PaaS读取从200变为403。两条fixture/package分别为266.71/269.863秒和125.83/128.319秒，最终各只有一条业务效果、一个outbox事实、一条准确Audit记录及完整租户链。
+
+这组证据接受IAM-UI-03的User资料/状态和Membership响应丢失恢复，不把本地真实进程入口冒充新的签名安装运行，也不扩展为附件、Group删除或其他写路径已经验收。UX观察到UNKNOWN页的重复警告、“取消”易被误读以及移除成员页仍写“继续添加”等非阻断文案缺口，继续由UX/UI owner处理；服务端安全结论不依赖这些文案。
 
 ### 首次登录强制改密
 

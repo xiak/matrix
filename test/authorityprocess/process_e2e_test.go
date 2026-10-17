@@ -183,6 +183,8 @@ const (
 	authorityProcessCommandRecoveryBrowser
 	authorityProcessAccountLifecycleRecoveryBrowser
 	authorityProcessPolicyMutationRecoveryBrowser
+	authorityProcessUserManagementRecoveryBrowser
+	authorityProcessGroupMembershipRecoveryBrowser
 	authorityProcessGroupDeletionBrowser
 	authorityProcessPasswordChangeBrowser
 	authorityProcessDailyPasswordChangeBrowser
@@ -297,6 +299,33 @@ func TestIAMPolicyMutationRecoveryConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessPolicyMutationRecoveryBrowser)
 }
 
+// This opt-in fixture proves that User profile/status recovery reads the
+// immutable original result after a committed response is lost. Reloading the
+// same browser origin must never replay the write or infer success from the
+// User's current state.
+func TestIAMUserManagementRecoveryConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_USER_MANAGEMENT_RECOVERY_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_USER_MANAGEMENT_RECOVERY_BROWSER=1 for the bounded LIVE User-management recovery browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("User-management recovery browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessUserManagementRecoveryBrowser)
+}
+
+// This opt-in fixture proves that Group membership recovery can only replay
+// the exact original create/remove command after a committed response is
+// lost. A current membership read is not a completion result or replay permit.
+func TestIAMGroupMembershipRecoveryConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_GROUP_MEMBERSHIP_RECOVERY_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_GROUP_MEMBERSHIP_RECOVERY_BROWSER=1 for the bounded LIVE Group-membership recovery browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("Group-membership recovery browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessGroupMembershipRecoveryBrowser)
+}
+
 // This opt-in fixture proves the destructive Group workspace against real
 // IAM, Audit and PostgreSQL authority. The browser must show the exact cascade
 // impact, require the Group name, submit one versioned command and return to
@@ -396,6 +425,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser ||
 		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
 		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser ||
+		mode == authorityProcessUserManagementRecoveryBrowser || mode == authorityProcessGroupMembershipRecoveryBrowser ||
 		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
 		mode == authorityProcessDailyPasswordChangeBrowser || mode == authorityProcessAccountSecuritySettingsBrowser {
 		duration = authorityProcessBrowserObservation
@@ -834,6 +864,20 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)
+		return
+	}
+	if mode == authorityProcessUserManagementRecoveryBrowser {
+		sensitive = append(sensitive, runIAMUserManagementRecoveryConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
+		return
+	}
+	if mode == authorityProcessGroupMembershipRecoveryBrowser {
+		sensitive = append(sensitive, runIAMGroupMembershipRecoveryConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
 		return
 	}
 	if mode == authorityProcessGroupDeletionBrowser {
@@ -3525,6 +3569,424 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 	t.Logf("two same-origin tabs recovered one committed Policy %s after the first tab closed a held partial response; the competing tab produced no queued write, the surviving tab replayed exactly one byte-identical command, and the authoritative Policy, immutable version, unique outbox fact and verified tenant Audit chain all matched", operation)
 }
 
+func runIAMUserManagementRecoveryConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	operation := iamv1.UserManagementOperation(strings.TrimSpace(os.Getenv("MATRIX_IAM_USER_MANAGEMENT_RECOVERY_OPERATION")))
+	if operation == "" {
+		operation = iamv1.UserManagementUpdate
+	}
+	if operation != iamv1.UserManagementUpdate && operation != iamv1.UserManagementSetStatus {
+		t.Fatalf("MATRIX_IAM_USER_MANAGEMENT_RECOVERY_OPERATION is not a closed User management operation: %q", operation)
+	}
+
+	const (
+		loginName           = "browser.user.recovery"
+		originalDisplayName = "Browser User recovery target"
+		updatedDisplayName  = "Browser User recovered profile"
+	)
+	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, originalDisplayName,
+		initialDeveloperPassword, "browser-user-recovery-create")
+	initial := loginIAM(t, iamEndpoint, loginName+"@organization-process", initialDeveloperPassword,
+		"browser-user-recovery-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-user-recovery-password")
+	member := loginIAM(t, iamEndpoint, loginName+"@organization-process", changedDeveloperPassword,
+		"browser-user-recovery-login")
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", member.Credential, nil); response.Status != http.StatusOK {
+		t.Fatalf("prepared User Session status=%d", response.Status)
+	}
+	currentResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/users/"+string(user.ID), ownerBearer, nil)
+	var currentAccess iamv1.UserAccess
+	if currentResponse.Status != http.StatusOK || json.Unmarshal(currentResponse.Body, &currentAccess) != nil ||
+		iamv1.ValidateUserAccess(currentAccess) != nil || currentAccess.User.ID != user.ID ||
+		currentAccess.User.DisplayName != originalDisplayName || currentAccess.User.Status != iamv1.PrincipalActive ||
+		currentAccess.User.MustChangePassword || currentAccess.User.ResourceVersion != user.ResourceVersion+1 {
+		t.Fatalf("read post-password-change User status=%d body=%s", currentResponse.Status, currentResponse.Body)
+	}
+	user = currentAccess.User
+
+	mutationPath := "/api/iam/v1/users/" + string(user.ID)
+	if operation == iamv1.UserManagementUpdate {
+		mutationPath += ":update"
+	} else {
+		mutationPath += ":set-status"
+	}
+	completionPrefix := "/api/iam/v1/users/" + string(user.ID) + "/management-completions/"
+	loss := &browserResponseLoss{
+		method: http.MethodPost, path: mutationPath, recoveryPathPrefix: completionPrefix,
+		allowSameHostRecovery: true, postLossWritePrefix: "/api/iam/v1/users/" + string(user.ID),
+	}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
+	)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-user-management-recovery-finished")
+	browserPath := "/console/access/users/?id=" + url.QueryEscape(string(user.ID))
+	intent := "change the display name to " + strconv.Quote(updatedDisplayName)
+	if operation == iamv1.UserManagementSetStatus {
+		intent = "disable the User"
+	}
+	t.Logf("USER_MANAGEMENT_RECOVERY_BROWSER_FIXTURE operation=%s url=%s%s finish=%s user=%s login=%s realm=admin; %s, observe the committed-response-loss state, reload the same origin, inspect the original result, and do not resubmit the mutation; use the existing changed admin password",
+		operation, server.URL, browserPath, finish, user.ID, loginName, intent)
+	waitForBrowserMarker(t, ctx, ui, finish, "same-origin User management recovery completion")
+
+	observation := loss.snapshot()
+	defer clear(observation.RequestBody)
+	requestID := ""
+	wantDisplayName := originalDisplayName
+	wantStatus := iamv1.PrincipalActive
+	wantAction := auditv1.ActionIAMUserUpdated
+	if operation == iamv1.UserManagementUpdate {
+		var request iamv1.UpdateUserRequest
+		if json.Unmarshal(observation.RequestBody, &request) != nil || iamv1.ValidateUpdateUserRequest(request) != nil ||
+			request.DisplayName != updatedDisplayName || request.ResourceVersion != user.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-user-management-") {
+			t.Fatal("browser submitted an invalid User profile update")
+		}
+		requestID, wantDisplayName = request.RequestID, request.DisplayName
+	} else {
+		var request iamv1.SetUserStatusRequest
+		if json.Unmarshal(observation.RequestBody, &request) != nil || iamv1.ValidateSetUserStatusRequest(request) != nil ||
+			request.Status != iamv1.PrincipalDisabled || request.ResourceVersion != user.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-user-management-") {
+			t.Fatal("browser submitted an invalid User status change")
+		}
+		requestID, wantStatus, wantAction = request.RequestID, request.Status, auditv1.ActionIAMUserStatusSet
+	}
+	if observation.Attempts != 1 || observation.SelectedAttempt != 1 || observation.MutationOverflow ||
+		!observation.ResponseLost || observation.BackendStatus != http.StatusOK || observation.IdempotencyKey != "" ||
+		observation.MutationHost == "" || observation.RecoveryReads != 1 || observation.RecoveryHost != observation.MutationHost ||
+		len(observation.RecoveryAttempts) != 1 || observation.RecoveryAttempts[0].Method != http.MethodGet ||
+		observation.RecoveryAttempts[0].Host != observation.MutationHost ||
+		observation.RecoveryAttempts[0].BackendStatus != http.StatusOK ||
+		!strings.HasPrefix(observation.RecoveryAttempts[0].RequestURI, completionPrefix) ||
+		observation.PostLossWrites != 0 || len(observation.MutationAttempts) != 1 {
+		t.Fatalf("User management response-loss boundary was not exact: attempts=%d selected=%d overflow=%t lost=%t backend=%d key_present=%t recovery_reads=%d same_host=%t recovery_attempts=%d post_loss_writes=%d mutation_ledger=%d",
+			observation.Attempts, observation.SelectedAttempt, observation.MutationOverflow,
+			observation.ResponseLost, observation.BackendStatus, observation.IdempotencyKey != "",
+			observation.RecoveryReads, observation.RecoveryHost == observation.MutationHost,
+			len(observation.RecoveryAttempts), observation.PostLossWrites, len(observation.MutationAttempts))
+	}
+	attempt := observation.MutationAttempts[0]
+	if attempt.Sequence != 1 || attempt.Method != http.MethodPost || attempt.Host != observation.MutationHost ||
+		attempt.RequestURI != mutationPath || !attempt.BackendCalled || attempt.BackendStatus != http.StatusOK ||
+		!attempt.RequestBodyCompared || !attempt.RequestBodyMatchesSelected ||
+		!attempt.IdempotencyKeyCompared || !attempt.IdempotencyKeyMatchesSelected || !attempt.SelectedForLoss {
+		t.Fatalf("User management attempt did not preserve the exact original command: %#v", attempt)
+	}
+	recoveryURL, err := url.Parse(observation.RecoveryRequestURI)
+	if err != nil || recoveryURL.Path != completionPrefix+requestID ||
+		recoveryURL.Query().Get("operation") != string(operation) ||
+		recoveryURL.Query().Get("expectedResourceVersion") != strconv.FormatUint(user.ResourceVersion, 10) {
+		t.Fatalf("User management completion read changed the original identity: %q", observation.RecoveryRequestURI)
+	}
+
+	var storedDisplayName, storedStatus string
+	var storedVersion uint64
+	if err := database.QueryRow(ctx, `SELECT display_name,status,resource_version FROM iam.principals
+		WHERE tenant_id=$1 AND id=$2 AND principal_type='USER'`, user.AccountID, user.ID).
+		Scan(&storedDisplayName, &storedStatus, &storedVersion); err != nil ||
+		storedDisplayName != wantDisplayName || storedStatus != string(wantStatus) || storedVersion != user.ResourceVersion+1 {
+		t.Fatalf("User management recovery changed the authoritative result: display=%q status=%q version=%d err=%v",
+			storedDisplayName, storedStatus, storedVersion, err)
+	}
+	completionPath := iamEndpoint + "/v1/users/" + string(user.ID) + "/management-completions/" + requestID +
+		"?operation=" + url.QueryEscape(string(operation)) + "&expectedResourceVersion=" + strconv.FormatUint(user.ResourceVersion, 10)
+	readCompletion := func() iamv1.UserManagementCompletion {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, completionPath, ownerBearer, nil)
+		var completion iamv1.UserManagementCompletion
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &completion) != nil ||
+			iamv1.ValidateUserManagementCompletion(completion) != nil || completion.AccountID != user.AccountID ||
+			completion.ActorPrincipalID != "principal-admin" || completion.Operation != operation ||
+			completion.UserID != user.ID || completion.CommandRequestID != requestID ||
+			completion.ExpectedResourceVersion != user.ResourceVersion || completion.Result.DisplayName != wantDisplayName ||
+			completion.Result.Status != wantStatus || completion.Result.ResourceVersion != user.ResourceVersion+1 {
+			t.Fatalf("read immutable User management completion status=%d body=%s", response.Status, response.Body)
+		}
+		return completion
+	}
+	originalCompletion := readCompletion()
+
+	if operation == iamv1.UserManagementUpdate {
+		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/users/"+string(user.ID)+":update", ownerBearer,
+			iamv1.UpdateUserRequest{DisplayName: "Browser User later state", ResourceVersion: user.ResourceVersion + 1,
+				RequestID: "browser-user-recovery-later-update"})
+		var current iamv1.User
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &current) != nil ||
+			iamv1.ValidateUser(current) != nil || current.DisplayName != "Browser User later state" ||
+			current.ResourceVersion != user.ResourceVersion+2 || current.Status != iamv1.PrincipalActive {
+			t.Fatalf("advance User after completion status=%d body=%s", response.Status, response.Body)
+		}
+		if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", member.Credential, nil); response.Status != http.StatusOK {
+			t.Fatalf("profile update unexpectedly revoked the User Session: status=%d", response.Status)
+		}
+	} else {
+		if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", member.Credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatalf("disabled User retained its existing Session: status=%d", response.Status)
+		}
+		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/users/"+string(user.ID)+":set-status", ownerBearer,
+			iamv1.SetUserStatusRequest{Status: iamv1.PrincipalActive, ResourceVersion: user.ResourceVersion + 1,
+				RequestID: "browser-user-recovery-later-enable"})
+		var current iamv1.User
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &current) != nil ||
+			iamv1.ValidateUser(current) != nil || current.Status != iamv1.PrincipalActive ||
+			current.ResourceVersion != user.ResourceVersion+2 {
+			t.Fatalf("re-enable User after completion status=%d body=%s", response.Status, response.Body)
+		}
+		if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", member.Credential, nil); response.Status != http.StatusUnauthorized {
+			t.Fatalf("re-enabled User revived an old Session: status=%d", response.Status)
+		}
+	}
+	if current := readCompletion(); !reflect.DeepEqual(current, originalCompletion) {
+		t.Fatal("later User state rewrote the original management completion")
+	}
+
+	var outboxFacts int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox
+		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3
+		  AND event_document#>>'{target,kind}'='USER' AND event_document#>>'{target,id}'=$4`,
+		user.AccountID, wantAction, requestID, user.ID).Scan(&outboxFacts); err != nil || outboxFacts != 1 {
+		t.Fatalf("User management recovery retained %d original outbox facts: err=%v", outboxFacts, err)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, ownerBearer,
+		auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}, http.StatusOK)
+	auditMatches := 0
+	for _, record := range page.Records {
+		if record.Event.Target.ID != string(user.ID) || record.Event.RequestID != requestID {
+			continue
+		}
+		auditMatches++
+		if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(user.AccountID) ||
+			record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
+			record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetUser ||
+			record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
+			t.Fatal("User management Audit fact changed its actor, scope, target or result")
+		}
+	}
+	if auditMatches != 1 {
+		t.Fatalf("User management original Audit fact matches=%d", auditMatches)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(user.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("User management tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Logf("the same browser origin inspected one committed %s result after response loss without replaying a write; later User state stayed distinct, Session effects were fail-closed, and the unique outbox fact and verified tenant Audit chain matched", operation)
+	return []string{initial.Credential, member.Credential}
+}
+
+func runIAMGroupMembershipRecoveryConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	operation := strings.ToUpper(strings.TrimSpace(os.Getenv("MATRIX_IAM_GROUP_MEMBERSHIP_RECOVERY_OPERATION")))
+	if operation == "" {
+		operation = "CREATE"
+	}
+	if operation != "CREATE" && operation != "REMOVE" {
+		t.Fatalf("MATRIX_IAM_GROUP_MEMBERSHIP_RECOVERY_OPERATION is not CREATE or REMOVE: %q", operation)
+	}
+
+	const (
+		groupName   = "Browser membership recovery operators"
+		loginName   = "browser.membership.recovery"
+		displayName = "Browser membership recovery User"
+	)
+	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups", ownerBearer,
+		iamv1.CreateGroupRequest{Name: groupName, Description: "Response-loss membership recovery target.",
+			RequestID: "browser-membership-recovery-group"})
+	var group iamv1.Group
+	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &group) != nil ||
+		iamv1.ValidateGroup(group) != nil || group.AccountID != "organization-process" || group.ResourceVersion != 1 {
+		t.Fatalf("prepare Group membership recovery target status=%d body=%s", createdResponse.Status, createdResponse.Body)
+	}
+	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, displayName,
+		initialDeveloperPassword, "browser-membership-recovery-user")
+	initial := loginIAM(t, iamEndpoint, loginName+"@organization-process", initialDeveloperPassword,
+		"browser-membership-recovery-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-membership-recovery-password")
+	member := loginIAM(t, iamEndpoint, loginName+"@organization-process", changedDeveloperPassword,
+		"browser-membership-recovery-login")
+	attachmentResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", ownerBearer,
+		iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)},
+			PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+			RequestID: "browser-membership-recovery-policy",
+		})
+	var attachment iamv1.PolicyAttachment
+	if attachmentResponse.Status != http.StatusOK || json.Unmarshal(attachmentResponse.Body, &attachment) != nil ||
+		iamv1.ValidatePolicyAttachment(attachment) != nil || attachment.Target.Kind != iamv1.PolicyTargetGroup ||
+		attachment.Target.ID != string(group.ID) || attachment.PolicyID != iamv1.SystemPolicyPaaSViewer {
+		t.Fatalf("prepare Group membership policy status=%d body=%s", attachmentResponse.Status, attachmentResponse.Body)
+	}
+
+	var prepared iamv1.GroupMembership
+	if operation == "REMOVE" {
+		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups/"+string(group.ID)+"/memberships", ownerBearer,
+			iamv1.CreateGroupMembershipRequest{UserID: user.ID, RequestID: "browser-membership-recovery-prepare"})
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &prepared) != nil ||
+			iamv1.ValidateGroupMembership(prepared) != nil || prepared.GroupID != group.ID ||
+			prepared.UserID != user.ID || prepared.ResourceVersion != 1 || prepared.RemovedAt != nil {
+			t.Fatalf("prepare Group membership removal status=%d body=%s", response.Status, response.Body)
+		}
+	}
+	wantBefore, wantAfter := http.StatusForbidden, http.StatusOK
+	if operation == "REMOVE" {
+		wantBefore, wantAfter = http.StatusOK, http.StatusForbidden
+	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", member.Credential, nil); response.Status != wantBefore {
+		t.Fatalf("Group membership precondition permission status=%d want=%d", response.Status, wantBefore)
+	}
+
+	mutationPath := "/api/iam/v1/groups/" + string(group.ID) + "/memberships"
+	if operation == "REMOVE" {
+		mutationPath += "/" + string(prepared.ID) + ":remove"
+	}
+	loss := &browserResponseLoss{
+		method: http.MethodPost, path: mutationPath,
+		postLossWritePrefix: "/api/iam/v1/groups/" + string(group.ID) + "/memberships",
+	}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
+	)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-group-membership-recovery-finished")
+	browserPath := "/console/access/groups/?id=" + url.QueryEscape(string(group.ID))
+	intent := "add the exact User " + loginName
+	if operation == "REMOVE" {
+		intent = "remove the exact User " + loginName
+	}
+	t.Logf("GROUP_MEMBERSHIP_RECOVERY_BROWSER_FIXTURE operation=%s url=%s%s finish=%s group=%s user=%s login=%s realm=admin; %s, observe the committed-response-loss state, then explicitly retry the unchanged original command once; use the existing changed admin password",
+		operation, server.URL, browserPath, finish, group.ID, user.ID, loginName, intent)
+	waitForBrowserMarker(t, ctx, ui, finish, "Group membership response-loss recovery completion")
+
+	observation := loss.snapshot()
+	defer clear(observation.RequestBody)
+	requestID := ""
+	wantAction := auditv1.ActionIAMGroupMembershipCreated
+	wantMembershipID := prepared.ID
+	if operation == "CREATE" {
+		var request iamv1.CreateGroupMembershipRequest
+		if json.Unmarshal(observation.RequestBody, &request) != nil || iamv1.ValidateCreateGroupMembershipRequest(request) != nil ||
+			request.UserID != user.ID || !strings.HasPrefix(request.RequestID, "ui-group-membership-") {
+			t.Fatal("browser replayed an invalid Group membership creation")
+		}
+		requestID = request.RequestID
+	} else {
+		var request iamv1.RemoveGroupMembershipRequest
+		if json.Unmarshal(observation.RequestBody, &request) != nil || iamv1.ValidateRemoveGroupMembershipRequest(request) != nil ||
+			request.ResourceVersion != prepared.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-group-membership-") {
+			t.Fatal("browser replayed an invalid Group membership removal")
+		}
+		requestID, wantAction = request.RequestID, auditv1.ActionIAMGroupMembershipRemoved
+	}
+	if observation.Attempts != 2 || observation.SelectedAttempt != 1 || observation.MutationOverflow ||
+		!observation.ResponseLost || observation.BackendStatus != http.StatusOK || observation.IdempotencyKey != "" ||
+		observation.RecoveryReads != 0 || len(observation.RecoveryAttempts) != 0 ||
+		observation.PostLossWrites != 1 || observation.PostLossMethod != http.MethodPost ||
+		observation.PostLossPath != mutationPath || observation.PostLossHost != observation.MutationHost ||
+		len(observation.MutationAttempts) != 2 {
+		t.Fatalf("Group membership response-loss boundary was not exact: attempts=%d selected=%d overflow=%t lost=%t backend=%d key_present=%t recovery_reads=%d post_loss_writes=%d post_loss_path=%q same_host=%t ledger=%d",
+			observation.Attempts, observation.SelectedAttempt, observation.MutationOverflow,
+			observation.ResponseLost, observation.BackendStatus, observation.IdempotencyKey != "",
+			observation.RecoveryReads, observation.PostLossWrites, observation.PostLossPath,
+			observation.PostLossHost == observation.MutationHost, len(observation.MutationAttempts))
+	}
+	for index, attempt := range observation.MutationAttempts {
+		if attempt.Sequence != index+1 || attempt.Method != http.MethodPost || attempt.Host != observation.MutationHost ||
+			attempt.RequestURI != mutationPath || !attempt.BackendCalled || attempt.BackendStatus != http.StatusOK ||
+			!attempt.RequestBodyCompared || !attempt.RequestBodyMatchesSelected ||
+			!attempt.IdempotencyKeyCompared || !attempt.IdempotencyKeyMatchesSelected ||
+			attempt.SelectedForLoss != (index == 0) {
+			t.Fatalf("Group membership attempt %d did not preserve the exact original command: %#v", index, attempt)
+		}
+	}
+
+	var storedID, createdBy, removedBy string
+	var storedVersion uint64
+	var removed bool
+	if err := database.QueryRow(ctx, `SELECT id,created_by,COALESCE(removed_by,''),resource_version,removed_at IS NOT NULL
+		FROM iam.group_memberships WHERE tenant_id=$1 AND group_id=$2 AND user_id=$3
+		ORDER BY created_at DESC LIMIT 1`, group.AccountID, group.ID, user.ID).
+		Scan(&storedID, &createdBy, &removedBy, &storedVersion, &removed); err != nil {
+		t.Fatalf("read authoritative Group membership: %v", err)
+	}
+	if wantMembershipID == "" {
+		wantMembershipID = iamv1.GroupMembershipID(storedID)
+	}
+	wantVersion := uint64(1)
+	if operation == "REMOVE" {
+		wantVersion = 2
+	}
+	if storedID != string(wantMembershipID) || createdBy != "principal-admin" || storedVersion != wantVersion ||
+		(operation == "CREATE" && (removedBy != "" || removed)) ||
+		(operation == "REMOVE" && (removedBy != "principal-admin" || !removed)) {
+		t.Fatalf("Group membership replay changed the authoritative result: id=%q created_by=%q removed_by=%q version=%d removed=%t",
+			storedID, createdBy, removedBy, storedVersion, removed)
+	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", member.Credential, nil); response.Status != wantAfter {
+		t.Fatalf("Group membership permission was not effective on the next request: status=%d want=%d", response.Status, wantAfter)
+	}
+
+	var outboxFacts int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox
+		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3
+		  AND event_document#>>'{target,kind}'='GROUP_MEMBERSHIP' AND event_document#>>'{target,id}'=$4`,
+		group.AccountID, wantAction, requestID, wantMembershipID).Scan(&outboxFacts); err != nil || outboxFacts != 1 {
+		t.Fatalf("Group membership recovery retained %d original outbox facts: err=%v", outboxFacts, err)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, ownerBearer,
+		auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}, http.StatusOK)
+	auditMatches := 0
+	for _, record := range page.Records {
+		if record.Event.Target.ID != string(wantMembershipID) || record.Event.RequestID != requestID {
+			continue
+		}
+		auditMatches++
+		if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(group.AccountID) ||
+			record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
+			record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetGroupMembership ||
+			record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
+			t.Fatal("Group membership Audit fact changed its actor, scope, target or result")
+		}
+	}
+	if auditMatches != 1 {
+		t.Fatalf("Group membership original Audit fact matches=%d", auditMatches)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(group.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("Group membership tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Logf("one committed Group membership %s was recovered by one byte-identical explicit retry; the permission change was effective on the next PaaS request and the unique outbox fact and verified tenant Audit chain matched", operation)
+	return []string{initial.Credential, member.Credential}
+}
+
 func runIAMGroupDeletionConsoleBrowser(
 	t *testing.T,
 	ctx context.Context,
@@ -4716,11 +5178,12 @@ func refreshPersonalSecurityBrowserCode(
 }
 
 type browserResponseLoss struct {
-	method              string
-	path                string
-	recoveryPath        string
-	recoveryPathPrefix  string
-	postLossWritePrefix string
+	method                string
+	path                  string
+	recoveryPath          string
+	recoveryPathPrefix    string
+	allowSameHostRecovery bool
+	postLossWritePrefix   string
 
 	mu                       sync.Mutex
 	attempts                 int
@@ -4908,7 +5371,7 @@ func (value *browserResponseLoss) observeRecovery(request *http.Request, backend
 	value.recoveryAttempts = append(value.recoveryAttempts, browserResponseLossRecoveryAttempt{
 		Method: request.Method, Host: request.Host, RequestURI: request.URL.RequestURI(), BackendStatus: backendStatus,
 	})
-	if value.mutationHost == "" || request.Host == value.mutationHost ||
+	if value.mutationHost == "" || !value.allowSameHostRecovery && request.Host == value.mutationHost ||
 		backendStatus < http.StatusOK || backendStatus >= http.StatusMultipleChoices {
 		return
 	}
@@ -5057,6 +5520,44 @@ func TestBrowserResponseLossPreservesHeaderlessPolicyMutationAttempts(t *testing
 					first, selected, replayed, changed)
 			}
 		})
+	}
+}
+
+func TestBrowserResponseLossAllowsOnlyExplicitSameOriginReadRecovery(t *testing.T) {
+	t.Parallel()
+	const (
+		mutationPath = "/api/iam/v1/users/user-one:update"
+		recoveryPath = "/api/iam/v1/users/user-one/management-completions/request-one"
+	)
+	mutationBody := []byte(`{"displayName":"renamed","resourceVersion":1,"requestId":"request-one"}`)
+	mutation := httptest.NewRequest(http.MethodPost, "http://browser.example"+mutationPath,
+		bytes.NewReader(mutationBody))
+
+	closed := &browserResponseLoss{method: http.MethodPost, path: mutationPath, recoveryPathPrefix: recoveryPath}
+	if !closed.observe(mutation, http.StatusOK, mutationBody) {
+		t.Fatal("same-origin recovery fixture did not select its successful mutation")
+	}
+	closed.markLost()
+	read := httptest.NewRequest(http.MethodGet,
+		"http://browser.example"+recoveryPath+"?operation=USER_UPDATE&expectedResourceVersion=1", nil)
+	closed.observeRecovery(read, http.StatusOK)
+	if observation := closed.snapshot(); observation.RecoveryReads != 0 || len(observation.RecoveryAttempts) != 1 {
+		t.Fatal("same-origin completion read was accepted without the explicit contract")
+	}
+
+	allowed := &browserResponseLoss{
+		method: http.MethodPost, path: mutationPath, recoveryPathPrefix: recoveryPath,
+		allowSameHostRecovery: true,
+	}
+	if !allowed.observe(mutation, http.StatusOK, mutationBody) {
+		t.Fatal("explicit same-origin recovery fixture did not select its successful mutation")
+	}
+	allowed.markLost()
+	allowed.observeRecovery(read, http.StatusOK)
+	observation := allowed.snapshot()
+	if observation.RecoveryReads != 1 || observation.RecoveryHost != mutation.Host ||
+		observation.RecoveryRequestURI != read.URL.RequestURI() || len(observation.RecoveryAttempts) != 1 {
+		t.Fatalf("explicit same-origin completion read was not recorded exactly: %#v", observation)
 	}
 }
 
