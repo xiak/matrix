@@ -2371,7 +2371,8 @@ retains its danger affordance, and an unknown request's return action names
 the actual User directory. A confirmed receipt survives a failed independent
 read without displaying an old directory status as current User state.
 
-The source-only candidate is fixed at frontend tree
+The source-only candidate is published at
+`343622a11d0ce4c65c763de0e717505e0b8dae9a`, with frontend tree
 `5076a5eeb472fc9de79501db9498c30b09233619`, based on source parent
 `c8981dd160474710868bf84712f2b7792f283973`. It consumes only the fixed public
 User-management contract at `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2`.
