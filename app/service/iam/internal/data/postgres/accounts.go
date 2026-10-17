@@ -754,6 +754,26 @@ func (value *transaction) ReadUserPasswordResetCompletion(ctx context.Context, r
 	return result, nil
 }
 
+func (value *transaction) ReadUserManagementCompletion(ctx context.Context, read identityaccess.AccountRead, user iamv1.PrincipalID,
+	operation iamv1.UserManagementOperation, requestID string, expectedVersion uint64) (iamv1.UserManagementCompletion, error) {
+	var encoded []byte
+	err := value.tx.QueryRow(ctx, "SELECT iam.read_user_management_completion($1,$2,$3,$4,$5,$6,$7)",
+		read.AccountID, read.ActorPrincipalID, read.DecisionID, user, operation, requestID, expectedVersion).Scan(&encoded)
+	if err != nil {
+		var failure *pgconn.PgError
+		if errors.As(err, &failure) && failure.Code == "P0002" {
+			return iamv1.UserManagementCompletion{}, identityaccess.ErrUserManagementCompletionNotFound
+		}
+		return iamv1.UserManagementCompletion{}, mapAuthorizationDatabaseError("read user management completion", err)
+	}
+	defer clear(encoded)
+	var result iamv1.UserManagementCompletion
+	if contractjson.DecodeObjectBytes(encoded, 4096, &result) != nil {
+		return iamv1.UserManagementCompletion{}, identityaccess.ErrUnavailable
+	}
+	return result, nil
+}
+
 func (value *transaction) ChangeUser(ctx context.Context, mutation identityaccess.UserChange) (iamv1.User, error) {
 	if (mutation.Status == nil) == (mutation.PasswordHash == nil) || (mutation.PasswordHash == nil) != (mutation.ExpectedPassword == nil) {
 		return iamv1.User{}, identityaccess.ErrInvalidArgument

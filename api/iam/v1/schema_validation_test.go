@@ -111,6 +111,53 @@ func TestUserPasswordResetCompletionSchemaAndStrictCodec(t *testing.T) {
 	}
 }
 
+func TestUserManagementCompletionSchemaAndStrictCodec(t *testing.T) {
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "UserManagementCompletion")
+	valid := `{"apiVersion":"iam.matrix.xiak.com/v1","kind":"UserManagementCompletion","accountId":"account-one","actorPrincipalId":"administrator-one","operation":"USER_UPDATE","userId":"user-one","commandRequestId":"update-one","expectedResourceVersion":4,"result":{"apiVersion":"iam.matrix.xiak.com/v1","kind":"User","id":"user-one","accountId":"account-one","loginName":"member","displayName":"Updated member","status":"ACTIVE","resourceVersion":5,"createdAt":"2026-10-16T08:30:00.123456Z","updatedAt":"2026-10-17T08:30:00.123456Z"},"eventId":"event-update","occurredAt":"2026-10-17T08:30:00.123456Z"}`
+	check := func(wire string, want bool) {
+		t.Helper()
+		var result UserManagementCompletion
+		instance, err := jsonschema.UnmarshalJSON(strings.NewReader(wire))
+		if err != nil || (schema.Validate(instance) == nil) != want || (DecodeRequest(strings.NewReader(wire), &result) == nil) != want {
+			t.Fatalf("user management completion schema/runtime disagree: want=%t", want)
+		}
+	}
+	check(valid, true)
+	check(strings.Replace(strings.Replace(valid, `"USER_UPDATE"`, `"USER_SET_STATUS"`, 1), `"status":"ACTIVE"`, `"status":"DISABLED"`, 1), true)
+	var fields map[string]json.RawMessage
+	if json.Unmarshal([]byte(valid), &fields) != nil {
+		t.Fatal("invalid fixture")
+	}
+	for name, original := range fields {
+		delete(fields, name)
+		encoded, _ := json.Marshal(fields)
+		check(string(encoded), false)
+		fields[name] = original
+	}
+	for _, variant := range []string{
+		strings.Replace(valid, `"USER_UPDATE"`, `"OTHER"`, 1),
+		strings.Replace(valid, `"expectedResourceVersion":4`, `"expectedResourceVersion":0`, 1),
+		strings.Replace(valid, `"expectedResourceVersion":4`, `"expectedResourceVersion":9007199254740991`, 1),
+		strings.Replace(valid, `"eventId":`, `"password":"forbidden","eventId":`, 1),
+	} {
+		check(variant, false)
+	}
+	for _, variant := range []string{
+		strings.Replace(valid, `"accountId":"account-one"`, `"accountId":"other-account"`, 1),
+		strings.Replace(valid, `"userId":"user-one"`, `"userId":"other-user"`, 1),
+		strings.Replace(valid, `"resourceVersion":5`, `"resourceVersion":6`, 1),
+		strings.Replace(valid, `"occurredAt":"2026-10-17T08:30:00.123456Z"`, `"occurredAt":"2026-10-17T08:30:01.123456Z"`, 1),
+		strings.Replace(valid, `"commandRequestId":`, `"CommandRequestId":`, 1),
+		strings.Replace(valid, `"commandRequestId":`, `"commandRequestId":"other","commandRequestId":`, 1),
+		valid + `{}`, `null`, `[]`,
+	} {
+		var result UserManagementCompletion
+		if DecodeRequest(strings.NewReader(variant), &result) == nil {
+			t.Fatal("user management completion codec accepted ambiguous data")
+		}
+	}
+}
+
 func TestSecurityReportSchemasMatchClosedRuntimeContract(t *testing.T) {
 	document := loadIAMOpenAPI(t)
 	reportSchema := compileIAMOpenAPISchema(t, document, "AccountSecurityReport")

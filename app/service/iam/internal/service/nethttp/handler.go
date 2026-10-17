@@ -103,6 +103,7 @@ type Workflow interface {
 	CreateAccount(context.Context, iamv1.Secret, iamv1.CreateAccountRequest) (iamv1.Account, error)
 	SetAccountAlias(context.Context, iamv1.Secret, iamv1.SetAccountAliasRequest) (iamv1.Account, error)
 	UpdateUser(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.UpdateUserRequest) (iamv1.User, error)
+	UserManagementCompletion(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.UserManagementOperation, string, uint64, string) (iamv1.UserManagementCompletion, error)
 	DeleteUser(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.DeleteUserRequest) (iamv1.UserDeletion, error)
 	SetUserStatus(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.SetUserStatusRequest) (iamv1.User, error)
 	ResetUserPassword(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.ResetUserPasswordRequest) (iamv1.User, error)
@@ -1973,6 +1974,10 @@ func (value *handler) accountLifecycleCompletion(response http.ResponseWriter, r
 
 func (value *handler) user(response http.ResponseWriter, request *http.Request) {
 	parts := strings.Split(strings.TrimPrefix(request.URL.Path, "/v1/users/"), "/")
+	if len(parts) >= 2 && parts[1] == "management-completions" {
+		value.userManagementCompletion(response, request, parts)
+		return
+	}
 	if len(parts) >= 2 && parts[1] == "password-resets" {
 		value.userPasswordResetCompletion(response, request, parts)
 		return
@@ -2042,6 +2047,47 @@ func (value *handler) user(response http.ResponseWriter, request *http.Request) 
 			return
 		}
 		result, err = value.workflow.SetUserStatus(request.Context(), credential, iamv1.PrincipalID(id), body)
+	}
+	if err != nil {
+		value.writeError(response, request, err)
+		return
+	}
+	writeJSON(response, http.StatusOK, result)
+}
+
+func (value *handler) userManagementCompletion(response http.ResponseWriter, request *http.Request, parts []string) {
+	if len(parts) != 3 || iamv1.ValidateID("userId", parts[0]) != nil || iamv1.ValidateID("commandRequestId", parts[2]) != nil {
+		value.notFound(response, request)
+		return
+	}
+	if !value.requireMethod(response, request, http.MethodGet) {
+		return
+	}
+	query, err := url.ParseQuery(request.URL.RawQuery)
+	operations, versions := query["operation"], query["expectedResourceVersion"]
+	var version uint64
+	if err == nil && len(versions) == 1 {
+		version, err = strconv.ParseUint(versions[0], 10, 64)
+	}
+	operation := iamv1.UserManagementOperation("")
+	if len(operations) == 1 {
+		operation = iamv1.UserManagementOperation(operations[0])
+	}
+	validOperation := operation == iamv1.UserManagementUpdate || operation == iamv1.UserManagementSetStatus
+	if err != nil || len(request.URL.RawQuery) > 256 || len(query) != 2 || len(operations) != 1 || len(versions) != 1 ||
+		!validOperation || version == 0 || version >= 9007199254740991 || versions[0] != strconv.FormatUint(version, 10) ||
+		request.ContentLength != 0 || len(request.TransferEncoding) != 0 {
+		writeProblem(response, requestID(request), http.StatusBadRequest, "iam.request.invalid", "IAM request is invalid")
+		return
+	}
+	credential, ok := bearerCredential(response, request)
+	if !ok {
+		return
+	}
+	result, err := value.workflow.UserManagementCompletion(request.Context(), credential, iamv1.PrincipalID(parts[0]), operation, parts[2], version, requestID(request))
+	if err == nil && (iamv1.ValidateUserManagementCompletion(result) != nil || result.UserID != iamv1.PrincipalID(parts[0]) ||
+		result.Operation != operation || result.CommandRequestID != parts[2] || result.ExpectedResourceVersion != version) {
+		err = identityaccess.ErrUnavailable
 	}
 	if err != nil {
 		value.writeError(response, request, err)
@@ -2315,6 +2361,8 @@ func (value *handler) writeError(response http.ResponseWriter, request *http.Req
 		writeProblem(response, requestID, http.StatusNotFound, "iam.access-finding.not-found", "Access finding not found")
 	case errors.Is(err, identityaccess.ErrUserPasswordResetCompletionNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.user-password-reset-completion.not-found", "User password reset completion not found")
+	case errors.Is(err, identityaccess.ErrUserManagementCompletionNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, "iam.user-management-completion.not-found", "User management completion not found")
 	case errors.Is(err, identityaccess.ErrAccountLifecycleCompletionNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, "iam.account-lifecycle-completion.not-found", "Account lifecycle completion not found")
 	case errors.Is(err, identityaccess.ErrVerificationRejected):

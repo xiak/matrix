@@ -301,6 +301,11 @@ func buildPaths() object {
 					"schema": object{"type": "integer", "minimum": 0, "maximum": 9007199254740990}, "description": "Original expected version; zero only for account creation. Canonical decimal; no other query fields or body are accepted."}})},
 		"/v1/account:alias":  object{"post": mutationOperation("setAccountAlias", "Set the current account login alias", "SetAccountAliasRequest", "Account", "200", nil, nil)},
 		"/v1/users/{userId}": object{"get": readOperation("getUser", "Read one manageable account user and target capabilities", "UserAccess", nil, []any{openapi31.PathIDParameter("userId")})},
+		"/v1/users/{userId}/management-completions/{commandRequestId}": object{"get": readOperation("getUserManagementCompletion", "Observe only the original actor's committed User profile or status command under its current authority; no replay permit or assertion of present User state", "UserManagementCompletion", nil,
+			[]any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("commandRequestId"),
+				object{"name": "operation", "in": "query", "required": true, "schema": openapi31.Ref("UserManagementOperation"), "description": "Exact original User command kind."},
+				object{"name": "expectedResourceVersion", "in": "query", "required": true,
+					"schema": object{"type": "integer", "minimum": 1, "maximum": 9007199254740990}, "description": "Original expected User version. Canonical positive decimal; no other query fields or body are accepted."}})},
 		"/v1/users/{userId}/password-resets/{resetRequestId}": object{"get": readOperation("getUserPasswordResetCompletion", "Observe only the original actor's committed reset under current reset-password authority; no password, replay permit or assertion of present credential validity", "UserPasswordResetCompletion", nil,
 			[]any{openapi31.PathIDParameter("userId"), openapi31.PathIDParameter("resetRequestId"), object{"name": "resourceVersion", "in": "query", "required": true,
 				"schema": object{"type": "integer", "minimum": 1, "maximum": 9007199254740990}, "description": "Original expected version, canonical positive decimal. No other query fields or body are accepted."}})},
@@ -530,10 +535,10 @@ func readOperation(
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No current-account report content is available for this reference; expired content is never revived by the read."}
 	}
 	switch operationID {
-	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest", "passwordRequirements", "getUserPasswordResetCompletion", "getAccountLifecycleCompletion":
+	case "getAuthenticatorState", "getTOTPEnrollment", "getTOTPEnrollmentByRequest", "cancelTOTPEnrollment", "getStepUpByRequest", "getRecoveryCodeRegenerationByRequest", "getAuthenticatorRemovalByRequest", "passwordRequirements", "getUserPasswordResetCompletion", "getUserManagementCompletion", "getAccountLifecycleCompletion":
 		responses["400"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "Invalid path, query or unexpected body; no identity selector is accepted."}
 	}
-	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" || operationID == "getAuthenticatorRemovalByRequest" || operationID == "getUserPasswordResetCompletion" || operationID == "getAccountLifecycleCompletion" {
+	if operationID == "getStepUpByRequest" || operationID == "getRecoveryCodeRegenerationByRequest" || operationID == "getAuthenticatorRemovalByRequest" || operationID == "getUserPasswordResetCompletion" || operationID == "getUserManagementCompletion" || operationID == "getAccountLifecycleCompletion" {
 		responses["404"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."}
 	}
 	switch operationID {
@@ -544,7 +549,7 @@ func readOperation(
 		responses["409"] = object{"$ref": "#/components/responses/ProblemResponse", "description": "The enrollment is already confirmed and cannot be cancelled."}
 	}
 	responseDescription := "Current authority state."
-	if operationID == "getUserPasswordResetCompletion" || operationID == "getAccountLifecycleCompletion" {
+	if operationID == "getUserPasswordResetCompletion" || operationID == "getUserManagementCompletion" || operationID == "getAccountLifecycleCompletion" {
 		responseDescription = "Original immutable non-secret completion observed under current authority; not present resource or credential state."
 	}
 	responses["200"] = openapi31.JSONResponse(responseDescription, responseSchema)
@@ -610,6 +615,7 @@ func enumSchemas() map[string][]string {
 		"WorkloadRoleBindingStatus":       {string(iamv1.WorkloadRoleBindingActive), string(iamv1.WorkloadRoleBindingRevoked)},
 		"WorkloadRoleCommandType":         {string(iamv1.WorkloadRoleCommandBind), string(iamv1.WorkloadRoleCommandUnbind)},
 		"AccountLifecycleOperation":       {string(iamv1.AccountLifecycleCreate), string(iamv1.AccountLifecycleSetStatus), string(iamv1.AccountLifecycleRecoverRootCredentials)},
+		"UserManagementOperation":         {string(iamv1.UserManagementUpdate), string(iamv1.UserManagementSetStatus)},
 		"AccountStatus":                   {string(iamv1.AccountActive), string(iamv1.AccountDisabled)},
 		"PrincipalType":                   {string(iamv1.PrincipalUser), string(iamv1.PrincipalServiceAccount)},
 		"SubjectType":                     {string(iamv1.SubjectUser), string(iamv1.SubjectServiceAccount), string(iamv1.SubjectRole)},
@@ -882,6 +888,7 @@ func structContracts() map[string]reflect.Type {
 		"AccountLifecycleCompletion":                    openapi31.StructType[iamv1.AccountLifecycleCompletion](),
 		"ResetUserPasswordRequest":                      openapi31.StructType[iamv1.ResetUserPasswordRequest](),
 		"UserPasswordResetCompletion":                   openapi31.StructType[iamv1.UserPasswordResetCompletion](),
+		"UserManagementCompletion":                      openapi31.StructType[iamv1.UserManagementCompletion](),
 		"RevokeSessionRequest":                          openapi31.StructType[iamv1.RevokeSessionRequest](),
 		"Revocation":                                    openapi31.StructType[iamv1.Revocation](),
 		"AuthorizationNetworkContext":                   openapi31.StructType[iamv1.AuthorizationNetworkContext](),
@@ -923,6 +930,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		case "resultingResourceVersion":
 			return object{"type": "integer", "minimum": 2, "maximum": uint64(9007199254740991)}
 		}
+	}
+	if owner == "UserManagementCompletion" && jsonName == "expectedResourceVersion" {
+		return object{"type": "integer", "minimum": 1, "maximum": uint64(9007199254740990)}
 	}
 	if owner == "PasswordRequirements" {
 		switch jsonName {
@@ -1569,6 +1579,7 @@ func applySemanticOverlays(schemas object) {
 	schemas["ServiceLinkedRoleListing"].(object)["properties"].(object)["bindingCount"].(object)["minimum"] = 1
 	schemas["ServiceLinkedRoleList"].(object)["properties"].(object)["items"].(object)["maxItems"] = iamv1.DirectoryPageSize
 	schemas["UserPasswordResetCompletion"].(object)["description"] = "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion."
+	schemas["UserManagementCompletion"].(object)["description"] = "Immutable non-secret snapshot returned by one committed User profile or status command. The snapshot is the original result, not current User state, Audit delivery, authorization or a replay permit. Runtime validation binds the current Account and actor to the exact original operation, target, request and expected version; a missing or rejected read never authorizes a replacement intent."
 	schemas["AccountLifecycleCompletion"].(object)["description"] = "Non-secret, permanently retained confirmation of one committed platform account command. commandRequestId is the original write body's requestId, not this GET's transport request ID. The value is not password-input equality, current account state, Audit delivery, authorization or permission to replay. Runtime validation binds the original actor, operation, target, request and version; creation uses expectedResourceVersion zero, while status and root recovery require resultingResourceVersion = expectedResourceVersion + 1. Root recovery records the target Account status at commit and never implies that a disabled Account was enabled. A missing or rejected read never authorizes a replacement intent."
 	schemas["AccountLifecycleCompletion"].(object)["oneOf"] = []any{
 		object{"required": []string{"rootPrincipalId"}, "properties": object{
@@ -1992,6 +2003,7 @@ func applySemanticOverlays(schemas object) {
 		"AccountSecuritySettings": "AccountSecuritySettings", "AccountSecuritySettingsChange": "AccountSecuritySettingsChange",
 		"SessionActivity":             "SessionActivity",
 		"UserPasswordResetCompletion": "UserPasswordResetCompletion",
+		"UserManagementCompletion":    "UserManagementCompletion",
 		"NotificationContact":         "NotificationContact", "NotificationContactVerification": "NotificationContactVerification",
 		"AuthenticatorRemoval": "AuthenticatorRemoval",
 		"AccessKey":            "AccessKey", "AccessKeyList": "AccessKeyList", "AccessKeyDeletion": "AccessKeyDeletion",

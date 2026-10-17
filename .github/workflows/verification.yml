@@ -439,15 +439,15 @@ jobs:
             -race -p 1 -count=1 ./test/authorityprocess \
             -run '^(TestIAMAuthorizationProfileAdvanceProcess|TestIndependentIAMAuditAndPaaSProcesses|TestIAMTOTPBackupProcesses)$'
 
-      - name: Direct predecessor account completion gate
+      - name: Direct predecessor user management completion gate
         if: matrix.lane == 'authority-predecessor'
         env:
-          MATRIX_IAM_ACCOUNT_COMPLETION_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_account_completion_upgrade_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
+          MATRIX_IAM_USER_MANAGEMENT_UPGRADE_POSTGRES_TEST_DSN: postgres://postgres:matrix-authority-ci-test-only@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/matrix_iam_user_management_upgrade_ci_${{ github.run_id }}_${{ github.run_attempt }}?sslmode=disable
         run: |
           time bash .github/scripts/run-go-test-selection.sh \
-            TestIAMAccountLifecycleCompletionPredecessorProcess \
+            TestIAMUserManagementCompletionPredecessorProcess \
             -race -p 1 -count=1 ./test/authorityprocess \
-            -run '^TestIAMAccountLifecycleCompletionPredecessorProcess$'
+            -run '^TestIAMUserManagementCompletionPredecessorProcess$'
 
       - name: Real managed product providers and IAM gate
         if: matrix.lane == 'authority-managed-products'

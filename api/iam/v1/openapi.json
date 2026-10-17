@@ -41833,6 +41833,68 @@
         ],
         "type": "object"
       },
+      "UserManagementCompletion": {
+        "additionalProperties": false,
+        "description": "Immutable non-secret snapshot returned by one committed User profile or status command. The snapshot is the original result, not current User state, Audit delivery, authorization or a replay permit. Runtime validation binds the current Account and actor to the exact original operation, target, request and expected version; a missing or rejected read never authorizes a replacement intent.",
+        "properties": {
+          "accountId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "actorPrincipalId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "apiVersion": {
+            "const": "iam.matrix.xiak.com/v1"
+          },
+          "commandRequestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "eventId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expectedResourceVersion": {
+            "maximum": 9007199254740990,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "const": "UserManagementCompletion"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/UserManagementOperation"
+          },
+          "result": {
+            "$ref": "#/components/schemas/User"
+          },
+          "userId": {
+            "$ref": "#/components/schemas/ID"
+          }
+        },
+        "required": [
+          "accountId",
+          "actorPrincipalId",
+          "apiVersion",
+          "commandRequestId",
+          "eventId",
+          "expectedResourceVersion",
+          "kind",
+          "occurredAt",
+          "operation",
+          "result",
+          "userId"
+        ],
+        "type": "object"
+      },
+      "UserManagementOperation": {
+        "enum": [
+          "USER_UPDATE",
+          "USER_SET_STATUS"
+        ],
+        "type": "string"
+      },
       "UserPasswordResetCompletion": {
         "additionalProperties": false,
         "description": "Non-secret confirmation of one committed administrator reset, not password-input equality, current credential validity, Audit delivery or replay authority. Runtime validation requires a distinct actor and target, resultingResourceVersion = expectedResourceVersion + 1, and the original UTC microsecond fact time. Lookup must bind current Account/actor authorization and the exact original target/request/version; schema validation alone proves neither provenance nor completion.",
@@ -50003,6 +50065,88 @@
           }
         },
         "summary": "Explicitly disable or enable one key at its exact version"
+      }
+    },
+    "/v1/users/{userId}/management-completions/{commandRequestId}": {
+      "get": {
+        "operationId": "getUserManagementCompletion",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "userId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "commandRequestId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exact original User command kind.",
+            "in": "query",
+            "name": "operation",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/UserManagementOperation"
+            }
+          },
+          {
+            "description": "Original expected User version. Canonical positive decimal; no other query fields or body are accepted.",
+            "in": "query",
+            "name": "expectedResourceVersion",
+            "required": true,
+            "schema": {
+              "maximum": 9007199254740990,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserManagementCompletion"
+                }
+              }
+            },
+            "description": "Original immutable non-secret completion observed under current authority; not present resource or credential state."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "Invalid path, query or unexpected body; no identity selector is accepted."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse",
+            "description": "No original same-USER metadata observed; not evidence that an uncertain command rolled back, and not permission to create a replacement intent."
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Observe only the original actor's committed User profile or status command under its current authority; no replay permit or assertion of present User state"
       }
     },
     "/v1/users/{userId}/password-resets/{resetRequestId}": {

@@ -1764,6 +1764,264 @@ REVOKE ALL ON FUNCTION iam.assert_account_lifecycle_intent_unused(text,text,text
       matrix_iam_authentication_recovery,matrix_iam_backup_custody;
 GRANT EXECUTE ON FUNCTION iam.read_account_lifecycle_completion(text,text,text,text,text,text,bigint) TO matrix_iam_api;
 
+-- Ordinary User profile/status completions close the ambiguous-response gap.
+-- Pre-cutover facts are not backfilled because their exact resulting User
+-- snapshot was not retained; their request IDs remain permanently consumed.
+CREATE INDEX IF NOT EXISTS user_management_intent_history ON iam.audit_outbox
+    (tenant_id,(event_document#>>'{actor,id}'),(event_document->>'requestId'))
+    WHERE event_document->>'action' IN ('iam.user.updated','iam.user.status-set')
+      AND event_document->>'result'='SUCCEEDED';
+CREATE TABLE IF NOT EXISTS iam.user_management_completions (
+    account_id text COLLATE "C" NOT NULL,
+    actor_principal_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    operation text COLLATE "C" NOT NULL,
+    user_id text COLLATE "C" NOT NULL,
+    expected_version bigint NOT NULL,
+    resulting_version bigint NOT NULL,
+    login_name text COLLATE "C" NOT NULL,
+    display_name text NOT NULL,
+    resulting_status text COLLATE "C" NOT NULL,
+    must_change_password boolean NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    updated_at timestamptz(6) NOT NULL,
+    event_id text COLLATE "C" NOT NULL,
+    occurred_at timestamptz(6) NOT NULL,
+    CONSTRAINT user_management_completions_pk PRIMARY KEY(account_id,actor_principal_id,request_id),
+    CONSTRAINT user_management_completions_event_uq UNIQUE(account_id,event_id),
+    CONSTRAINT user_management_completions_actor_fk FOREIGN KEY(account_id,actor_principal_id) REFERENCES iam.principals(tenant_id,id),
+    CONSTRAINT user_management_completions_user_fk FOREIGN KEY(account_id,user_id) REFERENCES iam.principals(tenant_id,id),
+    CONSTRAINT user_management_completions_event_fk FOREIGN KEY(account_id,event_id) REFERENCES iam.audit_outbox(tenant_id,event_id),
+    CONSTRAINT user_management_completions_values CHECK(
+        account_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_principal_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND user_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND operation IN ('USER_UPDATE','USER_SET_STATUS')
+        AND expected_version BETWEEN 1 AND 9007199254740990
+        AND resulting_version=expected_version+1
+        AND login_name COLLATE "C" ~ '^[a-z][a-z0-9._-]{2,63}$'
+        AND length(display_name) BETWEEN 1 AND 128 AND btrim(display_name)=display_name
+        AND resulting_status IN ('ACTIVE','DISABLED')
+        AND isfinite(created_at) AND isfinite(updated_at) AND isfinite(occurred_at)
+        AND created_at<=updated_at AND updated_at=occurred_at)
+);
+ALTER TABLE iam.user_management_completions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE iam.user_management_completions FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS tenant_isolation ON iam.user_management_completions;
+CREATE POLICY tenant_isolation ON iam.user_management_completions
+    USING(account_id=iam.current_tenant_id()) WITH CHECK(account_id=iam.current_tenant_id());
+DROP TRIGGER IF EXISTS user_management_completions_immutable ON iam.user_management_completions;
+CREATE TRIGGER user_management_completions_immutable BEFORE UPDATE OR DELETE ON iam.user_management_completions
+    FOR EACH ROW EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.user_management_completions ENABLE ALWAYS TRIGGER user_management_completions_immutable;
+DROP TRIGGER IF EXISTS user_management_completions_no_truncate ON iam.user_management_completions;
+CREATE TRIGGER user_management_completions_no_truncate BEFORE TRUNCATE ON iam.user_management_completions
+    FOR EACH STATEMENT EXECUTE FUNCTION iam.reject_policy_history_change();
+ALTER TABLE iam.user_management_completions ENABLE ALWAYS TRIGGER user_management_completions_no_truncate;
+REVOKE ALL ON iam.user_management_completions FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
+CREATE OR REPLACE FUNCTION iam.assert_user_management_intent_unused(tenant text,actor text,command_id text)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+BEGIN
+    IF COALESCE(tenant,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(actor,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(command_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='user management intent is invalid';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    IF EXISTS(SELECT 1 FROM iam.user_management_completions c WHERE c.account_id=tenant
+          AND c.actor_principal_id=actor AND c.request_id=command_id)
+      OR EXISTS(SELECT 1 FROM iam.audit_outbox o WHERE o.tenant_id=tenant
+          AND o.event_document->>'action' IN ('iam.user.updated','iam.user.status-set')
+          AND o.event_document->>'result'='SUCCEEDED' AND o.event_document#>>'{actor,id}'=actor
+          AND o.event_document->>'requestId'=command_id) THEN
+        RAISE EXCEPTION USING ERRCODE='23505',MESSAGE='user management intent was already used';
+    END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.assert_user_management_completion(tenant text,actor text,command_id text)
+RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.user_management_completions%ROWTYPE; fact jsonb; expected_digest text;
+    event_action text; decision_action text;
+BEGIN
+    SELECT * INTO receipt FROM iam.user_management_completions c WHERE c.account_id=tenant
+        AND c.actor_principal_id=actor AND c.request_id=command_id;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='user management completion is missing'; END IF;
+    CASE receipt.operation
+      WHEN 'USER_UPDATE' THEN
+        event_action:='iam.user.updated'; decision_action:='iam.user.update';
+        expected_digest:='sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')||
+          convert_to('user-profile-update','UTF8')||decode('00','hex')||convert_to('{"ID":'||to_json(receipt.user_id)::text||
+          ',"Request":{"displayName":'||to_json(receipt.display_name)::text||',"resourceVersion":'||receipt.expected_version::text||
+          ',"requestId":'||to_json(command_id)::text||'}}','UTF8')),'hex');
+      WHEN 'USER_SET_STATUS' THEN
+        event_action:='iam.user.status-set'; decision_action:='iam.user.set-status';
+        expected_digest:='sha256:'||encode(sha256(convert_to('matrix.iam.request.v1','UTF8')||decode('00','hex')||
+          convert_to('principal-status','UTF8')||decode('00','hex')||convert_to('{"ID":'||to_json(receipt.user_id)::text||
+          ',"Request":{"status":'||to_json(receipt.resulting_status)::text||',"resourceVersion":'||receipt.expected_version::text||
+          ',"requestId":'||to_json(command_id)::text||'}}','UTF8')),'hex');
+      ELSE RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='user management completion operation differs';
+    END CASE;
+    SELECT o.event_document INTO fact FROM iam.audit_outbox o WHERE o.tenant_id=tenant AND o.event_id=receipt.event_id;
+    IF fact IS NULL OR fact->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1' OR fact->>'kind' IS DISTINCT FROM 'AuditEvent'
+      OR fact->>'eventId' IS DISTINCT FROM receipt.event_id OR fact->>'tenantId' IS DISTINCT FROM tenant
+      OR fact->>'action' IS DISTINCT FROM event_action OR fact->>'result' IS DISTINCT FROM 'SUCCEEDED'
+      OR fact->'actor' IS DISTINCT FROM jsonb_build_object('type','USER','id',actor)
+      OR fact->'target' IS DISTINCT FROM jsonb_build_object('kind','USER','id',receipt.user_id)
+      OR fact->>'requestId' IS DISTINCT FROM command_id OR fact->>'correlationId' IS DISTINCT FROM command_id
+      OR fact->>'requestDigest' IS DISTINCT FROM expected_digest
+      OR (fact->>'occurredAt')::timestamptz IS DISTINCT FROM receipt.occurred_at
+      OR fact ?| ARRAY['installationId','operationId']
+      OR (fact-ARRAY['apiVersion','kind','eventId','tenantId','actor','iamDecisionId','action','target','result',
+          'requestDigest','requestId','correlationId','occurredAt','traceparent'])<>'{}'::jsonb
+      OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=actor AND p.principal_type='USER')
+      OR NOT EXISTS(SELECT 1 FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=receipt.user_id AND p.principal_type='USER')
+      OR NOT EXISTS(SELECT 1 FROM iam.authorization_decisions d WHERE d.tenant_id=tenant AND d.id=fact->>'iamDecisionId'
+          AND d.principal_id=actor AND d.subject_type='USER' AND d.contract_version IN (4,5,6,7) AND d.access_key_id IS NULL AND d.allowed
+          AND d.action_name=decision_action AND d.target_kind='USER' AND d.target_id=receipt.user_id
+          AND d.resource_mode='INSTANCE' AND d.collection_usage IS NULL
+          AND d.request_id=command_id AND d.decided_at=receipt.occurred_at) THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='user management completion evidence differs';
+    END IF;
+END $function$;
+
+CREATE OR REPLACE FUNCTION iam.verify_user_management_completion()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE tenant text; actor text; command_id text;
+BEGIN
+    IF TG_TABLE_NAME='user_management_completions' THEN
+        tenant:=NEW.account_id; actor:=NEW.actor_principal_id; command_id:=NEW.request_id;
+    ELSE
+        IF NEW.event_document->>'action' NOT IN ('iam.user.updated','iam.user.status-set') THEN RETURN NULL; END IF;
+        tenant:=NEW.tenant_id; actor:=NEW.event_document#>>'{actor,id}'; command_id:=NEW.event_document->>'requestId';
+    END IF;
+    PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    PERFORM iam.assert_user_management_completion(tenant,actor,command_id);
+    RETURN NULL;
+END $function$;
+DROP TRIGGER IF EXISTS verify_user_management_completion ON iam.user_management_completions;
+CREATE CONSTRAINT TRIGGER verify_user_management_completion AFTER INSERT ON iam.user_management_completions
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_user_management_completion();
+ALTER TABLE iam.user_management_completions ENABLE ALWAYS TRIGGER verify_user_management_completion;
+DROP TRIGGER IF EXISTS verify_user_management_completion ON iam.audit_outbox;
+CREATE CONSTRAINT TRIGGER verify_user_management_completion AFTER INSERT ON iam.audit_outbox
+    DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION iam.verify_user_management_completion();
+ALTER TABLE iam.audit_outbox ENABLE ALWAYS TRIGGER verify_user_management_completion;
+
+CREATE OR REPLACE FUNCTION iam.user_management_completion_contract_ready()
+RETURNS boolean LANGUAGE plpgsql STABLE SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE relation_oid oid:=to_regclass('iam.user_management_completions'); expected record;
+BEGIN
+    IF relation_oid IS NULL OR NOT EXISTS(SELECT 1 FROM pg_class c WHERE c.oid=relation_oid AND c.relkind='r'
+        AND c.relowner='matrix_iam_owner'::regrole AND c.relrowsecurity AND c.relforcerowsecurity)
+      OR (SELECT count(*) FROM pg_policy p WHERE p.polrelid=relation_oid)<>1
+      OR NOT EXISTS(SELECT 1 FROM pg_policy p WHERE p.polrelid=relation_oid AND p.polname='tenant_isolation'
+          AND p.polcmd='*' AND p.polpermissive AND p.polroles=ARRAY[0::oid] AND p.polqual IS NOT NULL AND p.polwithcheck IS NOT NULL)
+      OR (SELECT count(*) FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attnum>0 AND NOT a.attisdropped)<>15
+      OR EXISTS(SELECT 1 FROM pg_class c,LATERAL aclexplode(COALESCE(c.relacl,acldefault('r',c.relowner))) acl
+          WHERE c.oid=relation_oid AND acl.grantee<>c.relowner)
+      OR EXISTS(SELECT 1 FROM pg_attribute a,LATERAL aclexplode(a.attacl) acl
+          WHERE a.attrelid=relation_oid AND acl.grantee<>'matrix_iam_owner'::regrole) THEN RETURN false; END IF;
+    FOR expected IN SELECT * FROM (VALUES
+      ('account_id','text',-1),('actor_principal_id','text',-1),('request_id','text',-1),('operation','text',-1),
+      ('user_id','text',-1),('expected_version','bigint',-1),('resulting_version','bigint',-1),('login_name','text',-1),
+      ('display_name','text',-1),('resulting_status','text',-1),('must_change_password','boolean',-1),
+      ('created_at','timestamptz',6),('updated_at','timestamptz',6),('event_id','text',-1),('occurred_at','timestamptz',6)
+    ) e(name,kind,precision) LOOP
+      IF NOT EXISTS(SELECT 1 FROM pg_attribute a WHERE a.attrelid=relation_oid AND a.attname=expected.name
+          AND a.atttypid=expected.kind::regtype AND a.atttypmod=expected.precision AND a.attnotnull AND NOT a.attisdropped)
+        THEN RETURN false; END IF;
+    END LOOP;
+    FOR expected IN SELECT * FROM (VALUES
+      ('p','account_id,actor_principal_id,request_id',NULL,NULL),('u','account_id,event_id',NULL,NULL),
+      ('f','account_id,actor_principal_id','iam.principals','tenant_id,id'),
+      ('f','account_id,user_id','iam.principals','tenant_id,id'),('f','account_id,event_id','iam.audit_outbox','tenant_id,event_id')
+    ) e(kind,columns,reference_table,reference_columns) LOOP
+      IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=relation_oid AND c.contype::text=expected.kind
+          AND c.convalidated AND c.conenforced AND NOT c.condeferrable AND NOT c.condeferred
+          AND ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(number,position)
+              JOIN pg_attribute a ON a.attrelid=c.conrelid AND a.attnum=k.number ORDER BY k.position)=string_to_array(expected.columns,',')
+          AND (expected.kind<>'f' OR (c.confrelid=to_regclass(expected.reference_table) AND c.confupdtype='a' AND c.confdeltype='a'
+              AND c.confmatchtype='s' AND ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(number,position)
+                  JOIN pg_attribute a ON a.attrelid=c.confrelid AND a.attnum=k.number ORDER BY k.position)=string_to_array(expected.reference_columns,','))))
+        THEN RETURN false; END IF;
+    END LOOP;
+    IF NOT EXISTS(SELECT 1 FROM pg_constraint c WHERE c.conrelid=relation_oid AND c.conname='user_management_completions_values'
+        AND c.contype='c' AND c.convalidated AND c.conenforced) THEN RETURN false; END IF;
+    FOR expected IN SELECT * FROM (VALUES
+      ('iam.user_management_completions','user_management_completions_immutable',27,'iam.reject_policy_history_change()',false),
+      ('iam.user_management_completions','user_management_completions_no_truncate',34,'iam.reject_policy_history_change()',false),
+      ('iam.user_management_completions','verify_user_management_completion',5,'iam.verify_user_management_completion()',true),
+      ('iam.audit_outbox','verify_user_management_completion',5,'iam.verify_user_management_completion()',true)
+    ) e(relation,name,kind,signature,deferred) LOOP
+      IF NOT EXISTS(SELECT 1 FROM pg_trigger t WHERE t.tgrelid=to_regclass(expected.relation) AND t.tgname=expected.name
+          AND t.tgenabled='A' AND NOT t.tgisinternal AND t.tgtype=expected.kind AND t.tgnargs=0 AND t.tgqual IS NULL
+          AND t.tgfoid=to_regprocedure(expected.signature) AND t.tgdeferrable=expected.deferred AND t.tginitdeferred=expected.deferred)
+        THEN RETURN false; END IF;
+    END LOOP;
+    RETURN (SELECT count(*)=4 FROM pg_proc p JOIN (VALUES
+      ('iam.assert_user_management_intent_unused(text,text,text)',false,'void',false,'tenant,actor,command_id'),
+      ('iam.assert_user_management_completion(text,text,text)',false,'void',false,'tenant,actor,command_id'),
+      ('iam.verify_user_management_completion()',false,'trigger',false,''),
+      ('iam.read_user_management_completion(text,text,text,text,text,text,bigint)',true,'jsonb',false,
+        'tenant,actor,decision,user_id,management_operation,command_id,expected_version')
+    ) definition(signature,definer,result_type,returns_set,names) ON p.oid=to_regprocedure(definition.signature)
+      AND p.prosecdef=definition.definer AND p.prorettype=definition.result_type::regtype AND p.proretset=definition.returns_set
+      AND COALESCE(array_to_string(p.proargnames,','),'')=definition.names
+      WHERE p.proowner='matrix_iam_owner'::regrole AND NOT p.proisstrict AND p.provolatile='v' AND p.proparallel='u'
+        AND p.proconfig=ARRAY['search_path=pg_catalog, pg_temp']
+        AND has_function_privilege('matrix_iam_api',p.oid,'EXECUTE')=definition.definer
+        AND NOT EXISTS(SELECT 1 FROM aclexplode(COALESCE(p.proacl,acldefault('f',p.proowner))) acl
+          WHERE acl.privilege_type='EXECUTE' AND (acl.is_grantable OR
+            acl.grantee NOT IN (p.proowner,CASE WHEN definition.definer THEN 'matrix_iam_api'::regrole ELSE p.proowner END))
+            AND acl.grantee<>p.proowner));
+END $function$;
+REVOKE ALL ON FUNCTION iam.user_management_completion_contract_ready() FROM PUBLIC,matrix_iam_api,matrix_iam_worker,
+    matrix_iam_notification_worker,matrix_iam_credential_recovery,matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+
+CREATE OR REPLACE FUNCTION iam.read_user_management_completion(tenant text,actor text,decision text,user_id text,
+    management_operation text,command_id text,expected_version bigint)
+RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
+DECLARE receipt iam.user_management_completions%ROWTYPE; action_name text;
+BEGIN
+    CASE management_operation
+      WHEN 'USER_UPDATE' THEN action_name:='iam.user.update';
+      WHEN 'USER_SET_STATUS' THEN action_name:='iam.user.set-status';
+      ELSE RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='user management completion reference is invalid';
+    END CASE;
+    PERFORM iam.assert_allowed_decision(tenant,actor,decision,action_name,'USER',user_id,'INSTANCE',NULL);
+    IF NOT iam.user_management_completion_contract_ready()
+      OR COALESCE(user_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR COALESCE(command_id,'') COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+      OR expected_version IS NULL OR expected_version NOT BETWEEN 1 AND 9007199254740990 THEN
+        RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='user management completion reference is invalid';
+    END IF;
+    SELECT * INTO receipt FROM iam.user_management_completions c WHERE c.account_id=tenant
+      AND c.actor_principal_id=actor AND c.user_id=read_user_management_completion.user_id
+      AND c.operation=management_operation AND c.request_id=command_id
+      AND c.expected_version=read_user_management_completion.expected_version;
+    IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='user management completion is not found'; END IF;
+    PERFORM iam.assert_user_management_completion(tenant,actor,command_id);
+    RETURN jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','UserManagementCompletion',
+      'accountId',receipt.account_id,'actorPrincipalId',receipt.actor_principal_id,'operation',receipt.operation,
+      'userId',receipt.user_id,'commandRequestId',receipt.request_id,'expectedResourceVersion',receipt.expected_version,
+      'result',jsonb_build_object('apiVersion','iam.matrix.xiak.com/v1','kind','User','id',receipt.user_id,
+        'accountId',receipt.account_id,'loginName',receipt.login_name,'displayName',receipt.display_name,
+        'status',receipt.resulting_status,'mustChangePassword',receipt.must_change_password,
+        'resourceVersion',receipt.resulting_version,
+        'createdAt',to_char(receipt.created_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'),
+        'updatedAt',to_char(receipt.updated_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"')),
+      'eventId',receipt.event_id,'occurredAt',to_char(receipt.occurred_at AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"'));
+END $function$;
+REVOKE ALL ON FUNCTION iam.assert_user_management_intent_unused(text,text,text),iam.assert_user_management_completion(text,text,text),
+    iam.verify_user_management_completion(),iam.read_user_management_completion(text,text,text,text,text,text,bigint)
+    FROM PUBLIC,matrix_iam_api,matrix_iam_worker,matrix_iam_notification_worker,matrix_iam_credential_recovery,
+      matrix_iam_authentication_recovery,matrix_iam_backup_custody;
+GRANT EXECUTE ON FUNCTION iam.read_user_management_completion(text,text,text,text,text,text,bigint) TO matrix_iam_api;
+
 CREATE OR REPLACE FUNCTION iam.set_account_alias(tenant text, actor text, decision text,
     new_alias text, expected_version bigint, event jsonb)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog, pg_temp AS $function$
@@ -1804,6 +2062,10 @@ BEGIN
     END IF;
     PERFORM iam.assert_allowed_decision(tenant,actor,decision,'iam.user.update','USER',user_id,'INSTANCE',NULL);
     PERFORM set_config('matrix.iam_tenant_id',tenant,true);
+    IF NOT iam.user_management_completion_contract_ready() THEN
+        RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='user management completion contract is unavailable';
+    END IF;
+    PERFORM iam.assert_user_management_intent_unused(tenant,actor,event->>'requestId');
     PERFORM 1 FROM iam.accounts AS account WHERE account.id=tenant AND account.status='ACTIVE' FOR SHARE;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='42501', MESSAGE='user account is unavailable'; END IF;
     SELECT * INTO stored FROM iam.principals AS principal
@@ -1826,6 +2088,12 @@ BEGIN
            updated_at=transaction_timestamp()
      WHERE principal.tenant_id=tenant AND principal.id=user_id;
     PERFORM iam.append_account_event(tenant,actor,decision,'iam.user.updated','USER',user_id,event);
+    INSERT INTO iam.user_management_completions(account_id,actor_principal_id,request_id,operation,user_id,
+        expected_version,resulting_version,login_name,display_name,resulting_status,must_change_password,
+        created_at,updated_at,event_id,occurred_at)
+    SELECT tenant,actor,event->>'requestId','USER_UPDATE',p.id,expected_version,p.resource_version,
+        p.login_name,p.display_name,p.status,p.must_change_password,p.created_at,p.updated_at,event->>'eventId',transaction_timestamp()
+    FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=user_id;
     RETURN iam.user_snapshot(tenant,user_id);
 END
 $function$;
@@ -2161,6 +2429,10 @@ BEGIN
         IF expected_generation IS NOT NULL OR expected_password_hash IS NOT NULL OR expected_history_digest IS NOT NULL OR expected_settings_version IS NOT NULL THEN
             RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='status change cannot use password material';
         END IF;
+        IF NOT iam.user_management_completion_contract_ready() THEN
+            RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='user management completion contract is unavailable';
+        END IF;
+        PERFORM iam.assert_user_management_intent_unused(tenant,actor,event->>'requestId');
     ELSE
         action := 'iam.user.reset-password'; event_action := 'iam.user.password-reset';
         IF expected_generation IS NULL OR expected_generation NOT BETWEEN 1 AND 9007199254740990
@@ -2213,6 +2485,13 @@ BEGIN
         INSERT INTO iam.user_password_reset_completions(tenant_id,actor_principal_id,user_id,request_id,
             expected_version,resulting_version,event_id,occurred_at)
         VALUES(tenant,actor,user_id,event->>'requestId',expected_version,expected_version+1,event->>'eventId',transaction_timestamp());
+    ELSE
+        INSERT INTO iam.user_management_completions(account_id,actor_principal_id,request_id,operation,user_id,
+            expected_version,resulting_version,login_name,display_name,resulting_status,must_change_password,
+            created_at,updated_at,event_id,occurred_at)
+        SELECT tenant,actor,event->>'requestId','USER_SET_STATUS',p.id,expected_version,p.resource_version,
+            p.login_name,p.display_name,p.status,p.must_change_password,p.created_at,p.updated_at,event->>'eventId',transaction_timestamp()
+        FROM iam.principals p WHERE p.tenant_id=tenant AND p.id=user_id;
     END IF;
     RETURN iam.user_snapshot(tenant,user_id);
 END

@@ -834,6 +834,97 @@ func TestPasswordResetCompletionUsesCurrentActorAndOnlyOriginalHistory(t *testin
 	}
 }
 
+func TestUserManagementCompletionUsesCurrentActorAuthorityAndExactHistory(t *testing.T) {
+	for _, sample := range []struct {
+		operation iamv1.UserManagementOperation
+		action    iamv1.Action
+		status    iamv1.PrincipalStatus
+	}{
+		{iamv1.UserManagementUpdate, iamv1.ActionIAMUserUpdate, iamv1.PrincipalActive},
+		{iamv1.UserManagementSetStatus, iamv1.ActionIAMUserSetStatus, iamv1.PrincipalDisabled},
+	} {
+		t.Run(string(sample.operation), func(t *testing.T) {
+			tx := newCoreTransaction()
+			repository := &coreRepository{transaction: tx}
+			service, err := newCoreAuthority(repository, Config{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			document := coreBootstrap(t)
+			if _, err := service.Bootstrap(t.Context(), document); err != nil {
+				t.Fatal(err)
+			}
+			login, err := service.Login(t.Context(), iamv1.LoginRequest{LoginName: "admin", Password: document.Administrator.Password, RequestID: "user-history-login"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.ChangePassword(t.Context(), login.Credential, iamv1.ChangePasswordRequest{CurrentPassword: document.Administrator.Password,
+				NewPassword: coreSecret(t, "User-History-Actor-Password-73!"), RequestID: "user-history-change"}); err != nil {
+				t.Fatal(err)
+			}
+			occurred := tx.now.Add(-time.Minute)
+			original := iamv1.UserManagementCompletion{APIVersion: iamv1.APIVersion, Kind: "UserManagementCompletion",
+				AccountID: tx.organization.ID, ActorPrincipalID: tx.principal.ID, Operation: sample.operation,
+				UserID: "user-history-target", CommandRequestID: "user-original", ExpectedResourceVersion: 4,
+				Result: iamv1.User{APIVersion: iamv1.APIVersion, Kind: "User", ID: "user-history-target", AccountID: tx.organization.ID,
+					LoginName: "member", DisplayName: "Member", Status: sample.status, ResourceVersion: 5,
+					CreatedAt: occurred.Add(-time.Hour), UpdatedAt: occurred}, EventID: "user-original-event", OccurredAt: occurred}
+			reads := 0
+			result, readErr := original, error(nil)
+			tx.userManagementCompletionRead = func(read AccountRead, target iamv1.PrincipalID, operation iamv1.UserManagementOperation,
+				command string, version uint64) (iamv1.UserManagementCompletion, error) {
+				reads++
+				if !repository.inTransaction || read.AccountID != original.AccountID || read.ActorPrincipalID != original.ActorPrincipalID ||
+					read.DecisionID == "" || target != original.UserID || operation != sample.operation || command != original.CommandRequestID || version != 4 {
+					t.Fatal("user completion lookup lost its credential-derived exact scope")
+				}
+				decision := tx.authorizations[len(tx.authorizations)-1].Decision
+				if !decision.Allowed || decision.Action != sample.action || decision.Resource.Kind != iamv1.ResourceUser || decision.Resource.ID != string(target) {
+					t.Fatal("user completion lookup reused unrelated authority")
+				}
+				return result, readErr
+			}
+			query := func() (iamv1.UserManagementCompletion, error) {
+				return service.UserManagementCompletion(t.Context(), login.Credential, original.UserID, sample.operation,
+					original.CommandRequestID, 4, "read-original")
+			}
+			if got, err := query(); err != nil || got != original {
+				t.Fatal("exact user management completion failed", err)
+			}
+			for _, mutate := range []func(*iamv1.UserManagementCompletion){
+				func(v *iamv1.UserManagementCompletion) { v.AccountID = "other-account" },
+				func(v *iamv1.UserManagementCompletion) { v.ActorPrincipalID = "other-actor" },
+				func(v *iamv1.UserManagementCompletion) { v.Operation = "OTHER" },
+				func(v *iamv1.UserManagementCompletion) { v.UserID = "other-target" },
+				func(v *iamv1.UserManagementCompletion) { v.CommandRequestID = "other-command" },
+				func(v *iamv1.UserManagementCompletion) { v.ExpectedResourceVersion++ },
+				func(v *iamv1.UserManagementCompletion) { v.OccurredAt = tx.now.Add(time.Second) },
+			} {
+				result = original
+				mutate(&result)
+				if got, err := query(); !errors.Is(err, ErrUnavailable) || got != (iamv1.UserManagementCompletion{}) {
+					t.Fatal("unbound user history escaped", err)
+				}
+			}
+			result, readErr = original, ErrUserManagementCompletionNotFound
+			if got, err := query(); !errors.Is(err, ErrUserManagementCompletionNotFound) || got != (iamv1.UserManagementCompletion{}) {
+				t.Fatal("missing user history was invented", err)
+			}
+			readErr = nil
+			repository.afterTransaction = func(error) error { return ErrUnavailable }
+			if got, err := query(); !errors.Is(err, ErrUnavailable) || got != (iamv1.UserManagementCompletion{}) {
+				t.Fatal("unknown transaction exposed a user completion", err)
+			}
+			repository.afterTransaction = nil
+			before := reads
+			tx.profileErr = ErrUnavailable
+			if _, err := query(); !errors.Is(err, ErrUnavailable) || reads != before {
+				t.Fatal("unavailable current authority read user history", err)
+			}
+		})
+	}
+}
+
 func TestAccountLifecycleCompletionUsesCurrentActorAuthorityAndExactHistory(t *testing.T) {
 	tx := newCoreTransaction()
 	repository := &coreRepository{transaction: tx}
@@ -3793,6 +3884,7 @@ type coreTransaction struct {
 	settingsMutationCalled           bool
 	passwordResetRead                func(AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)
 	passwordResetCompletionRead      func(AccountRead, iamv1.PrincipalID, string, uint64) (iamv1.UserPasswordResetCompletion, error)
+	userManagementCompletionRead     func(AccountRead, iamv1.PrincipalID, iamv1.UserManagementOperation, string, uint64) (iamv1.UserManagementCompletion, error)
 	accountLifecycleCompletionRead   func(AccountRead, iamv1.AccountID, iamv1.AccountLifecycleOperation, string, uint64) (iamv1.AccountLifecycleCompletion, error)
 	userCreationSettings             func(AccountRead) (iamv1.AccountPasswordSettings, uint64, error)
 	userCreationMutation             *UserMutation
@@ -4041,6 +4133,14 @@ func (transaction *coreTransaction) ReadPasswordReset(_ context.Context, read Ac
 
 func (transaction *coreTransaction) ReadUserPasswordResetCompletion(_ context.Context, read AccountRead, user iamv1.PrincipalID, request string, version uint64) (iamv1.UserPasswordResetCompletion, error) {
 	return transaction.passwordResetCompletionRead(read, user, request, version)
+}
+
+func (transaction *coreTransaction) ReadUserManagementCompletion(_ context.Context, read AccountRead, user iamv1.PrincipalID,
+	operation iamv1.UserManagementOperation, request string, version uint64) (iamv1.UserManagementCompletion, error) {
+	if transaction.userManagementCompletionRead == nil {
+		return iamv1.UserManagementCompletion{}, ErrUnavailable
+	}
+	return transaction.userManagementCompletionRead(read, user, operation, request, version)
 }
 
 func (transaction *coreTransaction) ReadAccountLifecycleCompletion(_ context.Context, read AccountRead, account iamv1.AccountID,

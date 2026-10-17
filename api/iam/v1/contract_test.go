@@ -1753,6 +1753,72 @@ func TestUserPasswordResetCompletionBindsOneOriginalNonSecretResult(t *testing.T
 	}
 }
 
+func TestUserManagementCompletionBindsOriginalImmutableUserResult(t *testing.T) {
+	now := time.Date(2026, 10, 17, 8, 30, 0, 123456000, time.UTC)
+	created := now.Add(-24 * time.Hour)
+	valid := []UserManagementCompletion{
+		{APIVersion: APIVersion, Kind: "UserManagementCompletion", AccountID: "account-one", ActorPrincipalID: "administrator-one",
+			Operation: UserManagementUpdate, UserID: "user-one", CommandRequestID: "update-one", ExpectedResourceVersion: 4,
+			Result: User{APIVersion: APIVersion, Kind: "User", ID: "user-one", AccountID: "account-one", LoginName: "member",
+				DisplayName: "Updated member", Status: PrincipalActive, ResourceVersion: 5, CreatedAt: created, UpdatedAt: now},
+			EventID: "event-update", OccurredAt: now},
+		{APIVersion: APIVersion, Kind: "UserManagementCompletion", AccountID: "account-one", ActorPrincipalID: "administrator-one",
+			Operation: UserManagementSetStatus, UserID: "user-one", CommandRequestID: "disable-one", ExpectedResourceVersion: 5,
+			Result: User{APIVersion: APIVersion, Kind: "User", ID: "user-one", AccountID: "account-one", LoginName: "member",
+				DisplayName: "Updated member", Status: PrincipalDisabled, ResourceVersion: 6, CreatedAt: created, UpdatedAt: now},
+			EventID: "event-disable", OccurredAt: now},
+	}
+	for _, value := range valid {
+		if err := ValidateUserManagementCompletion(value); err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := json.Marshal(value)
+		var decoded UserManagementCompletion
+		if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) != nil || decoded != value ||
+			bytes.Contains(encoded, []byte("password")) || bytes.Contains(encoded, []byte("permit")) {
+			t.Fatal("user management completion lost its closed immutable result")
+		}
+	}
+	for _, test := range []struct {
+		name   string
+		index  int
+		change func(*UserManagementCompletion)
+	}{
+		{"api version", 0, func(v *UserManagementCompletion) { v.APIVersion = "other/v1" }},
+		{"kind", 0, func(v *UserManagementCompletion) { v.Kind = "User" }},
+		{"account", 0, func(v *UserManagementCompletion) { v.AccountID = "other-account" }},
+		{"actor", 0, func(v *UserManagementCompletion) { v.ActorPrincipalID = "" }},
+		{"operation", 0, func(v *UserManagementCompletion) { v.Operation = "OTHER" }},
+		{"target", 0, func(v *UserManagementCompletion) { v.UserID = "other-user" }},
+		{"request", 0, func(v *UserManagementCompletion) { v.CommandRequestID = "" }},
+		{"zero expected", 0, func(v *UserManagementCompletion) { v.ExpectedResourceVersion = 0 }},
+		{"unsafe expected", 0, func(v *UserManagementCompletion) { v.ExpectedResourceVersion = 9007199254740991 }},
+		{"result account", 0, func(v *UserManagementCompletion) { v.Result.AccountID = "other-account" }},
+		{"result target", 0, func(v *UserManagementCompletion) { v.Result.ID = "other-user" }},
+		{"result version", 0, func(v *UserManagementCompletion) { v.Result.ResourceVersion++ }},
+		{"result time", 0, func(v *UserManagementCompletion) { v.Result.UpdatedAt = v.Result.UpdatedAt.Add(time.Second) }},
+		{"event", 0, func(v *UserManagementCompletion) { v.EventID = "event/other" }},
+		{"time", 0, func(v *UserManagementCompletion) { v.OccurredAt = time.Time{} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			value := valid[test.index]
+			test.change(&value)
+			if ValidateUserManagementCompletion(value) == nil {
+				t.Fatal("invalid user management completion accepted")
+			}
+			encoded, err := json.Marshal(value)
+			decoded := valid[test.index]
+			if err != nil || DecodeRequest(bytes.NewReader(encoded), &decoded) == nil || decoded != valid[test.index] {
+				t.Fatal("invalid completion decoded or partially replaced the previous value")
+			}
+		})
+	}
+	var missing *UserManagementCompletion
+	if missing.UnmarshalJSON([]byte(`{}`)) == nil {
+		t.Fatal("nil user management completion destination accepted")
+	}
+}
+
 func TestAccountLifecycleCompletionIsClosedAndNonSecret(t *testing.T) {
 	now := time.Date(2026, 10, 15, 12, 0, 0, 123456000, time.UTC)
 	valid := []AccountLifecycleCompletion{
@@ -8851,6 +8917,56 @@ func TestIAMOpenAPIPasswordResetCompletionIsReadOnlyAndExact(t *testing.T) {
 	}
 	if responses["201"] != nil || responses["409"] != nil {
 		t.Fatal("read-only completion implies a write/replay outcome")
+	}
+}
+
+func TestIAMOpenAPIUserManagementCompletionIsReadOnlyAndExact(t *testing.T) {
+	document := loadIAMOpenAPI(t)
+	paths := mustIAMObject(t, document["paths"], "paths")
+	path := mustIAMObject(t, paths["/v1/users/{userId}/management-completions/{commandRequestId}"], "user management completion path")
+	if len(path) != 1 || path["get"] == nil {
+		t.Fatal("user management completion exposed a mutation")
+	}
+	operation := mustIAMObject(t, path["get"], "user management completion operation")
+	if operation["requestBody"] != nil {
+		t.Fatal("user management completion accepts a body")
+	}
+	parameters, ok := operation["parameters"].([]any)
+	if !ok || len(parameters) != 4 {
+		t.Fatal("user management completion reference is not closed")
+	}
+	expected := map[string]string{"userId": "path", "commandRequestId": "path", "operation": "query", "expectedResourceVersion": "query"}
+	for _, raw := range parameters {
+		parameter := mustIAMObject(t, raw, "user management completion parameter")
+		name, ok := parameter["name"].(string)
+		if !ok || expected[name] == "" || parameter["in"] != expected[name] || parameter["required"] != true {
+			t.Fatal("user management completion accepts a selector or optional original identity")
+		}
+		delete(expected, name)
+		if name == "expectedResourceVersion" {
+			schema := mustIAMObject(t, parameter["schema"], "original user version")
+			if schema["type"] != "integer" || schema["minimum"] != float64(1) || schema["maximum"] != float64(9007199254740990) {
+				t.Fatal("user management completion loses safe original version bounds")
+			}
+		}
+		if name == "operation" {
+			schema := mustIAMObject(t, parameter["schema"], "user management operation")
+			if schema["$ref"] != "#/components/schemas/UserManagementOperation" {
+				t.Fatal("user management completion accepts an open operation")
+			}
+		}
+	}
+	if len(expected) != 0 {
+		t.Fatal("user management completion omitted part of the original identity")
+	}
+	responses := mustIAMObject(t, operation["responses"], "user management completion outcomes")
+	for _, code := range []string{"200", "400", "401", "403", "404", "503"} {
+		if responses[code] == nil {
+			t.Fatal("user management completion omitted a closed outcome", code)
+		}
+	}
+	if responses["201"] != nil || responses["409"] != nil {
+		t.Fatal("user management completion implies a write or replacement intent")
 	}
 }
 

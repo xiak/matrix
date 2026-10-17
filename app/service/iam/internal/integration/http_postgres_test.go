@@ -35224,10 +35224,44 @@ func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http
 		updated.DisplayName != "Renamed account user" || updated.LoginName != user.LoginName || updated.AccountID != user.AccountID || updated.ResourceVersion != 3 {
 		t.Fatal("profile update changed immutable identity fields")
 	}
+	readManagementCompletion := func(bearer, command string, operation iamv1.UserManagementOperation, version uint64, status int) iamv1.UserManagementCompletion {
+		t.Helper()
+		path := "/v1/users/" + string(user.ID) + "/management-completions/" + command +
+			"?operation=" + string(operation) + "&expectedResourceVersion=" + strconv.FormatUint(version, 10)
+		response := request(http.MethodGet, path, bearer, nil, status)
+		if status != http.StatusOK {
+			return iamv1.UserManagementCompletion{}
+		}
+		var completion iamv1.UserManagementCompletion
+		if json.Unmarshal(response.Body.Bytes(), &completion) != nil || iamv1.ValidateUserManagementCompletion(completion) != nil {
+			t.Fatal("invalid immutable User management completion")
+		}
+		return completion
+	}
+	updateCompletion := readManagementCompletion(root, "request-profile-update", iamv1.UserManagementUpdate, 2, http.StatusOK)
+	if updateCompletion.Result != updated {
+		t.Fatal("profile completion did not preserve the original transaction result")
+	}
+	readManagementCompletion(root, "request-profile-update", iamv1.UserManagementSetStatus, 2, http.StatusNotFound)
+	readManagementCompletion(root, "request-profile-update", iamv1.UserManagementUpdate, 1, http.StatusNotFound)
+	// A fully privileged administrator in another Account can authorize the
+	// same action only in that Account. The tenant-scoped receipt lookup must
+	// remain indistinguishable from an unknown command.
+	readManagementCompletion(otherTenantRoot, "request-profile-update", iamv1.UserManagementUpdate, 2, http.StatusNotFound)
 	request(http.MethodPost, "/v1/users/"+string(user.ID)+":delete", root,
 		iamv1.DeleteUserRequest{ResourceVersion: updated.ResourceVersion, RequestID: "request-active-delete"}, http.StatusConflict)
-	request(http.MethodPost, "/v1/users/"+string(user.ID)+":set-status", root,
+	disabledResponse := request(http.MethodPost, "/v1/users/"+string(user.ID)+":set-status", root,
 		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: updated.ResourceVersion, RequestID: "request-profile-disable"}, http.StatusOK)
+	var disabled iamv1.User
+	if json.Unmarshal(disabledResponse.Body.Bytes(), &disabled) != nil || iamv1.ValidateUser(disabled) != nil ||
+		disabled.Status != iamv1.PrincipalDisabled || disabled.ResourceVersion != 4 {
+		t.Fatal("status mutation returned an invalid User")
+	}
+	statusCompletion := readManagementCompletion(root, "request-profile-disable", iamv1.UserManagementSetStatus, 3, http.StatusOK)
+	if statusCompletion.Result != disabled || readManagementCompletion(root, "request-profile-update", iamv1.UserManagementUpdate, 2, http.StatusOK) != updateCompletion {
+		t.Fatal("later User mutation rewrote an earlier completion")
+	}
+	proveUserManagementCompletionStorage(t, ctx, database, handler, root, updateCompletion)
 	read(root, user.ID, http.StatusOK)
 	request(http.MethodPost, "/v1/users/"+string(user.ID)+":delete", otherTenantRoot,
 		iamv1.DeleteUserRequest{ResourceVersion: 4, RequestID: "request-cross-account-delete"}, http.StatusForbidden)
@@ -35390,6 +35424,143 @@ func proveUserProfileAndDeletion(t *testing.T, ctx context.Context, handler http
 		t.Fatal("winning status/profile mutation mixed concurrent effects")
 	}
 	assertIAMSecretsAbsent(t, ctx, database, initialPassword, changedPassword, bearer, protectedBearer)
+}
+
+func proveUserManagementCompletionStorage(t *testing.T, ctx context.Context, database *pgx.Conn, handler http.Handler, actor string, completion iamv1.UserManagementCompletion) {
+	t.Helper()
+	for _, role := range []string{"matrix_iam_api", "matrix_iam_worker", "matrix_iam_credential_recovery", "matrix_iam_authentication_recovery", "matrix_iam_notification_worker", "matrix_iam_backup_custody"} {
+		for _, statement := range []string{
+			"SELECT * FROM iam.user_management_completions",
+			"UPDATE iam.user_management_completions SET request_id=request_id",
+			"DELETE FROM iam.user_management_completions",
+			"TRUNCATE iam.user_management_completions",
+		} {
+			tx, err := database.Begin(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := tx.Exec(ctx, "SET LOCAL ROLE "+role); err != nil {
+				_ = tx.Rollback(ctx)
+				t.Fatal(err)
+			}
+			_, err = tx.Exec(ctx, statement)
+			_ = tx.Rollback(ctx)
+			var failure *pgconn.PgError
+			if !errors.As(err, &failure) || failure.Code != "42501" {
+				t.Fatalf("User management completion table exposed to %s", role)
+			}
+		}
+	}
+	for _, scope := range []struct {
+		tenant string
+		want   int
+	}{{string(completion.AccountID), 1}, {"wrong-user-management-account", 0}} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SET LOCAL ROLE matrix_iam_owner"); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "SELECT set_config('matrix.iam_tenant_id',$1,true)", scope.tenant); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		var count int
+		err = tx.QueryRow(ctx, "SELECT count(*) FROM iam.user_management_completions WHERE event_id=$1", completion.EventID).Scan(&count)
+		_ = tx.Rollback(ctx)
+		if err != nil || count != scope.want {
+			t.Fatalf("User management completion tenant isolation failed: count=%d err=%v", count, err)
+		}
+	}
+	for _, statement := range []string{
+		"UPDATE iam.user_management_completions SET resulting_version=resulting_version",
+		"DELETE FROM iam.user_management_completions",
+		"TRUNCATE iam.user_management_completions",
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, statement)
+		_ = tx.Rollback(ctx)
+		if err == nil {
+			t.Fatal("immutable User management completion accepted mutation")
+		}
+	}
+	for _, corruption := range []string{
+		"expected_version=expected_version+1,resulting_version=resulting_version+1",
+		"display_name=display_name||' tampered'",
+		"updated_at=updated_at-interval '1 microsecond',occurred_at=occurred_at-interval '1 microsecond'",
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "ALTER TABLE iam.user_management_completions DISABLE TRIGGER user_management_completions_immutable"); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "UPDATE iam.user_management_completions SET "+corruption+" WHERE event_id=$1", completion.EventID); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, "SELECT iam.assert_user_management_completion($1,$2,$3)", completion.AccountID, completion.ActorPrincipalID, completion.CommandRequestID)
+		_ = tx.Rollback(ctx)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "23514" {
+			t.Fatal("corrupt User management completion retained evidence")
+		}
+	}
+	for _, patch := range []string{
+		`{"tenantId":"another-user-management-account"}`,
+		`{"actor":{"type":"USER","id":"another-user-management-actor"}}`,
+		`{"target":{"kind":"USER","id":"another-user-management-target"}}`,
+		`{"action":"iam.user.deleted"}`,
+		`{"requestId":"another-user-management-intent"}`,
+		`{"requestDigest":"sha256:0000000000000000000000000000000000000000000000000000000000000000"}`,
+		`{"installationId":"another-user-management-scope"}`,
+		`{"permit":true}`,
+	} {
+		tx, err := database.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tx.Exec(ctx, "UPDATE iam.audit_outbox SET event_document=event_document||$1::jsonb WHERE event_id=$2", patch, completion.EventID); err != nil {
+			_ = tx.Rollback(ctx)
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, "SELECT iam.assert_user_management_completion($1,$2,$3)", completion.AccountID, completion.ActorPrincipalID, completion.CommandRequestID)
+		_ = tx.Rollback(ctx)
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "23514" {
+			t.Fatal("User management completion accepted a different historical fact")
+		}
+	}
+	path := fmt.Sprintf("/v1/users/%s/management-completions/%s?operation=%s&expectedResourceVersion=%d",
+		completion.UserID, completion.CommandRequestID, completion.Operation, completion.ExpectedResourceVersion)
+	for _, damage := range []struct{ apply, repair string }{
+		{"ALTER TABLE iam.user_management_completions NO FORCE ROW LEVEL SECURITY", "ALTER TABLE iam.user_management_completions FORCE ROW LEVEL SECURITY"},
+		{"ALTER TABLE iam.user_management_completions DISABLE TRIGGER user_management_completions_immutable", "ALTER TABLE iam.user_management_completions ENABLE ALWAYS TRIGGER user_management_completions_immutable"},
+		{"ALTER TABLE iam.audit_outbox DISABLE TRIGGER verify_user_management_completion", "ALTER TABLE iam.audit_outbox ENABLE ALWAYS TRIGGER verify_user_management_completion"},
+		{"GRANT SELECT (request_id) ON iam.user_management_completions TO matrix_iam_api", "REVOKE SELECT (request_id) ON iam.user_management_completions FROM matrix_iam_api"},
+	} {
+		if _, err := database.Exec(ctx, damage.apply); err != nil {
+			t.Fatal(err)
+		}
+		ready := performIAMRequest(handler, http.MethodGet, "/ready", "", nil)
+		query := performIAMRequest(handler, http.MethodGet, path, actor, nil)
+		if _, err := database.Exec(ctx, damage.repair); err != nil {
+			t.Fatal(err)
+		}
+		if ready.Code != http.StatusServiceUnavailable || query.Code != http.StatusServiceUnavailable {
+			t.Fatal("damaged User management completion contract did not close readiness and query")
+		}
+		if performIAMRequest(handler, http.MethodGet, "/ready", "", nil).Code != http.StatusOK {
+			t.Fatal("restored User management completion contract did not recover readiness")
+		}
+	}
 }
 
 func proveTenantLifecycleHTTP(t *testing.T, ctx context.Context, handler http.Handler, database *pgx.Conn, root, otherPrimary string, repository identityaccess.Repository) {

@@ -2147,6 +2147,90 @@ func TestIAMUserPasswordResetCompletionBoundary(t *testing.T) {
 	}
 }
 
+func TestIAMUserManagementCompletionBoundary(t *testing.T) {
+	const path = "/v1/users/user-target/management-completions/user-command"
+	now := time.Date(2026, 10, 17, 8, 30, 0, 0, time.UTC)
+	valid := iamv1.UserManagementCompletion{APIVersion: iamv1.APIVersion, Kind: "UserManagementCompletion",
+		AccountID: "account-catalog", ActorPrincipalID: "administrator-one", Operation: iamv1.UserManagementSetStatus,
+		UserID: "user-target", CommandRequestID: "user-command", ExpectedResourceVersion: 7,
+		Result: iamv1.User{APIVersion: iamv1.APIVersion, Kind: "User", ID: "user-target", AccountID: "account-catalog",
+			LoginName: "member", DisplayName: "Member", Status: iamv1.PrincipalDisabled, ResourceVersion: 8,
+			CreatedAt: now.Add(-time.Hour), UpdatedAt: now}, EventID: "user-event", OccurredAt: now}
+	validQuery := "?operation=USER_SET_STATUS&expectedResourceVersion=7"
+	for _, attack := range []struct {
+		method, path, body string
+		status             int
+	}{
+		{http.MethodGet, path, "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=USER_SET_STATUS", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=OTHER&expectedResourceVersion=7", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=USER_SET_STATUS&operation=USER_SET_STATUS&expectedResourceVersion=7", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=USER_SET_STATUS&expectedResourceVersion=0", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=USER_SET_STATUS&expectedResourceVersion=07", "", http.StatusBadRequest},
+		{http.MethodGet, path + "?operation=USER_SET_STATUS&expectedResourceVersion=7&accountId=other", "", http.StatusBadRequest},
+		{http.MethodGet, path + validQuery, `{}`, http.StatusBadRequest},
+		{http.MethodGet, path + "/extra" + validQuery, "", http.StatusNotFound},
+		{http.MethodPost, path + validQuery, "", http.StatusMethodNotAllowed},
+	} {
+		t.Run(attack.method+attack.path+attack.body, func(t *testing.T) {
+			workflow := newHTTPWorkflow(t)
+			request := httptest.NewRequest(attack.method, attack.path, strings.NewReader(attack.body))
+			request.Header.Set("Authorization", "Bearer current")
+			response := httptest.NewRecorder()
+			newTestHandler(t, workflow).ServeHTTP(response, request)
+			if response.Code != attack.status || workflow.userManagementCompletionCalls != 0 {
+				t.Fatalf("invalid user completion query reached workflow: status=%d calls=%d", response.Code, workflow.userManagementCompletionCalls)
+			}
+		})
+	}
+	for _, outcome := range []struct {
+		err    error
+		status int
+	}{
+		{nil, http.StatusOK}, {identityaccess.ErrUserManagementCompletionNotFound, http.StatusNotFound},
+		{identityaccess.ErrUnauthenticated, http.StatusUnauthorized}, {identityaccess.ErrForbidden, http.StatusForbidden},
+		{identityaccess.ErrUnavailable, http.StatusServiceUnavailable},
+	} {
+		workflow := newHTTPWorkflow(t)
+		workflow.userManagementCompletion, workflow.userManagementCompletionError = valid, outcome.err
+		request := httptest.NewRequest(http.MethodGet, path+validQuery, nil)
+		request.Header.Set("Authorization", "Bearer current")
+		request.Header.Set("X-Tenant-ID", "forged-account")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != outcome.status || workflow.userManagementCompletionCalls != 1 ||
+			workflow.userManagementUser != valid.UserID || workflow.userManagementOperation != valid.Operation ||
+			workflow.userManagementCommand != valid.CommandRequestID || workflow.userManagementVersion != valid.ExpectedResourceVersion {
+			t.Fatalf("user completion outcome was misrepresented: %d", response.Code)
+		}
+		if outcome.err == nil {
+			var got iamv1.UserManagementCompletion
+			if json.Unmarshal(response.Body.Bytes(), &got) != nil || got != valid ||
+				string(workflow.userManagementCredential.CopyBytes()) != "current" || response.Header().Get("Cache-Control") != "no-store" {
+				t.Fatal("original user completion changed or accepted a tenant selector")
+			}
+		}
+	}
+	for _, mutate := range []func(*iamv1.UserManagementCompletion){
+		func(v *iamv1.UserManagementCompletion) { v.UserID = "wrong-target" },
+		func(v *iamv1.UserManagementCompletion) { v.Operation = iamv1.UserManagementUpdate },
+		func(v *iamv1.UserManagementCompletion) { v.CommandRequestID = "wrong-command" },
+		func(v *iamv1.UserManagementCompletion) { v.ExpectedResourceVersion++ },
+		func(v *iamv1.UserManagementCompletion) { v.EventID = "" },
+	} {
+		workflow := newHTTPWorkflow(t)
+		workflow.userManagementCompletion = valid
+		mutate(&workflow.userManagementCompletion)
+		request := httptest.NewRequest(http.MethodGet, path+validQuery, nil)
+		request.Header.Set("Authorization", "Bearer current")
+		response := httptest.NewRecorder()
+		newTestHandler(t, workflow).ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatal("unbound user management completion exposed")
+		}
+	}
+}
+
 func TestIAMAccountLifecycleCompletionBoundary(t *testing.T) {
 	const path = "/v1/accounts/account-target/lifecycle-completions/account-command"
 	valid := iamv1.AccountLifecycleCompletion{APIVersion: iamv1.APIVersion, Kind: "AccountLifecycleCompletion",
@@ -2657,6 +2741,14 @@ type httpWorkflow struct {
 	accountLifecycleOperation       iamv1.AccountLifecycleOperation
 	accountLifecycleCommand         string
 	accountLifecycleVersion         uint64
+	userManagementCompletion        iamv1.UserManagementCompletion
+	userManagementCompletionCalls   int
+	userManagementCompletionError   error
+	userManagementCredential        iamv1.Secret
+	userManagementUser              iamv1.PrincipalID
+	userManagementOperation         iamv1.UserManagementOperation
+	userManagementCommand           string
+	userManagementVersion           uint64
 	passwordRequirements            iamv1.PasswordRequirements
 	passwordRequirementsCalls       int
 	passwordRequirementsError       error
@@ -2871,6 +2963,14 @@ func (value *httpWorkflow) UserPasswordResetCompletion(_ context.Context, creden
 		return iamv1.UserPasswordResetCompletion{}, identityaccess.ErrUnavailable
 	}
 	return value.resetCompletion, value.resetCompletionError
+}
+
+func (value *httpWorkflow) UserManagementCompletion(_ context.Context, credential iamv1.Secret, user iamv1.PrincipalID,
+	operation iamv1.UserManagementOperation, command string, version uint64, _ string) (iamv1.UserManagementCompletion, error) {
+	value.userManagementCompletionCalls++
+	value.userManagementCredential, value.userManagementUser = credential, user
+	value.userManagementOperation, value.userManagementCommand, value.userManagementVersion = operation, command, version
+	return value.userManagementCompletion, value.userManagementCompletionError
 }
 
 func (value *httpWorkflow) AccountLifecycleCompletion(_ context.Context, credential iamv1.Secret, account iamv1.AccountID,

@@ -215,6 +215,7 @@ type Transaction interface {
 	RecoverLocalCredentials(context.Context, LocalCredentialRecoveryMutation) (iamv1.LocalCredentialRecoveryResult, error)
 	SetAccountAlias(context.Context, AccountAliasMutation) (iamv1.Account, error)
 	UpdateUser(context.Context, UserProfileMutation) (iamv1.User, error)
+	ReadUserManagementCompletion(context.Context, AccountRead, iamv1.PrincipalID, iamv1.UserManagementOperation, string, uint64) (iamv1.UserManagementCompletion, error)
 	DeleteUser(context.Context, UserDeletionMutation) (iamv1.UserDeletion, error)
 	ChangeUser(context.Context, UserChange) (iamv1.User, error)
 	ReadPasswordReset(context.Context, AccountRead, iamv1.PrincipalID, uint64) (PasswordReplacementMaterial, error)

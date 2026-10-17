@@ -25,7 +25,7 @@ import (
 	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 )
 
-const accountLifecycleCompletionPredecessor = "5effc802fa8116d14420188d9075d6fe3ab1ceaa"
+const userManagementCompletionPredecessor = "08e1dc4a6ce81386ea7223e62d03356f82aeee58"
 
 // TestIAMAuthorizationProfileAdvanceProcess proves the current-schema release
 // boundary for one source-built future authorization declaration. It is not a
@@ -382,12 +382,12 @@ func proveFrozenFamilyProfileAdvance(t *testing.T, ctx context.Context, admin *p
 	t.Logf("source-built Profile r%d: old family frozen; new publication does not select; explicit selection grants; restart/revocation hold; not a production PaaS inspect endpoint or release-upgrade gate", profile.Revision)
 }
 
-// TestIAMAccountLifecycleCompletionPredecessorProcess is the rolling, single
-// predecessor gate for the IAM86 account-command completion shape. The fixed
-// IAM85 executable creates real Account/Audit state; only the current
-// migrator and executable may create or read the new completion rows.
-func TestIAMAccountLifecycleCompletionPredecessorProcess(t *testing.T) {
-	const variable = "MATRIX_IAM_ACCOUNT_COMPLETION_UPGRADE_POSTGRES_TEST_DSN"
+// TestIAMUserManagementCompletionPredecessorProcess is the rolling single
+// predecessor gate for the IAM87 User-command completion shape. The fixed
+// accepted IAM86 executable creates real User/Audit state; only the current
+// migrator and executable may create or read the new immutable completions.
+func TestIAMUserManagementCompletionPredecessorProcess(t *testing.T) {
+	const variable = "MATRIX_IAM_USER_MANAGEMENT_UPGRADE_POSTGRES_TEST_DSN"
 	dsn := os.Getenv(variable)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
@@ -395,24 +395,24 @@ func TestIAMAccountLifecycleCompletionPredecessorProcess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 6*time.Minute)
 	defer cancel()
 	config, err := pgx.ParseConfig(dsn)
-	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_account_completion_upgrade_") {
-		t.Fatal("account completion predecessor gate requires its own disposable database")
+	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_user_management_upgrade_") {
+		t.Fatal("user management predecessor gate requires its own disposable database")
 	}
 	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	admin, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
-		t.Fatal("connect account completion predecessor database", err)
+		t.Fatal("connect user management predecessor database", err)
 	}
 	defer admin.Close(context.Background())
 	assertPostgres18(t, ctx, admin)
 	assertCleanSchemas(t, ctx, admin)
 
 	root, temporary := repositoryRoot(t), t.TempDir()
-	predecessorRoot := extractFixedIAMSource(t, ctx, root, temporary, accountLifecycleCompletionPredecessor)
-	predecessorMigrator := buildAuthorityBinary(t, ctx, predecessorRoot, temporary, "iam-account-completion-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
-	predecessorBinary := buildAuthorityBinary(t, ctx, predecessorRoot, temporary, "iam-account-completion-predecessor", "./app/service/iam/cmd/matrix-iam")
-	currentMigrator := buildAuthorityBinary(t, ctx, root, temporary, "iam-account-completion-current-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
-	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-account-completion-current", "./app/service/iam/cmd/matrix-iam")
+	predecessorRoot := extractFixedIAMSource(t, ctx, root, temporary, userManagementCompletionPredecessor)
+	predecessorMigrator := buildAuthorityBinary(t, ctx, predecessorRoot, temporary, "iam-user-management-predecessor-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	predecessorBinary := buildAuthorityBinary(t, ctx, predecessorRoot, temporary, "iam-user-management-predecessor", "./app/service/iam/cmd/matrix-iam")
+	currentMigrator := buildAuthorityBinary(t, ctx, root, temporary, "iam-user-management-current-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-user-management-current", "./app/service/iam/cmd/matrix-iam")
 
 	const apiLogin = "matrix_iam_api_login"
 	var migrationEnvironment []string
@@ -443,7 +443,7 @@ func TestIAMAccountLifecycleCompletionPredecessorProcess(t *testing.T) {
 	}
 	migrationEnvironment = append(migrationEnvironment,
 		installationv1.IAMProductAuthorizationMigrationFileEnvironment+"="+
-			writeProtectedFile(t, temporary, "iam-account-completion-product-authorization.json", productAuthorization))
+			writeProtectedFile(t, temporary, "iam-user-management-product-authorization.json", productAuthorization))
 	clear(productAuthorization)
 
 	var children []*childProcess
@@ -464,14 +464,14 @@ func TestIAMAccountLifecycleCompletionPredecessorProcess(t *testing.T) {
 			}
 		}
 	}
-	runMigration(predecessorRoot, predecessorMigrator, "IAM85 predecessor")
+	runMigration(predecessorRoot, predecessorMigrator, "IAM86 predecessor")
 
 	bootstrap := processBootstrap(t)
 	encodedBootstrap, err := iamv1.EncodeBootstrapDocument(bootstrap)
 	if err != nil {
 		t.Fatal(err)
 	}
-	bootstrapPath := writeProtectedFile(t, temporary, "iam-account-completion-bootstrap", encodedBootstrap)
+	bootstrapPath := writeProtectedFile(t, temporary, "iam-user-management-bootstrap", encodedBootstrap)
 	clear(encodedBootstrap)
 	digest, err := iamv1.BootstrapDigest(bootstrap)
 	if err != nil {
@@ -480,8 +480,8 @@ func TestIAMAccountLifecycleCompletionPredecessorProcess(t *testing.T) {
 	mail := iamv1.EmailVerificationKeyring{APIVersion: iamv1.APIVersion, Kind: "EmailVerificationKeyring",
 		Purpose:        iamv1.EmailVerificationWrappingPurpose,
 		Scope:          iamv1.SecurityMailInstallationScope{InstallationID: bootstrap.InstallationID, BootstrapDigest: digest},
-		KeysetRevision: 1, ActiveKeyID: "account-completion-mail", Keys: []iamv1.EmailVerificationWrappingKey{{
-			KeyID: "account-completion-mail", FormatVersion: 1,
+		KeysetRevision: 1, ActiveKeyID: "user-management-mail", Keys: []iamv1.EmailVerificationWrappingKey{{
+			KeyID: "user-management-mail", FormatVersion: 1,
 			KeyMaterial: processSecret(t, base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x65}, 32))),
 		}}}
 	encodedMail, err := iamv1.EncodeEmailVerificationKeyring(mail)
@@ -491,13 +491,13 @@ func TestIAMAccountLifecycleCompletionPredecessorProcess(t *testing.T) {
 	address := freeAddress(t)
 	endpoint := "http://" + address
 	environment := []string{
-		"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-account-completion-api-dsn", []byte(runtimeDSN(t, config, apiLogin, processDBPassword))),
+		"MATRIX_IAM_DATABASE_DSN_FILE=" + writeProtectedFile(t, temporary, "iam-user-management-api-dsn", []byte(runtimeDSN(t, config, apiLogin, processDBPassword))),
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
 		"MATRIX_IAM_LISTEN_ADDRESS=" + address,
-		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-account-completion-cursor", []byte(strings.Repeat("43", 32))),
+		"MATRIX_IAM_CURSOR_KEY_FILE=" + writeProtectedFile(t, temporary, "iam-user-management-cursor", []byte(strings.Repeat("43", 32))),
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + writeProcessAccessKeyWrapping(t, temporary, bootstrap),
 		"MATRIX_IAM_TOTP_KEYRING_FILE=" + writeProcessTOTPKeyring(t, temporary, bootstrap),
-		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE=" + writeProtectedFile(t, temporary, "iam-account-completion-mail.json", encodedMail),
+		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE=" + writeProtectedFile(t, temporary, "iam-user-management-mail.json", encodedMail),
 	}
 	clear(encodedMail)
 	start := func(workdir, binary string, schema uint64) *childProcess {
@@ -509,42 +509,29 @@ func TestIAMAccountLifecycleCompletionPredecessorProcess(t *testing.T) {
 		response := performJSON(t, http.MethodGet, endpoint+"/ready", "", nil)
 		var readiness iamv1.Readiness
 		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &readiness) != nil || readiness.SchemaVersion != schema {
-			t.Fatalf("account completion process readiness schema=%d status=%d want=%d", readiness.SchemaVersion, response.Status, schema)
+			t.Fatalf("user management process readiness schema=%d status=%d want=%d", readiness.SchemaVersion, response.Status, schema)
 		}
 		return child
 	}
 
-	predecessor := start(predecessorRoot, predecessorBinary, 85)
-	operator := loginIAM(t, endpoint, "admin", initialAdminPassword, "account-completion-operator-login")
-	changePasswordIAM(t, endpoint, operator.Credential, initialAdminPassword, changedAdminPassword, "account-completion-operator-password")
+	predecessor := start(predecessorRoot, predecessorBinary, 86)
+	operator := loginIAM(t, endpoint, "admin", initialAdminPassword, "user-management-operator-login")
+	changePasswordIAM(t, endpoint, operator.Credential, initialAdminPassword, changedAdminPassword, "user-management-operator-password")
 	sensitive = append(sensitive, operator.Credential)
-	const accountID = "account-completion-retained"
-	const createRequest = "account-completion-predecessor-create"
-	createdResponse := performJSON(t, http.MethodPost, endpoint+"/v1/accounts", operator.Credential, map[string]any{
-		"id": accountID, "displayName": "Retained completion account", "rootLoginName": "completion.retained.root",
-		"rootDisplayName": "Retained completion root", "initialPassword": initialReaderPassword, "requestId": createRequest,
-	})
-	var retained iamv1.Account
-	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &retained) != nil ||
-		iamv1.ValidateAccount(retained) != nil || retained.ResourceVersion != 1 || retained.Status != iamv1.AccountActive {
-		t.Fatalf("IAM85 did not create retained Account: status=%d", createdResponse.Status)
+	retained := createIAMUser(t, endpoint, operator.Credential, "history.member", "History member", initialReaderPassword, "user-management-member-create")
+	const predecessorUpdateRequest = "user-management-predecessor-update"
+	updatedResponse := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(retained.ID)+":update", operator.Credential,
+		iamv1.UpdateUserRequest{DisplayName: "Predecessor updated member", ResourceVersion: retained.ResourceVersion, RequestID: predecessorUpdateRequest})
+	if updatedResponse.Status != http.StatusOK || json.Unmarshal(updatedResponse.Body, &retained) != nil ||
+		iamv1.ValidateUser(retained) != nil || retained.ResourceVersion != 2 || retained.DisplayName != "Predecessor updated member" {
+		t.Fatalf("IAM86 did not update retained User: status=%d", updatedResponse.Status)
 	}
-	rootID := retained.RootIdentity.PrincipalID
-	const disableRequest = "account-completion-predecessor-disable"
-	disabledResponse := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+accountID+":set-status", operator.Credential,
-		iamv1.SetAccountStatusRequest{Status: iamv1.AccountDisabled, ResourceVersion: retained.ResourceVersion, RequestID: disableRequest})
+	const predecessorStatusRequest = "user-management-predecessor-disable"
+	disabledResponse := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(retained.ID)+":set-status", operator.Credential,
+		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalDisabled, ResourceVersion: retained.ResourceVersion, RequestID: predecessorStatusRequest})
 	if disabledResponse.Status != http.StatusOK || json.Unmarshal(disabledResponse.Body, &retained) != nil ||
-		iamv1.ValidateAccount(retained) != nil || retained.ResourceVersion != 2 || retained.Status != iamv1.AccountDisabled || retained.RootIdentity.PrincipalID != rootID {
-		t.Fatalf("IAM85 did not pause retained Account: status=%d", disabledResponse.Status)
-	}
-	const predecessorRecoveryPassword = "Retained-Predecessor-Recovery-Password-76!"
-	const recoveryRequest = "account-completion-predecessor-recovery"
-	sensitive = append(sensitive, predecessorRecoveryPassword)
-	recoveryResponse := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+accountID+":recover-root-credentials", operator.Credential,
-		map[string]any{"initialPassword": predecessorRecoveryPassword, "resourceVersion": retained.ResourceVersion, "requestId": recoveryRequest})
-	if recoveryResponse.Status != http.StatusOK || json.Unmarshal(recoveryResponse.Body, &retained) != nil ||
-		iamv1.ValidateAccount(retained) != nil || retained.ResourceVersion != 3 || retained.Status != iamv1.AccountDisabled || retained.RootIdentity.PrincipalID != rootID {
-		t.Fatalf("IAM85 did not recover the retained disabled Account: status=%d", recoveryResponse.Status)
+		iamv1.ValidateUser(retained) != nil || retained.ResourceVersion != 3 || retained.Status != iamv1.PrincipalDisabled {
+		t.Fatalf("IAM86 did not disable retained User: status=%d", disabledResponse.Status)
 	}
 
 	canonicalOutbox := func() map[string]string {
@@ -575,106 +562,105 @@ func TestIAMAccountLifecycleCompletionPredecessorProcess(t *testing.T) {
 	}
 	predecessorFacts := canonicalOutbox()
 	predecessor.stop()
-	runMigration(root, currentMigrator, "IAM86 current")
+	runMigration(root, currentMigrator, "IAM87 current")
 
 	var schema uint64
 	var ready, contractReady bool
 	var completionCount int
-	if err := admin.QueryRow(ctx, "SELECT schema_version, ready, iam.account_lifecycle_completion_contract_ready() FROM iam.readiness()").Scan(&schema, &ready, &contractReady); err != nil || schema != 86 || !ready || !contractReady {
-		t.Fatal("IAM86 completion schema is not ready", err)
+	if err := admin.QueryRow(ctx, "SELECT schema_version, ready, iam.user_management_completion_contract_ready() FROM iam.readiness()").Scan(&schema, &ready, &contractReady); err != nil || schema != 87 || !ready || !contractReady {
+		t.Fatal("IAM87 user management completion schema is not ready", err)
 	}
-	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.account_lifecycle_completions").Scan(&completionCount); err != nil || completionCount != 0 {
-		t.Fatal("IAM86 migration invented predecessor completion facts", err)
+	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.user_management_completions").Scan(&completionCount); err != nil || completionCount != 0 {
+		t.Fatal("IAM87 migration invented predecessor user completions", err)
 	}
 	current := start(root, currentBinary, installationrelease.CurrentDatabaseProfile().Authorities.IAM)
 	currentFacts := canonicalOutbox()
 	if len(currentFacts) != len(predecessorFacts) {
-		t.Fatal("IAM86 migration or equal bootstrap changed retained Audit fact count")
+		t.Fatal("IAM87 migration or equal bootstrap changed retained Audit fact count")
 	}
 	for eventID, before := range predecessorFacts {
 		if currentFacts[eventID] != before {
-			t.Fatal("IAM86 migration or equal bootstrap rewrote retained Audit canonical bytes")
+			t.Fatal("IAM87 migration or equal bootstrap rewrote retained Audit canonical bytes")
 		}
 	}
 
-	readAccount := func() iamv1.Account {
+	readUser := func() iamv1.User {
 		t.Helper()
-		response := performJSON(t, http.MethodGet, endpoint+"/v1/accounts/"+accountID, operator.Credential, nil)
-		var access iamv1.AccountAccess
+		response := performJSON(t, http.MethodGet, endpoint+"/v1/users/"+string(retained.ID), operator.Credential, nil)
+		var access iamv1.UserAccess
 		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &access) != nil ||
-			iamv1.ValidateAccountAccess(access) != nil || access.Account.ID != accountID {
-			t.Fatalf("read retained Account after IAM86 migration: status=%d", response.Status)
+			iamv1.ValidateUserAccess(access) != nil || access.User.ID != retained.ID {
+			t.Fatalf("read retained User after IAM87 migration: status=%d", response.Status)
 		}
-		return access.Account
+		return access.User
 	}
-	readCompletion := func(request string, operation iamv1.AccountLifecycleOperation, expectedVersion uint64, status int) iamv1.AccountLifecycleCompletion {
+	readCompletion := func(request string, operation iamv1.UserManagementOperation, expectedVersion uint64, status int) iamv1.UserManagementCompletion {
 		t.Helper()
-		path := endpoint + "/v1/accounts/" + accountID + "/lifecycle-completions/" + request +
+		path := endpoint + "/v1/users/" + string(retained.ID) + "/management-completions/" + request +
 			"?operation=" + string(operation) + "&expectedResourceVersion=" + fmt.Sprint(expectedVersion)
 		response := performJSON(t, http.MethodGet, path, operator.Credential, nil)
 		if response.Status != status {
-			t.Fatalf("read account completion %s: status=%d want=%d", request, response.Status, status)
+			t.Fatalf("read user completion %s: status=%d want=%d", request, response.Status, status)
 		}
 		if status != http.StatusOK {
-			return iamv1.AccountLifecycleCompletion{}
+			return iamv1.UserManagementCompletion{}
 		}
-		var completion iamv1.AccountLifecycleCompletion
-		if json.Unmarshal(response.Body, &completion) != nil || iamv1.ValidateAccountLifecycleCompletion(completion) != nil {
-			t.Fatal("decode current account completion")
+		var completion iamv1.UserManagementCompletion
+		if json.Unmarshal(response.Body, &completion) != nil || iamv1.ValidateUserManagementCompletion(completion) != nil {
+			t.Fatal("decode current user management completion")
 		}
 		return completion
 	}
-	readCompletion(createRequest, iamv1.AccountLifecycleCreate, 0, http.StatusNotFound)
-	readCompletion(disableRequest, iamv1.AccountLifecycleSetStatus, 1, http.StatusNotFound)
-	readCompletion(recoveryRequest, iamv1.AccountLifecycleRecoverRootCredentials, 2, http.StatusNotFound)
-	if retained = readAccount(); retained.Status != iamv1.AccountDisabled || retained.ResourceVersion != 3 || retained.RootIdentity.PrincipalID != rootID {
-		t.Fatal("IAM86 migration changed retained Account identity or state")
+	readCompletion(predecessorUpdateRequest, iamv1.UserManagementUpdate, 1, http.StatusNotFound)
+	readCompletion(predecessorStatusRequest, iamv1.UserManagementSetStatus, 2, http.StatusNotFound)
+	if retained = readUser(); retained.Status != iamv1.PrincipalDisabled || retained.ResourceVersion != 3 || retained.DisplayName != "Predecessor updated member" {
+		t.Fatal("IAM87 migration changed retained User identity or state")
 	}
 
-	const currentRecoveryPassword = "Retained-Current-Recovery-Password-87!"
-	sensitive = append(sensitive, currentRecoveryPassword)
-	var beforeCredentialVersion uint64
-	var beforePasswordHash string
-	if err := admin.QueryRow(ctx, "SELECT credential_version,password_hash FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", accountID, rootID).Scan(&beforeCredentialVersion, &beforePasswordHash); err != nil {
-		t.Fatal("read retained root credential state", err)
+	reused := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(retained.ID)+":update", operator.Credential,
+		iamv1.UpdateUserRequest{DisplayName: "Forbidden reused intent", ResourceVersion: retained.ResourceVersion, RequestID: predecessorStatusRequest})
+	unchanged := readUser()
+	if reused.Status != http.StatusConflict || unchanged != retained {
+		t.Fatal("IAM87 reused a predecessor request across User operations or changed retained state")
 	}
-	reused := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+accountID+":recover-root-credentials", operator.Credential,
-		map[string]any{"initialPassword": currentRecoveryPassword, "resourceVersion": retained.ResourceVersion, "requestId": recoveryRequest})
-	var afterCredentialVersion uint64
-	var afterPasswordHash string
-	if err := admin.QueryRow(ctx, "SELECT credential_version,password_hash FROM iam.user_credentials WHERE tenant_id=$1 AND principal_id=$2", accountID, rootID).Scan(&afterCredentialVersion, &afterPasswordHash); err != nil {
-		t.Fatal("read rejected retained root credential state", err)
+	const currentUpdateRequest = "user-management-current-update"
+	completedResponse := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(retained.ID)+":update", operator.Credential,
+		iamv1.UpdateUserRequest{DisplayName: "Current updated member", ResourceVersion: retained.ResourceVersion, RequestID: currentUpdateRequest})
+	var updated iamv1.User
+	if completedResponse.Status != http.StatusOK || json.Unmarshal(completedResponse.Body, &updated) != nil ||
+		iamv1.ValidateUser(updated) != nil || updated.ResourceVersion != 4 || updated.Status != iamv1.PrincipalDisabled ||
+		updated.DisplayName != "Current updated member" {
+		t.Fatalf("IAM87 did not update retained User: status=%d", completedResponse.Status)
 	}
-	unchanged := readAccount()
-	if reused.Status != http.StatusConflict || unchanged.Status != retained.Status || unchanged.ResourceVersion != retained.ResourceVersion ||
-		unchanged.RootIdentity.PrincipalID != retained.RootIdentity.PrincipalID || afterCredentialVersion != beforeCredentialVersion || afterPasswordHash != beforePasswordHash {
-		t.Fatal("IAM86 reused a consumed predecessor request or changed retained state")
+	updateCompletion := readCompletion(currentUpdateRequest, iamv1.UserManagementUpdate, 3, http.StatusOK)
+	if updateCompletion.Result != updated {
+		t.Fatal("IAM87 update completion did not preserve the original result")
 	}
-	const currentRecoveryRequest = "account-completion-current-recovery"
-	completedResponse := performJSON(t, http.MethodPost, endpoint+"/v1/accounts/"+accountID+":recover-root-credentials", operator.Credential,
-		map[string]any{"initialPassword": currentRecoveryPassword, "resourceVersion": retained.ResourceVersion, "requestId": currentRecoveryRequest})
-	var completedAccount iamv1.Account
-	if completedResponse.Status != http.StatusOK || json.Unmarshal(completedResponse.Body, &completedAccount) != nil ||
-		iamv1.ValidateAccount(completedAccount) != nil || completedAccount.ResourceVersion != 4 ||
-		completedAccount.Status != iamv1.AccountDisabled || completedAccount.RootIdentity.PrincipalID != rootID {
-		t.Fatalf("IAM86 did not recover retained disabled Account: status=%d", completedResponse.Status)
+	const currentStatusRequest = "user-management-current-enable"
+	statusResponse := performJSON(t, http.MethodPost, endpoint+"/v1/users/"+string(retained.ID)+":set-status", operator.Credential,
+		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalActive, ResourceVersion: updated.ResourceVersion, RequestID: currentStatusRequest})
+	var enabled iamv1.User
+	if statusResponse.Status != http.StatusOK || json.Unmarshal(statusResponse.Body, &enabled) != nil ||
+		iamv1.ValidateUser(enabled) != nil || enabled.ResourceVersion != 5 || enabled.Status != iamv1.PrincipalActive {
+		t.Fatalf("IAM87 did not enable retained User: status=%d", statusResponse.Status)
 	}
-	completion := readCompletion(currentRecoveryRequest, iamv1.AccountLifecycleRecoverRootCredentials, 3, http.StatusOK)
-	if completion.ResultingResourceVersion != 4 || completion.Status != iamv1.AccountDisabled || completion.RootPrincipalID != rootID {
-		t.Fatal("IAM86 retained-data completion implied enable or changed the root identity")
+	statusCompletion := readCompletion(currentStatusRequest, iamv1.UserManagementSetStatus, 4, http.StatusOK)
+	if statusCompletion.Result != enabled || readCompletion(currentUpdateRequest, iamv1.UserManagementUpdate, 3, http.StatusOK) != updateCompletion {
+		t.Fatal("later User state rewrote an original completion")
 	}
 	current.stop()
 	current = start(root, currentBinary, installationrelease.CurrentDatabaseProfile().Authorities.IAM)
 	defer current.stop()
-	if replay := readCompletion(currentRecoveryRequest, iamv1.AccountLifecycleRecoverRootCredentials, 3, http.StatusOK); replay != completion {
-		t.Fatal("IAM86 restart changed the immutable account completion")
+	if replay := readCompletion(currentUpdateRequest, iamv1.UserManagementUpdate, 3, http.StatusOK); replay != updateCompletion {
+		t.Fatal("IAM87 restart changed the immutable update completion")
 	}
-	restartedAccount := readAccount()
-	if restartedAccount.Status != completedAccount.Status || restartedAccount.ResourceVersion != completedAccount.ResourceVersion ||
-		restartedAccount.RootIdentity.PrincipalID != completedAccount.RootIdentity.PrincipalID {
-		t.Fatal("IAM86 restart changed retained Account state")
+	if replay := readCompletion(currentStatusRequest, iamv1.UserManagementSetStatus, 4, http.StatusOK); replay != statusCompletion {
+		t.Fatal("IAM87 restart changed the immutable status completion")
 	}
-	t.Log("fixed IAM85 process -> IAM86: old completions absent, old request consumed, canonical facts retained, new disabled-root completion survives restart")
+	if restarted := readUser(); restarted != enabled {
+		t.Fatal("IAM87 restart changed retained User state")
+	}
+	t.Log("fixed IAM86 process -> IAM87: old completions absent, old request IDs consumed, canonical facts retained, exact profile/status snapshots survive later mutation and restart")
 }
 
 // Fixed predecessor source is extracted into a bounded temporary directory;

@@ -15,6 +15,7 @@ import (
 
 var ErrSecuritySettingsChangeNotFound = errors.New("security settings change was not found")
 var ErrUserPasswordResetCompletionNotFound = errors.New("user password reset completion was not found")
+var ErrUserManagementCompletionNotFound = errors.New("user management completion was not found")
 var ErrAccountLifecycleCompletionNotFound = errors.New("account lifecycle completion was not found")
 
 type SecuritySettingsMutation struct {
@@ -1265,6 +1266,42 @@ func (service *Authority) UserPasswordResetCompletion(ctx context.Context, crede
 				result.ActorPrincipalID != subject.Subject.Principal.ID || result.UserID != user || result.RequestID != resetRequestID ||
 				result.ExpectedResourceVersion != expectedVersion || result.OccurredAt.After(now) {
 				return iamv1.UserPasswordResetCompletion{}, ErrUnavailable
+			}
+			return result, nil
+		})
+}
+
+// UserManagementCompletion observes the immutable, non-secret result of one
+// profile or status command. It rechecks the original actor's current command
+// authority and never substitutes the User's current state for an uncertain
+// original response.
+func (service *Authority) UserManagementCompletion(ctx context.Context, credential iamv1.Secret, user iamv1.PrincipalID,
+	operation iamv1.UserManagementOperation, commandRequestID string, expectedVersion uint64, requestID string) (iamv1.UserManagementCompletion, error) {
+	if iamv1.ValidateID("userId", string(user)) != nil || iamv1.ValidateID("commandRequestId", commandRequestID) != nil ||
+		iamv1.ValidateID("requestId", requestID) != nil || expectedVersion == 0 || expectedVersion >= 9007199254740991 {
+		return iamv1.UserManagementCompletion{}, ErrInvalidArgument
+	}
+	var action iamv1.Action
+	switch operation {
+	case iamv1.UserManagementUpdate:
+		action = iamv1.ActionIAMUserUpdate
+	case iamv1.UserManagementSetStatus:
+		action = iamv1.ActionIAMUserSetStatus
+	default:
+		return iamv1.UserManagementCompletion{}, ErrInvalidArgument
+	}
+	return withAccountAuthorization(service, ctx, credential, action, iamv1.AuthorizationResourceInstance, "",
+		iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(user)}, requestID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.UserManagementCompletion, error) {
+			result, err := tx.ReadUserManagementCompletion(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, user, operation, commandRequestID, expectedVersion)
+			if err != nil {
+				return iamv1.UserManagementCompletion{}, err
+			}
+			if iamv1.ValidateUserManagementCompletion(result) != nil || result.AccountID != subject.Subject.Organization.ID ||
+				result.ActorPrincipalID != subject.Subject.Principal.ID || result.Operation != operation || result.UserID != user ||
+				result.CommandRequestID != commandRequestID || result.ExpectedResourceVersion != expectedVersion || result.OccurredAt.After(now) {
+				return iamv1.UserManagementCompletion{}, ErrUnavailable
 			}
 			return result, nil
 		})

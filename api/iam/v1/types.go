@@ -1034,6 +1034,33 @@ type UserPasswordResetCompletion struct {
 	OccurredAt               time.Time   `json:"occurredAt"`
 }
 
+// UserManagementOperation is the closed set of ordinary User commands whose
+// immutable, non-secret result can be inspected after an uncertain response.
+// It is not an IAM action or permission and cannot authorize another write.
+type UserManagementOperation string
+
+const (
+	UserManagementUpdate    UserManagementOperation = "USER_UPDATE"
+	UserManagementSetStatus UserManagementOperation = "USER_SET_STATUS"
+)
+
+// UserManagementCompletion identifies one committed User profile or status
+// command. Result is the exact non-secret User snapshot returned by the
+// original transaction; it is not the User's current state or a replay permit.
+type UserManagementCompletion struct {
+	APIVersion              string                  `json:"apiVersion"`
+	Kind                    string                  `json:"kind"`
+	AccountID               AccountID               `json:"accountId"`
+	ActorPrincipalID        PrincipalID             `json:"actorPrincipalId"`
+	Operation               UserManagementOperation `json:"operation"`
+	UserID                  PrincipalID             `json:"userId"`
+	CommandRequestID        string                  `json:"commandRequestId"`
+	ExpectedResourceVersion uint64                  `json:"expectedResourceVersion"`
+	Result                  User                    `json:"result"`
+	EventID                 string                  `json:"eventId"`
+	OccurredAt              time.Time               `json:"occurredAt"`
+}
+
 type RevokeSessionRequest struct {
 	RequestID string `json:"requestId"`
 }

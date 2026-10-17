@@ -68,6 +68,17 @@ func (value *UserPasswordResetCompletion) UnmarshalJSON(source []byte) error {
 	return nil
 }
 
+func (value *UserManagementCompletion) UnmarshalJSON(source []byte) error {
+	type wire UserManagementCompletion
+	var decoded wire
+	if value == nil || contractjson.DecodeObjectBytes(source, MaxRequestBytes, &decoded) != nil ||
+		ValidateUserManagementCompletion(UserManagementCompletion(decoded)) != nil {
+		return contractjson.ErrInvalidDocument
+	}
+	*value = UserManagementCompletion(decoded)
+	return nil
+}
+
 func (value *PasswordRequirements) UnmarshalJSON(source []byte) error {
 	type wire PasswordRequirements
 	var decoded wire

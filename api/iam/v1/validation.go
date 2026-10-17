@@ -1665,6 +1665,26 @@ func ValidateUserPasswordResetCompletion(value UserPasswordResetCompletion) erro
 		ValidateID("eventId", value.EventID), validateTime("occurredAt", value.OccurredAt))
 }
 
+func ValidateUserManagementCompletion(value UserManagementCompletion) error {
+	if value.APIVersion != APIVersion || value.Kind != "UserManagementCompletion" {
+		return errors.New("user management completion metadata is invalid")
+	}
+	if value.Operation != UserManagementUpdate && value.Operation != UserManagementSetStatus {
+		return errors.New("user management completion operation is invalid")
+	}
+	if validatePositiveVersion(value.ExpectedResourceVersion) != nil || value.ExpectedResourceVersion >= 9007199254740991 ||
+		value.Result.ResourceVersion != value.ExpectedResourceVersion+1 {
+		return errors.New("user management completion versions are invalid")
+	}
+	if ValidateUser(value.Result) != nil || value.Result.AccountID != value.AccountID || value.Result.ID != value.UserID ||
+		!value.Result.UpdatedAt.Equal(value.OccurredAt) {
+		return errors.New("user management completion result is invalid")
+	}
+	return errors.Join(ValidateID("accountId", string(value.AccountID)), ValidateID("actorPrincipalId", string(value.ActorPrincipalID)),
+		ValidateID("userId", string(value.UserID)), ValidateID("commandRequestId", value.CommandRequestID),
+		ValidateID("eventId", value.EventID), validateTime("occurredAt", value.OccurredAt))
+}
+
 func ValidateRootIdentity(value RootIdentity) error {
 	return errors.Join(ValidateID("rootIdentity.principalId", string(value.PrincipalID)),
 		validateLoginName(value.LoginName))
