@@ -11,6 +11,7 @@ import { LiveRecoveryCodeRegeneration } from "./LiveRecoveryCodeRegeneration";
 import { LiveTOTPManagement } from "./LiveTOTPManagement";
 import { AuthenticatorSetupMaterial } from "./AuthenticatorSetupMaterial";
 import { LiveNotificationContactReplacement } from "./LiveNotificationContactReplacement";
+import { SelfPasswordSettings } from "./PasswordChangeForm";
 import styles from "./MfaPreviewExperience.module.css";
 
 type LoadState = "loading" | "ready" | "error";
@@ -224,6 +225,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
       <Badge status="success">LIVE</Badge>
     </div>
     <Alert status="info"><ShieldCheck aria-hidden="true" />{t("boundary")}</Alert>
+    <SelfPasswordSettings />
     {error ? <Alert status="danger">{t(`errors.${error}`)} {error === "load" ? <Button onClick={() => { setLoadState("loading"); setError(null); void load(); }} size="small" variant="ghost"><RefreshCcw aria-hidden="true" />{t("retry")}</Button> : null}</Alert> : null}
     {!client ? <Alert status="warning">{t("unavailable")}</Alert> : null}
     <div className={styles.securityCards}>

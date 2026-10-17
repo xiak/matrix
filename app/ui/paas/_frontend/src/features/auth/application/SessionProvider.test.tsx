@@ -24,12 +24,15 @@ function Probe() {
   const session = useSession();
   const security = usePersonalSecurity();
   const [returnedCodes, setReturnedCodes] = useState<string[]>([]);
+  const [passwordResult, setPasswordResult] = useState<boolean | null>(null);
   return (
     <div>
       <span data-testid="phase">{session.phase}</span>
       <span data-testid="principal">{session.current?.loginName ?? "none"}</span>
       <span data-testid="challenge">{session.challenge?.challenge.nextStep ?? "none"}</span>
       <span data-testid="error">{session.error ?? "none"}</span>
+      <span data-testid="password-state">{session.passwordChange.state}</span>
+      <span data-testid="password-result">{String(passwordResult)}</span>
       <span data-testid="recovery">{session.enrollmentRecovery?.recoveryCodes.join("|") ?? "none"}</span>
       <span data-testid="first-enrollment">{session.firstEnrollment?.status ?? "none"}</span>
       <span data-testid="authenticator-recovery">{session.authenticatorRecovery?.state ?? "none"}</span>
@@ -38,9 +41,10 @@ function Probe() {
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
       <button onClick={() => void session.login("bravo", "password")} type="button">login-b</button>
       <button
-        onClick={() => void session.changePassword("Initial-Admin-Password-49!", "Changed-Admin-Password-73!")}
+        onClick={() => void session.changePassword("Initial-Admin-Password-49!", "Changed-Admin-Password-73!").then(setPasswordResult)}
         type="button"
       >change</button>
+      <button onClick={() => void session.changePassword("Initial-Admin-Password-49!", "Changed-Admin-Password-73!", false).then(setPasswordResult)} type="button">change-retain</button>
       <button onClick={() => void session.logout()} type="button">logout</button>
       <button onClick={() => void session.verifyAuthenticationChallenge("123456")} type="button">verify</button>
       <button onClick={session.enterAuthenticatorRecovery} type="button">enter-recovery</button>
@@ -108,6 +112,71 @@ afterEach(() => {
 });
 
 describe("SessionProvider", () => {
+  it.each([true, false])("changes an authenticated User's password with revokeOthers=%s while retaining the current Session", async (revoke) => {
+    const iam = repository(); const request = deferred<void>(); iam.changePassword = vi.fn(() => request.promise);
+    const view = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(view.getByText("login")));
+    await act(async () => fireEvent.click(view.getByText(revoke ? "change" : "change-retain")));
+    expect(view.getByTestId("phase").textContent).toBe("authenticated"); expect(view.getByTestId("password-state").textContent).toBe("pending");
+    expect(iam.changePassword).toHaveBeenCalledExactlyOnceWith(secretCredential, { currentPassword: "Initial-Admin-Password-49!", newPassword: "Changed-Admin-Password-73!", revokeOtherSessions: revoke });
+    await act(async () => request.resolve());
+    expect(view.getByTestId("password-result").textContent).toBe("true"); expect(view.getByTestId("password-state").textContent).toBe("idle");
+    expect(view.getByTestId("phase").textContent).toBe("authenticated"); expect(view.getByTestId("principal").textContent).toBe("admin");
+    expect(view.container.textContent).not.toContain(secretCredential); expect(localStorage.length + sessionStorage.length).toBe(0);
+  });
+
+  it("forces other-session revocation on required first-login replacement even when false is submitted", async () => {
+    const iam = repository({ mustChangePassword: true }); iam.changePassword = vi.fn().mockResolvedValue(undefined);
+    const view = render(<SessionProvider repository={iam}><Probe /></SessionProvider>); await act(async () => fireEvent.click(view.getByText("login")));
+    await act(async () => fireEvent.click(view.getByText("change-retain")));
+    expect(iam.changePassword).toHaveBeenCalledExactlyOnceWith(secretCredential, { currentPassword: "Initial-Admin-Password-49!", newPassword: "Changed-Admin-Password-73!", revokeOtherSessions: true });
+    expect(view.getByTestId("phase").textContent).toBe("authenticated");
+  });
+
+  it.each([401, 409, 422])("never reports a %s daily password rejection as success or forced-first-login", async (status) => {
+    const iam = repository(); iam.changePassword = vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE"));
+    const view = render(<SessionProvider repository={iam}><Probe /></SessionProvider>); await act(async () => fireEvent.click(view.getByText("login")));
+    await act(async () => fireEvent.click(view.getByText("change")));
+    expect(view.getByTestId("password-result").textContent).toBe("false"); expect(view.getByTestId("password-state").textContent).toBe("idle");
+    expect(view.getByTestId("error").textContent).toBe(status === 401 ? "invalidCurrentPassword" : status === 409 ? "passwordConflict" : "passwordPolicy");
+    expect(view.getByTestId("phase").textContent).toBe("authenticated"); expect(view.container.textContent).not.toContain("PRIVATE");
+  });
+
+  it("blocks duplicate and unknown password requests until a new authenticated owner exists", async () => {
+    const iam = repository(); const request = deferred<void>(); iam.changePassword = vi.fn(() => request.promise);
+    const view = render(<SessionProvider repository={iam}><Probe /></SessionProvider>); await act(async () => fireEvent.click(view.getByText("login")));
+    await act(async () => { fireEvent.click(view.getByText("change")); fireEvent.click(view.getByText("change-retain")); });
+    expect(iam.changePassword).toHaveBeenCalledOnce(); await act(async () => request.reject(new Error("response lost")));
+    expect(view.getByTestId("password-state").textContent).toBe("outcome-unknown");
+    await act(async () => fireEvent.click(view.getByText("change"))); expect(iam.changePassword).toHaveBeenCalledOnce();
+    await act(async () => fireEvent.click(view.getByText("login-b")));
+    expect(view.getByTestId("password-state").textContent).toBe("idle");
+    vi.mocked(iam.changePassword).mockResolvedValueOnce(undefined); await act(async () => fireEvent.click(view.getByText("change")));
+    expect(iam.changePassword).toHaveBeenCalledTimes(2); expect(view.getByTestId("password-result").textContent).toBe("true");
+  });
+
+  it.each(["Session", "repository"])("discards late password success after the originating %s owner changes", async (owner) => {
+    const iam = repository(); const request = deferred<void>(); iam.changePassword = vi.fn(() => request.promise);
+    const view = render(<SessionProvider repository={iam}><Probe /></SessionProvider>); await act(async () => fireEvent.click(view.getByText("login")));
+    await act(async () => fireEvent.click(view.getByText("change")));
+    if (owner === "Session") await act(async () => fireEvent.click(view.getByText("login-b")));
+    else view.rerender(<SessionProvider repository={repository()}><Probe /></SessionProvider>);
+    await act(async () => request.resolve());
+    expect(view.getByTestId("password-result").textContent).toBe("false"); expect(view.getByTestId("error").textContent).toBe("none");
+    expect(view.getByTestId("password-state").textContent).toBe(owner === "Session" ? "idle" : "outcome-unknown"); expect(view.getByTestId("phase").textContent).toBe("authenticated");
+    expect(view.getByTestId("principal").textContent).toBe(owner === "Session" ? "bravo" : "admin");
+    if (owner === "repository") { await act(async () => fireEvent.click(view.getByText("change"))); expect(view.getByTestId("password-state").textContent).toBe("outcome-unknown"); }
+  });
+
+  it("ignores an old Session's late password 401 instead of expiring its replacement", async () => {
+    const iam = repository(); const request = deferred<void>(); iam.changePassword = vi.fn(() => request.promise);
+    const view = render(<SessionProvider repository={iam}><Probe /></SessionProvider>); await act(async () => fireEvent.click(view.getByText("login")));
+    await act(async () => fireEvent.click(view.getByText("change"))); await act(async () => fireEvent.click(view.getByText("login-b")));
+    await act(async () => request.reject(new HttpProblem(401, "OLD_SESSION")));
+    expect(view.getByTestId("principal").textContent).toBe("bravo"); expect(view.getByTestId("phase").textContent).toBe("authenticated");
+    expect(view.getByTestId("error").textContent).toBe("none"); expect(view.getByTestId("password-result").textContent).toBe("false");
+  });
+
   it("discards a late first-enrollment observation after its challenge is cancelled", async () => {
     const challenge = { id: "first-challenge", purpose: "ENROLLMENT" as const, nextStep: "ENROLLMENT" as const,
       expiresAt: "2099-09-01T00:05:00Z" };

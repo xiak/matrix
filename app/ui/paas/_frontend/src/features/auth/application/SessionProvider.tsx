@@ -5,12 +5,13 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
   type ReactNode
 } from "react";
-import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type {
   AuthenticatorRecovery,
   AuthenticatedSession,
@@ -59,7 +60,8 @@ type SessionContextValue = {
   cancelAuthenticationChallenge(): void;
   acknowledgeReauthentication(): void;
   acknowledgeEnrollmentRecovery(): void;
-  changePassword(currentPassword: string, newPassword: string): Promise<boolean>;
+  passwordChange: { identity: string; state: "idle" | "pending" | "outcome-unknown" };
+  changePassword(currentPassword: string, newPassword: string, revokeOtherSessions?: boolean): Promise<boolean>;
   logout(): Promise<boolean>;
   expire(expectedCredential: string, expectedSessionRevision?: number): boolean;
 };
@@ -108,7 +110,7 @@ function challengePasswordError(error: unknown): SessionErrorCode {
   return "passwordUnavailable";
 }
 
-function knownRecoveryRejection(error: unknown): error is HttpProblem {
+function knownAuthenticationRejection(error: unknown): error is HttpProblem {
   return error instanceof HttpProblem && [400, 401, 403, 409, 413, 415, 422, 429].includes(error.status);
 }
 
@@ -141,6 +143,15 @@ export function SessionProvider({
   const firstEnrollmentOperationRef = useRef<number | null>(null);
   const [error, setError] = useState<SessionErrorCode | null>(null);
   const clearError = useCallback(() => { setError(null); }, []);
+  const passwordOwner = useMemo(() => ({ repository, sessionRevision, authenticated: credential !== null, identity: requestToken("ui-password-view-") }), [repository, credential, sessionRevision]);
+  const currentPasswordOwner = useRef<typeof passwordOwner | null>(passwordOwner);
+  useLayoutEffect(() => { currentPasswordOwner.current = passwordOwner; return () => { currentPasswordOwner.current = null; }; }, [passwordOwner]);
+  type PasswordAttempt = { owner: typeof passwordOwner; state: "pending" | "outcome-unknown" };
+  const passwordAttemptRef = useRef<PasswordAttempt | null>(null);
+  const [passwordAttempt, setPasswordAttempt] = useState<PasswordAttempt | null>(null);
+  const passwordChange = useMemo(() => ({ identity: passwordOwner.identity,
+    state: passwordAttempt?.owner.sessionRevision === passwordOwner.sessionRevision && passwordOwner.authenticated
+      ? passwordAttempt.owner === passwordOwner ? passwordAttempt.state : "outcome-unknown" as const : "idle" as const }), [passwordAttempt, passwordOwner]);
 
   const replaceChallenge = useCallback((next: PendingAuthenticationChallenge | null) => {
     challengeRef.current = next;
@@ -156,6 +167,8 @@ export function SessionProvider({
     authenticationRevisionRef.current += 1;
     firstEnrollmentOperationRef.current = null;
     credentialRef.current = null;
+    passwordAttemptRef.current = null;
+    setPasswordAttempt(null);
     setCredential(null);
     setCurrent(null);
     replaceChallenge(null);
@@ -387,7 +400,7 @@ export function SessionProvider({
     } catch (startError) {
       if (authenticationRevisionRef.current !== authenticationRevision || challengeRef.current !== sourceChallenge ||
           authenticatorRecoveryRef.current !== pending) return false;
-      if (knownRecoveryRejection(startError)) {
+      if (knownAuthenticationRejection(startError)) {
         replaceAuthenticatorRecovery(null);
         setError(recoveryStartError(startError));
         setPhase("recovery-code-required");
@@ -427,12 +440,12 @@ export function SessionProvider({
     } catch (confirmError) {
       if (authenticationRevisionRef.current !== authenticationRevision || challengeRef.current !== recoveryChallenge ||
           authenticatorRecoveryRef.current !== pending) return false;
-      if (knownRecoveryRejection(confirmError) && confirmError.status === 401) {
+      if (knownAuthenticationRejection(confirmError) && confirmError.status === 401) {
         setError("invalidVerificationCode");
         setPhase("recovery-enrollment-required");
         return false;
       }
-      if (knownRecoveryRejection(confirmError)) {
+      if (knownAuthenticationRejection(confirmError)) {
         replaceChallenge(null);
         replaceAuthenticatorRecovery({
           loginName: pending.loginName,
@@ -765,23 +778,40 @@ export function SessionProvider({
 
   const changePassword = useCallback(async (
     currentPassword: string,
-    newPassword: string
+    newPassword: string,
+    revokeOtherSessions = true
   ) => {
-    if (!credential || !current || phase !== "password-change-required") {
+    if (!credential || !current || credentialRef.current !== credential || currentPasswordOwner.current !== passwordOwner ||
+        (phase !== "password-change-required" && phase !== "authenticated") || typeof revokeOtherSessions !== "boolean" ||
+        passwordAttemptRef.current?.owner.sessionRevision === passwordOwner.sessionRevision) {
       return false;
     }
-    setPhase("changing-password");
+    const required = phase === "password-change-required";
+    const authenticationRevision = authenticationRevisionRef.current;
+    const attempt: PasswordAttempt = { owner: passwordOwner, state: "pending" };
+    passwordAttemptRef.current = attempt; setPasswordAttempt(attempt);
+    const ownsReply = () => currentPasswordOwner.current === passwordOwner && passwordAttemptRef.current === attempt &&
+      authenticationRevisionRef.current === authenticationRevision && credentialRef.current === credential;
+    if (required) setPhase("changing-password");
     setError(null);
     try {
-      await repository.changePassword(credential, { currentPassword, newPassword });
-      setPhase("authenticated");
+      await repository.changePassword(credential, { currentPassword, newPassword, revokeOtherSessions: required || revokeOtherSessions });
+      if (!ownsReply()) return false;
+      passwordAttemptRef.current = null; setPasswordAttempt(null);
+      if (required) setPhase("authenticated");
       return true;
     } catch (changeError) {
+      if (!ownsReply()) return false;
+      if (knownAuthenticationRejection(changeError)) { passwordAttemptRef.current = null; setPasswordAttempt(null); }
+      else {
+        const unknown: PasswordAttempt = { owner: passwordOwner, state: "outcome-unknown" };
+        passwordAttemptRef.current = unknown; setPasswordAttempt(unknown);
+      }
       setError(passwordChangeError(changeError));
-      setPhase("password-change-required");
+      if (required) setPhase("password-change-required");
       return false;
     }
-  }, [credential, current, phase, repository]);
+  }, [credential, current, passwordOwner, phase, repository]);
 
   const logout = useCallback(async () => {
     if (!credential) {
@@ -836,10 +866,11 @@ export function SessionProvider({
     cancelAuthenticationChallenge,
     acknowledgeReauthentication,
     acknowledgeEnrollmentRecovery,
+    passwordChange,
     changePassword,
     logout,
     expire
-  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmAuthenticatorRecovery, confirmFirstEnrollmentContact, confirmFirstEnrollmentFactor, current, enrollmentRecovery, firstEnrollment, reauthenticationReason, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, leaveAuthenticatorRecovery, login, logout, phase, sessionRevision, restartAuthenticatorRecovery, startAuthenticatorRecovery, startFirstEnrollmentContact, startFirstEnrollmentFactor, verifyAuthenticationChallenge]);
+  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmAuthenticatorRecovery, confirmFirstEnrollmentContact, confirmFirstEnrollmentFactor, current, enrollmentRecovery, firstEnrollment, reauthenticationReason, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, leaveAuthenticatorRecovery, login, logout, passwordChange, phase, sessionRevision, restartAuthenticatorRecovery, startAuthenticatorRecovery, startFirstEnrollmentContact, startFirstEnrollmentFactor, verifyAuthenticationChallenge]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (

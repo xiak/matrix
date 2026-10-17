@@ -48,6 +48,8 @@ Policy元数据与整策略退役候选固定为`a12093895ca7461c15f50b8ca0ff5dd
 
 后继固定`f529279db3911e4c104d14d00f2c186dde306e0a`只在既有`authorityprocess` owner增加Policy mutation真实浏览器门禁及其响应丢失夹具，不改变生产代码、API、数据库或发布Profile。两个独立空白PostgreSQL 18运行已分别证明UPDATE和RETIRE在后端2xx后半响应丢失、同源双标签Web Lock排他、关闭持锁标签及完全相同原命令单次恢复；每次只有一个权威状态推进、一条outbox事实、一条成功Audit记录，稳定Policy/不可变版本或活动目录退役结果及完整租户链准确。UPDATE fixture/race package为179.86/183.424秒，RETIRE为209.35/212.884秒；本轮专属容器、网络和卷在零外部数据库连接后已精确删除。[Verification 38936057920](https://github.com/xiak/matrix/actions/runs/38936057920)已通过GitHub API核实精确SHA，19个job全部`completed/success`；该独立结果只接受该固定源包含的门禁，不替代默认CI跳过的opt-in浏览器场景或当前后继工作树的发布验收。
 
+当前后继从UX/UI owner固定`3079bf6749f68857ad6fab048311fba0cf468a99`选择性采用普通User日常改密的九个既有认证源码、测试和消息路径，并由消费分支最终源码重建嵌入资产。日常默认撤销其他Session、允许显式请求保留仍有效的其他Session，首次登录强制改密始终撤销其他Session；pending、明确拒绝、结果未知、Session/repository换主和迟到响应均有失败关闭边界。Node22.22.2/npm11.6.4下四个聚焦文件271项、完整75文件1732项Vitest、8项Node构建边界、静态边界、两次59页导出/324项嵌入一致及Go UI test/vet已经通过；真实浏览器最终提交、数据库会话效果、Audit关联、独立CI和签名release仍待当前分支逐项验收，因此IAM-AC-02和总目标状态不变。
+
 ## 高风险测试矩阵
 
 - Tenant/Account：相同用户名、组名、策略名、资源 ID/key，错误 header/body/path/cursor 不能切换。

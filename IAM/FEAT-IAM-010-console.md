@@ -315,3 +315,11 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 该证据接受普通User首次登录强制改密的纯页面最终提交及会话代次边界；它不外推为日常主动改密的“保留当前/全部下线”选择、TOTP强制绑定、改密响应丢失恢复、其他敏感写入的过期Session矩阵或签名release组合验收。
 
 固定`18c115fe5007e36b7369e74f1c5c065952c0df32`选择性采用UX/UI owner固定`db4ce3f51febf30975ca616bbff221e30a11f031`中Group删除的五个源码、测试和消息路径，由本分支最终源码重新生成324项嵌入资产；没有导入donor生成物、FEAT、checkpoint或账号安全设置WIP。删除客户端只接受与当前Account、Group、名称、下一resourceVersion、非负级联计数及合法删除时间完全匹配的权威回执；busy/draft guard卸载后才进行普通受保护导航，目录独立重读，403/409/503、非法回执和跨Session/repository迟到结果均不得导航或显示成功。[Verification 38984154633](https://github.com/xiak/matrix/actions/runs/38984154633)已由测试owner按精确SHA核实19个job全部`completed/success`：受支持Node22.22.2/npm11.6.4实际通过75个Vitest文件、1703项测试和8项Node边界测试，234组对比度、两次59页/57路径生产导出及324项嵌入逐字一致；其中ConsoleNavigation的20项包含准确删除回执、导航和负向竞争用例。该CI默认跳过8个opt-in真实浏览器根，因此只接受Group组件/生成物和首次改密fixture的编译回归，不能替代Group最终页面删除或上述首次改密的本地真实浏览器证据；7个需要专属Postfix的邮件子测试也按既定边界跳过。
+
+### 普通用户日常改密
+
+本分支继续`ADAPT` UX/UI owner固定`3079bf6749f68857ad6fab048311fba0cf468a99`的九个既有认证源码、测试和中英文消息路径；九个消费blob与固定对象逐项一致，没有导入其FEAT、生成资产或尚未固定的Account安全设置。普通User从本人安全设置进入改密，只提交当前密码、新密码和明确的`revokeOtherSessions`；日常默认撤销其他会话但允许显式关闭，首次登录强制改密不显示该选项且始终强制撤销其他会话。当前Session只能由已经认证的同一bearer保留，页面不提供Account、User或Session selector，也不把改密成功变成新的认证事实。
+
+请求pending时禁止重复写；401、409、422和非法回包不得显示成功或切换到首次登录流程。无法确认结果时立即清除密码字段并锁住同一Session的后续改密，repository替换和迟到响应不得解除；只有新的正常认证所有者才能清除该非敏感阻断状态。成功后仍在当前内容区展示结果，不写入浏览器存储、不退出当前Session、不导航；明示`false`只请求保留服务端判定仍有效的其他会话，不能复活已过期或已撤销会话。
+
+消费分支在Node22.22.2/npm11.6.4下已通过四个聚焦文件271项及完整75文件1732项Vitest、8项Node构建边界测试、typecheck、变更owner lint、architecture、234组对比度、两次59页/57路径生产导出与324项嵌入逐字一致，Go UI test/vet也已通过。该证据接受组件、HTTP适配和生成物边界；真实浏览器最终提交、当前/其他Session数据库效果、Audit关联及签名release组合尚未验收，不能由donor分支测试或静态页面替代。

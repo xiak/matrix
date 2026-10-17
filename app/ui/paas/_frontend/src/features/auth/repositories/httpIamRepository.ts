@@ -3653,7 +3653,6 @@ export const httpAccountRepository: AccountRepository = {
   }
 };
 
-type ChangePasswordWire = { changedAt?: unknown; bootstrapFileRetirable?: unknown };
 
 function parseActiveSession(value: unknown): SessionSummary {
   const wire = accountRecord(value);
@@ -4034,12 +4033,14 @@ export const httpIamRepository: IamRepository = {
     }
   },
   async changePassword(credential: string, command: ChangePasswordCommand): Promise<void> {
-    const wire = await requestJSON<ChangePasswordWire>("/api/iam/v1/auth/password", {
+    const wire = accountRecord(await requestJSON<unknown>("/api/iam/v1/auth/password", {
       method: "POST",
       headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" },
       body: JSON.stringify({ currentPassword: command.currentPassword, newPassword: command.newPassword, revokeOtherSessions: command.revokeOtherSessions, requestId: requestToken("ui-password-") })
-    });
-    if (typeof wire.changedAt !== "string" || typeof wire.bootstrapFileRetirable !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+    }));
+    exactKeys(wire, ["changedAt", "bootstrapFileRetirable"]);
+    accountTimestamp(wire.changedAt);
+    if (typeof wire.bootstrapFileRetirable !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
   },
   async logout(credential: string): Promise<void> {
     await requestJSON<unknown>("/api/iam/v1/auth/logout", {
