@@ -679,6 +679,22 @@ from current Account facts or have its lost inputs resurrected by this UI.
 
 #### MFA and self-session experience contract
 
+The LIVE Account editor replaces all four explicit security segments together:
+MFA, password, Session idle timeout and AccessKey source networks. It starts
+only from a complete authorized current read, freezes that source revision,
+and reviews every before/after value without inferring missing fields or
+silently rebasing a draft. A changed authentication/repository owner invalidates
+an old read or review. Empty, fractional, out-of-range and unchanged inputs
+cannot create a step-up or PUT. All changes, including relaxing the user MFA
+rule, use the pre-change password/TOTP proof and the existing frozen full-intent
+workflow. Root/platform protected identity floors remain server-owned.
+Successful application ends only the original caller Session and requires
+normal login again. UNKNOWN retains the original complete intent for the
+existing completion GET after re-login; a current read is not completion or
+the original before-state. Historical absent fields are never filled with UI
+defaults. This editor does not enable a preview environment's authentication
+requirements or add phone login, SMS or a phone factor.
+
 The login challenge, restricted first enrollment, personal TOTP lifecycle,
 notification address and self-session pages have fixed LIVE clients as well
 as an explicit isolated MOCK. IAM-009/IAM-012 own their server-side rules and
@@ -2162,15 +2178,18 @@ metadata/terminal-retirement wire contract at
 `94cabe999378b7fdae9b5074546aab156e1d7553`. Remaining UI work is not an
 unpublished-backend placeholder:
 
-- Account security settings already have a LIVE read surface and a dedicated
-  AccessKey source-network edit/review/proof/completion workflow. The mounted
-  editor and Provider `begin` boundary accept only the next network layer,
-  retaining the current MFA, password and Session settings unchanged. Controls
-  for the other supported rule changes are missing. Each later slice must
-  verify its then-current public schema, reuse the dedicated step-up and
-  original-intent recovery owners, and distinguish ending the original caller
-  Session from inspecting history after a new login. This assessment does not
-  enable mandatory login/MFA or relax the existing UX-acceptance boundary.
+- Account security settings have a complete LIVE edit/review candidate for
+  MFA, password, Session idle timeout and AccessKey source networks, based on
+  the published full replacement contract at
+  `94cabe999378b7fdae9b5074546aab156e1d7553`. The existing dedicated step-up and
+  original-intent recovery owners now accept the complete frozen target,
+  without requiring a network change. All values remain explicit; stale
+  reads, changed owners, invalid inputs and unchanged targets cannot start a
+  new proof. A pending operation uses regional progress, while actual UNKNOWN
+  retains the original request and target. The editor distinguishes ending
+  the original caller Session from inspecting its completion after a new
+  login. This is a separate source candidate, not inherited browser/runtime
+  acceptance or permission to enable mandatory preview login/MFA.
 - Policy reads, creation, version publication, explicit default selection and
   nondefault-version retirement retain their LIVE paths. The separate Policy
   metadata/whole-retirement candidate now adds strict public-repository calls,
@@ -2220,7 +2239,8 @@ failure report nor establishes a unique cause for those failures. Independent
 fixed-source CI, supported-browser cross-tab/closed-tab recovery and signed IAM
 runtime acceptance remain open. No backend, API, SQL, shared DEV process, real
 Account/resource or mandatory authentication configuration changed. The full
-Account security-settings editor remains the separate, unimplemented gap above.
+Account security-settings editor is the separate candidate above; it does not
+inherit the Policy candidate's validation results.
 
 #### LIVE self-service password source candidate
 
@@ -2248,6 +2268,38 @@ embed equality, fresh UI-host Go checks, independent CI, real-browser and
 signed-IAM runtime acceptance are not claimed for this source. No shared DEV,
 real resource, IAM/Audit/SQL/profile or mandatory authentication setting changed;
 isolated MOCK and the email-only Phase 1 receiving scope remain intact.
+
+#### LIVE complete Account security-settings source candidate
+
+The independent complete editor is fixed at frontend tree
+`b5264c6d8cf0048cc22982d3653ad1b9951f446c`, based on source parent
+`3079bf6749f68857ad6fab048311fba0cf468a99`. It replaces the network-only
+form and Provider input together, reusing the existing full-intent proof and
+completion workflow. The summary, before/after review and frozen command
+target share one semantic values view; existing public controls and the
+dirty/busy leave owner remain in use. Current-read failure retains the
+unsubmitted draft without permitting proof, while owner changes clear its
+secrets. Predispatch review rejection does not claim a retained UNKNOWN
+command, and in-flight work does not flash an unknown-outcome warning.
+
+Windows Node 22.22.2/npm 11.6.4 typecheck, full lint, changed-owner zero-warning
+lint, architecture, 234 theme contrast pairs and all eight Node export-boundary
+cases pass on the isolated fixed source. The independent complete Windows
+Vitest gate passes all 75 files and 1801 cases in 916.60 seconds, with zero
+failures, skipped or todo cases and no timeout/worker/configuration changes.
+The JSON report SHA-256 is
+`fca471befc25fbc5cdca3a124d511f802d7ec07a599e3debcbf2e42a87e5acc8`.
+The earlier four-file/288-case focused pass is additional, not a substitute.
+The complete run emitted React `act` warnings from unchanged test owners;
+it does not prove a warning-free browser. The nine changed frontend blobs
+were checked against the isolated archive before publication.
+
+This is a source-only integration candidate. Generated assets are unchanged
+and must be rebuilt by the consuming branch. Production export/embed equality,
+fresh UI-host Go checks, independent CI, supported-browser and signed-IAM
+runtime acceptance are not claimed for this source. No backend/API/SQL/profile,
+shared DEV, real Account/resource or mandatory authentication setting changed.
+The isolated MOCK and email-only Phase 1 receiving scope remain unchanged.
 
 #### LIVE deletion-confirmation follow-up
 

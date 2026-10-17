@@ -425,7 +425,7 @@ function AccessKeyIntentProbe() {
   </>;
 }
 
-function SecuritySettingsIntentProbe() {
+function SecuritySettingsIntentProbe({ proposed = { expectedResourceVersion: accountSecuritySettings.resourceVersion, mfa: accountSecuritySettings.mfa, password: accountSecuritySettings.password, session: accountSecuritySettings.session, accessKeyNetwork: { allowedSourceCidrs: ["10.0.0.0/8"] } } }: { proposed?: SecuritySettingsUpdateIntent }) {
   const session = useSession();
   const access = useAccountAccess();
   const update = access.accountSecuritySettings?.update;
@@ -433,7 +433,7 @@ function SecuritySettingsIntentProbe() {
   return <>
     <button onClick={() => void session.login("admin", "password")}>login-settings-probe</button>
     <output aria-label="settings-probe-session">{session.phase}</output>
-    <button disabled={!update || Boolean(intent)} onClick={() => { if (update) void update.begin(accountSecuritySettings, { allowedSourceCidrs: ["10.0.0.0/8"] }, 7).catch(() => {}); }}>begin-settings</button>
+    <button disabled={!update || Boolean(intent)} onClick={() => { if (update) void update.begin(accountSecuritySettings, proposed, 7).catch(() => {}); }}>begin-settings</button>
     <button disabled={!update || intent?.state !== "STEP_UP_UNKNOWN"} onClick={() => { if (update) void update.retryStepUp().catch(() => {}); }}>retry-settings-step-up</button>
     <button disabled={!update || intent?.state !== "PENDING"} onClick={() => { if (update) void update.verifyStepUp({ requestId: `ui-account-security-settings-verify-${"b".repeat(32)}`, password: "test-password", code: "123456" }).catch(() => {}); }}>verify-settings-step-up</button>
     <button disabled={!update || intent?.state !== "PROVED"} onClick={() => { if (update) void update.apply().catch(() => {}); }}>apply-settings</button>
@@ -944,6 +944,82 @@ describe("account access", () => {
     await openAccess(accounts({ accountSecuritySettings: { read } }), iam(), "settings");
     expect(await screen.findByRole("button", { name: "登录控制台" })).toBeTruthy();
     expect(screen.queryByText(/没有查看账号安全规则的权限/)).toBeNull();
+  });
+
+  it.each(["mfa", "password", "password-lowercase", "password-uppercase", "password-digit", "password-symbol", "password-history", "password-age", "password-expiry", "session", "network"])("starts one frozen full-settings proof for an independent %s change without requiring a network delta", async (field) => {
+    const proposed: SecuritySettingsUpdateIntent = { expectedResourceVersion: 4, mfa: structuredClone(accountSecuritySettings.mfa),
+      password: structuredClone(accountSecuritySettings.password), session: structuredClone(accountSecuritySettings.session), accessKeyNetwork: { allowedSourceCidrs: [] } };
+    if (field === "mfa") proposed.mfa.requiredForUsers = false;
+    if (field === "password") proposed.password.minimumLength = 21;
+    if (field === "password-lowercase") proposed.password.requireLowercase = !proposed.password.requireLowercase;
+    if (field === "password-uppercase") proposed.password.requireUppercase = !proposed.password.requireUppercase;
+    if (field === "password-digit") proposed.password.requireDigit = !proposed.password.requireDigit;
+    if (field === "password-symbol") proposed.password.requireSymbol = !proposed.password.requireSymbol;
+    if (field === "password-history") proposed.password.historyCount += 1;
+    if (field === "password-age") proposed.password.maxAgeDays = 0;
+    if (field === "password-expiry") proposed.password.expiryMode = "ADMIN_RESET";
+    if (field === "session") proposed.session.idleTimeoutMinutes = 20;
+    if (field === "network") proposed.accessKeyNetwork.allowedSourceCidrs = ["10.0.0.0/8"];
+    const expected = structuredClone(proposed);
+    const startStepUp = vi.fn(async (_credential: string, command: { requestId: string; expectedFactorRevision: number; intent: SecuritySettingsUpdateIntent }): Promise<SecurityStepUp> => ({
+      id: "step-up-full-settings", requestId: command.requestId, operation: "SECURITY_SETTINGS_UPDATE", expectedFactorRevision: command.expectedFactorRevision,
+      securitySettings: structuredClone(command.intent), state: "PENDING", createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null
+    }));
+    const update = { startStepUp, stepUpByRequest: vi.fn(), verifyStepUp: vi.fn(), apply: vi.fn(), changeByRequest: vi.fn() };
+    const repository = accounts({ accountSecuritySettings: { read: vi.fn().mockResolvedValue(accountSecuritySettings), update } });
+    const user = userEvent.setup({ delay: null });
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><SecuritySettingsIntentProbe proposed={proposed} /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "begin-settings" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "begin-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toMatch(/^PENDING:/));
+    proposed.password.minimumLength = 30;
+    expect(startStepUp).toHaveBeenCalledExactlyOnceWith(credential, { requestId: expect.stringMatching(/^ui-account-security-settings-/), expectedFactorRevision: 7, intent: expected });
+    expect(update.apply).not.toHaveBeenCalled();
+  });
+
+  it.each(["unchanged", "missing-mfa", "missing-password", "missing-session", "missing-network", "length-low", "length-high", "history-high", "age-high", "expiry", "idle-low", "fraction", "wrong-version", "unsafe-version", "extra-field"])("rejects a %s full-settings target before any step-up or write", async (variant) => {
+    const proposed: Record<string, unknown> = { expectedResourceVersion: 4, mfa: structuredClone(accountSecuritySettings.mfa), password: structuredClone(accountSecuritySettings.password),
+      session: { idleTimeoutMinutes: variant === "unchanged" ? 30 : 20 }, accessKeyNetwork: { allowedSourceCidrs: [] } };
+    if (variant.startsWith("missing-")) delete proposed[variant.slice(8) === "network" ? "accessKeyNetwork" : variant.slice(8)];
+    const password = proposed.password as Record<string, unknown>;
+    if (variant === "length-low") password.minimumLength = 14;
+    if (variant === "length-high") password.minimumLength = 129;
+    if (variant === "history-high") password.historyCount = 25;
+    if (variant === "age-high") password.maxAgeDays = 366;
+    if (variant === "expiry") password.expiryMode = "UNKNOWN";
+    if (variant === "idle-low") proposed.session = { idleTimeoutMinutes: 4 };
+    if (variant === "fraction") proposed.session = { idleTimeoutMinutes: 20.5 };
+    if (variant === "wrong-version") proposed.expectedResourceVersion = 5;
+    if (variant === "unsafe-version") proposed.expectedResourceVersion = Number.MAX_SAFE_INTEGER;
+    if (variant === "extra-field") proposed.permit = true;
+    const update = { startStepUp: vi.fn(), stepUpByRequest: vi.fn(), verifyStepUp: vi.fn(), apply: vi.fn(), changeByRequest: vi.fn() };
+    const repository = accounts({ accountSecuritySettings: { read: vi.fn().mockResolvedValue(accountSecuritySettings), update } });
+    const user = userEvent.setup({ delay: null });
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><SecuritySettingsIntentProbe proposed={proposed as unknown as SecuritySettingsUpdateIntent} /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "begin-settings" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "begin-settings" }));
+    expect(screen.getByLabelText("settings-intent").textContent).toBe("none"); expect(update.startStepUp).not.toHaveBeenCalled(); expect(update.apply).not.toHaveBeenCalled(); expect(sessionStorage.length).toBe(0);
+  });
+
+  it("does not commit a late security-settings proof after its provider has unmounted", async () => {
+    let release!: (value: SecurityStepUp) => void;
+    const startStepUp = vi.fn<(credential: string, command: { requestId: string; expectedFactorRevision: number; intent: SecuritySettingsUpdateIntent }) => Promise<SecurityStepUp>>(() => new Promise<SecurityStepUp>((resolve) => { release = resolve; }));
+    const update = { startStepUp, stepUpByRequest: vi.fn(), verifyStepUp: vi.fn(), apply: vi.fn(), changeByRequest: vi.fn() };
+    const repository = accounts({ accountSecuritySettings: { read: vi.fn().mockResolvedValue(accountSecuritySettings), update } });
+    const user = userEvent.setup({ delay: null });
+    const view = render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><SecuritySettingsIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "begin-settings" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "begin-settings" })); await waitFor(() => expect(startStepUp).toHaveBeenCalledOnce());
+    const command = startStepUp.mock.calls[0]![1]; view.unmount();
+    await act(async () => { release({ id: "late-step-up", requestId: command.requestId, operation: "SECURITY_SETTINGS_UPDATE",
+      expectedFactorRevision: command.expectedFactorRevision, securitySettings: command.intent, state: "PENDING",
+      createdAt: timestamp, expiresAt: "2026-09-11T08:02:00Z", provedAt: null, consumedAt: null }); });
+    const stored = Array.from({ length: sessionStorage.length }, (_, index) => JSON.parse(sessionStorage.getItem(sessionStorage.key(index)!)!)).find((entry: { requestId?: string }) => entry.requestId === command.requestId);
+    expect(stored).toMatchObject({ requestId: command.requestId, state: "STEP_UP_UNKNOWN", stepUp: null, settings: command.intent });
+    expect(update.apply).not.toHaveBeenCalled(); expect(update.verifyStepUp).not.toHaveBeenCalled();
   });
 
   it("persists one frozen full-settings intent, replays the exact step-up, ends the caller Session, and recovers completion after login", async () => {

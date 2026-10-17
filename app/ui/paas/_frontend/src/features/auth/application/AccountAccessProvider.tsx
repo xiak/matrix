@@ -53,6 +53,7 @@ import type { CreateRoleCommand, CreateRolePolicyAttachmentCommand, DeleteRoleCo
 import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
 import type { AccountSecurityReport, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
 import type { SecurityStepUp } from "../domain/personalSecurity";
+import { sameSecuritySettingsIntent } from "../domain/accounts";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -233,7 +234,7 @@ export type AccountSecuritySettingsMutationIntent = Readonly<{
 
 export type AccountSecuritySettingsUpdateClient = {
   intent: AccountSecuritySettingsMutationIntent | null;
-  begin(current: AccountSecuritySettings, accessKeyNetwork: AccessKeyNetworkRestrictions, expectedFactorRevision: number): Promise<SecurityStepUp>;
+  begin(current: AccountSecuritySettings, settings: SecuritySettingsUpdateIntent, expectedFactorRevision: number): Promise<SecurityStepUp>;
   retryStepUp(): Promise<SecurityStepUp>;
   inspectStepUp(): Promise<SecurityStepUp>;
   verifyStepUp(command: { requestId: string; password: string; code: string }): Promise<SecurityStepUp>;
@@ -242,7 +243,13 @@ export type AccountSecuritySettingsUpdateClient = {
   clear(requestId: string): boolean;
 };
 
+/** The review failed before a new command was registered or dispatched. */
+export class AccountSecuritySettingsReviewRejected extends Error {
+  constructor() { super("ACCOUNT_SECURITY_SETTINGS_REVIEW_REJECTED"); this.name = "AccountSecuritySettingsReviewRejected"; }
+}
+
 export type AccountSecuritySettingsClient = {
+  identity: string;
   accountId: string;
   principalId: string;
   sessionId: string;
@@ -465,26 +472,11 @@ function clearUserPolicyChangeIntent(intent: UserPolicyChangeIntent): void {
   catch { /* Storage loss cannot prove the original relationship command failed. */ }
 }
 
-function sameSecuritySettingsIntent(left: SecuritySettingsUpdateIntent, right: SecuritySettingsUpdateIntent): boolean {
-  return left.expectedResourceVersion === right.expectedResourceVersion &&
-    left.mfa.requiredForUsers === right.mfa.requiredForUsers &&
-    left.password.minimumLength === right.password.minimumLength &&
-    left.password.requireLowercase === right.password.requireLowercase &&
-    left.password.requireUppercase === right.password.requireUppercase &&
-    left.password.requireDigit === right.password.requireDigit &&
-    left.password.requireSymbol === right.password.requireSymbol &&
-    left.password.historyCount === right.password.historyCount &&
-    left.password.maxAgeDays === right.password.maxAgeDays &&
-    left.password.expiryMode === right.password.expiryMode &&
-    left.session.idleTimeoutMinutes === right.session.idleTimeoutMinutes &&
-    accessKeyNetworkRestrictionsEqual(left.accessKeyNetwork, right.accessKeyNetwork);
-}
-
 function validSecuritySettingsIntent(value: unknown): value is SecuritySettingsUpdateIntent {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
   if (Object.keys(record).length !== 5 || !["expectedResourceVersion", "mfa", "password", "session", "accessKeyNetwork"].every((field) => Object.hasOwn(record, field)) ||
-      typeof record.expectedResourceVersion !== "number" || !Number.isSafeInteger(record.expectedResourceVersion) || record.expectedResourceVersion < 1 ||
+      typeof record.expectedResourceVersion !== "number" || !Number.isSafeInteger(record.expectedResourceVersion) || record.expectedResourceVersion < 1 || record.expectedResourceVersion >= Number.MAX_SAFE_INTEGER ||
       !record.mfa || typeof record.mfa !== "object" || Array.isArray(record.mfa) ||
       !record.password || typeof record.password !== "object" || Array.isArray(record.password) ||
       !record.session || typeof record.session !== "object" || Array.isArray(record.session) ||
@@ -495,14 +487,14 @@ function validSecuritySettingsIntent(value: unknown): value is SecuritySettingsU
   const passwordFields = ["minimumLength", "requireLowercase", "requireUppercase", "requireDigit", "requireSymbol", "historyCount", "maxAgeDays", "expiryMode"];
   return Object.keys(mfa).length === 1 && typeof mfa.requiredForUsers === "boolean" &&
     Object.keys(password).length === passwordFields.length && passwordFields.every((field) => Object.hasOwn(password, field)) &&
-    typeof password.minimumLength === "number" && Number.isSafeInteger(password.minimumLength) && password.minimumLength >= 1 &&
+    typeof password.minimumLength === "number" && Number.isSafeInteger(password.minimumLength) && password.minimumLength >= 15 && password.minimumLength <= 128 &&
     typeof password.requireLowercase === "boolean" && typeof password.requireUppercase === "boolean" &&
     typeof password.requireDigit === "boolean" && typeof password.requireSymbol === "boolean" &&
-    typeof password.historyCount === "number" && Number.isSafeInteger(password.historyCount) && password.historyCount >= 0 &&
-    typeof password.maxAgeDays === "number" && Number.isSafeInteger(password.maxAgeDays) && password.maxAgeDays >= 0 &&
+    typeof password.historyCount === "number" && Number.isSafeInteger(password.historyCount) && password.historyCount >= 0 && password.historyCount <= 24 &&
+    typeof password.maxAgeDays === "number" && Number.isSafeInteger(password.maxAgeDays) && password.maxAgeDays >= 0 && password.maxAgeDays <= 365 &&
     (password.expiryMode === "CHANGE_PASSWORD" || password.expiryMode === "ADMIN_RESET") &&
     Object.keys(session).length === 1 && typeof session.idleTimeoutMinutes === "number" &&
-    Number.isSafeInteger(session.idleTimeoutMinutes) && session.idleTimeoutMinutes >= 1 &&
+    Number.isSafeInteger(session.idleTimeoutMinutes) && session.idleTimeoutMinutes >= 5 && session.idleTimeoutMinutes <= 60 &&
     accessKeyNetworkRestrictionsValid(record.accessKeyNetwork as AccessKeyNetworkRestrictions);
 }
 
@@ -760,6 +752,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const viewSession = useMemo(() => ({ credential, tenantId, principalId, sessionRevision }), [credential, tenantId, principalId, sessionRevision]);
   const [verifiedIdentityOwner, setVerifiedIdentityOwner] = useState<{ session: typeof viewSession; repository: AccountRepository } | null>(null);
   const currentViewSession = useRef(viewSession);
+  const settingsOwner = useMemo(() => ({ repository, viewSession, active, identity: requestToken("ui-settings-view-") }), [repository, viewSession, active]);
+  const currentSettingsOwner = useRef<typeof settingsOwner | null>(settingsOwner);
+  useLayoutEffect(() => { currentSettingsOwner.current = settingsOwner; return () => { currentSettingsOwner.current = null; }; }, [settingsOwner]);
   // Exact target reads are not members of the signed directory. Retain only
   // advisory UI facts for this Session, repository and read generation.
   const exactUsers = useMemo(() => ({ active, repository, revision, viewSession,
@@ -863,7 +858,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     setStoredAccessKeyCreate(null);
   }, [viewSession]);
   const rememberSecuritySettingsIntent = useCallback((expectedRequestId: string | null, next: AccountSecuritySettingsMutationIntent | null): boolean => {
-    if (currentViewSession.current !== viewSession || !tenantId || !principalId || !securitySettingsIdentityKey) return false;
+    if (currentViewSession.current !== viewSession || currentSettingsOwner.current !== settingsOwner || !tenantId || !principalId || !securitySettingsIdentityKey) return false;
     const current = securitySettingsIntentRef.current;
     if (expectedRequestId === null) {
       if (current || !next || next.accountId !== tenantId || next.actorId !== principalId) return false;
@@ -876,7 +871,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     if (next) storeAccountSecuritySettingsIntent(next);
     else if (current) clearAccountSecuritySettingsIntent(current);
     return true;
-  }, [principalId, securitySettingsIdentityKey, tenantId, viewSession]);
+  }, [principalId, securitySettingsIdentityKey, settingsOwner, tenantId, viewSession]);
   const rememberUserPolicyChange = useCallback((expectedRequestId: string | null, next: UserPolicyChangeIntent | null): boolean => {
     if (currentViewSession.current !== viewSession) return false;
     const stored = userPolicyChangeRef.current;
@@ -1705,20 +1700,22 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   const accountSecuritySettings = useMemo<AccountSecuritySettingsClient | null>(() => {
     const reader = repository.accountSecuritySettings;
-    if (!active || !credential || !scene || scene.accountId !== tenantId || !principalId || !sessionId || !reader) return null;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !principalId || !sessionId || !reader ||
+        verifiedIdentityOwner?.session !== viewSession || verifiedIdentityOwner.repository !== repository) return null;
     const accountId = scene.accountId;
     const updater = reader.update;
     const mutationIntent = securitySettingsIntent?.accountId === accountId && securitySettingsIntent.actorId === principalId
       ? securitySettingsIntent : null;
     const knownStartRejection = (failure: unknown) => failure instanceof HttpProblem && [400, 401, 403, 409, 413, 415, 422, 429].includes(failure.status);
     const expireCurrent = () => {
+      if (currentSettingsOwner.current !== settingsOwner) return;
       if (expireSession(credential, sessionRevision)) {
         setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
       }
     };
     const requireMutation = () => {
       const current = securitySettingsIntentRef.current;
-      if (currentViewSession.current !== viewSession || !current || current.accountId !== accountId || current.actorId !== principalId) {
+      if (currentViewSession.current !== viewSession || currentSettingsOwner.current !== settingsOwner || !current || current.accountId !== accountId || current.actorId !== principalId) {
         throw new Error("INVALID_IAM_STATE");
       }
       return current;
@@ -1743,21 +1740,17 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       return stepUp;
     };
     return {
-      accountId, principalId, sessionId, sessionRevision,
+      identity: settingsOwner.identity, accountId, principalId, sessionId, sessionRevision,
       update: updater ? {
         intent: mutationIntent,
-        async begin(current, accessKeyNetwork, expectedFactorRevision) {
+        async begin(current, proposed, expectedFactorRevision) {
           if (securitySettingsIntentRef.current || currentViewSession.current !== viewSession || current.accountId !== accountId ||
-              !Number.isSafeInteger(expectedFactorRevision) || expectedFactorRevision < 1 ||
-              !accessKeyNetworkRestrictionsValid(accessKeyNetwork) ||
-              accessKeyNetworkRestrictionsEqual(current.accessKeyNetwork, accessKeyNetwork)) throw new Error("INVALID_IAM_STATE");
-          const settings: SecuritySettingsUpdateIntent = {
-            expectedResourceVersion: current.resourceVersion,
-            mfa: { ...current.mfa },
-            password: { ...current.password },
-            session: { ...current.session },
-            accessKeyNetwork: { allowedSourceCidrs: [...accessKeyNetwork.allowedSourceCidrs] }
-          };
+              currentSettingsOwner.current !== settingsOwner || !Number.isSafeInteger(expectedFactorRevision) || expectedFactorRevision < 2 ||
+              !validSecuritySettingsIntent(proposed) || proposed.expectedResourceVersion !== current.resourceVersion) throw new AccountSecuritySettingsReviewRejected();
+          const before = { expectedResourceVersion: current.resourceVersion, mfa: current.mfa, password: current.password,
+            session: current.session, accessKeyNetwork: current.accessKeyNetwork };
+          if (!validSecuritySettingsIntent(before) || sameSecuritySettingsIntent(before, proposed)) throw new AccountSecuritySettingsReviewRejected();
+          const settings = structuredClone(proposed);
           const pending: AccountSecuritySettingsMutationIntent = {
             accountId,
             actorId: principalId,
@@ -1767,7 +1760,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
             settings,
             stepUp: null
           };
-          if (!rememberSecuritySettingsIntent(null, pending)) throw new Error("STALE_IAM_SESSION");
+          if (!rememberSecuritySettingsIntent(null, pending)) throw new AccountSecuritySettingsReviewRejected();
           securitySettingsMutationPending.current = pending.requestId;
           try { return await startStepUp(pending); }
           catch (failure) {
@@ -1890,12 +1883,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       async load() {
         try {
           const settings = await reader.read(credential, accountId);
+          if (currentSettingsOwner.current !== settingsOwner) throw new Error("STALE_IAM_STATE");
           if (settings.accountId !== accountId) throw new Error("INVALID_IAM_TENANT");
           return { status: "ready", settings };
         } catch (failure) {
           if (failure instanceof HttpProblem) {
             if (failure.status === 401) {
-              if (expireSession(credential, sessionRevision)) {
+              if (currentSettingsOwner.current === settingsOwner && expireSession(credential, sessionRevision)) {
                 setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
               }
               return { status: "expired" };
@@ -1907,7 +1901,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         }
       }
     };
-  }, [active, credential, expireSession, principalId, rememberSecuritySettingsIntent, repository, scene, securitySettingsIntent, sessionId, sessionRevision, tenantId, viewSession]);
+  }, [active, credential, expireSession, principalId, rememberSecuritySettingsIntent, repository, scene, securitySettingsIntent, sessionId, sessionRevision, settingsOwner, tenantId, verifiedIdentityOwner, viewSession]);
 
   // Unrelated collection retries must not replace these independent clients.
   const observedAccountId = scene && scene.accountId === tenantId ? scene.accountId : null;
