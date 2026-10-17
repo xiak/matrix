@@ -335,3 +335,5 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 页面编辑Account级强制MFA、密码长度/字符/历史/期限及到期动作、Session空闲期限和AccessKey来源CIDR，并以完整替换、当前Account resourceVersion和精确step-up意图提交。输入先进入只读审阅；当前密码与六位验证码只驻留于当前表单，Session或repository换主即清除。step-up签发、验证和最终应用各自区分明确拒绝、冲突、过期及结果未知；UNKNOWN只允许检查或以完全相同意图恢复，不能自动生成新requestId、沿用其他Session的证明或显示成功。dirty/busy guard在未提交草稿、审阅和在途阶段阻止误导航；读取失败不会把未知设置伪装成默认值。
 
 本分支在Node22.22.2/npm11.6.4下已通过相关七个文件535项测试、typecheck、全量lint、architecture、234组对比度、59页/57路径生产导出、未设置与`0`两种预览输入的324项逐字一致及Go UI test/vet。该证据接受当前组件、状态机和嵌入生成物；尚未取得当前提交的完整前端/独立CI，也未在真实浏览器+后端执行step-up、最终应用、冲突和UNKNOWN恢复，更未重打包含本切片的签名release，因此IAM-UI-06与总目标状态不变。
+
+既有`authorityprocess` owner现另有显式opt-in的Account安全设置浏览器门禁：在独立Account内创建只拥有精确读写与审计读取权限的普通User，先通过真实API验证通知地址并绑定TOTP，再由浏览器完成PASSWORD_TOTP登录、完整设置审阅、当前Session step-up和最终替换。门禁要求MFA、密码、Session和AccessKey CIDR恰好推进一个Account设置版本，全部旧Session在下一次受保护请求因旧设置代次失败关闭，重新MFA登录只能读取原完成回执，唯一成功事实携带原USER、Account目标及原授权决定并进入完整租户Audit链，同时生成绑定原事实与已验证联系人的单一通知任务。该门禁已通过编译、默认skip与`go vet`；真实页面尚未执行，不能提前关闭本节缺口。

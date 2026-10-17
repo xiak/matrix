@@ -56,6 +56,8 @@ Policy元数据与整策略退役候选固定为`a12093895ca7461c15f50b8ca0ff5dd
 
 当前切片又选择性采用UX/UI owner固定`7ebc8700a5e23651047222e8e7f5f414b854342a`的Account `security-settings`编辑增量：八个路径逐字采用，一个既有测试owner以三方增量保留本分支后继断言，嵌入资产全部从消费分支源码重建。Account级MFA、密码、Session空闲期限和AccessKey CIDR采用完整替换、resourceVersion、step-up及分阶段UNKNOWN失败关闭；验证秘密不进入持久化状态，Session/repository换主清除草稿秘密。七个聚焦文件535项、typecheck、全量lint、architecture、234组对比度、双模式324项嵌入一致及Go UI test/vet已通过。当前提交的完整前端/独立CI、真实浏览器+后端step-up/应用/冲突/UNKNOWN和包含本切片的签名release均未完成，故不得据此接受IAM-AC-02、IAM-UI-06或整体发布。
 
+后继`authorityprocess` opt-in门禁已冻结该编辑器的真实验收形状：精确最小权限普通User、已验证通知地址和真实TOTP，浏览器PASSWORD_TOTP登录及设置step-up，一个完整版本替换，旧设置代次Session下一请求全部拒绝，重新认证后只读原完成回执、单一通知任务、唯一原USER/Account/授权决定事实和完整租户Audit链。当前仅通过编译、默认skip和`go vet`，尚无页面最终提交或真库结果；冲突及分阶段UNKNOWN也仍由API/并发和组件门禁持有，是否增加独立浏览器响应丢失旅程按风险与重复成本决定。
+
 ## 高风险测试矩阵
 
 - Tenant/Account：相同用户名、组名、策略名、资源 ID/key，错误 header/body/path/cursor 不能切换。

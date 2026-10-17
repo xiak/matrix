@@ -186,6 +186,7 @@ const (
 	authorityProcessGroupDeletionBrowser
 	authorityProcessPasswordChangeBrowser
 	authorityProcessDailyPasswordChangeBrowser
+	authorityProcessAccountSecuritySettingsBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
@@ -338,6 +339,20 @@ func TestIAMDailyPasswordChangeConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessDailyPasswordChangeBrowser)
 }
 
+// This opt-in fixture proves the Account-wide security-settings editor in a
+// real browser. The exact full replacement must be held by a current-Session
+// step-up, invalidate every pre-existing Account Session and emit one immutable
+// Account-scoped success fact without treating the browser as an authority.
+func TestIAMAccountSecuritySettingsConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_ACCOUNT_SECURITY_SETTINGS_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_ACCOUNT_SECURITY_SETTINGS_BROWSER=1 for the bounded LIVE Account security-settings browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("Account security-settings browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessAccountSecuritySettingsBrowser)
+}
+
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
 // and RabbitMQ 4.1 product resources through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
@@ -382,7 +397,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
 		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser ||
 		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
-		mode == authorityProcessDailyPasswordChangeBrowser {
+		mode == authorityProcessDailyPasswordChangeBrowser || mode == authorityProcessAccountSecuritySettingsBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -837,6 +852,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	if mode == authorityProcessDailyPasswordChangeBrowser {
 		runIAMDailyPasswordChangeConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)
+		return
+	}
+	if mode == authorityProcessAccountSecuritySettingsBrowser {
+		runIAMAccountSecuritySettingsConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)
@@ -3965,6 +3987,252 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 		t.Fatalf("daily password change tenant Audit chain is incomplete: %#v", chain)
 	}
 	t.Log("the live daily password flow advanced one User credential epoch, retained only the calling Session, revoked both prior Sessions, rejected the old password, accepted a fresh login with the new password and emitted one self-authenticated fact in the verified tenant Audit chain")
+}
+
+func runIAMAccountSecuritySettingsConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	const (
+		rootName   = "browser.security.settings.root"
+		memberName = "browser.security.settings.operator"
+		email      = "browser.security.settings@matrix.test"
+	)
+	call := func(method, path, bearer string, body any, want int, result any) processResponse {
+		t.Helper()
+		response := performJSON(t, method, iamEndpoint+path, bearer, body)
+		if response.Status != want {
+			t.Fatalf("Account security-settings browser preparation %s %s status=%d want=%d body=%s", method, path, response.Status, want, response.Body)
+		}
+		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil {
+			t.Fatalf("Account security-settings browser preparation returned an invalid %s response", path)
+		}
+		return response
+	}
+
+	var account iamv1.Account
+	call(http.MethodPost, "/v1/accounts", platformBearer, map[string]any{
+		"id": browserAccountID, "displayName": "Browser security settings Account", "rootLoginName": rootName,
+		"rootDisplayName": "Browser security settings Root", "initialPassword": initialReaderPassword,
+		"requestId": "browser-security-settings-account-create",
+	}, http.StatusCreated, &account)
+	if account.ID != browserAccountID {
+		t.Fatal("Account security-settings fixture created the wrong Account")
+	}
+	rootInitial := loginIAM(t, iamEndpoint, rootName, initialReaderPassword, "browser-security-settings-root-initial")
+	changePasswordIAM(t, iamEndpoint, rootInitial.Credential, initialReaderPassword, changedReaderPassword,
+		"browser-security-settings-root-password")
+	accountRoot := loginIAM(t, iamEndpoint, rootName, changedReaderPassword, "browser-security-settings-root-login")
+	member := createIAMUser(t, iamEndpoint, accountRoot.Credential, memberName, "Browser security settings operator",
+		initialDeveloperPassword, "browser-security-settings-user-create")
+
+	var policy iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", accountRoot.Credential, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser security settings operator", RequestID: "browser-security-settings-policy-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead, iamv1.ActionIAMSecuritySettingsUpdate},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact,
+					ID: browserAccountID}}}}},
+	}, http.StatusCreated, &policy)
+	createIAMPolicyAttachment(t, iamEndpoint, accountRoot.Credential, member.ID, policy.Policy.ID,
+		"browser-security-settings-policy-attach")
+	createIAMPolicyAttachment(t, iamEndpoint, accountRoot.Credential, member.ID, iamv1.SystemPolicyAuditReader,
+		"browser-security-settings-audit-attach")
+
+	realm := memberName + "@" + browserAccountID
+	memberInitial := loginIAM(t, iamEndpoint, realm, initialDeveloperPassword, "browser-security-settings-user-initial")
+	changePasswordIAM(t, iamEndpoint, memberInitial.Credential, initialDeveloperPassword, changedDeveloperPassword,
+		"browser-security-settings-user-password")
+	var contact iamv1.NotificationContactVerification
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications", memberInitial.Credential,
+		map[string]string{"email": email, "password": changedDeveloperPassword, "requestId": "browser-security-settings-contact"},
+		http.StatusOK, &contact)
+	contactCode := readProcessContactCode(t, ctx, database, contact)
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications/"+contact.ID+":confirm", memberInitial.Credential,
+		map[string]string{"requestId": "browser-security-settings-contact-confirm", "code": contactCode}, http.StatusOK, nil)
+
+	var enrollment iamv1.StartTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments", memberInitial.Credential,
+		map[string]any{"requestId": "browser-security-settings-totp-start", "password": changedDeveloperPassword,
+			"expectedFactorRevision": 1}, http.StatusOK, &enrollment)
+	if enrollment.Provisioning == nil {
+		t.Fatal("Account security-settings browser operator lacks TOTP provisioning")
+	}
+	seedBytes := enrollment.Provisioning.Seed.CopyBytes()
+	defer clear(seedBytes)
+	seed := string(seedBytes)
+	bindingCode, _ := processTOTPCode(t, ctx, database, seed, -1, true)
+	var bound iamv1.ConfirmTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments/"+enrollment.Enrollment.ID+":confirm", memberInitial.Credential,
+		map[string]string{"requestId": "browser-security-settings-totp-confirm", "code": bindingCode}, http.StatusOK, &bound)
+	if bound.Enrollment.FactorRevision != 2 || bound.Enrollment.ID != enrollment.Enrollment.ID {
+		t.Fatal("Account security-settings browser operator TOTP did not bind at the expected revision")
+	}
+
+	var initialConsumed int64
+	if err := database.QueryRow(ctx, `SELECT last_consumed_step FROM iam.totp_authenticators
+		WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND state='ACTIVE'`,
+		browserAccountID, member.ID, enrollment.Enrollment.ID).Scan(&initialConsumed); err != nil {
+		t.Fatalf("read Account security-settings browser factor: %v", err)
+	}
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-account-security-settings-finished")
+	codePath := filepath.Join(temporary, "browser-account-security-settings-code")
+	t.Logf("ACCOUNT_SECURITY_SETTINGS_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s code=%s; sign in with the changed developer password, use the protected code file for login and step-up, replace the complete Account settings with MFA required, minimum length 21, lowercase and digit required, history 3, maximum age 90, ADMIN_RESET, idle timeout 20 and CIDRs 10.0.0.0/8 plus 2001:db8::/32, then create the completion marker",
+		server.URL, finish, realm, codePath)
+	waitForAccountSecuritySettingsBrowserCompletion(t, ctx, database, ui, finish, codePath,
+		member.ID, enrollment.Enrollment.ID, seed, initialConsumed)
+
+	var currentGenerationSessions, staleGenerationSessions int
+	if err := database.QueryRow(ctx, `SELECT
+		count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL AND security_settings_version=2),
+		count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL AND security_settings_version=1)
+		FROM iam.sessions WHERE tenant_id=$1`, browserAccountID).Scan(&currentGenerationSessions, &staleGenerationSessions); err != nil ||
+		currentGenerationSessions != 0 || staleGenerationSessions < 2 {
+		t.Fatalf("Account security-settings update did not fence every pre-existing Account Session: current=%d stale=%d err=%v",
+			currentGenerationSessions, staleGenerationSessions, err)
+	}
+	for name, credential := range map[string]string{"Account Root": accountRoot.Credential, "operator setup": memberInitial.Credential} {
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", credential, nil)
+		if response.Status != http.StatusUnauthorized {
+			t.Fatalf("Account security-settings update did not reject the %s Session on its next protected request: status=%d body=%s",
+				name, response.Status, response.Body)
+		}
+	}
+	fresh := loginIAMWithTOTP(t, ctx, database, iamEndpoint, realm, changedDeveloperPassword,
+		member.ID, seed, "browser-security-settings-fresh-login")
+	settingsResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/account/security-settings", fresh.Credential, nil)
+	var settings iamv1.AccountSecuritySettings
+	if settingsResponse.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(settingsResponse.Body), &settings) != nil ||
+		iamv1.ValidateAccountSecuritySettings(settings) != nil || settings.AccountID != browserAccountID || settings.ResourceVersion != 2 ||
+		!settings.MFA.RequiredForUsers || settings.Password.MinimumLength != 21 || !settings.Password.RequireLowercase ||
+		settings.Password.RequireUppercase || !settings.Password.RequireDigit || settings.Password.RequireSymbol ||
+		settings.Password.HistoryCount != 3 || settings.Password.MaxAgeDays != 90 || settings.Password.ExpiryMode != iamv1.PasswordExpiryAdminReset ||
+		settings.Session.IdleTimeoutMinutes != 20 || !slices.Equal(settings.AccessKeyNetwork.AllowedSourceCIDRs,
+		[]string{"10.0.0.0/8", "2001:db8::/32"}) {
+		t.Fatalf("Account security-settings browser did not persist the exact full replacement: status=%d body=%s", settingsResponse.Status, settingsResponse.Body)
+	}
+
+	var factCount int
+	var eventID, requestID string
+	var encoded []byte
+	if err := database.QueryRow(ctx, `SELECT count(*),min(event_id),min(event_document->>'requestId'),min(event_document::text)::jsonb
+		FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'=$2
+		  AND event_document#>>'{target,kind}'='ACCOUNT' AND event_document#>>'{target,id}'=$1
+		  AND left(event_document->>'requestId',29)='ui-account-security-settings-'`,
+		browserAccountID, auditv1.ActionIAMSecuritySettingsUpdated).Scan(&factCount, &eventID, &requestID, &encoded); err != nil || factCount != 1 {
+		t.Fatalf("Account security-settings browser success fact count=%d err=%v", factCount, err)
+	}
+	defer clear(encoded)
+	var event auditv1.Event
+	if auditv1.DecodeRequest(bytes.NewReader(encoded), &event) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil ||
+		string(event.EventID) != eventID || event.RequestID != requestID || event.Action != auditv1.ActionIAMSecuritySettingsUpdated ||
+		event.Actor.Type != auditv1.ActorUser || event.Actor.ID != auditv1.ActorID(member.ID) ||
+		event.TenantID != auditv1.TenantID(browserAccountID) || event.InstallationID != "" ||
+		event.Target.Kind != auditv1.TargetAccount || event.Target.ID != browserAccountID || event.Result != auditv1.ResultSucceeded ||
+		event.IAMDecisionID == "" {
+		t.Fatal("Account security-settings browser fact lost its exact actor, Account scope, target or authority decision")
+	}
+	completionResponse := performJSON(t, http.MethodGet,
+		iamEndpoint+"/v1/account/security-settings/changes/"+requestID, fresh.Credential, nil)
+	var completion iamv1.AccountSecuritySettingsChange
+	if completionResponse.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(completionResponse.Body), &completion) != nil ||
+		iamv1.ValidateAccountSecuritySettingsChange(completion) != nil || completion.RequestID != requestID ||
+		completion.ExpectedResourceVersion != 1 || !completion.CallerSessionEnded || !reflect.DeepEqual(completion.Settings, settings) {
+		t.Fatalf("Account security-settings browser completion changed the original result: status=%d body=%s", completionResponse.Status, completionResponse.Body)
+	}
+	var noticeCount int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.security_notifications
+		WHERE tenant_id=$1 AND event_id=$2 AND user_id=$3 AND kind='SECURITY_SETTINGS_CHANGED'
+		  AND state='PENDING' AND email=$4 AND contact_revision=1`,
+		browserAccountID, event.EventID, member.ID, email).Scan(&noticeCount); err != nil || noticeCount != 1 {
+		t.Fatalf("Account security-settings browser notice count=%d err=%v", noticeCount, err)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, fresh.Credential,
+		auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMSecuritySettingsUpdated}, http.StatusOK)
+	matches := 0
+	for _, record := range page.Records {
+		if record.Event.EventID == event.EventID {
+			matches++
+			if record.Source != auditv1.SourceIAM || record.Event != event {
+				t.Fatal("Account security-settings Audit record changed the immutable IAM fact")
+			}
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("Account security-settings Audit fact matches=%d", matches)
+	}
+	chain := verifyAudit(t, auditEndpoint, fresh.Credential)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(browserAccountID) || chain.InstallationID != "" {
+		t.Fatalf("Account security-settings tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Log("the live Account security-settings editor consumed an exact current-Session step-up, persisted one complete versioned replacement, fenced every existing Account Session on its next protected request, preserved one immutable completion and delivered one authority-bound fact through the verified tenant Audit chain")
+}
+
+func waitForAccountSecuritySettingsBrowserCompletion(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	ui *childProcess,
+	finish string,
+	codePath string,
+	userID iamv1.PrincipalID,
+	factorID string,
+	seed string,
+	initialConsumed int64,
+) {
+	t.Helper()
+	lastWritten := int64(-1)
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("Account security-settings browser completion timed out")
+		case <-ticker.C:
+			if exited, _ := ui.poll(); exited {
+				t.Fatal("browser UI exited during Account security-settings observation")
+			}
+			var state string
+			var consumed int64
+			if err := database.QueryRow(ctx, `SELECT state,last_consumed_step FROM iam.totp_authenticators
+				WHERE tenant_id=$1 AND user_id=$2 AND id=$3`, browserAccountID, userID, factorID).Scan(&state, &consumed); err != nil || state != "ACTIVE" {
+				t.Fatalf("observe Account security-settings browser factor: state=%q err=%v", state, err)
+			}
+			code, step := processTOTPCode(t, ctx, database, seed, consumed, false)
+			if step != lastWritten {
+				writePersonalSecurityBrowserCode(t, codePath, code)
+				lastWritten = step
+			}
+			info, err := os.Lstat(finish)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil || !info.Mode().IsRegular() || consumed <= initialConsumed {
+				t.Fatal("invalid Account security-settings browser completion marker")
+			}
+			var consumedProofs int
+			if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.step_ups
+				WHERE tenant_id=$1 AND user_id=$2 AND factor_id=$3 AND operation='SECURITY_SETTINGS_UPDATE' AND state='CONSUMED'`,
+				browserAccountID, userID, factorID).Scan(&consumedProofs); err != nil || consumedProofs != 1 {
+				t.Fatalf("Account security-settings browser consumed step-up count=%d err=%v", consumedProofs, err)
+			}
+			return
+		}
+	}
 }
 
 func runIAMIdentityConsoleBrowser(
