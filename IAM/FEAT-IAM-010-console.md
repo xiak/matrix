@@ -322,6 +322,16 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 
 请求pending时禁止重复写；401、409、422和非法回包不得显示成功或切换到首次登录流程。无法确认结果时立即清除密码字段并锁住同一Session的后续改密，repository替换和迟到响应不得解除；只有新的正常认证所有者才能清除该非敏感阻断状态。成功后仍在当前内容区展示结果，不写入浏览器存储、不退出当前Session、不导航；明示`false`只请求保留服务端判定仍有效的其他会话，不能复活已过期或已撤销会话。
 
-消费分支在Node22.22.2/npm11.6.4下已通过四个聚焦文件271项及完整75文件1732项Vitest、8项Node构建边界测试、typecheck、变更owner lint、architecture、234组对比度、两次59页/57路径生产导出与324项嵌入逐字一致，Go UI test/vet也已通过。该证据接受组件、HTTP适配和生成物边界；真实浏览器最终提交、当前/其他Session数据库效果、Audit关联及签名release组合尚未验收，不能由donor分支测试或静态页面替代。
+消费分支固定`53bca8baeb15283d4c3100169e19eb73ae4b87ab`的[Verification 38994516955](https://github.com/xiak/matrix/actions/runs/38994516955)已按精确SHA核实十九项作业全部`completed/success`。`console`在Node22.22.2/npm11.6.4实际通过75个Vitest文件、1732项测试和8项Node构建边界测试，234组对比度、两次59页/57路径生产导出与324项嵌入逐字一致；十四个authority lane的57个顶层根全部实际RUN/PASS。七个需要专属Postfix的邮件子测试和默认opt-in浏览器入口按既定边界跳过，因此该CI接受组件、HTTP适配、生成物和默认回归，不替代真实日常改密页面提交。
 
 既有`authorityprocess` owner现提供独立显式opt-in的日常改密浏览器门禁：先把一个普通User推进到正常凭据代次并建立两个仍有效的旧Session，再由浏览器正常登录，在本人安全设置保持默认“退出其他会话”并提交下一密码。完成后必须证明User与凭据代次只推进一次、两个已知旧Session分别只撤销一次、唯一调用Session保持ACTIVE并迁移到新代次、旧密码拒绝、新密码可重新登录、唯一`ui-password-*`成功事实进入完整租户Audit链。该门禁当前只完成编译/默认skip核对；未发生页面最终提交前不得登记为通过，也不覆盖明示保留其他Session的`false`路径。
+
+固定`ffb305f859338cd8954f1476374b0d7d61c774b9`又把该浏览器门禁纳入可独立选择的当前测试owner；同一固定源码组装的签名Release A/B `iam.r36.3/.4`已在隔离Docker 27.5.1+PostgreSQL 18中完成1135.40秒的完整生命周期与95.52秒的重启后验证。这接受日常改密生产UI所在源码与签名运行时的组合构建和周边生命周期，不代表opt-in浏览器已执行，也不接受仍在运行的Verification 38997696246。最终页面提交、调用/其他Session精确数据库效果和唯一Audit事实仍由本节门禁关闭。
+
+### Account安全设置编辑
+
+当前切片选择性`ADAPT` UX/UI owner固定`7ebc8700a5e23651047222e8e7f5f414b854342a`的九个既有Account安全设置源码、测试和中英文消息路径；其中八个路径以其父提交`3079bf6749f68857ad6fab048311fba0cf468a99`为本分支准确基线并逐字采用，`AccountAccessRenderer.test.tsx`只合入对应增量以保留本分支后继Policy和日常改密断言。没有导入donor FEAT、checkpoint、后端、API、SQL或生成资产；324项嵌入资产由消费分支最终源码重新生成。
+
+页面编辑Account级强制MFA、密码长度/字符/历史/期限及到期动作、Session空闲期限和AccessKey来源CIDR，并以完整替换、当前Account resourceVersion和精确step-up意图提交。输入先进入只读审阅；当前密码与六位验证码只驻留于当前表单，Session或repository换主即清除。step-up签发、验证和最终应用各自区分明确拒绝、冲突、过期及结果未知；UNKNOWN只允许检查或以完全相同意图恢复，不能自动生成新requestId、沿用其他Session的证明或显示成功。dirty/busy guard在未提交草稿、审阅和在途阶段阻止误导航；读取失败不会把未知设置伪装成默认值。
+
+本分支在Node22.22.2/npm11.6.4下已通过相关七个文件535项测试、typecheck、全量lint、architecture、234组对比度、59页/57路径生产导出、未设置与`0`两种预览输入的324项逐字一致及Go UI test/vet。该证据接受当前组件、状态机和嵌入生成物；尚未取得当前提交的完整前端/独立CI，也未在真实浏览器+后端执行step-up、最终应用、冲突和UNKNOWN恢复，更未重打包含本切片的签名release，因此IAM-UI-06与总目标状态不变。

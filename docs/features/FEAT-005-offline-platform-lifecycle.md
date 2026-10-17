@@ -959,6 +959,34 @@ release directly into an `86+r36` runtime, arbitrary historical N-1 support,
 production database HA or browser interaction. FEAT-IAM-010 owns the latter
 and must record every completed LIVE path without inheriting this result.
 
+On 2026-10-17, fixed source
+`ffb305f859338cd8954f1476374b0d7d61c774b9` assembled Release A
+`matrix-v0.1.0-iam.r36.3-ffb305f85933` and its exact same-source successor B
+`matrix-v0.1.0-iam.r36.4-ffb305f85933`. Both retain IAM/Audit/PaaS
+`86/39/7+r36`, the topology digest above, 12 signed files and ten pinned
+images; their public trust document has SHA-256
+`5d096ac4eaa03c0ca9598842da341bb158929461ffb45fd23443ccf974b499bb`.
+They ran in a new task-owned, network-disabled Docker 27.5.1 engine limited
+to 2 CPUs, 6 GiB memory, 1024 PIDs and a private cgroup namespace. The
+1135.40-second pre-restart gate repeated the complete A-to-B lifecycle,
+including restricted runtime identities, Account/User revocation, real mail
+contact verification, TOTP, all four managed-product providers, Audit chains,
+backup, failed-upgrade rollback, successful upgrade, explicit rollback and
+selected-backup recovery. The offline mail fixture was re-authenticated by its
+archive SHA-256
+`20d890545ed758797d6de3725c1a8992ee1c95478b203cfaecb94e4435a3d1d0`
+and bounded certificate but was not freshly generated; its protected
+configuration, installation state and private signer remain outside the
+signed releases.
+
+Only that exact task-owned outer engine was stopped and started. The
+95.52-second post-restart gate rechecked status/verify, retained AccessKey
+retirement, fresh MFA login, retained Account primary recovery and revocation,
+and the complete offline-lifecycle marker. This extends the effectful signed
+runtime evidence to `ffb305f`; it does not execute a browser, accept the still
+running Verification 38997696246, or accept the later Account
+`security-settings` UI candidate.
+
 ### Gate A: release and CLI contract
 
 1. Canonical manifest/signature verification rejects byte, path, metadata,

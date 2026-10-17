@@ -1,4 +1,4 @@
-import type { AccessKeyNetworkRestrictions } from "./accessKeyNetwork";
+import { accessKeyNetworkRestrictionsEqual, type AccessKeyNetworkRestrictions } from "./accessKeyNetwork";
 
 export type PolicyScope = "TENANT" | "INSTALLATION";
 export type PolicyManagement = "SYSTEM" | "CUSTOMER";
@@ -165,6 +165,15 @@ export type SecuritySettingsUpdateIntent = {
   session: AccountSessionSettings;
   accessKeyNetwork: AccessKeyNetworkRestrictions;
 };
+
+export function sameSecuritySettingsIntent(left: SecuritySettingsUpdateIntent, right: SecuritySettingsUpdateIntent): boolean {
+  return left.expectedResourceVersion === right.expectedResourceVersion && left.mfa.requiredForUsers === right.mfa.requiredForUsers &&
+    left.password.minimumLength === right.password.minimumLength && left.password.requireLowercase === right.password.requireLowercase &&
+    left.password.requireUppercase === right.password.requireUppercase && left.password.requireDigit === right.password.requireDigit &&
+    left.password.requireSymbol === right.password.requireSymbol && left.password.historyCount === right.password.historyCount &&
+    left.password.maxAgeDays === right.password.maxAgeDays && left.password.expiryMode === right.password.expiryMode &&
+    left.session.idleTimeoutMinutes === right.session.idleTimeoutMinutes && accessKeyNetworkRestrictionsEqual(left.accessKeyNetwork, right.accessKeyNetwork);
+}
 
 export type AccountSecuritySettingsChange = {
   requestId: string;

@@ -48,9 +48,13 @@ Policy元数据与整策略退役候选固定为`a12093895ca7461c15f50b8ca0ff5dd
 
 后继固定`f529279db3911e4c104d14d00f2c186dde306e0a`只在既有`authorityprocess` owner增加Policy mutation真实浏览器门禁及其响应丢失夹具，不改变生产代码、API、数据库或发布Profile。两个独立空白PostgreSQL 18运行已分别证明UPDATE和RETIRE在后端2xx后半响应丢失、同源双标签Web Lock排他、关闭持锁标签及完全相同原命令单次恢复；每次只有一个权威状态推进、一条outbox事实、一条成功Audit记录，稳定Policy/不可变版本或活动目录退役结果及完整租户链准确。UPDATE fixture/race package为179.86/183.424秒，RETIRE为209.35/212.884秒；本轮专属容器、网络和卷在零外部数据库连接后已精确删除。[Verification 38936057920](https://github.com/xiak/matrix/actions/runs/38936057920)已通过GitHub API核实精确SHA，19个job全部`completed/success`；该独立结果只接受该固定源包含的门禁，不替代默认CI跳过的opt-in浏览器场景或当前后继工作树的发布验收。
 
-当前后继从UX/UI owner固定`3079bf6749f68857ad6fab048311fba0cf468a99`选择性采用普通User日常改密的九个既有认证源码、测试和消息路径，并由消费分支最终源码重建嵌入资产。日常默认撤销其他Session、允许显式请求保留仍有效的其他Session，首次登录强制改密始终撤销其他Session；pending、明确拒绝、结果未知、Session/repository换主和迟到响应均有失败关闭边界。Node22.22.2/npm11.6.4下四个聚焦文件271项、完整75文件1732项Vitest、8项Node构建边界、静态边界、两次59页导出/324项嵌入一致及Go UI test/vet已经通过；真实浏览器最终提交、数据库会话效果、Audit关联、独立CI和签名release仍待当前分支逐项验收，因此IAM-AC-02和总目标状态不变。
+固定`53bca8baeb15283d4c3100169e19eb73ae4b87ab`从UX/UI owner固定`3079bf6749f68857ad6fab048311fba0cf468a99`选择性采用普通User日常改密的九个既有认证源码、测试和消息路径，并由消费分支最终源码重建嵌入资产。日常默认撤销其他Session、允许显式请求保留仍有效的其他Session，首次登录强制改密始终撤销其他Session；pending、明确拒绝、结果未知、Session/repository换主和迟到响应均有失败关闭边界。[Verification 38994516955](https://github.com/xiak/matrix/actions/runs/38994516955)已按精确SHA核实十九项作业全部`completed/success`；`console`实际通过75个Vitest文件、1732项测试、8项Node边界、234组对比度及324项双模式导出/嵌入一致，十四个authority lane的57个顶层根全部RUN/PASS。默认CI仍跳过七项专属Postfix邮件子测试及opt-in浏览器，因此IAM-AC-02和总目标状态不变。
 
 后继`authorityprocess` opt-in门禁已冻结日常默认撤销其他Session的真实验收形状，包括两个既有旧Session、浏览器调用Session、凭据代次、旧/新密码和唯一Audit事实；当前仅编译并以默认skip通过，尚无最终页面提交或真库结果，不能改变上述未验收结论。明示`revokeOtherSessions=false`继续由API/并发和组件门禁持有，后续是否增加第二条人工浏览器旅程按风险和重复成本决定，不把同一语义重复为发布前置。
+
+固定`ffb305f859338cd8954f1476374b0d7d61c774b9`同源签名Release A/B `iam.r36.3/.4`已在任务独立的network-none Docker 27.5.1+PostgreSQL 18中完成1135.40秒完整生命周期和95.52秒重启后验证，证明上述生产UI所在源码可以进入当前`86/39/7+r36`签名组合并保留账号、凭据、MFA、Session和Audit周边契约。该效果证据没有运行日常改密浏览器门禁；Verification 38997696246仍在运行，二者均不能提前接受最终提交、精确Session效果或IAM-AC-02。
+
+当前切片又选择性采用UX/UI owner固定`7ebc8700a5e23651047222e8e7f5f414b854342a`的Account `security-settings`编辑增量：八个路径逐字采用，一个既有测试owner以三方增量保留本分支后继断言，嵌入资产全部从消费分支源码重建。Account级MFA、密码、Session空闲期限和AccessKey CIDR采用完整替换、resourceVersion、step-up及分阶段UNKNOWN失败关闭；验证秘密不进入持久化状态，Session/repository换主清除草稿秘密。七个聚焦文件535项、typecheck、全量lint、architecture、234组对比度、双模式324项嵌入一致及Go UI test/vet已通过。当前提交的完整前端/独立CI、真实浏览器+后端step-up/应用/冲突/UNKNOWN和包含本切片的签名release均未完成，故不得据此接受IAM-AC-02、IAM-UI-06或整体发布。
 
 ## 高风险测试矩阵
 
