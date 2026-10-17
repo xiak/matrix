@@ -1,9 +1,87 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { httpAccountRepository, httpIamRepository } from "./httpIamRepository";
-import type { AccountLifecycleIntent, AccountPolicyDetail } from "../domain/accounts";
+import type { AccountLifecycleIntent, AccountPolicyDetail, UserManagementIntent } from "../domain/accounts";
 
 const apiVersion = "iam.matrix.xiak.com/v1";
 const timestamp = "2026-09-11T08:00:00Z";
+
+describe("User management original-result contract", () => {
+  const scope = { accountId: "account-one", actorPrincipalId: "actor-one", userId: "team:user-one" };
+  const base = { format: 1 as const, ...scope, commandRequestId: "original:user-change", expectedResourceVersion: 3 };
+  const intents: UserManagementIntent[] = [
+    { ...base, operation: "USER_UPDATE", intendedDisplayName: "Reviewed name" },
+    { ...base, operation: "USER_SET_STATUS", intendedStatus: "DISABLED" },
+    { ...base, operation: "USER_SET_STATUS", intendedStatus: "ACTIVE" }
+  ];
+  function result(intent = intents[0]!) {
+    return { apiVersion, kind: "User", id: scope.userId, accountId: scope.accountId, loginName: "engineer", displayName: intent.operation === "USER_UPDATE" ? intent.intendedDisplayName : "Engineer",
+      status: intent.operation === "USER_SET_STATUS" ? intent.intendedStatus : "ACTIVE", mustChangePassword: false, resourceVersion: 4, createdAt: timestamp, updatedAt: timestamp };
+  }
+  function completion(intent = intents[0]!) {
+    return { apiVersion, kind: "UserManagementCompletion", accountId: intent.accountId, actorPrincipalId: intent.actorPrincipalId, userId: intent.userId,
+      commandRequestId: intent.commandRequestId, operation: intent.operation, expectedResourceVersion: intent.expectedResourceVersion,
+      eventId: "user-change-event", occurredAt: timestamp, result: result(intent) };
+  }
+  function answer(body: unknown, headers: Record<string, string> = {}, status = 200) {
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store", ...headers } }));
+    vi.stubGlobal("fetch", fetcher); return fetcher;
+  }
+  it.each(intents)("sends only the frozen $operation payload and exact request key", async (intent) => {
+    const fetcher = answer(result(intent));
+    await httpAccountRepository.userManagement!.submit("current-bearer", intent);
+    expect(fetcher).toHaveBeenCalledOnce(); const [url, init] = fetcher.mock.calls[0]!;
+    expect(url).toBe(`/api/iam/v1/users/team%3Auser-one:${intent.operation === "USER_UPDATE" ? "update" : "set-status"}`);
+    expect(init.headers.Authorization).toBe("Bearer current-bearer");
+    expect(JSON.parse(init.body)).toEqual({ ...(intent.operation === "USER_UPDATE" ? { displayName: intent.intendedDisplayName } : { status: intent.intendedStatus }), resourceVersion: 3, requestId: base.commandRequestId });
+  });
+  it.each(intents)("reads only the original $operation completion with the current bearer, never the current User", async (intent) => {
+    const fetcher = answer(completion(intent)); const value = await httpAccountRepository.userManagement!.readCompletion("fresh-user-bearer", intent);
+    expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/iam/v1/users/team%3Auser-one/management-completions/original%3Auser-change?operation=${intent.operation}&expectedResourceVersion=3`,
+      { cache: "no-store", headers: { Accept: "application/json", Authorization: "Bearer fresh-user-bearer" } });
+    expect(value).toMatchObject({ ...scope, commandRequestId: intent.commandRequestId, operation: intent.operation, expectedResourceVersion: 3, result: { resourceVersion: 4 } });
+    expect(value).not.toHaveProperty("apiVersion"); expect(value).not.toHaveProperty("credential");
+  });
+  it.each([{ accountId: "other" }, { actorPrincipalId: "other" }, { userId: "other" }, { commandRequestId: "other" }, { operation: "USER_SET_STATUS" },
+    { expectedResourceVersion: 2 }, { expectedResourceVersion: "3" }, { eventId: "" }, { occurredAt: "2026-02-30T00:00:00Z" }, { occurredAt: "2026-10-17T00:00:00+00:00" },
+    { kind: "AccountLifecycleCompletion" }, { apiVersion: "other/v1" }, { requestId: "alias" }, { credential: "secret" }, { permit: true }])("rejects wrong bindings and extra completion facts: %j", async (change) => {
+    answer({ ...completion(), ...change }); await expect(httpAccountRepository.userManagement!.readCompletion("bearer", intents[0]!)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+  it.each(["accountId", "actorPrincipalId", "userId", "commandRequestId", "operation", "expectedResourceVersion", "eventId", "occurredAt", "result"])("requires the original %s field", async (key) => {
+    const value: Record<string, unknown> = completion(); delete value[key]; answer(value);
+    await expect(httpAccountRepository.userManagement!.readCompletion("bearer", intents[0]!)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+  it.each([{ accountId: "other" }, { id: "other" }, { resourceVersion: 3 }, { resourceVersion: 5 }, { displayName: "Wrong" }, { password: "not-a-result" }, { status: "UNKNOWN" }, { updatedAt: "invalid" }])("rejects an invalid immediate and immutable User snapshot: %j", async (change) => {
+    answer({ ...result(), ...change }); await expect(httpAccountRepository.userManagement!.submit("bearer", intents[0]!)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    answer({ ...completion(), result: { ...result(), ...change } }); await expect(httpAccountRepository.userManagement!.readCompletion("bearer", intents[0]!)).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+  it("matches the intended status rather than treating any advanced User revision as success", async () => {
+    answer({ ...result(intents[1]!), status: "ACTIVE" }); await expect(httpAccountRepository.userManagement!.submit("bearer", intents[1]!)).rejects.toThrow();
+    answer({ ...completion(intents[1]!), result: { ...result(intents[1]!), status: "ACTIVE" } }); await expect(httpAccountRepository.userManagement!.readCompletion("bearer", intents[1]!)).rejects.toThrow();
+  });
+  it("preserves unrelated historical profile fields instead of imposing the new-name editor's normalization on a status result", async () => {
+    const intent = intents[1]!, historical = { ...result(intent), displayName: " Existing profile " };
+    answer({ ...completion(intent), result: historical });
+    expect((await httpAccountRepository.userManagement!.readCompletion("bearer", intent)).result.displayName).toBe(historical.displayName);
+  });
+  const unsafeHeaders: Record<string, string>[] = [{ "Cache-Control": "public, max-age=60" }, { "Cache-Control": "" }, { "Content-Type": "text/plain" }];
+  it.each(unsafeHeaders)("rejects an unsafe completion transport: %j", async (headers) => {
+    answer(completion(), headers); await expect(httpAccountRepository.userManagement!.readCompletion("bearer", intents[0]!)).rejects.toThrow();
+  });
+  it.each([401, 403, 404, 409, 500, 503])("propagates lookup %s without another request or write", async (status) => {
+    const fetcher = answer({ code: "NOT_OBSERVED", message: "not authoritative failure" }, {}, status);
+    await expect(httpAccountRepository.userManagement!.readCompletion("bearer", intents[0]!)).rejects.toThrow(); expect(fetcher).toHaveBeenCalledOnce();
+  });
+  it.each([{ ...intents[0]!, expectedResourceVersion: Number.MAX_SAFE_INTEGER }, { ...intents[0]!, sessionId: "selector" }, { ...intents[0]!, intendedDisplayName: " " }])("rejects malformed original intents before any transport: %j", async (intent) => {
+    const fetcher = answer(completion());
+    await expect(httpAccountRepository.userManagement!.submit("bearer", intent as UserManagementIntent)).rejects.toThrow("INVALID_USER_MANAGEMENT_REQUEST");
+    await expect(httpAccountRepository.userManagement!.readCompletion("bearer", intent as UserManagementIntent)).rejects.toThrow("INVALID_USER_MANAGEMENT_REQUEST"); expect(fetcher).not.toHaveBeenCalled();
+  });
+  it("rejects unknown commands and keeps the MOCK-only status command out of LIVE dispatch", async () => {
+    const fetcher = answer(result());
+    await expect(httpAccountRepository.execute("bearer", { kind: "unknown-command" } as never)).rejects.toThrow("INVALID_IAM_COMMAND");
+    await expect(httpAccountRepository.execute("bearer", { kind: "set-status", userId: scope.userId, resourceVersion: 3, status: "DISABLED" })).rejects.toThrow("USER_MANAGEMENT_CLIENT_REQUIRED"); expect(fetcher).not.toHaveBeenCalled();
+  });
+});
 
 describe("account lifecycle completion read contract", () => {
   const base = { format: 1 as const, actorAccountId: "platform-account", actorPrincipalId: "platform-user",
@@ -3036,24 +3114,12 @@ describe("IAM HTTP account boundary", () => {
     }
   });
 
-  it("binds profile updates and irreversible deletion to one user revision", async () => {
-    let fetcher = reply({ ...user, displayName: "Renamed Alex", resourceVersion: 3 });
-    await httpAccountRepository.execute("bearer", { kind: "update-user", userId: user.id, displayName: "Renamed Alex", resourceVersion: 2 });
-    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users/user-alex:update");
-    expect(requestBody(fetcher)).toEqual({ displayName: "Renamed Alex", resourceVersion: 2, requestId: expect.any(String) });
-
-    fetcher = reply({ apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp });
+  it("binds irreversible deletion to one user revision", async () => {
+    const fetcher = reply({ apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp });
     await httpAccountRepository.execute("bearer", { kind: "delete-user", userId: user.id, resourceVersion: 2 });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users/user-alex:delete");
     expect(requestBody(fetcher)).toEqual({ resourceVersion: 2, requestId: expect.any(String) });
 
-    for (const body of [
-      { ...user, id: "another-user", displayName: "Renamed Alex", resourceVersion: 3 },
-      { ...user, displayName: "Wrong name", resourceVersion: 3 }
-    ]) {
-      reply(body);
-      await expect(httpAccountRepository.execute("bearer", { kind: "update-user", userId: user.id, displayName: "Renamed Alex", resourceVersion: 2 })).rejects.toThrow("INVALID_IAM_RESPONSE");
-    }
     for (const body of [
       { apiVersion, kind: "UserDeletion", accountId: account.id, id: "another-user", loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp },
       { apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 4, deletedAt: timestamp },

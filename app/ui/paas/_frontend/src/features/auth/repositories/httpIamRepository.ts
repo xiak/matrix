@@ -1,5 +1,5 @@
 import { HttpProblem, requestJSON, requestJSONResponse, requestToken } from "@/infrastructure/http/jsonRequest";
-import { policyDisplayNameValid, policyMetadataResultMatches } from "../domain/accounts";
+import { policyDisplayNameValid, policyMetadataResultMatches, userManagementCompletionMatches, userManagementResultMatches } from "../domain/accounts";
 import type {
   Account,
   AccountLifecycleCompletion,
@@ -48,6 +48,7 @@ import type {
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
   User,
+  UserManagementCompletion,
   UserAccess,
   UserPolicyAttachment,
   RolePolicyAttachment,
@@ -80,6 +81,7 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import type { AuthenticatorRemoval, AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, NotificationDeliveryObservation, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart, TOTPRemovalResponse } from "../domain/personalSecurity";
 import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginCommand } from "./iamRepository";
 import { parseAccountLifecycleIntent } from "./accountLifecycleRecoveryStorage";
+import { parseUserManagementIntent } from "./userManagementRecoveryStorage";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDeletion, RoleDirectory, RoleListing, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
 import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
 import { sourceCidrValid } from "../domain/policyLanguage";
@@ -2850,6 +2852,36 @@ async function readAccountLifecycleCompletion(credential: string, original: Acco
 }
 
 export const httpAccountRepository: AccountRepository = {
+  userManagement: {
+    async submit(credential, original) {
+      const intent = parseUserManagementIntent(original);
+      if (!intent) throw new Error("INVALID_USER_MANAGEMENT_REQUEST");
+      const response = await requestJSONResponse<unknown>(`/api/iam/v1/users/${encodeURIComponent(intent.userId)}:${intent.operation === "USER_UPDATE" ? "update" : "set-status"}`, {
+        method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+        body: JSON.stringify({ ...(intent.operation === "USER_UPDATE" ? { displayName: intent.intendedDisplayName } : { status: intent.intendedStatus }), resourceVersion: intent.expectedResourceVersion, requestId: intent.commandRequestId })
+      });
+      if (response.status !== 200) throw new Error("INVALID_IAM_RESPONSE");
+      const user = parseUser(response.body);
+      if (!userManagementResultMatches(user, intent)) throw new Error("INVALID_IAM_RESPONSE");
+      return user;
+    },
+    async readCompletion(credential, original) {
+      const intent = parseUserManagementIntent(original);
+      if (!intent) throw new Error("INVALID_USER_MANAGEMENT_REQUEST");
+      const query = new URLSearchParams({ operation: intent.operation, expectedResourceVersion: String(intent.expectedResourceVersion) });
+      const response = await requestJSONResponse<unknown>(`/api/iam/v1/users/${encodeURIComponent(intent.userId)}/management-completions/${encodeURIComponent(intent.commandRequestId)}?${query}`, { headers: accountHeaders(credential) });
+      if (response.status !== 200 || response.headers.get("Cache-Control") !== "no-store" || response.headers.get("Content-Type")?.split(";")[0]?.trim().toLowerCase() !== "application/json") throw new Error("INVALID_IAM_RESPONSE");
+      const wire = accountRecord(response.body);
+      exactKeys(wire, ["apiVersion", "kind", "accountId", "actorPrincipalId", "userId", "commandRequestId", "operation", "expectedResourceVersion", "result", "eventId", "occurredAt"]);
+      requireAccountKind(wire, "UserManagementCompletion");
+      if (wire.operation !== "USER_UPDATE" && wire.operation !== "USER_SET_STATUS") throw new Error("INVALID_IAM_RESPONSE");
+      const completion: UserManagementCompletion = { accountId: accountIdentifier(wire.accountId), actorPrincipalId: accountIdentifier(wire.actorPrincipalId),
+        userId: accountIdentifier(wire.userId), commandRequestId: accountIdentifier(wire.commandRequestId), operation: wire.operation,
+        expectedResourceVersion: accountVersion(wire.expectedResourceVersion), result: parseUser(wire.result), eventId: accountIdentifier(wire.eventId), occurredAt: accountTimestamp(wire.occurredAt) };
+      if (!userManagementCompletionMatches(completion, intent)) throw new Error("INVALID_IAM_RESPONSE");
+      return completion;
+    }
+  },
   async createUser(credential, accountId, command) {
     if (command.permissionBoundary !== null || !command.requestId || !accountId) throw new Error("INVALID_IAM_REQUEST");
     const value = await requestJSON<unknown>("/api/iam/v1/users", {
@@ -3607,6 +3639,7 @@ export const httpAccountRepository: AccountRepository = {
     ), { ...expectation, accountId: accountIdentifier(expectation.accountId), actorPrincipalId: accountIdentifier(expectation.actorPrincipalId), requestId });
   },
   async execute(credential, command) {
+    if (command.kind === "set-status") throw new Error("USER_MANAGEMENT_CLIENT_REQUIRED");
     if (command.kind === "create-account" || command.kind === "set-account-status" || command.kind === "recover-root-credentials") {
       throw new Error("ACCOUNT_LIFECYCLE_CLIENT_REQUIRED");
     }
@@ -3615,11 +3648,10 @@ export const httpAccountRepository: AccountRepository = {
     let body: object;
     switch (command.kind) {
       case "set-alias": path = "/api/iam/v1/account:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
-      case "update-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:update`; body = { displayName: command.displayName, resourceVersion: command.resourceVersion }; break;
       case "delete-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:delete`; body = { resourceVersion: command.resourceVersion }; break;
-      case "set-status": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:set-status`; body = { status: command.status, resourceVersion: command.resourceVersion }; break;
       case "reset-password": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:reset-password`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
       case "create-policy-attachment": path = "/api/iam/v1/policy-attachments"; body = { target: { kind: "USER", id: command.userId }, policyId: command.policyId, policyResourceVersion: command.policyResourceVersion }; break;
+      default: throw new Error("INVALID_IAM_COMMAND");
     }
     const result = await requestJSON<unknown>(path, { method: "POST", headers: { ...accountHeaders(credential), "Content-Type": "application/json" }, body: JSON.stringify({ ...body, requestId }) });
     if (command.kind === "set-alias") {
@@ -3647,8 +3679,6 @@ export const httpAccountRepository: AccountRepository = {
     }
     const user = parseUser(result);
     if (user.id !== command.userId || user.resourceVersion <= command.resourceVersion) throw new Error("INVALID_IAM_RESPONSE");
-    if (command.kind === "update-user" && user.displayName !== command.displayName) throw new Error("INVALID_IAM_RESPONSE");
-    if (command.kind === "set-status" && user.status !== command.status) throw new Error("INVALID_IAM_RESPONSE");
     if (command.kind === "reset-password" && !user.mustChangePassword) throw new Error("INVALID_IAM_RESPONSE");
   }
 };

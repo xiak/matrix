@@ -2345,6 +2345,64 @@ supported-browser and signed-IAM runtime acceptance are not claimed for this
 source. No backend/API/SQL/profile, shared DEV, real Account/resource, mandatory
 authentication setting or email-only Phase 1 receiving scope changed.
 
+#### LIVE User profile/status original-command source candidate
+
+User display-name and enable/disable commands freeze the Account, original
+actor, exact User, expected revision, intended value and request ID before
+dispatch. A tab-scoped non-secret reminder is stored and verified before
+the write; unreadable or unavailable storage gives an explicit read-only
+explanation rather than silently enabling another command. It does not claim
+cross-tab exclusion or cross-browser reminder recovery. UNKNOWN uses only the fixed same-actor completion GET;
+no failed lookup, later current-state read or fresh login authorizes another
+POST or replacement intent. A strict bound command result or immutable
+completion confirms the original operation, not the User's current state,
+Audit delivery or resource access. Current User data is read independently.
+
+The existing User workspace owns the content-area review, feedback and
+dirty/busy leave behavior. Recovery remains reachable by the known User
+locator even if the current exact read is forbidden or unavailable. New writes
+still require the exact current server capability; Root, self and other
+protected identity rules are never inferred from names. Session/repository
+changes fence late responses. The superseded generic rename contract and its
+unused preview branch are removed atomically; MOCK still renames through its
+existing workspace command. The remaining MOCK status command cannot dispatch
+through LIVE. Normal cancellation restores the source control, disable review
+retains its danger affordance, and an unknown request's return action names
+the actual User directory. A confirmed receipt survives a failed independent
+read without displaying an old directory status as current User state.
+
+The source-only candidate is fixed at frontend tree
+`5076a5eeb472fc9de79501db9498c30b09233619`, based on source parent
+`c8981dd160474710868bf84712f2b7792f283973`. It consumes only the fixed public
+User-management contract at `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2`.
+The semantic User command editor and original-result notice reuse the public
+content form, controls, facts, feedback and leave/focus owners; no second
+account model, generic receipt engine or backend implementation is introduced.
+
+Windows Node 22.22.2/npm 11.6.4 typecheck, full lint, all 13 changed TypeScript
+owners with zero-warning lint, architecture, 234 theme contrast pairs and all
+eight Node export-boundary cases pass on the isolated fixed source. The
+independent complete Windows Vitest gate passes all 77 files and 1967 cases
+in 640.90 seconds, with zero failures, skipped or todo cases and no
+timeout/worker/configuration/dependency changes. The JSON report SHA-256 is
+`d307ccc8de69c9fcbb79b6d15a4a1fac0c63a6a24e731da096ae6ac2f18bea6e`.
+The 45 dedicated original-command cases, strict HTTP contract cases and 21
+selected workspace cases additionally prove storage-before-write, exact
+target/value/revision/result binding, query-only UNKNOWN recovery, denied
+current reads, new-session restoration, late-owner fences, explicit fresh
+review after conflict and retained completion after independent read failure.
+All 15 changed frontend blobs match the tested archive. Existing React `act`
+warnings remain test warnings, not warning-free browser evidence.
+
+Generated assets are unchanged and must be rebuilt by the consuming branch.
+Production export/embed equality, fresh UI-host Go checks, independent CI,
+supported-browser and signed-IAM runtime acceptance are not claimed for this
+source; backend IAM87 verification and older IAM86 page evidence are not
+inherited. No backend/API/SQL/profile, shared DEV, real Account/resource,
+mandatory authentication or email-only Phase 1 receiving scope changed. User
+deletion recovery and PolicyAttachment reminder-storage hardening are separate
+slices; this candidate does not claim either or add phone/email/MFA behavior.
+
 #### LIVE deletion-confirmation follow-up
 
 LIVE Group deletion consumes the strict command receipt before navigating.

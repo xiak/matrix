@@ -197,6 +197,37 @@ export type User = {
   resourceVersion: number;
 };
 
+export type UserManagementIntent = Readonly<{
+  format: 1; accountId: string; actorPrincipalId: string; userId: string;
+  commandRequestId: string; expectedResourceVersion: number;
+} & ({ operation: "USER_UPDATE"; intendedDisplayName: string } | { operation: "USER_SET_STATUS"; intendedStatus: User["status"] })>;
+
+/** Original committed User result, never a current-state or resource-access verdict. */
+export type UserManagementCompletion = Readonly<{
+  accountId: string; actorPrincipalId: string; userId: string; commandRequestId: string;
+  operation: UserManagementIntent["operation"]; expectedResourceVersion: number;
+  result: User; eventId: string; occurredAt: string;
+}>;
+
+export function userManagementDisplayNameValid(value: unknown): value is string {
+  return typeof value === "string" && value.trim() === value && value.length > 0 && Array.from(value).length <= 128;
+}
+
+export function userManagementResultMatches(result: User, intent: UserManagementIntent): boolean {
+  return Boolean(result && Object.keys(result).length === 7 && result.accountId === intent.accountId && result.id === intent.userId &&
+    typeof result.loginName === "string" && result.loginName.length > 0 && typeof result.mustChangePassword === "boolean" &&
+    typeof result.displayName === "string" && result.displayName.length > 0 && Array.from(result.displayName).length <= 128 && (result.status === "ACTIVE" || result.status === "DISABLED") &&
+    result.resourceVersion === intent.expectedResourceVersion + 1 &&
+    (intent.operation === "USER_UPDATE" ? result.displayName === intent.intendedDisplayName : result.status === intent.intendedStatus));
+}
+
+export function userManagementCompletionMatches(result: UserManagementCompletion, intent: UserManagementIntent): boolean {
+  return Boolean(result && Object.keys(result).length === 9 && result.accountId === intent.accountId && result.actorPrincipalId === intent.actorPrincipalId &&
+    result.userId === intent.userId && result.commandRequestId === intent.commandRequestId && result.operation === intent.operation &&
+    result.expectedResourceVersion === intent.expectedResourceVersion && typeof result.eventId === "string" && result.eventId.length > 0 &&
+    typeof result.occurredAt === "string" && Number.isFinite(Date.parse(result.occurredAt)) && userManagementResultMatches(result.result, intent));
+}
+
 export type AccountPolicy = {
   id: string;
   management: PolicyManagement;
@@ -547,7 +578,6 @@ export type AccountCommand =
   | { kind: "set-account-status"; accountId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
   | { kind: "recover-root-credentials"; accountId: string; initialPassword: string; resourceVersion: number }
   | { kind: "set-alias"; alias: string; resourceVersion: number }
-  | { kind: "update-user"; userId: string; displayName: string; resourceVersion: number }
   | { kind: "delete-user"; userId: string; resourceVersion: number }
   | { kind: "set-status"; userId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
   | { kind: "reset-password"; userId: string; initialPassword: string; resourceVersion: number; requestId: string }
