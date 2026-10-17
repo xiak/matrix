@@ -50,6 +50,8 @@ Policy元数据与整策略退役候选固定为`a12093895ca7461c15f50b8ca0ff5dd
 
 当前后继从UX/UI owner固定`3079bf6749f68857ad6fab048311fba0cf468a99`选择性采用普通User日常改密的九个既有认证源码、测试和消息路径，并由消费分支最终源码重建嵌入资产。日常默认撤销其他Session、允许显式请求保留仍有效的其他Session，首次登录强制改密始终撤销其他Session；pending、明确拒绝、结果未知、Session/repository换主和迟到响应均有失败关闭边界。Node22.22.2/npm11.6.4下四个聚焦文件271项、完整75文件1732项Vitest、8项Node构建边界、静态边界、两次59页导出/324项嵌入一致及Go UI test/vet已经通过；真实浏览器最终提交、数据库会话效果、Audit关联、独立CI和签名release仍待当前分支逐项验收，因此IAM-AC-02和总目标状态不变。
 
+后继`authorityprocess` opt-in门禁已冻结日常默认撤销其他Session的真实验收形状，包括两个既有旧Session、浏览器调用Session、凭据代次、旧/新密码和唯一Audit事实；当前仅编译并以默认skip通过，尚无最终页面提交或真库结果，不能改变上述未验收结论。明示`revokeOtherSessions=false`继续由API/并发和组件门禁持有，后续是否增加第二条人工浏览器旅程按风险和重复成本决定，不把同一语义重复为发布前置。
+
 ## 高风险测试矩阵
 
 - Tenant/Account：相同用户名、组名、策略名、资源 ID/key，错误 header/body/path/cursor 不能切换。

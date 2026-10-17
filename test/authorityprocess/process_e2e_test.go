@@ -70,6 +70,7 @@ const (
 	changedAdminPassword              = "Changed-Process-Admin-Password-73!"
 	initialReaderPassword             = "Initial-Process-Reader-Password-84!"
 	changedReaderPassword             = "Changed-Process-Reader-Password-95!"
+	dailyChangedReaderPassword        = "Daily-Process-Reader-Password-67!"
 	initialDeveloperPassword          = "Initial-Process-Developer-Password-57!"
 	changedDeveloperPassword          = "Changed-Process-Developer-Password-61!"
 	accountLifecycleRecoveredPassword = "Recovered-Browser-Root-Password-86!"
@@ -184,6 +185,7 @@ const (
 	authorityProcessPolicyMutationRecoveryBrowser
 	authorityProcessGroupDeletionBrowser
 	authorityProcessPasswordChangeBrowser
+	authorityProcessDailyPasswordChangeBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
@@ -322,6 +324,20 @@ func TestIAMPasswordChangeConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessPasswordChangeBrowser)
 }
 
+// This opt-in fixture proves the normal self-service password ceremony in the
+// real browser. The default choice must revoke every other still-active
+// Session, retain only the already-authenticated calling Session and advance
+// its credential epoch without treating the password response as a new login.
+func TestIAMDailyPasswordChangeConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_DAILY_PASSWORD_CHANGE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_DAILY_PASSWORD_CHANGE_BROWSER=1 for the bounded LIVE daily password-change browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("daily password-change browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessDailyPasswordChangeBrowser)
+}
+
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
 // and RabbitMQ 4.1 product resources through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
@@ -365,7 +381,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser ||
 		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
 		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser ||
-		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser {
+		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
+		mode == authorityProcessDailyPasswordChangeBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -596,6 +613,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		changedAdminPassword,
 		initialReaderPassword,
 		changedReaderPassword,
+		dailyChangedReaderPassword,
 		initialDeveloperPassword,
 		changedDeveloperPassword,
 		accountLifecycleRecoveredPassword,
@@ -812,6 +830,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	if mode == authorityProcessPasswordChangeBrowser {
 		runIAMPasswordChangeConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)
+		return
+	}
+	if mode == authorityProcessDailyPasswordChangeBrowser {
+		runIAMDailyPasswordChangeConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)
@@ -3782,6 +3807,164 @@ func runIAMPasswordChangeConsoleBrowser(
 		t.Fatalf("password change tenant Audit chain is incomplete: %#v", chain)
 	}
 	t.Log("the live first-login flow changed one User password, advanced its credential epoch, revoked the other restricted Session, retained only the calling Session, rejected the old password, accepted a fresh login with the new password and emitted one self-authenticated fact in the verified tenant Audit chain")
+}
+
+func runIAMDailyPasswordChangeConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	const loginName = "browser.daily.password.member"
+	realm := loginName + "@organization-process"
+	member := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser daily password member",
+		initialReaderPassword, "browser-daily-password-user-create")
+	original := loginIAM(t, iamEndpoint, realm, initialReaderPassword, "browser-daily-password-initial-login")
+	changePasswordIAM(t, iamEndpoint, original.Credential, initialReaderPassword, changedReaderPassword,
+		"browser-daily-password-initial-change")
+	peer := loginIAM(t, iamEndpoint, realm, changedReaderPassword, "browser-daily-password-peer-login")
+	if original.Session.PrincipalID != member.ID || peer.Session.PrincipalID != member.ID ||
+		original.Session.AccountID != member.AccountID || peer.Session.AccountID != member.AccountID ||
+		original.Session.ID == peer.Session.ID {
+		t.Fatal("daily password fixture Sessions do not belong to the exact prepared User")
+	}
+	var preparedActive, preparedTotal int
+	var preparedMinGeneration, preparedMaxGeneration int64
+	if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),count(*),
+		COALESCE(min(credential_version),0),COALESCE(max(credential_version),0)
+		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, member.AccountID, member.ID).
+		Scan(&preparedActive, &preparedTotal, &preparedMinGeneration, &preparedMaxGeneration); err != nil ||
+		preparedActive != 2 || preparedTotal != 2 || preparedMinGeneration != 2 || preparedMaxGeneration != 2 {
+		t.Fatalf("daily password fixture did not prepare two generation-2 Sessions: active=%d total=%d minGeneration=%d maxGeneration=%d err=%v",
+			preparedActive, preparedTotal, preparedMinGeneration, preparedMaxGeneration, err)
+	}
+
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-daily-password-change-finished")
+	t.Logf("DAILY_PASSWORD_CHANGE_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s; sign in with the existing changed reader password, open the personal password editor, leave the recommended revoke-other-sessions option selected, submit the existing daily reader password, confirm the current Session stays authenticated, then create the completion marker",
+		server.URL, finish, realm)
+	waitForBrowserMarker(t, ctx, ui, finish, "daily password change browser completion")
+
+	var mustChange bool
+	var principalVersion, credentialVersion int64
+	if err := database.QueryRow(ctx, `SELECT p.must_change_password,p.resource_version,c.credential_version
+		FROM iam.principals AS p JOIN iam.user_credentials AS c
+		  ON c.tenant_id=p.tenant_id AND c.principal_id=p.id
+		WHERE p.tenant_id=$1 AND p.id=$2 AND p.principal_type='USER' AND p.status='ACTIVE' AND p.deleted_at IS NULL`,
+		member.AccountID, member.ID).Scan(&mustChange, &principalVersion, &credentialVersion); err != nil ||
+		mustChange || principalVersion != 3 || credentialVersion != 3 {
+		t.Fatalf("daily browser password change did not advance the exact User credential epoch: mustChange=%t principalVersion=%d credentialVersion=%d err=%v",
+			mustChange, principalVersion, credentialVersion, err)
+	}
+	for _, known := range []struct {
+		name            string
+		id              iamv1.SessionID
+		resourceVersion int64
+	}{
+		{name: "original", id: original.Session.ID, resourceVersion: 3},
+		{name: "peer", id: peer.Session.ID, resourceVersion: 2},
+	} {
+		var status string
+		var resourceVersion, sessionCredentialVersion int64
+		var revokedAt time.Time
+		if err := database.QueryRow(ctx, `SELECT status,resource_version,credential_version,revoked_at FROM iam.sessions
+			WHERE tenant_id=$1 AND principal_id=$2 AND id=$3`, member.AccountID, member.ID, known.id).
+			Scan(&status, &resourceVersion, &sessionCredentialVersion, &revokedAt); err != nil ||
+			status != string(iamv1.SessionRevoked) || resourceVersion != known.resourceVersion ||
+			sessionCredentialVersion != 2 || revokedAt.IsZero() {
+			t.Fatalf("daily password change did not revoke the %s Session exactly once: status=%q version=%d generation=%d revoked=%s err=%v",
+				known.name, status, resourceVersion, sessionCredentialVersion, revokedAt, err)
+		}
+	}
+	var activeSessions, totalSessions int
+	var activeCredentialVersion, activeResourceVersion int64
+	if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),count(*),
+		COALESCE(max(credential_version) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),0),
+		COALESCE(max(resource_version) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),0)
+		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, member.AccountID, member.ID).
+		Scan(&activeSessions, &totalSessions, &activeCredentialVersion, &activeResourceVersion); err != nil ||
+		activeSessions != 1 || totalSessions != 3 || activeCredentialVersion != 3 || activeResourceVersion != 2 {
+		t.Fatalf("daily password change retained the wrong Session set: active=%d total=%d generation=%d version=%d err=%v",
+			activeSessions, totalSessions, activeCredentialVersion, activeResourceVersion, err)
+	}
+
+	oldPassword := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/login", "", struct {
+		LoginName string `json:"loginName"`
+		Password  string `json:"password"`
+		RequestID string `json:"requestId"`
+	}{LoginName: realm, Password: changedReaderPassword, RequestID: "browser-daily-password-old-login"})
+	if oldPassword.Status != http.StatusUnauthorized || bytes.Contains(oldPassword.Body, []byte(changedReaderPassword)) {
+		t.Fatalf("daily old password was not rejected without disclosure: status=%d body=%s", oldPassword.Status, oldPassword.Body)
+	}
+	fresh := loginIAM(t, iamEndpoint, realm, dailyChangedReaderPassword, "browser-daily-password-new-login")
+	if fresh.Session.PrincipalID != member.ID || fresh.Session.AccountID != member.AccountID ||
+		fresh.Session.Status != iamv1.SessionActive {
+		t.Fatal("daily changed password did not create a normal Session for the same User and Account")
+	}
+	identityResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", fresh.Credential, nil)
+	var identity iamv1.CurrentIdentity
+	if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil ||
+		iamv1.ValidateCurrentIdentity(identity) != nil || identity.User.ID != member.ID ||
+		identity.User.MustChangePassword || identity.Account.ID != member.AccountID {
+		t.Fatalf("daily changed password did not reauthenticate the exact current identity: status=%d body=%s", identityResponse.Status, identityResponse.Body)
+	}
+
+	var factCount int
+	var eventID, requestID string
+	var eventDocument []byte
+	if err := database.QueryRow(ctx, `SELECT count(*),min(event_id),min(event_document->>'requestId'),min(event_document::text)::jsonb
+		FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'=$2
+		  AND event_document#>>'{target,kind}'='USER' AND event_document#>>'{target,id}'=$3
+		  AND left(event_document->>'requestId',12)='ui-password-'`,
+		member.AccountID, auditv1.ActionIAMUserPasswordChanged, member.ID).
+		Scan(&factCount, &eventID, &requestID, &eventDocument); err != nil || factCount != 1 {
+		t.Fatalf("daily browser password change success fact count=%d err=%v", factCount, err)
+	}
+	defer clear(eventDocument)
+	var event auditv1.Event
+	if !strings.HasPrefix(requestID, "ui-password-") || iamv1.ValidateID("requestId", requestID) != nil ||
+		auditv1.DecodeRequest(bytes.NewReader(eventDocument), &event) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil || string(event.EventID) != eventID ||
+		event.RequestID != requestID || event.Action != auditv1.ActionIAMUserPasswordChanged ||
+		event.Actor.Type != auditv1.ActorUser || event.Actor.ID != auditv1.ActorID(member.ID) ||
+		event.TenantID != auditv1.TenantID(member.AccountID) || event.InstallationID != "" ||
+		event.Target.Kind != auditv1.TargetUser || event.Target.ID != string(member.ID) ||
+		event.Result != auditv1.ResultSucceeded || event.IAMDecisionID != "" {
+		t.Fatal("daily password change fact changed its browser request, self actor, Account scope or USER target")
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, ownerBearer,
+		auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMUserPasswordChanged}, http.StatusOK)
+	matches := 0
+	for _, record := range page.Records {
+		if record.Event.EventID != event.EventID {
+			continue
+		}
+		matches++
+		storedEvent, storedErr := json.Marshal(event)
+		recordedEvent, recordedErr := json.Marshal(record.Event)
+		if record.Source != auditv1.SourceIAM || storedErr != nil || recordedErr != nil ||
+			!bytes.Equal(storedEvent, recordedEvent) {
+			t.Fatal("daily password change Audit record no longer matches the immutable IAM success fact")
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("daily password change Audit fact matches=%d", matches)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(member.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("daily password change tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Log("the live daily password flow advanced one User credential epoch, retained only the calling Session, revoked both prior Sessions, rejected the old password, accepted a fresh login with the new password and emitted one self-authenticated fact in the verified tenant Audit chain")
 }
 
 func runIAMIdentityConsoleBrowser(
