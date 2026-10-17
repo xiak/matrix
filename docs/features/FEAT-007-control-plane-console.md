@@ -2301,6 +2301,50 @@ runtime acceptance are not claimed for this source. No backend/API/SQL/profile,
 shared DEV, real Account/resource or mandatory authentication setting changed.
 The isolated MOCK and email-only Phase 1 receiving scope remain unchanged.
 
+#### LIVE Group Membership original-command candidate
+
+LIVE Group Membership creation/removal freezes the original Account, actor,
+Group, User, request ID and, for removal, exact Membership ID and revision
+before dispatch. Only a user-invoked exact replay may retry an UNKNOWN; a
+later rejection cannot prove that the original command failed. A complete
+bound 200 is original-command evidence, separate from current relation reads.
+Local recovery-storage failure blocks a new write, owner changes fence late
+responses, and tab-scoped reminders contain no bearer or secret; they do not
+claim cross-tab exclusion. A known Group locator
+labels the pre-read detail heading without inventing a name or capability. It
+does not require directory-list authority: exact reads and explicit original
+replay independently reauthorize the current caller. No Membership completion
+GET, derived ID, total, impact count or automatic replay is invented. The
+isolated MOCK remains unchanged. Exact replay follows the inspected fixed
+public source `ffb305f859338cd8954f1476374b0d7d61c774b9`. This Membership slice
+does not implement or claim User display-name/status completion recovery.
+
+The source-only candidate is fixed at frontend tree
+`0e06eae7c72b5b777cc81193a2e0e33df396deab`, based on source parent
+`7ebc8700a5e23651047222e8e7f5f414b854342a`. Membership and direct-Policy
+relationship workflows now have distinct semantic owners because their
+recovery protocols differ; both retain the public content form, selection,
+facts, feedback and dirty/busy leave controls rather than adding a parallel UI.
+
+Windows Node 22.22.2/npm 11.6.4 typecheck, full lint, changed-owner zero-warning
+lint, architecture, 234 theme contrast pairs and all eight Node export-boundary
+cases pass on the isolated fixed source. The independent complete Windows
+Vitest gate passes all 76 files and 1857 cases in 1110.24 seconds, with zero
+failures, skipped or todo cases and no timeout/worker/configuration changes.
+The JSON report SHA-256 is
+`31015c1507c0b3ac9c80e8c2ef83ac92c73489e69823cfa491ec72568725f120`.
+The 53 dedicated command cases and integrated Group workspace tests cover
+exact replay, owner changes, storage failure, mismatched receipts, missing
+directory authority and an independent read failure after confirmed success.
+The 11 changed frontend blobs match the tested archive. Existing tests emitted
+React `act` warnings; this is not warning-free browser evidence.
+
+Generated assets are unchanged and must be rebuilt by the consuming branch.
+Production export/embed equality, fresh UI-host Go checks, independent CI,
+supported-browser and signed-IAM runtime acceptance are not claimed for this
+source. No backend/API/SQL/profile, shared DEV, real Account/resource, mandatory
+authentication setting or email-only Phase 1 receiving scope changed.
+
 #### LIVE deletion-confirmation follow-up
 
 LIVE Group deletion consumes the strict command receipt before navigating.

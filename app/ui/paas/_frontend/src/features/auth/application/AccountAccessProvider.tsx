@@ -87,8 +87,10 @@ export type UserBoundaryClient = {
 };
 
 export type GroupAccessClient = {
+  identity: string;
   accountId: string;
   actorPrincipalId: string;
+  expire(): void;
   canList: boolean;
   listRestrictionReason: CapabilityRestriction | null;
   canCreate: boolean;
@@ -1321,12 +1323,21 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [accountLifecycleOwner, commitLifecycleObservation, expireSession, lifecycleObservation, lifecycleViewIdentity, projectAccountSnapshot, runAccountLifecycleMutation, scene, sessionRevision]);
 
+  const groupsOwner = useMemo(() => ({ active, repository, viewSession, identity: requestToken("ui-groups-view-") }), [active, repository, viewSession]);
+  const currentGroupsOwner = useRef<typeof groupsOwner | null>(groupsOwner);
+  useLayoutEffect(() => { currentGroupsOwner.current = groupsOwner; return () => { currentGroupsOwner.current = null; }; }, [groupsOwner]);
   const groups = useMemo<GroupAccessClient | null>(() => {
-    if (!active || !credential || !scene || scene.accountId !== tenantId) return null;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || verifiedIdentityOwner?.session !== viewSession || verifiedIdentityOwner.repository !== repository) return null;
     const accountId = scene.accountId;
     return {
+      identity: groupsOwner.identity,
       accountId,
       actorPrincipalId: scene.currentUserId,
+      expire() {
+        if (currentGroupsOwner.current === groupsOwner && currentViewSession.current === viewSession && expireSession(credential, sessionRevision)) {
+          setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+        }
+      },
       canList: scene.canListGroups,
       listRestrictionReason: scene.listGroupsRestrictionReason,
       canCreate: scene.canCreateGroups,
@@ -1343,7 +1354,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       revokePolicyAttachment: (attachmentId, command) => protectedMutation(() => repository.revokePolicyAttachment(credential, attachmentId, command)),
       inspectPolicyAttachmentChange
     };
-  }, [active, credential, inspectPolicyAttachmentChange, protectedMutation, repository, scene, tenantId]);
+  }, [active, credential, expireSession, groupsOwner, inspectPolicyAttachmentChange, protectedMutation, repository, scene, sessionRevision, tenantId, verifiedIdentityOwner, viewSession]);
 
   const permissionBoundaries = useMemo<UserBoundaryClient | null>(() => {
     const boundaryRepository = repository.permissionBoundaries;

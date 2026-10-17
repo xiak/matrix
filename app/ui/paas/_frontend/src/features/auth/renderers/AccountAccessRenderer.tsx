@@ -219,7 +219,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const denied = scene && (
     (view === "users" && !entityId && !scene.canListUsers) ||
     (view === "create-user" && !scene.canCreateUsers) ||
-    (view === "groups" && !(workspace ? scene.canListUsers : scene.canListGroups)) ||
+    (view === "groups" && (workspace ? !scene.canListUsers : !entityId && !scene.canListGroups)) ||
     (view === "roles" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
     (view === "service-authorizations" && workspace && !scene.canListUsers) ||
     (view === "create-role" && !workspace && (!access.roles || !scene.canCreateRoles)) ||

@@ -412,6 +412,24 @@ export type GroupMembership = {
   removedBy?: string;
 };
 
+export type GroupMembershipMutationIntent = Readonly<{
+  format: 1;
+  accountId: string;
+  actorPrincipalId: string;
+  groupId: string;
+  userId: string;
+  requestId: string;
+} & ({ operation: "CREATE" } | { operation: "REMOVE"; membershipId: string; resourceVersion: number })>;
+
+export function groupMembershipResultMatches(result: GroupMembership, intent: GroupMembershipMutationIntent): boolean {
+  if (result.accountId !== intent.accountId || result.groupId !== intent.groupId || result.userId !== intent.userId ||
+      !result.id || !Number.isFinite(Date.parse(result.createdAt)) || !Number.isFinite(Date.parse(result.updatedAt))) return false;
+  return intent.operation === "CREATE"
+    ? result.resourceVersion === 1 && result.createdBy === intent.actorPrincipalId && result.removedAt === undefined && result.removedBy === undefined && result.createdAt === result.updatedAt
+    : result.id === intent.membershipId && result.resourceVersion === intent.resourceVersion + 1 && result.removedBy === intent.actorPrincipalId &&
+      typeof result.removedAt === "string" && Number.isFinite(Date.parse(result.removedAt)) && result.removedAt === result.updatedAt;
+}
+
 export type Group = {
   id: string;
   accountId: string;

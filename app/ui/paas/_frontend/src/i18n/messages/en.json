@@ -2081,6 +2081,28 @@
       "review": "Review"
     }
   },
+  "GroupMembershipCommand": {
+    "account": "Original account ID",
+    "actor": "Original actor ID",
+    "group": "Group ID",
+    "user": "User ID",
+    "request": "Original request ID",
+    "membership": "Membership ID",
+    "revision": "Membership revision",
+    "result": "Original command result",
+    "created": "Membership created",
+    "removed": "Membership removed",
+    "working": "Processing the original membership command…",
+    "unknown": "The original outcome is unknown. Its target and request are locked; current rows, a conflict or an authorization denial cannot prove it did not commit.",
+    "retryExact": "Retry the exact original request",
+    "staleReview": "The available selection or membership revision changed. Return, reread and review it; no target, version or request is changed automatically.",
+    "retryBoundary": "Only this explicit action retries the identical original request using the same actor's current valid session. No automatic send, new request ID or changed target is allowed. Leaving or signing in again retains only the non-secret intent.",
+    "storageUnavailable": "The original local reminder cannot be safely read, saved or cleared, so new changes are blocked. Restore storage and reopen this group; this does not prove that an original command failed.",
+    "receiptTitle": "Original membership command confirmed",
+    "receiptBoundary": "This is a precisely bound original command receipt, not the current member directory or effective resource access. A later read failure never replays the write or deletes a user or business resource.",
+    "finish": "Finish and read the group",
+    "leaveHint": "Leaving discards unsubmitted selection. A sent command retains its non-secret recovery intent; leaving neither cancels nor automatically resends it."
+  },
   "AccountSecuritySettingsEditor": {
     "controlTitle": "Account security configuration",
     "edit": "Edit account security rules",
