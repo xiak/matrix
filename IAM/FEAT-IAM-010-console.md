@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果；后继独立真实浏览器已从普通User首次登录完成纯页面强制改密，并验证仅保留调用Session、撤销另一受限Session、旧密码失效和新密码重新登录 | 日常主动改密的可选会话处置、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
-| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变。当前控制台候选已删除Group确认框的MOCK语义，并在真实运行时核对精确名称确认、不可恢复、审计保留、服务端权威影响计数及不删除User/Policy/租户资源的边界 | User修改/停复用、Membership、附件回执和不确定结果仍需浏览器门禁；Group最终页面提交、返回计数、outbox/Audit及目录消失仍待点击当刻确认后实跑；批量User不在本轮需求 |
+| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；当前IAM86+r36签名页面读取普通User详情、无直接附件/无边界及权威空Group目录，并从纯页面创建空用户组、读取稳定ID、零成员和零直接附件；同一页面随后更新名称与描述，ID、授权代次及空关系保持不变。当前控制台候选已删除Group确认框的MOCK语义，并在真实运行时核对精确名称确认、不可恢复、审计保留、服务端权威影响计数及不删除User/Policy/租户资源的边界；后继源码已接入User资料/状态的只读原结果恢复与Membership显式等值重放 | User修改/停复用与Membership新恢复协议仍需消费分支完整构建、独立CI和浏览器门禁；附件回执和不确定结果仍需浏览器门禁；Group最终页面提交、返回计数、outbox/Audit及目录消失仍待点击当刻确认后实跑；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version。后继候选UI已在同一r36后端从页面创建零附件Policy、改名并整策略退役，稳定ID/默认版本/摘要及不可变版本保持，活动目录移除且三条outbox/Audit事实和完整租户链均已核对；独立真实浏览器门禁进一步证明改名与整策略退役各自在响应半断后的双标签排他、关闭持锁标签和完全相同原命令恢复 | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略；候选UI尚未随完整签名release重打，不能冒充签名组合验收 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；当前IAM86+r36签名页面读取已验证通知地址、本人TOTP状态、六个有效Session，并对缺少`iam.access-key.list`和`iam.security-settings.read`显示真实权限拒绝 | 账号强制MFA下普通User首次绑定、普通User换绑/解绑后的受限重新绑定、AccessKey全生命周期、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、外部物理认证器及WebAuthn明确Deferred |
@@ -276,6 +276,12 @@ RabbitMQ详情页从IAM读取准确ACTIVE模板`managedservice.installation-read
 
 UX/UI owner后继固定`029a6ec3b9061efe46c30bfd496ece4135390926`只修改现有Group renderer、交互测试和中英文消息五个路径。本分支固定`94cabe999378b7fdae9b5074546aab156e1d7553`选择性采用这些源码后，在当前独立运行时重新打开上述精确Group的删除确认框并输入`ui-runtime-delete-gate`；确认按钮准确启用，页面明确说明这是实际IAM删除、对象会从有效目录移除、审计记录保留、删除不可恢复、服务端返回解除Membership/撤销直接附件数量，且不会删除User、Policy或租户资源。该核对关闭了错误MOCK文案阻塞，但尚未点击最终删除；因此Group仍为ACTIVE版本1，最终返回计数、唯一outbox/Audit事实和目录消失仍是未完成门禁，不能把对话框截图冒充删除成功。
 
+### LIVE Group Membership 原命令恢复源码
+
+2026-10-17，本分支选择性`ADAPT` UX/UI owner固定`c8981dd160474710868bf84712f2b7792f283973`，其公开Membership契约来源固定为`ffb305f859338cd8954f1476374b0d7d61c774b9`。十个既有或新增消费路径与UX固定对象逐个blob一致；综合工作区测试以三方增量保留本分支后继断言。没有导入donor后端、FEAT状态、checkpoint或生成资产。创建/移除命令在发出前冻结当前Account、actor、Group、User、request ID，以及移除时的准确Membership ID与版本；UNKNOWN只允许操作者显式等价重试原命令，当前关系读取、后继401/403/409或404均不能证明原写未提交。恢复材料只含非秘密命令身份，不缓存permit；存储失败阻止新写，重新认证、换owner及迟到响应继续失败关闭。
+
+受支持Node 22.22.2/npm 11.6.4下，三个聚焦文件共283项测试、typecheck、architecture、234组主题对比度及九个变更TypeScript路径的零警告lint通过。测试覆盖无Group读取权限时只呈现已知locator和原命令恢复、remount不自动重放、401保留原意图并使当前Session过期、成功回执不因独立刷新失败而丢失，以及相同request ID的显式等价重试。后继User恢复片已与本片共同重建并验证消费分支完整嵌入资产；独立CI和真实IAM浏览器效果仍由下述组合门禁补齐，因此当前不关闭IAM-UI-03的Membership运行缺口。
+
 ### 精确目标读取与目录故障隔离
 
 2026-10-16，本分支继续`ADAPT` UX/UI owner固定`45251050879e23d23bb3fc7982ab8f7718bfbca9`、后继`ddd1a7760e2560e2ad2b2ea5fbe9ddffb27d6761`及纯测试后继`14811b6118f39ca30d012d9fb54e1997cb1f4e3f`、`1090fcafabc14b541c70a41968d485cde5c347e7`。只采用二十个既有auth/control-plane源码、测试和消息路径；最终二十个工作树blob与最后一个固定对象逐项一致。没有导入对方FEAT、adoption、checkpoint或生成资产；完整嵌入资产仍从本分支最终源码重建。
@@ -307,6 +313,12 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 固定源码`a12093895ca7461c15f50b8ca0ff5ddbe01e7803`编译的候选UI只替换当前r36签名安装中的静态UI容器，十个既有后端容器的ID、启动时间和重启计数未变。真实页面创建`UIRuntimePolicyA120`后将其改名为`UIRuntimePolicyA120Renamed`，再用精确原名称确认整策略退役；权威数据库显示同一Policy从resourceVersion 1推进至2、3并最终为`RETIRED`，唯一不可变版本、默认版本和内容摘要保持，活动附件始终为零，活动目录回到八项系统Policy。创建、改名、退役三条IAM outbox均为`DELIVERED`，对应`iam.policy.created`、`iam.policy.updated`、`iam.policy.deleted`事实分别进入租户Audit序列477、480、485；页面随后把当前租户序列1–488校验为完整且到达链尾。该证据接受正常改名/退役页面效果及审计关联，不接受尚未实跑的双标签竞争、关闭持锁标签、跨刷新/重登原意图恢复，也不把候选UI容器解释为新的完整签名release。
 
 固定`f529279db3911e4c104d14d00f2c186dde306e0a`在既有`authorityprocess` owner增加显式opt-in的Policy mutation恢复门禁，不改变生产API、数据库或发布Profile。两个各自从空库开始的专属PostgreSQL 18运行均使用真实受限IAM/Audit/PaaS、双dispatcher与嵌入控制台：标签页A分别提交显示名修改和整策略退役；代理在后端2xx后提交响应头和半段正文并保持连接，使页面进入UNKNOWN且Web Lock持续持有。已单独登录同源标签页B尝试恢复时只得到“当前浏览器仍有请求在处理”，代理确认没有排队或额外写；关闭A后，B显式重放原method、path、Host、requestId、resourceVersion和body完全相同的命令。每次运行的代理最终都只观察初始请求和一次等值重放，初始提交已产生的Policy状态没有第二次推进；UPDATE保持稳定ID、默认版本、内容摘要和唯一不可变PolicyVersion，RETIRE使活动目录准确回到八项系统Policy并保留同一不可变版本。两次运行各自恰有一条outbox事实、一条准确actor/scope/target的成功Audit记录及完整租户链。UPDATE fixture/race package分别通过179.86/183.424秒，RETIRE分别通过209.35/212.884秒；聚焦回归、完整无数据库包、vet和diff检查随后通过。[Verification 38936057920](https://github.com/xiak/matrix/actions/runs/38936057920)已通过GitHub API核实精确SHA，19个job全部`completed/success`。该证据接受Policy UPDATE/RETIRE的真实响应丢失恢复，不替代默认CI明确跳过的opt-in浏览器场景之外的发布门禁。
+
+### User资料与状态原结果恢复源码
+
+2026-10-17，本分支从已固定UX/UI源码`343622a11d0ce4c65c763de0e717505e0b8dae9a`（父`c8981dd160474710868bf84712f2b7792f283973`）选择性`ADAPT`十五个frontend路径，不导入donor文档、生成资产或验收状态。显示名更新与启停在发送前持久化原Account、actor、User、operation、request ID、expected resource version及非秘密目标值；UNKNOWN只允许以当前有效Session读取准确`UserManagementCompletion`，不得重新POST、自动换request ID或用当前User状态猜测原结果。完成回执与独立当前详情读取分离，404/403/409/503不释放原意图，401只失效准确旧Session；Account、actor、User、repository和Session换主均围栏迟到响应。存储不可读写或后端未提供completion client时，页面在网络写入前降为只读。无消费者的旧泛型`update-user`分支及Preview死路径同步删除，隔离MOCK继续使用其原工作区命令。
+
+消费分支以三方增量保留本分支renderer测试，并与前述Membership切片共同在Node22.22.2/npm11.6.4下通过五个聚焦文件、772项测试、typecheck、architecture、234组主题对比度和二十个变更TypeScript路径的零警告lint。随后完整门禁通过77个Vitest文件、1954项测试及8项Node导出边界测试；两次59页production export在未设置与显式`0`预览模式下得到324个逐字一致文件，本分支重建的嵌入资产与最终导出完全一致，Go UI test/vet通过。UX固定源的1967项结果属于其完整分支；本分支保留既有三方测试owner且不继承donor测试计数。该证据接受选择性集成、生产构建和嵌入交付，不接受尚未完成的独立CI、真实User写入/响应丢失恢复或签名IAM浏览器组合。
 
 ### 首次登录强制改密
 

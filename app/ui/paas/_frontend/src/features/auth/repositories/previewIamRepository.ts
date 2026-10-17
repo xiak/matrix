@@ -1132,7 +1132,7 @@ export const previewAccountRepository: AccountRepository = {
   },
   async execute(credential, command: AccountCommand) {
     requirePreviewCredential(credential);
-    if ((command.kind === "update-user" || command.kind === "delete-user" || command.kind === "set-status" || command.kind === "reset-password" || command.kind === "create-policy-attachment") && command.userId === account.rootIdentity.principalId) throw new HttpProblem(403, "ROOT_IDENTITY_PROTECTED");
+    if ((command.kind === "delete-user" || command.kind === "set-status" || command.kind === "reset-password" || command.kind === "create-policy-attachment") && command.userId === account.rootIdentity.principalId) throw new HttpProblem(403, "ROOT_IDENTITY_PROTECTED");
     if (command.kind === "create-account") {
       if (accounts.some((entry) => entry.id === command.id)) throw new HttpProblem(409, "PREVIEW_NAME_CONFLICT");
       accounts = [...accounts, {
@@ -1161,13 +1161,6 @@ export const previewAccountRepository: AccountRepository = {
     if (command.kind === "set-alias") {
       account = { ...account, loginAlias: command.alias, resourceVersion: account.resourceVersion + 1 };
       accounts = accounts.map((entry) => entry.id === account.id ? account : entry);
-      return;
-    }
-    if (command.kind === "update-user") {
-      const existing = users.find((user) => user.id === command.userId);
-      if (!existing || existing.resourceVersion !== command.resourceVersion) throw new HttpProblem(409, "PREVIEW_USER_CHANGED");
-      if (!command.displayName.trim()) throw new HttpProblem(422, "PREVIEW_INVALID_USER");
-      updateUser(command.userId, (user) => ({ ...user, displayName: command.displayName.trim(), resourceVersion: user.resourceVersion + 1 }));
       return;
     }
     if (command.kind === "delete-user") {

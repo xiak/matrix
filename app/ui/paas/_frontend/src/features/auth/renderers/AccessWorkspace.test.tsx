@@ -21,6 +21,7 @@ import { accountSecurityReportLimits, buildAccessActivityObservations, buildAcce
 import { buildAccountAccessScene } from "../scenes/accountAccessScene";
 import { previewAccountRepository, previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import { readGroupMembershipIntent, writeGroupMembershipIntent } from "../repositories/groupMembershipRecoveryStorage";
 
 vi.mock("next/link", () => ({
   default: ({ onNavigate, href, children, ...props }: React.ComponentProps<"a"> & { onNavigate?(event: { preventDefault(): void }): void }) => <a {...props} href={href} onClick={(event) => {
@@ -2043,7 +2044,7 @@ describe("CAM-style access workspace", () => {
     expect(await screen.findByText("暂无记录")).toBeTruthy();
     expect(listGroups).toHaveBeenCalledTimes(3);
   });
-  it("keeps a stable group detail heading and back path while the live object loads", async () => {
+  it("keeps the known group locator and back path visible before its authorized detail resolves", async () => {
     let resolveGroup!: (access: GroupAccess) => void;
     const liveGroup: GroupAccess = {
       group: { id: "group-slow", accountId: account.id, name: "SlowTeam", description: "Loaded after the detail shell", resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
@@ -2054,9 +2055,11 @@ describe("CAM-style access workspace", () => {
       getGroup: vi.fn(() => new Promise<GroupAccess>((resolve) => { resolveGroup = resolve; }))
     } });
 
-    expect(screen.getByRole("heading", { name: "用户组" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: liveGroup.group.id })).toBeTruthy();
     expect(screen.getByRole("button", { name: "返回列表" })).toBeTruthy();
     expect(screen.getByText("正在读取用户组详情…")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: liveGroup.group.name })).toBeNull();
+    expect(screen.queryByRole("button", { name: "添加成员" })).toBeNull();
     expect(screen.queryByText("Loaded after the detail shell")).toBeNull();
 
     await act(async () => { resolveGroup(liveGroup); });
@@ -2338,17 +2341,21 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("tab", { name: "成员 (1)" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "添加成员" }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    const workflow = within(screen.getByRole("group", { name: "添加成员 · LiveOperators" }));
+    let workflow = within(screen.getByRole("group", { name: "添加成员 · LiveOperators" }));
     await user.click(workflow.getByRole("checkbox", { name: "chen" }));
     expect(workflow.getByRole("checkbox", { name: "qiao" })).toHaveProperty("disabled", true);
     expect(workflow.getByText(/每次选择 1 项/)).toBeTruthy();
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    expect(workflow.getByText(liveGroup.group.id)).toBeTruthy();
     await user.click(workflow.getByRole("button", { name: "确认变更" }));
     await waitFor(() => expect(createMembership).toHaveBeenCalledTimes(1));
     const retained = createMembership.mock.calls[0]?.[3]?.requestId;
     expect(retained).toEqual(expect.any(String));
-    expect(workflow.getByText(/暂时无法完成操作/)).toBeTruthy();
-    await user.click(workflow.getByRole("button", { name: "确认变更" }));
+    workflow = within(screen.getByRole("group", { name: "添加成员 · LiveOperators" }));
+    expect(workflow.getByText(/原命令结果未知/)).toBeTruthy();
+    expect(workflow.queryByRole("button", { name: "返回选择" })).toBeNull();
+    await user.click(workflow.getByRole("button", { name: "等价重试原请求" }));
+    expect(await screen.findByText("原成员关系命令已确认")).toBeTruthy();
     await waitFor(() => expect(screen.queryByRole("group", { name: "添加成员 · LiveOperators" })).toBeNull());
     expect(createMembership).toHaveBeenCalledTimes(2);
     expect(createMembership.mock.calls[1]?.[3]?.requestId).toBe(retained);
@@ -2361,6 +2368,50 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("tab", { name: "成员" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "成员 (2)" })).toBeNull();
   });
+  it("restores an original Membership after remount without needing a current Group read or automatically replaying it", async () => {
+    const groupId = "group-restored-membership"; const subject = reviewUsers.find((entry) => entry.user.loginName === "chen")!.user;
+    const original = { format: 1 as const, operation: "CREATE" as const, accountId: account.id, actorPrincipalId: rootUser.id, groupId, userId: subject.id, requestId: "original-member-request" };
+    writeGroupMembershipIntent(sessionStorage, original);
+    const created = { id: "restored-membership", accountId: account.id, groupId, userId: subject.id, createdBy: rootUser.id, resourceVersion: 1, createdAt: "2026-10-17T02:00:00Z", updatedAt: "2026-10-17T02:00:00Z" };
+    const create = vi.fn().mockResolvedValue(created); const getGroup = vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN"));
+    const { user, repository } = await open("groups", { live: true, reader: true, entityId: groupId, users: reviewUsers, repository: { getGroup, createGroupMembership: create } });
+    expect(await screen.findByText(/原命令结果未知/)).toBeTruthy(); expect(screen.getByText(original.requestId)).toBeTruthy();
+    expect(create).not.toHaveBeenCalled(); expect(repository.listGroupMemberships).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "添加成员" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "等价重试原请求" }));
+    expect(await screen.findByRole("status", { name: "原成员关系命令已确认" })).toBeTruthy();
+    expect(create).toHaveBeenCalledExactlyOnceWith("preview-only", account.id, groupId, { userId: subject.id, requestId: original.requestId });
+    expect(screen.queryByRole("button", { name: "等价重试原请求" })).toBeNull();
+    expect(repository.listGroupMemberships).not.toHaveBeenCalled(); expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("expires the current Session on a Membership retry 401 without discarding or replaying the original unknown command", async () => {
+    const original = { format: 1 as const, operation: "CREATE" as const, accountId: account.id, actorPrincipalId: rootUser.id, groupId: "group-expired-membership", userId: "principal-chen", requestId: "original-expired-member-request" };
+    writeGroupMembershipIntent(sessionStorage, original);
+    const create = vi.fn().mockRejectedValue(new HttpProblem(401, "EXPIRED"));
+    const { user } = await open("groups", { live: true, entityId: original.groupId, repository: { createGroupMembership: create } });
+    await user.click(await screen.findByRole("button", { name: "等价重试原请求" }));
+    expect(await screen.findByRole("button", { name: "Enter" })).toBeTruthy();
+    expect(readGroupMembershipIntent(sessionStorage, original)).toEqual(original); expect(create).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a confirmed Membership receipt when the independent current Group refresh fails without issuing another mutation", async () => {
+    const groupId = "group-membership-read-failure"; const subject = reviewUsers.find((entry) => entry.user.loginName === "chen")!.user;
+    const group: GroupAccess = { group: { id: groupId, accountId: account.id, name: "ReadFailureOperators", description: "", resourceVersion: 1, createdAt: "2026-10-17T02:00:00Z", updatedAt: "2026-10-17T02:00:00Z" }, policyAttachments: [],
+      capabilities: [capability("iam.group.read", "GROUP", groupId), capability("iam.group-membership.list", "GROUP", groupId), capability("iam.group-membership.create", "GROUP", groupId)] };
+    const getGroup = vi.fn().mockResolvedValueOnce(group).mockRejectedValue(new HttpProblem(503, "READ_UNAVAILABLE"));
+    const created = { id: "confirmed-membership", accountId: account.id, groupId, userId: subject.id, createdBy: rootUser.id, resourceVersion: 1, createdAt: "2026-10-17T02:00:00Z", updatedAt: "2026-10-17T02:00:00Z" };
+    const create = vi.fn().mockResolvedValue(created); const list = vi.fn().mockResolvedValue({ accountId: account.id, groupId, items: [], nextAfter: null });
+    const { user, repository } = await open("groups", { live: true, entityId: groupId, users: reviewUsers, repository: { getGroup, listGroupMemberships: list, createGroupMembership: create } });
+    await user.click(await screen.findByRole("button", { name: "添加成员" })); await user.click(screen.getByRole("checkbox", { name: "chen" }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" })); await user.click(screen.getByRole("button", { name: "确认变更" }));
+    expect(await screen.findByRole("status", { name: "原成员关系命令已确认" })).toBeTruthy();
+    await waitFor(() => expect(getGroup).toHaveBeenCalledTimes(2));
+    expect(await screen.findByRole("button", { name: "重试" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "等价重试原请求" })).toBeNull(); expect(create).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledOnce(); expect(repository.removeGroupMembership).not.toHaveBeenCalled(); expect(repository.execute).not.toHaveBeenCalled();
+  });
+
   it("checks the immutable completion record after a group policy response is lost without replaying the write", async () => {
     const policy: AccountPolicy = {
       id: "policy-group-audit", management: "CUSTOMER", accountId: account.id, displayName: "GroupAuditAccess",

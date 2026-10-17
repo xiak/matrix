@@ -4,10 +4,13 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, FormField, Input, TableSkeleton, TextArea } from "@ui/xiak";
 import { accountError, type GroupAccessClient } from "../application/AccountAccessProvider";
+import { useGroupMembershipMutation, type GroupMembershipMutationClient } from "../application/groupMembershipMutation";
 import type {
   AccountAccessView,
   GroupAccess,
+  Group,
   GroupDeletion,
+  GroupMembership,
   GroupMembershipAccess,
   IamAction,
   PolicyAttachmentChangeOperationExpectation
@@ -100,45 +103,29 @@ function LiveGroupMetadataEditor({ client, access, onClose, onChanged, onStale }
   </WorkspaceInlineForm>;
 }
 
-function LiveGroupAssociationEditor({ client, access, memberships, scene, change, onClose, onChanged, onStale }: {
+function LiveGroupPolicyEditor({ client, access, scene, mode, onClose, onChanged }: {
   client: GroupAccessClient;
   access: GroupAccess;
-  memberships: GroupMembershipAccess[];
   scene: AccountAccessScene;
-  change: GroupChange;
+  mode: "add" | "remove";
   onClose(): void;
   onChanged(): Promise<void>;
-  onStale(): void;
 }) {
   const t = useTranslations("GroupWorkspace");
   const w = useTranslations("IamWorkspace");
-  const a = useTranslations("AccountAccess");
   const p = useTranslations("PolicyAttachmentChange");
   const policyScope = useMemo(() => ({ accountId: client.accountId, actorPrincipalId: client.actorPrincipalId,
     target: { kind: "GROUP" as const, id: access.group.id } }), [access.group.id, client.accountId, client.actorPrincipalId]);
-  const [restoredPolicyIntent] = useState(() => change.kind === "policies" ? readPendingPolicyAttachmentChange(policyScope) : null);
+  const [restoredPolicyIntent] = useState(() => readPendingPolicyAttachmentChange(policyScope));
   const [selection, setSelection] = useState<string[]>(() => restoredPolicyIntent
     ? [restoredPolicyIntent.operation === "CREATE" ? restoredPolicyIntent.policyId : restoredPolicyIntent.attachmentId]
     : []);
   const [review, setReview] = useState(Boolean(restoredPolicyIntent));
-  const [operation, setOperation] = useState<OperationState>({ busy: false, error: null });
   const requestId = useRef(restoredPolicyIntent?.requestId ?? commandId());
-  const clearError = useCallback(() => setOperation((current) => current.error ? { ...current, error: null } : current), []);
-  const memberById = useMemo(() => new Map(scene.users.map((user) => [user.id, user])), [scene.users]);
   const policyById = useMemo(() => new Map(scene.policies.map((policy) => [policy.id, policy])), [scene.policies]);
-  const activeUserIds = useMemo(() => new Set(memberships.map((entry) => entry.membership.userId)), [memberships]);
   const attachedPolicyIds = useMemo(() => new Set(access.policyAttachments.map((entry) => entry.policyId)), [access.policyAttachments]);
   const options = useMemo(() => {
-    if (change.kind === "members" && change.mode === "add") return scene.users
-      .filter((user) => !activeUserIds.has(user.id))
-      .map((user) => ({ id: user.id, name: user.loginName, description: `${a("child")} · ${user.name}` }));
-    if (change.kind === "members") return memberships
-      .filter((entry) => findActionCapability(entry.capabilities, "iam.group-membership.remove", "GROUP_MEMBERSHIP", entry.membership.id)?.available === true)
-      .map((entry) => {
-        const user = memberById.get(entry.membership.userId);
-        return { id: entry.membership.id, name: user?.loginName ?? entry.membership.userId, description: user?.name ?? t("unresolvedUser") };
-      });
-    if (change.mode === "add") return scene.policies
+    if (mode === "add") return scene.policies
       .filter((policy) => policy.scopeKind === "tenant" && policy.available && !attachedPolicyIds.has(policy.id))
       .map((policy) => ({ id: policy.id, name: policy.displayName, description: `${w(policy.owner === "system" ? "system" : "custom")} · ${policy.id}` }));
     return access.policyAttachments
@@ -147,8 +134,8 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
         const policy = policyById.get(attachment.policyId);
         return { id: attachment.id, name: policy?.displayName ?? attachment.policyId, description: policy?.id ?? attachment.policyId };
       });
-  }, [a, access.capabilities, access.policyAttachments, activeUserIds, attachedPolicyIds, change.kind, change.mode, memberById, memberships, policyById, scene.policies, scene.users, t, w]);
-  const label = t(`${change.mode}${change.kind === "members" ? "Members" : "Policies"}`);
+  }, [access.capabilities, access.policyAttachments, attachedPolicyIds, mode, policyById, scene.policies, w]);
+  const label = t(`${mode}Policies`);
   const selected = options.find((option) => option.id === selection[0]);
   const policyCommand = usePolicyAttachmentCommand<PolicyAttachmentChangeOperationExpectation>({
     scope: policyScope,
@@ -169,9 +156,9 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
     inspect: (intent) => client.inspectPolicyAttachmentChange(intent),
     refresh: onChanged
   });
-  const policyBusy = change.kind === "policies" && (policyCommand.state.phase === "pending" || policyCommand.state.phase === "checking");
-  const policyLocked = change.kind === "policies" && policyCommand.locked;
-  const recoveringPolicy = change.kind === "policies" && (policyCommand.state.phase === "unknown" || policyCommand.state.phase === "checking" || policyCommand.state.phase === "refreshFailed");
+  const policyBusy = policyCommand.state.phase === "pending" || policyCommand.state.phase === "checking";
+  const policyLocked = policyCommand.locked;
+  const recoveringPolicy = policyCommand.state.phase === "unknown" || policyCommand.state.phase === "checking" || policyCommand.state.phase === "refreshFailed";
   const selectedName = selected?.name ?? (policyCommand.intent?.operation === "CREATE"
     ? policyCommand.intent.policyId
     : policyCommand.intent?.attachmentId);
@@ -182,60 +169,129 @@ function LiveGroupAssociationEditor({ client, access, memberships, scene, change
     setReview(false);
     requestId.current = commandId();
     policyCommand.reset();
-    clearError();
   };
 
   return <WorkspaceInlineForm
     title={`${label} · ${access.group.name}`}
     backLabel={t("backToGroupDetails")}
     onClose={onClose}
-    submitLabel={change.kind === "policies" && policyCommand.state.phase === "unknown" ? p("checkOriginalRequest") : change.kind === "policies" && policyCommand.state.phase === "checking" ? p("checking") : t(review ? "confirmChange" : "reviewChange")}
-    submitDisabled={change.kind === "policies" && policyCommand.state.phase === "refreshFailed" || !recoveringPolicy && !selection.length}
-    operation={operationProps(change.kind === "policies" ? { busy: policyBusy, error: null } : operation, clearError)}
-    draft={{ dirty: Boolean(selection.length) || review || change.kind === "policies" && policyLocked, title: label, description: change.kind === "policies" ? p("unknownHint") : t("singleRelationImpact") }}
+    submitLabel={policyCommand.state.phase === "unknown" ? p("checkOriginalRequest") : policyCommand.state.phase === "checking" ? p("checking") : t(review ? "confirmChange" : "reviewChange")}
+    submitDisabled={policyCommand.state.phase === "refreshFailed" || !recoveringPolicy && !selection.length}
+    operation={{ busy: policyBusy, clearError: () => undefined }}
+    draft={{ dirty: Boolean(selection.length) || review || policyLocked, title: label, description: p("unknownHint") }}
     onSubmit={async () => {
-      if (change.kind === "policies" && policyCommand.state.phase === "unknown") return policyCommand.inspectOriginal();
+      if (policyCommand.state.phase === "unknown") return policyCommand.inspectOriginal();
       if (!selected) return false;
       if (!review) { setReview(true); return false; }
-      setOperation({ busy: true, error: null });
-      try {
-        if (change.kind === "members" && change.mode === "add") {
-          await client.createMembership(access.group.id, { userId: selected.id, requestId: requestId.current });
-        } else if (change.kind === "members") {
-          const membership = memberships.find((entry) => entry.membership.id === selected.id)?.membership;
-          if (!membership) throw new Error("STALE_GROUP_MEMBERSHIP");
-          await client.removeMembership(access.group.id, membership.id, { resourceVersion: membership.resourceVersion, requestId: requestId.current });
-        } else if (change.mode === "add") {
+      if (mode === "add") {
           const policy = scene.policies.find((entry) => entry.id === selected.id);
           if (!policy) throw new Error("STALE_GROUP_POLICY");
           return policyCommand.run({ operation: "CREATE", target: { kind: "GROUP", id: access.group.id }, policyId: policy.id, policyResourceVersion: policy.resourceVersion, requestId: requestId.current });
-        } else {
+      } else {
           const attachment = access.policyAttachments.find((entry) => entry.id === selected.id);
           if (!attachment) throw new Error("STALE_GROUP_ATTACHMENT");
           return policyCommand.run({ operation: "REVOKE", attachmentId: attachment.id, expectedResourceVersion: attachment.resourceVersion, requestId: requestId.current });
-        }
-        await onChanged();
-        return true;
-      } catch (failure) {
-        const code = accountError(failure);
-        if (code === "conflict") onStale();
-        else setOperation({ busy: false, error: w(`errors.${code}`) });
-        return false;
-      } finally {
-        setOperation((current) => current.busy ? { ...current, busy: false } : current);
       }
     }}
   >
-    {change.kind === "policies" ? <PolicyAttachmentChangeFeedback state={policyCommand.state} onRetryRead={policyCommand.retryRead} /> : null}
+    <PolicyAttachmentChangeFeedback state={policyCommand.state} onRetryRead={policyCommand.retryRead} />
     {review ? <>
-      <Alert status={change.mode === "remove" ? "warning" : "info"}>{t("singleRelationImpact")}</Alert>
+      <Alert status={mode === "remove" ? "warning" : "info"}>{t("singleRelationImpact")}</Alert>
       <div className={styles.roleTags}><Badge>{selectedName}</Badge></div>
-      {change.mode === "remove" ? <Alert status="warning">{t("remainingSources")}</Alert> : null}
-      <div><Button type="button" variant="secondary" disabled={change.kind === "policies" && policyLocked} onClick={() => { policyCommand.reset(); setReview(false); clearError(); }}>{t("backToSelection")}</Button></div>
+      {mode === "remove" ? <Alert status="warning">{t("remainingSources")}</Alert> : null}
+      <div><Button type="button" variant="secondary" disabled={policyLocked} onClick={() => { policyCommand.reset(); setReview(false); }}>{t("backToSelection")}</Button></div>
     </> : <>
-      <Alert>{t(change.kind === "members" ? "membershipHint" : "policyChangeHint")}</Alert>
+      <Alert>{t("policyChangeHint")}</Alert>
       <WorkspaceSelection label={label} options={options} value={selection} onChange={select} limit={1} />
-      {change.kind === "members" && change.mode === "add" && !scene.directoryComplete ? <p className={styles.note}>{t("loadedUsersOnly")}</p> : null}
+    </>}
+  </WorkspaceInlineForm>;
+}
+
+function MembershipReceipt({ receipt }: { receipt: GroupMembership }) {
+  const t = useTranslations("GroupMembershipCommand");
+  return <Alert status="success" role="status" aria-label={t("receiptTitle")}>
+    <strong>{t("receiptTitle")}</strong><p>{t("receiptBoundary")}</p>
+    <dl className={styles.facts}>
+      <div><dt>{t("membership")}</dt><dd><code>{receipt.id}</code></dd></div>
+      <div><dt>{t("group")}</dt><dd><code>{receipt.groupId}</code></dd></div>
+      <div><dt>{t("user")}</dt><dd><code>{receipt.userId}</code></dd></div>
+      <div><dt>{t("revision")}</dt><dd>{receipt.resourceVersion}</dd></div>
+      <div><dt>{t("result")}</dt><dd>{t(receipt.removedAt ? "removed" : "created")} · <WorkspaceTime value={receipt.removedAt ?? receipt.createdAt} /></dd></div>
+    </dl>
+  </Alert>;
+}
+
+function LiveGroupMembershipEditor({ group, mode, memberships, scene, command, canBegin = false, onClose, onCompleted, onStale }: {
+  group: Pick<Group, "id" | "name">; mode: "add" | "remove"; memberships: GroupMembershipAccess[]; scene: AccountAccessScene;
+  command: GroupMembershipMutationClient; canBegin?: boolean; onClose(): void; onCompleted(): void; onStale?(): void;
+}) {
+  const t = useTranslations("GroupWorkspace");
+  const m = useTranslations("GroupMembershipCommand");
+  const a = useTranslations("AccountAccess");
+  const [selection, setSelection] = useState<string[]>([]);
+  const [review, setReview] = useState<{ name: string; input: Parameters<GroupMembershipMutationClient["begin"]>[0] } | null>(null);
+  const users = new Map(scene.users.map((user) => [user.id, user]));
+  const options = mode === "add" ? scene.users.filter((user) => !user.protected && user.id !== scene.currentUserId && !memberships.some((item) => item.membership.userId === user.id))
+    .map((user) => ({ id: user.id, name: user.loginName, description: `${a("child")} · ${user.name}` }))
+    : memberships.filter((item) => findActionCapability(item.capabilities, "iam.group-membership.remove", "GROUP_MEMBERSHIP", item.membership.id)?.available === true)
+      .map((item) => ({ id: item.membership.id, name: users.get(item.membership.userId)?.loginName ?? item.membership.userId, description: users.get(item.membership.userId)?.name ?? t("unresolvedUser") }));
+  const selected = options.find((option) => option.id === selection[0]);
+  const selectedMembership = mode === "remove" ? memberships.find((item) => item.membership.id === selected?.id)?.membership : null;
+  const staleReview = Boolean(review && (!selected || review.input.operation === "REMOVE" &&
+    (selectedMembership?.id !== review.input.membership.id || selectedMembership?.resourceVersion !== review.input.membership.resourceVersion || selectedMembership?.userId !== review.input.membership.userId)));
+  const pending = command.pending;
+  const title = `${t(`${pending ? pending.operation === "CREATE" ? "add" : "remove" : mode}Members`)} · ${group.name}`;
+  return <WorkspaceInlineForm title={title} onClose={onClose} backLabel={t("backToGroupDetails")}
+    operation={{ busy: command.busy, clearError: () => undefined }}
+    submitLabel={command.receipt && pending ? m("finish") : pending ? m("retryExact") : t(review ? "confirmChange" : "reviewChange")}
+    submitDisabled={command.receipt && pending ? false : !command.ready || !pending && (!canBegin || !selected || staleReview)}
+    draft={{ dirty: !pending && (Boolean(review) || selection.length > 0), title, description: m("leaveHint") }}
+    onSubmit={async () => {
+      if (pending && command.receipt) {
+        if (command.acknowledge()) onCompleted();
+        return false;
+      }
+      if (pending) {
+        const result = await command.retry();
+        if (result.status === "applied" && command.acknowledge()) onCompleted();
+        return false;
+      }
+      if (!selected || !canBegin || staleReview) return false;
+      if (!review) {
+        if (mode === "remove" && !selectedMembership) return false;
+        setReview({ name: selected.name, input: mode === "add" ? { operation: "CREATE", userId: selected.id } : { operation: "REMOVE", membership: structuredClone(selectedMembership!) } });
+        return false;
+      }
+      const result = await command.begin(review.input);
+      if (result.status === "applied" && command.acknowledge()) onCompleted();
+      else if (result.status === "rejected" && result.reason === "conflict") onStale?.();
+      return false;
+    }}>
+    {command.recoveryError ? <Alert status="danger">{m("storageUnavailable")}</Alert> : null}
+    {command.busy ? <p role="status">{m("working")}</p> : command.error ? <Alert status={pending ? "warning" : "danger"}>{a(`errors.${command.error}`)}</Alert> : null}
+    {pending ? <>
+      {!command.receipt && !command.busy && !command.recoveryError ? <Alert status="warning">{m("unknown")}</Alert> : null}
+      <dl className={styles.facts}>
+        <div><dt>{m("account")}</dt><dd><code>{pending.accountId}</code></dd></div>
+        <div><dt>{m("actor")}</dt><dd><code>{pending.actorPrincipalId}</code></dd></div>
+        <div><dt>{m("group")}</dt><dd><code>{pending.groupId}</code></dd></div>
+        <div><dt>{m("user")}</dt><dd><code>{pending.userId}</code></dd></div>
+        <div><dt>{m("request")}</dt><dd><code>{pending.requestId}</code></dd></div>
+        {pending.operation === "REMOVE" ? <><div><dt>{m("membership")}</dt><dd><code>{pending.membershipId}</code></dd></div><div><dt>{m("revision")}</dt><dd>{pending.resourceVersion}</dd></div></> : null}
+      </dl>
+      {command.receipt ? <MembershipReceipt receipt={command.receipt} /> : <Alert>{m("retryBoundary")}</Alert>}
+    </> : review ? <>
+      <Alert status={mode === "remove" ? "warning" : "info"}>{t("singleRelationImpact")}</Alert>
+      <Badge>{review.name}</Badge>
+      <p>{m("group")} <code>{group.id}</code> · {m("user")} <code>{review.input.operation === "CREATE" ? review.input.userId : review.input.membership.userId}</code></p>
+      {review.input.operation === "REMOVE" ? <p>{m("membership")} <code>{review.input.membership.id}</code> · {m("revision")} {review.input.membership.resourceVersion}</p> : null}
+      {staleReview || !canBegin ? <Alert status="warning">{m("staleReview")}</Alert> : null}
+      {mode === "remove" ? <Alert status="warning">{t("remainingSources")}</Alert> : null}
+      <Button variant="secondary" type="button" onClick={() => setReview(null)}>{t("backToSelection")}</Button>
+    </> : <>
+      <Alert>{t("membershipHint")}</Alert>
+      <WorkspaceSelection label={t(`${mode}Members`)} options={options} value={selection} onChange={(value) => { setSelection(value); setReview(null); }} limit={1} />
+      {mode === "add" && !scene.directoryComplete ? <p className={styles.note}>{t("loadedUsersOnly")}</p> : null}
     </>}
   </WorkspaceInlineForm>;
 }
@@ -292,6 +348,7 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen, onDeleted }: {
   const t = useTranslations("GroupWorkspace");
   const a = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
+  const membershipCommand = useGroupMembershipMutation(client, entityId);
   const requestVersion = useRef(0);
   const membershipRequestVersion = useRef(0);
   const [access, setAccess] = useState<GroupAccess | null>(null);
@@ -452,11 +509,18 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen, onDeleted }: {
     if (wasEditing && !editing) pageActionFocus.current?.focus();
   }, [editing]);
 
-  const stableTitle = access?.group.name ?? w("groups");
+  const stableTitle = access?.group.name ?? entityId;
+  // Original-command recovery does not depend on a current Group or member read.
+  if (membershipCommand.pending) return <WorkspaceDetail title={access?.group.name ?? entityId} onBack={() => onOpen("groups")}>
+    <LiveGroupMembershipEditor group={{ id: entityId, name: access?.group.name ?? entityId }} mode={membershipCommand.pending.operation === "CREATE" ? "add" : "remove"}
+      scene={scene} memberships={memberships} command={membershipCommand} onClose={() => onOpen("groups")}
+      onCompleted={() => { setChange(null); void load(); }} />
+  </WorkspaceDetail>;
   if (phase === "loading") return <WorkspaceDetail title={stableTitle} onBack={() => onOpen("groups")}>
     <TableSkeleton label={t("loadingGroup")} rows={4} header={false} />
   </WorkspaceDetail>;
   if (phase === "error" || !access || !record) return <WorkspaceDetail title={stableTitle} onBack={() => onOpen("groups")}>
+    {membershipCommand.receipt ? <MembershipReceipt receipt={membershipCommand.receipt} /> : null}
     <EmptyState title={w("entityUnavailable")} description={pageError ?? w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => { setPhase("loading"); void load(true); }}>{t("retry")}</Button>} />
   </WorkspaceDetail>;
 
@@ -471,10 +535,13 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen, onDeleted }: {
   const stale = () => { setEditing(false); setDeleting(false); setChange(null); setPageError(a("errors.conflict")); void load(); };
 
   return <>
+    {membershipCommand.receipt ? <MembershipReceipt receipt={membershipCommand.receipt} /> : null}
     {pageError ? <Alert status="warning">{pageError}</Alert> : null}
     <GroupDetail
       group={record}
-      workflow={editing ? <LiveGroupMetadataEditor client={client} access={access} onClose={() => setEditing(false)} onChanged={() => load()} onStale={stale} /> : change ? <LiveGroupAssociationEditor client={client} access={access} memberships={memberships} scene={scene} change={change} onClose={() => setChange(null)} onChanged={() => load()} onStale={stale} /> : undefined}
+      workflow={editing ? <LiveGroupMetadataEditor client={client} access={access} onClose={() => setEditing(false)} onChanged={() => load()} onStale={stale} /> : change?.kind === "members" ?
+        <LiveGroupMembershipEditor group={access.group} memberships={memberships} scene={scene} mode={change.mode} command={membershipCommand} canBegin={!refreshingGroup && membersPhase === "ready"} onClose={() => setChange(null)} onCompleted={() => { setChange(null); void load(); }} onStale={stale} /> : change ?
+        <LiveGroupPolicyEditor client={client} access={access} scene={scene} mode={change.mode} onClose={() => setChange(null)} onChanged={() => load()} /> : undefined}
       controls={{
         edit: { disabled: refreshingGroup || edit?.available !== true, reason: refreshingGroup ? t("loadingGroup") : edit?.restrictionReason ?? undefined, onInvoke: () => setEditing(true) },
         delete: { disabled: refreshingGroup || remove?.available !== true, reason: refreshingGroup ? t("loadingGroup") : remove?.restrictionReason ?? undefined, onInvoke: () => setDeleting(true) },
@@ -510,13 +577,19 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen, onDeleted }: {
   </>;
 }
 
-export function AccountLiveGroups({ client, entityId, scene, onCreate, onOpen }: {
+type AccountLiveGroupsProps = {
   client: GroupAccessClient;
   entityId?: string;
   scene: AccountAccessScene;
   onCreate(): void;
   onOpen: OpenGroupEntity;
-}) {
+};
+
+export function AccountLiveGroups(props: AccountLiveGroupsProps) {
+  return <AccountLiveGroupsWorkspace key={props.client.identity} {...props} />;
+}
+
+function AccountLiveGroupsWorkspace({ client, entityId, scene, onCreate, onOpen }: AccountLiveGroupsProps) {
   const t = useTranslations("GroupWorkspace");
   const [receipt, setReceipt] = useState<{ client: GroupAccessClient; result: GroupDeletion } | null>(null);
   if (entityId) return <LiveGroupWorkspace key={entityId} client={client} entityId={entityId} scene={scene} onOpen={onOpen}

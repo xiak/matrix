@@ -6,9 +6,9 @@ import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent } from "../application/AccountAccessProvider";
+import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent, type UserManagementClient } from "../application/AccountAccessProvider";
 import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
-import type { AccountLifecycleCompletion, AccountLifecycleIntent } from "../domain/accounts";
+import type { AccountLifecycleCompletion, AccountLifecycleIntent, UserManagementIntent, UserManagementCompletion } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { httpIamRepository } from "../repositories/httpIamRepository";
@@ -18,6 +18,7 @@ import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
 import { LoginRenderer } from "./LoginRenderer";
 import { buildAccountAccessScene, type AccountDirectoryKind } from "../scenes/accountAccessScene";
 import { AccountUserAccessMethods } from "./AccountUserWorkspace";
+import { readUserManagementIntent, writeUserManagementIntent } from "../repositories/userManagementRecoveryStorage";
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
@@ -154,6 +155,8 @@ function accounts(overrides: Partial<AccountRepository> = {}): AccountRepository
     listAuthorizationProfiles: vi.fn().mockResolvedValue(profileDirectory()),
     listAccounts: vi.fn().mockResolvedValue({ items: [accountAccess(identity.account)], nextAfter: null }),
     readPasswordResetCompletion: vi.fn().mockRejectedValue(new HttpProblem(404, "RESET_RESULT_UNOBSERVED")),
+    userManagement: { submit: vi.fn(async (_credential: string, intent: UserManagementIntent) => ({ ...childUser, resourceVersion: intent.expectedResourceVersion + 1,
+      ...(intent.operation === "USER_UPDATE" ? { displayName: intent.intendedDisplayName } : { status: intent.intendedStatus }) })), readCompletion: vi.fn().mockRejectedValue(new HttpProblem(404, "UNOBSERVED")) },
     execute: vi.fn().mockResolvedValue(undefined),
     revokePolicyAttachment: vi.fn().mockResolvedValue({ id: "attachment-child-a-system.paas-viewer", resourceVersion: 2, revokedAt: "2026-08-27T00:00:00Z" }),
     ...overrides
@@ -172,15 +175,18 @@ function DirectoryGuardProbe({ view }: { view: AccountAccessView }) {
   const session = useSession();
   const access = useAccountAccess();
   const [exactReady, setExactReady] = useState(false);
+  const [initiallyAdmitted, setInitiallyAdmitted] = useState(false);
   const [result, setResult] = useState("");
-  const retainedCommand = useRef<typeof access.execute | null>(null);
+  const retainedCommand = useRef<UserManagementClient | null>(null);
+  const originalUserCommand: UserManagementIntent = { format: 1, accountId: account.id, actorPrincipalId: identity.user.id, userId: childUser.id, operation: "USER_SET_STATUS", expectedResourceVersion: childUser.resourceVersion, intendedStatus: "DISABLED", commandRequestId: "directory-owner-command" };
   return <>
     <button onClick={() => void session.login("admin", "password")}>login-directory-probe</button>
-    <button onClick={() => void access.loadUser(childUser.id).then(() => { retainedCommand.current = access.execute; setExactReady(true); }).catch(() => setExactReady(false))}>read-exact-user</button>
+    <button onClick={() => void access.loadUser(childUser.id).then(() => { retainedCommand.current = access.userManagement; setInitiallyAdmitted(Boolean(access.userManagement?.canBegin(originalUserCommand))); setExactReady(true); }).catch(() => { setInitiallyAdmitted(false); setExactReady(false); })}>read-exact-user</button>
     <button onClick={() => access.usersPage("next-user-page")}>read-next-user-page</button>
     <button disabled={access.loading} onClick={() => void access.retryDirectory("users")}>retry-user-directory</button>
-    <button onClick={() => void (retainedCommand.current ?? access.execute)({ kind: "set-status", userId: childUser.id, resourceVersion: childUser.resourceVersion, status: "DISABLED" }).then((value) => setResult(String(value)))}>attempt-old-user-command</button>
+    <button onClick={() => { const client = retainedCommand.current ?? access.userManagement; if (!client) setResult("false"); else void client.submit(originalUserCommand).then(() => setResult("true"), () => setResult("false")); }}>attempt-old-user-command</button>
     <output aria-label="exact-user-ready">{String(exactReady)}</output>
+    <output aria-label="exact-user-initially-admitted">{String(initiallyAdmitted)}</output>
     <output aria-label="old-user-command-result">{result}</output>
     <AccountAccessRenderer view={view} onNavigate={() => {}} />
   </>;
@@ -803,12 +809,14 @@ describe("account access", () => {
     await screen.findByRole("button", { name: "查看用户 developer" });
     await user.click(screen.getByRole("button", { name: "read-exact-user" }));
     await waitFor(() => expect(screen.getByLabelText("exact-user-ready").textContent).toBe("true"));
+    expect(screen.getByLabelText("exact-user-initially-admitted").textContent).toBe("true");
     await user.click(screen.getByRole("button", { name: "read-next-user-page" }));
     await screen.findByText("用户目录暂时不可用");
     expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
     expect(screen.queryByRole("button", { name: "查看用户 developer" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "attempt-old-user-command" }));
     await waitFor(() => expect(screen.getByLabelText("old-user-command-result").textContent).toBe("false"));
+    expect(repository.userManagement!.submit).not.toHaveBeenCalled();
     expect(repository.getUser).toHaveBeenCalledTimes(1);
     expect(repository.execute).not.toHaveBeenCalled();
   });
@@ -1979,8 +1987,135 @@ describe("account access", () => {
     const field = screen.getByLabelText("用户显示名称");
     await user.clear(field);
     await user.type(field, "Developer Renamed");
+    await user.click(screen.getByRole("button", { name: "审阅更改" }));
+    expect(repository.userManagement!.submit).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "保存显示名称" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "update-user", userId: "child-a", displayName: "Developer Renamed", resourceVersion: 2 }));
+    await waitFor(() => expect(repository.userManagement!.submit).toHaveBeenCalledWith(credential, expect.objectContaining({ accountId: account.id, actorPrincipalId: identity.user.id, operation: "USER_UPDATE", userId: "child-a", intendedDisplayName: "Developer Renamed", expectedResourceVersion: 2, commandRequestId: expect.stringMatching(/^ui-user-management-/) })));
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("guards an unsubmitted LIVE name draft and restores its source action after explicit cancellation", async () => {
+    const repository = accounts(); const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" })); await user.click(await screen.findByRole("button", { name: "修改显示名称" }));
+    await user.clear(screen.getByLabelText("用户显示名称")); await user.type(screen.getByLabelText("用户显示名称"), "Unsubmitted name");
+    await user.click(screen.getByTestId("nav-policies"));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "继续编辑" }));
+    expect(screen.getByLabelText("用户显示名称")).toHaveProperty("value", "Unsubmitted name");
+    await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "放弃并离开" }));
+    expect(await screen.findByRole("button", { name: "修改显示名称" })).toBe(document.activeElement);
+    expect(repository.userManagement!.submit).not.toHaveBeenCalled(); expect(repository.userManagement!.readCompletion).not.toHaveBeenCalled(); expect(sessionStorage.length).toBe(0);
+  });
+
+  it("explains read-only User controls when original-result recovery is unavailable without falling back to generic writes", async () => {
+    const repository = accounts({ userManagement: undefined }); const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    expect(await screen.findByText("当前环境未提供用户变更的安全结果恢复能力，资料与状态操作暂为只读。")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", true); expect(screen.getByRole("button", { name: "禁用用户" })).toHaveProperty("disabled", true);
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("explains an unreadable original User reminder before disabling new changes", async () => {
+    const getItem = Storage.prototype.getItem;
+    const fault = vi.spyOn(Storage.prototype, "getItem").mockImplementation(function(this: Storage, key: string) {
+      if (key.startsWith("matrix.iam.user-management.v1:")) throw new Error("storage blocked");
+      return getItem.call(this, key);
+    });
+    try {
+      const repository = accounts(); const { user } = await openAccess(repository); await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+      expect(await screen.findByText(/无法安全读取或保存原请求提醒/)).toBeTruthy();
+      expect(screen.getByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", true); expect(screen.getByRole("button", { name: "禁用用户" })).toHaveProperty("disabled", true);
+      expect(repository.userManagement!.submit).not.toHaveBeenCalled(); expect(repository.execute).not.toHaveBeenCalled();
+    } finally { fault.mockRestore(); }
+  });
+
+  it("checks an original User result by known locator without requiring current detail or directory authority", async () => {
+    const intent: UserManagementIntent = { format: 1, accountId: account.id, actorPrincipalId: identity.user.id, userId: childUser.id, commandRequestId: "lost-user-rename", expectedResourceVersion: childUser.resourceVersion, operation: "USER_UPDATE", intendedDisplayName: "Original renamed user" };
+    writeUserManagementIntent(sessionStorage, intent);
+    const reader = { ...identity, capabilities: identity.capabilities.map((item) => item.action === "iam.user.list" ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item) };
+    const readCompletion = vi.fn().mockResolvedValue({ accountId: account.id, actorPrincipalId: identity.user.id, userId: childUser.id, commandRequestId: intent.commandRequestId, expectedResourceVersion: intent.expectedResourceVersion, operation: intent.operation,
+      result: { ...childUser, displayName: intent.intendedDisplayName, resourceVersion: intent.expectedResourceVersion + 1 }, eventId: "original-user-event", occurredAt: timestamp });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue(reader), getUser: vi.fn().mockRejectedValue(new HttpProblem(403, "PRIVATE USER READ")), userManagement: { submit: vi.fn(), readCompletion } });
+    const { user, view } = await openAccess(repository, iam(), "users", credential, childUser.id);
+    await screen.findByRole("button", { name: "查询原请求结果" });
+    expect(readCompletion).not.toHaveBeenCalled(); expect(repository.listUsers).not.toHaveBeenCalled(); expect(repository.userManagement!.submit).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByRole("status", { name: "已确认原用户变更" })).toBeTruthy();
+    expect(readCompletion).toHaveBeenCalledExactlyOnceWith(credential, intent);
+    await waitFor(() => expect(repository.getUser).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "重试读取" })).toBeTruthy();
+    expect(view.container.textContent).not.toContain("PRIVATE USER READ");
+    expect(readUserManagementIntent(sessionStorage, intent)).toBeNull(); expect(repository.userManagement!.submit).not.toHaveBeenCalled(); expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([403, 404, 409, 503])("retains one original User command after a %s lookup without a replacement or automatic write", async (status) => {
+    const submit = vi.fn().mockRejectedValue(new Error("lost write response")); const readCompletion = vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE LOOKUP"));
+    const repository = accounts({ userManagement: { submit, readCompletion } }); const { user, view } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" })); await user.click(await screen.findByRole("button", { name: "禁用用户" }));
+    await user.click(screen.getByRole("button", { name: "确认禁用" }));
+    await screen.findByRole("button", { name: "查询原请求结果" });
+    const intent = vi.mocked(submit).mock.calls[0]![1] as UserManagementIntent;
+    expect(readUserManagementIntent(sessionStorage, intent)).toEqual(intent); expect(readCompletion).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
+    await waitFor(() => expect(readCompletion).toHaveBeenCalledExactlyOnceWith(credential, intent));
+    expect(readUserManagementIntent(sessionStorage, intent)).toEqual(intent); expect(screen.queryByRole("button", { name: "确认禁用" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull(); expect(screen.queryByRole("status", { name: "已确认原用户变更" })).toBeNull();
+    expect(submit).toHaveBeenCalledOnce(); expect(repository.execute).not.toHaveBeenCalled(); expect(view.container.textContent).not.toContain("PRIVATE LOOKUP");
+    await user.click(screen.getByRole("button", { name: "返回用户列表" }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    expect(await screen.findByRole("button", { name: "查询原请求结果" })).toBeTruthy();
+    expect(readUserManagementIntent(sessionStorage, intent)).toEqual(intent); expect(submit).toHaveBeenCalledOnce(); expect(readCompletion).toHaveBeenCalledOnce();
+  });
+
+  it("retains a confirmed User change when its independent current read fails and only retries that read", async () => {
+    const repository = accounts({ getUser: vi.fn().mockResolvedValueOnce(structuredClone(child)).mockRejectedValue(new HttpProblem(503, "READ UNAVAILABLE")) });
+    const { user } = await openAccess(repository); await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "禁用用户" })); await user.click(screen.getByRole("button", { name: "确认禁用" }));
+    expect(await screen.findByRole("status", { name: "已确认原用户变更" })).toBeTruthy();
+    await user.click(await screen.findByRole("button", { name: "重试读取" }));
+    await waitFor(() => expect(repository.getUser).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("status", { name: "已确认原用户变更" })).toBeTruthy();
+    expect(screen.queryByText("正常", { exact: true })).toBeNull();
+    expect(repository.userManagement!.submit).toHaveBeenCalledOnce(); expect(repository.userManagement!.readCompletion).not.toHaveBeenCalled(); expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("rereads a conflicting User revision and requires a fresh explicit status review and request", async () => {
+    const newerUser: User = { ...childUser, resourceVersion: 3 };
+    const newer = { ...child, user: newerUser, capabilities: userCapabilities(newerUser, child.policyAttachments) };
+    const submit = vi.fn().mockRejectedValueOnce(new HttpProblem(409, "CONFLICT")).mockResolvedValue({ ...newerUser, resourceVersion: 4, status: "DISABLED" });
+    const repository = accounts({ getUser: vi.fn().mockResolvedValueOnce(structuredClone(child)).mockResolvedValue(newer), userManagement: { submit, readCompletion: vi.fn() } });
+    const { user } = await openAccess(repository); await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "禁用用户" })); await user.click(screen.getByRole("button", { name: "确认禁用" }));
+    await waitFor(() => expect(repository.getUser).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText("目标或当前权限已变化，请重新读取用户并审阅新的更改。")).toBeTruthy();
+    expect(submit).toHaveBeenCalledOnce(); expect(sessionStorage.length).toBe(0); expect(repository.userManagement!.readCompletion).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("button", { name: "禁用用户" }));
+    expect(submit).toHaveBeenCalledOnce(); await user.click(screen.getByRole("button", { name: "确认禁用" }));
+    await waitFor(() => expect(submit).toHaveBeenCalledTimes(2));
+    const previous = submit.mock.calls[0]![1] as UserManagementIntent, next = submit.mock.calls[1]![1] as UserManagementIntent;
+    expect(previous.expectedResourceVersion).toBe(2); expect(next.expectedResourceVersion).toBe(3); expect(next.commandRequestId).not.toBe(previous.commandRequestId);
+  });
+
+  it("expires the current Session on original User lookup 401 while retaining the non-secret reminder", async () => {
+    const intent: UserManagementIntent = { format: 1, accountId: account.id, actorPrincipalId: identity.user.id, userId: childUser.id, commandRequestId: "lost-user-status", expectedResourceVersion: childUser.resourceVersion, operation: "USER_SET_STATUS", intendedStatus: "DISABLED" };
+    writeUserManagementIntent(sessionStorage, intent); const repository = accounts({ userManagement: { submit: vi.fn(), readCompletion: vi.fn().mockRejectedValue(new HttpProblem(401, "EXPIRED")) } });
+    const { user } = await openAccess(repository, iam(), "users", credential, childUser.id);
+    await user.click(await screen.findByRole("button", { name: "查询原请求结果" }));
+    expect(await screen.findByRole("button", { name: "登录控制台" })).toBeTruthy();
+    expect(readUserManagementIntent(sessionStorage, intent)).toEqual(intent); expect(repository.userManagement!.submit).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late User lookup 401 from an old repository without expiring or submitting for the replacement owner", async () => {
+    const intent: UserManagementIntent = { format: 1, accountId: account.id, actorPrincipalId: identity.user.id, userId: childUser.id, commandRequestId: "old-owner-user-status", expectedResourceVersion: childUser.resourceVersion, operation: "USER_SET_STATUS", intendedStatus: "DISABLED" };
+    writeUserManagementIntent(sessionStorage, intent); let reject!: (failure: unknown) => void;
+    const previous = accounts({ userManagement: { submit: vi.fn(), readCompletion: vi.fn(() => new Promise<UserManagementCompletion>((_resolve, fail) => { reject = fail; })) } });
+    const next = accounts(); const { user, replaceRepository } = await openAccess(previous, iam(), "users", credential, childUser.id);
+    await user.click(await screen.findByRole("button", { name: "查询原请求结果" })); replaceRepository(next);
+    await waitFor(() => expect(next.currentIdentity).toHaveBeenCalled());
+    await act(async () => { reject(new HttpProblem(401, "OLD OWNER")); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "查询原请求结果" }).hasAttribute("disabled")).toBe(false));
+    expect(screen.queryByRole("button", { name: "登录控制台" })).toBeNull(); expect(next.userManagement!.submit).not.toHaveBeenCalled(); expect(next.userManagement!.readCompletion).not.toHaveBeenCalled();
+    expect(readUserManagementIntent(sessionStorage, intent)).toEqual(intent);
   });
 
   it("requires disablement and typed confirmation before irreversible live deletion", async () => {
@@ -4732,7 +4867,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "禁用用户" }));
     expect(repository.execute).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认禁用" }));
-    await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "set-status", userId: "child-a", status: "DISABLED", resourceVersion: 2 }));
+    await waitFor(() => expect(repository.userManagement!.submit).toHaveBeenCalledWith(credential, expect.objectContaining({ operation: "USER_SET_STATUS", userId: "child-a", intendedStatus: "DISABLED", expectedResourceVersion: 2 })));
     await waitFor(() => expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole("button", { name: "重置密码" }));
     await user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
@@ -4742,7 +4877,7 @@ describe("account access", () => {
     expect(within(resetReview).getByText(/撤销所有现有会话/)).toBeTruthy();
     expect(within(resetReview).getByRole("heading", { name: "确认重置目标与影响" })).toBe(document.activeElement);
     expect(resetReview.textContent).not.toContain("Reset-Only-Test-Password-74!");
-    expect(repository.execute).toHaveBeenCalledTimes(1);
+    expect(repository.execute).not.toHaveBeenCalled();
     await user.click(within(resetReview).getByRole("button", { name: "修改初始密码" }));
     expect(screen.getByLabelText(/^初始密码/)).toHaveProperty("value", "Reset-Only-Test-Password-74!");
     await user.click(screen.getByRole("button", { name: "审阅重置" }));

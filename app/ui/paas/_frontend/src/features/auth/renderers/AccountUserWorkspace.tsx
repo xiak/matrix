@@ -1,8 +1,10 @@
 "use client";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import { Badge, Button, EmptyState, FormField, Input, Table, TableSkeleton, Tabs } from "@ui/xiak";
+import { Alert, Badge, Button, EmptyState, FormField, Input, Table, TableSkeleton, Tabs } from "@ui/xiak";
 import { useAccountAccess, type UserBoundarySnapshot } from "../application/AccountAccessProvider";
+import { useUserManagementMutation } from "../application/userManagementMutation";
+import { UserManagementEditor, UserManagementReceiptNotice } from "./UserManagementCommand";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import { containsDenyStatement } from "../domain/policyDocument";
@@ -43,17 +45,33 @@ function AccountUserSnapshot({ user, busy, children }: { user: AccountUserScene;
   </div>;
 }
 
-export function AccountLiveUserWorkspace({ userId, summary, onBack }: { userId: string; summary?: AccountUserScene; onBack(): void }) {
+type LiveUserWorkspaceProps = { userId: string; summary?: AccountUserScene; onBack(): void };
+export function AccountLiveUserWorkspace(props: LiveUserWorkspaceProps) {
+  const { userManagement } = useAccountAccess();
+  return <LiveUserWorkspace key={userManagement?.identity ?? props.userId} {...props} />;
+}
+
+function LiveUserWorkspace({ userId, summary, onBack }: LiveUserWorkspaceProps) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
-  const { loadUser, permissionBoundaries } = useAccountAccess();
+  const management = useTranslations("UserManagementCommand");
+  const { loadUser, permissionBoundaries, userManagement } = useAccountAccess();
+  const command = useUserManagementMutation(userManagement, userId);
+  const [workflow, setWorkflow] = useState<"rename" | "status" | null>(null);
+  const renameRef = useRef<HTMLButtonElement>(null), statusRef = useRef<HTMLButtonElement>(null);
+  const returnAction = useRef<"rename" | "status" | null>(null);
   const [loadVersion, setLoadVersion] = useState(0);
   const owner = useMemo(() => ({ loadUser, permissionBoundaries, userId, loadVersion }), [loadUser, loadVersion, permissionBoundaries, userId]);
   type UserRead = { state: "loading" } | { state: "ready"; user: AccountUserScene; boundary?: UserBoundarySnapshot } | { state: "error" };
   const [snapshot, setSnapshot] = useState<{ owner: typeof owner; value: UserRead }>({ owner, value: { state: "loading" } });
   const loaded: UserRead = snapshot.owner === owner ? snapshot.value : { state: "loading" };
-  const currentOwner = useRef(owner);
-  useLayoutEffect(() => { currentOwner.current = owner; }, [owner]);
+  const currentOwner = useRef<typeof owner | null>(owner);
+  useLayoutEffect(() => { currentOwner.current = owner; return () => { currentOwner.current = null; }; }, [owner]);
+  useLayoutEffect(() => {
+    if (workflow || command.pending || loaded.state !== "ready" || !returnAction.current) return;
+    (returnAction.current === "rename" ? renameRef : statusRef).current?.focus({ preventScroll: true });
+    returnAction.current = null;
+  }, [command.pending, loaded.state, workflow]);
   const boundaryChanged = useCallback((boundary: UserBoundarySnapshot) => {
     if (currentOwner.current === owner) setSnapshot({ owner, value: { state: "ready", user: boundary.user, boundary } });
   }, [owner]);
@@ -67,18 +85,31 @@ export function AccountLiveUserWorkspace({ userId, summary, onBack }: { userId: 
     return () => { current = false; };
   }, [loadUser, owner, permissionBoundaries, userId]);
   const title = summary?.loginName ?? userId;
-  if (loaded.state === "loading") return <WorkspaceDetail title={title} onBack={onBack}>{summary ? <AccountUserSnapshot user={summary} busy>
+  const completed = () => { setWorkflow(null); setLoadVersion((current) => current + 1); };
+  const commandFeedback = <>{loaded.state === "ready" && !userManagement ? <Alert>{management("readOnlyUnavailable")}</Alert> : null}
+    {command.recoveryError ? <Alert status="danger">{management("storageUnavailable")}</Alert> : null}
+    {command.receipt ? <UserManagementReceiptNotice receipt={command.receipt} /> : null}
+    {command.error === "conflict" || command.error === "forbidden" ? <Alert status="warning">{management("staleReview")}</Alert> : null}</>;
+  if (command.pending || workflow && loaded.state === "ready") return <WorkspaceDetail title={title} onBack={onBack}>
+    <UserManagementEditor userId={userId} user={loaded.state === "ready" ? loaded.user : undefined} mode={workflow ?? (command.pending?.operation === "USER_UPDATE" ? "rename" : "status")} command={command}
+      onClose={command.pending ? onBack : () => setWorkflow(null)} onCompleted={completed} onStale={completed} />
+  </WorkspaceDetail>;
+  if (loaded.state === "loading") return <WorkspaceDetail title={title} onBack={onBack}>{commandFeedback}{summary && !command.receipt ? <AccountUserSnapshot user={summary} busy>
     <TableSkeleton label={t("loadingUser")} rows={3} header={false} />
   </AccountUserSnapshot> : <TableSkeleton label={t("loadingUser")} rows={3} header={false} />}</WorkspaceDetail>;
   if (loaded.state === "error") return <WorkspaceDetail title={title} onBack={onBack}>
-    {summary ? <AccountUserSnapshot user={summary} busy={false} /> : null}
+    {commandFeedback}
+    {summary && !command.receipt ? <AccountUserSnapshot user={summary} busy={false} /> : null}
     <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<div className={styles.actions}>
       <Button onClick={() => setLoadVersion((current) => current + 1)}>{t("retryUser")}</Button>
       <Button variant="secondary" onClick={onBack}>{w("back")}</Button>
     </div>} />
   </WorkspaceDetail>;
   return <WorkspaceDetail title={loaded.user.loginName} onBack={onBack}>
-    <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} deleteAction profileActions showLiveEvidenceBoundary user={loaded.user} onDeleted={onBack} />
+    {commandFeedback}
+    <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} deleteAction showLiveEvidenceBoundary user={loaded.user} onDeleted={onBack} renameActionRef={renameRef} statusActionRef={statusRef}
+      managementCommands={{ disabled: !command.ready || !userManagement,
+        onRename() { returnAction.current = "rename"; setWorkflow("rename"); }, onStatus() { returnAction.current = "status"; setWorkflow("status"); } }} />
     {permissionBoundaries && loaded.boundary ? <LivePermissionBoundary key={`${permissionBoundaries.accountId}:${loaded.user.id}`} client={permissionBoundaries} snapshot={loaded.boundary} onChanged={boundaryChanged} /> : null}
   </WorkspaceDetail>;
 }

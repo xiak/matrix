@@ -5,6 +5,7 @@ import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { useSession, useSessionCredential } from "./SessionProvider";
 import { useLiveUserCreation, type UserCreationClient } from "./userCreation";
 import { useLivePolicyMutation, type PolicyMutationClient } from "./policyMutation";
+import { UserManagementReviewRejected } from "./userManagementMutation";
 import type {
   Account,
   AccountLifecycleIntent,
@@ -37,6 +38,9 @@ import type {
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
   UserPermissionBoundary,
+  User,
+  UserManagementIntent,
+  UserManagementCompletion,
   SecuritySettingsUpdateIntent
 } from "../domain/accounts";
 import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTemplateDirectory } from "../domain/serviceAuthorization";
@@ -79,6 +83,13 @@ export type UserBoundarySnapshot = {
   policies: AccountPolicy[];
   policiesAvailable: boolean;
 };
+export type UserManagementClient = {
+  identity: string; accountId: string; actorPrincipalId: string;
+  canBegin(intent: UserManagementIntent): boolean;
+  submit(intent: UserManagementIntent): Promise<User>;
+  readCompletion(intent: UserManagementIntent): Promise<UserManagementCompletion>;
+  expire(): void;
+};
 export type UserBoundaryClient = {
   accountId: string;
   load(userId: string): Promise<UserBoundarySnapshot>;
@@ -87,8 +98,10 @@ export type UserBoundaryClient = {
 };
 
 export type GroupAccessClient = {
+  identity: string;
   accountId: string;
   actorPrincipalId: string;
+  expire(): void;
   canList: boolean;
   listRestrictionReason: CapabilityRestriction | null;
   canCreate: boolean;
@@ -621,6 +634,7 @@ type AccountAccess = {
   clearWorkspaceError(): void;
   clearFeedback(): void;
   groups: GroupAccessClient | null;
+  userManagement: UserManagementClient | null;
   permissionBoundaries: UserBoundaryClient | null;
   authorizationProfiles: AuthorizationProfileClient | null;
   serviceRoleTemplates: ServiceRoleTemplateClient | null;
@@ -720,7 +734,6 @@ function accountCommandAvailable(scene: AccountAccessScene, command: AccountComm
   }
   const user = exactUsers.get(command.userId) ?? scene.users.find((item) => item.id === command.userId);
   if (!user) return false;
-  if (command.kind === "update-user") return user.canUpdate;
   if (command.kind === "delete-user") return user.canDelete;
   if (command.kind === "set-status") return user.canSetStatus;
   if (command.kind === "reset-password") return user.canResetPassword;
@@ -1321,12 +1334,44 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [accountLifecycleOwner, commitLifecycleObservation, expireSession, lifecycleObservation, lifecycleViewIdentity, projectAccountSnapshot, runAccountLifecycleMutation, scene, sessionRevision]);
 
+  const userManagementOwner = useMemo(() => ({ active, repository, viewSession, identity: requestToken("ui-user-management-view-") }), [active, repository, viewSession]);
+  const currentUserManagementOwner = useRef<typeof userManagementOwner | null>(userManagementOwner);
+  useLayoutEffect(() => { currentUserManagementOwner.current = userManagementOwner; return () => { currentUserManagementOwner.current = null; }; }, [userManagementOwner]);
+  const userManagement = useMemo<UserManagementClient | null>(() => {
+    const commands = repository.userManagement;
+    if (!active || !credential || !scene || repository.workspace || !commands || scene.accountId !== tenantId || scene.currentUserId !== principalId || verifiedIdentityOwner?.session !== viewSession || verifiedIdentityOwner.repository !== repository) return null;
+    const owns = () => currentUserManagementOwner.current === userManagementOwner && currentViewSession.current === viewSession && currentExactUsers.current === exactUsers;
+    const canBegin = (intent: UserManagementIntent) => {
+      const user = exactUsers.users.get(intent.userId);
+      return Boolean(owns() && intent.accountId === tenantId && intent.actorPrincipalId === principalId && user && user.id !== scene.accountOwner.id &&
+        user.resourceVersion === intent.expectedResourceVersion && (intent.operation === "USER_UPDATE" ? user.canUpdate && user.name !== intent.intendedDisplayName : user.canSetStatus && user.enabled !== (intent.intendedStatus === "ACTIVE")));
+    };
+    return {
+      identity: userManagementOwner.identity, accountId: tenantId, actorPrincipalId: principalId, canBegin,
+      submit(intent) { if (!canBegin(intent)) return Promise.reject(new UserManagementReviewRejected()); return commands.submit(credential, intent); },
+      readCompletion(intent) {
+        if (!owns() || intent.accountId !== tenantId || intent.actorPrincipalId !== principalId) return Promise.reject(new Error("STALE_USER_MANAGEMENT_OWNER"));
+        return commands.readCompletion(credential, intent);
+      },
+      expire() { if (owns() && expireSession(credential, sessionRevision)) { setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired"); } }
+    };
+  }, [active, credential, exactUsers, expireSession, principalId, repository, scene, sessionRevision, tenantId, userManagementOwner, verifiedIdentityOwner, viewSession]);
+
+  const groupsOwner = useMemo(() => ({ active, repository, viewSession, identity: requestToken("ui-groups-view-") }), [active, repository, viewSession]);
+  const currentGroupsOwner = useRef<typeof groupsOwner | null>(groupsOwner);
+  useLayoutEffect(() => { currentGroupsOwner.current = groupsOwner; return () => { currentGroupsOwner.current = null; }; }, [groupsOwner]);
   const groups = useMemo<GroupAccessClient | null>(() => {
-    if (!active || !credential || !scene || scene.accountId !== tenantId) return null;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || verifiedIdentityOwner?.session !== viewSession || verifiedIdentityOwner.repository !== repository) return null;
     const accountId = scene.accountId;
     return {
+      identity: groupsOwner.identity,
       accountId,
       actorPrincipalId: scene.currentUserId,
+      expire() {
+        if (currentGroupsOwner.current === groupsOwner && currentViewSession.current === viewSession && expireSession(credential, sessionRevision)) {
+          setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+        }
+      },
       canList: scene.canListGroups,
       listRestrictionReason: scene.listGroupsRestrictionReason,
       canCreate: scene.canCreateGroups,
@@ -1343,7 +1388,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       revokePolicyAttachment: (attachmentId, command) => protectedMutation(() => repository.revokePolicyAttachment(credential, attachmentId, command)),
       inspectPolicyAttachmentChange
     };
-  }, [active, credential, inspectPolicyAttachmentChange, protectedMutation, repository, scene, tenantId]);
+  }, [active, credential, expireSession, groupsOwner, inspectPolicyAttachmentChange, protectedMutation, repository, scene, sessionRevision, tenantId, verifiedIdentityOwner, viewSession]);
 
   const permissionBoundaries = useMemo<UserBoundaryClient | null>(() => {
     const boundaryRepository = repository.permissionBoundaries;
@@ -2372,6 +2417,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     refreshPolicyDirectory: () => loadPolicyDirectory("tenantPolicies"),
     userDirectoryView,
     groups,
+    userManagement,
     permissionBoundaries,
     authorizationProfiles,
     serviceRoleTemplates,
@@ -2513,6 +2559,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       return true;
     },
     async execute(command) {
+      if (!repository.workspace && command.kind === "set-status") return false;
       if (!active || !credential || loading || mutationPending.current ||
           currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return false;
       if (workspace?.personalMfa.reauthenticationRequired) { setWorkspaceError("reauthenticationRequired"); return false; }
@@ -2532,7 +2579,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, userManagement, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

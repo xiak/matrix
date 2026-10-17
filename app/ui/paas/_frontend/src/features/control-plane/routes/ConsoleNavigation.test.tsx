@@ -84,7 +84,7 @@ function deletionFixture() {
   const scene = buildAccountAccessScene(identity, { items: [], nextAfter: null }, null,
     { accountId: identity.account.id, scope: "TENANT", installationId: null, items: [] },
     { accountId: identity.account.id, scope: "INSTALLATION", installationId: "test-installation", items: [] });
-  const client: GroupAccessClient = { accountId: identity.account.id, actorPrincipalId: identity.user.id, canList: true, listRestrictionReason: null, canCreate: false, createRestrictionReason: "AUTHORITY_REQUIRED",
+  const client: GroupAccessClient = { identity: "group-navigation-view", expire: vi.fn(), accountId: identity.account.id, actorPrincipalId: identity.user.id, canList: true, listRestrictionReason: null, canCreate: false, createRestrictionReason: "AUTHORITY_REQUIRED",
     list: vi.fn(async () => ({ items: active ? [deletionGroup] : [], nextAfter: null })), get: vi.fn(async () => deletionGroup),
     delete: vi.fn(async () => { active = false; return structuredClone(deletionReceipt); }),
     create: vi.fn(), update: vi.fn(), listMemberships: vi.fn(async () => ({ accountId: identity.account.id, groupId: deletionGroup.group.id, items: [], nextAfter: null })),

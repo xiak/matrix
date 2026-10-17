@@ -1,6 +1,6 @@
 # FEAT-IAM-003：主账号、用户与凭据生命周期
 
-- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期、显式管理能力、用户详情/资料/安全删除及 User 资料/状态命令的不确定响应恢复已有真实后端验证。固定源码 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` 的 IAM87+r37 独立 CI、同 Profile 签名生命周期和重启复验已通过；010 拥有的 LIVE UI 消费仍待完成，整体未验收。
+- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期、显式管理能力、用户详情/资料/安全删除及 User 资料/状态命令的不确定响应恢复已有真实后端验证。固定源码 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` 的 IAM87+r37 独立 CI、同 Profile 签名生命周期和重启复验已通过；010 拥有的 User 资料/状态与 Group Membership 原命令恢复 UI 源码、完整前端检查和嵌入构建已经消费分支验证，仍待该固定消费源码的独立 CI、同 Profile 签名运行及真实浏览器效果门禁，整体未验收。
 - 依赖：002。
 - Owner：IAM 账号/身份与安装 primary 的接口协作。
 
@@ -78,7 +78,7 @@ User 资料/状态不确定结果门禁须分别证明：原结果可按精确 o
 
 固定实现 `10fad2aadb3c060d438ca97658e20cec2dde0fef` 增加严格 `UserManagementCompletion` 契约、封闭读取路由、同事务 PostgreSQL receipt/Audit 证据及唯一 IAM86→IAM87 滚动前驱门禁。受影响 API、HTTP、use case、迁移、release profile 和架构门禁通过；任务独立 PostgreSQL 18 中，User 资料/状态纵向切片证明精确原结果、跨 Account 防枚举、强制 RLS、runtime 零表权限、不可变触发器、receipt/Audit 篡改拒绝及契约损坏时 readiness/读取同时失败关闭。固定 IAM86 executable→IAM87 migrator/runtime 又证明旧完成记录不被猜测补造、旧 requestId 保持消费、原 canonical Audit 不变，新资料/状态结果在后续变更和重启后保持原值。
 
-后继固定 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` 的 [Verification 39002693982](https://github.com/xiak/matrix/actions/runs/39002693982) 已完成 19 项作业且全部成功；新前驱进程根和 User-management PostgreSQL 纵向根均真实运行通过。相同源码的 IAM87/Audit39/PaaS7+r37 签名 A/B 又完成 1569.78 秒离线效果门禁及仅重启本任务引擎后的 126.43 秒复验；唯一发布证据由 [FEAT-005 当前 IAM87 门禁](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)维护。UX/UI 对新完成读取的消费仍由 010 验收，因此本结果不接受整体 FEAT。
+后继固定 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` 的 [Verification 39002693982](https://github.com/xiak/matrix/actions/runs/39002693982) 已完成 19 项作业且全部成功；新前驱进程根和 User-management PostgreSQL 纵向根均真实运行通过。相同源码的 IAM87/Audit39/PaaS7+r37 签名 A/B 又完成 1569.78 秒离线效果门禁及仅重启本任务引擎后的 126.43 秒复验；唯一发布证据由 [FEAT-005 当前 IAM87 门禁](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)维护。010 已在消费分支完成新 User 完成读取和 Group Membership 原命令恢复的源码接入、77 个文件/1954 项测试、完整 type/lint/architecture/234 组对比度、两次生产导出、324 个嵌入文件一致性及 Go UI test/vet；该结果仍须固定提交后的独立 CI、同 Profile 签名运行和真实浏览器效果验证，故不接受整体 FEAT。
 
 固定回滚点 `79b37949300c686617694f52abff9a08626043e2` 已在独立 `feat/iam` 工作树完成当前管理面的破坏性替换：公开管理 DTO/路由只使用 Account、RootIdentity 和 User，旧 Organization/Principal 管理路由返回 404；Bootstrap、ServiceIdentity、AuthorizationDecision、旧 Audit 事实与 canonical bytes 保持冻结。数据库把旧 `login_index.account_owner` 迁移为强约束的 `account_roots`，并从封存 bootstrap receipt 为实际 9fd/a36 旧状态还原唯一 root；缺失或冲突关系失败关闭。该提交的 Verification `34599945505` 中 go、authority-process、node-process 三项均成功。
 

@@ -44,6 +44,8 @@ import type {
   RolePolicyAttachment,
   UserAccess,
   User,
+  UserManagementIntent,
+  UserManagementCompletion,
   UserPermissionBoundary
 } from "../domain/accounts";
 import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTemplateDirectory } from "../domain/serviceAuthorization";
@@ -159,6 +161,10 @@ export interface IamRepository {
 }
 
 export interface AccountRepository {
+  userManagement?: {
+    submit(credential: string, intent: UserManagementIntent): Promise<User>;
+    readCompletion(credential: string, intent: UserManagementIntent): Promise<UserManagementCompletion>;
+  };
   // Root-only, explicit no-boundary creation. Account is a local response
   // assertion; the caller owns the complete input and its idempotency request.
   createUser?(credential: string, accountId: string, command: CreateUserCommand): Promise<User>;
