@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted current release consumer at IAM/Audit/PaaS `86/39/7+r36`. Its sole predecessor is fixed `85/39/7+r35`; the current source's signed four-product A/B offline lifecycle, APISIX consumer paths, restart verification, rolling-predecessor gate and independent CI have passed. Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by this lifecycle result
+- Status: Accepted current release consumer at IAM/Audit/PaaS `87/39/7+r37`. Its sole rolling development predecessor is fixed `86/39/7+r36`; the current source's signed four-product A/B offline lifecycle, APISIX consumer paths, restart verification, rolling-predecessor gate and independent CI have passed. Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by this lifecycle result
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `86/39/7` revision 36 and its sole release predecessor is `85/39/7` revision 35; earlier accepted slices remain historical evidence, not an alternate current profile
+- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `87/39/7` revision 37 and its sole rolling data predecessor is fixed `86/39/7` revision 36; a signed upgrade still requires an immediate same-profile release predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
 
 ## Outcome
 
@@ -899,7 +899,62 @@ paths. It does not admit a cross-profile transition, arbitrary historical
 N-1 operation, database HA or browser interaction with the installed release.
 FEAT-IAM-010 continues to own that final browser path.
 
-### Current IAM86 Account-lifecycle release-consumer gate
+### Current IAM87 User-management-completion release-consumer gate
+
+On 2026-10-17, fixed source
+`1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` assembled and authenticated
+Release A `matrix-v0.1.0-iam.r37.1-1fc35c6c17b7` and its immediate
+same-source successor B `matrix-v0.1.0-iam.r37.2-1fc35c6c17b7`. B names A by
+its exact release ID and version. Both carry IAM/Audit/PaaS `87/39/7+r37`,
+topology digest
+`sha256:ca31ccec97d52776d61c8bdcea0be04b2d5a6fe7fc28d9d0055c4d2a3ff75c30`,
+12 signed files and ten pinned images. The public 294-byte trust document has
+SHA-256 `3d6c4ef3669091ed201e06d66de12eaa042ae6257574086d11fca8e6aadf08a6`;
+the private signing key, protected mail configuration and installation state
+are outside both release trees.
+
+The releases ran in a fresh task-owned Docker 27.5.1 engine with no external
+route, constrained to 2 CPUs, 6 GiB memory, 1024 PIDs and a private cgroup
+namespace. The engine started the accepted run with zero images, containers
+and volumes, so every runtime image came from the authenticated release or the
+separately authenticated test-only mail fixture. The 1569.78-second effectful
+gate passed A installation, restricted runtime database identities, APISIX
+USER and AccessKey paths, two-Account primary/member revocation, real
+STARTTLS/SASL SMTP contact verification, TOTP login and security notice,
+access-analysis disposition, all four signed managed-product provider
+lifecycles, explicit service-role authority, two application generations,
+complete tenant and installation Audit chains, protected backup, injected
+upgrade automatic rollback, B upgrade, explicit platform rollback, selected
+backup recovery with permanent AccessKey fencing, application rollback and
+stop/capacity release, and bounded support zero-leakage checks. The mail
+fixture archive was authenticated as
+`sha256:20d890545ed758797d6de3725c1a8992ee1c95478b203cfaecb94e4435a3d1d0`.
+
+The protected mail input copy was then deleted and only that exact outer
+engine was stopped and started, retaining the same container identity. The
+126.43-second post-restart gate proved retired AccessKey state, fresh MFA
+login, both retained Accounts' primary recovery and member revocation,
+status/verify and the complete offline lifecycle. No Docker Desktop daemon,
+remote machine, shared service or unrelated Docker object was restarted or
+modified.
+
+[Verification 39002693982](https://github.com/xiak/matrix/actions/runs/39002693982)
+completed successfully on attempt 1 with all 19 jobs successful. All 57
+authority roots actually ran and passed. In particular, the fixed IAM86
+executable to IAM87 migration/runtime root passed in 50.46 seconds, retaining
+old canonical Audit facts and consumed request IDs without inventing old
+completion snapshots; the IAM PostgreSQL HTTP vertical slice passed in 149.09
+seconds with the User-management completion RLS, least-privilege,
+immutability, tamper and fail-closed checks. The default workflow did not run
+opt-in browser journeys or dedicated-Postfix subtests, so this result does not
+replace the signed lifecycle above or FEAT-IAM-010's installed browser gate.
+
+This accepts the current same-profile signed lifecycle and the rolling
+IAM86-to-IAM87 development predecessor at their respective owners. It does
+not admit a cross-profile signed upgrade, arbitrary historical N-1 operation,
+production database HA or LIVE UI consumption of the new completion route.
+
+### IAM86 Account-lifecycle release-consumer evidence
 
 On 2026-10-16, fixed source
 `08e1dc4a6ce81386ea7223e62d03356f82aeee58` assembled and authenticated

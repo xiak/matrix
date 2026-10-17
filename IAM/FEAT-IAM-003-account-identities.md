@@ -1,6 +1,6 @@
 # FEAT-IAM-003：主账号、用户与凭据生命周期
 
-- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期、显式管理能力、用户详情/资料/安全删除及 User 资料/状态命令的不确定响应恢复已有真实后端验证。当前已接受签名发布仍为 IAM86+r36；源码候选已推进至 IAM87+r37，独立 CI、同 Profile 签名生命周期及 010 拥有的 LIVE UI 消费仍待完成，整体未验收。
+- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期、显式管理能力、用户详情/资料/安全删除及 User 资料/状态命令的不确定响应恢复已有真实后端验证。固定源码 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` 的 IAM87+r37 独立 CI、同 Profile 签名生命周期和重启复验已通过；010 拥有的 LIVE UI 消费仍待完成，整体未验收。
 - 依赖：002。
 - Owner：IAM 账号/身份与安装 primary 的接口协作。
 
@@ -62,7 +62,7 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 User 资料和状态命令遵循同一不确定结果原则，但使用独立的封闭 `UserManagementCompletion`，避免把 Account lifecycle、密码重置或任意业务 receipt 混成通用框架。完成记录与对应 `iam.user.updated|iam.user.status-set` 事实同事务提交；成功 requestId 在 operation 间也只能消费一次。前驱版本已经成功的 User 命令不补造结果快照，但原 requestId 仍由历史 Audit 保持消费。完成表强制 RLS、不可更新/删除/truncate，runtime 角色没有表权限；公开读取只能通过 API 角色的目的限定函数，并逐次核对原决定、请求摘要和 Audit 事实。缺表、触发器、RLS、列权限或证据任一损坏时 readiness 与读取均返回 unavailable。
 
-User 完成表、受限读取函数和公开 GET 是新的数据库/wire 形状，当前源码候选因此推进到 IAM87/Audit39/PaaS7、`contractRevision=37`；唯一滚动前驱为固定 `08e1dc4a6ce81386ea7223e62d03356f82aeee58` 的 IAM86/Audit39/PaaS7+r36。当前已接受签名发布仍停留在该前驱组合，不能把本地 SQL 可迁移解释为发布升级许可。开发期更早版本不继续累积兼容矩阵。
+User 完成表、受限读取函数和公开 GET 是新的数据库/wire 形状，因此当前组合是 IAM87/Audit39/PaaS7、`contractRevision=37`；唯一滚动前驱为固定 `08e1dc4a6ce81386ea7223e62d03356f82aeee58` 的 IAM86/Audit39/PaaS7+r36。固定 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` 已取得 IAM87+r37 同 Profile 签名 A/B 生命周期与重启证据；这不把 IAM86+r36 签名包变成可直接跨 Profile 升级的发布前驱。开发期更早版本不继续累积兼容矩阵。
 
 ## 验收
 
@@ -76,7 +76,9 @@ User 资料/状态不确定结果门禁须分别证明：原结果可按精确 o
 
 ## 当前候选证据
 
-固定实现 `10fad2aadb3c060d438ca97658e20cec2dde0fef` 增加严格 `UserManagementCompletion` 契约、封闭读取路由、同事务 PostgreSQL receipt/Audit 证据及唯一 IAM86→IAM87 滚动前驱门禁。受影响 API、HTTP、use case、迁移、release profile 和架构门禁通过；任务独立 PostgreSQL 18 中，User 资料/状态纵向切片证明精确原结果、跨 Account 防枚举、强制 RLS、runtime 零表权限、不可变触发器、receipt/Audit 篡改拒绝及契约损坏时 readiness/读取同时失败关闭。固定 IAM86 executable→IAM87 migrator/runtime 又证明旧完成记录不被猜测补造、旧 requestId 保持消费、原 canonical Audit 不变，新资料/状态结果在后续变更和重启后保持原值。本地专属容器、网络和卷已在无测试客户端后精确清理；该固定对象的独立 CI、同 Profile 签名生命周期和 UX/UI 消费尚未完成，不能据此接受整体 FEAT。
+固定实现 `10fad2aadb3c060d438ca97658e20cec2dde0fef` 增加严格 `UserManagementCompletion` 契约、封闭读取路由、同事务 PostgreSQL receipt/Audit 证据及唯一 IAM86→IAM87 滚动前驱门禁。受影响 API、HTTP、use case、迁移、release profile 和架构门禁通过；任务独立 PostgreSQL 18 中，User 资料/状态纵向切片证明精确原结果、跨 Account 防枚举、强制 RLS、runtime 零表权限、不可变触发器、receipt/Audit 篡改拒绝及契约损坏时 readiness/读取同时失败关闭。固定 IAM86 executable→IAM87 migrator/runtime 又证明旧完成记录不被猜测补造、旧 requestId 保持消费、原 canonical Audit 不变，新资料/状态结果在后续变更和重启后保持原值。
+
+后继固定 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` 的 [Verification 39002693982](https://github.com/xiak/matrix/actions/runs/39002693982) 已完成 19 项作业且全部成功；新前驱进程根和 User-management PostgreSQL 纵向根均真实运行通过。相同源码的 IAM87/Audit39/PaaS7+r37 签名 A/B 又完成 1569.78 秒离线效果门禁及仅重启本任务引擎后的 126.43 秒复验；唯一发布证据由 [FEAT-005 当前 IAM87 门禁](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)维护。UX/UI 对新完成读取的消费仍由 010 验收，因此本结果不接受整体 FEAT。
 
 固定回滚点 `79b37949300c686617694f52abff9a08626043e2` 已在独立 `feat/iam` 工作树完成当前管理面的破坏性替换：公开管理 DTO/路由只使用 Account、RootIdentity 和 User，旧 Organization/Principal 管理路由返回 404；Bootstrap、ServiceIdentity、AuthorizationDecision、旧 Audit 事实与 canonical bytes 保持冻结。数据库把旧 `login_index.account_owner` 迁移为强约束的 `account_roots`，并从封存 bootstrap receipt 为实际 9fd/a36 旧状态还原唯一 root；缺失或冲突关系失败关闭。该提交的 Verification `34599945505` 中 go、authority-process、node-process 三项均成功。
 
