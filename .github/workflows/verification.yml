@@ -266,7 +266,7 @@ jobs:
                 matrix_iam_profile_advance_ci matrix_authority_process_ci)
               ;;
             authority-predecessor)
-              databases=(matrix_iam_account_completion_upgrade_ci)
+              databases=(matrix_iam_user_management_upgrade_ci)
               ;;
             authority-managed-products)
               databases=(matrix_managedservice_predecessor_ci matrix_managedservice_ci
