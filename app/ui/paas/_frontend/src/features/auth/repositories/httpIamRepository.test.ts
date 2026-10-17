@@ -1868,6 +1868,14 @@ describe("IAM HTTP account boundary", () => {
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer transient-bearer" } });
   });
 
+  it.each([
+    {}, { changedAt: "not-a-time", bootstrapFileRetirable: false }, { changedAt: "2026-02-30T08:00:00Z", bootstrapFileRetirable: false },
+    { changedAt: timestamp, bootstrapFileRetirable: "false" }, { changedAt: timestamp, bootstrapFileRetirable: false, revokedCount: 2 },
+    { changedAt: timestamp, bootstrapFileRetirable: false, sessionId: "not-a-receipt-field" }
+  ])("rejects malformed password success receipts without manufacturing completion %#", async (value) => {
+    reply(value); await expect(httpIamRepository.changePassword("bearer", { currentPassword: "Current-Test-Password-49!", newPassword: "Changed-Test-Password-73!" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+  });
+
   it("sends the qualified username as one login identifier", async () => {
     const fetcher = reply({ outcome: "AUTHENTICATED", credential: "transient-bearer", mustChangePassword: false,
       session: { apiVersion, kind: "Session", id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } });

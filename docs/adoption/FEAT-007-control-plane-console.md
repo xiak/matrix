@@ -10,6 +10,7 @@
 | Donor | Commit | Worktree policy |
 | --- | --- | --- |
 | Complete Discord-style Next.js UI | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Sole architecture and visual-style donor; read only through Git object commands and exclude its worktree. |
+| IAM self-service password replacement | `94cabe999378b7fdae9b5074546aab156e1d7553` | `ADAPT` only the public current-password/new-password command, default-true `revokeOtherSessions` rule, required-replacement override and closed success receipt. `REUSE` this console's existing Session provider, password form, public controls and leave/focus owner. `REJECT` caller Account/Session selectors, password persistence or automatic secret replay, invented completion APIs, donor UI/backend/WIP and inherited acceptance. |
 | PaaS product-design record | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Product-boundary reference only; it is not a second UI architecture or style donor. |
 | Matrix shared interaction fixes | `21b469b343d83a190acc0a3bb34a29b5294191ad` | This repository, fixed Git objects; backport bounded behavior to the existing cloud UI owner, not its replacement shell. |
 | IAM account-access capability contract | `25202188f33ca5892880b72d6f6831e476c0bfb1` | Same repository, fixed after verification run `34797635592`. Selectively adapt its public IAM wire/domain semantics and boundary tests into the existing console; do not cherry-pick its generated UI, styles or backend runtime. |

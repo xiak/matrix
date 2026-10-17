@@ -33,6 +33,20 @@ generic provider schemas before a real second implementation exists.
    password in the same memory-only session before entering the console;
    there is no post-login organization selector, JWT, external identity provider, or
    social-login branch.
+   An already authenticated User can change only their own password from the
+   existing personal-security content page. The shared password form defaults
+   to `revokeOtherSessions=true` and allows an explicit false only for this
+   ordinary flow. Required first-login replacement exposes no such choice and
+   always submits true. No Account or Session selector is accepted. Successful
+   self-service replacement stays in content and retains the submitting
+   Session; other Sessions are server-owned and the UI invents no revocation
+   count. Complete valid receipts alone establish success. Rejections and
+   unknown/malformed responses never navigate or claim completion. Passwords
+   remain in form memory and clear after submission or owner replacement;
+   dirty/busy navigation uses the shared leave protection. UNKNOWN prevents a
+   replacement write in the same Session and directs normal re-login, not
+   credential replay or a fabricated completion lookup. This does not add an
+   administrator reset, email/phone login, recovery factor or mandatory MFA.
 3. The authenticated console shows an overview, service catalog, quota,
    service installations, and local-region configuration allowed by the
    user's fixed IAM role.
@@ -2207,6 +2221,33 @@ fixed-source CI, supported-browser cross-tab/closed-tab recovery and signed IAM
 runtime acceptance remain open. No backend, API, SQL, shared DEV process, real
 Account/resource or mandatory authentication configuration changed. The full
 Account security-settings editor remains the separate, unimplemented gap above.
+
+#### LIVE self-service password source candidate
+
+The independent password slice is fixed at frontend tree
+`9557d7cac746b446ddeeb193256a17a0be3ad511`, excluding the separate Account
+security-settings editor work. It uses the existing Session, HTTP password,
+shared form, public Card and leave/focus owners; no new backend wire or general
+recovery framework is introduced. On Windows Node 22.22.2/npm 11.6.4, typecheck,
+full lint, changed-owner zero-warning lint, architecture, 234 theme contrast
+pairs and all eight Node export-boundary cases pass.
+
+The independent complete Windows Vitest gate on this exact tree passes all
+75 files and 1745 cases in 412.50 seconds, with zero failures, skipped or todo
+cases and no timeout/worker/configuration changes. The JSON report SHA-256 is
+`f22b4ef663bfebe71bbeded4bd619e0f977a6061c894612427f00932eecae51b`.
+Existing Session, LoginRenderer/ConsoleNavigation and strict HTTP test owners
+cover ordinary and required replacement, explicit session policy, owner changes,
+UNKNOWN exclusion, invalid receipts, no-write validation/cancellation, shared
+dirty/busy navigation, secret clearing and focus restoration. The interrupted
+run without a terminal report is not counted as a passed gate.
+
+This is a source-only integration candidate. Generated assets deliberately
+remain unchanged for the consuming IAM branch to rebuild. Production export,
+embed equality, fresh UI-host Go checks, independent CI, real-browser and
+signed-IAM runtime acceptance are not claimed for this source. No shared DEV,
+real resource, IAM/Audit/SQL/profile or mandatory authentication setting changed;
+isolated MOCK and the email-only Phase 1 receiving scope remain intact.
 
 #### LIVE deletion-confirmation follow-up
 

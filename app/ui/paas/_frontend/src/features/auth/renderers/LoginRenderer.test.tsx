@@ -1,12 +1,15 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useState } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
-import { SessionProvider } from "../application/SessionProvider";
+import { SessionProvider, useSession } from "../application/SessionProvider";
 import type { IamRepository } from "../repositories/iamRepository";
 import { previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
 import { LoginRenderer } from "./LoginRenderer";
+import { SelfPasswordSettings } from "./PasswordChangeForm";
+import { ConsoleNavigationProvider, useConsoleNavigation } from "@/features/control-plane/routes/ConsoleNavigation";
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
 vi.mock("next/navigation", () => ({ useRouter: () => navigation }));
@@ -22,9 +25,140 @@ function open(iam = repository(), returnTo: string | undefined = "/console/resou
   render(<LocaleProvider><SessionProvider repository={iam}><LoginRenderer returnTo={returnTo} /></SessionProvider></LocaleProvider>);
   return { user, iam };
 }
-afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); vi.clearAllMocks(); });
+afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); vi.clearAllMocks(); window.history.replaceState(null, "", "/"); });
+
+function SelfPasswordRoute() {
+  const session = useSession(); const nav = useConsoleNavigation(); const [settings, setSettings] = useState(true);
+  return <>
+    <button onClick={() => void session.login("alex@account-a", "Initial-Test-Password-49!")}>Test sign in</button>
+    <button onClick={() => void session.login("bravo@account-b", "Initial-Test-Password-49!")}>Test sign in as replacement</button>
+    <output aria-label="Current session phase">{session.phase}</output>
+    <button onClick={() => nav.navigate("/console/access/settings/?panel=sessions", { onAccepted: () => setSettings(false) })}>查看会话</button>
+    {settings ? <SelfPasswordSettings /> : <h2>会话列表</h2>}
+  </>;
+}
+function SelfPasswordHarness({ iam }: { iam: IamRepository }) {
+  return <LocaleProvider><SessionProvider repository={iam}><ConsoleNavigationProvider selection={{ section: "access", view: "settings" }}><SelfPasswordRoute /></ConsoleNavigationProvider></SessionProvider></LocaleProvider>;
+}
+async function openSelf(iam = repository()) {
+  window.history.replaceState(null, "", "/console/access/settings/");
+  const user = userEvent.setup({ delay: null }); const view = render(<SelfPasswordHarness iam={iam} />);
+  await user.click(screen.getByRole("button", { name: "Test sign in" }));
+  await user.click(await screen.findByRole("button", { name: "修改本人密码" }));
+  return { iam, user, view };
+}
+function enterSelfPasswords() {
+  fireEvent.change(screen.getByLabelText("当前密码", { exact: true }), { target: { value: "Initial-Test-Password-49!" } });
+  fireEvent.change(screen.getByLabelText("新密码", { exact: true }), { target: { value: "Changed-Test-Password-73!" } });
+  fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "Changed-Test-Password-73!" } });
+}
+
+describe("self-service password change", () => {
+  it.each([true, false])("submits explicit revokeOthers=%s and keeps success in the current content workspace", async (revoke) => {
+    const { iam, user } = await openSelf();
+    const choice = screen.getByRole("checkbox", { name: "同时退出其他登录会话（推荐）" }) as HTMLInputElement;
+    expect(choice.checked).toBe(true); if (!revoke) await user.click(choice);
+    expect(screen.queryByRole("combobox")).toBeNull(); expect(iam.changePassword).not.toHaveBeenCalled();
+    enterSelfPasswords(); await user.click(screen.getByRole("button", { name: "更新密码" }));
+    expect(iam.changePassword).toHaveBeenCalledExactlyOnceWith("memory-only-token", { currentPassword: "Initial-Test-Password-49!", newPassword: "Changed-Test-Password-73!", revokeOtherSessions: revoke });
+    expect(await screen.findByRole("status", { name: "改密结果" })).toBeTruthy(); expect(screen.getByRole("status", { name: "改密结果" }).textContent).toContain("当前会话保留");
+    expect(screen.getByLabelText("Current session phase").textContent).toBe("authenticated"); expect(iam.logout).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled(); expect(window.location.search).toBe("");
+    expect(screen.queryByLabelText("新密码", { exact: true })).toBeNull(); expect(document.body.textContent).not.toContain("Changed-Test-Password-73!");
+    expect(JSON.stringify(sessionStorage) + JSON.stringify(localStorage)).not.toContain("Changed-Test-Password-73!");
+    await user.click(screen.getByRole("button", { name: "完成" }));
+    expect(screen.getByRole("button", { name: "修改本人密码" })).toBe(document.activeElement);
+  });
+
+  it("validates bounds and confirmation locally and focuses the field without sending a command", async () => {
+    const { iam, user } = await openSelf(); enterSelfPasswords();
+    fireEvent.change(screen.getByLabelText("新密码", { exact: true }), { target: { value: "short" } });
+    await user.click(screen.getByRole("button", { name: "更新密码" }));
+    expect(screen.getByLabelText("新密码", { exact: true })).toBe(document.activeElement); expect(iam.changePassword).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByLabelText("新密码", { exact: true }), { target: { value: "Another-Test-Password-73!" } });
+    await user.click(screen.getByRole("button", { name: "更新密码" }));
+    expect(screen.getByLabelText("确认新密码")).toBe(document.activeElement); expect(screen.getByRole("alert").textContent).toContain("不一致");
+    expect(iam.changePassword).not.toHaveBeenCalled();
+  });
+
+  it("guards dirty content navigation and discards passwords only after explicit leave consent", async () => {
+    const { iam, user } = await openSelf(); enterSelfPasswords();
+    await user.click(screen.getByRole("button", { name: "查看会话" })); expect(window.location.search).toBe("");
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "继续编辑" }));
+    expect((screen.getByLabelText("新密码", { exact: true }) as HTMLInputElement).value).toBe("Changed-Test-Password-73!");
+    await user.click(screen.getByRole("button", { name: "查看会话" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "放弃并离开" }));
+    expect(window.location.search).toBe("?panel=sessions"); expect(screen.getByRole("heading", { name: "会话列表" })).toBeTruthy();
+    expect(screen.queryByLabelText("新密码", { exact: true })).toBeNull(); expect(iam.changePassword).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled();
+  });
+
+  it("cancels a dirty edit without writing and restores the shared edit action focus", async () => {
+    const { iam, user } = await openSelf(); enterSelfPasswords(); await user.click(screen.getByRole("button", { name: "取消" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "放弃并离开" }));
+    expect(screen.getByRole("button", { name: "修改本人密码" })).toBe(document.activeElement);
+    expect(iam.changePassword).not.toHaveBeenCalled(); expect(screen.queryByLabelText("新密码", { exact: true })).toBeNull();
+  });
+
+  it.each([401, 409, 503])("clears entered secrets and never displays success for a %s response", async (status) => {
+    const iam = repository(); vi.mocked(iam.changePassword).mockRejectedValue(new HttpProblem(status, "PRIVATE_FAILURE"));
+    const { user } = await openSelf(iam); enterSelfPasswords(); await user.click(screen.getByRole("button", { name: "更新密码" }));
+    await waitFor(() => expect(iam.changePassword).toHaveBeenCalledOnce());
+    for (const label of ["当前密码", "新密码", "确认新密码"]) expect((screen.getByLabelText(label, { exact: true }) as HTMLInputElement).value).toBe("");
+    expect(screen.queryByRole("status", { name: "改密结果" })).toBeNull(); expect(screen.getByLabelText("Current session phase").textContent).toBe("authenticated");
+    expect(navigation.replace).not.toHaveBeenCalled(); expect(document.body.textContent).not.toContain("PRIVATE_FAILURE");
+    if (status === 503) {
+      expect(screen.getByRole("alert").textContent).toContain("结果未确认");
+      expect((screen.getByLabelText("新密码", { exact: true }) as HTMLInputElement).disabled).toBe(true);
+      await user.click(screen.getByRole("button", { name: "取消" }));
+      await user.click(screen.getByRole("button", { name: "查看未确认的改密" }));
+      expect(screen.getByRole("button", { name: "更新密码" }).hasAttribute("disabled")).toBe(true); expect(iam.changePassword).toHaveBeenCalledOnce();
+    } else expect(screen.getByRole("alert").textContent).toContain(status === 401 ? "登录会话已经失效" : "未确认成功");
+  });
+
+  it("keeps busy navigation guarded and never resumes a rejected navigation automatically after save", async () => {
+    let resolve!: () => void; const iam = repository(); vi.mocked(iam.changePassword).mockImplementation(() => new Promise<void>((done) => { resolve = done; }));
+    const { user } = await openSelf(iam); enterSelfPasswords(); await user.click(screen.getByRole("button", { name: "更新密码" }));
+    await user.click(screen.getByRole("button", { name: "查看会话" })); expect(window.location.search).toBe("");
+    expect(screen.getByRole("dialog").textContent).toContain("提交"); await act(async () => resolve());
+    expect(window.location.search).toBe(""); expect(screen.queryByRole("heading", { name: "会话列表" })).toBeNull();
+  });
+
+  it("retains the unknown command and reports failed logout without unlocking another password write", async () => {
+    const iam = repository(); vi.mocked(iam.changePassword).mockRejectedValue(new Error("lost response"));
+    vi.mocked(iam.logout).mockRejectedValue(new Error("logout unavailable")); const { user } = await openSelf(iam);
+    enterSelfPasswords(); await user.click(screen.getByRole("button", { name: "更新密码" }));
+    await user.click(await screen.findByRole("button", { name: "退出并重新登录" }));
+    expect(await screen.findByText(/会话仍保留/)).toBeTruthy(); expect(screen.getByText(/本次改密结果未确认/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "更新密码" }).hasAttribute("disabled")).toBe(true); expect(iam.changePassword).toHaveBeenCalledOnce();
+  });
+
+  it.each(["Session", "repository"])("clears a draft and ignores a late password completion after a %s change", async (owner) => {
+    let resolve!: () => void; const iam = repository(); vi.mocked(iam.changePassword).mockImplementation(() => new Promise<void>((done) => { resolve = done; }));
+    const { user, view } = await openSelf(iam); enterSelfPasswords(); await user.click(screen.getByRole("button", { name: "更新密码" }));
+    if (owner === "Session") await user.click(screen.getByRole("button", { name: "Test sign in as replacement" }));
+    else view.rerender(<SelfPasswordHarness iam={repository()} />);
+    await act(async () => resolve());
+    expect(screen.queryByRole("status", { name: "改密结果" })).toBeNull(); expect(screen.queryByLabelText("新密码", { exact: true })).toBeNull();
+    expect(screen.getByRole("button", { name: owner === "Session" ? "修改本人密码" : "查看未确认的改密" })).toBeTruthy(); expect(navigation.replace).not.toHaveBeenCalled();
+  });
+});
 
 describe("branded sign-in flows", () => {
+  it("does not navigate or resubmit when required first-login password replacement has an unknown outcome", async () => {
+    const iam = repository(true); vi.mocked(iam.changePassword).mockRejectedValue(new HttpProblem(503, "PRIVATE"));
+    const { user } = open(iam);
+    fireEvent.change(screen.getByLabelText("密码", { exact: true }), { target: { value: "Initial-Test-Password-49!" } });
+    await user.click(screen.getByRole("button", { name: "登录控制台" })); await screen.findByRole("heading", { name: "设置你的正式密码" });
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    fireEvent.change(screen.getByLabelText("当前初始密码"), { target: { value: "Initial-Test-Password-49!" } });
+    fireEvent.change(screen.getByLabelText("新密码", { exact: true }), { target: { value: "Changed-Test-Password-73!" } });
+    fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "Changed-Test-Password-73!" } });
+    await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
+    expect(await screen.findByText(/本次改密结果未确认/)).toBeTruthy(); expect(navigation.replace).not.toHaveBeenCalled();
+    expect(iam.changePassword).toHaveBeenCalledExactlyOnceWith("memory-only-token", { currentPassword: "Initial-Test-Password-49!", newPassword: "Changed-Test-Password-73!", revokeOtherSessions: true });
+    expect((screen.getByLabelText("新密码", { exact: true }) as HTMLInputElement).disabled).toBe(true);
+  });
   it.each(["primary", "subaccount", "preview"])("lands a %s sign-in on the dashboard by default", async (mode) => {
     const user = userEvent.setup();
     render(<LocaleProvider><SessionProvider repository={repository()}><LoginRenderer /></SessionProvider></LocaleProvider>);
@@ -58,6 +192,7 @@ describe("branded sign-in flows", () => {
     fireEvent.change(screen.getByLabelText("密码", { exact: true }), { target: { value: "Initial-Password-49!" } });
     await user.click(screen.getByRole("button", { name: "登录控制台" }));
     await screen.findByRole("heading", { name: "设置你的正式密码" });
+    expect(screen.queryByRole("checkbox", { name: "同时退出其他登录会话（推荐）" })).toBeNull();
     expect(navigation.replace).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("当前初始密码"), { target: { value: "Initial-Password-49!" } });
     fireEvent.change(screen.getByLabelText("新密码", { exact: true }), { target: { value: "Permanent-Password-49!" } });
@@ -66,7 +201,7 @@ describe("branded sign-in flows", () => {
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledExactlyOnceWith(returnTo, { scroll: false }));
     expect(iam.changePassword).toHaveBeenCalledOnce();
     expect(iam.login).toHaveBeenCalledWith({ loginName: "developer@tenant-a", password: "Initial-Password-49!" });
-    expect(iam.changePassword).toHaveBeenCalledWith("memory-only-token", { currentPassword: "Initial-Password-49!", newPassword: "Permanent-Password-49!" });
+    expect(iam.changePassword).toHaveBeenCalledWith("memory-only-token", { currentPassword: "Initial-Password-49!", newPassword: "Permanent-Password-49!", revokeOtherSessions: true });
   });
 
   it("keeps the preview a separate explicit action and does not persist credentials", async () => {
@@ -410,7 +545,7 @@ describe("branded sign-in flows", () => {
     fireEvent.change(screen.getByLabelText("确认新密码"), { target: { value: "Permanent-Password-49!" } });
     await user.click(screen.getByRole("button", { name: "保存并进入控制台" }));
     await waitFor(() => expect(navigation.replace).toHaveBeenCalledWith("/console/resources/", { scroll: false }));
-    expect(iam.changePassword).toHaveBeenCalledWith("memory-only-token", { currentPassword: "Initial-Password-49!", newPassword: "Permanent-Password-49!" });
+    expect(iam.changePassword).toHaveBeenCalledWith("memory-only-token", { currentPassword: "Initial-Password-49!", newPassword: "Permanent-Password-49!", revokeOtherSessions: true });
   });
   it("retains a restricted session after failed revocation and shows translated feedback", async () => {
     const iam = repository(true);
