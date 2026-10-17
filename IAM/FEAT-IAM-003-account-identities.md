@@ -1,6 +1,6 @@
 # FEAT-IAM-003：主账号、用户与凭据生命周期
 
-- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期、显式管理能力、用户详情/资料/安全删除已有真实验证；当前发布组合的同Profile签名生命周期已由011接受。剩余本轮缺口是010拥有的完整LIVE UI，整体仍未验收。
+- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期、显式管理能力、用户详情/资料/安全删除及 User 资料/状态命令的不确定响应恢复已有真实后端验证。当前已接受签名发布仍为 IAM86+r36；源码候选已推进至 IAM87+r37，独立 CI、同 Profile 签名生命周期及 010 拥有的 LIVE UI 消费仍待完成，整体未验收。
 - 依赖：002。
 - Owner：IAM 账号/身份与安装 primary 的接口协作。
 
@@ -17,7 +17,7 @@
 | IAM-ID-07 | 改密/重置/恢复保持 generation 单调，forced 必撤其他临时会话，普通默认撤其他可选 |
 | IAM-ID-08 | 删除/停用用户不改变已有资源、Operation 和审计归属；恢复不激活旧 session |
 | IAM-ID-09 | 原 root 凭据恢复不换 owner、不授平台、不启用暂停账号；平台 primary 仍需离线限定能力 |
-| IAM-ID-10 | 账号开通、停复用和原 root 凭据恢复在提交结果不确定后，原 USER 可在新的浏览器会话中按原操作、目标、requestId 和预期版本只读查询永久完成事实；查询不重放写入、不证明密码输入相同，也不替代当前权限校验 |
+| IAM-ID-10 | 账号开通、停复用、原 root 凭据恢复及 User 资料/状态命令在提交结果不确定后，原 USER 可在新的浏览器会话中按原操作、目标、requestId 和预期版本只读查询永久完成事实；查询不重放写入、不证明秘密输入相同，也不替代当前权限校验 |
 
 ## 详细设计
 
@@ -41,6 +41,7 @@ RootIdentity 仍由底层 USER principal 承载认证，但不出现在日常 Us
 - 账号命令完成面：`GET /v1/accounts/{accountId}/lifecycle-completions/{commandRequestId}?operation=ACCOUNT_CREATE|ACCOUNT_SET_STATUS|ACCOUNT_ROOT_CREDENTIALS_RECOVER&expectedResourceVersion=...`。`commandRequestId` 是原写请求 body 的 `requestId`，不是本次 GET 的传输 request ID；开通的预期版本固定为 0，其他操作必须大于 0。响应只返回原 actor、操作、目标、原预期/结果版本、提交时结果状态、可选原 root、事件和完成时间，不返回密码、哈希、输入 commitment、当前 Account 快照或授权结论。Root 凭据恢复记录当时真实的 `ACTIVE|DISABLED` Account 状态，不能把恢复完成误写成账号已启用。
 - 当前账号面：`POST /v1/account:alias`；Account 只能由当前有效 session 推导，body/query 不接受 `accountId`。
 - 用户面：`GET|POST /v1/users`、`GET /v1/users/{userId}`、`POST /v1/users/{userId}:update`、`POST /v1/users/{userId}:delete`、`POST /v1/users/{userId}:set-status`、`POST /v1/users/{userId}:reset-password`。详情返回与列表同形的 `UserAccess`；资料更新首片只允许显示名称，登录名与 Account 不可变。
+- User 命令完成面：`GET /v1/users/{userId}/management-completions/{commandRequestId}?operation=USER_UPDATE|USER_SET_STATUS&expectedResourceVersion=...`。响应是原事务返回的非敏感 `User` 快照、原 actor、目标、操作、版本、事件和提交时间；它不是当前 User 状态、写入重放许可或 Audit 已投递证明。查询重新验证当前同一动作权限，并严格绑定原 Account/actor/target/operation/requestId/version；另一个 Account 的管理员只能得到不存在语义，不能枚举目标事实。
 - `GET /v1/auth/me` 返回 `Account`、当前 USER 投影、显式 identityKind、策略附件与完整当前能力集合；不再保留 `canCreateAccounts` 单一提示或任何角色枚举。
 
 现有 `/v1/organizations*`、`/v1/organization:alias`、`/v1/principals*` 及对应 Organization/OrganizationAccount/Principal 管理 DTO 在切换提交中删除，不保留别名或双响应。Bootstrap、ServiceIdentity、AuthorizationDecision 和历史 Audit 中已经发布的 organization/tenant 字段属于历史或跨服务契约，不因管理面改名重编码；它们与新管理 DTO 的映射在单一 adapter 内完成。
@@ -59,7 +60,9 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 账号生命周期完成事实与对应成功 Audit outbox 在同一事务提交并永久保留，使用原 actor Account、原 USER、原 requestId 作为唯一意图边界；同一 actor 不能把已成功的生命周期 requestId 换操作、目标或版本再次使用。只为新命令生成完成事实；旧成功 Audit 不猜测缺失的原版本和开通显示输入，也不反向补造完成记录，但其 requestId 仍视为已消费。读取时重新验证当前 session、当前同一 action 权威、原 actor/目标/版本和不可变 Audit/decision 证据；当前 User 被停用、会话失效或权限撤销后失败关闭。`404`、`403`、`401`、协议错误和不确定响应都不能据此签发替代意图。Root 凭据恢复只修复原 Root USER 的凭据/租户管理员关系并推进 Account 版本，完成记录必须保存恢复事务提交时的 Account 状态；即使目标为 `DISABLED` 也不能启用账号。完成事实不随 Account 后续状态变化而改写，也不能被 runtime role 直接读写、更新、删除或 truncate。
 
-该持久化表、受限读取函数和公开 GET 是新的数据库/wire 形状，当前未发布候选因此推进到 IAM86/Audit39/PaaS7、`contractRevision=36`；唯一发布前驱为已接受的 IAM85/Audit39/PaaS7+r35。开发期更早版本不继续累积兼容矩阵，前驱成功事实只按上述可证明字段迁移或明确不补造。
+User 资料和状态命令遵循同一不确定结果原则，但使用独立的封闭 `UserManagementCompletion`，避免把 Account lifecycle、密码重置或任意业务 receipt 混成通用框架。完成记录与对应 `iam.user.updated|iam.user.status-set` 事实同事务提交；成功 requestId 在 operation 间也只能消费一次。前驱版本已经成功的 User 命令不补造结果快照，但原 requestId 仍由历史 Audit 保持消费。完成表强制 RLS、不可更新/删除/truncate，runtime 角色没有表权限；公开读取只能通过 API 角色的目的限定函数，并逐次核对原决定、请求摘要和 Audit 事实。缺表、触发器、RLS、列权限或证据任一损坏时 readiness 与读取均返回 unavailable。
+
+User 完成表、受限读取函数和公开 GET 是新的数据库/wire 形状，当前源码候选因此推进到 IAM87/Audit39/PaaS7、`contractRevision=37`；唯一滚动前驱为固定 `08e1dc4a6ce81386ea7223e62d03356f82aeee58` 的 IAM86/Audit39/PaaS7+r36。当前已接受签名发布仍停留在该前驱组合，不能把本地 SQL 可迁移解释为发布升级许可。开发期更早版本不继续累积兼容矩阵。
 
 ## 验收
 
@@ -69,7 +72,11 @@ Account 更新以 scope/account 锁序列化；User 安全变更在 principal �
 
 账号生命周期不确定结果门禁还须覆盖三个操作：成功响应丢失后，原 USER 在新登录会话以精确 operation、accountId、commandRequestId 和 expectedResourceVersion 取得同一非敏感事实；错误 actor、跨 Account、错误操作/目标/版本、重复 query、请求 body、旧或撤销权限、停用身份及被篡改的 receipt/Audit/decision 全部失败关闭。相同 requestId 跨操作重用不得产生部分账号、密码、session、附件、完成事实或 outbox 变化；完成后目标继续演进不改变旧事实。完成表和读取函数必须保持强制 RLS、无 runtime 表权限、只给 API 角色执行封闭读取函数，apply-twice 与进程重启保持原事实；旧成功历史不补造 receipt，但必须拒绝用其 requestId 创建新意图。
 
+User 资料/状态不确定结果门禁须分别证明：原结果可按精确 operation、userId、commandRequestId 和 expectedResourceVersion 读取；错误 operation/version、另一个 Account、当前撤权和篡改证据失败关闭；后续状态或资料变更不得改写旧结果。完成记录和成功 Audit/outbox 必须同事务出现，缺一时提交失败；前驱成功命令没有回填结果但 requestId 不可重用。直接前驱真实 executable、当前迁移/runtime、重启和旧 Audit canonical bytes 必须在唯一滚动门禁中共同验证。
+
 ## 当前候选证据
+
+固定实现 `10fad2aadb3c060d438ca97658e20cec2dde0fef` 增加严格 `UserManagementCompletion` 契约、封闭读取路由、同事务 PostgreSQL receipt/Audit 证据及唯一 IAM86→IAM87 滚动前驱门禁。受影响 API、HTTP、use case、迁移、release profile 和架构门禁通过；任务独立 PostgreSQL 18 中，User 资料/状态纵向切片证明精确原结果、跨 Account 防枚举、强制 RLS、runtime 零表权限、不可变触发器、receipt/Audit 篡改拒绝及契约损坏时 readiness/读取同时失败关闭。固定 IAM86 executable→IAM87 migrator/runtime 又证明旧完成记录不被猜测补造、旧 requestId 保持消费、原 canonical Audit 不变，新资料/状态结果在后续变更和重启后保持原值。本地专属容器、网络和卷已在无测试客户端后精确清理；该固定对象的独立 CI、同 Profile 签名生命周期和 UX/UI 消费尚未完成，不能据此接受整体 FEAT。
 
 固定回滚点 `79b37949300c686617694f52abff9a08626043e2` 已在独立 `feat/iam` 工作树完成当前管理面的破坏性替换：公开管理 DTO/路由只使用 Account、RootIdentity 和 User，旧 Organization/Principal 管理路由返回 404；Bootstrap、ServiceIdentity、AuthorizationDecision、旧 Audit 事实与 canonical bytes 保持冻结。数据库把旧 `login_index.account_owner` 迁移为强约束的 `account_roots`，并从封存 bootstrap receipt 为实际 9fd/a36 旧状态还原唯一 root；缺失或冲突关系失败关闭。该提交的 Verification `34599945505` 中 go、authority-process、node-process 三项均成功。
 
