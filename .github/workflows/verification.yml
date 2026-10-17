@@ -158,9 +158,13 @@ jobs:
     # separately observes two real ten-minute windows, and step-up owns OTP
     # windows plus original proof expiry. Moving a fixture does not duplicate
     # it, raise per-lane database concurrency, or weaken its own deadline.
+    # Eight lanes keep the fourteen independent runners within GitHub's normal
+    # hosted-runner concurrency while reducing the previous four-wave queue to
+    # two waves. This changes orchestration latency only: each lane still owns
+    # one bounded PostgreSQL service and remains internally serial.
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 8
       matrix:
         include:
           # Schedule the longest natural-window and database lanes first.
