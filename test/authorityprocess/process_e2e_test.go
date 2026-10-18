@@ -3625,7 +3625,7 @@ func runIAMUserManagementRecoveryConsoleBrowser(
 	completionPrefix := "/api/iam/v1/users/" + string(user.ID) + "/management-completions/"
 	loss := &browserResponseLoss{
 		method: http.MethodPost, path: mutationPath, recoveryPathPrefix: completionPrefix,
-		allowSameHostRecovery: true, postLossWritePrefix: "/api/iam/v1/users/" + string(user.ID),
+		allowSameHostRecovery: true, postLossWritePrefix: "/api/iam/v1/users/",
 	}
 	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
 		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
@@ -3753,19 +3753,26 @@ func runIAMUserManagementRecoveryConsoleBrowser(
 		t.Fatal("later User state rewrote the original management completion")
 	}
 
-	var outboxFacts int
-	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox
+	var outboxFacts, requestFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		count(*) FILTER(WHERE event_document#>>'{target,kind}'='USER' AND event_document#>>'{target,id}'=$4),
+		count(*) FROM iam.audit_outbox
 		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3
-		  AND event_document#>>'{target,kind}'='USER' AND event_document#>>'{target,id}'=$4`,
-		user.AccountID, wantAction, requestID, user.ID).Scan(&outboxFacts); err != nil || outboxFacts != 1 {
-		t.Fatalf("User management recovery retained %d original outbox facts: err=%v", outboxFacts, err)
+		`, user.AccountID, wantAction, requestID, user.ID).Scan(&outboxFacts, &requestFacts); err != nil ||
+		outboxFacts != 1 || requestFacts != 1 {
+		t.Fatalf("User management recovery retained target=%d request=%d original outbox facts: err=%v",
+			outboxFacts, requestFacts, err)
 	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	page := queryAudit(t, auditEndpoint, ownerBearer,
 		auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}, http.StatusOK)
-	auditMatches := 0
+	auditMatches, auditRequestMatches := 0, 0
 	for _, record := range page.Records {
-		if record.Event.Target.ID != string(user.ID) || record.Event.RequestID != requestID {
+		if record.Event.RequestID != requestID {
+			continue
+		}
+		auditRequestMatches++
+		if record.Event.Target.ID != string(user.ID) {
 			continue
 		}
 		auditMatches++
@@ -3776,8 +3783,8 @@ func runIAMUserManagementRecoveryConsoleBrowser(
 			t.Fatal("User management Audit fact changed its actor, scope, target or result")
 		}
 	}
-	if auditMatches != 1 {
-		t.Fatalf("User management original Audit fact matches=%d", auditMatches)
+	if auditMatches != 1 || auditRequestMatches != 1 {
+		t.Fatalf("User management original Audit facts target=%d request=%d", auditMatches, auditRequestMatches)
 	}
 	chain := verifyAudit(t, auditEndpoint, ownerBearer)
 	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
@@ -3926,6 +3933,12 @@ func runIAMGroupMembershipRecoveryConsoleBrowser(
 		}
 	}
 
+	var membershipRows int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.group_memberships
+		WHERE tenant_id=$1 AND group_id=$2 AND user_id=$3`, group.AccountID, group.ID, user.ID).
+		Scan(&membershipRows); err != nil || membershipRows != 1 {
+		t.Fatalf("Group membership replay retained %d rows for the exact Account, Group and User: err=%v", membershipRows, err)
+	}
 	var storedID, createdBy, removedBy string
 	var storedVersion uint64
 	var removed bool
@@ -3952,19 +3965,26 @@ func runIAMGroupMembershipRecoveryConsoleBrowser(
 		t.Fatalf("Group membership permission was not effective on the next request: status=%d want=%d", response.Status, wantAfter)
 	}
 
-	var outboxFacts int
-	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox
+	var outboxFacts, requestFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		count(*) FILTER(WHERE event_document#>>'{target,kind}'='GROUP_MEMBERSHIP' AND event_document#>>'{target,id}'=$4),
+		count(*) FROM iam.audit_outbox
 		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3
-		  AND event_document#>>'{target,kind}'='GROUP_MEMBERSHIP' AND event_document#>>'{target,id}'=$4`,
-		group.AccountID, wantAction, requestID, wantMembershipID).Scan(&outboxFacts); err != nil || outboxFacts != 1 {
-		t.Fatalf("Group membership recovery retained %d original outbox facts: err=%v", outboxFacts, err)
+		`, group.AccountID, wantAction, requestID, wantMembershipID).Scan(&outboxFacts, &requestFacts); err != nil ||
+		outboxFacts != 1 || requestFacts != 1 {
+		t.Fatalf("Group membership recovery retained target=%d request=%d original outbox facts: err=%v",
+			outboxFacts, requestFacts, err)
 	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	page := queryAudit(t, auditEndpoint, ownerBearer,
 		auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}, http.StatusOK)
-	auditMatches := 0
+	auditMatches, auditRequestMatches := 0, 0
 	for _, record := range page.Records {
-		if record.Event.Target.ID != string(wantMembershipID) || record.Event.RequestID != requestID {
+		if record.Event.RequestID != requestID {
+			continue
+		}
+		auditRequestMatches++
+		if record.Event.Target.ID != string(wantMembershipID) {
 			continue
 		}
 		auditMatches++
@@ -3975,8 +3995,8 @@ func runIAMGroupMembershipRecoveryConsoleBrowser(
 			t.Fatal("Group membership Audit fact changed its actor, scope, target or result")
 		}
 	}
-	if auditMatches != 1 {
-		t.Fatalf("Group membership original Audit fact matches=%d", auditMatches)
+	if auditMatches != 1 || auditRequestMatches != 1 {
+		t.Fatalf("Group membership original Audit facts target=%d request=%d", auditMatches, auditRequestMatches)
 	}
 	chain := verifyAudit(t, auditEndpoint, ownerBearer)
 	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
@@ -4537,21 +4557,26 @@ func runIAMAccountSecuritySettingsConsoleBrowser(
 	var bound iamv1.ConfirmTOTPEnrollmentResponse
 	call(http.MethodPost, "/v1/auth/totp/enrollments/"+enrollment.Enrollment.ID+":confirm", memberInitial.Credential,
 		map[string]string{"requestId": "browser-security-settings-totp-confirm", "code": bindingCode}, http.StatusOK, &bound)
-	if bound.Enrollment.FactorRevision != 2 || bound.Enrollment.ID != enrollment.Enrollment.ID {
-		t.Fatal("Account security-settings browser operator TOTP did not bind at the expected revision")
+	if iamv1.ValidateConfirmTOTPEnrollmentResponse(bound) != nil || bound.Enrollment.State != "CONFIRMED" ||
+		bound.Enrollment.FactorRevision != enrollment.Enrollment.FactorRevision || bound.Enrollment.ID != enrollment.Enrollment.ID {
+		t.Fatalf("Account security-settings browser operator returned an invalid TOTP binding completion: %#v", bound.Enrollment)
 	}
 
 	var initialConsumed int64
-	if err := database.QueryRow(ctx, `SELECT last_consumed_step FROM iam.totp_authenticators
+	var boundRevision uint64
+	if err := database.QueryRow(ctx, `SELECT last_consumed_step,bound_revision FROM iam.totp_authenticators
 		WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND state='ACTIVE'`,
-		browserAccountID, member.ID, enrollment.Enrollment.ID).Scan(&initialConsumed); err != nil {
+		browserAccountID, member.ID, enrollment.Enrollment.ID).Scan(&initialConsumed, &boundRevision); err != nil {
 		t.Fatalf("read Account security-settings browser factor: %v", err)
+	} else if boundRevision != enrollment.Enrollment.FactorRevision+1 {
+		t.Fatalf("Account security-settings browser operator TOTP bound revision=%d want=%d",
+			boundRevision, enrollment.Enrollment.FactorRevision+1)
 	}
 	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
 	defer closeBrowser()
 	finish := filepath.Join(temporary, "browser-account-security-settings-finished")
 	codePath := filepath.Join(temporary, "browser-account-security-settings-code")
-	t.Logf("ACCOUNT_SECURITY_SETTINGS_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s code=%s; sign in with the changed developer password, use the protected code file for login and step-up, replace the complete Account settings with MFA required, minimum length 21, lowercase and digit required, history 3, maximum age 90, ADMIN_RESET, idle timeout 20 and CIDRs 10.0.0.0/8 plus 2001:db8::/32, then create the completion marker",
+	t.Logf("ACCOUNT_SECURITY_SETTINGS_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s code=%s; sign in with the changed developer password, use the protected code file for login and step-up, replace the complete Account settings with MFA required, minimum length 21, lowercase and digit required, history 3, maximum age 90, ADMIN_RESET, idle timeout 20 and CIDRs 10.0.0.0/8 plus 2001:db8::/32, reauthenticate after the old Session is fenced, read version 2, then create the completion marker",
 		server.URL, finish, realm, codePath)
 	waitForAccountSecuritySettingsBrowserCompletion(t, ctx, database, ui, finish, codePath,
 		member.ID, enrollment.Enrollment.ID, seed, initialConsumed)
@@ -4561,8 +4586,8 @@ func runIAMAccountSecuritySettingsConsoleBrowser(
 		count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL AND security_settings_version=2),
 		count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL AND security_settings_version=1)
 		FROM iam.sessions WHERE tenant_id=$1`, browserAccountID).Scan(&currentGenerationSessions, &staleGenerationSessions); err != nil ||
-		currentGenerationSessions != 0 || staleGenerationSessions < 2 {
-		t.Fatalf("Account security-settings update did not fence every pre-existing Account Session: current=%d stale=%d err=%v",
+		currentGenerationSessions != 1 || staleGenerationSessions < 2 {
+		t.Fatalf("Account security-settings update did not retain exactly one post-change Session while fencing every pre-existing Account Session: current=%d stale=%d err=%v",
 			currentGenerationSessions, staleGenerationSessions, err)
 	}
 	for name, credential := range map[string]string{"Account Root": accountRoot.Credential, "operator setup": memberInitial.Credential} {
@@ -5558,6 +5583,38 @@ func TestBrowserResponseLossAllowsOnlyExplicitSameOriginReadRecovery(t *testing.
 	if observation.RecoveryReads != 1 || observation.RecoveryHost != mutation.Host ||
 		observation.RecoveryRequestURI != read.URL.RequestURI() || len(observation.RecoveryAttempts) != 1 {
 		t.Fatalf("explicit same-origin completion read was not recorded exactly: %#v", observation)
+	}
+}
+
+func TestBrowserResponseLossTracksAllPostLossUserWrites(t *testing.T) {
+	t.Parallel()
+	loss := &browserResponseLoss{postLossWritePrefix: "/api/iam/v1/users/"}
+	loss.markLost()
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodGet,
+			"http://browser.example/api/iam/v1/users/user-one/management-completions/request-one", nil),
+		httptest.NewRequest(http.MethodPost,
+			"http://browser.example/api/iam/v1/auth/login", nil),
+		httptest.NewRequest(http.MethodPost,
+			"http://browser.example/api/iam/v1/users-archive/user-one:update", nil),
+	} {
+		loss.observePostLossWrite(request)
+	}
+	for _, request := range []*http.Request{
+		httptest.NewRequest(http.MethodPost,
+			"http://browser.example/api/iam/v1/users/user-one:update", nil),
+		httptest.NewRequest(http.MethodPost,
+			"http://browser.example/api/iam/v1/users/user-one:set-status", nil),
+		httptest.NewRequest(http.MethodDelete,
+			"http://browser.example/api/iam/v1/users/user-two", nil),
+	} {
+		loss.observePostLossWrite(request)
+	}
+	observation := loss.snapshot()
+	if observation.PostLossWrites != 3 || observation.PostLossMethod != http.MethodPost ||
+		observation.PostLossPath != "/api/iam/v1/users/user-one:update" ||
+		observation.PostLossHost != "browser.example" {
+		t.Fatalf("User recovery did not count every post-loss User write exactly: %#v", observation)
 	}
 }
 
@@ -16437,8 +16494,9 @@ func assertAuthorityPlaintextAbsent(
 
 // Decode strings before scanning: JSON escapes must not hide a credential,
 // and SQL LIKE metacharacters in a credential are literal, not wildcards.
-// A six-digit substring in a contract-valid Audit requestDigest, occurredAt or
-// the exact server-generated identity of an audited read is not disclosure.
+// A six-digit substring in a contract-valid Audit requestDigest,
+// authorityEvidenceDigest, occurredAt or the exact server-generated identity
+// of an audited read is not disclosure.
 // Exact pre-seed events may also contain that later code in an already
 // published identifier. None of these exceptions applies to arbitrary text,
 // an exact code value, a changed event or any longer credential.
@@ -16508,7 +16566,7 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 					"apiVersion", "schemaVersion", "kind", "eventId", "tenantId", "installationId",
 					"actor", "type", "id", "roleSession", "sessionId", "sourceUserId",
 					"sourceServicePrincipalId", "accessKeyId", "action", "target", "result",
-					"idempotencyFingerprint", "requestDigest", "requestId", "correlationId",
+					"idempotencyFingerprint", "requestDigest", "authorityEvidenceDigest", "requestId", "correlationId",
 					"auditId", "traceparent", "occurredAt", "observedAt", "createdAt", "updatedAt", "terminalAt",
 					"iamDecisionId", "operationId", "data":
 					field = key
@@ -16534,7 +16592,7 @@ func authorityPlaintextLocationWithStructural(document string, beforeOTP map[str
 					event.Action == auditv1.ActionIAMAuthorizationDecided &&
 					event.Target.Kind == auditv1.TargetAuthorizationDecision &&
 					event.Target.ID == string(event.IAMDecisionID)
-				ignoreCode := validEvent && (key == "requestDigest" || key == "occurredAt" ||
+				ignoreCode := validEvent && (key == "requestDigest" || key == "authorityEvidenceDigest" || key == "occurredAt" ||
 					key == "eventId" || key == "iamDecisionId") || trustedAuthorizationRequestIdentity ||
 					(earlierIdentity && key == "id")
 				if location := inspect(child, ignoreCode,
@@ -17412,6 +17470,30 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	evidenceEvent := event
+	evidenceEvent.EventID = "event-authority-evidence"
+	evidenceEvent.Action = auditv1.ActionIAMPolicyAttachmentCreated
+	evidenceEvent.Target = auditv1.TargetReference{Kind: auditv1.TargetPolicyAttachment, ID: "attachment-authority-evidence"}
+	evidenceEvent.IAMDecisionID = "decision-authority-evidence"
+	evidenceEvent.RequestDigest = "sha256:" + strings.Repeat("b", 64)
+	evidenceEvent.AuthorityEvidenceDigest = "sha256:" + strings.Repeat("c", 58) + code
+	evidenceEvent.RequestID, evidenceEvent.CorrelationID = "request-authority-evidence", "request-authority-evidence"
+	evidenceCanonical, _, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, evidenceEvent)
+	if err != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, evidenceEvent) != nil {
+		t.Fatal("invalid authority-evidence digest inspection fixture")
+	}
+	evidenceEncoded, err := json.Marshal(evidenceEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidEvidenceEvent := evidenceEvent
+	invalidEvidenceEvent.Action = auditv1.ActionIAMAuthenticatorBound
+	invalidEvidenceEvent.Target = auditv1.TargetReference{Kind: auditv1.TargetPrincipal, ID: "user-one"}
+	invalidEvidenceEvent.IAMDecisionID = ""
+	invalidEvidenceEncoded, err := json.Marshal(invalidEvidenceEvent)
+	if err != nil {
+		t.Fatal(err)
+	}
 	timestampEvent := event
 	timestampEvent.OccurredAt = time.Date(2026, 9, 24, 0, 0, 0, 123456000, time.UTC)
 	timestampEncoded, err := json.Marshal(timestampEvent)
@@ -17430,6 +17512,8 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 	}{
 		{"code-in-request-digest", string(encoded), code, false, false},
 		{"code-in-canonical-request-digest", canonical, code, false, false},
+		{"code-in-authority-evidence-digest", string(evidenceEncoded), code, false, false},
+		{"code-in-canonical-authority-evidence-digest", evidenceCanonical, code, false, false},
 		{"code-in-occurred-at", string(timestampEncoded), code, false, false},
 		{"code-in-server-event-id", string(identifierEncoded), code, false, false},
 		{"plaintext-code", `{"code":"123456"}`, code, true, false},
@@ -17443,9 +17527,12 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 		{"literal-not-wildcard", `{"password":"literalXpercentYpassword"}`, "literal_percent%password", false, false},
 		{"digest-in-another-field", `{"password":"` + event.RequestDigest + `"}`, code, true, false},
 		{"unproved-digest-shape", `{"requestDigest":"` + event.RequestDigest + `"}`, code, true, false},
+		{"unproved-authority-evidence-digest-shape", `{"authorityEvidenceDigest":"` + evidenceEvent.AuthorityEvidenceDigest + `"}`, code, true, false},
+		{"authority-evidence-on-wrong-action", string(invalidEvidenceEncoded), code, true, false},
 		{"malformed-audit-digest", strings.Replace(string(encoded), event.RequestDigest, "sha256:"+code, 1), code, true, false},
 		{"additional-audit-disclosure", strings.Replace(string(encoded), `"request-one"`, `"request-123456"`, 1), code, true, false},
 		{"full-digest-material", string(encoded), event.RequestDigest, true, false},
+		{"full-authority-evidence-digest-material", string(evidenceEncoded), evidenceEvent.AuthorityEvidenceDigest, true, false},
 		{"credential-used-as-digest-body", strings.Replace(string(encoded), event.RequestDigest, "sha256:"+edgeAssertion, 1), edgeAssertion, true, false},
 		{"empty-input", `{}`, "", false, true},
 		{"invalid-json", `{"code":`, code, false, true},
