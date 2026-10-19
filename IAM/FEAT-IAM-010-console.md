@@ -322,6 +322,8 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 
 测试候选`83d7c42cf665296d10de5fec15cf5ea26feb8dd7`已完成本地默认/race/架构/vet及原生Linux编译，但2026-10-19的真实页面仅到最终审阅：浏览器owner的工具要求人类逐次确认，未执行最终点击。独立PostgreSQL18.4中Policy仍为修订2、默认V1，只有准备阶段的创建/发布事实；没有完成marker、切换事实或Go PASS。该次专属进程主动停止，零数据库客户端后清理其PG容器、卷、网络、转发与临时目录。默认切换及响应丢失恢复仍未验收，不能以审阅截图、编译通过或进程停止成功替代。
 
+独立源码审查发现该准备版本的写观察范围是单个Policy路径，会漏计同ID的`:set-default-version`重试，导致正确页面效果仍被后验判为失败。既有ResponseLoss表复用真实fixture的唯一配置构造后，旧范围准确得到`post_loss_writes=0 want=1`，并暴露UPDATE/RETIRE漏计其他Policy写；这属于测试接线假红，不是已观察到的生产漏洞。当前范围改为集合根`/api/iam/v1/policies`，同时覆盖集合创建、目标冒号动作和其他Policy写，仍排除相邻`policies-archive`、登录及GET/HEAD/OPTIONS；没有降低主门禁的计数1、两次等值账本、准确path/Host或原预算。十二个既有ResponseLoss入口的race通过3.733秒，完整默认authorityprocess/architecture race为3.954/2.583秒，vet通过；这些廉价回归只证明观察器，不替代仍缺的真实页面提交。
+
 ### User资料与状态原结果恢复源码
 
 2026-10-17，本分支从已固定UX/UI源码`343622a11d0ce4c65c763de0e717505e0b8dae9a`（父`c8981dd160474710868bf84712f2b7792f283973`）选择性`ADAPT`十五个frontend路径，不导入donor文档、生成资产或验收状态。显示名更新与启停在发送前持久化原Account、actor、User、operation、request ID、expected resource version及非秘密目标值；UNKNOWN只允许以当前有效Session读取准确`UserManagementCompletion`，不得重新POST、自动换request ID或用当前User状态猜测原结果。完成回执与独立当前详情读取分离，404/403/409/503不释放原意图，401只失效准确旧Session；Account、actor、User、repository和Session换主均围栏迟到响应。存储不可读写或后端未提供completion client时，页面在网络写入前降为只读。无消费者的旧泛型`update-user`分支及Preview死路径同步删除，隔离MOCK继续使用其原工作区命令。

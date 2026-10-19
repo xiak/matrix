@@ -3498,25 +3498,8 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 	assertUnreferenced()
 
 	policyPath := "/api/iam/v1/policies/" + string(created.Policy.ID)
-	mutationPath := policyPath
-	loss := &browserResponseLoss{
-		postLossWritePrefix: policyPath,
-	}
-	switch operation {
-	case "UPDATE":
-		loss.method = http.MethodPatch
-	case "RETIRE":
-		loss.method = http.MethodDelete
-	case "SET_DEFAULT":
-		loss.method = http.MethodPost
-		mutationPath += ":set-default-version"
-	}
-	loss.path = mutationPath
-	if operation != "SET_DEFAULT" {
-		loss.holdAfterPartialResponse = true
-		loss.holdReached, loss.holdRelease, loss.holdFinished = make(chan struct{}), make(chan struct{}), make(chan struct{})
-		loss.holdTimeout = 5 * time.Minute
-	}
+	loss := newPolicyMutationBrowserResponseLoss(operation, policyPath)
+	mutationPath := loss.path
 	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
 		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
 	)
@@ -5988,40 +5971,86 @@ func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
 	}
 }
 
+// Keep the real browser fixture's method/path/write scope in one place so the
+// inexpensive observer tests exercise its actual wiring, not a second setup.
+func newPolicyMutationBrowserResponseLoss(operation, policyPath string) *browserResponseLoss {
+	loss := &browserResponseLoss{path: policyPath, postLossWritePrefix: "/api/iam/v1/policies"}
+	switch operation {
+	case "UPDATE":
+		loss.method = http.MethodPatch
+	case "RETIRE":
+		loss.method = http.MethodDelete
+	case "SET_DEFAULT":
+		loss.method = http.MethodPost
+		loss.path += ":set-default-version"
+	default:
+		panic("unknown Policy browser operation")
+	}
+	if operation != "SET_DEFAULT" {
+		loss.holdAfterPartialResponse = true
+		loss.holdReached, loss.holdRelease, loss.holdFinished = make(chan struct{}), make(chan struct{}), make(chan struct{})
+		loss.holdTimeout = 5 * time.Minute
+	}
+	return loss
+}
+
 func TestBrowserResponseLossPreservesHeaderlessPolicyMutationAttempts(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		name   string
-		method string
-		body   string
+		name      string
+		operation string
+		method    string
+		suffix    string
+		body      string
 	}{
-		{"update", http.MethodPatch, `{"displayName":"renamed","resourceVersion":2,"requestId":"ui-policy-metadata-update"}`},
-		{"retire", http.MethodDelete, `{"resourceVersion":2,"requestId":"ui-policy-metadata-retire"}`},
+		{"update", "UPDATE", http.MethodPatch, "", `{"displayName":"renamed","resourceVersion":2,"requestId":"ui-policy-metadata-update"}`},
+		{"retire", "RETIRE", http.MethodDelete, "", `{"resourceVersion":2,"requestId":"ui-policy-metadata-retire"}`},
+		{"set_default", "SET_DEFAULT", http.MethodPost, ":set-default-version", `{"versionId":"version-two","resourceVersion":2,"requestId":"ui-policy-version-default"}`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			const policyPath = "/api/iam/v1/policies/policy-one"
-			loss := &browserResponseLoss{method: test.method, path: policyPath}
+			mutationPath := policyPath + test.suffix
+			loss := newPolicyMutationBrowserResponseLoss(test.operation, policyPath)
 			unauthorizedBody := []byte(`{"resourceVersion":1,"requestId":"unauthorized-attempt"}`)
-			unauthorized := httptest.NewRequest(test.method, "http://browser-a.example"+policyPath,
+			unauthorized := httptest.NewRequest(test.method, "http://browser-a.example"+mutationPath,
 				bytes.NewReader(unauthorizedBody))
+			loss.observePostLossWrite(unauthorized)
 			if !loss.matches(unauthorized) || loss.observe(unauthorized, http.StatusUnauthorized, unauthorizedBody) {
 				t.Fatal("unauthorized Policy request was selected for response loss")
 			}
-			selected := httptest.NewRequest(test.method, "http://browser-a.example"+policyPath,
+			selected := httptest.NewRequest(test.method, "http://browser-a.example"+mutationPath,
 				strings.NewReader(test.body))
+			loss.observePostLossWrite(selected)
 			if !loss.matches(selected) || !loss.observe(selected, http.StatusOK, []byte(test.body)) {
 				t.Fatal("successful Policy response loss was not selected")
 			}
 			loss.markLost()
-			replay := httptest.NewRequest(test.method, "http://browser-b.example"+policyPath,
+			for _, ignored := range []*http.Request{
+				httptest.NewRequest(http.MethodGet, "http://browser-b.example"+mutationPath, nil),
+				httptest.NewRequest(http.MethodHead, "http://browser-b.example"+policyPath, nil),
+				httptest.NewRequest(http.MethodOptions, "http://browser-b.example"+mutationPath, nil),
+				httptest.NewRequest(http.MethodPost, "http://browser-b.example/api/iam/v1/policies-archive/policy-one:set-default-version", nil),
+				httptest.NewRequest(http.MethodPost, "http://browser-b.example/api/iam/v1/auth/login", nil),
+			} {
+				loss.observePostLossWrite(ignored)
+			}
+			if loss.snapshot().PostLossWrites != 0 {
+				t.Fatal("pre-loss, read-only or adjacent-collection requests were counted as Policy writes")
+			}
+			replay := httptest.NewRequest(test.method, "http://browser-b.example"+mutationPath,
 				strings.NewReader(test.body))
+			loss.observePostLossWrite(replay)
 			if !loss.matches(replay) || loss.observe(replay, http.StatusOK, []byte(test.body)) {
 				t.Fatal("exact Policy replay was not observed as a later attempt")
 			}
+			if loss.snapshot().PostLossWrites != 1 {
+				t.Fatalf("the real Policy fixture missed its explicit replay: post_loss_writes=%d want=1", loss.snapshot().PostLossWrites)
+			}
 			changedBody := []byte(test.body + " ")
-			changed := httptest.NewRequest(test.method, "http://browser-b.example"+policyPath,
+			changed := httptest.NewRequest(test.method, "http://browser-b.example"+mutationPath,
 				bytes.NewReader(changedBody))
+			loss.observePostLossWrite(changed)
 			if loss.observe(changed, http.StatusConflict, changedBody) {
 				t.Fatal("changed Policy replay was selected for response loss")
 			}
@@ -6031,6 +6060,8 @@ func TestBrowserResponseLossPreservesHeaderlessPolicyMutationAttempts(t *testing
 			if observation.Attempts != 4 || observation.SelectedAttempt != 2 || observation.MutationOverflow ||
 				observation.IdempotencyKey != "" ||
 				observation.MutationHost != "browser-a.example" ||
+				observation.PostLossWrites != 2 || observation.PostLossMethod != test.method ||
+				observation.PostLossPath != mutationPath || observation.PostLossHost != "browser-b.example" ||
 				!bytes.Equal(observation.RequestBody, []byte(test.body)) ||
 				len(observation.MutationAttempts) != 4 {
 				t.Fatalf("headerless Policy baseline was overwritten: attempts=%d selected=%d overflow=%t host=%q body_match=%t ledger=%d",
@@ -6044,7 +6075,7 @@ func TestBrowserResponseLossPreservesHeaderlessPolicyMutationAttempts(t *testing
 					wantHost = "browser-b.example"
 				}
 				if attempt.Method != test.method || attempt.Host != wantHost ||
-					attempt.RequestURI != policyPath || !attempt.BackendCalled ||
+					attempt.RequestURI != mutationPath || !attempt.BackendCalled ||
 					!attempt.RequestBodyCompared || !attempt.IdempotencyKeyCompared ||
 					!attempt.IdempotencyKeyMatchesSelected {
 					t.Fatalf("Policy mutation attempt %d was not exact: %#v", index, attempt)
@@ -6059,6 +6090,16 @@ func TestBrowserResponseLossPreservesHeaderlessPolicyMutationAttempts(t *testing
 				changed.RequestBodyMatchesSelected {
 				t.Fatalf("Policy mutation sequence did not preserve the selected command: first=%#v selected=%#v replay=%#v changed=%#v",
 					first, selected, replayed, changed)
+			}
+			loss.observePostLossWrite(httptest.NewRequest(http.MethodPost,
+				"http://browser-b.example/api/iam/v1/policies/policy-two:set-default-version", nil))
+			if loss.snapshot().PostLossWrites != 3 {
+				t.Fatal("another Policy write escaped the browser fixture's post-loss write fence")
+			}
+			loss.observePostLossWrite(httptest.NewRequest(http.MethodPost,
+				"http://browser-b.example/api/iam/v1/policies", nil))
+			if loss.snapshot().PostLossWrites != 4 {
+				t.Fatal("Policy creation escaped the browser fixture's post-loss write fence")
 			}
 		})
 	}
