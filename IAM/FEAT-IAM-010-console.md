@@ -50,7 +50,9 @@
 
 固定消费提交`5384e4421877069f9ad4bc4e47ca219d46be9798`的精确[Verification 39252717070](https://github.com/xiak/matrix/actions/runs/39252717070)已独立闭合，准确范围归011。提交后的消费者复核发现[Issue #4](https://github.com/xiak/matrix/issues/4)：旧创建请求挂起、同User重新登录并恢复UNKNOWN后，旧401或成功回包仍清除新Session保留的非秘密原意图；当前身份和内存UNKNOWN未丢失不代表持久恢复边界安全。本分支仅选择性消费UX固定`ad8cd9c3cd846d8556d0c3974826ff49bc4fc32d`的两个生产文件，父blob均与本分支一致，保留两条原始消费者断言和本地测试布局。两条回归在修改前1.94秒确定失败，修改后1.81秒原样通过，同时证明原requestId/UNKNOWN/持久化记录保持且没有第二次创建调用。未引入新Session模型或持久凭据；此处先记录本地修复证据，Issue仍须当前固定候选的独立CI收口，不能由5384的绿色结果推定关闭。
 
-真实Role页面必须从浏览器显式承担开始，观察有效Role的受保护业务读取、管理员撤权后的401/BLOCKED，以及显式验证来源身份后的USER状态；现有附件fixture中的后台重新承担只证明后验，不能替代这些页面动作。准备门禁时发现原浏览器relay缺少`/api/paas/`，应用请求会错误落到UI上游。原`authorityprocess` owner现将既有路由装配提取为可检查的HTTP边界并补齐该前缀，保留IAM/Audit/managed-services/UI原映射；短回归先证明PaaS路径错误返回UI的200，再证明准确上游、方法、cursor原字节、原Bearer及401/403响应保持且无注入tenant selector，相关response-loss race门禁3.749秒及vet通过。该测试使用loopback测试上游，只验证fixture转发，不冒充真实PaaS权限或浏览器已通过；没有改变生产APISIX、API或安装契约。
+真实Role页面沿现有附件fixture的ROLE/REVOKE组合验收，不新增测试账号模型或第二套框架。两个标签各持独立的内存Session：普通User从`/console/access/role-access/`显式发现、审阅并承担只信任自己的Role，在`/console/applications/`通过Role读取真实PaaS目录；管理员在精确Role详情内联撤销原附件，响应丢失后只读核对原requestId的不可变回执。普通User标签再读同一业务资源必须得到401并进入全局BLOCKED，不得静默用来源User重试；点击“验证并返回用户模式”后由IAM重新验证来源，成功后才返回USER，业务读取应呈现真实403且不确认其他资源存在。角色、主体、附件与原请求都必须对应同一fixture；完成上述可见状态后才能创建已有结束标记。标记后的旧Role401、原发行记录、新显式承担和唯一Audit属于后台后验，不能替代页面动作。UX/UI固定源码走查确认这些路由和操作已具备，MOCK交互及源码检查本身仍不算真实验收。
+
+准备该门禁时发现原浏览器relay缺少`/api/paas/`，应用请求会错误落到UI上游。固定`176097677b5f73b63f3d47c7b4f218585feb050a`在原`authorityprocess` owner提取既有路由装配并补齐该前缀，保留IAM/Audit/managed-services/UI原映射；短回归先证明PaaS路径错误返回UI的200，再证明准确上游、方法、cursor原字节、原Bearer及401/403响应保持且无注入tenant selector，相关response-loss race门禁3.749秒及vet通过。该测试使用loopback测试上游，只验证fixture转发，不冒充真实PaaS权限或浏览器已通过；没有改变生产APISIX、API或安装契约。
 
 ### 当前身份的权限上限投影
 
