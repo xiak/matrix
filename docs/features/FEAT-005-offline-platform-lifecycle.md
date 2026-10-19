@@ -920,7 +920,28 @@ Their 284-byte public trust document has SHA-256
 The private signing key was removed after assembly; protected mail input,
 installation state and test credentials are not release payloads.
 
-The delivery archives were made from those authenticated Linux trees, then
+The later same-profile candidate `e1a96db06142f62508a26870edd8ce36cdc32780`
+with signed A `.r37.7` and B `.r37.8` is not accepted. Its existing isolated
+lifecycle passed through B retained-state upgrade, then failed at
+`platform-rollback` after 2000.90 seconds. The original CLI output was not
+retained, so its precise failure category cannot be recovered; a later
+authenticated read-only status of B/previous A as READY does not convert the
+failed run into a pass. No rollback or lifecycle retry was used to overwrite
+that observation. The existing test owner now preserves closed process,
+cancellation/deadline, output-bound/safety, known CLI fault and response-field
+categories, followed by separate rollback receipt checks. It never emits raw
+output or messages and keeps the strict JSON, READY, target release, empty
+predecessor, changed-result and timing requirements. Focused red/green cases
+and the phase1e2e/platformcommand/CLI race checks validate that diagnostic
+boundary. The same owner adds an explicit opt-in, fifteen-minute diagnostic
+for one rollback of an already prepared B installation. It authenticates the
+exact A/B pair and retained installation, keeps the existing network and
+secret-output checks, and requires A/empty predecessor/changed plus the
+original container, status and verify postconditions. It does not replace
+fresh installation, business-data retention, backup recovery or restart
+acceptance; neither diagnostic establishes the original failure's root cause.
+
+The accepted `9621bb6` delivery archives were made from its authenticated Linux trees, then
 independently extracted and compared file-by-file and by object type,
 owner/group and mode. No links are present; `bin/mx` remains `0700 root:root`,
 other files `0600` and directories `0700`. These are the archive identities,

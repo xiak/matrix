@@ -93,6 +93,85 @@ func lifecycleObservationBudget(raw string, available time.Duration) (time.Durat
 	return budget, nil
 }
 
+func TestMXOutputKeepsClosedFailureClassification(t *testing.T) {
+	valid := []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"PlatformCommandResult","action":"ROLLBACK","status":"SUCCEEDED","result":{"state":"READY","releaseId":"release-a","changed":true}}`)
+	failure := []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"PlatformCommandFailure","action":"ROLLBACK","status":"FAILED","error":{"class":"PRECONDITION_FAILED","code":"ROLLBACK_SOURCE_NOT_READY","message":"not diagnostic output"}}`)
+	for _, scenario := range []struct {
+		name       string
+		output     commandOutput
+		processErr error
+		contextErr error
+		want       string
+	}{
+		{"valid result", commandOutput{stdout: valid}, nil, nil, ""},
+		{"start failure", commandOutput{}, errors.New("private executable path"), nil, "mx-rollback-process"},
+		{"cancelled ready response", commandOutput{stdout: valid}, nil, context.Canceled, "mx-rollback-cancelled"},
+		{"deadline", commandOutput{}, nil, context.DeadlineExceeded, "mx-rollback-deadline"},
+		{"output limit", commandOutput{}, errCommandOutputLimit, nil, "mx-rollback-output-limit"},
+		{"closed CLI precondition", commandOutput{stderr: failure, exit: 3}, nil, nil, "mx-rollback-source-not-ready"},
+		{"unknown exit", commandOutput{stderr: []byte("raw process detail"), exit: 70}, nil, nil, "mx-rollback-exit-unknown"},
+		{"unexpected stderr", commandOutput{stdout: valid, stderr: []byte("raw process detail")}, nil, nil, "mx-rollback-unexpected-stderr"},
+		{"secret stdout", commandOutput{stdout: []byte("sensitive-test-material")}, nil, nil, "mx-rollback-sensitive-output"},
+		{"secret in failed stderr", commandOutput{stderr: bytes.ReplaceAll(failure, []byte("not diagnostic output"), []byte("sensitive-test-material")), exit: 3}, nil, nil, "mx-rollback-sensitive-output"},
+		{"malformed JSON", commandOutput{stdout: []byte("{")}, nil, nil, "mx-rollback-json"},
+		{"two JSON values", commandOutput{stdout: append(append([]byte(nil), valid...), []byte(" {}")...)}, nil, nil, "mx-rollback-json"},
+		{"unknown result field", commandOutput{stdout: bytes.ReplaceAll(valid, []byte(`"changed":true`), []byte(`"changed":true,"unknown":true`))}, nil, nil, "mx-rollback-json"},
+		{"API version", commandOutput{stdout: bytes.ReplaceAll(valid, []byte("cli.matrix.xiak.com/v1"), []byte("cli.matrix.xiak.com/unknown"))}, nil, nil, "mx-rollback-api-version"},
+		{"kind", commandOutput{stdout: bytes.ReplaceAll(valid, []byte("PlatformCommandResult"), []byte("UnknownResult"))}, nil, nil, "mx-rollback-kind"},
+		{"action", commandOutput{stdout: bytes.ReplaceAll(valid, []byte("ROLLBACK"), []byte("UPGRADE"))}, nil, nil, "mx-rollback-action"},
+		{"status", commandOutput{stdout: bytes.ReplaceAll(valid, []byte("SUCCEEDED"), []byte("FAILED"))}, nil, nil, "mx-rollback-status"},
+		{"state", commandOutput{stdout: bytes.ReplaceAll(valid, []byte("READY"), []byte("NOT_READY"))}, nil, nil, "mx-rollback-state"},
+		{"wrong failure action", commandOutput{stderr: bytes.ReplaceAll(failure, []byte("ROLLBACK\""), []byte("UPGRADE\"")), exit: 3}, nil, nil, "mx-rollback-exit-unknown"},
+		{"wrong exit for failure", commandOutput{stderr: failure, exit: 5}, nil, nil, "mx-rollback-exit-unknown"},
+		{"unknown failure code", commandOutput{stderr: bytes.ReplaceAll(failure, []byte("ROLLBACK_SOURCE_NOT_READY"), []byte("PRIVATE_VALUE")), exit: 3}, nil, nil, "mx-rollback-exit-unknown"},
+		{"unknown failure field", commandOutput{stderr: bytes.ReplaceAll(failure, []byte(`"class":`), []byte(`"private":"value","class":`)), exit: 3}, nil, nil, "mx-rollback-exit-unknown"},
+		{"failure with stdout", commandOutput{stdout: valid, stderr: failure, exit: 3}, nil, nil, "mx-rollback-exit-unknown"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			got, err := checkMXOutput("rollback", scenario.output, scenario.processErr, scenario.contextErr, [][]byte{[]byte("sensitive-test-material")})
+			if scenario.want == "" {
+				if err != nil || got.ReleaseID != "release-a" || !got.Changed {
+					t.Fatal("valid signed command result was rejected")
+				}
+				return
+			}
+			if err == nil || err.Error() != "phase1 gate failed at "+scenario.want || got != (mxResult{}) {
+				t.Fatalf("closed failure classification: got %v, want %s", safeFailure(err), scenario.want)
+			}
+		})
+	}
+}
+
+func TestExplicitRollbackKeepsCommandAndReceiptFailuresSeparate(t *testing.T) {
+	valid := mxResult{ReleaseID: "release-a", Changed: true}
+	for _, scenario := range []struct {
+		name   string
+		result mxResult
+		err    error
+		want   string
+	}{
+		{"valid", valid, nil, ""},
+		{"command", mxResult{}, fail("mx-rollback-source-not-ready"), "mx-rollback-source-not-ready"},
+		{"unknown command error", mxResult{}, errors.New("private command output"), "internal-acceptance-error"},
+		{"release", mxResult{ReleaseID: "release-b", Changed: true}, nil, "platform-rollback-release"},
+		{"previous", mxResult{ReleaseID: "release-a", PreviousID: "release-b", Changed: true}, nil, "platform-rollback-previous"},
+		{"changed", mxResult{ReleaseID: "release-a"}, nil, "platform-rollback-unchanged"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			err := checkExplicitRollback(scenario.result, scenario.err, "release-a")
+			if scenario.want == "" {
+				if err != nil {
+					t.Fatal("valid rollback receipt was rejected")
+				}
+				return
+			}
+			if err == nil || err.Error() != "phase1 gate failed at "+scenario.want {
+				t.Fatalf("closed rollback failure: got %v, want %s", safeFailure(err), scenario.want)
+			}
+		})
+	}
+}
+
 func TestLifecycleObservationBudget(t *testing.T) {
 	for _, scenario := range []struct {
 		name      string
@@ -180,6 +259,62 @@ func TestOfflinePhase1UpgradeFault(t *testing.T) {
 		t.Fatal(safeFailure(err))
 	}
 	emit("focused-upgrade-injection-and-automatic-rollback")
+}
+
+// This executes one explicit rollback of an authenticated, prepared B
+// installation. It does not replace the fresh-host lifecycle, its retained
+// business-state assertions, backup recovery, or the separate restart gate.
+func TestOfflinePhase1Rollback(t *testing.T) {
+	if os.Getenv("MATRIX_PHASE1_ROLLBACK") != "1" {
+		t.Skip("set MATRIX_PHASE1_ROLLBACK=1 on a prepared isolated release-B installation")
+	}
+	config, err := optionsFromEnvironment()
+	if err != nil || config.afterStart {
+		t.Fatal(fail("focused-rollback-input"))
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
+	defer cancel()
+	value, err := authenticatedGate(config)
+	if err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	defer value.edge.close()
+	if err := assertNoExternalRoute(); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	state, err := assertPlatform(ctx, config.root, value.releases.b.Manifest, value.releases.a.Manifest.Release.ID)
+	if err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if err := value.readTenantRetention(state.InstallationID); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	value.sensitive, err = installedSecretValues(config.root)
+	if err != nil {
+		t.Fatal(fail("focused-rollback-secret-inventory"))
+	}
+	defer func() {
+		for _, secret := range value.sensitive {
+			clear(secret)
+		}
+	}()
+	result, commandErr := runMX(ctx, value.releases.b, "rollback", []string{"--root", config.root}, value.pathLeakage())
+	if err := checkExplicitRollback(result, commandErr, value.releases.a.Manifest.Release.ID); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if _, err := assertPlatform(ctx, config.root, value.releases.a.Manifest, ""); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if err := assertNoExternalRoute(); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	emit("focused-explicit-platform-rollback")
 }
 
 func TestInjectedUpgradeWaitBounds(t *testing.T) {

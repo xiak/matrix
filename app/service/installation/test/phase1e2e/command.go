@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/release"
@@ -22,6 +23,8 @@ import (
 )
 
 const maximumCommandOutput = 1024 * 1024
+
+var errCommandOutputLimit = errors.New("command output exceeded acceptance bound")
 
 type commandOutput struct {
 	stdout []byte
@@ -66,7 +69,7 @@ func runProcess(ctx context.Context, executable string, arguments ...string) (co
 		stderr: append([]byte(nil), stderr.content.Bytes()...),
 	}
 	if stdout.overflow || stderr.overflow {
-		return commandOutput{}, errors.New("command output exceeded acceptance bound")
+		return commandOutput{}, errCommandOutputLimit
 	}
 	if err == nil {
 		return result, nil
@@ -122,18 +125,103 @@ func runMX(
 	args := []string{"--format", "json", "platform", action}
 	args = append(args, arguments...)
 	output, err := runProcess(ctx, mxPath(bundle), args...)
-	if err != nil || output.exit != 0 || containsAny(output.stdout, forbidden) ||
-		containsAny(output.stderr, forbidden) || len(output.stderr) != 0 {
-		return mxResult{}, fail("mx-" + action)
+	return checkMXOutput(action, output, err, ctx.Err(), forbidden)
+}
+
+func checkMXOutput(action string, output commandOutput, processErr, contextErr error, forbidden [][]byte) (mxResult, error) {
+	step := "mx-" + action
+	if containsAny(output.stdout, forbidden) || containsAny(output.stderr, forbidden) {
+		return mxResult{}, fail(step + "-sensitive-output")
+	}
+	if errors.Is(contextErr, context.DeadlineExceeded) {
+		return mxResult{}, fail(step + "-deadline")
+	}
+	if contextErr != nil {
+		return mxResult{}, fail(step + "-cancelled")
+	}
+	if errors.Is(processErr, errCommandOutputLimit) {
+		return mxResult{}, fail(step + "-output-limit")
+	}
+	if processErr != nil {
+		return mxResult{}, fail(step + "-process")
+	}
+	if output.exit != 0 {
+		return mxResult{}, closedMXFailure(action, output)
+	}
+	if len(output.stderr) != 0 {
+		return mxResult{}, fail(step + "-unexpected-stderr")
 	}
 	var envelope mxEnvelope
-	if decodeOne(output.stdout, &envelope) != nil ||
-		envelope.APIVersion != "cli.matrix.xiak.com/v1" ||
-		envelope.Kind != "PlatformCommandResult" || envelope.Action != strings.ToUpper(action) ||
-		envelope.Status != "SUCCEEDED" || envelope.Result.State != "READY" {
-		return mxResult{}, fail("mx-" + action + "-result")
+	if decodeOne(output.stdout, &envelope) != nil {
+		return mxResult{}, fail(step + "-json")
+	}
+	if envelope.APIVersion != cli.OutputAPIVersion {
+		return mxResult{}, fail(step + "-api-version")
+	}
+	if envelope.Kind != "PlatformCommandResult" {
+		return mxResult{}, fail(step + "-kind")
+	}
+	if envelope.Action != strings.ToUpper(action) {
+		return mxResult{}, fail(step + "-action")
+	}
+	if envelope.Status != "SUCCEEDED" {
+		return mxResult{}, fail(step + "-status")
+	}
+	if envelope.Result.State != "READY" {
+		return mxResult{}, fail(step + "-state")
 	}
 	return envelope.Result, nil
+}
+
+// These are diagnostic categories, never recovery permits. Unknown output and
+// free-form messages remain private; even a recognized failure still fails.
+func closedMXFailure(action string, output commandOutput) error {
+	unknown := fail("mx-" + action + "-exit-unknown")
+	var envelope mxFailure
+	if action != "rollback" || len(output.stdout) != 0 || decodeOne(output.stderr, &envelope) != nil ||
+		envelope.APIVersion != cli.OutputAPIVersion || envelope.Kind != "PlatformCommandFailure" ||
+		envelope.Action != "ROLLBACK" || envelope.Status != "FAILED" {
+		return unknown
+	}
+	known := map[string]struct {
+		class cli.FaultClass
+		exit  int
+		step  string
+	}{
+		"ROLLBACK_SOURCE_NOT_READY":        {cli.FaultPrecondition, cli.ExitPrecondition, "source-not-ready"},
+		"ROLLBACK_PREDECESSOR_UNAVAILABLE": {cli.FaultPrecondition, cli.ExitPrecondition, "predecessor-unavailable"},
+		"ROLLBACK_PREDECESSOR_MISMATCH":    {cli.FaultPrecondition, cli.ExitPrecondition, "predecessor-mismatch"},
+		"ROLLBACK_SCHEMA_INCOMPATIBLE":     {cli.FaultPrecondition, cli.ExitPrecondition, "profile-incompatible"},
+		"INSTALLATION_STATE_INVALID":       {cli.FaultVerification, cli.ExitVerification, "journal-invalid"},
+		"INSTALLATION_RELEASE_INVALID":     {cli.FaultVerification, cli.ExitVerification, "release-invalid"},
+		"PLATFORM_VERIFICATION_FAILED":     {cli.FaultVerification, cli.ExitVerification, "verification-failed"},
+		"DEPENDENCY_UNAVAILABLE":           {cli.FaultUnavailable, cli.ExitUnavailable, "dependency-unavailable"},
+		"ROLLBACK_DEPENDENCY_UNAVAILABLE":  {cli.FaultUnavailable, cli.ExitUnavailable, "rollback-dependency-unavailable"},
+		"ROLLBACK_OUTCOME_UNKNOWN":         {cli.FaultUnavailable, cli.ExitUnavailable, "outcome-unknown"},
+		"COMMAND_INTERRUPTED":              {cli.FaultInterrupted, cli.ExitInterrupted, "interrupted"},
+		"ROLLBACK_FAILED":                  {cli.FaultInternal, cli.ExitInternal, "execution-failed"},
+	}
+	category, ok := known[envelope.Error.Code]
+	if !ok || envelope.Error.Class != string(category.class) || output.exit != category.exit {
+		return unknown
+	}
+	return fail("mx-rollback-" + category.step)
+}
+
+func checkExplicitRollback(result mxResult, commandErr error, expectedRelease string) error {
+	if commandErr != nil {
+		return safeFailure(commandErr)
+	}
+	if result.ReleaseID != expectedRelease {
+		return fail("platform-rollback-release")
+	}
+	if result.PreviousID != "" {
+		return fail("platform-rollback-previous")
+	}
+	if !result.Changed {
+		return fail("platform-rollback-unchanged")
+	}
+	return nil
 }
 
 func startMX(

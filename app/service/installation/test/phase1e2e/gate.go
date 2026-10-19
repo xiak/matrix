@@ -305,9 +305,8 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 
 	rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
-	if err != nil || rollback.ReleaseID != value.releases.a.Manifest.Release.ID ||
-		rollback.PreviousID != "" || !rollback.Changed {
-		return fail("platform-rollback")
+	if err := checkExplicitRollback(rollback, err, value.releases.a.Manifest.Release.ID); err != nil {
+		return err
 	}
 	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
 		return err
