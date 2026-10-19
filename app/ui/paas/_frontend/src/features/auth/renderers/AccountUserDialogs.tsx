@@ -66,7 +66,7 @@ export function CreateTenantWorkspace({ onClose }: { onClose(): void }) {
   </WorkspaceDetail>;
 }
 
-export function UserAccessManagement({ user, onDeleted, managementCommands, renameActionRef, statusActionRef, deleteAction = false, showLiveEvidenceBoundary = false }: {
+export function UserAccessManagement({ user, onDeleted, managementCommands, renameActionRef, statusActionRef, deleteAction = false, showLiveEvidenceBoundary = false, initialSection }: {
   user: AccountUserScene;
   onDeleted?(): void;
   managementCommands?: { disabled: boolean; onRename(): void; onStatus(): void };
@@ -74,6 +74,7 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
   statusActionRef?: Ref<HTMLButtonElement>;
   deleteAction?: boolean;
   showLiveEvidenceBoundary?: boolean;
+  initialSection?: "policies" | "keys";
 }) {
   const t = useTranslations("AccountAccess");
   const policyChange = useTranslations("PolicyAttachmentChange");
@@ -85,13 +86,16 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
   const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [resettingPassword, setResettingPassword] = useState(false);
   const [reviewingReset, setReviewingReset] = useState(false);
-  const [showKeys, setShowKeys] = useState(false);
+  const [showKeys, setShowKeys] = useState(initialSection === "keys");
   const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
   const relationIntent = access.userPolicyChangeIntent;
   const reviewingPolicy = relationIntent?.userId === user.id;
   const otherUserIntent = relationIntent && !reviewingPolicy ? relationIntent : null;
   const reviewHeading = useRef<HTMLHeadingElement>(null);
   const resetReviewHeading = useRef<HTMLHeadingElement>(null);
+  const keysSection = useRef<HTMLElement>(null);
+  const policiesSection = useRef<HTMLElement>(null);
+  const pendingInitialSection = useRef(initialSection);
   const reviewTrigger = useRef<HTMLButtonElement>(null);
   const returnToTrigger = useRef(false);
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
@@ -117,6 +121,15 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
   useLayoutEffect(() => {
     if (resettingPassword && reviewingReset) resetReviewHeading.current?.focus({ preventScroll: true });
   }, [resettingPassword, reviewingReset]);
+  useLayoutEffect(() => {
+    const section = pendingInitialSection.current;
+    if (!section) return;
+    const target = section === "keys" ? keysSection.current : policiesSection.current;
+    if (!target) return;
+    pendingInitialSection.current = undefined;
+    target.focus({ preventScroll: true });
+    target.scrollIntoView?.({ block: "start" });
+  }, [showKeys]);
 
   async function resetPassword() {
     const initialPassword = password;
@@ -136,7 +149,7 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
         <div className={styles.actions}><Button ref={renameActionRef} disabled={disabled || managementCommands.disabled || !user.canUpdate} onClick={managementCommands.onRename} title={!user.canUpdate ? restriction(user.updateRestrictionReason) : undefined} variant="secondary">{t("editDisplayName")}</Button></div>
         <p className={styles.note}>{t("immutableUserFieldsHint")}</p>
       </section> : null}
-      {showLiveEvidenceBoundary ? <section className={styles.identitySection}>
+      {showLiveEvidenceBoundary ? <section aria-label={t("accessMethodsAndCredentials")} className={styles.identitySection} ref={keysSection} role="region" tabIndex={-1}>
         <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("accessMethodsAndCredentials")}</strong></div>
         <p className={styles.note}>{t(access.accessKeys ? "liveCredentialManagedHint" : "liveCredentialContractHint")}</p>
         {access.accessKeys && access.scene ? <>
@@ -145,6 +158,7 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
             userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} /> : null}
         </> : null}
       </section> : null}
+      <section aria-label={t("directPolicyAttachments")} ref={policiesSection} role="region" tabIndex={-1}>
       <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>{t("directPolicyAttachments")}</strong></div>
       <p className={styles.note}>{t("policyAttachmentHint")}</p>
       <ul className={styles.bindingList}>
@@ -220,6 +234,7 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
       </form> : <p className={styles.note}>{availablePolicies.length ? t("noAttachablePolicies") : access.scene?.canViewPolicies ? t("allPoliciesAttached") : t("policyDirectoryUnavailable")}</p>}
       {platformAttachmentBlocked ? <p className={styles.note}>{t("platformAttachmentUnavailable", { reason: restriction(user.platformAttachmentRestrictionReason) })}</p> : null}
       {tenantAttachmentBlocked ? <p className={styles.note}>{t("tenantAttachmentUnavailable", { reason: restriction(user.tenantAttachmentRestrictionReason) })}</p> : null}
+      </section>
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("loginSecurity")}</strong></div>
       <div className={styles.actions}>
           <Button ref={statusActionRef} disabled={disabled || managementCommands?.disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { if (managementCommands) managementCommands.onStatus(); else { setConfirmStatus(true); setConfirmDelete(false); setResettingPassword(false); setPassword(""); } }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
