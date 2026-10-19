@@ -107,8 +107,12 @@
   verification, all assertions and resource limits remain unchanged. Unit,
   full phase1e2e race 2.601s, architecture race 1.875s, vet and Linux build
   passed; the Linux entry also proved oversized/short-parent budgets reject
-  before effects. Exact Verification 39224178428 attempt 1 is in progress
-  with the existing Test Expert. A distinct fresh engine is now running the
+  before effects. Exact Verification 39224178428 attempt 1 is independently
+  closed as completed/success at 2026-10-19 09:09:26 UTC: all 19 jobs,
+  57 authority roots and complete necessary logs passed. FEAT011 owns the
+  evidence; do not fetch this closed tuple's jobs/logs again. Its seven
+  dedicated-Postfix skips and default opt-in browser/lifecycle entries are
+  not runtime evidence. A distinct fresh engine is now running the
   unchanged signed 9621 A/B with an explicit 50m budget/55m Go deadline;
   its full lifecycle and restart are unaccepted. The two retired diagnostic
   engines, exclusive volumes and private installation directories were
