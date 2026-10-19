@@ -141,7 +141,7 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
         <p className={styles.note}>{t(access.accessKeys ? "liveCredentialManagedHint" : "liveCredentialContractHint")}</p>
         {access.accessKeys && access.scene ? <>
           <div className={styles.actions}><Button onClick={() => setShowKeys((current) => !current)} variant="secondary">{t(showKeys ? "hideAccessKeys" : "manageAccessKeys")}</Button></div>
-          {showKeys ? <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={access.scene} createIntent={access.accessKeyCreateIntent} scopedOwner={user}
+          {showKeys ? <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={access.scene} createIntent={access.accessKeyCreateIntent} mutationIntent={access.accessKeyMutationIntent} scopedOwner={user}
             userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} /> : null}
         </> : null}
       </section> : null}

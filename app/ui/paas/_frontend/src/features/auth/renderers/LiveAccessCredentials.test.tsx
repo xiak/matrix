@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
-import type { AccessKeyClient, AccessKeyCreateIntent, AccountSecuritySettingsClient, AuthorizationProfileClient, AuthorizationProfileLoad } from "../application/AccountAccessProvider";
+import type { AccessKeyClient, AccessKeyCreateIntent, AccessKeyMutationIntent, AccountSecuritySettingsClient, AuthorizationProfileClient, AuthorizationProfileLoad } from "../application/AccountAccessProvider";
 import type { AuthorizationProfileDirectory } from "../domain/accounts";
 import type { AccessKeyAccess, AccessKeyDirectory } from "../domain/accessKeys";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
@@ -50,6 +50,7 @@ function client(overrides: Partial<AccessKeyClient> = {}): AccessKeyClient {
     read: vi.fn().mockResolvedValue(directory.items[0]),
     create: vi.fn().mockResolvedValue({ outcome: "APPLIED", key: { ...key, id: "mak1.alex-rotated" }, secret: "mak1.one-time-secret" }),
     acknowledgeIssued: vi.fn().mockReturnValue(true),
+    acknowledgeMutation: vi.fn().mockReturnValue(true),
     setStatus: vi.fn(),
     setNetworkRestrictions: vi.fn(),
     delete: vi.fn(),
@@ -156,10 +157,13 @@ describe("LiveAccessCredentials", () => {
 
   it("shows fixed LIVE network and authorization evidence and updates only the key layer", async () => {
     const user = userEvent.setup();
+    const changedDirectory = { ...directory, items: [{ ...directory.items[0]!, key: {
+      ...key, networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24"] }, resourceVersion: 2
+    } }] };
     const setNetworkRestrictions = vi.fn().mockResolvedValue({ outcome: "APPLIED", key: {
       ...key, networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24"] }, resourceVersion: 2
     } });
-    const api = client({ setNetworkRestrictions });
+    const api = client({ list: vi.fn().mockResolvedValueOnce(directory).mockResolvedValueOnce(changedDirectory), setNetworkRestrictions });
     render(<LocaleProvider><LiveAccessCredentials accountSecuritySettings={settings()} client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
 
     await user.click(await screen.findByRole("button", { name: key.id }));
@@ -177,7 +181,60 @@ describe("LiveAccessCredentials", () => {
     await waitFor(() => expect(setNetworkRestrictions).toHaveBeenCalledWith(owner.id, key.id, expect.objectContaining({
       accessKeyResourceVersion: 1, networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24"] }
     })));
+    await waitFor(() => expect(api.list).toHaveBeenCalledTimes(2));
+    expect(api.acknowledgeMutation).toHaveBeenCalledOnce();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("keeps a completed key change locked when its authoritative reread fails and retries only that reread", async () => {
+    const user = userEvent.setup();
+    const changedDirectory = { ...directory, items: [{ ...directory.items[0]!, key: {
+      ...key, networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24"] }, resourceVersion: 2
+    } }] };
+    const list = vi.fn().mockResolvedValueOnce(directory).mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE")).mockResolvedValueOnce(changedDirectory);
+    const setNetworkRestrictions = vi.fn().mockResolvedValue({ outcome: "APPLIED", key: changedDirectory.items[0]!.key });
+    const api = client({ list, setNetworkRestrictions });
+    render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: key.id }));
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(within(screen.getByRole("menu", { name: "更多操作" })).getByRole("menuitem", { name: "配置来源网络" }));
+    const field = screen.getByRole("textbox", { name: "允许的来源 CIDR" });
+    await user.clear(field);
+    await user.type(field, "203.0.113.0/24");
+    await user.click(screen.getByRole("button", { name: "保存来源限制" }));
+
+    expect(await screen.findByText("原操作已有非秘密完成结果。不会再次提交写请求；请重新读取该用户的权威密钥目录后结束处置。")).toBeTruthy();
+    expect(api.acknowledgeMutation).not.toHaveBeenCalled();
+    expect(setNetworkRestrictions).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "重新读取当前状态" }));
+    await waitFor(() => expect(api.acknowledgeMutation).toHaveBeenCalledOnce());
+    expect(setNetworkRestrictions).toHaveBeenCalledOnce();
+    expect(list).toHaveBeenCalledTimes(3);
+  });
+
+  it("replays an uncertain delete even when the key row is already absent, then acknowledges only after the full list reread", async () => {
+    const user = userEvent.setup();
+    const emptyDirectory: AccessKeyDirectory = { ...directory, items: [] };
+    const mutationIntent: AccessKeyMutationIntent = {
+      accountId: scene.accountId, actorId: "root-acme", userId: owner.id, accessKeyId: key.id,
+      accessKeyResourceVersion: key.resourceVersion, operation: "delete",
+      requestId: `ui-access-key-delete-${"d".repeat(32)}`, phase: "unknown"
+    };
+    const remove = vi.fn().mockResolvedValue({ outcome: "EQUAL_REPLAY", deletion: {
+      id: key.id, accountId: scene.accountId, userId: owner.id, resourceVersion: 2, deletedAt: "2026-09-21T09:00:00Z"
+    } });
+    const api = client({ list: vi.fn().mockResolvedValue(emptyDirectory), delete: remove });
+    render(<LocaleProvider><LiveAccessCredentials client={api} mutationIntent={mutationIntent} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "继续处理原请求" }));
+    expect(screen.getByText("当前目录中已找不到这把密钥。这可能是原删除已经生效，但目录缺少该行本身不能证明结果；仍须重放原删除并完成权威回读。")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试原请求" }));
+    await waitFor(() => expect(remove).toHaveBeenCalledWith(owner.id, key.id, {
+      accessKeyResourceVersion: key.resourceVersion, requestId: mutationIntent.requestId
+    }));
+    expect(api.list).toHaveBeenCalledTimes(2);
+    expect(api.acknowledgeMutation).toHaveBeenCalledWith(mutationIntent.requestId);
   });
 
   it("uses the shared detail title and stable page actions instead of repeating key controls in the body", async () => {
@@ -404,5 +461,23 @@ describe("LiveAccessCredentials", () => {
     expect(screen.getByRole("button", { name: "新建访问密钥" }).hasAttribute("disabled")).toBe(true);
     expect(first.create).not.toHaveBeenCalled();
     expect(replacement.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps an unknown mutation locked but refuses to replay it through a replacement client", async () => {
+    const mutationIntent: AccessKeyMutationIntent = {
+      accountId: scene.accountId, actorId: "root-acme", userId: owner.id, accessKeyId: key.id,
+      accessKeyResourceVersion: key.resourceVersion, operation: "set-status", status: "DISABLED",
+      requestId: `ui-access-key-status-${"c".repeat(32)}`, phase: "unknown"
+    };
+    const first = client();
+    const replacement = client();
+    const view = render(<LocaleProvider><LiveAccessCredentials client={first} mutationIntent={mutationIntent} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+    expect(await screen.findByRole("button", { name: "继续处理原请求" })).toBeTruthy();
+
+    view.rerender(<LocaleProvider><LiveAccessCredentials client={replacement} mutationIntent={mutationIntent} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+    expect(await screen.findByText(`后端连接已切换，原访问密钥操作 ${mutationIntent.requestId} 不会通过当前连接重放。请恢复原连接后继续核对。`)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "继续处理原请求" })).toBeNull();
+    expect(first.setStatus).not.toHaveBeenCalled();
+    expect(replacement.setStatus).not.toHaveBeenCalled();
   });
 });

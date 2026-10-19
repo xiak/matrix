@@ -7,7 +7,7 @@ import { Alert, Badge, Button, Card, Checkbox, ContentPage, Table, TableSkeleton
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccessKeyAccess, AccessKeyDirectory, AccessKeyStatus } from "../domain/accessKeys";
 import type { IamAction } from "../domain/accounts";
-import type { AccessKeyClient, AccessKeyCreateIntent, AccountSecuritySettingsClient, AuthorizationProfileClient } from "../application/AccountAccessProvider";
+import type { AccessKeyClient, AccessKeyCreateIntent, AccessKeyMutationIntent, AccountSecuritySettingsClient, AuthorizationProfileClient } from "../application/AccountAccessProvider";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { AccountIdentifier } from "./AccountOverview";
 import { AccessKeyOwnerDirectory } from "./AccessKeyOwnerDirectory";
@@ -18,13 +18,16 @@ import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccessCredentials.module.css";
 
 type LiveKeyError = "forbidden" | "routeUnavailable" | "conflict" | "unavailable";
+type WithoutMutationOwner<T> = T extends AccessKeyMutationIntent ? Omit<T, "accountId" | "actorId"> : never;
+type LiveAccessKeyMutation = WithoutMutationOwner<AccessKeyMutationIntent>;
 type LiveKeyFlow =
   | { kind: "create"; requestId: string; userResourceVersion: number; networkRestrictions: { allowedSourceCidrs: string[] } }
   | { kind: "issued"; keyId: string; secret: string; requestId: string }
   | { kind: "replayed"; keyId: string }
   | { kind: "status"; access: AccessKeyAccess; status: AccessKeyStatus; requestId: string }
   | { kind: "network"; access: AccessKeyAccess; requestId: string }
-  | { kind: "delete"; access: AccessKeyAccess; requestId: string };
+  | { kind: "delete"; access: AccessKeyAccess; requestId: string }
+  | { kind: "recover-mutation"; intent: LiveAccessKeyMutation; access: AccessKeyAccess | null };
 type AccessKeyDirectoryState =
   | { status: "loading" }
   | { status: "ready"; directory: AccessKeyDirectory }
@@ -34,6 +37,7 @@ type OwnedAccessKeySelection = { client: AccessKeyClient; userId: string; access
 type OwnedLiveKeyFlow = { client: AccessKeyClient; userId: string; flow: LiveKeyFlow };
 type OwnedLiveKeyError = { client: AccessKeyClient; userId: string; error: LiveKeyError };
 type AccessKeyIntentBinding = { client: AccessKeyClient; observed: AccessKeyCreateIntent | null; requestId: string | null };
+type AccessKeyMutationBinding = { client: AccessKeyClient; observed: AccessKeyMutationIntent | null; requestId: string | null };
 
 const loadingAccessKeyDirectory: AccessKeyDirectoryState = { status: "loading" };
 
@@ -56,7 +60,7 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   directory: AccessKeyDirectory;
   client: AccessKeyClient;
   retryingOriginal: boolean;
-  onChanged(): Promise<void>;
+  onChanged(): Promise<boolean>;
   onClose(): void;
   onInspectRecovered(keyId: string): void;
 }) {
@@ -70,6 +74,7 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   const [error, setError] = useState<LiveKeyError | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [deleteConfirmed, setDeleteConfirmed] = useState(false);
+  const [replacement, setReplacement] = useState<LiveKeyFlow | null>(null);
   const initialNetwork = flow.kind === "create" ? flow.networkRestrictions : flow.kind === "network" ? flow.access.key.networkRestrictions : { allowedSourceCidrs: [] };
   const [networkDraft, setNetworkDraft] = useState(() => initialNetwork.allowedSourceCidrs.join("\n"));
   const [networkIssue, setNetworkIssue] = useState<AccessKeyNetworkDraftIssue | null>(null);
@@ -79,55 +84,92 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
     return () => { mounted.current = false; };
   }, []);
 
+  const mutationTitle = (intent: LiveAccessKeyMutation) => intent.operation === "set-status"
+    ? t("changeStateTitle", { action: t(intent.status === "ENABLED" ? "enable" : "disable"), name: intent.accessKeyId })
+    : intent.operation === "set-network-restrictions" ? network("editKeyTitle")
+      : t("keyDeleteReview", { name: intent.accessKeyId });
+  const active = replacement ?? flow;
+  const actionCapability = active.kind === "status" ? capability(active.access, "iam.access-key.set-status")
+    : active.kind === "network" ? capability(active.access, "iam.access-key.set-network-restrictions")
+    : active.kind === "delete" ? capability(active.access, "iam.access-key.delete")
+      : active.kind === "recover-mutation" && active.access
+        ? capability(active.access, active.intent.operation === "set-status" ? "iam.access-key.set-status"
+          : active.intent.operation === "set-network-restrictions" ? "iam.access-key.set-network-restrictions" : "iam.access-key.delete") : null;
   const createCapability = capability(directory, "iam.access-key.create");
-  const actionCapability = flow.kind === "status" ? capability(flow.access, "iam.access-key.set-status")
-    : flow.kind === "network" ? capability(flow.access, "iam.access-key.set-network-restrictions")
-    : flow.kind === "delete" ? capability(flow.access, "iam.access-key.delete") : null;
-  const title = flow.kind === "create" ? t("keyCreateReview")
-    : flow.kind === "issued" ? t("keyLiveCreated")
-      : flow.kind === "replayed" ? t("keyLiveReplayTitle")
-        : flow.kind === "status" ? t("changeStateTitle", { action: t(flow.status === "ENABLED" ? "enable" : "disable"), name: flow.access.key.id })
-          : flow.kind === "network" ? network("editKeyTitle")
-          : t("keyDeleteReview", { name: flow.access.key.id });
+  const activeTitle = active.kind === "create" ? t("keyCreateReview")
+    : active.kind === "issued" ? t("keyLiveCreated")
+      : active.kind === "replayed" ? t("keyLiveReplayTitle")
+        : active.kind === "status" ? t("changeStateTitle", { action: t(active.status === "ENABLED" ? "enable" : "disable"), name: active.access.key.id })
+          : active.kind === "network" ? network("editKeyTitle")
+            : active.kind === "delete" ? t("keyDeleteReview", { name: active.access.key.id })
+              : mutationTitle(active.intent);
 
   const run = async () => {
-    const parsedNetwork = flow.kind === "create" || flow.kind === "network" ? parseAccessKeyNetworkDraft(networkDraft) : null;
+    const parsedNetwork = active.kind === "create" || active.kind === "network" ? parseAccessKeyNetworkDraft(networkDraft) : null;
     if (parsedNetwork && !parsedNetwork.ok) { setNetworkIssue(parsedNetwork.issue); return; }
     setBusy(true); setError(null);
     try {
-      if (flow.kind === "create") {
-        const result = await client.create(owner.id, { userResourceVersion: flow.userResourceVersion, networkRestrictions: parsedNetwork && parsedNetwork.ok ? parsedNetwork.restrictions : flow.networkRestrictions, requestId: flow.requestId });
+      if (active.kind === "create") {
+        const result = await client.create(owner.id, { userResourceVersion: active.userResourceVersion, networkRestrictions: parsedNetwork && parsedNetwork.ok ? parsedNetwork.restrictions : active.networkRestrictions, requestId: active.requestId });
         if (!mounted.current) return;
-        if (result.outcome === "APPLIED") onCloseWith({ kind: "issued", keyId: result.key.id, secret: result.secret, requestId: flow.requestId });
+        if (result.outcome === "APPLIED") onCloseWith({ kind: "issued", keyId: result.key.id, secret: result.secret, requestId: active.requestId });
         else onCloseWith({ kind: "replayed", keyId: result.key.id });
         void onChanged();
         return;
       }
-      if (flow.kind === "status") {
-        await client.setStatus(owner.id, flow.access.key.id, { accessKeyResourceVersion: flow.access.key.resourceVersion, requestId: flow.requestId, status: flow.status });
-      } else if (flow.kind === "network" && parsedNetwork?.ok) {
-        await client.setNetworkRestrictions(owner.id, flow.access.key.id, { accessKeyResourceVersion: flow.access.key.resourceVersion, networkRestrictions: parsedNetwork.restrictions, requestId: flow.requestId });
-      } else if (flow.kind === "delete") {
-        await client.delete(owner.id, flow.access.key.id, { accessKeyResourceVersion: flow.access.key.resourceVersion, requestId: flow.requestId });
+      if (active.kind === "recover-mutation") {
+        if (active.intent.phase === "unknown") {
+          if (active.intent.operation === "set-status") {
+            await client.setStatus(active.intent.userId, active.intent.accessKeyId, { accessKeyResourceVersion: active.intent.accessKeyResourceVersion, requestId: active.intent.requestId, status: active.intent.status });
+          } else if (active.intent.operation === "set-network-restrictions") {
+            await client.setNetworkRestrictions(active.intent.userId, active.intent.accessKeyId, { accessKeyResourceVersion: active.intent.accessKeyResourceVersion, networkRestrictions: active.intent.networkRestrictions, requestId: active.intent.requestId });
+          } else {
+            await client.delete(active.intent.userId, active.intent.accessKeyId, { accessKeyResourceVersion: active.intent.accessKeyResourceVersion, requestId: active.intent.requestId });
+          }
+        }
+        if (!mounted.current) return;
+        const refreshed = await onChanged();
+        if (!mounted.current) return;
+        if (refreshed && client.acknowledgeMutation(active.intent.requestId)) onClose();
+        else {
+          setError("unavailable");
+          onCloseWith({ ...active, intent: { ...active.intent, phase: "completed" } });
+        }
+        return;
+      }
+      if (active.kind === "issued" || active.kind === "replayed") return;
+      if (active.kind === "status") {
+        await client.setStatus(owner.id, active.access.key.id, { accessKeyResourceVersion: active.access.key.resourceVersion, requestId: active.requestId, status: active.status });
+      } else if (active.kind === "network" && parsedNetwork?.ok) {
+        await client.setNetworkRestrictions(owner.id, active.access.key.id, { accessKeyResourceVersion: active.access.key.resourceVersion, networkRestrictions: parsedNetwork.restrictions, requestId: active.requestId });
+      } else if (active.kind === "delete") {
+        await client.delete(owner.id, active.access.key.id, { accessKeyResourceVersion: active.access.key.resourceVersion, requestId: active.requestId });
       }
       if (!mounted.current) return;
-      await onChanged();
-      if (mounted.current) onClose();
+      const refreshed = await onChanged();
+      if (!mounted.current) return;
+      const intent: LiveAccessKeyMutation = active.kind === "status"
+        ? { userId: owner.id, accessKeyId: active.access.key.id, accessKeyResourceVersion: active.access.key.resourceVersion, operation: "set-status", status: active.status, requestId: active.requestId, phase: "completed" }
+        : active.kind === "network" && parsedNetwork?.ok
+          ? { userId: owner.id, accessKeyId: active.access.key.id, accessKeyResourceVersion: active.access.key.resourceVersion, operation: "set-network-restrictions", networkRestrictions: parsedNetwork.restrictions, requestId: active.requestId, phase: "completed" }
+          : { userId: owner.id, accessKeyId: active.access.key.id, accessKeyResourceVersion: active.access.key.resourceVersion, operation: "delete", requestId: active.requestId, phase: "completed" };
+      if (refreshed && client.acknowledgeMutation(active.requestId)) onClose();
+      else {
+        setError("unavailable");
+        onCloseWith({ kind: "recover-mutation", intent, access: directory.items.find((item) => item.key.id === intent.accessKeyId) ?? null });
+      }
     } catch (failure) { if (mounted.current) setError(keyError(failure)); }
     finally { if (mounted.current) setBusy(false); }
   };
-  const [replacement, setReplacement] = useState<LiveKeyFlow | null>(null);
   const onCloseWith = (next: LiveKeyFlow) => setReplacement(next);
-  const active = replacement ?? flow;
-  const activeTitle = replacement ? replacement.kind === "issued" ? t("keyLiveCreated") : t("keyLiveReplayTitle") : title;
-  const networkDraftResult = flow.kind === "create" || flow.kind === "network" ? parseAccessKeyNetworkDraft(networkDraft) : null;
-  const networkUnchanged = flow.kind === "network" && networkDraftResult?.ok &&
-    accessKeyNetworkRestrictionsEqual(flow.access.key.networkRestrictions, networkDraftResult.restrictions);
+  const networkDraftResult = active.kind === "create" || active.kind === "network" ? parseAccessKeyNetworkDraft(networkDraft) : null;
+  const networkUnchanged = active.kind === "network" && networkDraftResult?.ok &&
+    accessKeyNetworkRestrictionsEqual(active.access.key.networkRestrictions, networkDraftResult.restrictions);
 
   return <Card>
     <Card.Header className={styles.flowHeader}><div><h2 className={styles.focusHeading} ref={heading} tabIndex={-1}>{activeTitle}</h2><Typography.Text tone="muted">{t("keyInlineWorkflow")}</Typography.Text></div><Badge status="success">LIVE</Badge></Card.Header>
     <Card.Body className={styles.flowBody}>
-      {error ? <Alert status="danger"><span>{t(`keyLiveErrors.${error}`)}</span>{error === "unavailable" && flow.kind === "create" ? <span className={styles.operationReference}><strong>{t("keyOperationReference")}</strong><code>{flow.requestId}</code></span> : null}</Alert> : null}
+      {error ? <Alert status="danger"><span>{t(`keyLiveErrors.${error}`)}</span>{error === "unavailable" && (active.kind === "create" || active.kind === "recover-mutation") ? <span className={styles.operationReference}><strong>{t("keyOperationReference")}</strong><code>{active.kind === "create" ? active.requestId : active.intent.requestId}</code></span> : null}</Alert> : null}
       {active.kind === "create" ? <>
         <dl className={styles.reviewFacts}>
           <div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div>
@@ -171,14 +213,29 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
         <Checkbox checked={deleteConfirmed} onChange={(event) => setDeleteConfirmed(event.target.checked)}>{t("keyDeleteAcknowledge")}</Checkbox>
         <div className={styles.actions}><Button disabled={busy || !deleteConfirmed || active.access.key.status !== "DISABLED" || !actionCapability?.available} onClick={() => void run()} variant="danger">{busy ? t("keyLiveSaving") : t("deleteConfirm")}</Button><Button disabled={busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
       </> : null}
+      {active.kind === "recover-mutation" ? <>
+        <Alert status={active.intent.phase === "unknown" ? "warning" : "info"}>{t(active.intent.phase === "unknown" ? "keyMutationUnknown" : "keyMutationCompleted")}</Alert>
+        <dl className={styles.reviewFacts}>
+          <div><dt>{t("keyId")}</dt><dd><code>{active.intent.accessKeyId}</code></dd></div>
+          <div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div>
+          <div><dt>{t("keyOperationReference")}</dt><dd><code>{active.intent.requestId}</code></dd></div>
+          <div><dt>{t("keyResourceVersion")}</dt><dd>{active.intent.accessKeyResourceVersion}</dd></div>
+          {active.intent.operation === "set-status" ? <div><dt>{t("state")}</dt><dd>{t(active.intent.status === "ENABLED" ? "enabled" : "disabled")}</dd></div> : null}
+        </dl>
+        {active.intent.operation === "set-network-restrictions" ? <div className={styles.operationReference}><strong>{network("keyLayer")}</strong><code>{active.intent.networkRestrictions.allowedSourceCidrs.join(", ") || network("unrestrictedLayer")}</code></div> : null}
+        {!active.access ? <Alert status="info">{t("keyMutationTargetMissing")}</Alert> : null}
+        {active.access && !actionCapability?.available && actionCapability?.restrictionReason ? <Alert status="warning">{restrictions(actionCapability.restrictionReason)}</Alert> : null}
+        <div className={styles.actions}><Button disabled={busy || Boolean(active.access && !actionCapability?.available)} onClick={() => void run()}>{busy ? t("keyLiveSaving") : t(active.intent.phase === "unknown" ? "keyLiveRetryOriginal" : "keyRefreshAuthoritative")}</Button><Button disabled={busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
+      </> : null}
     </Card.Body>
   </Card>;
 }
 
-export function LiveAccessCredentials({ client, scene, createIntent = null, scopedOwner, userDirectory, accountSecuritySettings = null, authorizationProfiles = null, onInspectPermissions }: {
+export function LiveAccessCredentials({ client, scene, createIntent = null, mutationIntent = null, scopedOwner, userDirectory, accountSecuritySettings = null, authorizationProfiles = null, onInspectPermissions }: {
   client: AccessKeyClient;
   scene: AccountAccessScene;
   createIntent?: AccessKeyCreateIntent | null;
+  mutationIntent?: AccessKeyMutationIntent | null;
   scopedOwner?: AccountUserScene;
   userDirectory?: { busy: boolean; loading: boolean; readPage(after: string): void };
   accountSecuritySettings?: AccountSecuritySettingsClient | null;
@@ -227,6 +284,17 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
     setStoredIntentBinding(intentBinding);
   }
   const currentCreateIntent = createIntent && intentBinding.client === client && intentBinding.requestId === createIntent.requestId ? createIntent : null;
+  const [storedMutationBinding, setStoredMutationBinding] = useState<AccessKeyMutationBinding>(() => ({ client, observed: mutationIntent, requestId: mutationIntent?.requestId ?? null }));
+  let mutationBinding = storedMutationBinding;
+  if (storedMutationBinding.observed !== mutationIntent) {
+    mutationBinding = {
+      client: mutationIntent && storedMutationBinding.requestId === mutationIntent.requestId ? storedMutationBinding.client : client,
+      observed: mutationIntent,
+      requestId: mutationIntent?.requestId ?? null
+    };
+    setStoredMutationBinding(mutationBinding);
+  }
+  const currentMutationIntent = mutationIntent && mutationBinding.client === client && mutationBinding.requestId === mutationIntent.requestId ? mutationIntent : null;
   const [accountNetworkView, setAccountNetworkView] = useState<{
     client: AccountSecuritySettingsClient | null;
     state: AccessKeyAccountNetworkState;
@@ -260,7 +328,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
     setInteractionErrorView((current) => current?.client === client && current.userId === userId ? null : current);
     try {
       const next = await client.list(userId);
-      if (clientRevisions.get(userId) !== request) return;
+      if (clientRevisions.get(userId) !== request) return false;
       setDirectoryView((current) => current?.client === client && current.userId === userId
         ? { client, userId, state: { status: "ready", directory: next } } : current);
       setSelection((current) => {
@@ -268,12 +336,16 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
         const access = next.items.find((item) => item.key.id === current.access.key.id);
         return access ? { client, userId, access } : null;
       });
+      return true;
     } catch (failure) {
       if (clientRevisions.get(userId) === request) {
-        setDirectoryView((current) => current?.client === client && current.userId === userId
-          ? { client, userId, state: { status: "error", error: keyError(failure) } } : current);
-        setSelection((current) => current?.client === client && current.userId === userId ? null : current);
+        if (foreground) {
+          setDirectoryView((current) => current?.client === client && current.userId === userId
+            ? { client, userId, state: { status: "error", error: keyError(failure) } } : current);
+          setSelection((current) => current?.client === client && current.userId === userId ? null : current);
+        }
       }
+      return false;
     }
   }, [client]);
 
@@ -296,13 +368,17 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
       ? t("keyLivePendingOwner", { id: currentCreateIntent.userId })
       : t("keyClientChangedIntent", { id: createIntent.requestId })} {currentCreateIntent && scene.users.some((user) => user.id === currentCreateIntent.userId)
         ? <Button onClick={() => chooseOwner(currentCreateIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
+    {mutationIntent ? <Alert status="warning">{currentMutationIntent
+      ? t("keyMutationPendingOwner", { id: currentMutationIntent.userId })
+      : t("keyMutationClientChanged", { id: mutationIntent.requestId })} {currentMutationIntent && scene.users.some((user) => user.id === currentMutationIntent.userId)
+        ? <Button onClick={() => chooseOwner(currentMutationIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
     {scene.canListUsers && !scene.directoryFailures?.users ? <AccessKeyOwnerDirectory scene={scene} busy={userDirectory?.busy} loading={userDirectory?.loading} onOpen={chooseOwner} onReadPage={userDirectory?.readPage} />
       : <Alert status="info">{t("keyOwnerDirectoryUnavailable")}{!scene.isRoot ? <Button onClick={() => chooseOwner(scene.currentUserId)} size="small" variant="ghost">{t("keyViewOwn")}</Button> : null}{scene.directoryFailures?.users ? <Button disabled={userDirectory?.busy || userDirectory?.loading} onClick={() => userDirectory?.readPage("")} size="small" variant="secondary">{t("keyRetryUserDirectory")}</Button> : null}</Alert>}
     <RotationGuide />
   </section>;
 
   const startCreate = () => {
-    if (createIntent) return;
+    if (createIntent || mutationIntent) return;
     if (directory) setFlow({ kind: "create", requestId: requestToken("ui-access-key-create-"), userResourceVersion: directory.userResourceVersion, networkRestrictions: { allowedSourceCidrs: [] } });
   };
   const resumeCreate = () => {
@@ -310,6 +386,11 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
     setFlow(currentCreateIntent.phase === "unknown"
       ? { kind: "create", requestId: currentCreateIntent.requestId, userResourceVersion: currentCreateIntent.userResourceVersion, networkRestrictions: currentCreateIntent.networkRestrictions }
       : { kind: "replayed", keyId: currentCreateIntent.keyId });
+  };
+  const resumeMutation = () => {
+    if (!currentMutationIntent || currentMutationIntent.userId !== owner.id || !directory) return;
+    const access = directory.items.find((item) => item.key.id === currentMutationIntent.accessKeyId) ?? null;
+    setFlow({ kind: "recover-mutation", intent: currentMutationIntent, access });
   };
   const openKey = async (access: AccessKeyAccess) => {
     const userId = owner.id;
@@ -336,37 +417,43 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
     const deleteCapability = capability(selected, "iam.access-key.delete");
     const restrictionReason = (value: typeof statusCapability) => value?.restrictionReason
       ? restrictions(value.restrictionReason) : undefined;
-    const createDisabled = Boolean(createIntent) || directory.items.length >= 2 || !createCapability?.available;
-    const createDisabledReason = createIntent ? t("keyCreatePendingReason")
+    const mutationBlocked = Boolean(mutationIntent);
+    const mutationBlockedReason = mutationBlocked ? t("keyMutationPendingReason") : undefined;
+    const createDisabled = Boolean(createIntent) || mutationBlocked || directory.items.length >= 2 || !createCapability?.available;
+    const createDisabledReason = mutationBlockedReason ?? (createIntent ? t("keyCreatePendingReason")
       : directory.items.length >= 2 ? t("keyQuotaReached")
-        : !createCapability?.available ? restrictionReason(createCapability) : undefined;
+        : !createCapability?.available ? restrictionReason(createCapability) : undefined);
     const remove = {
       id: "delete", label: t("delete"), danger: true,
-      disabled: selected.key.status !== "DISABLED" || !deleteCapability?.available,
-      disabledReason: selected.key.status !== "DISABLED" ? t("errors.disableFirst")
-        : !deleteCapability?.available ? restrictionReason(deleteCapability) : undefined,
+      disabled: mutationBlocked || selected.key.status !== "DISABLED" || !deleteCapability?.available,
+      disabledReason: mutationBlockedReason ?? (selected.key.status !== "DISABLED" ? t("errors.disableFirst")
+        : !deleteCapability?.available ? restrictionReason(deleteCapability) : undefined),
       onSelect: () => setFlow({ kind: "delete", access: selected, requestId: requestToken("ui-access-key-delete-") })
     };
     const replace = { id: "replace", label: t("keyCreateReplacement"), disabled: createDisabled, disabledReason: createDisabledReason, onSelect: startCreate };
     const actions: ComponentProps<typeof WorkspaceDetail>["actions"] = selected.key.credentialState === "RECOVERY_FENCED"
       ? selected.key.status === "ENABLED"
-        ? { primary: { id: "status", label: t("disable"), variant: "secondary", disabled: !statusCapability?.available, disabledReason: !statusCapability?.available ? restrictionReason(statusCapability) : undefined, onSelect: () => setFlow({ kind: "status", access: selected, status: "DISABLED", requestId: requestToken("ui-access-key-status-") }) }, secondary: [replace, remove] }
+        ? { primary: { id: "status", label: t("disable"), variant: "secondary", disabled: mutationBlocked || !statusCapability?.available, disabledReason: mutationBlockedReason ?? (!statusCapability?.available ? restrictionReason(statusCapability) : undefined), onSelect: () => setFlow({ kind: "status", access: selected, status: "DISABLED", requestId: requestToken("ui-access-key-status-") }) }, secondary: [replace, remove] }
         : { primary: replace, secondary: [remove] }
       : {
           primary: {
             id: "status", label: t(selected.key.status === "ENABLED" ? "disable" : "enable"), variant: "secondary",
-            disabled: !statusCapability?.available, disabledReason: !statusCapability?.available ? restrictionReason(statusCapability) : undefined,
+            disabled: mutationBlocked || !statusCapability?.available, disabledReason: mutationBlockedReason ?? (!statusCapability?.available ? restrictionReason(statusCapability) : undefined),
             onSelect: () => setFlow({ kind: "status", access: selected, status: selected.key.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") })
           },
           secondary: [{
-            id: "network", label: network("configureKey"), disabled: !networkCapability?.available,
-            disabledReason: !networkCapability?.available ? restrictionReason(networkCapability) : undefined,
+            id: "network", label: network("configureKey"), disabled: mutationBlocked || !networkCapability?.available,
+            disabledReason: mutationBlockedReason ?? (!networkCapability?.available ? restrictionReason(networkCapability) : undefined),
             onSelect: () => setFlow({ kind: "network", access: selected, requestId: requestToken("ui-access-key-network-") })
           }, remove]
         };
     return <section className={styles.root}>
       <WorkspaceDetail embedded={Boolean(scopedOwner)} title={selected.key.id} onBack={() => setSelection(null)} actions={actions}>
         {!scopedOwner ? <Alert status="info">{t("keyLiveProductBoundary")}</Alert> : null}
+        {mutationIntent ? <Alert status="warning">{currentMutationIntent
+          ? currentMutationIntent.userId === owner.id ? t("keyMutationPending", { id: currentMutationIntent.requestId }) : t("keyMutationPendingOwner", { id: currentMutationIntent.userId })
+          : t("keyMutationClientChanged", { id: mutationIntent.requestId })} {currentMutationIntent?.userId === owner.id
+            ? <Button onClick={resumeMutation} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
         {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
         {selected.key.credentialState === "RECOVERY_FENCED" ? <Alert status="danger">{t("keyCredentialFencedAlert")}</Alert> : null}
         <Card><Card.Body className={styles.detailBody}>
@@ -381,8 +468,8 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
   }
 
   return <section className={styles.root}>
-    {scopedOwner ? <div className={styles.embeddedHeading}><h3>{t("keys")}</h3><Button disabled={Boolean(flow || createIntent) || !createCapability?.available} onClick={startCreate} size="small">{t("createKey")}</Button></div>
-      : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: Boolean(createIntent) || !createCapability?.available, disabledReason: createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
+    {scopedOwner ? <div className={styles.embeddedHeading}><h3>{t("keys")}</h3><Button disabled={Boolean(flow || createIntent || mutationIntent) || !createCapability?.available} onClick={startCreate} size="small">{t("createKey")}</Button></div>
+      : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: Boolean(createIntent || mutationIntent) || !createCapability?.available, disabledReason: mutationIntent ? t("keyMutationPendingReason") : createIntent ? t("keyCreatePendingReason") : createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
     {!scopedOwner ? <Alert status="info">{t("keyLiveProductBoundary")}</Alert> : null}
     {createIntent && !flow ? <Alert status="warning">{currentCreateIntent
       ? currentCreateIntent.userId === owner.id
@@ -392,6 +479,13 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, scop
         ? currentCreateIntent.userId === owner.id
           ? <Button disabled={Boolean(flow) || currentCreateIntent.phase === "unknown" && !createCapability?.available} onClick={resumeCreate} size="small" variant="ghost">{t("keyLiveResume")}</Button>
           : !scopedOwner && scene.users.some((user) => user.id === currentCreateIntent.userId) ? <Button onClick={() => chooseOwner(currentCreateIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null
+        : null}</Alert> : null}
+    {mutationIntent && !flow ? <Alert status="warning">{currentMutationIntent
+      ? currentMutationIntent.userId === owner.id ? t("keyMutationPending", { id: currentMutationIntent.requestId }) : t("keyMutationPendingOwner", { id: currentMutationIntent.userId })
+      : t("keyMutationClientChanged", { id: mutationIntent.requestId })} {currentMutationIntent
+        ? currentMutationIntent.userId === owner.id
+          ? <Button onClick={resumeMutation} size="small" variant="ghost">{t("keyLiveResume")}</Button>
+          : !scopedOwner && scene.users.some((user) => user.id === currentMutationIntent.userId) ? <Button onClick={() => chooseOwner(currentMutationIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null
         : null}</Alert> : null}
     {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
     {loading && !directory ? <Card>

@@ -458,6 +458,10 @@ async function openDirectUserPolicyOwnerProbe(repository: AccountRepository) {
 }
 
 const originalKeyRequestId = `ui-access-key-create-${"a".repeat(32)}`;
+const originalKeyStatusRequestId = `ui-access-key-status-${"a".repeat(32)}`;
+const originalKeyNetworkRequestId = `ui-access-key-network-${"b".repeat(32)}`;
+const originalKeyDeleteRequestId = `ui-access-key-delete-${"d".repeat(32)}`;
+const replacementKeyDeleteRequestId = `ui-access-key-delete-${"e".repeat(32)}`;
 function AccessKeyIntentProbe() {
   const session = useSession();
   const access = useAccountAccess();
@@ -472,8 +476,13 @@ function AccessKeyIntentProbe() {
       <button disabled={!client} onClick={() => { if (client) void client.create(childUser.id, { userResourceVersion: childUser.resourceVersion, networkRestrictions: { allowedSourceCidrs: [] }, requestId: `ui-access-key-create-${"b".repeat(32)}` }).catch(() => {}); }}>create-new-key</button>
       <button disabled={!client} onClick={() => { if (client) void client.create("child-b", { userResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: [] }, requestId: `ui-access-key-create-${"c".repeat(32)}` }).catch(() => {}); }}>create-other-user-key</button>
       <button disabled={!client} onClick={() => { client?.acknowledgeIssued(originalKeyRequestId, "mak1.lost-secret"); }}>acknowledge-issued-key</button>
-      <button disabled={!client} onClick={() => { if (client) void client.delete(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, requestId: "ui-access-key-delete-test" }).catch(() => {}); }}>retire-recovered-key</button>
+      <button disabled={!client} onClick={() => { if (client) void client.setStatus(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, status: "DISABLED", requestId: originalKeyStatusRequestId }).catch(() => {}); }}>disable-key</button>
+      <button disabled={!client} onClick={() => { if (client) void client.setNetworkRestrictions(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24"] }, requestId: originalKeyNetworkRequestId }).catch(() => {}); }}>restrict-key-network</button>
+      <button disabled={!client} onClick={() => { if (client) void client.delete(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, requestId: originalKeyDeleteRequestId }).catch(() => {}); }}>retire-recovered-key</button>
+      <button disabled={!client} onClick={() => { if (client) void client.delete(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, requestId: replacementKeyDeleteRequestId }).catch(() => {}); }}>retire-recovered-key-new-intent</button>
+      <button disabled={!client} onClick={() => { client?.acknowledgeMutation(originalKeyStatusRequestId); client?.acknowledgeMutation(originalKeyNetworkRequestId); client?.acknowledgeMutation(originalKeyDeleteRequestId); }}>acknowledge-key-mutation</button>
       <output aria-label="key-create-intent">{access.accessKeyCreateIntent ? `${access.accessKeyCreateIntent.phase}:${access.accessKeyCreateIntent.userId}:${access.accessKeyCreateIntent.requestId}` : "none"}</output>
+      <output aria-label="key-mutation-intent">{access.accessKeyMutationIntent ? `${access.accessKeyMutationIntent.phase}:${access.accessKeyMutationIntent.operation}:${access.accessKeyMutationIntent.userId}:${access.accessKeyMutationIntent.requestId}` : "none"}</output>
     </> : null}
   </>;
 }
@@ -1939,7 +1948,7 @@ describe("account access", () => {
     expect(listUsers).toHaveBeenLastCalledWith(credential, undefined);
   });
 
-  it("retains one live key creation across view unmount and login, blocks another owner, and unlocks only after recovered-key retirement", async () => {
+  it("retains one live key creation across view unmount and login, then unlocks only after recovered-key retirement is acknowledged", async () => {
     const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
       networkRestrictions: { allowedSourceCidrs: [] },
       resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
@@ -1980,7 +1989,11 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "create-new-key" }));
     expect(create).toHaveBeenCalledTimes(2);
     await user.click(screen.getByRole("button", { name: "retire-recovered-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`completed:delete:${childUser.id}:${originalKeyDeleteRequestId}`));
+    expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`);
+    await user.click(screen.getByRole("button", { name: "acknowledge-key-mutation" }));
     await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe("none"));
+    expect(screen.getByLabelText("key-mutation-intent").textContent).toBe("none");
     expect(remove).toHaveBeenCalledWith(credential, account.id, childUser.id, key.id, expect.anything());
   });
 
@@ -2030,7 +2043,189 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "acknowledge-issued-key" }));
     expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`);
     await user.click(screen.getByRole("button", { name: "retire-recovered-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`completed:delete:${childUser.id}:${originalKeyDeleteRequestId}`));
+    expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`);
+    await user.click(screen.getByRole("button", { name: "acknowledge-key-mutation" }));
     await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe("none"));
+    expect(screen.getByLabelText("key-mutation-intent").textContent).toBe("none");
+  });
+
+  it("persists an uncertain recovered-key deletion before the response can be lost", async () => {
+    const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      networkRestrictions: { allowedSourceCidrs: [] },
+      resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
+    const create = vi.fn().mockResolvedValue({ outcome: "APPLIED", key, secret: "test-only-one-time-secret" });
+    const remove = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: remove } });
+    const auth = iam();
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "create-original-key" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "create-original-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`));
+    await user.click(screen.getByRole("button", { name: "retire-recovered-key" }));
+    await waitFor(() => expect(remove).toHaveBeenCalledOnce());
+
+    const raw = sessionStorage.getItem(`matrix-iam-access-key-mutation:v1:${encodeURIComponent(account.id)}:${encodeURIComponent(rootUser.id)}`);
+    expect(raw && JSON.parse(raw)).toEqual({
+      accountId: account.id,
+      actorId: rootUser.id,
+      userId: childUser.id,
+      accessKeyId: key.id,
+      accessKeyResourceVersion: key.resourceVersion,
+      operation: "delete",
+      requestId: originalKeyDeleteRequestId,
+      phase: "unknown"
+    });
+    await user.click(screen.getByRole("button", { name: "retire-recovered-key-new-intent" }));
+    expect(remove).toHaveBeenCalledOnce();
+    expect(sessionStorage.getItem(`matrix-iam-access-key-mutation:v1:${encodeURIComponent(account.id)}:${encodeURIComponent(rootUser.id)}`)).toBe(raw);
+  });
+
+  it.each([
+    { label: "status", button: "disable-key", requestId: originalKeyStatusRequestId, operation: "set-status" as const },
+    { label: "network", button: "restrict-key-network", requestId: originalKeyNetworkRequestId, operation: "set-network-restrictions" as const },
+    { label: "delete", button: "retire-recovered-key", requestId: originalKeyDeleteRequestId, operation: "delete" as const }
+  ])("restores and explicitly replays one uncertain AccessKey $label intent after login", async ({ button, requestId, operation }) => {
+    const changedKey = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      networkRestrictions: operation === "set-network-restrictions" ? { allowedSourceCidrs: ["203.0.113.0/24"] } : { allowedSourceCidrs: [] },
+      resourceVersion: 3, createdAt: timestamp, updatedAt: timestamp };
+    const setStatus = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockResolvedValueOnce({ outcome: "EQUAL_REPLAY", key: changedKey });
+    const setNetworkRestrictions = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockResolvedValueOnce({ outcome: "EQUAL_REPLAY", key: changedKey });
+    const remove = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockResolvedValueOnce({ outcome: "EQUAL_REPLAY", deletion: { id: changedKey.id, accountId: account.id, userId: childUser.id, resourceVersion: 3, deletedAt: timestamp } });
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus, setNetworkRestrictions, delete: remove } });
+    const auth = iam();
+    const user = userEvent.setup();
+    const tree = () => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
+    const first = render(tree());
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: button }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: button }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`unknown:${operation}:${childUser.id}:${requestId}`));
+    first.unmount();
+
+    render(tree());
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`unknown:${operation}:${childUser.id}:${requestId}`));
+    await user.click(screen.getByRole("button", { name: button }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`completed:${operation}:${childUser.id}:${requestId}`));
+
+    const invoked = operation === "set-status" ? setStatus : operation === "set-network-restrictions" ? setNetworkRestrictions : remove;
+    expect(invoked).toHaveBeenCalledTimes(2);
+    expect(invoked.mock.calls[0]).toEqual(invoked.mock.calls[1]);
+    await user.click(screen.getByRole("button", { name: "acknowledge-key-mutation" }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe("none"));
+  });
+
+  it.each(["success", "unauthorized"] as const)("rejects a late AccessKey create %s from an unmounted Session owner", async (outcome) => {
+    const lateKey = { id: "mak1.late-old-session", accountId: account.id, userId: childUser.id, status: "ENABLED" as const,
+      credentialState: "CURRENT" as const, networkRestrictions: { allowedSourceCidrs: [] }, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+    let resolveOld!: (value: { outcome: "APPLIED"; key: typeof lateKey; secret: string }) => void;
+    let rejectOld!: (reason: unknown) => void;
+    const oldCreate = vi.fn(() => new Promise<{ outcome: "APPLIED"; key: typeof lateKey; secret: string }>((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }));
+    const oldRepository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: oldCreate, setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const newRepository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const auth = iam();
+    const user = userEvent.setup();
+    const tree = (repository: AccountRepository) => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
+    const first = render(tree(oldRepository));
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "create-original-key" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "create-original-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`unknown:${childUser.id}:${originalKeyRequestId}`));
+    first.unmount();
+
+    render(tree(newRepository));
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`unknown:${childUser.id}:${originalKeyRequestId}`));
+    await act(async () => {
+      if (outcome === "success") resolveOld({ outcome: "APPLIED", key: lateKey, secret: "late-secret-must-not-surface" });
+      else rejectOld(new HttpProblem(401, "SESSION_EXPIRED"));
+    });
+
+    const stored = sessionStorage.getItem(`matrix-iam-access-key-create:v1:${encodeURIComponent(account.id)}:${encodeURIComponent(rootUser.id)}`);
+    expect(stored && JSON.parse(stored)).toEqual(expect.objectContaining({ phase: "unknown", requestId: originalKeyRequestId }));
+    expect(screen.getByLabelText("key-create-intent").textContent).toBe(`unknown:${childUser.id}:${originalKeyRequestId}`);
+    expect(screen.queryByText("late-secret-must-not-surface")).toBeNull();
+  });
+
+  it.each(["success", "unauthorized"] as const)("rejects a late recovered-key delete %s from an unmounted Session owner", async (outcome) => {
+    const recoveredKey = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      credentialState: "CURRENT" as const, networkRestrictions: { allowedSourceCidrs: [] }, resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
+    const deletion = { id: recoveredKey.id, accountId: account.id, userId: childUser.id, resourceVersion: 3, deletedAt: timestamp };
+    let resolveOld!: (value: { outcome: "APPLIED"; deletion: typeof deletion }) => void;
+    let rejectOld!: (reason: unknown) => void;
+    const oldDelete = vi.fn(() => new Promise<{ outcome: "APPLIED"; deletion: typeof deletion }>((resolve, reject) => { resolveOld = resolve; rejectOld = reject; }));
+    const newDelete = vi.fn().mockResolvedValue({ outcome: "EQUAL_REPLAY", deletion });
+    const oldRepository = accounts({ accessKeys: {
+      list: vi.fn(), read: vi.fn(), create: vi.fn().mockResolvedValue({ outcome: "APPLIED", key: recoveredKey, secret: "one-time-secret" }),
+      setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: oldDelete
+    } });
+    const newRepository = accounts({ accessKeys: {
+      list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: newDelete
+    } });
+    const auth = iam();
+    const user = userEvent.setup();
+    const tree = (repository: AccountRepository) => <LocaleProvider><SessionProvider repository={auth}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>;
+    const first = render(tree(oldRepository));
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "create-original-key" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "create-original-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`));
+    await user.click(screen.getByRole("button", { name: "retire-recovered-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`unknown:delete:${childUser.id}:${originalKeyDeleteRequestId}`));
+    first.unmount();
+
+    render(tree(newRepository));
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`unknown:delete:${childUser.id}:${originalKeyDeleteRequestId}`));
+    await act(async () => {
+      if (outcome === "success") resolveOld({ outcome: "APPLIED", deletion });
+      else rejectOld(new HttpProblem(401, "SESSION_EXPIRED"));
+    });
+
+    expect(screen.getByLabelText("key-probe-session").textContent).toContain("authenticated");
+    expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`);
+    expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`unknown:delete:${childUser.id}:${originalKeyDeleteRequestId}`);
+    await user.click(screen.getByRole("button", { name: "retire-recovered-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`completed:delete:${childUser.id}:${originalKeyDeleteRequestId}`));
+    expect(newDelete).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "acknowledge-key-mutation" }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe("none"));
+    expect(screen.getByLabelText("key-create-intent").textContent).toBe("none");
+  });
+
+  it("fails closed for foreign or malformed stored AccessKey mutation bindings", async () => {
+    const valid = {
+      accountId: account.id, actorId: rootUser.id, userId: childUser.id, accessKeyId: "mak1.lost-secret",
+      accessKeyResourceVersion: 2, operation: "delete", requestId: originalKeyDeleteRequestId, phase: "unknown"
+    };
+    const invalid = [
+      { ...valid, accountId: "tenant-foreign" },
+      { ...valid, actorId: "principal-foreign" },
+      { ...valid, userId: "invalid user" },
+      { ...valid, accessKeyResourceVersion: 0 },
+      { ...valid, requestId: replacementKeyDeleteRequestId, unexpected: true }
+    ];
+    const storageKey = `matrix-iam-access-key-mutation:v1:${encodeURIComponent(account.id)}:${encodeURIComponent(rootUser.id)}`;
+    for (const record of invalid) {
+      sessionStorage.clear();
+      sessionStorage.setItem(storageKey, JSON.stringify(record));
+      const remove = vi.fn();
+      const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: remove } });
+      const user = userEvent.setup();
+      const view = render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+      await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "create-original-key" }).hasAttribute("disabled")).toBe(false));
+      expect(screen.getByLabelText("key-mutation-intent").textContent).toBe("none");
+      expect(remove).not.toHaveBeenCalled();
+      view.unmount();
+    }
   });
 
   it("updates only the display name through the live user revision", async () => {
