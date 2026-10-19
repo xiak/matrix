@@ -6731,16 +6731,33 @@ func startIAMConsoleBrowserWithResponseLoss(
 
 	// Same-origin loopback routing only. No credentials/selectors are injected;
 	// actual services enforce every request. This is not production APISIX.
-	mux := http.NewServeMux()
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxConnsPerHost = 8
 	transport.MaxIdleConnsPerHost = 8
 	transport.ResponseHeaderTimeout = 15 * time.Second
+	mux := iamConsoleBrowserUpstreams(t, transport, iamEndpoint, auditEndpoint, paasEndpoint, "http://"+uiAddress)
+	requests := make(chan struct{}, 16)
+	server := httptest.NewUnstartedServer(iamConsoleBrowserFixtureHandler(mux, requests, responseLoss))
+	server.Config.ReadHeaderTimeout = 5 * time.Second
+	server.Config.ReadTimeout = 30 * time.Second
+	server.Config.WriteTimeout = 30 * time.Second
+	server.Config.IdleTimeout = 30 * time.Second
+	server.Start()
+	return server, ui, func() {
+		server.Close()
+		transport.CloseIdleConnections()
+	}
+}
+
+func iamConsoleBrowserUpstreams(t *testing.T, transport *http.Transport, iamEndpoint, auditEndpoint, paasEndpoint, uiEndpoint string) *http.ServeMux {
+	t.Helper()
+	mux := http.NewServeMux()
 	for _, route := range []struct{ prefix, strip, endpoint string }{
 		{"/api/iam/", "/api/iam", iamEndpoint},
 		{"/api/audit/", "/api/audit", auditEndpoint},
+		{"/api/paas/", "/api/paas", paasEndpoint},
 		{"/api/managed-services/", "/api", paasEndpoint},
-		{"/", "", "http://" + uiAddress},
+		{"/", "", uiEndpoint},
 	} {
 		target, err := url.Parse(route.endpoint)
 		if err != nil {
@@ -6753,16 +6770,52 @@ func startIAMConsoleBrowserWithResponseLoss(
 		}
 		mux.Handle(route.prefix, http.StripPrefix(route.strip, proxy))
 	}
-	requests := make(chan struct{}, 16)
-	server := httptest.NewUnstartedServer(iamConsoleBrowserFixtureHandler(mux, requests, responseLoss))
-	server.Config.ReadHeaderTimeout = 5 * time.Second
-	server.Config.ReadTimeout = 30 * time.Second
-	server.Config.WriteTimeout = 30 * time.Second
-	server.Config.IdleTimeout = 30 * time.Second
-	server.Start()
-	return server, ui, func() {
-		server.Close()
-		transport.CloseIdleConnections()
+	return mux
+}
+
+func TestIAMConsoleBrowserRoutesPreserveAuthorityResponses(t *testing.T) {
+	upstream := func(name string, status int) *httptest.Server {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_ = json.NewEncoder(w).Encode(map[string]string{
+				"upstream": name, "method": r.Method, "uri": r.URL.RequestURI(),
+				"authorization": r.Header.Get("Authorization"), "tenant": r.Header.Get("X-Tenant-ID"),
+			})
+		}))
+		t.Cleanup(server.Close)
+		return server
+	}
+	iam, audit, paas, ui := upstream("iam", http.StatusUnauthorized), upstream("audit", http.StatusForbidden),
+		upstream("paas", http.StatusUnauthorized), upstream("ui", http.StatusOK)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxConnsPerHost = 2
+	transport.ResponseHeaderTimeout = 2 * time.Second
+	t.Cleanup(transport.CloseIdleConnections)
+	mux := iamConsoleBrowserUpstreams(t, transport, iam.URL, audit.URL, paas.URL, ui.URL)
+	for _, candidate := range []struct {
+		path, upstream, uri string
+		status              int
+	}{
+		{"/api/iam/v1/auth/session", "iam", "/v1/auth/session", http.StatusUnauthorized},
+		{"/api/audit/v1/records:query", "audit", "/v1/records:query", http.StatusForbidden},
+		{"/api/paas/v1/applications?after=opaque%2Bcursor", "paas", "/v1/applications?after=opaque%2Bcursor", http.StatusUnauthorized},
+		{"/api/managed-services/v1/service-definitions", "paas", "/managed-services/v1/service-definitions", http.StatusUnauthorized},
+		{"/console/applications/", "ui", "/console/applications/", http.StatusOK},
+		{"/_next/static/chunks/fixed.js", "ui", "/_next/static/chunks/fixed.js", http.StatusOK},
+	} {
+		t.Run(candidate.path, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "http://browser.test"+candidate.path, nil)
+			request.Header.Set("Authorization", "Bearer browser-route-synthetic")
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+			var actual map[string]string
+			if err := json.Unmarshal(response.Body.Bytes(), &actual); err != nil || response.Code != candidate.status ||
+				actual["upstream"] != candidate.upstream || actual["uri"] != candidate.uri ||
+				actual["method"] != http.MethodGet || actual["authorization"] != "Bearer browser-route-synthetic" || actual["tenant"] != "" {
+				t.Fatalf("browser route lost its authority/path/credential/status: status=%d observation=%v err=%v", response.Code, actual, err)
+			}
+		})
 	}
 }
 

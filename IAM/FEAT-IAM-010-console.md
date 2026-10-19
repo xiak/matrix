@@ -48,6 +48,10 @@
 
 本地Node22.22.2、2GiB heap、单worker的七文件280项相关回归以56.05秒通过，覆盖Role/Session、ControlPlane、Audit、服务开通及专用TOTP路径。类型/lint/架构、234组样式对比度及八项静态导出Node测试通过；2-worker生产构建的preview unset/0两种模式逐字等价，324项嵌入资产由本分支重新生成并匹配。Go UI/architecture race分别7.305/2.438秒及相关vet通过。已确认命令与后续资源读取分离：当前401使身份失效且不重放已完成命令；403/503/协议错误保留各自拒绝或不可用语义。未改变后端API/SQL/完整Profile。此证据不等于后继候选精确CI、签名发布或真实Role撤权页面已验收。
 
+固定消费提交为`5384e4421877069f9ad4bc4e47ca219d46be9798`，精确[Verification 39252717070](https://github.com/xiak/matrix/actions/runs/39252717070)仍待独立收口。提交后的消费者复核又以1.83秒稳定复现[Issue #4](https://github.com/xiak/matrix/issues/4)：旧创建请求挂起、同User重新登录并恢复UNKNOWN后，旧401或成功回包仍清除新Session保留的非秘密原意图；当前身份和内存UNKNOWN未丢失不代表持久恢复边界安全。该缺口继续由原UI owner修复，不能由5384的既有测试或CI推定关闭。
+
+真实Role页面必须从浏览器显式承担开始，观察有效Role的受保护业务读取、管理员撤权后的401/BLOCKED，以及显式验证来源身份后的USER状态；现有附件fixture中的后台重新承担只证明后验，不能替代这些页面动作。准备门禁时发现原浏览器relay缺少`/api/paas/`，应用请求会错误落到UI上游。原`authorityprocess` owner现将既有路由装配提取为可检查的HTTP边界并补齐该前缀，保留IAM/Audit/managed-services/UI原映射；短回归先证明PaaS路径错误返回UI的200，再证明准确上游、方法、cursor原字节、原Bearer及401/403响应保持且无注入tenant selector，相关response-loss race门禁3.749秒及vet通过。该测试使用loopback测试上游，只验证fixture转发，不冒充真实PaaS权限或浏览器已通过；没有改变生产APISIX、API或安装契约。
+
 ### 当前身份的权限上限投影
 
 现有 `/console/access` 客户端严格消费 `CurrentIdentity.permissionBoundary`，匹配当前 Account、User 和 User resourceVersion；缺失字段、错误归属/修订或非法版本摘要直接使当前身份读取失败，不能降级为无边界。原 Account Root 仅允许明确无边界。页面独立展示“租户权限上限”及精确 Policy/默认版本 ID，不把它加入正向附件或从名称推导权限。
