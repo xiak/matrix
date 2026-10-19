@@ -2404,6 +2404,58 @@ mandatory authentication or email-only Phase 1 receiving scope changed. User
 deletion recovery and PolicyAttachment reminder-storage hardening are separate
 slices; this candidate does not claim either or add phone/email/MFA behavior.
 
+#### LIVE recoverable-command outcome UX follow-up
+
+The recoverable IAM command UX is fixed at source
+`dbe5add33d8ef1cac663f2186e965f8fff041671`, based on source parent
+`8d1aa991fd9568d5d67e6d5bdcff24d1a95e5bfc`. User and Group Membership
+UNKNOWN states now render one warning
+with the latest inspection failure as subordinate evidence; their secondary
+action says that the operator may return later and never implies that leaving
+cancels or rolls back the submitted command. Group member selection names
+addition and removal separately instead of telling a removal operator to
+continue adding.
+
+Group and Role policy-attachment review now share one semantic owner over the
+existing strict contract. It freezes the actual operation, target, policy or
+attachment identity, expected version, Account, actor and request ID before
+dispatch. A completion recovered through the original-result read remains in
+the content area as an immutable request/result receipt until the operator
+explicitly finishes; the independent current relationship read is not used as
+proof of the original command and no second write is offered. The request ID
+is renderable state rather than a ref read during render, so review and submit
+use the same value without violating the React ownership model.
+
+A confirmed complete Account security-settings replacement expires only the
+submitting Session and carries its exact request ID to the next login view.
+The explanation says why a new identity context is required without claiming
+that every other Session was revoked. A rejected, unauthorized or still
+unknown command does not receive that success notice. The current-settings
+description now accurately states that the four rule groups are read and
+replaced together; it no longer calls the surface read-only.
+
+Windows Node 22.22.2/npm 11.6.4 typecheck, full lint, architecture and all 234
+theme contrast pairs pass. The complete frontend gate passes all 77 files and
+1,969 cases in 505.54 seconds, followed by all eight export-boundary script
+cases; the focused User, Group, Role, Session, login and Account-security
+owners also pass. `git diff --check` and both locale JSON parses pass.
+
+The fixed product browser at backend source `741dceb6f` supplied independent
+REVOKE evidence: the operator submitted one PaaSViewer revocation, observed
+UNKNOWN request `37bc573c-d58d-470e-9f1c-d87f6615e853`, read that original
+request exactly once and then observed zero current attachments. It also
+showed why this follow-up is required: the old UI returned directly to current
+detail without presenting the immutable completion receipt. After the browser
+marker, IAM independently confirmed one revocation write, denial on the
+member's next protected request, one completion record, one outbox/Audit event
+and a valid Audit chain. Those backend assertions remain owned by IAM and are
+cited here rather than inherited as this branch's release acceptance.
+No backend/API/SQL/profile, shared DEV, real Account/resource or mandatory
+authentication setting changed. The isolated MOCK and Phase 1 email-only
+contact-verification/security-notification receiving scope remain intact;
+email login, email MFA, phone login, SMS, phone-number binding and physical
+phone integration remain excluded.
+
 #### LIVE deletion-confirmation follow-up
 
 LIVE Group deletion consumes the strict command receipt before navigating.

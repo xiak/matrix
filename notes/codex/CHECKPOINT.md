@@ -3,11 +3,11 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-10-17
+- Updated: 2026-10-19
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source-only candidate: `343622a11d0ce4c65c763de0e717505e0b8dae9a`
-- Source parent: `c8981dd160474710868bf84712f2b7792f283973`
+- Pushed source-only candidate: `dbe5add33d8ef1cac663f2186e965f8fff041671`
+- Source parent: `8d1aa991fd9568d5d67e6d5bdcff24d1a95e5bfc`
 
 ## Authoritative route
 
@@ -20,30 +20,31 @@
 
 ## Pushed milestone
 
-The User workspace retains original display-name and status commands across
-content navigation and tab reload. UNKNOWN permits only the fixed original
-completion lookup, not another write or an inference from current User state.
-The semantic command editor and receipt notice reuse public content forms,
-feedback, controls and leave/focus owners. Session, repository, actor and User
-boundaries reject late results. Earlier Group Membership recovery remains a
-different protocol: explicit exact replay, not the User completion lookup.
+Recoverable User and Group Membership commands present one UNKNOWN warning and
+make leaving explicit without implying cancellation or rollback. Group and
+Role policy-attachment review freezes the actual target, policy or attachment,
+version and request ID. A completion recovered from the original-result read
+remains visible as an immutable receipt until the operator explicitly returns
+to detail; current relationship state never substitutes for that result.
+Confirmed Account security-settings replacement ends only the submitting
+Session and carries the exact original request ID into an accurate re-login
+explanation.
 
 The isolated, fixed frontend source passed the complete supported Windows
-frontend gates. Exact evidence and limitations belong to FEAT-007. Generated
-assets are unchanged; this is not a newly built or deployed UI. The consuming
-IAM branch must selectively adapt the source, rebuild assets and independently
-pass its build, CI and signed-IAM browser/runtime gates. No older browser,
-backend or embedded-asset result is inherited by this source candidate.
+frontend gates: 77 Vitest files / 1,969 cases, eight export-boundary tests,
+typecheck, full lint, architecture and 234 theme contrast pairs. Exact evidence
+and limitations belong to FEAT-007. A separate fixed-product REVOKE browser
+gate independently proved one write, one original-result read, immediate
+permission loss and consistent completion/outbox/Audit state; it reproduced
+the old missing-receipt UX but is not browser acceptance of this source.
 
 ## Continuation boundary
 
-Preserve the inspectable isolated MOCK and existing composition rather than
-replacing the UI shell. No backend/API/SQL/profile, shared DEV, real resource
-or mandatory authentication setting changed in this milestone. Phase 1 keeps
-email for contact verification and security-notification receiving; it does
-not add email login, email MFA, phone login, SMS or phone binding.
-
-User deletion recovery and PolicyAttachment reminder-storage hardening are
-not included in the User profile/status milestone. Keep the remaining work
-and signed-browser acceptance with their existing FEAT owners. Read only
-published fixed IAM Git objects, not the engineer's working tree or WIP.
+Preserve the inspectable isolated MOCK and existing composition. Generated
+assets are unchanged; the consuming IAM branch must selectively adapt the
+fixed source, rebuild and independently pass CI and signed runtime/browser
+gates. No backend/API/SQL/profile, shared DEV, real resource or mandatory
+authentication setting changed. Phase 1 keeps email only for contact
+verification and security-notification receiving; email login/MFA, phone
+login, SMS, phone binding and physical-phone integration remain excluded.
+Read only published fixed IAM Git objects, not the engineer's working tree.
