@@ -920,7 +920,40 @@ Their 284-byte public trust document has SHA-256
 The private signing key was removed after assembly; protected mail input,
 installation state and test credentials are not release payloads.
 
-The later same-profile candidate `e1a96db06142f62508a26870edd8ce36cdc32780`
+The latest same-profile candidate is fixed
+`5935fa5005529b2c4e1da943b98f49300430ba10`. Its clean source assembled and
+self-authenticated A=`matrix-v0.1.0-iam.r37.9-5935fa500552` and immediate
+B=`matrix-v0.1.0-iam.r37.10-5935fa500552`; both record that exact source,
+IAM/Audit/PaaS `87/39/7+r37`, twelve payloads and ten images. Their manifest
+SHA-256 values are respectively
+`95a22bf81803a5dfe0281a40e95f13e951c55a5b79b921b2992baf18e8c03834` and
+`1708dda17a137141e10665ed2ea8fa836a36b3b4b98a7591ae36b71efb556b95`;
+the separate public trust SHA-256 is
+`ef0cce70e4877fbfb2a6d15eccc1646066b31d2b3d1861e638690b5903c1fc00`.
+The one-time signing private key was removed after both assemblies.
+
+The test driver is compiled from the same fixed source, SHA-256
+`942c8c32eb53b609e21a98a01a7d81d99dc4c2f9342d3fa2b22f3402b44f0cd2`.
+The existing Postfix fixture received a fresh synthetic test-only CA/server
+certificate; its standalone archive SHA-256 is
+`c07e6a5035cf4ab98bf012427aa54dc789cf0ee747889a0b2cdef7eace5be9f2` and
+image ID is
+`sha256:a74964ab0e33713578831192d2f190ac42c8a6c2e71e69e37873951fc4106e1d`.
+The private channel was encoded by the existing contract codec with mode0600,
+outside the release inputs; no old installation secret was read. Completed
+CA signing material and the copied fixture private key were removed.
+
+The build-only engine, its image-cache volume and network were removed after
+exact ownership checks. The full existing lifecycle has now started in a
+different, initially zero-image/container/volume Docker27.5.1 engine on native
+Linux, external-network-disabled, private cgroup namespace,2 CPU/4 GiB/PIDs1024.
+It retains the explicit50-minute observation/55-minute Go deadline and the
+unchanged real-fault recovery bound. This is in-progress candidate execution,
+not an accepted lifecycle, post-restart result, browser journey or latency SLO.
+Exact independent CI is closed in FEAT-IAM-011; accepted signed production
+remains9621 until this candidate obtains the required runtime evidence.
+
+The earlier rejected same-profile candidate `e1a96db06142f62508a26870edd8ce36cdc32780`
 with signed A `.r37.7` and B `.r37.8` is not accepted. Its existing isolated
 lifecycle passed through B retained-state upgrade, then failed at
 `platform-rollback` after 2000.90 seconds. The original CLI output was not

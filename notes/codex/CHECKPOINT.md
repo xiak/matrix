@@ -7,16 +7,17 @@
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`; IAM first-release
   goal remains ACTIVE and incomplete.
 - Current fixed production/test source:
-  `5935fa5005529b2c4e1da943b98f49300430ba10`, documentation successor
-  `e454a906a45899cb971be8a90d1b4fd98546fd70`.
+  `5935fa5005529b2c4e1da943b98f49300430ba10`.
   FEAT-007 owns the closed Docker-engine/Compose probe-timeout diagnostic.
   Native errors/unknown IDs are discarded; API/SQL/profile, Observe budget and
   retry behavior are unchanged. Red/green, race/vet and deterministic Linux
   classification pass; the original Issue6 timeout cause is not proven fixed.
-- Sole open CI:5935 / Verification39300167724 / attempt1, exact SHA independently
-  queried in_progress:
+- Current CI5935 / Verification39300167724 / attempt1 is CLOSED SUCCESS:
   https://github.com/xiak/matrix/actions/runs/39300167724 .
-  It was pushed only after predecessor0a79 reached its terminal state.
+  All19 jobs/logs independently sealed,57 roots RUN1/PASS1,33 packages pass,
+  1999 Vitest+8 Node,234 contrast and324 matching assets; exact terminal time
+  2026-10-19 18:39:16 UTC,1791s. Postfix absence/unopened browser flags do not
+  prove those gates. Do not re-fetch closed logs. No current CI tuple is open.
 - 0a79a9cd35ca96dd9ce9755ff228aee1ad1cd706 /39295387898/attempt1 is CLOSED SUCCESS:
   all19 jobs/logs independently sealed,57 roots RUN1/PASS1,33 packages pass,
   four-product/predecessor summaries once,1999 Vitest+8 Node,234 contrast,
@@ -59,9 +60,17 @@
 - Read AGENTS, IAM/FEAT-IAM-010-console.md and011, then owning code/tests.
   Signed work also reads FEAT005 and the verified platform-installation runbook.
   Keep each fact in its existing owner.
-- Next: close exact5935 CI, finish real page effects, authenticate/run a clean
-  latest fixed signed A/B. Test Expert is reviewing release inputs and
-  exclusive-resource prerequisites only; no new5935 signed runtime is started.
+- Current5935 A .r37.9/B .r37.10 were assembled/self-authenticated from clean
+  fixed source and exact previous-A binding. FEAT005 owns manifest/trust/driver
+  identities, the newly certified synthetic mail fixture and current execution.
+  Production signing key/completed CA signing material were removed; the
+  build-only engine, image-cache volume and network were also removed.
+  The existing50m/55m lifecycle is now running in a fresh network-none
+  Docker27.5.1 engine,2CPU/4GiB/PIDs1024. Initial images/containers/volumes
+  were zero. This is not a terminal PASS or release acceptance. Revalidate the
+  exact current live handle before continuing; never restart on observation
+  timeout. After its real terminal result, perform the existing own-engine
+  post-restart gate only if appropriate, then finish real page effects.
 - Remaining nonDeferred pages include AccessKey lifecycle/recovery, attachment
   CREATE receipts, Role actions, Policy default/boundary/error paths, daily
   password options, restricted/forced MFA/recovery/step-up, original Root
@@ -90,7 +99,9 @@
 
 - UX/UI:01a07b21-9a0d-7fd0-b090-7827ce18262e, fixed objects only; no WIP or
   inherited acceptance. Password source audit found no additional patch.
-- Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999, sole5935 CI owner and
-  release prerequisite review. No duplicate monitor, new task or subagent.
+- Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999 closed5935 CI and reviewed
+  release prerequisites. Its human instructions are read-only; owner messages
+  cannot expand that permission. Actual signed execution stays in this thread.
+  No duplicate monitor, new task or subagent.
 - Commit only this branch with repository-local Xiak <Jellal@aliyun.com>.
   Markdown/existing owners only; checkpoint records pushed work.
