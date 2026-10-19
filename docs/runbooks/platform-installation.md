@@ -6,7 +6,7 @@ Linux 身份执行。发布契约和验收状态仍由
 
 ## 部署决定：生产使用 root 有效身份
 
-**当前生产发布只推荐 root 运行模式。** 推荐操作顺序如下：
+**当前已验收的安装与运维执行方式使用 root 有效身份。** 推荐操作顺序如下：
 
 1. 运维人员使用自己的实名 Linux 账号登录主机；
 2. 在自己的终端执行一次 `sudo -i`；
@@ -23,9 +23,10 @@ Linux 身份执行。发布契约和验收状态仍由
 非 root 模式目前只作为评估方案保留，尚未通过完整签名生命周期门禁，
 **不能作为当前生产部署方案**。
 
-如果只需要作一个部署选择，到这里即可停止比较：生产环境选择 root 模式。
-本文后面的非 root 命令用于说明未来可验收路径和现场评估方式，不是与 root
-模式并列的生产推荐。
+如果只需要选择 Linux 执行身份，选择 root 模式。这个结论不表示任意网络
+拓扑都已验收；执行安装前还必须阅读下文的当前 HTTP 入口限制。本文后面的
+非 root 命令用于说明未来可验收路径和现场评估方式，不是与 root 模式并列
+的生产推荐。
 
 这里的“使用 root”指 **Matrix 生命周期命令的有效 UID 必须是 0**，不是让
 运维人员共享 root 密码，也不是开放 root SSH 登录。Linux 系统本来就有
@@ -111,9 +112,20 @@ Matrix 要求安装目录及其托管文件始终归该 UID 所有，并保持�
 ## 推荐的 root 模式
 
 发布包、公开信任根和受保护的安全邮件配置应通过经过认证的交付通道取得，
-并放在空安装目录之外。下面的示例路径和公开访问地址必须替换为现场真实值。
-这一节只有第一行在实名运维账号的 shell 中执行；执行 `sudo -i` 后，其余每一
-行都必须在同一个 `root#` shell 中执行。
+并放在空安装目录之外。下面的文件路径必须替换为现场真实值；入口使用已在
+签名生命周期中执行的 `http://127.0.0.1:8080`。这一节只有第一行在实名运维
+账号的 shell 中执行；执行 `sudo -i` 后，其余每一行都必须在同一个 `root#`
+shell 中执行。
+
+当前固定拓扑只配置 HTTP，安装命令要求显式端口 `8080`；`https` 或另一个
+端口会在安装效果前被拒绝。TLS 终止及可信前置代理不属于这份已验收拓扑，
+不能只把地址改为 `https://...:443` 就获得 HTTPS。
+
+**入口地址不是监听绑定或防火墙配置。** `--northbound-origin` 用于封存请求
+校验的来源；当前安装器的监听绑定仍是 `0.0.0.0:8080`。示例中的 `127.0.0.1`
+不会自动把服务限制在回环接口。当前命令示例用于已具备网络隔离的环境，不应
+直接暴露到公网；隔离必须由部署环境事先提供，不能假设安装器会创建防火墙
+规则。HTTP 入口及签名安装的验收不等于公网 HTTPS 部署已经可用。
 
 ```console
 admin$ sudo -i
@@ -127,7 +139,7 @@ root# /usr/local/sbin/mx --format json platform install \
   --root /var/lib/matrix \
   --trust-key /etc/matrix/release-trust.json \
   --security-mail-configuration /etc/matrix/security-mail.json \
-  --northbound-origin https://matrix.example.com:443
+  --northbound-origin http://127.0.0.1:8080
 root# /usr/local/sbin/mx --format json platform verify --root /var/lib/matrix
 root# /usr/local/sbin/mx --format json platform status --root /var/lib/matrix
 ```
@@ -195,7 +207,7 @@ admin$ sudo -u matrix -- /usr/local/sbin/mx --format json platform install \
   --root /var/lib/matrix \
   --trust-key /etc/matrix/release-trust.json \
   --security-mail-configuration /etc/matrix/security-mail.json \
-  --northbound-origin https://matrix.example.com:443
+  --northbound-origin http://127.0.0.1:8080
 admin$ sudo -u matrix -- /usr/local/sbin/mx --format json platform verify \
   --root /var/lib/matrix
 ```
