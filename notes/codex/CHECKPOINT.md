@@ -6,7 +6,23 @@
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   The IAM first-release goal remains ACTIVE and incomplete.
-- Current fixed UI consumer:
+- Current fixed UI/fixture consumer:
+  `0a79a9cd35ca96dd9ce9755ff228aee1ad1cd706`, parent
+  `18f072222d4628c631121cdf4329dd9d6325d87d`.
+  Selectively ADAPT only the Go static-server production change from
+  `14dccb1df71952fed5f6eb5581114a82c3da6ad1`, parent
+  `900618f54733d3422a6ac71f0276b0c583b019ac`; parent and child blobs match.
+  A real browser exposed HTTP400 for valid User keys/policies deep links.
+  Preserve four original HTML/Next segment red cases:2.532s red,3.505s green;
+  six supported User tabs require one nonempty id, other routes/selectors
+  remain denied. Complete UI/architecture/default authorityprocess race
+  7.300/2.340/3.962s and vet pass. Frontend assets/profile unchanged.
+  Existing authorityprocess now has the opt-in AccessKey SET_STATUS/NETWORK/
+  DELETE response-loss fixture and default exact-replay/read-after-replay
+  observer negatives. Co-located native PG18.4 and real services reached the
+  fixed login page after explicit fixture policy grant; no browser key
+  command or marker has completed. This is not LIVE or release acceptance.
+- Preceding frontend consumer:
   `2d853754ab0f1f0608355665fbb9011315b3779f`, parent
   `5e78e32c1dacb9ce095403155ee755b53d708524`.
   Selectively ADAPT UX `fd3cf32c70f608b4048749a5289750e473975825`,
@@ -24,10 +40,11 @@
   in85.99s. Type/lint/architecture,234 contrast pairs,eight Node tests and
   dual two-worker export comparison (324 files) pass. Go UI/architecture/
   default authorityprocess race 7.277/2.342/3.910s, vet and Linux UI build pass.
-  These are local gates, not LIVE or independent-CI acceptance.
+  Its independent CI is separately closed below; these local gates alone
+  do not prove LIVE acceptance.
 - Issue https://github.com/xiak/matrix/issues/5 remains OPEN. Fixed consumer
   and remaining real-browser items are recorded at
-  https://github.com/xiak/matrix/issues/5#issuecomment-6272714813 .
+  https://github.com/xiak/matrix/issues/5#issuecomment-6273198109 .
   FEAT010 owns exact-owner recovery across directory pages/failures,
   User policies/keys section navigation and one-time Secret leave protection.
   These three connections are implemented, not browser-accepted. No global
@@ -38,10 +55,16 @@
   Its opt-in prepared-B rollback diagnostic is not a second lifecycle suite.
   phase1e2e/platformcommand/CLI race 3.133/20.880/2.534s and vet pass.
 - Sole unclosed CI tuple:
-  2d853754 / Verification39288898228 / attempt1,
-  https://github.com/xiak/matrix/actions/runs/39288898228 .
-  Last independently observed in_progress; no terminal acceptance yet.
+  0a79a9cd / Verification39295387898 / attempt1,
+  https://github.com/xiak/matrix/actions/runs/39295387898 .
+  Exact head_sha independently queried in_progress; no terminal acceptance.
   Audit this exact tuple rather than restarting or retrieving closed runs.
+- 2d853754 / Verification39288898228 / attempt1 is CLOSED SUCCESS:
+  all19 jobs/logs independently verified,57 authority roots RUN1/PASS1,
+  four-product summary exactly once,1999 Vitest+8Node,324 embedded assets.
+  Seven absent Postfix subtests and13 unopened browser flags are not runtime
+  evidence. No new signed acceptance or Issue6 root-cause resolution.
+  Do not re-fetch the closed attempt or inherit its state for0a79a9cd.
 - ef10d51 / Verification39284297226 / attempt1 is CLOSED FAILURE, not queued
   or cancelled: independent audit sealed19 logs,17success/2failure jobs,
   56PASS/1FAIL of57 roots. ManagedProductProviderProcesses39.94s failed when
@@ -120,6 +143,10 @@ Keyboard专项 stays lower priority, not accepted.
 - Exact earlier Role-fence cleanup, four old UI ELF removals and a201MiB
   task-created temporary npm cache removal were tool-blocked. They were not
   deleted; do not retry equivalent deletion through another command/tool.
+- The current task's rebuildable local source/vendor/SDK staging directory
+  and three remote transfer archives were also rejected before execution by
+  the cleanup tool. They remain; do not retry through another tool or remove
+  a parent directory to bypass that result. This is not completed cleanup.
 - Only own exact labeled objects, bounded CPU/memory/PIDs,
   GOMAXPROCS2/-p2 and serialized heavy gates. Do not touch other tasks or
   remote1.3/1.5/161. Keep accepted packages and genuinely reusable caches.
@@ -133,7 +160,7 @@ Keyboard专项 stays lower priority, not accepted.
   consumedfd3 and pending page acceptance are in FEAT010/Issue5; the donor's
   900618f documentation/checkpoint was not imported.
 - Test Expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns independent
-  audit of the sole unclosed2d853/39288898228/attempt1 tuple.
+  audit of the sole unclosed0a79a9cd/39295387898/attempt1 tuple.
   No duplicate monitor, new task or new subagent.
 - User permits routine development/testing without repetitive approval;
   actual tool-specific restrictions remain.

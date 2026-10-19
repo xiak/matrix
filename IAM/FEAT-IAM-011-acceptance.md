@@ -62,6 +62,8 @@ Session并发测试的固定修正为`38a2cda69ec547c9e8d9d557bf61a3bcd992335c`�
 
 此前`ef10d51bfbf120ec521e665bac9d54b14fa26c0d`的[Verification 39284297226](https://github.com/xiak/matrix/actions/runs/39284297226) attempt 1仍为failure：19项job为17成功、managed-products及派生汇总失败；57个顶层根为56 PASS、1 FAIL。唯一失败根`TestManagedProductProviderProcesses`为39.94秒，worker在取得HTTP 200之前以exit 1输出`PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_TIMEOUT`；原5秒Observe预算没有修改。日志不含底层命令/连接根因，不能归因为网络或资源抖动。[Issue #6](https://github.com/xiak/matrix/issues/6)保持打开；新tuple四产品通过不等于根因已修复。现有签名接受基线仍为9621。
 
+后继消费者`0a79a9cd35ca96dd9ce9755ff228aee1ad1cd706`修正真实Go静态入口对合法User tab的400拒绝，并在现有owner新增可选AccessKey恢复浏览器门禁；本地及实际页面入口证据归010。其[Verification 39295387898](https://github.com/xiak/matrix/actions/runs/39295387898) attempt 1已核对精确SHA并处于`in_progress`，不能继承2d的CI结果；页面只到真实登录页，不冒充密钥命令效果或签名发布验收。
+
 ## 高风险测试矩阵
 
 - Tenant/Account：相同用户名、组名、策略名、资源 ID/key，错误 header/body/path/cursor 不能切换。
