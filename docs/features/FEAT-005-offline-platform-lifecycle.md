@@ -972,6 +972,13 @@ original A was again observed healthy, without changing health checks or
 limits. This closes the focused injection/recovery check, not the required
 new-source fresh lifecycle, retained business state or restart acceptance.
 
+The one-use test signing private key has been removed after authenticated A/B
+assembly. Both signed releases, their public trust root and the current fixed
+driver remain available; superseded driver copies were hash-checked and
+removed locally and from the task input directory. Old drivers remain
+rebuildable from Git. This is scoped artifact cleanup, not a claim that all
+historical runtime objects have been removed.
+
 On 2026-10-17, fixed source
 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` assembled and authenticated
 Release A `matrix-v0.1.0-iam.r37.1-1fc35c6c17b7` and its immediate

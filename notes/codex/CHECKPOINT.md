@@ -90,9 +90,13 @@
   no health check or limit was relaxed. A new isolated engine started with
   zero images/containers/volumes for the full fresh lifecycle, whose result
   and subsequent restart gate remain pending. Exact Verification 39216883017
-  attempt 1 is still with the existing Test Expert; seven completed logs
-  were independently checked, not the entire run. Do not infer a product
-  timing SLO or complete release acceptance from the focused gate.
+  attempt 1 is now independently closed as completed/success at
+  2026-10-19 08:05:05 UTC: all 19 jobs, 57 authority roots and complete
+  necessary logs were verified. FEAT011 owns the evidence; do not GET this
+  closed attempt's jobs/logs again. Do not infer a product timing SLO or
+  complete release acceptance from the focused gate. The one-use test signing
+  private key and superseded test-driver copies were removed; signed A/B,
+  public trust and the current driver remain. This is not all-resource cleanup.
 - Accepted signed-release source remains
   `741dceb6f0092fbc33706842862980816fe72d15`,
   IAM87/Audit39/PaaS7+r37. Its exact CI and same-profile signed A/B lifecycle
