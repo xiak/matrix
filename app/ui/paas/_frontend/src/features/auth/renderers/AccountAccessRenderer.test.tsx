@@ -410,6 +410,53 @@ function AccountIntentProbe() {
   </>;
 }
 
+function DirectUserPolicyOwnerProbe() {
+  const access = useAccountAccess();
+  const [readResult, setReadResult] = useState("idle");
+  const [attachResult, setAttachResult] = useState("idle");
+  const [revokeResult, setRevokeResult] = useState("idle");
+  const [submitResult, setSubmitResult] = useState("idle");
+  const [inspectResult, setInspectResult] = useState("idle");
+  const [endResult, setEndResult] = useState("idle");
+  const target = access.scene?.users[0];
+  const intent = access.userPolicyChangeIntent;
+  return <>
+    <button onClick={() => void access.loadUser(childUser.id).then(() => setReadResult("ready"), () => setReadResult("error"))}>direct-read-user</button>
+    <button onClick={() => setAttachResult(String(Boolean(target && access.beginUserPolicyAttachment(target, platformPolicy.id))))}>direct-begin-attachment</button>
+    <button onClick={() => setRevokeResult(String(Boolean(target && access.beginUserPolicyRevocation(target, target.attachments[0]?.id ?? "missing"))))}>direct-begin-revocation</button>
+    <button onClick={() => void access.submitUserPolicyChange(intent?.requestId ?? "missing").then((result) => setSubmitResult(String(result)))}>direct-submit-attachment</button>
+    <button onClick={() => void access.inspectUserPolicyChange(intent?.requestId ?? "missing").then((result) => setInspectResult(String(result)))}>direct-inspect-attachment</button>
+    <button onClick={() => setEndResult(String(access.endUserPolicyChange(intent?.requestId ?? "missing")))}>direct-end-attachment</button>
+    <output aria-label="direct-owner-ready">{String(access.userPolicyChangeReady)}</output>
+    <output aria-label="direct-read-result">{readResult}</output>
+    <output aria-label="direct-attach-result">{attachResult}</output>
+    <output aria-label="direct-revoke-result">{revokeResult}</output>
+    <output aria-label="direct-submit-result">{submitResult}</output>
+    <output aria-label="direct-inspect-result">{inspectResult}</output>
+    <output aria-label="direct-end-result">{endResult}</output>
+    <output aria-label="direct-policy-intent">{intent ? `${intent.phase}:${intent.requestId}` : "none"}</output>
+  </>;
+}
+
+function AuthenticatedUserPolicyOwnerProbe({ repository }: { repository: AccountRepository }) {
+  const session = useSession();
+  return session.phase === "authenticated"
+    ? <AccountAccessProvider repository={repository}><DirectUserPolicyOwnerProbe /></AccountAccessProvider>
+    : <LoginRenderer />;
+}
+
+async function openDirectUserPolicyOwnerProbe(repository: AccountRepository) {
+  const user = userEvent.setup({ delay: null });
+  const tree = (activeRepository: AccountRepository) => <LocaleProvider><SessionProvider repository={iam()}><AuthenticatedUserPolicyOwnerProbe repository={activeRepository} /></SessionProvider></LocaleProvider>;
+  const view = render(tree(repository));
+  await user.click(screen.getByLabelText("密码", { exact: true }));
+  await user.paste("Only-Test-Password-49!");
+  await user.click(screen.getByRole("button", { name: "登录控制台" }));
+  await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(credential));
+  await waitFor(() => expect(screen.getByLabelText("direct-owner-ready").textContent).toBe("true"));
+  return { user, replaceRepository: (next: AccountRepository) => view.rerender(tree(next)) };
+}
+
 const originalKeyRequestId = `ui-access-key-create-${"a".repeat(32)}`;
 function AccessKeyIntentProbe() {
   const session = useSession();
@@ -4793,6 +4840,109 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
     expect(await screen.findByRole("status", { name: "原策略关联命令已确认" })).toBeTruthy();
     expect(readPolicyAttachmentChange).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when direct USER policy context commands bypass the controls before replacement identity verification", async () => {
+    let replacementVerified = false;
+    let verifyReplacement!: (value: AccountIdentity) => void;
+    const replacementExecute = vi.fn().mockResolvedValue(undefined);
+    const replacementRevoke = vi.fn().mockResolvedValue({
+      id: "attachment-child-a-system.paas-viewer", resourceVersion: 2, revokedAt: timestamp
+    });
+    const replacement = accounts({
+      currentIdentity: vi.fn(() => replacementVerified ? Promise.resolve(structuredClone(identity)) :
+        new Promise<AccountIdentity>((resolve) => { verifyReplacement = (value) => { replacementVerified = true; resolve(value); }; })),
+      getUser: vi.fn().mockResolvedValue(structuredClone(child)),
+      execute: replacementExecute,
+      revokePolicyAttachment: replacementRevoke
+    });
+    const { user, replaceRepository } = await openDirectUserPolicyOwnerProbe(accounts());
+
+    replaceRepository(replacement);
+    await waitFor(() => expect(replacement.currentIdentity).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "direct-read-user" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-read-result").textContent).toBe("ready"));
+    expect(replacement.getUser).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("direct-owner-ready").textContent).toBe("false");
+
+    await user.click(screen.getByRole("button", { name: "direct-begin-attachment" }));
+    await user.click(screen.getByRole("button", { name: "direct-begin-revocation" }));
+    await user.click(screen.getByRole("button", { name: "direct-submit-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-submit-result").textContent).toBe("false"));
+    expect(screen.getByLabelText("direct-attach-result").textContent).toBe("false");
+    expect(screen.getByLabelText("direct-revoke-result").textContent).toBe("false");
+    expect(screen.getByLabelText("direct-policy-intent").textContent).toBe("none");
+    expect(replacementExecute).not.toHaveBeenCalled();
+    expect(replacementRevoke).not.toHaveBeenCalled();
+
+    await act(async () => { verifyReplacement(structuredClone(identity)); });
+    await waitFor(() => expect(screen.getByLabelText("direct-owner-ready").textContent).toBe("true"));
+    await user.click(screen.getByRole("button", { name: "direct-begin-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-attach-result").textContent).toBe("true"));
+    expect(screen.getByLabelText("direct-policy-intent").textContent).toMatch(/^review:ui-user-attachment-/);
+    await user.click(screen.getByRole("button", { name: "direct-end-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-policy-intent").textContent).toBe("none"));
+    expect(screen.getByLabelText("direct-end-result").textContent).toBe("true");
+    await user.click(screen.getByRole("button", { name: "direct-begin-revocation" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-revoke-result").textContent).toBe("true"));
+    expect(screen.getByLabelText("direct-policy-intent").textContent).toMatch(/^review:ui-user-revocation-/);
+    await user.click(screen.getByRole("button", { name: "direct-end-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-policy-intent").textContent).toBe("none"));
+    await user.click(screen.getByRole("button", { name: "direct-begin-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-policy-intent").textContent).toMatch(/^review:ui-user-attachment-/));
+    await user.click(screen.getByRole("button", { name: "direct-submit-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-submit-result").textContent).toBe("true"));
+    expect(replacementExecute).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when direct UNKNOWN inspection bypasses the controls before replacement identity verification", async () => {
+    let replacementVerified = false;
+    let verifyReplacement!: (value: AccountIdentity) => void;
+    const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
+    const readPolicyAttachmentChange = vi.fn(async (_credential: string, expected: PolicyAttachmentChangeExpectation) => {
+      if (expected.operation !== "CREATE") throw new Error("unexpected operation");
+      return {
+        operation: "CREATE" as const,
+        accountId: expected.accountId,
+        actorPrincipalId: expected.actorPrincipalId,
+        requestId: expected.requestId,
+        completedAt: timestamp,
+        target: expected.target,
+        policyId: expected.policyId,
+        policyResourceVersion: expected.policyResourceVersion,
+        attachment: attachment(expected.target.id, platformPolicy)
+      };
+    });
+    const replacement = accounts({
+      currentIdentity: vi.fn(() => replacementVerified ? Promise.resolve(structuredClone(identity)) :
+        new Promise<AccountIdentity>((resolve) => { verifyReplacement = (value) => { replacementVerified = true; resolve(value); }; })),
+      getUser: vi.fn().mockResolvedValue(structuredClone(child)),
+      readPolicyAttachmentChange
+    });
+    const { user, replaceRepository } = await openDirectUserPolicyOwnerProbe(accounts({ execute }));
+    await user.click(screen.getByRole("button", { name: "direct-begin-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-policy-intent").textContent).toMatch(/^review:ui-user-attachment-/));
+    await user.click(screen.getByRole("button", { name: "direct-submit-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-policy-intent").textContent).toMatch(/^unknown:ui-user-attachment-/));
+    expect(execute).toHaveBeenCalledTimes(1);
+
+    replaceRepository(replacement);
+    await waitFor(() => expect(replacement.currentIdentity).toHaveBeenCalledTimes(1));
+    await user.click(screen.getByRole("button", { name: "direct-read-user" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-read-result").textContent).toBe("ready"));
+    expect(screen.getByLabelText("direct-owner-ready").textContent).toBe("false");
+    expect(screen.getByLabelText("direct-policy-intent").textContent).toMatch(/^unknown:ui-user-attachment-/);
+    await user.click(screen.getByRole("button", { name: "direct-inspect-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-inspect-result").textContent).toBe("false"));
+    expect(readPolicyAttachmentChange).not.toHaveBeenCalled();
+
+    await act(async () => { verifyReplacement(structuredClone(identity)); });
+    await waitFor(() => expect(screen.getByLabelText("direct-owner-ready").textContent).toBe("true"));
+    await user.click(screen.getByRole("button", { name: "direct-inspect-attachment" }));
+    await waitFor(() => expect(screen.getByLabelText("direct-inspect-result").textContent).toBe("true"));
+    expect(readPolicyAttachmentChange).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText("direct-policy-intent").textContent).toMatch(/^confirmed:ui-user-attachment-/);
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
