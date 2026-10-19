@@ -179,6 +179,25 @@ func validateExpectedMXFailure(
 	return nil
 }
 
+// waitInjectedUpgrade starts the failure-recovery budget after injection,
+// never extending the enclosing lifecycle deadline. Cancellation joins the
+// already-started command before its captured output can be inspected.
+func waitInjectedUpgrade(ctx context.Context, cancelCommand context.CancelFunc, waited <-chan error) error {
+	rollbackContext, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	select {
+	case err := <-waited:
+		if rollbackContext.Err() != nil {
+			return rollbackContext.Err()
+		}
+		return err
+	case <-rollbackContext.Done():
+		cancelCommand()
+		<-waited
+		return rollbackContext.Err()
+	}
+}
+
 func decodeOne(content []byte, destination any) error {
 	decoder := json.NewDecoder(bytes.NewReader(content))
 	decoder.DisallowUnknownFields()

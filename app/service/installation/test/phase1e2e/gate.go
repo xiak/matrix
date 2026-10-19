@@ -3434,7 +3434,13 @@ func (value *gate) failedUpgrade(
 	ctx context.Context,
 	secret, password, bearer []byte,
 ) error {
-	upgradeContext, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	// Signed preparation and migrations use the existing whole-gate budget.
+	// The rollback bound starts only after a real target fault is injected;
+	// otherwise slower media can prevent the intended failure from occurring.
+	if _, bounded := ctx.Deadline(); !bounded {
+		return fail("failed-upgrade-unbounded-context")
+	}
+	upgradeContext, cancel := context.WithCancel(ctx)
 	defer cancel()
 	command, stdout, stderr, err := startMX(
 		upgradeContext, value.releases.a, "upgrade",
@@ -3477,7 +3483,10 @@ func (value *gate) failedUpgrade(
 		<-waited
 		return fail("failed-upgrade-injection")
 	}
-	waitErr := <-waited
+	waitErr := waitInjectedUpgrade(upgradeContext, cancel, waited)
+	if errors.Is(waitErr, context.DeadlineExceeded) || errors.Is(waitErr, context.Canceled) {
+		return fail("failed-upgrade-rollback-deadline")
+	}
 	if err := validateExpectedMXFailure(
 		waitErr, stdout, stderr, "upgrade", value.forbidden(secret, password, bearer),
 	); err != nil {

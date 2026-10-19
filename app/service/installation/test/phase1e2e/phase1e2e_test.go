@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -24,6 +25,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
@@ -63,6 +65,128 @@ func TestOfflinePhase1Lifecycle(t *testing.T) {
 	if err := runGate(ctx, config); err != nil {
 		t.Fatal(safeFailure(err))
 	}
+}
+
+// This is a focused fault diagnostic on an already prepared A installation,
+// never a substitute for the fresh-host lifecycle or its restart gate.
+func TestOfflinePhase1UpgradeFault(t *testing.T) {
+	if os.Getenv("MATRIX_PHASE1_UPGRADE_FAULT") != "1" {
+		t.Skip("set MATRIX_PHASE1_UPGRADE_FAULT=1 on a prepared isolated release-A installation")
+	}
+	config, err := optionsFromEnvironment()
+	if err != nil || config.afterStart {
+		t.Fatal(fail("focused-upgrade-input"))
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	value, err := authenticatedGate(config)
+	if err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	defer value.edge.close()
+	if err := assertNoExternalRoute(); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	state, err := assertPlatform(ctx, config.root, value.releases.a.Manifest, "")
+	if err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if err := value.readTenantRetention(state.InstallationID); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	value.sensitive, err = installedSecretValues(config.root)
+	if err != nil {
+		t.Fatal(fail("focused-upgrade-secret-inventory"))
+	}
+	defer func() {
+		for _, secret := range value.sensitive {
+			clear(secret)
+		}
+	}()
+	if err := value.failedUpgrade(ctx, nil, nil, nil); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if _, err := assertPlatform(ctx, config.root, value.releases.a.Manifest, ""); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	if err := assertNoExternalRoute(); err != nil {
+		t.Fatal(safeFailure(err))
+	}
+	emit("focused-upgrade-injection-and-automatic-rollback")
+}
+
+func TestInjectedUpgradeWaitBounds(t *testing.T) {
+	t.Run("preparation does not consume the rollback window", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			outer, cancelOuter := context.WithTimeout(t.Context(), 30*time.Minute)
+			defer cancelOuter()
+			command, cancelCommand := context.WithCancel(outer)
+			defer cancelCommand()
+			time.Sleep(6 * time.Minute)
+			if command.Err() != nil {
+				t.Fatal("whole-gate budget expired during preparation")
+			}
+			waited := make(chan error, 1)
+			want := errors.New("observed command failure")
+			go func() {
+				time.Sleep(2 * time.Minute)
+				waited <- want
+			}()
+			started := time.Now()
+			if got := waitInjectedUpgrade(command, cancelCommand, waited); got != want ||
+				time.Since(started) != 2*time.Minute || command.Err() != nil {
+				t.Fatal("completed fault recovery lost its command result or remaining budget")
+			}
+		})
+	})
+	for _, scenario := range []struct {
+		name       string
+		outerLimit time.Duration
+		wantWait   time.Duration
+		wantOuter  error
+	}{
+		{"rollback deadline cancels and joins command", 30 * time.Minute, 5 * time.Minute, nil},
+		{"enclosing deadline is never extended", time.Minute, time.Minute, context.DeadlineExceeded},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				outer, cancelOuter := context.WithTimeout(t.Context(), scenario.outerLimit)
+				defer cancelOuter()
+				command, cancelCommand := context.WithCancel(outer)
+				defer cancelCommand()
+				waited := make(chan error)
+				joined := false
+				go func() {
+					<-command.Done()
+					joined = true
+					waited <- command.Err()
+				}()
+				started := time.Now()
+				got := waitInjectedUpgrade(command, cancelCommand, waited)
+				if !errors.Is(got, context.DeadlineExceeded) || time.Since(started) != scenario.wantWait ||
+					outer.Err() != scenario.wantOuter || command.Err() == nil || !joined {
+					t.Fatal("fault recovery escaped its bound or left an unjoined command")
+				}
+			})
+		})
+	}
+	t.Run("cancelled caller cannot accept a ready result", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			command, cancelCommand := context.WithCancel(t.Context())
+			waited := make(chan error, 1)
+			waited <- nil
+			cancelCommand()
+			if !errors.Is(waitInjectedUpgrade(command, cancelCommand, waited), context.Canceled) {
+				t.Fatal("cancelled lifecycle accepted a coincident command result")
+			}
+		})
+	})
 }
 
 func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
@@ -873,27 +997,38 @@ func optionsFromEnvironment() (options, error) {
 }
 
 func runGate(ctx context.Context, config options) error {
+	value, err := authenticatedGate(config)
+	if err != nil {
+		return err
+	}
+	if config.afterStart {
+		return value.afterRestart(ctx)
+	}
+	return value.beforeRestart(ctx)
+}
+
+func authenticatedGate(config options) (*gate, error) {
 	if runtime.GOOS != "linux" || runtime.GOARCH != "amd64" {
-		return fail("unsupported-host")
+		return nil, fail("unsupported-host")
 	}
 	trust, err := os.ReadFile(config.trustKey)
 	if err != nil {
-		return fail("release-authentication")
+		return nil, fail("release-authentication")
 	}
 	defer clear(trust)
 	a, err := release.VerifyDirectory(config.releaseA, trust)
 	if err != nil {
-		return fail("release-a-authentication")
+		return nil, fail("release-a-authentication")
 	}
 	if config.afterStart {
-		return newGate(config, releasePair{a: a}).afterRestart(ctx)
+		return newGate(config, releasePair{a: a}), nil
 	}
 	b, err := release.VerifyDirectory(config.releaseB, trust)
 	if err != nil {
-		return fail("release-b-authentication")
+		return nil, fail("release-b-authentication")
 	}
 	if err := validateReleasePair(a, b); err != nil {
-		return err
+		return nil, err
 	}
-	return newGate(config, releasePair{a: a, b: b}).beforeRestart(ctx)
+	return newGate(config, releasePair{a: a, b: b}), nil
 }

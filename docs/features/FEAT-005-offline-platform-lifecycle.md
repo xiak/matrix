@@ -938,10 +938,28 @@ completed in 164.8 seconds, preserving its command ID and making B READY
 with A as previous. This is interrupted-command recovery evidence, not the
 missing fault injection/automatic rollback or a complete fresh lifecycle.
 The investigation and required closure are tracked in
-[#3](https://github.com/xiak/matrix/issues/3); neither the five-minute window
-nor the thirty-minute whole-gate deadline was enlarged. A fresh complete
-run and restart gate remain required. The last accepted combination stays
-the `741dceb6` release recorded by FEAT-IAM-011.
+[#3](https://github.com/xiak/matrix/issues/3). Neither deadline was changed
+for those observations. The last accepted combination stays the `741dceb6`
+release recorded by FEAT-IAM-011.
+
+The current test owner separates signed preparation from fault recovery.
+Preparation consumes the existing thirty-minute whole-lifecycle budget; once
+the actual target APISIX container is removed, command completion has at
+most five minutes or the remaining outer budget, whichever expires first.
+Cancellation terminates and joins the command before inspecting its output;
+a cancelled caller cannot accept a coincident ready result. Virtual-clock
+unit checks cover preparation, the recovery limit, the shorter outer deadline
+and cancellation. No product performance SLO is inferred from this test
+deadline, and no signature, payload, profile or expected failure check is
+relaxed.
+
+`TestOfflinePhase1UpgradeFault` in the same test owner provides an opt-in
+focused check on a previously prepared, authenticated A installation. It
+reuses the existing real target-container injection, exact CLI failure,
+source restoration, target absence and status/verify assertions; it emits
+only a focused-completion marker. The ordinary fresh-host lifecycle and
+restart gates remain required, and this focused entry cannot stand in for
+them. The new timing split and focused entry still need real-runtime evidence.
 
 On 2026-10-17, fixed source
 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` assembled and authenticated
