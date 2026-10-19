@@ -314,6 +314,12 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 
 固定`f529279db3911e4c104d14d00f2c186dde306e0a`在既有`authorityprocess` owner增加显式opt-in的Policy mutation恢复门禁，不改变生产API、数据库或发布Profile。两个各自从空库开始的专属PostgreSQL 18运行均使用真实受限IAM/Audit/PaaS、双dispatcher与嵌入控制台：标签页A分别提交显示名修改和整策略退役；代理在后端2xx后提交响应头和半段正文并保持连接，使页面进入UNKNOWN且Web Lock持续持有。已单独登录同源标签页B尝试恢复时只得到“当前浏览器仍有请求在处理”，代理确认没有排队或额外写；关闭A后，B显式重放原method、path、Host、requestId、resourceVersion和body完全相同的命令。每次运行的代理最终都只观察初始请求和一次等值重放，初始提交已产生的Policy状态没有第二次推进；UPDATE保持稳定ID、默认版本、内容摘要和唯一不可变PolicyVersion，RETIRE使活动目录准确回到八项系统Policy并保留同一不可变版本。两次运行各自恰有一条outbox事实、一条准确actor/scope/target的成功Audit记录及完整租户链。UPDATE fixture/race package分别通过179.86/183.424秒，RETIRE分别通过209.35/212.884秒；聚焦回归、完整无数据库包、vet和diff检查随后通过。[Verification 38936057920](https://github.com/xiak/matrix/actions/runs/38936057920)已通过GitHub API核实精确SHA，19个job全部`completed/success`。该证据接受Policy UPDATE/RETIRE的真实响应丢失恢复，不替代默认CI明确跳过的opt-in浏览器场景之外的发布门禁。
 
+### Policy默认版本的页面结果恢复
+
+沿既有Policy mutation浏览器fixture增加`SET_DEFAULT`场景，不新建套件。测试对象为同Account的零附件CUSTOMER Policy，且没有User/Role权限边界引用；两个已经发布的不可变版本分别为同一业务读取的ALLOW与DENY。页面从版本表审阅当前/目标版本、摘要和预期Policy修订，最终选择目标版本；创建这些测试版本不授予任何主体权限。
+
+响应丢失按[005的版本事务合同](FEAT-IAM-005-policy-versions-and-boundaries.md#版本发布事务)验收，不冒充附件的只读完成查询：首个POST真实提交后丢回包，页面冻结UNKNOWN及原意图；只允许操作者显式重试完全相同的method/path/Host/requestId/version/body一次。两个POST必须对应一个Policy修订变化和一条成功outbox/Audit，原结果修订仍当前时才能确认；当前状态GET或冲突都不证明原意图完成。页面确认后独立重读版本目录，目标为当前默认，两个版本的内容/编译声明及零授权引用保持。后继修订后的历史结果恢复没有新接口，本片不扩张为不可变completion GET或通用receipt框架；原数据/Audit后验与页面观察必须同时通过，才登记该路径验收。
+
 ### User资料与状态原结果恢复源码
 
 2026-10-17，本分支从已固定UX/UI源码`343622a11d0ce4c65c763de0e717505e0b8dae9a`（父`c8981dd160474710868bf84712f2b7792f283973`）选择性`ADAPT`十五个frontend路径，不导入donor文档、生成资产或验收状态。显示名更新与启停在发送前持久化原Account、actor、User、operation、request ID、expected resource version及非秘密目标值；UNKNOWN只允许以当前有效Session读取准确`UserManagementCompletion`，不得重新POST、自动换request ID或用当前User状态猜测原结果。完成回执与独立当前详情读取分离，404/403/409/503不释放原意图，401只失效准确旧Session；Account、actor、User、repository和Session换主均围栏迟到响应。存储不可读写或后端未提供completion client时，页面在网络写入前降为只读。无消费者的旧泛型`update-user`分支及Preview死路径同步删除，隔离MOCK继续使用其原工作区命令。
