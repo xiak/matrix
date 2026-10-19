@@ -6,18 +6,17 @@
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   The renewed IAM first-release goal is ACTIVE and incomplete.
-- Latest pushed candidate:
-  `0c00ef988cb74f4a812fe0a3eb43b9dd454c3455`.
-  It changes only the existing authorityprocess test owner and FEAT010/011.
-  The Group PolicyAttachment CREATE receipt-recovery browser gate passed;
-  REVOKE is implemented but has not run in a real browser. Its independent
-  CI is not yet accepted.
-- Parent `a79ca1454401e24427c0bbef667b4d43b2db1522` has exact
-  [Verification 39118086883](https://github.com/xiak/matrix/actions/runs/39118086883)
-  attempt 1 completed/success, all 19 jobs. The test expert is finishing
-  detailed log review; job success does not replace opt-in browser or SMTP
-  evidence.
-- Product and signed-release source remains
+- Latest fixed test source:
+  `c80e58165b46f57ad309eabbdb3c33b0e2bc782e`.
+  It strengthens the existing Group deletion browser fixture. Its
+  [Verification 39191085161](https://github.com/xiak/matrix/actions/runs/39191085161)
+  is still pending final confirmation; do not inherit the predecessor's CI.
+- Fixed `0c00ef988cb74f4a812fe0a3eb43b9dd454c3455` has exact
+  [Verification 39188263855](https://github.com/xiak/matrix/actions/runs/39188263855)
+  attempt 1 completed/success, all 19 jobs. The test expert completed the
+  actual-log audit: all 57 top-level authority roots RUN/PASS. Default
+  opt-in browsers and seven Postfix subtests are not real execution evidence.
+- Product and accepted signed-release source remains
   `741dceb6f0092fbc33706842862980816fe72d15`,
   IAM87/Audit39/PaaS7 + contractRevision37. Its exact CI39012317180 and
   same-profile signed A/B lifecycle and restart verification passed.
@@ -29,37 +28,42 @@
 Read AGENTS, IAM/FEAT-IAM-010-console.md, then
 IAM/FEAT-IAM-011-acceptance.md and the relevant existing
 test/authorityprocess/process_e2e_test.go fixture. FEAT010 owns individual
-UI paths, evidence and remaining gaps; FEAT011 owns combined acceptance.
-Do not infer completion from this checkpoint or repeat accepted gates.
+UI paths, evidence and gaps; FEAT011 owns combined acceptance.
 
-Continue Group attachment REVOKE, then the remaining nonDeferred UI
-paths in FEAT010. Daily password change and Group final deletion have
-opt-in fixtures but no accepted final browser execution. Direct User/Role
-attachments and remaining policy/security/resource paths retain their
-own acceptance boundaries. Deferred external integrations and deployment
-prerequisites are not silently part of this goal.
+Group attachment CREATE and REVOKE have real browser/PG18/process evidence:
+one committed POST, lost reply, one exact receipt GET, zero subsequent
+attachment writes, next-request authorization and unique completion/outbox/
+Audit with a complete chain. REVOKE uses fixed
+`77923f7839633002eb2a6c732c35fec6bea19436`, which connects that mode to the
+existing browser observation budget without extending production HTTP timeouts.
 
-Current test increment proves CREATE with one committed POST, lost reply,
-one exact original receipt GET, no later attachment writes, next-request
-PaaS authorization, one authoritative row/completion/outbox/Audit fact and
-a complete tenant chain. Its default authorityprocess and architecture
-race tests, vet and diff checks pass; default SKIP is not REVOKE evidence.
-No production API, SQL, UI, profile or encoding changed.
+The c80 Group final-deletion browser effect also passed: exact one-membership
+and one-attachment cascade, directory removal, next PaaS denial, still-valid
+member identity and surviving system Policy, unique outbox/Audit and chain.
+The old UI immediately returns to details/directory in these two flows and
+does not retain visible immutable completion/counts. That UX gap remains open;
+backend effects do not replace visible receipt acceptance.
+
+Continue the existing nonDeferred FEAT010 matrix, including those receipt
+presentation fixes, daily password change, direct User/Role attachments and
+remaining policy/security/resource paths. Do not repeat accepted gates without
+an affected boundary. Deferred integrations and deployment prerequisites are
+not silently part of this goal.
 
 ## Coordination and delivery boundaries
 
-- UX/UI engineer thread `01a07b21-9a0d-7fd0-b090-7827ce18262e`
-  owns UI on its own branch. It is handling already observed UNKNOWN,
-  cancellation, membership-removal and security-settings messages.
-  Consume only its verified fixed changes, not WIP or foreign FEAT status.
-- Test expert thread `01a12f7b-be04-7590-acb1-3ba4f0dab999`
-  owns independent CI/log review. Submit necessary CI once and continue
-  independent development; fix security/contract failures before acceptance.
-- User authorizes routine test decisions and starting Docker Desktop if
-  stopped. This does not authorize resetting shared Docker/WSL, restarting
-  remote machines, consuming foreign resources or changing global settings.
-- Use uniquely owned limited resources, GOMAXPROCS2 and bounded Go
-  concurrency; serialize heavy real database gates. Remove no-longer-needed
-  task resources after evidence collection. Cleanups must verify ownership.
-- Keep docs Markdown and existing owners, Git identity
-  Xiak <Jellal@aliyun.com>, and push only the task branch.
+- UX/UI engineer `01a07b21-9a0d-7fd0-b090-7827ce18262e` owns UI on its
+  own branch. Consume fixed reviewed deltas only, preserve this branch's
+  tests and rebuild embedded assets; no foreign WIP or inherited acceptance.
+- Test expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns independent
+  CI/log review. Continue independent work while necessary CI runs;
+  fix security/contract failures before acceptance.
+- The user authorizes routine product development/test actions without
+  repetitive approval. Mandatory tool-specific human handoff remains binding.
+  Isolate task resources; do not reset shared Docker/WSL, restart remote
+  machines/shared services or touch unrelated resources.
+- Use uniquely owned limited resources, GOMAXPROCS2 and bounded Go concurrency;
+  serialize heavy real database gates. Verify ownership and remove unused
+  task resources after evidence collection.
+- Markdown and existing document owners; repository-local Git identity
+  Xiak <Jellal@aliyun.com>; push only the task branch.
