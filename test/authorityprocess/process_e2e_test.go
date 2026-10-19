@@ -440,6 +440,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
 		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser ||
 		mode == authorityProcessUserManagementRecoveryBrowser || mode == authorityProcessGroupMembershipRecoveryBrowser ||
+		mode == authorityProcessPolicyAttachmentRecoveryBrowser ||
 		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
 		mode == authorityProcessDailyPasswordChangeBrowser || mode == authorityProcessAccountSecuritySettingsBrowser {
 		duration = authorityProcessBrowserObservation
