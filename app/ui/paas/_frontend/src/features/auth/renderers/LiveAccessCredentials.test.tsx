@@ -1,23 +1,25 @@
-import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, render as renderRoot, screen, waitFor, within } from "@testing-library/react";
+import { useState, type ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { AccessKeyClient, AccessKeyCreateIntent, AccessKeyMutationIntent, AccountSecuritySettingsClient, AuthorizationProfileClient, AuthorizationProfileLoad } from "../application/AccountAccessProvider";
 import type { AuthorizationProfileDirectory } from "../domain/accounts";
 import type { AccessKeyAccess, AccessKeyDirectory } from "../domain/accessKeys";
-import type { AccountAccessScene } from "../scenes/accountAccessScene";
+import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
 
-const owner = {
-  accountType: "subuser", id: "user-alex", name: "Alex", loginName: "alex", source: "local", qualifiedName: "alex@acme",
+const owner: AccountUserScene = {
+  accountType: "subuser", accountId: "account-acme", id: "user-alex", name: "Alex", loginName: "alex", source: "local", qualifiedName: "alex@acme",
   protected: false, credentialProtection: null, enabled: true, resourceVersion: 2, state: "active",
   canRead: true, readRestrictionReason: null, canUpdate: true, updateRestrictionReason: null, canDelete: true, deleteRestrictionReason: null,
   canSetStatus: true, statusRestrictionReason: null, canResetPassword: true, passwordRestrictionReason: null,
   canAttachTenantPolicy: true, tenantAttachmentRestrictionReason: null, canAttachPlatformPolicy: false, platformAttachmentRestrictionReason: null,
   canSetPermissionBoundary: true, permissionBoundarySetRestrictionReason: null, canRemovePermissionBoundary: true, permissionBoundaryRemoveRestrictionReason: null,
   attachments: []
-} as const;
+};
 const scene = { accountId: "account-acme", accountOwner: { id: "root-acme" }, canListUsers: true, isRoot: true, users: [owner] } as unknown as AccountAccessScene;
 const key = { id: "mak1.alex-primary", accountId: scene.accountId, userId: owner.id, status: "ENABLED" as const, resourceVersion: 1,
   credentialState: "CURRENT" as const,
@@ -64,6 +66,10 @@ function settings(): AccountSecuritySettingsClient {
     password: { minimumLength: 15, requireLowercase: true, requireUppercase: true, requireDigit: true, requireSymbol: true, historyCount: 3, maxAgeDays: 90, expiryMode: "CHANGE_PASSWORD" },
     session: { idleTimeoutMinutes: 30 }, accessKeyNetwork: { allowedSourceCidrs: ["2001:db8::/32"] }, updatedAt: "2026-09-21T08:00:00Z"
   } }) };
+}
+
+function render(value: ReactNode) {
+  return renderRoot(value, { wrapper: UnsavedChangesProvider });
 }
 
 afterEach(cleanup);
@@ -314,6 +320,84 @@ describe("LiveAccessCredentials", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("resolves an original-intent owner outside the loaded user page only after an explicit exact read", async () => {
+    const user = userEvent.setup();
+    const offPageOwner = { ...owner, id: "user-auditor", name: "Auditor", loginName: "auditor", qualifiedName: "auditor@acme", resourceVersion: 5 };
+    const offPageDirectory: AccessKeyDirectory = {
+      ...directory,
+      userId: offPageOwner.id,
+      userResourceVersion: offPageOwner.resourceVersion,
+      capabilities: directory.capabilities.map((entry) => ({ ...entry, resource: { ...entry.resource, id: offPageOwner.id } })),
+      items: []
+    };
+    const intent: AccessKeyCreateIntent = {
+      accountId: scene.accountId, actorId: "root-acme", userId: offPageOwner.id, userResourceVersion: offPageOwner.resourceVersion,
+      networkRestrictions: { allowedSourceCidrs: [] }, requestId: `ui-access-key-create-${"e".repeat(32)}`, phase: "unknown"
+    };
+    const api = client({ list: vi.fn().mockResolvedValue(offPageDirectory) });
+    const loadOwner = vi.fn().mockResolvedValue(offPageOwner);
+    const failedDirectoryScene = { ...scene, directoryFailures: { users: "unavailable" } } as AccountAccessScene;
+    render(<LocaleProvider><LiveAccessCredentials client={api} createIntent={intent} loadOwner={loadOwner} scene={failedDirectoryScene} /></LocaleProvider>);
+
+    expect(api.list).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "继续处理原请求" }));
+    expect(loadOwner).toHaveBeenCalledExactlyOnceWith(offPageOwner.id);
+    expect(await screen.findByRole("heading", { level: 1, name: "auditor · 访问密钥" })).toBeTruthy();
+    await waitFor(() => expect(api.list).toHaveBeenCalledExactlyOnceWith(offPageOwner.id));
+    expect(api.create).not.toHaveBeenCalled();
+
+    await user.click(await screen.findByRole("button", { name: "继续处理原请求" }));
+    expect(screen.getByText(intent.requestId)).toBeTruthy();
+    expect(api.create).not.toHaveBeenCalled();
+  });
+
+  it.each(["rejected", "wrong-user"] as const)("keeps the exact mutation intent locked when its owner read is %s", async (failure) => {
+    const user = userEvent.setup();
+    const intent: AccessKeyMutationIntent = {
+      accountId: scene.accountId, actorId: "root-acme", userId: "user-auditor", accessKeyId: "key-auditor",
+      accessKeyResourceVersion: 2, requestId: `ui-access-key-delete-${"a".repeat(32)}`, phase: "unknown", operation: "delete"
+    };
+    const api = client();
+    const loadOwner = failure === "rejected"
+      ? vi.fn().mockRejectedValue(new Error("UNAVAILABLE")) : vi.fn().mockResolvedValue(owner);
+    render(<LocaleProvider><LiveAccessCredentials client={api} mutationIntent={intent} loadOwner={loadOwner}
+      scene={{ ...scene, directoryFailures: { users: "unavailable" } } as AccountAccessScene} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "继续处理原请求" }));
+    expect(await screen.findByText(`无法读取原请求所属用户 ${intent.userId}。原请求仍保持锁定且不会自动重放；请重试精确读取。`)).toBeTruthy();
+    expect(loadOwner).toHaveBeenCalledExactlyOnceWith(intent.userId);
+    expect((screen.getByRole("button", { name: "继续处理原请求" }) as HTMLButtonElement).disabled).toBe(false);
+    expect(api.list).not.toHaveBeenCalled();
+    expect(api.create).not.toHaveBeenCalled();
+    expect(api.setStatus).not.toHaveBeenCalled();
+    expect(api.setNetworkRestrictions).not.toHaveBeenCalled();
+    expect(api.delete).not.toHaveBeenCalled();
+  });
+
+  it("ignores an original owner's late resolution after the AccessKey client changes", async () => {
+    const user = userEvent.setup();
+    const offPageOwner = { ...owner, id: "user-auditor", loginName: "auditor" };
+    const intent: AccessKeyCreateIntent = {
+      accountId: scene.accountId, actorId: "root-acme", userId: offPageOwner.id, userResourceVersion: 5,
+      networkRestrictions: { allowedSourceCidrs: [] }, requestId: `ui-access-key-create-${"f".repeat(32)}`, phase: "unknown"
+    };
+    let resolveOwner!: (value: typeof offPageOwner) => void;
+    const loadOwner = vi.fn(() => new Promise<typeof offPageOwner>((resolve) => { resolveOwner = resolve; }));
+    const first = client();
+    const replacement = client();
+    const view = render(<LocaleProvider><LiveAccessCredentials client={first} createIntent={intent} loadOwner={loadOwner} scene={scene} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "继续处理原请求" }));
+    expect(loadOwner).toHaveBeenCalledExactlyOnceWith(intent.userId);
+    view.rerender(<LocaleProvider><LiveAccessCredentials client={replacement} createIntent={intent} loadOwner={loadOwner} scene={scene} /></LocaleProvider>);
+    await act(async () => resolveOwner(offPageOwner));
+    expect(screen.queryByRole("heading", { name: "auditor · 访问密钥" })).toBeNull();
+    expect(first.list).not.toHaveBeenCalled();
+    expect(replacement.list).not.toHaveBeenCalled();
+    expect(first.create).not.toHaveBeenCalled();
+    expect(replacement.create).not.toHaveBeenCalled();
+  });
+
   it("loads the shared product credential boundary only after the user asks for it", async () => {
     const user = userEvent.setup();
     const api = client();
@@ -400,6 +484,38 @@ describe("LiveAccessCredentials", () => {
     expect(api.acknowledgeIssued).toHaveBeenCalledOnce();
   });
 
+  it("guards an applied one-time Secret until an explicit leave clears the mounted workflow", async () => {
+    const user = userEvent.setup();
+    const api = client();
+    function Fixture() {
+      const requestLeave = useLeaveConfirmation();
+      const [open, setOpen] = useState(true);
+      return <LocaleProvider>{open ? <LiveAccessCredentials client={api} scene={scene} /> : <p>destination-page</p>}
+        <button onClick={() => requestLeave(() => setOpen(false))}>navigate-away</button>
+      </LocaleProvider>;
+    }
+    render(<Fixture />);
+
+    await user.click(screen.getByRole("button", { name: "管理 alex 的访问密钥" }));
+    await screen.findByRole("button", { name: key.id });
+    await user.click(screen.getByRole("button", { name: "新建访问密钥" }));
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    expect(await screen.findByText("mak1.one-time-secret")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "navigate-away" }));
+    expect(screen.getByRole("dialog", { name: "离开并隐藏一次性 Secret？" })).toBeTruthy();
+    expect(screen.getByText("mak1.one-time-secret")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "留在此页" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByText("mak1.one-time-secret")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "navigate-away" }));
+    await user.click(screen.getByRole("button", { name: "清除 Secret 并离开" }));
+    expect(await screen.findByText("destination-page")).toBeTruthy();
+    expect(screen.queryByText("mak1.one-time-secret")).toBeNull();
+    expect(api.acknowledgeIssued).not.toHaveBeenCalled();
+  });
+
   it("removes an unacknowledged one-time Secret immediately when the client changes", async () => {
     const user = userEvent.setup();
     const first = client();
@@ -415,12 +531,15 @@ describe("LiveAccessCredentials", () => {
 
     view.rerender(<LocaleProvider><LiveAccessCredentials client={replacement} scene={scene} /></LocaleProvider>);
     expect(screen.queryByText("mak1.one-time-secret")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 1, name: "alex · 访问密钥" })).toBeTruthy();
     expect(screen.getByText("正在读取该用户的访问密钥…").closest('[role="status"]')).toBeTruthy();
 
     await waitFor(() => expect(replacement.list).toHaveBeenCalledWith(owner.id));
     await act(async () => resolveReplacement(replacementDirectory));
     expect(await screen.findByRole("button", { name: replacementKey.id })).toBeTruthy();
+    view.rerender(<LocaleProvider><LiveAccessCredentials client={first} scene={scene} /></LocaleProvider>);
+    expect(screen.queryByText("mak1.one-time-secret")).toBeNull();
     expect(first.acknowledgeIssued).not.toHaveBeenCalled();
     expect(replacement.acknowledgeIssued).not.toHaveBeenCalled();
   });

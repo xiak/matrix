@@ -17,7 +17,7 @@ import { AccountAccessRenderer } from "./AccountAccessRenderer";
 import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
 import { LoginRenderer } from "./LoginRenderer";
 import { buildAccountAccessScene, type AccountDirectoryKind } from "../scenes/accountAccessScene";
-import { AccountUserAccessMethods } from "./AccountUserWorkspace";
+import { AccountUserAccessMethods, type AccountUserDetailTab } from "./AccountUserWorkspace";
 import { readUserManagementIntent, writeUserManagementIntent } from "../repositories/userManagementRecoveryStorage";
 
 const navigation = vi.hoisted(() => ({ replace: vi.fn() }));
@@ -507,17 +507,18 @@ function SecuritySettingsIntentProbe({ proposed = { expectedResourceVersion: acc
   </>;
 }
 
-function AuthenticatedAccess({ repository, initialView, initialEntityId, active = true }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string; active?: boolean }) {
+function AuthenticatedAccess({ repository, initialView, initialEntityId, initialUserTab, active = true }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string; initialUserTab?: AccountUserDetailTab; active?: boolean }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
   const [view, setView] = useState(initialView);
   const [entityId, setEntityId] = useState<string | undefined>(initialEntityId);
-  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} onNavigate={(next, id) => requestLeave(() => { setView(next); setEntityId(id); })} /></AccountAccessProvider> : <LoginRenderer />;
+  const [userTab, setUserTab] = useState<AccountUserDetailTab | undefined>(initialUserTab);
+  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} userTab={userTab} onNavigate={(next, id, _method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setUserTab(nextUserTab); })} /></AccountAccessProvider> : <LoginRenderer />;
 }
 
-async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential, initialEntityId?: string) {
+async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential, initialEntityId?: string, initialUserTab?: AccountUserDetailTab) {
   const user = userEvent.setup({ delay: null });
-  const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} initialEntityId={initialEntityId} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
+  const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} initialEntityId={initialEntityId} initialUserTab={initialUserTab} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
   const view = render(tree(repository));
   await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
@@ -1848,6 +1849,29 @@ describe("account access", () => {
     expect(repository.getUser).toHaveBeenCalledTimes(1);
     expect(repository.listUsers).not.toHaveBeenCalled();
     expect(repository.accessKeys!.create).not.toHaveBeenCalled();
+  });
+
+  it("opens an exact LIVE user at the requested policy section and focuses the stable target", async () => {
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }) });
+    await openAccess(repository, iam(), "users", credential, childUser.id, "policies");
+
+    const section = await screen.findByRole("region", { name: "直接关联策略" });
+    await waitFor(() => expect(document.activeElement).toBe(section));
+    expect(repository.getUser).toHaveBeenCalledExactlyOnceWith(credential, childUser.id);
+    expect(repository.listUsers).not.toHaveBeenCalled();
+  });
+
+  it("opens an exact LIVE user at the requested key section and expands only its key inventory", async () => {
+    const list = vi.fn().mockResolvedValue({ accountId: account.id, userId: childUser.id, userResourceVersion: childUser.resourceVersion, capabilities: [], items: [] });
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }),
+      accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    await openAccess(repository, iam(), "users", credential, childUser.id, "keys");
+
+    const section = await screen.findByRole("region", { name: "访问方式与凭据" });
+    await waitFor(() => expect(document.activeElement).toBe(section));
+    expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
+    expect(list).toHaveBeenCalledExactlyOnceWith(credential, account.id, childUser.id);
+    expect(repository.listUsers).not.toHaveBeenCalled();
   });
 
   it("reads a member's own keys without any user-list or user-detail request", async () => {

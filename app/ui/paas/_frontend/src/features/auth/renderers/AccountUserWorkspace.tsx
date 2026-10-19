@@ -45,13 +45,18 @@ function AccountUserSnapshot({ user, busy, children }: { user: AccountUserScene;
   </div>;
 }
 
-type LiveUserWorkspaceProps = { userId: string; summary?: AccountUserScene; onBack(): void };
+type LiveUserWorkspaceProps = {
+  userId: string;
+  summary?: AccountUserScene;
+  initialSection?: Extract<AccountUserDetailTab, "policies" | "keys">;
+  onBack(): void;
+};
 export function AccountLiveUserWorkspace(props: LiveUserWorkspaceProps) {
   const { userManagement } = useAccountAccess();
   return <LiveUserWorkspace key={userManagement?.identity ?? props.userId} {...props} />;
 }
 
-function LiveUserWorkspace({ userId, summary, onBack }: LiveUserWorkspaceProps) {
+function LiveUserWorkspace({ userId, summary, initialSection, onBack }: LiveUserWorkspaceProps) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const management = useTranslations("UserManagementCommand");
@@ -107,7 +112,7 @@ function LiveUserWorkspace({ userId, summary, onBack }: LiveUserWorkspaceProps) 
   </WorkspaceDetail>;
   return <WorkspaceDetail title={loaded.user.loginName} onBack={onBack}>
     {commandFeedback}
-    <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} deleteAction showLiveEvidenceBoundary user={loaded.user} onDeleted={onBack} renameActionRef={renameRef} statusActionRef={statusRef}
+    <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} deleteAction showLiveEvidenceBoundary initialSection={initialSection} user={loaded.user} onDeleted={onBack} renameActionRef={renameRef} statusActionRef={statusRef}
       managementCommands={{ disabled: !command.ready || !userManagement,
         onRename() { returnAction.current = "rename"; setWorkflow("rename"); }, onStatus() { returnAction.current = "status"; setWorkflow("status"); } }} />
     {permissionBoundaries && loaded.boundary ? <LivePermissionBoundary key={`${permissionBoundaries.accountId}:${loaded.user.id}`} client={permissionBoundaries} snapshot={loaded.boundary} onChanged={boundaryChanged} /> : null}

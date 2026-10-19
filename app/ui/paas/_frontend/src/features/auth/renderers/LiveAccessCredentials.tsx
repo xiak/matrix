@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type ComponentProps } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound } from "lucide-react";
-import { Alert, Badge, Button, Card, Checkbox, ContentPage, Table, TableSkeleton, Typography } from "@ui/xiak";
+import { Alert, Badge, Button, Card, Checkbox, ContentPage, Table, TableSkeleton, Typography, useUnsavedChanges } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccessKeyAccess, AccessKeyDirectory, AccessKeyStatus } from "../domain/accessKeys";
 import type { IamAction } from "../domain/accounts";
@@ -38,6 +38,8 @@ type OwnedLiveKeyFlow = { client: AccessKeyClient; userId: string; flow: LiveKey
 type OwnedLiveKeyError = { client: AccessKeyClient; userId: string; error: LiveKeyError };
 type AccessKeyIntentBinding = { client: AccessKeyClient; observed: AccessKeyCreateIntent | null; requestId: string | null };
 type AccessKeyMutationBinding = { client: AccessKeyClient; observed: AccessKeyMutationIntent | null; requestId: string | null };
+type ExactOwnerView = { client: AccessKeyClient; userId: string; state: "loading" | "error" } |
+  { client: AccessKeyClient; userId: string; state: "ready"; owner: AccountUserScene };
 
 const loadingAccessKeyDirectory: AccessKeyDirectoryState = { status: "loading" };
 
@@ -70,6 +72,7 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   const restrictions = useTranslations("AccountAccess.restrictions");
   const networkFieldId = useId();
   const heading = useRef<HTMLHeadingElement>(null);
+  const secretAcknowledgement = useRef<HTMLInputElement>(null);
   const mounted = useRef(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<LiveKeyError | null>(null);
@@ -90,6 +93,11 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
     : intent.operation === "set-network-restrictions" ? network("editKeyTitle")
       : t("keyDeleteReview", { name: intent.accessKeyId });
   const active = replacement ?? flow;
+  const secretLeaveCopy = useMemo(() => ({
+    title: t("keySecretLeaveTitle"), description: t("keySecretLeaveDescription"), stay: t("keySecretLeaveStay"), leave: t("keySecretLeave"), close: t("keySecretLeaveClose"),
+    busyTitle: t("keySecretLeaveBusyTitle"), busyDescription: t("keySecretLeaveBusyDescription"), failure: t("keySecretLeaveFailure"), retry: t("keySecretLeaveRetry")
+  }), [t]);
+  useUnsavedChanges({ dirty: active.kind === "issued", busy: false, copy: secretLeaveCopy, focusRef: secretAcknowledgement });
   const actionCapability = active.kind === "status" ? capability(active.access, "iam.access-key.set-status")
     : active.kind === "network" ? capability(active.access, "iam.access-key.set-network-restrictions")
     : active.kind === "delete" ? capability(active.access, "iam.access-key.delete")
@@ -186,7 +194,7 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
       {active.kind === "issued" ? <>
         <Alert status="warning">{t("keyLiveSecretWarning")}</Alert>
         <div className={styles.secretGrid}><div><span>{t("keyId")}</span><AccountIdentifier label={t("keyId")} value={active.keyId} /></div><div><span>{t("keySecret")}</span><AccountIdentifier label={t("keySecret")} value={active.secret} /></div></div>
-        <Checkbox checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)}>{t("keyLiveAcknowledge")}</Checkbox>
+        <Checkbox ref={secretAcknowledgement} checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)}>{t("keyLiveAcknowledge")}</Checkbox>
         <div className={styles.actions}><Button disabled={!acknowledged} onClick={() => { if (client.acknowledgeIssued(active.requestId, active.keyId)) onClose(); }}>{t("done")}</Button></div>
       </> : null}
       {active.kind === "replayed" ? <>
@@ -232,7 +240,7 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
   </Card>;
 }
 
-export function LiveAccessCredentials({ client, scene, createIntent = null, mutationIntent = null, recoveryError = false, scopedOwner, userDirectory, accountSecuritySettings = null, authorizationProfiles = null, onInspectPermissions }: {
+export function LiveAccessCredentials({ client, scene, createIntent = null, mutationIntent = null, recoveryError = false, scopedOwner, userDirectory, accountSecuritySettings = null, authorizationProfiles = null, loadOwner, onInspectPermissions }: {
   client: AccessKeyClient;
   scene: AccountAccessScene;
   createIntent?: AccessKeyCreateIntent | null;
@@ -242,13 +250,21 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
   userDirectory?: { busy: boolean; loading: boolean; readPage(after: string): void };
   accountSecuritySettings?: AccountSecuritySettingsClient | null;
   authorizationProfiles?: AuthorizationProfileClient | null;
+  loadOwner?(userId: string): Promise<AccountUserScene>;
   onInspectPermissions?(ownerId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
   const network = useTranslations("AccessKeyNetworkPreview");
   const restrictions = useTranslations("AccountAccess.restrictions");
+  const activeClient = useRef(client);
+  activeClient.current = client;
+  const activeOwnerLoader = useRef(loadOwner);
+  activeOwnerLoader.current = loadOwner;
+  const ownerRequest = useRef<object | null>(null);
   const [ownerId, setOwnerId] = useState<string | null>(scopedOwner?.id ?? ((!scene.canListUsers || scene.directoryFailures?.users) && !scene.isRoot ? scene.currentUserId : null));
-  const owner = scopedOwner ?? scene.users.find((user) => user.id === ownerId) ??
+  const [exactOwnerView, setExactOwnerView] = useState<ExactOwnerView | null>(null);
+  const exactOwner = exactOwnerView?.client === client && exactOwnerView.userId === ownerId && exactOwnerView.state === "ready" ? exactOwnerView.owner : null;
+  const owner = scopedOwner ?? scene.users.find((user) => user.id === ownerId) ?? exactOwner ??
     (ownerId === scene.currentUserId && !scene.isRoot ? {
       id: scene.currentUserId, name: scene.identityLabel, loginName: scene.currentLoginName, enabled: scene.currentUserEnabled
     } : null);
@@ -306,6 +322,14 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
   const accountNetwork = accountNetworkView.client === accountSecuritySettings
     ? accountNetworkView.state : accountSecuritySettings ? { status: "loading" as const } : { status: "unavailable" as const };
 
+  useLayoutEffect(() => {
+    setFlowView((current) => current?.client === client ? current : null);
+  }, [client]);
+  useLayoutEffect(() => {
+    ownerRequest.current = null;
+    setExactOwnerView(null);
+  }, [client, loadOwner]);
+
   useEffect(() => {
     if (!accountSecuritySettings) return;
     let current = true;
@@ -357,11 +381,36 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
   }, [activeOwnerId, load]);
 
   const chooseOwner = (userId: string) => {
-    setDirectoryView(null); setSelection(null); setFlowView(null); setInteractionErrorView(null); setOwnerId(userId);
+    ownerRequest.current = null; setExactOwnerView(null); setDirectoryView(null); setSelection(null); setFlowView(null); setInteractionErrorView(null); setOwnerId(userId);
   };
   const closeOwner = () => {
-    setOwnerId(null); setDirectoryView(null); setSelection(null); setFlowView(null); setInteractionErrorView(null);
+    ownerRequest.current = null; setExactOwnerView(null); setOwnerId(null); setDirectoryView(null); setSelection(null); setFlowView(null); setInteractionErrorView(null);
   };
+  const resolveIntentOwner = async (userId: string) => {
+    if (scene.users.some((user) => user.id === userId)) { chooseOwner(userId); return; }
+    if (!loadOwner) return;
+    const sourceClient = client;
+    const sourceOwnerLoader = loadOwner;
+    const request = {};
+    ownerRequest.current = request;
+    setExactOwnerView({ client: sourceClient, userId, state: "loading" });
+    try {
+      const resolved = await sourceOwnerLoader(userId);
+      if (activeClient.current !== sourceClient || activeOwnerLoader.current !== sourceOwnerLoader || ownerRequest.current !== request) return;
+      if (resolved.id !== userId) throw new Error("EXACT_USER_MISMATCH");
+      setExactOwnerView({ client: sourceClient, userId, state: "ready", owner: resolved });
+      setDirectoryView(null); setSelection(null); setFlowView(null); setInteractionErrorView(null); setOwnerId(userId);
+    } catch {
+      if (activeClient.current === sourceClient && activeOwnerLoader.current === sourceOwnerLoader && ownerRequest.current === request) setExactOwnerView({ client: sourceClient, userId, state: "error" });
+    }
+  };
+  const intentOwnerButton = (userId: string) => !scopedOwner && (loadOwner || scene.users.some((user) => user.id === userId))
+    ? <Button disabled={exactOwnerView?.client === client && exactOwnerView.userId === userId && exactOwnerView.state === "loading"}
+        onClick={() => void resolveIntentOwner(userId)} size="small" variant="ghost">
+        {exactOwnerView?.client === client && exactOwnerView.userId === userId && exactOwnerView.state === "loading" ? t("keyIntentOwnerLoading") : t("keyLiveResume")}
+      </Button> : null;
+  const ownerResolutionNotice = exactOwnerView?.client === client && exactOwnerView.state === "error"
+    ? <Alert status="danger">{t("keyIntentOwnerUnavailable", { id: exactOwnerView.userId })}</Alert> : null;
 
   if (!owner) return <section className={styles.root}>
     <ContentPage.Heading title={t("keys")} scrollKey="live-access-key-user-directory" />
@@ -369,12 +418,11 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
     {recoveryError ? <Alert status="danger">{t("keyRecoveryStorageUnavailable")}</Alert> : null}
     {createIntent ? <Alert status="warning">{currentCreateIntent
       ? t("keyLivePendingOwner", { id: currentCreateIntent.userId })
-      : t("keyClientChangedIntent", { id: createIntent.requestId })} {currentCreateIntent && scene.users.some((user) => user.id === currentCreateIntent.userId)
-        ? <Button onClick={() => chooseOwner(currentCreateIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
+      : t("keyClientChangedIntent", { id: createIntent.requestId })} {currentCreateIntent ? intentOwnerButton(currentCreateIntent.userId) : null}</Alert> : null}
     {mutationIntent ? <Alert status="warning">{currentMutationIntent
       ? t("keyMutationPendingOwner", { id: currentMutationIntent.userId })
-      : t("keyMutationClientChanged", { id: mutationIntent.requestId })} {currentMutationIntent && scene.users.some((user) => user.id === currentMutationIntent.userId)
-        ? <Button onClick={() => chooseOwner(currentMutationIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
+      : t("keyMutationClientChanged", { id: mutationIntent.requestId })} {currentMutationIntent ? intentOwnerButton(currentMutationIntent.userId) : null}</Alert> : null}
+    {ownerResolutionNotice}
     {scene.canListUsers && !scene.directoryFailures?.users ? <AccessKeyOwnerDirectory scene={scene} busy={userDirectory?.busy} loading={userDirectory?.loading} onOpen={chooseOwner} onReadPage={userDirectory?.readPage} />
       : <Alert status="info">{t("keyOwnerDirectoryUnavailable")}{!scene.isRoot ? <Button onClick={() => chooseOwner(scene.currentUserId)} size="small" variant="ghost">{t("keyViewOwn")}</Button> : null}{scene.directoryFailures?.users ? <Button disabled={userDirectory?.busy || userDirectory?.loading} onClick={() => userDirectory?.readPage("")} size="small" variant="secondary">{t("keyRetryUserDirectory")}</Button> : null}</Alert>}
     <RotationGuide />
@@ -476,6 +524,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
       : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: Boolean(createIntent || mutationIntent) || recoveryError || !createCapability?.available, disabledReason: recoveryError ? t("keyRecoveryStorageUnavailable") : mutationIntent ? t("keyMutationPendingReason") : createIntent ? t("keyCreatePendingReason") : createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
     {!scopedOwner ? <Alert status="info">{t("keyLiveProductBoundary")}</Alert> : null}
     {recoveryError ? <Alert status="danger">{t("keyRecoveryStorageUnavailable")}</Alert> : null}
+    {ownerResolutionNotice}
     {createIntent && !flow ? <Alert status="warning">{currentCreateIntent
       ? currentCreateIntent.userId === owner.id
         ? currentCreateIntent.phase === "unknown" ? t("keyCreateUncertain", { id: currentCreateIntent.requestId }) : t("keyRecovered", { id: currentCreateIntent.keyId })
@@ -483,14 +532,14 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
       : t("keyClientChangedIntent", { id: createIntent.requestId })} {currentCreateIntent
         ? currentCreateIntent.userId === owner.id
           ? <Button disabled={Boolean(flow) || currentCreateIntent.phase === "unknown" && !createCapability?.available} onClick={resumeCreate} size="small" variant="ghost">{t("keyLiveResume")}</Button>
-          : !scopedOwner && scene.users.some((user) => user.id === currentCreateIntent.userId) ? <Button onClick={() => chooseOwner(currentCreateIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null
+          : intentOwnerButton(currentCreateIntent.userId)
         : null}</Alert> : null}
     {mutationIntent && !flow ? <Alert status="warning">{currentMutationIntent
       ? currentMutationIntent.userId === owner.id ? t("keyMutationPending", { id: currentMutationIntent.requestId }) : t("keyMutationPendingOwner", { id: currentMutationIntent.userId })
       : t("keyMutationClientChanged", { id: mutationIntent.requestId })} {currentMutationIntent
         ? currentMutationIntent.userId === owner.id
           ? <Button onClick={resumeMutation} size="small" variant="ghost">{t("keyLiveResume")}</Button>
-          : !scopedOwner && scene.users.some((user) => user.id === currentMutationIntent.userId) ? <Button onClick={() => chooseOwner(currentMutationIntent.userId)} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null
+          : intentOwnerButton(currentMutationIntent.userId)
         : null}</Alert> : null}
     {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
     {loading && !directory ? <Card>

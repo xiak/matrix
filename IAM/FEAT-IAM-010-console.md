@@ -72,7 +72,7 @@
 
 ### AccessKey 变更的原意图恢复
 
-沿用[007 的 K1 契约](FEAT-IAM-007-programmatic-credentials.md#k1管理入口与原子事实)，在既有 provider/renderer 内补齐状态变更、网络限制修改和删除的恢复流程，不新增通用回执接口、秘密恢复能力或第二套凭据模型。原消费者`e1a96db06142f62508a26870edd8ce36cdc32780`的页面局部意图在离页或重新登录后丢失；已恢复创建的key若删除成功但回包丢失，还会失去从目录进入原删除恢复的入口。固定消费者`f31267814e6449772ded8c785aed897531329533`选择性采用`1da15f7e005d9b888d0f5342d8a42a0f17f1e2f2`及必要后继`1329abbb0a30349eda8f939d3df469b0abdb0561`修正这些路径；[Issue #5](https://github.com/xiak/matrix/issues/5)仍保持打开。后继仅测试诊断提交`ef10d51bfbf120ec521e665bac9d54b14fa26c0d`的[Verification 39284297226](https://github.com/xiak/matrix/actions/runs/39284297226)尚未闭合，真实浏览器故障注入也未验收。
+沿用[007 的 K1 契约](FEAT-IAM-007-programmatic-credentials.md#k1管理入口与原子事实)，在既有 provider/renderer 内补齐状态变更、网络限制修改和删除的恢复流程，不新增通用回执接口、秘密恢复能力或第二套凭据模型。固定消费者`f31267814e6449772ded8c785aed897531329533`已修正离页或重新登录丢失原意图、已提交删除的key从目录消失后不能恢复的问题。本轮在其基础上选择性采用固定`fd3cf32c70f608b4048749a5289750e473975825`的准确User导航、原意图所属User读取和一次性Secret离页保护；具体采用边界归既有adoption owner。[Issue #5](https://github.com/xiak/matrix/issues/5)仍保持打开，本轮增量的独立CI及真实浏览器故障注入尚未验收。
 
 待核对意图只保存非敏感的Account、actor、目标User/key、预期资源版本、操作、冻结输入、requestId及阶段；严格解析，不保存Secret、Bearer、OTP或密文。真正没有记录与存储不可读、畸形或错误绑定必须区分；后三者不得被当作空闲状态允许新写，发送前必须成功持久化原意图，清除失败不得解锁。离页、重挂载和同actor重新登录必须保留原意图，其他Account/actor不得消费它。UNKNOWN期间禁止自动重试或新意图替代；操作者只能明确重放完全相同的原请求，不能编辑原CIDR、状态或版本后继续沿用requestId。
 
@@ -80,14 +80,14 @@
 
 创建意图与后续变更意图必须正确衔接：为处理未取得Secret的已创建key，仍允许对其准确目标进行显式禁用/删除。只有该key的删除完成事实及后续权威读取均成功，才能解除对应的recovered-create锁，不能因目录暂时无行或其他key删除成功而解锁。所有成功、失败和收尾还须经过现有精确来源Session围栏，旧Session迟到的成功、401或finally不得清理新Session保留的意图。
 
-本分支保留自身renderer用例，六个生产文件与固定后继逐字一致，未导入对方生成物或验收状态。独立消费者四条用例证明前一候选在存储读失败、写失败和畸形记录下仍派发新写，以及completed状态错误依赖原写权限：7.72秒确定失败，后继上原样8.37秒通过。另采用原owner的创建持久化和两类清除失败用例。两个完整文件278项测试75.77秒通过；Node22.22.2、单worker、2GiB heap下类型/lint/架构、234组对比度及八项导出Node测试通过，两个2-worker生产构建的324项资产逐字一致并由本分支重新嵌入。Go UI/architecture/default authorityprocess race及vet、Linux UI编译通过；未启用的数据库和浏览器用例不计真实运行。这些证据不等于LIVE命令效果、Audit唯一性或签名发布验收。后端API、SQL和完整Profile没有变化。
+本分支保留原renderer用例及登录交互，未导入对方生成物或验收状态。既有四条独立消费者回归继续覆盖存储读失败、写失败、畸形记录仍派发新写，以及completed状态错误依赖原写权限：前一候选7.72秒确定失败、必要修正上原样8.37秒通过。本轮另在旧消费者证明四条页面连接回归失败，采用修正后原样通过；旧client清理用例保持通过。增加的三条负向用例证明exact-owner读取失败或返回错误User时保留原锁、零密钥写入，以及旧client的迟到User回包不能打开新身份的目录。七个生产文件与固定fd3cf32c逐字一致；两个完整测试文件285项85.99秒通过。Node22.22.2、单worker、2GiB heap下类型/lint/架构、234组对比度及八项导出Node测试通过，两个2-worker生产构建的324项资产逐字一致并由本分支重新嵌入。Go UI/architecture/default authorityprocess race分别7.277/2.342/3.910秒，vet及Linux UI编译通过；未启用的数据库和浏览器用例不计真实运行。这些证据不等于LIVE命令效果、Audit唯一性或签名发布验收。后端API、SQL和IAM87/Audit39/PaaS7+r37完整Profile没有变化。
 
 最小验收沿原provider/repository/renderer及真实进程owner，不另建测试框架：
 
 - 三类命令分别覆盖UNKNOWN→离页/重挂载→同actor新登录→显式原请求重放；替换Account、actor、目标、版本或冻结输入均不得执行另一意图。
 - 覆盖旧Session迟到成功/401及并发收尾，原requestId和后来Session的待核对状态保持。
 - 覆盖recovered-create→删除已提交丢包→目录无key→原删除重放→权威回读后解锁；回读失败保留完成状态且不再写。
-- 当前固定消费者仍缺三项页面衔接，交既有UX owner补齐：User详情应消费`policies`/`keys`目标区块；原意图的User不在当前目录页或目录失败时仍应沿exact getUser/loadUser明确打开准确目标；一次性Secret尚未确认时应使用既有内部离页保护。Session/client改变仍须立即清除秘密，不受离页确认阻挡。Access Analysis只有keyId时不得猜测owner或伪造精确深链。
+- User详情已消费`policies`/`keys`目标区块；原意图的User不在当前目录页或目录失败时，明确操作沿既有exact getUser/loadUser读取准确目标，失败保持锁定而非重放命令。一次性Secret使用既有内部离页保护，Session/client改变仍立即清除秘密，不受离页确认阻挡。这三项当前已有组件证据，仍须真实浏览器验证；Access Analysis只有keyId时不得猜测owner或伪造精确深链。
 - 分别证明一次性Secret清除、完成事实与当前状态分离、命令效果及Audit唯一性。组件红绿、独立CI与真实浏览器证据分开记录，任何一层都不能冒充其他层已通过。
 
 ## 验收
