@@ -6,8 +6,8 @@
 - Updated: 2026-10-19
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed source-only candidate: `dbe5add33d8ef1cac663f2186e965f8fff041671`
-- Source parent: `8d1aa991fd9568d5d67e6d5bdcff24d1a95e5bfc`
+- Pushed source-only candidate: `323d7417ae230cf20d83d3903429b2492c0efb7f`
+- Source parent: `bd730cb0835a7f0de2ff132f79140d2c85a28281`
 
 ## Authoritative route
 
@@ -20,23 +20,26 @@
 
 ## Pushed milestone
 
-Recoverable User and Group Membership commands present one UNKNOWN warning and
-make leaving explicit without implying cancellation or rollback. Group and
-Role policy-attachment review freezes the actual target, policy or attachment,
-version and request ID. A completion recovered from the original-result read
-remains visible as an immutable receipt until the operator explicitly returns
-to detail; current relationship state never substitutes for that result.
-Confirmed Account security-settings replacement ends only the submitting
-Session and carries the exact original request ID into an accurate re-login
-explanation.
+The earlier recoverable-command UX remains intact. Historical inspection of an
+UNKNOWN Account security-settings command now updates the retained intent but
+does not expire a later authenticated Session or invent a sign-in notice;
+successful submission and a real `401` retain their existing Session boundary.
 
-The isolated, fixed frontend source passed the complete supported Windows
-frontend gates: 77 Vitest files / 1,969 cases, eight export-boundary tests,
-typecheck, full lint, architecture and 234 theme contrast pairs. Exact evidence
-and limitations belong to FEAT-007. A separate fixed-product REVOKE browser
-gate independently proved one write, one original-result read, immediate
-permission loss and consistent completion/outbox/Audit state; it reproduced
-the old missing-receipt UX but is not browser acceptance of this source.
+LIVE Group deletion now closes its busy dialog into an immutable receipt page
+containing the stable Group identity, original request ID, result revision,
+authoritative relationship counts and deletion time. It does not navigate or
+read the current directory until the operator explicitly finishes. The later
+directory read is independent and never substitutes for the command result.
+
+The complete Account-access, access-workspace and navigation owners pass
+240/216/20 cases. Typecheck, full lint, architecture and 234 theme contrast
+pairs pass; locale JSON and diff checks are clean. The complete frontend gate
+passes 77 Vitest files / 1,969 cases and all eight export-boundary cases. Exact
+evidence and limitations belong to FEAT-007. A real pre-fix Group deletion gate
+independently proved one write, one removed membership, one revoked direct
+attachment, retained User/Session, subsequent permission denial and consistent
+completion/outbox/Audit state. It reproduced the old missing-receipt UX but is
+not browser acceptance of this source.
 
 ## Continuation boundary
 

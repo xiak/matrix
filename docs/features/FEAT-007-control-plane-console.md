@@ -2430,9 +2430,13 @@ A confirmed complete Account security-settings replacement expires only the
 submitting Session and carries its exact request ID to the next login view.
 The explanation says why a new identity context is required without claiming
 that every other Session was revoked. A rejected, unauthorized or still
-unknown command does not receive that success notice. The current-settings
-description now accurately states that the four rule groups are read and
-replaced together; it no longer calls the surface read-only.
+unknown command does not receive that success notice. Reading an original
+UNKNOWN command after a later login is different from submitting the change:
+a confirmed historical completion updates only the retained intent and does
+not expire that later Session or create a new sign-in notice. A real `401`
+still expires the current Session. The current-settings description now
+accurately states that the four rule groups are read and replaced together;
+it no longer calls the surface read-only.
 
 Windows Node 22.22.2/npm 11.6.4 typecheck, full lint, architecture and all 234
 theme contrast pairs pass. The complete frontend gate passes all 77 files and
@@ -2458,16 +2462,22 @@ phone integration remain excluded.
 
 #### LIVE deletion-confirmation follow-up
 
-LIVE Group deletion consumes the strict command receipt before navigating.
-The detail stores the non-sensitive result and closes its operation dialog;
-ordinary guarded navigation runs only after that dialog and its busy/draft
-registration unmount. A Session-scoped Group workspace retains the receipt
-across entity-query changes while a separately mounted directory performs an
-independent authoritative read. Success feedback uses the returned stable ID,
-name, resulting revision, removed-membership and revoked-attachment counts,
-and deletion time, not preview counts or a later GET/404. Failure, conflict,
-malformed replies and late old-owner replies never navigate or invent success.
-No timeout, forced history, guard bypass or new recovery framework is used.
+LIVE Group deletion validates and preserves the original command receipt
+before any navigation. After the busy confirmation dialog and its draft guard
+unmount, the detail is replaced by a semantic receipt page rather than
+automatically jumping to a directory. It displays the returned stable Group
+ID and name, original request ID, resulting revision, authoritative removed-
+membership and revoked-attachment counts, and deletion time. The operator
+must explicitly choose **Finish and return to groups**; only then does ordinary
+guarded navigation run and a separately mounted directory perform an
+independent authoritative read. That current list or a later `404` is never
+used as proof of the original command result.
+
+Failure, conflict, malformed replies and late old-owner replies neither
+navigate nor invent success. The receipt is tied to the same LIVE client and
+the exact command request ID; it contains no editable draft or second write.
+No timeout, forced history, guard bypass, generic receipt framework or
+parallel Group model is introduced.
 
 Shared `WorkspaceDelete` copy remains mode-neutral in both locales. LIVE Group
 deletion supplies its own explicit IAM warning: the Group leaves the active
@@ -2475,36 +2485,38 @@ list, Audit history remains, and no restore action is supported. Users, Policies
 and business resources are not deleted. The UI does not invent soft-delete
 recovery or replace authoritative impact counts with preview counts.
 
-The Group-only frontend tree is
-`526b583b4bd6b1e5f24612b722ecaac7f1189eae`; the independently archived snapshot
-excludes the separate Account security-settings WIP. All 75 Windows Vitest files
-and 1716 cases pass in 442.51 seconds, with zero failures, skipped cases or
-timeout/worker/configuration changes. Result JSON SHA-256 is
-`26964b44d7790698322c4fcd6b17ef680414c566236fca71e4bfdcf4a0a763a2`.
-The real ConsoleNavigation/UnsavedChanges combination proves ordinary successful
-navigation, fresh directory reads, exact returned counts, no navigation for
-403/409/503/malformed receipts, and old Session/repository late-response fences.
-Existing name-confirmation, no-write cancellation, locale and MOCK/LIVE deletion
-contracts remain covered. Typecheck, changed-owner zero-warning lint,
-architecture, 234 contrast pairs and eight Node export-boundary cases pass.
-Three actual Windows production builds export 59 pages with one worker and 57
-segment-path normalizations each; unset/`0` and the Go embed match all 324 files
-byte-for-byte. Fresh UI-host Go test (web package 1.427 seconds) and vet pass.
+The replacement source is fixed and pushed at
+`323d7417ae230cf20d83d3903429b2492c0efb7f`, based on
+`bd730cb0835a7f0de2ff132f79140d2c85a28281`. The complete Account-access,
+access-workspace and navigation owner suites pass 240, 216 and 20 cases. They
+prove that the dialog unmounts before the receipt page, the entity URL and
+directory read remain unchanged until explicit completion, returned counts
+and original request ID stay visible, and the eventual transition performs
+one fresh directory read. Existing typed-name confirmation, cancellation,
+403/409/503/malformed-receipt and old Session/repository late-response fences
+remain covered. Account-security recovery additionally proves one original
+write, query-only completion and an authenticated later Session with no false
+sign-in notice. Typecheck, full lint, architecture, all 234 theme contrast
+pairs, locale JSON parsing and `git diff --check` pass. The complete frontend
+gate passes all 77 Vitest files and 1,969 cases in 513.19 seconds, followed by
+all eight export-boundary script cases with zero failures, cancellations,
+skips or todos. Generated assets and the backend contract are unchanged.
 
-An isolated in-app-browser fixture mounts the fixed Group renderer and actual
-ConsoleNavigation/UnsavedChanges providers against RAM-only responses. Success
-visibly clears the entity URL, closes the dialog, rereads the empty directory
-and shows returned revision v2, three removed memberships and two revoked direct
-attachments instead of the zero-count preview. A 409 or wrong-target receipt
-keeps the original detail URL and displays an error without success. A clean
-successful tab emits no warning/error. The waiting-response case confirms the
-busy dialog stays protected; late-owner behavior is covered by Vitest, not a
-completed browser Session-switch case. This component-browser fixture is not
-the production Next shell, an HTTP/backend deletion, signed-runtime or CI gate.
-No real resource or the IAM engineer's retained Group/Session was inspected or
-changed. Remaining combined runtime acceptance belongs to
-[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md); isolated MOCK and Phase 1 scope
-remain unchanged.
+A real pre-fix product browser gate deleted only the synthetic Group
+`Browser deletion operators`, with one membership and one direct PaaSViewer
+attachment. The old page returned directly to the empty directory and did not
+show the immutable request or impact receipt, which reproduced the UX defect
+this replacement closes. IAM independently recovered request
+`603039ff-6bbb-439a-be3a-82bc607f6425`, confirmed one deletion write, one
+removed Membership, one revoked attachment, the User and its Session still
+active, the next protected PaaS request denied, one decision-bound
+outbox/Audit record and a valid chain. That backend evidence remains owned by
+IAM; it is not signed-browser acceptance of this new source. Remaining embed,
+CI and combined runtime acceptance belongs to
+[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md). The isolated MOCK and Phase 1
+email-only contact-verification/security-notification receiving scope remain
+unchanged; phone login, SMS, phone-number binding and physical-phone
+integration remain excluded.
 
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
