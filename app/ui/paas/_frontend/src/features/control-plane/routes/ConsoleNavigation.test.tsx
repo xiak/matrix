@@ -142,14 +142,23 @@ describe("Console navigation", () => {
     const history = vi.spyOn(window.history, "pushState");
     render(<GroupDeletionHarness fixture={fixture} onAccepted={accepted} />);
     await confirmGroupDeletion(user);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(window.location.search).toBe(`?id=${deletionGroup.group.id}`);
+    expect(accepted).not.toHaveBeenCalled(); expect(history).not.toHaveBeenCalled();
+    expect(fixture.client.list).not.toHaveBeenCalled();
+    const receipt = screen.getByRole("status", { name: "用户组删除回执" });
+    const requestId = vi.mocked(fixture.client.delete).mock.calls[0]![1].requestId;
+    expect(receipt.textContent).toContain("已解除成员关系3"); expect(receipt.textContent).toContain("已撤销直接策略关联2");
+    expect(receipt.textContent).toContain(deletionGroup.group.id); expect(receipt.textContent).toContain("结果资源版本2");
+    expect(receipt.textContent).toContain(requestId);
+    expect(receipt.querySelector("time")?.dateTime).toBe(deletionReceipt.deletedAt);
+    expect(screen.getByRole("heading", { name: `用户组删除回执 · ${deletionGroup.group.name}` })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "完成并返回用户组列表" }));
     await waitFor(() => expect(window.location.pathname + window.location.search).toBe("/console/access/groups/"));
     expect(accepted).toHaveBeenCalledOnce(); expect(history).toHaveBeenCalledExactlyOnceWith(null, "", "/console/access/groups/");
-    const receipt = screen.getByRole("status", { name: "用户组删除回执" });
-    expect(receipt.textContent).toContain("解除 3 个成员关系"); expect(receipt.textContent).toContain("撤销 2 条直接策略关联");
-    expect(receipt.textContent).toContain(deletionGroup.group.id); expect(receipt.textContent).toContain("v2");
-    expect(receipt.querySelector("time")?.dateTime).toBe(deletionReceipt.deletedAt);
     await waitFor(() => expect(fixture.client.list).toHaveBeenCalledOnce());
     expect(screen.queryByRole("heading", { name: deletionGroup.group.name })).toBeNull(); expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("status", { name: "用户组删除回执" }).textContent).toContain(requestId);
     expect(fixture.client.get).toHaveBeenCalledTimes(1); expect(router.push).not.toHaveBeenCalled();
   });
 

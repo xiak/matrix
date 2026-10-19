@@ -269,6 +269,10 @@ describe("AccountLiveRoles", () => {
     await user.click(await screen.findByRole("combobox", { name: "要关联的策略" }));
     await user.click(await screen.findByRole("option", { name: `${boundaryPolicy.displayName} · ${boundaryPolicy.id}` }));
     await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    const review = within(screen.getByRole("group", { name: "关联策略" }));
+    expect(review.getByText(boundaryPolicy.displayName)).toBeTruthy();
+    expect(review.getByText(boundaryPolicy.id)).toBeTruthy();
+    expect(review.getByText(role.id)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "确认关联策略" }));
 
     await waitFor(() => expect(createPolicyAttachment).toHaveBeenCalledWith(role.id, expect.objectContaining({ policyId: boundaryPolicy.id, policyResourceVersion: boundaryPolicy.resourceVersion, requestId: expect.stringMatching(/^role-attachment-/) })));
@@ -321,6 +325,10 @@ describe("AccountLiveRoles", () => {
       policyId: boundaryPolicy.id, policyResourceVersion: boundaryPolicy.resourceVersion
     }));
     expect(createPolicyAttachment).toHaveBeenCalledTimes(1);
+    const receipt = within(await screen.findByRole("status", { name: "原策略关联命令已确认" }));
+    expect(receipt.getByText(original.requestId)).toBeTruthy();
+    expect(receipt.getByText(attachment.id)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "完成并返回详情" }));
     expect(await screen.findByRole("button", { name: boundaryPolicy.id })).toBeTruthy();
     expect(sessionStorage.length).toBe(0);
   });

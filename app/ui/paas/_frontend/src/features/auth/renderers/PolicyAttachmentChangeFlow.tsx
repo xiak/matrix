@@ -9,6 +9,7 @@ import type {
   PolicyAttachmentChange,
   PolicyAttachmentChangeOperationExpectation
 } from "../domain/accounts";
+import { WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
 type RecoverablePolicyAttachmentTarget = Extract<DirectPolicyAttachment["target"], { kind: "GROUP" | "ROLE" }>;
@@ -158,7 +159,10 @@ export function usePolicyAttachmentCommand<I extends PolicyAttachmentChangeOpera
       intent.current = null;
       if (!mounted.current) return false;
       setState({ phase: "completed", completion });
-      return true;
+      // A recovered completion must remain visible until the operator
+      // acknowledges its immutable request/result receipt. A synchronous
+      // write may keep the existing close-after-refresh behavior.
+      return completion === undefined;
     } catch (failure) {
       if (!mounted.current) return false;
       setState((current) => ({ phase: "refreshFailed", requestId: current.requestId, error: accountError(failure), completion }));
@@ -226,6 +230,29 @@ export function usePolicyAttachmentCommand<I extends PolicyAttachmentChangeOpera
   };
 }
 
+export function PolicyAttachmentReview({ scope, expectation, policyName, policyId }: {
+  scope: PolicyAttachmentChangeScope;
+  expectation: PolicyAttachmentChangeOperationExpectation;
+  policyName?: string;
+  policyId?: string;
+}) {
+  const t = useTranslations("PolicyAttachmentChange");
+  const resolvedPolicyId = expectation.operation === "CREATE" ? expectation.policyId : policyId;
+  return <dl className={styles.facts}>
+    <div><dt>{t("operation")}</dt><dd>{t(expectation.operation === "CREATE" ? "attach" : "revoke")}</dd></div>
+    <div><dt>{t("targetKind")}</dt><dd>{t(scope.target.kind === "GROUP" ? "group" : "role")}</dd></div>
+    <div><dt>{t("target")}</dt><dd><code>{scope.target.id}</code></dd></div>
+    {policyName ? <div><dt>{t("policyName")}</dt><dd>{policyName}</dd></div> : null}
+    {resolvedPolicyId ? <div><dt>{t("policyId")}</dt><dd><code>{resolvedPolicyId}</code></dd></div> : null}
+    {expectation.operation === "CREATE"
+      ? <div><dt>{t("policyRevision")}</dt><dd>{expectation.policyResourceVersion}</dd></div>
+      : <><div><dt>{t("attachmentId")}</dt><dd><code>{expectation.attachmentId}</code></dd></div><div><dt>{t("expectedRevision")}</dt><dd>{expectation.expectedResourceVersion}</dd></div></>}
+    <div><dt>{t("requestId")}</dt><dd><code>{expectation.requestId}</code></dd></div>
+    <div><dt>{t("accountId")}</dt><dd><code>{scope.accountId}</code></dd></div>
+    <div><dt>{t("actorId")}</dt><dd><code>{scope.actorPrincipalId}</code></dd></div>
+  </dl>;
+}
+
 export function PolicyAttachmentChangeFeedback({ state, onRetryRead }: {
   state: PolicyAttachmentCommandState;
   onRetryRead(): Promise<unknown>;
@@ -244,6 +271,26 @@ export function PolicyAttachmentChangeFeedback({ state, onRetryRead }: {
   </div></Alert>;
   if ((state.phase === "conflict" || state.phase === "rejected") && state.error) {
     return <Alert status="danger">{state.phase === "conflict" ? t("conflict") : a(`errors.${state.error}`)}</Alert>;
+  }
+  if (state.phase === "completed" && state.completion) {
+    const completion = state.completion;
+    return <Alert status="success" role="status" aria-label={t("completedTitle")}>
+      <strong>{t("completedTitle")}</strong><p>{t("completedHint")}</p>
+      <dl className={styles.facts}>
+        <div><dt>{t("operation")}</dt><dd>{t(completion.operation === "CREATE" ? "attach" : "revoke")}</dd></div>
+        <div><dt>{t("requestId")}</dt><dd><code>{completion.requestId}</code></dd></div>
+        <div><dt>{t("completedAt")}</dt><dd><WorkspaceTime value={completion.completedAt} /></dd></div>
+        {completion.operation === "CREATE" ? <>
+          <div><dt>{t("target")}</dt><dd><code>{completion.target.id}</code></dd></div>
+          <div><dt>{t("policyId")}</dt><dd><code>{completion.policyId}</code></dd></div>
+          <div><dt>{t("attachmentId")}</dt><dd><code>{completion.attachment.id}</code></dd></div>
+          <div><dt>{t("resultingRevision")}</dt><dd>{completion.attachment.resourceVersion}</dd></div>
+        </> : <>
+          <div><dt>{t("attachmentId")}</dt><dd><code>{completion.attachmentId}</code></dd></div>
+          <div><dt>{t("resultingRevision")}</dt><dd>{completion.revocation.resourceVersion}</dd></div>
+        </>}
+      </dl>
+    </Alert>;
   }
   return null;
 }

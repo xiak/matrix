@@ -36,6 +36,7 @@ function Probe() {
       <span data-testid="recovery">{session.enrollmentRecovery?.recoveryCodes.join("|") ?? "none"}</span>
       <span data-testid="first-enrollment">{session.firstEnrollment?.status ?? "none"}</span>
       <span data-testid="authenticator-recovery">{session.authenticatorRecovery?.state ?? "none"}</span>
+      <span data-testid="sign-in-notice">{session.signInNotice ? `${session.signInNotice.kind}:${session.signInNotice.requestId}` : "none"}</span>
       <span data-testid="code-regeneration">{security?.recoveryCodeRegenerationIntent?.state ?? "none"}</span>
       <span data-testid="returned-codes">{returnedCodes.join("|") || "none"}</span>
       <button onClick={() => void session.login("admin", "password")} type="button">login</button>
@@ -66,6 +67,7 @@ function Probe() {
       {security?.recoveryCodeRegenerationIntent ? <button onClick={() => security.clearRecoveryCodeRegenerationIntent(security.recoveryCodeRegenerationIntent!.requestId)} type="button">clear-code-regeneration</button> : null}
       <button onClick={session.cancelAuthenticationChallenge} type="button">cancel-challenge</button>
       <button onClick={() => session.expire(secretCredential)} type="button">expire</button>
+      <button onClick={() => session.expire(secretCredential, session.sessionRevision, { kind: "SECURITY_SETTINGS_UPDATED", requestId: "settings-change-one" })} type="button">expire-after-settings</button>
     </div>
   );
 }
@@ -112,6 +114,18 @@ afterEach(() => {
 });
 
 describe("SessionProvider", () => {
+  it("retains the exact security-settings sign-in reason until a new authenticated Session is established", async () => {
+    const view = render(<SessionProvider repository={repository()}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(view.getByText("login")));
+    expect(view.getByTestId("sign-in-notice").textContent).toBe("none");
+    await act(async () => fireEvent.click(view.getByText("expire-after-settings")));
+    expect(view.getByTestId("phase").textContent).toBe("anonymous");
+    expect(view.getByTestId("sign-in-notice").textContent).toBe("SECURITY_SETTINGS_UPDATED:settings-change-one");
+    await act(async () => fireEvent.click(view.getByText("login")));
+    expect(view.getByTestId("phase").textContent).toBe("authenticated");
+    expect(view.getByTestId("sign-in-notice").textContent).toBe("none");
+  });
+
   it.each([true, false])("changes an authenticated User's password with revokeOthers=%s while retaining the current Session", async (revoke) => {
     const iam = repository(); const request = deferred<void>(); iam.changePassword = vi.fn(() => request.promise);
     const view = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);

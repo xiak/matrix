@@ -342,6 +342,14 @@ REVOKE使用固定`77923f7839633002eb2a6c732c35fec6bea19436`的同一owner，先
 
 页面没有展示权威1+1计数或request ID，而是立即跳回目录。上述准确数量/request来自后端门禁，不冒充页面可见回执；Group删除的效果与隔离已证明，可见完成回执仍待UX owner修复和真实复验。不得用当前目录为空替代原命令完成证据，也不得在展示回执时重新发送删除或把级联范围扩大到User、Policy及业务资源。
 
+### 完成回执与重新登录说明集成
+
+本分支从UX/UI固定`dbe5add33d8ef1cac663f2186e965f8fff041671`及其封闭修正`323d7417ae230cf20d83d3903429b2492c0efb7f`选择性采用十八个既有frontend源码、测试和消息路径，不带入donor生成物、文档状态或后端变更。十六个消费blob与最终donor相同，两个renderer测试保留本分支既有差异。UNKNOWN只显示一条准确警告；“稍后查询/处理”不暗示取消已提交命令；Membership添加和移除使用各自选择说明。Group/Role附件审阅绑定真实目标、Policy/附件修订和原request，原结果恢复成功后保留不可变完成回执，操作者明确完成后才返回详情；回执不冒充当前授权或Audit投递证明。
+
+Group删除沿用原严格结果校验，并在对话框卸载后保留独立回执页：实际Group稳定ID/name、原命令request ID、结果修订、解除Membership/撤销附件数量及删除时间均取自本次命令与经验证的响应。只有明确“完成并返回用户组列表”才触发普通受保护导航及独立目录读取，不从空目录补造结果。Account安全设置的正常apply成功仍只清理准确调用Session的本地上下文，并向登录页传递非秘密原request说明；只读历史完成查询不退出后来建立的有效Session，真实401仍只失效准确当前认证所有者。没有扩展邮箱登录/MFA、手机能力、通用恢复框架、API/SQL或发布Profile。
+
+主增量在本分支Node22.22.2/npm11.6.4、单测试worker及2GiB Node堆限制下通过typecheck、完整lint、architecture、234组对比度、77个Vitest文件/1956项测试（479.40秒）及8项Node边界测试。两处修正再通过相同静态门禁和三个完整受影响组件文件/466项测试（210.23秒），不重复无关全量。最终源码以2个构建worker完成59页静态导出和57条分段归一化；未设置与显式0两种生产模式的324个文件逐字一致，本分支重新生成的Go嵌入产物与之完全匹配，Go UI/architecture race及UI vet通过。最终消费源码的独立CI与真实可见回执复验各自取得证据前，不能继承donor全量结论或把旧741页面的效果验收视为新UI已验收；同Profile签名release也仍保留独立发布门禁。
+
 ### 首次登录强制改密
 
 固定`6298e7532`在既有`authorityprocess` owner增加显式opt-in的首次登录改密浏览器门禁，不改变生产API、SQL或发布Profile。全新专属PostgreSQL 18以1.5 CPU、1 GiB、PIDs 256运行真实受限IAM/Audit/PaaS、双dispatcher与嵌入控制台；测试先为普通User签发另一条受限Session，随后浏览器以`username@account-id`和初始密码登录，从纯页面提交当前初始密码、新密码及确认值并进入所请求的IAM概览。数据库证明User和credential generation各只推进一次至版本2，`must_change_password=false`；另一条受限Session终态为REVOKED版本2且仍保留旧credential generation，浏览器调用Session是唯一ACTIVE会话并在同一事务提升至新generation。旧密码真实登录返回401且不泄露输入，新密码重新登录后`CurrentIdentity`仍为原Account/User且不再要求改密；唯一`ui-password-*`成功事实以本人USER为actor/target进入完整租户Audit链。fixture/race package分别通过76.68/80.216秒。结束前数据库外部客户端为0，按任务标签只删除本轮容器、网络和卷，未动共享或其他任务资源。
