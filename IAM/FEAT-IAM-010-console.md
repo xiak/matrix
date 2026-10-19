@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；当前已接受的签名产品源码为`9621bb6e66b1076576649d3f6b224725a60d6848`，IAM87/Audit39/PaaS7、`contractRevision=37`。精确独立CI及同源签名A/B完整离线生命周期、重启后复验已通过，准确发布证据归FEAT-005。User资料/状态、Group Membership、Account安全设置、Group附件恢复及Group删除效果已有各自真实证据；本版修复新repository身份未验证时的USER附件入口，但新可见回执、直接User/Role附件、日常改密及矩阵其余非Deferred页面写路径仍须逐项实跑。签名包通过不替代浏览器验收，整个FEAT仍为实施中。
+- 状态：实施中；当前已接受的签名产品源码为`9621bb6e66b1076576649d3f6b224725a60d6848`，IAM87/Audit39/PaaS7、`contractRevision=37`。精确独立CI及同源签名A/B完整离线生命周期、重启后复验已通过，准确发布证据归FEAT-005。User资料/状态、Group Membership、Account安全设置及Group附件恢复已有各自真实证据；当前版本又完成Group删除、GROUP/USER附件撤销的可见回执和权限/Audit后验。附件CREATE的新回执、Role附件、日常改密及矩阵其余非Deferred页面写路径仍须逐项实跑。签名包通过不替代浏览器验收，整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -23,7 +23,7 @@
 | --- | --- | --- |
 | IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果；后继独立真实浏览器已从普通User首次登录完成纯页面强制改密，并验证仅保留调用Session、撤销另一受限Session、旧密码失效和新密码重新登录 | 日常主动改密的可选会话处置、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
-| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；已接受的IAM87+r37产品源码通过完整前端/嵌入构建与独立CI。User显示名更新和停用各自在一次成功写入响应丢失后，只以原Account/actor/User/operation/requestId/expected version读取一次不可变完成结果且零目标写重放；停用立即撤销旧Session，恢复User不复活旧Session。Membership添加和移除各自在一次成功写入响应丢失后，只显式等值重放一次原method/path/Host/requestId/version/body，最终各只有一个成员关系效果、一个outbox/Audit事实，组权限在下一次PaaS请求生效或撤销；Group策略附件CREATE/REVOKE均已证明单次提交丢回包后只读一次原回执、零再写与下一请求授权变化。Group最终删除已证明准确1+1级联、目录移除、成员身份与系统Policy保留、继承权限下一请求撤销及唯一outbox/Audit | 可见附件/删除回执与命令所有者隔离已实现；本切片补齐新repository身份待验证期间的USER命令围栏并通过本分支组件/构建检查。`42c957a`只扩展既有fixture，不替代新回执及直接User/Role附件的真实浏览器门禁；批量User不在本轮需求 |
+| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；IAM87+r37已通过前端/嵌入构建与独立CI。User资料/停用以原意图只读恢复，Membership添加/移除只显式等值重放原命令，Group附件CREATE/REVOKE已有响应丢失与下一请求权限效果。当前9621页面进一步证明Group删除的1+1级联及准确可见回执，以及GROUP/USER附件撤销的一次提交、一次原回执读取、零再写、明确完成导航与唯一outbox/Audit；User、Policy及不在级联范围内的资源保持 | 当前CREATE回执及直接Role附件仍缺页面证据；ROLE/REVOKE本轮只到最终确认，未提交且已收尾，不计通过。日常关系隔离不能替代这些写路径；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version。后继候选UI已在同一r36后端从页面创建零附件Policy、改名并整策略退役，稳定ID/默认版本/摘要及不可变版本保持，活动目录移除且三条outbox/Audit事实和完整租户链均已核对；独立真实浏览器门禁进一步证明改名与整策略退役各自在响应半断后的双标签排他、关闭持锁标签和完全相同原命令恢复 | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略；当前签名组合已通过，但不能替代所列纯页面写路径 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；IAM86+r36签名页面读取已验证通知地址、本人TOTP状态和有效Session，并对缺少读取权限显示真实拒绝。固定`a119ffdb`的独立真实浏览器已证明普通User首次绑定、换绑、主动移除、重新绑定、四次MFA登录及跨浏览器撤销其他Session，准确因子/恢复码代次和Audit证据由[本人安全与会话](#live-本人安全与会话浏览器闭环)拥有；这不是强制MFA或签名APISIX页面验收。后继最小权限普通User已完成Account安全设置的真实TOTP step-up、完整版本替换、旧Session围栏和重新登录后权威读取 | 账号强制MFA下普通User首次绑定及受限重新绑定、AccessKey全生命周期、恢复码再生/自助恢复及其他敏感用途step-up仍缺完整浏览器门禁；已接受的普通TOTP路径仍缺当前签名APISIX页面组合证据。受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、外部物理认证器及WebAuthn明确Deferred |
@@ -334,15 +334,21 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 
 REVOKE使用固定`77923f7839633002eb2a6c732c35fec6bea19436`的同一owner，先把新增模式接入既有30分钟浏览器观察窗，不改变生产HTTP五秒期限、密码成本或原断言。在任务专属原生Linux、2CPU/2GiB进程限额及独立2CPU/2GiB/PIDs256 PostgreSQL 18中，从空白数据库启动全部真实进程。浏览器只撤销一次原附件，响应丢失后只查询一次原request `37bc573c-d58d-470e-9f1c-d87f6615e853`，没有第二次POST；完成后同一附件终态版本2、唯一完成记录、成员下一次PaaS读取403、全request唯一outbox/Audit及完整租户链均通过。fixture/race package为1379.77/1380.839秒，包含等待浏览器确认的时间，不作为响应性能。此前Windows进程经跨机数据库转发的尝试在PaaS installation verify的原五秒HTTP期限前失败、尚未打开浏览器；不计入通过，也未延长期限来掩盖它。
 
-实际旧UI在原结果查询成功后直接返回Group详情并显示零附件，未保留可见的不可变完成回执。这不否定精确只读恢复与权限效果，但完整UX仍需修正：区分原完成记录、当前授权状态及Audit投递，保留原request/结果让操作者明确完成后返回。直接User/Role附件的页面路径不在这两条证据内，不能由组件或默认SKIP代替。
+当前生产`9621bb6e66b1076576649d3f6b224725a60d6848`与测试`26deca2ae9df57cf2913a4868bca47f9332dd7c4`已于2026-10-19在独立PostgreSQL18.4和受限原生Linux进程上重新完成GROUP/REVOKE页面门禁，403.43秒通过。浏览器只撤销测试Group的唯一`PaaSViewer`附件，在真实提交后丢失回包，UNKNOWN保留原意图；一次原结果查询展示不可变回执，准确request为`d64f31f6-686f-45c4-b451-dd73a076ec94`、operation为REVOKE、结果版本2并带完成时间。操作者明确完成后才独立读取同一Group，直接附件为0，Group和成员仍在。整条路径只有一次原提交、一次原回执GET、零丢包后写入；成员下一次PaaS请求403，唯一完成/outbox/Audit及完整租户链通过。回执明确不代表当前授权或Audit投递状态；这些后验由真实服务另外证明。该运行关闭当前GROUP撤销的可见回执与完成导航缺口，未回填旧UI或CREATE的可见回执证据；耗时含页面观察，不作为产品延迟。该一次性数据库在客户端归零后删除。
 
-原`TestIAMPolicyAttachmentRecoveryConsoleBrowser`现可用仅测试配置`MATRIX_IAM_POLICY_ATTACHMENT_RECOVERY_TARGET`选择`GROUP`（默认）、`USER`或`ROLE`，仍使用同一个CREATE/REVOKE和响应丢失owner，不另造流程或套件。USER用真实普通登录会话检查下一次PaaS请求；ROLE只信任一个真实来源User，其User正向策略仅允许承担该精确Role，Role boundary限定为PaaSViewer，业务检查使用真实RoleSession而非来源User凭据。命令前后来源User均不得继承角色业务权限。三类目标共用精确Account/target/policy/version/request、唯一完成/outbox/Audit、一次原回执读取和零丢包后写入断言。新增模式目前仅通过默认测试/编译、architecture race及vet；没有页面最终操作和独立真实进程结果，不计USER/ROLE浏览器验收，也不回填既有GROUP证据。
+原`TestIAMPolicyAttachmentRecoveryConsoleBrowser`用仅测试配置`MATRIX_IAM_POLICY_ATTACHMENT_RECOVERY_TARGET`选择`GROUP`（默认）、`USER`或`ROLE`，仍使用同一个CREATE/REVOKE和响应丢失owner，不另造流程或套件。USER用真实普通登录会话检查下一次PaaS请求；ROLE只信任一个真实来源User，其User正向策略仅允许承担该精确Role，Role boundary限定为PaaSViewer，业务检查使用真实RoleSession而非来源User凭据。命令前后来源User均不得继承角色业务权限。三类目标共用精确Account/target/policy/version/request、唯一完成/outbox/Audit、一次原回执读取和零丢包后写入断言。
 
-### Group删除真实效果与回执缺口
+同一当前生产/测试固定源的USER/REVOKE已在另一空白数据库完成页面与权威后验，578.23秒通过。测试普通User只撤销一条直接`PaaSViewer`附件；UNKNOWN冻结原request `ui-user-revocation-2ad1716892937a9aea04282018aa421f`，只读查询一次后保留原目标、策略、附件、REVOKE、结果关系版本2及完成时间。明确“完成并重新读取”后User仍正常、直接附件为0，未修改登录安全、凭据或权限边界。后端证明原附件只推进一次、原User会话下一次PaaS读取403、唯一完成/outbox/Audit和完整链准确，且零丢包后写入。测试结束确认零客户端后删除该一次性数据库。该结果接受直接User附件撤销，不代替其CREATE或ROLE页面路径。
 
-固定`c80e58165b46f57ad309eabbdb3c33b0e2bc782e`的`TestIAMGroupDeletionConsoleBrowser`在另一空白数据库与同一限额原生Linux环境实跑。浏览器审阅实际删除语义、输入准确测试组名并只提交一次，随后权威目录加载为零。数据库证明同一Group只推进到版本2，同事务解除一条Membership并撤销一条直接附件，两个关系的版本和终态时间与Group完全匹配；原User仍ACTIVE、同一成员Session读取`/v1/auth/me`仍200，但下一次PaaS请求由200变为403，系统Policy仍ACTIVE。原request `603039ff-6bbb-439a-be3a-82bc607f6425`恰有一个决定绑定的outbox/Audit事实，完整租户链通过；fixture/race package为276.42/277.489秒。
+### Group删除真实页面与完成回执
 
-该旧页面没有展示权威1+1计数或request ID，而是立即跳回目录。上述准确数量/request来自后端门禁，不冒充页面可见回执；Group删除的效果与隔离已证明，可见完成回执由下一节固定候选修正，其真实最终操作仍未验收。不得用当前目录为空替代原命令完成证据，也不得在展示回执时重新发送删除或把级联范围扩大到User、Policy及业务资源。
+当前生产源码`9621bb6e66b1076576649d3f6b224725a60d6848`、测试固定`26deca2ae9df57cf2913a4868bca47f9332dd7c4`的既有`TestIAMGroupDeletionConsoleBrowser`已在2026-10-19完成真实页面和权威后验。独立PostgreSQL18.4限1 CPU/768 MiB/PIDs192，原生Linux进程组限2 CPU/2 GiB/Tasks256，Go1.26.3、GOMAXPROCS2、构建`-p 2`；未改变产品权限、SQL、期限或页面源码。
+
+UX/UI owner从LIVE详情确认测试组`Browser deletion operators`恰有一个普通成员和一条`PaaSViewer`附件，审阅真实级联影响、输入准确名称并只提交一次。页面保留的不可变完成回执明确显示原request `4b6b253a-57dd-4327-8fbf-2990e6f48cd0`、结果版本2、解除Membership 1、撤销直接附件1及删除时间；只有点击“完成并返回用户组列表”才独立读取目录，随后稳定显示零组。没有用API替代页面提交，也没有从空目录补造原结果。
+
+IAM后验先核对同一request和Group的2/1/1状态，再结束原fixture。完整门禁通过699.49秒：两个关系只推进一次且终态时间与Group一致，原User仍ACTIVE、原成员Session的身份读取仍200，而下一次PaaS请求由200变403；系统Policy仍ACTIVE。原命令恰有一个决定绑定的删除outbox/Audit事实，完整租户链验证通过。耗时包含浏览器观察，不作为产品延迟指标。结束后子进程退出、数据库客户端归零，才删除该一次性合成数据库；保留的专属PG用于下一份独立数据库，不声称全部资源已清理。
+
+这关闭当前Group删除的可见权威回执、明确完成导航及1+1级联缺口，不扩大为附件UNKNOWN、直接User/Role附件或签名APISIX页面验收。不得在展示回执时再次删除或把级联范围扩大到User、Policy及业务资源。
 
 ### 完成回执与重新登录说明集成
 
@@ -378,9 +384,9 @@ Group删除沿用原严格结果校验，并在对话框卸载后保留独立回
 
 消费分支固定`53bca8baeb15283d4c3100169e19eb73ae4b87ab`的[Verification 38994516955](https://github.com/xiak/matrix/actions/runs/38994516955)已按精确SHA核实十九项作业全部`completed/success`。`console`在Node22.22.2/npm11.6.4实际通过75个Vitest文件、1732项测试和8项Node构建边界测试，234组对比度、两次59页/57路径生产导出与324项嵌入逐字一致；十四个authority lane的57个顶层根全部实际RUN/PASS。七个需要专属Postfix的邮件子测试和默认opt-in浏览器入口按既定边界跳过，因此该CI接受组件、HTTP适配、生成物和默认回归，不替代真实日常改密页面提交。
 
-既有`authorityprocess` owner现提供独立显式opt-in的日常改密浏览器门禁：先把一个普通User推进到正常凭据代次并建立两个仍有效的旧Session，再由浏览器正常登录，在本人安全设置保持默认“退出其他会话”并提交下一密码。完成后必须证明User与凭据代次只推进一次、两个已知旧Session分别只撤销一次、唯一调用Session保持ACTIVE并迁移到新代次、旧密码拒绝、新密码可重新登录、唯一`ui-password-*`成功事实进入完整租户Audit链。该门禁当前只完成编译/默认skip核对；未发生页面最终提交前不得登记为通过，也不覆盖明示保留其他Session的`false`路径。
+既有`authorityprocess` owner提供同一个显式opt-in日常改密浏览器门禁。`MATRIX_IAM_DAILY_PASSWORD_REVOKE_OTHER_SESSIONS`省略或为`true`时检查默认退出其他会话，为`false`时要求页面显式取消该选项；其他值拒绝。两个模式各用独立空库，先准备同一普通User的两个有效generation-2 Session及一个已正常退出的Session，再由浏览器建立准确调用Session并提交下一密码，不另造套件或生产开关。
 
-固定`ffb305f859338cd8954f1476374b0d7d61c774b9`又把该浏览器门禁纳入可独立选择的当前测试owner；同一固定源码组装的签名Release A/B `iam.r36.3/.4`已在隔离Docker 27.5.1+PostgreSQL 18中完成1135.40秒的完整生命周期与95.52秒的重启后验证。这接受日常改密生产UI所在源码与签名运行时的组合构建和周边生命周期，不代表opt-in浏览器已执行，也不接受仍在运行的Verification 38997696246。最终页面提交、调用/其他Session精确数据库效果和唯一Audit事实仍由本节门禁关闭。
+两种选择都必须证明User/credential generation只推进一次、调用Session保持ACTIVE并迁移到新代次、原退出Session的状态/版本/generation/退出时间完全不变且其bearer继续401。`true`要求两个有效旧Session各只撤销一次且下一请求401；`false`要求两者继续ACTIVE、各只推进一次至新代次，下一请求仍返回原Account/User。精确Session总数和调用者集合不允许多出会话，旧密码拒绝、新密码正常登录、唯一本人`ui-password-*`成功事实及完整租户Audit链保持。当前仅默认测试、编译和静态检查通过；两种模式都未完成页面最终提交，不能记为真实浏览器通过，也不继承当前签名A/B的周边生命周期结论。
 
 ### Account安全设置编辑
 

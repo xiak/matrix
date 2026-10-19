@@ -4664,6 +4664,14 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 	start func(string, []string) *childProcess,
 ) {
 	t.Helper()
+	revokeOtherSessions := true
+	switch value := os.Getenv("MATRIX_IAM_DAILY_PASSWORD_REVOKE_OTHER_SESSIONS"); value {
+	case "", "true":
+	case "false":
+		revokeOtherSessions = false
+	default:
+		t.Fatal("MATRIX_IAM_DAILY_PASSWORD_REVOKE_OTHER_SESSIONS must be true or false")
+	}
 	const loginName = "browser.daily.password.member"
 	realm := loginName + "@organization-process"
 	member := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser daily password member",
@@ -4672,10 +4680,24 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 	changePasswordIAM(t, iamEndpoint, original.Credential, initialReaderPassword, changedReaderPassword,
 		"browser-daily-password-initial-change")
 	peer := loginIAM(t, iamEndpoint, realm, changedReaderPassword, "browser-daily-password-peer-login")
+	loggedOut := loginIAM(t, iamEndpoint, realm, changedReaderPassword, "browser-daily-password-logged-out-login")
+	logout := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/logout", loggedOut.Credential,
+		iamv1.LogoutRequest{RequestID: "browser-daily-password-prior-logout"})
+	if logout.Status != http.StatusOK {
+		t.Fatalf("prepare previously revoked daily-password Session: status=%d", logout.Status)
+	}
 	if original.Session.PrincipalID != member.ID || peer.Session.PrincipalID != member.ID ||
 		original.Session.AccountID != member.AccountID || peer.Session.AccountID != member.AccountID ||
-		original.Session.ID == peer.Session.ID {
+		loggedOut.Session.PrincipalID != member.ID || loggedOut.Session.AccountID != member.AccountID ||
+		original.Session.ID == peer.Session.ID || loggedOut.Session.ID == original.Session.ID || loggedOut.Session.ID == peer.Session.ID {
 		t.Fatal("daily password fixture Sessions do not belong to the exact prepared User")
+	}
+	var originalLogoutTime time.Time
+	if err := database.QueryRow(ctx, `SELECT revoked_at FROM iam.sessions
+		WHERE tenant_id=$1 AND principal_id=$2 AND id=$3 AND status='REVOKED'
+		  AND resource_version=2 AND credential_version=2`, member.AccountID, member.ID, loggedOut.Session.ID).
+		Scan(&originalLogoutTime); err != nil || originalLogoutTime.IsZero() {
+		t.Fatalf("daily password fixture did not retain its original logout: err=%v", err)
 	}
 	var preparedActive, preparedTotal int
 	var preparedMinGeneration, preparedMaxGeneration int64
@@ -4683,16 +4705,20 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 		COALESCE(min(credential_version),0),COALESCE(max(credential_version),0)
 		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, member.AccountID, member.ID).
 		Scan(&preparedActive, &preparedTotal, &preparedMinGeneration, &preparedMaxGeneration); err != nil ||
-		preparedActive != 2 || preparedTotal != 2 || preparedMinGeneration != 2 || preparedMaxGeneration != 2 {
-		t.Fatalf("daily password fixture did not prepare two generation-2 Sessions: active=%d total=%d minGeneration=%d maxGeneration=%d err=%v",
+		preparedActive != 2 || preparedTotal != 3 || preparedMinGeneration != 2 || preparedMaxGeneration != 2 {
+		t.Fatalf("daily password fixture did not prepare two active and one revoked generation-2 Sessions: active=%d total=%d minGeneration=%d maxGeneration=%d err=%v",
 			preparedActive, preparedTotal, preparedMinGeneration, preparedMaxGeneration, err)
 	}
 
 	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
 	defer closeBrowser()
 	finish := filepath.Join(temporary, "browser-daily-password-change-finished")
-	t.Logf("DAILY_PASSWORD_CHANGE_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s; sign in with the existing changed reader password, open the personal password editor, leave the recommended revoke-other-sessions option selected, submit the existing daily reader password, confirm the current Session stays authenticated, then create the completion marker",
-		server.URL, finish, realm)
+	choice := "leave the recommended revoke-other-sessions option selected"
+	if !revokeOtherSessions {
+		choice = "explicitly clear the revoke-other-sessions option to retain only other still-valid Sessions"
+	}
+	t.Logf("DAILY_PASSWORD_CHANGE_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s revoke_other_sessions=%t; sign in with the existing changed reader password, open the personal password editor, %s, submit the existing daily reader password, confirm the current Session stays authenticated, then create the completion marker",
+		server.URL, finish, realm, revokeOtherSessions, choice)
 	waitForBrowserMarker(t, ctx, ui, finish, "daily password change browser completion")
 
 	var mustChange bool
@@ -4710,32 +4736,62 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 		name            string
 		id              iamv1.SessionID
 		resourceVersion int64
+		credential      string
 	}{
-		{name: "original", id: original.Session.ID, resourceVersion: 3},
-		{name: "peer", id: peer.Session.ID, resourceVersion: 2},
+		{name: "original", id: original.Session.ID, resourceVersion: 3, credential: original.Credential},
+		{name: "peer", id: peer.Session.ID, resourceVersion: 2, credential: peer.Credential},
 	} {
 		var status string
 		var resourceVersion, sessionCredentialVersion int64
-		var revokedAt time.Time
-		if err := database.QueryRow(ctx, `SELECT status,resource_version,credential_version,revoked_at FROM iam.sessions
+		var revoked bool
+		wantStatus, wantGeneration, wantIdentityStatus := iamv1.SessionActive, int64(3), http.StatusOK
+		if revokeOtherSessions {
+			wantStatus, wantGeneration, wantIdentityStatus = iamv1.SessionRevoked, 2, http.StatusUnauthorized
+		}
+		if err := database.QueryRow(ctx, `SELECT status,resource_version,credential_version,revoked_at IS NOT NULL FROM iam.sessions
 			WHERE tenant_id=$1 AND principal_id=$2 AND id=$3`, member.AccountID, member.ID, known.id).
-			Scan(&status, &resourceVersion, &sessionCredentialVersion, &revokedAt); err != nil ||
-			status != string(iamv1.SessionRevoked) || resourceVersion != known.resourceVersion ||
-			sessionCredentialVersion != 2 || revokedAt.IsZero() {
-			t.Fatalf("daily password change did not revoke the %s Session exactly once: status=%q version=%d generation=%d revoked=%s err=%v",
-				known.name, status, resourceVersion, sessionCredentialVersion, revokedAt, err)
+			Scan(&status, &resourceVersion, &sessionCredentialVersion, &revoked); err != nil ||
+			status != string(wantStatus) || resourceVersion != known.resourceVersion ||
+			sessionCredentialVersion != wantGeneration || revoked != revokeOtherSessions {
+			t.Fatalf("daily password choice did not update the %s Session exactly once: revokeOthers=%t status=%q version=%d generation=%d revoked=%t err=%v",
+				known.name, revokeOtherSessions, status, resourceVersion, sessionCredentialVersion, revoked, err)
+		}
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", known.credential, nil)
+		if response.Status != wantIdentityStatus {
+			t.Fatalf("daily password choice did not affect the %s Session on its next request: status=%d want=%d",
+				known.name, response.Status, wantIdentityStatus)
+		}
+		if !revokeOtherSessions {
+			var retained iamv1.CurrentIdentity
+			if json.Unmarshal(response.Body, &retained) != nil || iamv1.ValidateCurrentIdentity(retained) != nil ||
+				retained.User.ID != member.ID || retained.Account.ID != member.AccountID || retained.User.MustChangePassword {
+				t.Fatal("retained daily-password Session returned a different or restricted identity")
+			}
 		}
 	}
-	var activeSessions, totalSessions int
-	var activeCredentialVersion, activeResourceVersion int64
+	var preservedLogout bool
+	if err := database.QueryRow(ctx, `SELECT status='REVOKED' AND resource_version=2 AND credential_version=2 AND revoked_at=$4
+		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND id=$3`,
+		member.AccountID, member.ID, loggedOut.Session.ID, originalLogoutTime).Scan(&preservedLogout); err != nil || !preservedLogout {
+		t.Fatalf("daily password choice changed the previously revoked Session: err=%v", err)
+	}
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", loggedOut.Credential, nil); response.Status != http.StatusUnauthorized {
+		t.Fatalf("daily password choice revived the previously revoked credential: status=%d", response.Status)
+	}
+	wantActiveSessions := 1
+	if !revokeOtherSessions {
+		wantActiveSessions = 3
+	}
+	var activeSessions, totalSessions, callingSessions int
 	if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),count(*),
-		COALESCE(max(credential_version) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),0),
-		COALESCE(max(resource_version) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),0)
-		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, member.AccountID, member.ID).
-		Scan(&activeSessions, &totalSessions, &activeCredentialVersion, &activeResourceVersion); err != nil ||
-		activeSessions != 1 || totalSessions != 3 || activeCredentialVersion != 3 || activeResourceVersion != 2 {
-		t.Fatalf("daily password change retained the wrong Session set: active=%d total=%d generation=%d version=%d err=%v",
-			activeSessions, totalSessions, activeCredentialVersion, activeResourceVersion, err)
+		count(*) FILTER(WHERE id<>ALL($3::text[]) AND status='ACTIVE' AND revoked_at IS NULL
+		  AND credential_version=3 AND resource_version=2)
+		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, member.AccountID, member.ID,
+		[]string{string(original.Session.ID), string(peer.Session.ID), string(loggedOut.Session.ID)}).
+		Scan(&activeSessions, &totalSessions, &callingSessions); err != nil ||
+		activeSessions != wantActiveSessions || totalSessions != 4 || callingSessions != 1 {
+		t.Fatalf("daily password change retained the wrong Session set: active=%d wantActive=%d total=%d calling=%d err=%v",
+			activeSessions, wantActiveSessions, totalSessions, callingSessions, err)
 	}
 
 	oldPassword := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/login", "", struct {
@@ -4806,7 +4862,7 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 		chain.TenantID != auditv1.TenantID(member.AccountID) || chain.InstallationID != "" {
 		t.Fatalf("daily password change tenant Audit chain is incomplete: %#v", chain)
 	}
-	t.Log("the live daily password flow advanced one User credential epoch, retained only the calling Session, revoked both prior Sessions, rejected the old password, accepted a fresh login with the new password and emitted one self-authenticated fact in the verified tenant Audit chain")
+	t.Logf("the live daily password flow advanced one User credential epoch with revokeOtherSessions=%t, retained the calling Session, preserved the prior logout, enforced the chosen disposition of both valid peers on their next requests, rejected the old password, accepted a fresh login with the new password and emitted one self-authenticated fact in the verified tenant Audit chain", revokeOtherSessions)
 }
 
 func runIAMAccountSecuritySettingsConsoleBrowser(

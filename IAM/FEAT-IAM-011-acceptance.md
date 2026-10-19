@@ -29,7 +29,7 @@
 | 总体架构、高可用与容量边界 | [000总体架构](FEAT-IAM-000-product-contract.md#总体架构)及其可用性、容量与一致性段落，跨产品边界由ADR-0002拥有 | 设计已完成；当前多IAM副本、失败关闭、受限容量与数据库切换夹具已有证据，部署尚不支持的完整数据库HA继续明确列为缺口，不虚构SLO |
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
-| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态、Group Membership及Group附件CREATE/REVOKE恢复有真实浏览器响应丢失门禁，Account安全设置正常完整替换和Group最终删除效果也有真实证据。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；可见附件/删除完成回执、日常改密及010矩阵其余非Deferred路径仍须闭合 |
+| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态、Group Membership及Group附件恢复、Account安全设置正常完整替换已有真实证据。当前9621又完成Group删除与GROUP/USER附件撤销的可见回执、导航和权威后验。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；附件CREATE的新回执、Role附件、日常改密及010矩阵其余非Deferred路径仍须闭合 |
 | 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`9621bb6e66b1076576649d3f6b224725a60d6848`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；IAM-AC-09现由测试修正`26deca2ae9df57cf2913a4868bca47f9332dd7c4`的[Verification 39224178428](https://github.com/xiak/matrix/actions/runs/39224178428)十九项全部成功及完整必要日志核对接受，其生产源码仍为`9621bb6e`。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。当前浏览器路径的精确请求、权限/Session效果、唯一outbox/Audit与可见回执缺口均由010拥有。其余IAM-UI-01–08非Deferred页面效果仍未完成，生产账号公平性SLO和安装级数据库HA保持Deferred，不冒充已交付能力 |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
@@ -48,7 +48,7 @@ Session并发测试的固定修正为`38a2cda69ec547c9e8d9d557bf61a3bcd992335c`�
 
 七项专属邮件子测试因缺少Postfix夹具跳过，十三个IAM浏览器入口及完整/聚焦签名生命周期flag默认未开启，不作为相应真实运行证据。十二项预算、四项虚拟时钟和十二项ResponseLoss检查在CI只有非verbose包级证据，不虚构逐子例时间。该轮created→terminal为1874秒，不能仅凭总时长归因某一调度瓶颈。CI清理只证明36个Post及14个Stop步骤成功，不证明本机历史资源已移除。已关闭的本attempt不再重复取证。新签名组合的实际运行、被拒绝的旧轮次和有界观察限制只归FEAT-005及[#3](https://github.com/xiak/matrix/issues/3)，不并入本CI或完整发布验收；被拒绝的`101dc339`/Verification39199323432保持cancelled。
 
-当前真实浏览器已证明User资料/状态恢复、Group Membership添加/移除恢复、Group策略附件CREATE/REVOKE只读恢复、Group最终删除效果，以及Account安全设置的正常完整替换。Group附件恢复与删除后的可见完成回执已有固定UI修正，但新版本的纯页面最终操作尚未验收；日常改密、直接User/Role附件和010矩阵中的其他非Deferred路径仍未完成，精确范围由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有。默认CI跳过的浏览器入口、专属Postfix邮件子测试不能按成功计；当前Linux前端通过也不宣称此前Windows边缘超时和既有React警告已消失。安全通知的真实投递证据仍由009拥有，不能以Audit或通知任务入队替代。
+当前真实浏览器已证明User资料/状态恢复、Group Membership添加/移除恢复、Group策略附件CREATE/REVOKE只读恢复，以及Account安全设置的正常完整替换。2026-10-19的当前9621产品与26deca2测试固定对象另已完成Group删除和GROUP/USER附件撤销的可见完成回执、明确导航、下一请求权限变化、唯一完成/outbox/Audit及完整链；精确请求与运行证据由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有。ROLE/REVOKE只到最终确认，未提交且已停止原fixture；当前CREATE回执、Role附件、日常改密和010其余非Deferred页面仍未完成。日常改密原测试owner已补true/false及已退出Session不复活的后置断言，默认/聚焦race与静态检查通过不等于页面已执行。默认CI跳过的浏览器入口、专属Postfix邮件子测试不能按成功计；当前Linux前端通过也不宣称此前Windows边缘超时和既有React警告已消失。安全通知的真实投递证据仍由009拥有，不能以Audit或通知任务入队替代。
 
 ## 高风险测试矩阵
 

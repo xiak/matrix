@@ -41,6 +41,19 @@
   39212113957, 75a1fa61 / 39216883017, 38a2cda6 / 39196850326 are also
   independently closed. The rejected 101dc339 / 39199323432 remains
   intentionally cancelled; do not backfill or reopen it.
+- Current 9621 production / fixed 26deca2 driver now also passed fresh native
+  browser gates for Group deletion (699.49s), GROUP attachment REVOKE
+  (403.43s), and USER attachment REVOKE (578.23s). UX observed the immutable
+  receipt and explicit completion navigation; IAM verified exact effects,
+  next-request permission loss, unique completion/outbox/Audit and the tenant
+  chain. The existing FEAT010 owns precise requests and limits. These are
+  independent-process browser gates, not signed APISIX page evidence.
+- The existing daily-password browser owner now selects default/true or
+  explicit false, preserves a prior logged-out Session, and verifies both
+  valid peers through their next real identity requests. Focused default,
+  race, architecture and vet checks passed with Go1.26.3/GOMAXPROCS2.
+  Neither daily-password page mode has run; this test-only increment's
+  independent CI must be verified separately. Production/profile unchanged.
 - Issue https://github.com/xiak/matrix/issues/3 stays OPEN for repeated
   large-payload I/O and bounded runtime limitations. The 640.84s fixture
   startup failure, 1084.08s pre-injection timeout and 1800.01s whole-budget
@@ -60,22 +73,28 @@ then the relevant existing test/authorityprocess/process_e2e_test.go owner.
 FEAT010 owns individual UI paths and gaps; FEAT011 owns combined acceptance.
 Read FEAT005 and the verified platform-installation runbook for release work.
 
-Prior User profile/status, Group Membership, Group attachment CREATE/REVOKE
-response-loss, Group deletion effects and normal Account-settings replacement
-have real evidence at their recorded fixed sources. Do not relabel them as
-new 9621 browser executions. The new UI has visible immutable receipts and
-completion navigation; current owner/repository/Session fences do not replace
-LIVE evidence.
+Prior User profile/status, Group Membership, Group attachment CREATE and
+normal Account-settings replacement have evidence at their recorded fixed
+sources; do not relabel them as new 9621 page runs. The current Group deletion
+and GROUP/USER REVOKE evidence above closes those exact visible-receipt gaps,
+not CREATE, ROLE or other page actions. Owner/repository/Session fences do
+not replace LIVE evidence.
 
-Continue the nonDeferred FEAT010 matrix. Priority is the new visible Group
-deletion and attachment receipts, direct User/Role attachment paths, then
-daily password choices and the remaining policy/security/resource journeys.
+Continue the nonDeferred FEAT010 matrix. Priority is remaining CREATE
+receipts and direct Role attachment paths, then daily password choices and
+the remaining policy/security/resource journeys.
 The existing fixtures must use fresh disposable databases and actual
 IAM/Audit/PaaS processes; only observed browser completion authorizes their
 finish marker and authoritative postconditions. No mocks/health-only pass.
 
-The previous Group run stopped before final deletion and no finish marker
-was produced; its follow-up receipt run did not start. Neither is accepted.
+The latest ROLE/REVOKE run stopped before submission: attachment remained
+version 1 and unrevoked, original REVOKE completions remained zero, no finish
+marker was written. It is not accepted and must use a fresh fixture later.
+Its native process was explicitly stopped instead of consuming the remaining
+observation window. All databases from this browser batch reached zero
+clients before removal; its exclusive PostgreSQL container, volume, network
+and tunnels were removed. The pre-existing image was retained. The accepted
+signed runtime remains stopped and retained for remaining signed-page work.
 Consult current CUA rules before actions: product-test authorization does
 not override tool-mandated credential handoff or action-time requirements.
 Do not repeat obsolete permission blockers without checking the actual rule.
