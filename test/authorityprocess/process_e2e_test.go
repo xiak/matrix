@@ -3648,34 +3648,40 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 		}
 	}
 
-	var outboxFacts, requestFacts int
+	var outboxFacts, actionRequestFacts int
 	if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$4),count(*)
 		FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3`,
-		created.Policy.AccountID, wantAction, requestID, created.Policy.ID).Scan(&outboxFacts, &requestFacts); err != nil || outboxFacts != 1 || requestFacts != 1 {
-		t.Fatalf("Policy replay did not retain one outbox fact: target=%d request=%d err=%v", outboxFacts, requestFacts, err)
+		created.Policy.AccountID, wantAction, requestID, created.Policy.ID).Scan(&outboxFacts, &actionRequestFacts); err != nil || outboxFacts != 1 || actionRequestFacts != 1 {
+		t.Fatalf("Policy replay did not retain one outbox fact: target=%d action_request=%d err=%v", outboxFacts, actionRequestFacts, err)
 	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
-	page := queryAudit(t, auditEndpoint, ownerBearer,
-		auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}, http.StatusOK)
+	query := auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}
 	auditMatches, auditRequestMatches := 0, 0
-	for _, record := range page.Records {
-		if record.Event.RequestID != requestID {
-			continue
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if record.Event.RequestID != requestID {
+				continue
+			}
+			auditRequestMatches++
+			if record.Event.Target.ID != string(created.Policy.ID) {
+				continue
+			}
+			auditMatches++
+			if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(created.Policy.AccountID) ||
+				record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
+				record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetPolicy ||
+				record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded || record.Event.IAMDecisionID == "" {
+				t.Fatal("Policy replay Audit fact changed its actor, scope, target or result")
+			}
 		}
-		auditRequestMatches++
-		if record.Event.Target.ID != string(created.Policy.ID) {
-			continue
+		if page.NextCursor == "" {
+			break
 		}
-		auditMatches++
-		if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(created.Policy.AccountID) ||
-			record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
-			record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetPolicy ||
-			record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded || record.Event.IAMDecisionID == "" {
-			t.Fatal("Policy replay Audit fact changed its actor, scope, target or result")
-		}
+		query.Cursor = page.NextCursor
 	}
 	if auditMatches != 1 || auditRequestMatches != 1 {
-		t.Fatalf("Policy replay Audit facts target=%d request=%d", auditMatches, auditRequestMatches)
+		t.Fatalf("Policy replay Audit facts target=%d action_request=%d", auditMatches, auditRequestMatches)
 	}
 	chain := verifyAudit(t, auditEndpoint, ownerBearer)
 	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
@@ -3873,38 +3879,44 @@ func runIAMUserManagementRecoveryConsoleBrowser(
 		t.Fatal("later User state rewrote the original management completion")
 	}
 
-	var outboxFacts, requestFacts int
+	var outboxFacts, actionRequestFacts int
 	if err := database.QueryRow(ctx, `SELECT
 		count(*) FILTER(WHERE event_document#>>'{target,kind}'='USER' AND event_document#>>'{target,id}'=$4),
 		count(*) FROM iam.audit_outbox
 		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3
-		`, user.AccountID, wantAction, requestID, user.ID).Scan(&outboxFacts, &requestFacts); err != nil ||
-		outboxFacts != 1 || requestFacts != 1 {
-		t.Fatalf("User management recovery retained target=%d request=%d original outbox facts: err=%v",
-			outboxFacts, requestFacts, err)
+		`, user.AccountID, wantAction, requestID, user.ID).Scan(&outboxFacts, &actionRequestFacts); err != nil ||
+		outboxFacts != 1 || actionRequestFacts != 1 {
+		t.Fatalf("User management recovery retained target=%d action_request=%d original outbox facts: err=%v",
+			outboxFacts, actionRequestFacts, err)
 	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
-	page := queryAudit(t, auditEndpoint, ownerBearer,
-		auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}, http.StatusOK)
+	query := auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}
 	auditMatches, auditRequestMatches := 0, 0
-	for _, record := range page.Records {
-		if record.Event.RequestID != requestID {
-			continue
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if record.Event.RequestID != requestID {
+				continue
+			}
+			auditRequestMatches++
+			if record.Event.Target.ID != string(user.ID) {
+				continue
+			}
+			auditMatches++
+			if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(user.AccountID) ||
+				record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
+				record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetUser ||
+				record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
+				t.Fatal("User management Audit fact changed its actor, scope, target or result")
+			}
 		}
-		auditRequestMatches++
-		if record.Event.Target.ID != string(user.ID) {
-			continue
+		if page.NextCursor == "" {
+			break
 		}
-		auditMatches++
-		if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(user.AccountID) ||
-			record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
-			record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetUser ||
-			record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
-			t.Fatal("User management Audit fact changed its actor, scope, target or result")
-		}
+		query.Cursor = page.NextCursor
 	}
 	if auditMatches != 1 || auditRequestMatches != 1 {
-		t.Fatalf("User management original Audit facts target=%d request=%d", auditMatches, auditRequestMatches)
+		t.Fatalf("User management original Audit facts target=%d action_request=%d", auditMatches, auditRequestMatches)
 	}
 	chain := verifyAudit(t, auditEndpoint, ownerBearer)
 	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
@@ -4085,38 +4097,44 @@ func runIAMGroupMembershipRecoveryConsoleBrowser(
 		t.Fatalf("Group membership permission was not effective on the next request: status=%d want=%d", response.Status, wantAfter)
 	}
 
-	var outboxFacts, requestFacts int
+	var outboxFacts, actionRequestFacts int
 	if err := database.QueryRow(ctx, `SELECT
 		count(*) FILTER(WHERE event_document#>>'{target,kind}'='GROUP_MEMBERSHIP' AND event_document#>>'{target,id}'=$4),
 		count(*) FROM iam.audit_outbox
 		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3
-		`, group.AccountID, wantAction, requestID, wantMembershipID).Scan(&outboxFacts, &requestFacts); err != nil ||
-		outboxFacts != 1 || requestFacts != 1 {
-		t.Fatalf("Group membership recovery retained target=%d request=%d original outbox facts: err=%v",
-			outboxFacts, requestFacts, err)
+		`, group.AccountID, wantAction, requestID, wantMembershipID).Scan(&outboxFacts, &actionRequestFacts); err != nil ||
+		outboxFacts != 1 || actionRequestFacts != 1 {
+		t.Fatalf("Group membership recovery retained target=%d action_request=%d original outbox facts: err=%v",
+			outboxFacts, actionRequestFacts, err)
 	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
-	page := queryAudit(t, auditEndpoint, ownerBearer,
-		auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}, http.StatusOK)
+	query := auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}
 	auditMatches, auditRequestMatches := 0, 0
-	for _, record := range page.Records {
-		if record.Event.RequestID != requestID {
-			continue
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if record.Event.RequestID != requestID {
+				continue
+			}
+			auditRequestMatches++
+			if record.Event.Target.ID != string(wantMembershipID) {
+				continue
+			}
+			auditMatches++
+			if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(group.AccountID) ||
+				record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
+				record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetGroupMembership ||
+				record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
+				t.Fatal("Group membership Audit fact changed its actor, scope, target or result")
+			}
 		}
-		auditRequestMatches++
-		if record.Event.Target.ID != string(wantMembershipID) {
-			continue
+		if page.NextCursor == "" {
+			break
 		}
-		auditMatches++
-		if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(group.AccountID) ||
-			record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
-			record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetGroupMembership ||
-			record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
-			t.Fatal("Group membership Audit fact changed its actor, scope, target or result")
-		}
+		query.Cursor = page.NextCursor
 	}
 	if auditMatches != 1 || auditRequestMatches != 1 {
-		t.Fatalf("Group membership original Audit facts target=%d request=%d", auditMatches, auditRequestMatches)
+		t.Fatalf("Group membership original Audit facts target=%d action_request=%d", auditMatches, auditRequestMatches)
 	}
 	chain := verifyAudit(t, auditEndpoint, ownerBearer)
 	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
@@ -4382,38 +4400,44 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 		}
 	}
 
-	var outboxFacts, requestFacts int
+	var outboxFacts, actionRequestFacts int
 	if err := database.QueryRow(ctx, `SELECT
 		count(*) FILTER(WHERE event_document#>>'{target,kind}'='POLICY_ATTACHMENT' AND event_document#>>'{target,id}'=$4),
 		count(*) FROM iam.audit_outbox
 		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3`,
-		user.AccountID, wantAction, requestID, wantAttachmentID).Scan(&outboxFacts, &requestFacts); err != nil ||
-		outboxFacts != 1 || requestFacts != 1 {
-		t.Fatalf("policy-attachment recovery retained target=%d request=%d original outbox facts: err=%v",
-			outboxFacts, requestFacts, err)
+		user.AccountID, wantAction, requestID, wantAttachmentID).Scan(&outboxFacts, &actionRequestFacts); err != nil ||
+		outboxFacts != 1 || actionRequestFacts != 1 {
+		t.Fatalf("policy-attachment recovery retained target=%d action_request=%d original outbox facts: err=%v",
+			outboxFacts, actionRequestFacts, err)
 	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
-	page := queryAudit(t, auditEndpoint, ownerBearer,
-		auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}, http.StatusOK)
+	query := auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}
 	auditMatches, auditRequestMatches := 0, 0
-	for _, record := range page.Records {
-		if record.Event.RequestID != requestID {
-			continue
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if record.Event.RequestID != requestID {
+				continue
+			}
+			auditRequestMatches++
+			if record.Event.Target.ID != string(wantAttachmentID) {
+				continue
+			}
+			auditMatches++
+			if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(user.AccountID) ||
+				record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
+				record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetPolicyAttachment ||
+				record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
+				t.Fatal("policy-attachment Audit fact changed its actor, scope, target or result")
+			}
 		}
-		auditRequestMatches++
-		if record.Event.Target.ID != string(wantAttachmentID) {
-			continue
+		if page.NextCursor == "" {
+			break
 		}
-		auditMatches++
-		if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(user.AccountID) ||
-			record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
-			record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetPolicyAttachment ||
-			record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
-			t.Fatal("policy-attachment Audit fact changed its actor, scope, target or result")
-		}
+		query.Cursor = page.NextCursor
 	}
 	if auditMatches != 1 || auditRequestMatches != 1 {
-		t.Fatalf("policy-attachment original Audit facts target=%d request=%d", auditMatches, auditRequestMatches)
+		t.Fatalf("policy-attachment original Audit facts target=%d action_request=%d", auditMatches, auditRequestMatches)
 	}
 	chain := verifyAudit(t, auditEndpoint, ownerBearer)
 	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
