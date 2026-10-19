@@ -903,10 +903,10 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		return
 	}
 	if mode == authorityProcessGroupDeletionBrowser {
-		runIAMGroupDeletionConsoleBrowser(
+		sensitive = append(sensitive, runIAMGroupDeletionConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
-		)
+		)...)
 		return
 	}
 	if mode == authorityProcessPasswordChangeBrowser {
@@ -4268,7 +4268,7 @@ func runIAMGroupDeletionConsoleBrowser(
 	paasEndpoint string,
 	ownerBearer string,
 	start func(string, []string) *childProcess,
-) {
+) []string {
 	t.Helper()
 	const groupName = "Browser deletion operators"
 	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups", ownerBearer,
@@ -4281,6 +4281,12 @@ func runIAMGroupDeletionConsoleBrowser(
 	}
 	member := createIAMUser(t, iamEndpoint, ownerBearer, "browser.group.member", "Browser group member",
 		initialDeveloperPassword, "browser-group-delete-member")
+	initial := loginIAM(t, iamEndpoint, "browser.group.member@organization-process", initialDeveloperPassword,
+		"browser-group-delete-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword, changedDeveloperPassword,
+		"browser-group-delete-password")
+	memberSession := loginIAM(t, iamEndpoint, "browser.group.member@organization-process", changedDeveloperPassword,
+		"browser-group-delete-member-login")
 	membershipResponse := performJSON(t, http.MethodPost,
 		iamEndpoint+"/v1/groups/"+string(group.ID)+"/memberships", ownerBearer,
 		iamv1.CreateGroupMembershipRequest{UserID: member.ID, RequestID: "browser-group-delete-membership"})
@@ -4304,6 +4310,9 @@ func runIAMGroupDeletionConsoleBrowser(
 		attachment.Target.Kind != iamv1.PolicyTargetGroup || attachment.Target.ID != string(group.ID) ||
 		attachment.PolicyID != iamv1.SystemPolicyPaaSViewer || attachment.ResourceVersion != 1 || attachment.RevokedAt != nil {
 		t.Fatalf("prepare Group deletion attachment status=%d body=%s", attachmentResponse.Status, attachmentResponse.Body)
+	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", memberSession.Credential, nil); response.Status != http.StatusOK {
+		t.Fatalf("Group deletion precondition did not grant the member PaaS access: status=%d", response.Status)
 	}
 
 	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
@@ -4373,6 +4382,15 @@ func runIAMGroupDeletionConsoleBrowser(
 		WHERE tenant_id=$1 AND id=$2 AND principal_type='USER'`, group.AccountID, member.ID).Scan(&memberLive); err != nil || !memberLive {
 		t.Fatalf("Group deletion deleted or disabled its member User: live=%t err=%v", memberLive, err)
 	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", memberSession.Credential, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("Group deletion did not revoke inherited access on the next PaaS request: status=%d", response.Status)
+	}
+	identityResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", memberSession.Credential, nil)
+	var identity iamv1.CurrentIdentity
+	if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &identity) != nil ||
+		iamv1.ValidateCurrentIdentity(identity) != nil || identity.Account.ID != member.AccountID || identity.User.ID != member.ID {
+		t.Fatalf("Group deletion changed the member's still-valid identity: status=%d", identityResponse.Status)
+	}
 	policyResponse := performJSON(t, http.MethodGet,
 		iamEndpoint+"/v1/policies/"+string(iamv1.SystemPolicyPaaSViewer), ownerBearer, nil)
 	var policy iamv1.PolicyDetail
@@ -4427,7 +4445,8 @@ func runIAMGroupDeletionConsoleBrowser(
 		chain.TenantID != auditv1.TenantID(group.AccountID) || chain.InstallationID != "" {
 		t.Fatalf("Group deletion tenant Audit chain is incomplete: %#v", chain)
 	}
-	t.Log("the live Group workspace deleted one versioned Group, atomically removed its one membership and revoked its one direct policy attachment, navigated to the live directory, preserved the User and system Policy, and emitted exactly one decision-bound fact in the verified tenant Audit chain")
+	t.Log("the live Group workspace deleted one versioned Group, atomically removed its one membership and revoked its one direct policy attachment, navigated to the live directory, denied the next member PaaS request while preserving its valid identity and the system Policy, and emitted exactly one decision-bound fact in the verified tenant Audit chain")
+	return []string{initial.Credential, memberSession.Credential}
 }
 
 func runIAMPasswordChangeConsoleBrowser(
