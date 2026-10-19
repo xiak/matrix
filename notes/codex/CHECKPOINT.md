@@ -82,9 +82,17 @@
   cannot emit the full lifecycle completion marker. Four virtual-clock cases,
   phase1e2e race (2.747s), architecture race (1.821s), vet and fixed Linux
   driver build passed. Production 9621 bits and profile are unchanged.
-  Exact Verification 39216883017 attempt 1 is running with the existing
-  Test Expert; its fixed review and actual focused/full signed gates remain
-  required. Do not infer a product timing SLO from either fixture deadline.
+  The Test Expert reviewed this exact fixed patch without a confirmed new
+  blocker. Its native-Linux focused gate passed in 689.05 seconds on unchanged
+  signed 9621 A/B: actual B APISIX fault, expected CLI failure, A automatic
+  restoration, B absence and repeated status/verify. An earlier strict
+  precondition failure before upgrade effects remains recorded separately;
+  no health check or limit was relaxed. A new isolated engine started with
+  zero images/containers/volumes for the full fresh lifecycle, whose result
+  and subsequent restart gate remain pending. Exact Verification 39216883017
+  attempt 1 is still with the existing Test Expert; seven completed logs
+  were independently checked, not the entire run. Do not infer a product
+  timing SLO or complete release acceptance from the focused gate.
 - Accepted signed-release source remains
   `741dceb6f0092fbc33706842862980816fe72d15`,
   IAM87/Audit39/PaaS7+r37. Its exact CI and same-profile signed A/B lifecycle

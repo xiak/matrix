@@ -959,7 +959,18 @@ reuses the existing real target-container injection, exact CLI failure,
 source restoration, target absence and status/verify assertions; it emits
 only a focused-completion marker. The ordinary fresh-host lifecycle and
 restart gates remain required, and this focused entry cannot stand in for
-them. The new timing split and focused entry still need real-runtime evidence.
+them. Fixed test driver `75a1fa61e51a218fd37b8137c4a86602568ecab3` passed
+this focused gate in 689.05 seconds on the unchanged signed 9621 A/B and the
+same 2-CPU/4-GiB isolated engine. The real B APISIX removal led to the expected
+CLI failure, a sealed `ROLLED_BACK` journal result with A current, no remaining B
+platform containers and successful repeated status/verify. Both the existing
+whole-gate bound and post-injection five-minute recovery bound were retained.
+An earlier focused attempt failed its strict A container-state precondition
+before any upgrade effect while the PaaS worker had two non-OOM restarts;
+that failure is not backfilled. The passing attempt began only after the
+original A was again observed healthy, without changing health checks or
+limits. This closes the focused injection/recovery check, not the required
+new-source fresh lifecycle, retained business state or restart acceptance.
 
 On 2026-10-17, fixed source
 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` assembled and authenticated
