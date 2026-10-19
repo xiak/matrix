@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；当前已接受的签名产品源码为`9621bb6e66b1076576649d3f6b224725a60d6848`，IAM87/Audit39/PaaS7、`contractRevision=37`。精确独立CI及同源签名A/B完整离线生命周期、重启后复验已通过，准确发布证据归FEAT-005。User资料/状态、Group Membership、Account安全设置及Group附件恢复已有各自真实证据；当前版本又完成Group删除、GROUP/USER附件撤销的可见回执和权限/Audit后验。附件CREATE的新回执、Role附件、日常改密及矩阵其余非Deferred页面写路径仍须逐项实跑。签名包通过不替代浏览器验收，整个FEAT仍为实施中。
+- 状态：实施中；当前已接受的签名产品源码为`5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7、`contractRevision=37`。精确独立CI、同源签名A/B完整离线生命周期及重启后复验均已通过，发布证据归FEAT-005。页面仅采纳本文件各自固定版本的真实证据：User资料/状态、Group Membership、Account安全设置及Group附件恢复已覆盖相应路径，固定9621另证明Group删除和GROUP/USER附件撤销的可见回执与权限/Audit后验。附件CREATE的新回执、Role附件、日常改密及矩阵其余非Deferred路径仍须逐项实跑。当前签名通过不继承或补造新版本浏览器验收，整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -21,14 +21,14 @@
 
 | ID | 当前结论 | 仍需闭合或明确延期的边界 |
 | --- | --- | --- |
-| IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
-| IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果；后继独立真实浏览器已从普通User首次登录完成纯页面强制改密，并验证仅保留调用Session、撤销另一受限Session、旧密码失效和新密码重新登录 | 日常主动改密的可选会话处置、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
-| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；IAM87+r37已通过前端/嵌入构建与独立CI。User资料/停用以原意图只读恢复，Membership添加/移除只显式等值重放原命令，Group附件CREATE/REVOKE已有响应丢失与下一请求权限效果。当前9621页面进一步证明Group删除的1+1级联及准确可见回执，以及GROUP/USER附件撤销的一次提交、一次原回执读取、零再写、明确完成导航与唯一outbox/Audit；User、Policy及不在级联范围内的资源保持 | 当前CREATE回执及直接Role附件仍缺页面证据；ROLE/REVOKE本轮只到最终确认，未提交且已收尾，不计通过。日常关系隔离不能替代这些写路径；批量User不在本轮需求 |
-| IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version。后继候选UI已在同一r36后端从页面创建零附件Policy、改名并整策略退役，稳定ID/默认版本/摘要及不可变版本保持，活动目录移除且三条outbox/Audit事实和完整租户链均已核对；独立真实浏览器门禁进一步证明改名与整策略退役各自在响应半断后的双标签排他、关闭持锁标签和完全相同原命令恢复 | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略；当前签名组合已通过，但不能替代所列纯页面写路径 |
-| IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role。当前后端与真实PG已证明Role附件变化使原RoleSession失效，显式新承担才按新授权求值，历史发行记录不被改写。后继候选选择性采用UX固定c5f858d、3ddbd991及ad8cd9c，在原身份owner中处理业务/Audit的401并保护跨Session恢复原意图；七文件282项本地回归通过，消费者固定e1a96db的19项CI全部成功，Issue #4已按精确消费者证据关闭 | 当前已接受的9621签名包仍有部分业务/Audit的401只显示局部过期；新签名组合及管理员撤销、Role凭据精确业务读取和显式返回来源身份的真实页面门禁尚未完成。跨Account、角色链、服务/外部身份trust明确Deferred |
+| IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，固定IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
+| IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；固定IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果；后继独立真实浏览器已从普通User首次登录完成纯页面强制改密，并验证仅保留调用Session、撤销另一受限Session、旧密码失效和新密码重新登录 | 日常主动改密的可选会话处置、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
+| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；IAM87+r37已通过前端/嵌入构建与独立CI。User资料/停用以原意图只读恢复，Membership添加/移除只显式等值重放原命令，Group附件CREATE/REVOKE已有响应丢失与下一请求权限效果。固定9621页面进一步证明Group删除的1+1级联及准确可见回执，以及GROUP/USER附件撤销的一次提交、一次原回执读取、零再写、明确完成导航与唯一outbox/Audit；User、Policy及不在级联范围内的资源保持 | 当前CREATE回执及直接Role附件仍缺页面证据；ROLE/REVOKE本轮只到最终确认，未提交且已收尾，不计通过。日常关系隔离不能替代这些写路径；批量User不在本轮需求 |
+| IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；固定IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version。后继候选UI已在同一r36后端从页面创建零附件Policy、改名并整策略退役，稳定ID/默认版本/摘要及不可变版本保持，活动目录移除且三条outbox/Audit事实和完整租户链均已核对；独立真实浏览器门禁进一步证明改名与整策略退役各自在响应半断后的双标签排他、关闭持锁标签和完全相同原命令恢复 | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略；当前签名组合已通过，但不能替代所列纯页面写路径 |
+| IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；固定IAM86+r36签名页面按权威空目录显示零Role。当前后端与真实PG已证明Role附件变化使原RoleSession失效，显式新承担才按新授权求值，历史发行记录不被改写。后继候选选择性采用UX固定c5f858d、3ddbd991及ad8cd9c，在原身份owner中处理业务/Audit的401并保护跨Session恢复原意图；七文件282项本地回归通过，消费者固定e1a96db的19项CI全部成功，Issue #4已按精确消费者证据关闭 | 业务/Audit的401及跨Session意图保护修正已进入当前5935签名源码，同源签名生命周期已通过；管理员撤销、Role凭据精确业务读取和显式返回来源身份的真实页面门禁仍未完成。跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；IAM86+r36签名页面读取已验证通知地址、本人TOTP状态和有效Session，并对缺少读取权限显示真实拒绝。固定`a119ffdb`的独立真实浏览器已证明普通User首次绑定、换绑、主动移除、重新绑定、四次MFA登录及跨浏览器撤销其他Session，准确因子/恢复码代次和Audit证据由[本人安全与会话](#live-本人安全与会话浏览器闭环)拥有；这不是强制MFA或签名APISIX页面验收。后继最小权限普通User已完成Account安全设置的真实TOTP step-up、完整版本替换、旧Session围栏和重新登录后权威读取 | 账号强制MFA下普通User首次绑定及受限重新绑定、AccessKey全生命周期、恢复码再生/自助恢复及其他敏感用途step-up仍缺完整浏览器门禁；已接受的普通TOTP路径仍缺当前签名APISIX页面组合证据。受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、外部物理认证器及WebAuthn明确Deferred |
-| IAM-UI-07 | 四个真实产品、协议、授权/撤权、错误矩阵和五类命令恢复已有分层证据；当前IAM86+r36签名页面又以`offline.alpha.primary`从真实RabbitMQ配额创建`iam-r36-terminate-test`并观察QUEUED→INSTALLING→RUNNING和AMQP端点，同一签名运行时已证明终止单写响应丢失、跨来源结果恢复、物理清理与配额归还 | 终止的纯页面最终提交与UNKNOWN呈现仍须实跑；不支持跨主体恢复，查无结果不得推断原写未发生 |
-| IAM-UI-08 | 当前IAM86+r36签名入口再次证明角色SSO、用户SSO和跨账号协作直达路由只有明确“尚未接入后端”EmptyState且没有提交控件 | 企业微信/外部IdP、Passkey/WebAuthn、跨账号与角色链保持禁用和Deferred；新增Deferred入口仍须沿同一边界验收 |
+| IAM-UI-07 | 四个真实产品、协议、授权/撤权、错误矩阵和五类命令恢复已有分层证据；固定IAM86+r36签名页面又以`offline.alpha.primary`从真实RabbitMQ配额创建`iam-r36-terminate-test`并观察QUEUED→INSTALLING→RUNNING和AMQP端点，同一签名运行时已证明终止单写响应丢失、跨来源结果恢复、物理清理与配额归还 | 终止的纯页面最终提交与UNKNOWN呈现仍须实跑；不支持跨主体恢复，查无结果不得推断原写未发生 |
+| IAM-UI-08 | 固定IAM86+r36签名入口再次证明角色SSO、用户SSO和跨账号协作直达路由只有明确“尚未接入后端”EmptyState且没有提交控件 | 企业微信/外部IdP、Passkey/WebAuthn、跨账号与角色链保持禁用和Deferred；新增Deferred入口仍须沿同一边界验收 |
 
 ## 详细设计
 

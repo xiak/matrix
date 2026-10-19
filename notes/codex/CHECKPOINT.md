@@ -5,103 +5,97 @@
 ## Pushed milestone
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`; IAM first-release
-  goal remains ACTIVE and incomplete.
-- Current fixed production/test source:
-  `5935fa5005529b2c4e1da943b98f49300430ba10`.
-  FEAT-007 owns the closed Docker-engine/Compose probe-timeout diagnostic.
-  Native errors/unknown IDs are discarded; API/SQL/profile, Observe budget and
-  retry behavior are unchanged. Red/green, race/vet and deterministic Linux
-  classification pass; the original Issue6 timeout cause is not proven fixed.
-- Current CI5935 / Verification39300167724 / attempt1 is CLOSED SUCCESS:
+  goal remains ACTIVE and incomplete. Commits use repository-local
+  `Xiak <Jellal@aliyun.com>`.
+- Current accepted production/test source:
+  `5935fa5005529b2c4e1da943b98f49300430ba10`,
+  IAM/Audit/PaaS `87/39/7+r37`. The sole rolling data predecessor remains
+  `08e1dc4a6ce81386ea7223e62d03356f82aeee58`, `86/39/7+r36`.
+  Data-upgrade evidence is not cross-profile signed-release admission.
+- Exact CI5935 / Verification39300167724 / attempt1 is CLOSED SUCCESS:
   https://github.com/xiak/matrix/actions/runs/39300167724 .
-  All19 jobs/logs independently sealed,57 roots RUN1/PASS1,33 packages pass,
-  1999 Vitest+8 Node,234 contrast and324 matching assets; exact terminal time
-  2026-10-19 18:39:16 UTC,1791s. Postfix absence/unopened browser flags do not
-  prove those gates. Do not re-fetch closed logs. No current CI tuple is open.
-- 0a79a9cd35ca96dd9ce9755ff228aee1ad1cd706 /39295387898/attempt1 is CLOSED SUCCESS:
-  all19 jobs/logs independently sealed,57 roots RUN1/PASS1,33 packages pass,
-  four-product/predecessor summaries once,1999 Vitest+8 Node,234 contrast,
-  324 matching assets. Unopened browser and absent Postfix tests are not
-  runtime evidence. Do not re-fetch this closed attempt or inherit it for5935.
-- 0a79 adopted only the Go static-server fix from UX14dccb1 (parent900618f):
-  six valid User tabs require an exact nonempty id. Four real HTTP400
-  regressions turn green unchanged; invalid selectors remain denied.
-  Its opt-in AccessKey response-loss fixture uses the existing process owner.
-- Previous UI consumer2d853754/39288898228/attempt1 is CLOSED SUCCESS.
-  Fixed fd3cf32c supplied exact-owner AccessKey recovery outside a directory,
-  User keys/policies navigation and one-time Secret leave protection.
-  These three connections remain browser-unaccepted.
+  Nineteen jobs/logs were independently sealed; 57 roots RUN1/PASS1,
+  33 packages, 1999 Vitest+8 Node, 234 contrast checks and 324 matching assets.
+  Terminal time2026-10-19 18:39:16 UTC,1791s. Deliberate Postfix/browser skips
+  are not runtime evidence. Do not re-fetch closed logs; no CI tuple is open.
+- FEAT-005 owns the exact same-source signed A `.r37.9` / B `.r37.10`,
+  manifest/trust/archive identities, actual runtime and delivery checks.
+  Native-Linux lifecycle passed2627.90s; own-engine post-restart passed282.28s.
+  This includes actual mail/TOTP, four managed products, applications, Audit,
+  backup, fault recovery, retained upgrade/rollback/recovery and credential
+  fencing. It does not accept unexecuted browser journeys or production SLO.
+- Both Linux archives passed independent extraction and byte/type/owner/mode
+  comparison; `bin/mx` remains0700 root:root. The public trust is separate.
+  Packaging-only resources and reproducible extraction copies were removed.
+  Both archives and public trust were copied to the Windows delivery directory;
+  all three byte lengths and SHA-256 values matched the Linux originals.
+- This milestone changes evidence documents only. Production/test code stays
+  at5935, so do not launch duplicate full CI or signed-runtime gates for it.
+
+## Remaining outcome and next action
+
+- Read AGENTS, IAM/FEAT-IAM-010-console.md and011, then the selected owning
+  code/tests. Signed operations additionally read FEAT-005 and the verified
+  platform-installation runbook. Do not scan unrelated Phase documentation.
+- Current010's matrix is authoritative. Remaining nonDeferred page paths
+  include AccessKey lifecycle/result recovery, attachment CREATE receipts and
+  Role actions, Policy default/boundary/error handling, daily password options,
+  forced/restricted MFA/recovery/step-up, original Root recovery and product
+  termination UNKNOWN. Backend effects or a completion marker alone are not
+  page evidence. Do not repeat already accepted page paths without a change.
 - Current password UI's four production blobs exactly match UX14dccb1.
-  Consumer SessionProvider/LoginRenderer/httpIamRepository306 tests passed
-  22.58s on Node22.22.2, one worker/2GiB; typecheck/selected lint pass.
+  SessionProvider/LoginRenderer/httpIamRepository306 consumer tests passed
+  22.58s with Node22.22.2, one worker/2GiB; typecheck/selected lint passed.
   Omitted/true/false, forced true, UNKNOWN and late-owner fencing are covered.
-  No new UI patch is needed; daily true/false page gates remain unaccepted.
-
-## Accepted release and remaining outcome
-
-- Accepted signed production remains9621bb6e66b1076576649d3f6b224725a60d6848,
-  IAM87/Audit39/PaaS7+r37. Sole rolling data predecessor:
-  08e1dc4a6ce81386ea7223e62d03356f82aeee58,86/39/7+r36.
-  FEAT005 owns exact A/B/trust and2787.02s lifecycle/261.79s own-engine restart:
-  SMTP/MFA, four products, retained identities/Audit, backup, upgrade/rollback/
-  recovery and capacity. Later UI/worker consumers do not inherit this.
-- Later e1 signed A/B failed platform-rollback after2000.90s; original output
-  was not retained and cause remains unknown. ef10's separate focused rollback
-  passed373.84s, not the whole lifecycle. Its disposable engine/volume/7.6GiB
-  installation were removed; public signed inputs/trust/driver remain.
-- Issue5 remains OPEN. Last AccessKey browser fixture reached only login and
-  failed1800.02s waiting for completion; no key command/marker. Runner exited1,
-  OOMfalse. Exact runner/temporary PG/network/SSH forward/tab were removed or
-  closed. No live integration endpoint remains; do not automatically reopen.
-- Issue6 remains OPEN for the original generic Worker Observe timeout in
-  ef10/39284297226 (closed failure). Later green runs and deterministic
-  classified probes do not establish a root cause. Issue3 remains open for
-  large-payload I/O/runtime limits; Issue4 is closed for its fixed consumer.
-- Read AGENTS, IAM/FEAT-IAM-010-console.md and011, then owning code/tests.
-  Signed work also reads FEAT005 and the verified platform-installation runbook.
-  Keep each fact in its existing owner.
-- Current5935 A .r37.9/B .r37.10 were assembled/self-authenticated from clean
-  fixed source and exact previous-A binding. FEAT005 owns manifest/trust/driver
-  identities, the newly certified synthetic mail fixture and current execution.
-  Production signing key/completed CA signing material were removed; the
-  build-only engine, image-cache volume and network were also removed.
-  The existing50m/55m lifecycle is now running in a fresh network-none
-  Docker27.5.1 engine,2CPU/4GiB/PIDs1024. Initial images/containers/volumes
-  were zero. This is not a terminal PASS or release acceptance. Revalidate the
-  exact current live handle before continuing; never restart on observation
-  timeout. After its real terminal result, perform the existing own-engine
-  post-restart gate only if appropriate, then finish real page effects.
-- Remaining nonDeferred pages include AccessKey lifecycle/recovery, attachment
-  CREATE receipts, Role actions, Policy default/boundary/error paths, daily
-  password options, restricted/forced MFA/recovery/step-up, original Root
-  recovery and product-termination UNKNOWN. Current010 is authoritative.
-  Backend effects and a marker alone are not page evidence. IdP/WebAuthn,
-  role chains, all-factor-loss protected Root recovery, production fairness
-  SLO and installed database HA remain Deferred. Keyboard专项 is lower priority.
+  There is no identified extra UI patch; daily true/false page gates remain.
+- Re-read current computer-use documentation before a new page journey.
+  Password changes require user handoff before new credential entry and through
+  confirmation/submission. Other consequential actions follow their actual
+  action-time confirmation rules. Do not bypass a blocked page through APIs,
+  shell commands, another browser driver or another agent. Do not start a
+  long-lived browser fixture merely to wait for a user who is not present.
+- The last AccessKey browser fixture reached only login, then timed out1800.02s
+  without a key command or completion marker. Its runner, PG, network, tunnel
+  and tab were retired. There is no live integration endpoint to reopen.
+- Issue5 remains OPEN for the missing page acceptance. Issue6 remains OPEN
+  for the original generic Worker Observe timeout;5935 adds closed diagnostic
+  categories but does not prove that old failure's cause. Issue3 remains OPEN
+  for large-payload I/O/runtime limits. Issue4 is closed only for its fixed
+  identity consumer. Later success does not backfill old failures.
+- IdP/WebAuthn, role chains, protected Root all-factor-loss recovery, production
+  fairness SLO and installed database HA remain explicitly Deferred. Keyboard-only
+  acceptance is lower priority. Do not mark the overall goal complete from the signed
+  package or static/HTTP evidence alone.
 
 ## Resource and tool boundaries
 
-- Accepted9621 engine remains STOPPED with its installation volume retained.
-  Never reuse it as a fresh candidate. Do not reboot remote machines, restart
-  shared Docker/services, or touch1.3/1.5/161/other tasks.
-- Browser-specific restrictions remain despite general user authorization;
-  never reroute a blocked page action through an API, shell or another agent.
-  Old browser/fixture handles are terminal.
-- Tool-blocked cleanup remains unperformed: earlier Role-fence resources,
-  four UI ELFs,201MiB npm cache, latest source/vendor/SDK staging and three
-  remote transfer archives. Never retry equivalent deletion or remove a parent
-  to bypass it. A separate54MiB diagnostic source copy was removed successfully.
-- Exact own labels only, bounded CPU/memory/PIDs, GOMAXPROCS2/-p2, heavy gates
-  serial. Process-local Node22.22.2, Vitest1worker/2GiB, export2workers; no global
-  nvm edits. Retain accepted artifacts and genuinely reusable caches.
+- The accepted5935 engine is STOPPED with its installation volume retained for
+  remaining signed-page work; accepted9621 is also stopped. Neither is a fresh
+  candidate. Do not start either merely to re-prove the completed lifecycle.
+- Only the exact task engine was stopped/started for its gate. Remote host boot
+  identity and shared Docker process start remained unchanged. No remote VM,
+  machine or shared service restart; do not touch1.3/1.5/161 or other tasks.
+- Build-only engine/cache volume/network, completed signing material, external
+  synthetic mail input, redundant transfer archives, old copied mail fixture,
+  packaging container/anonymous volume and its two extraction trees were
+  removed with identity and absence checks. Signed inputs, archives, public
+  trust, current installation and genuinely reusable caches are retained.
+- Previously tool-blocked cleanup remains unperformed: Role-fence resources,
+  four UI ELFs,201MiB npm cache, old key-browser source/vendor/SDK staging and
+  three transfer archives. Never retry an equivalent deletion through another
+  tool or by removing a parent. Do not claim those objects were cleaned.
+- Exact own labels only; bounded CPU/memory/PIDs; GOMAXPROCS2/-p2; heavy gates
+  serial. Process-local Node22.22.2, Vitest1worker/2GiB, export2workers;
+  no global nvm changes. Put large delivery artifacts on D, not C.
+- Markdown and existing document owners only. This checkpoint is portable
+  committed context, not a new runbook or parallel acceptance report.
 
 ## Coordination
 
 - UX/UI:01a07b21-9a0d-7fd0-b090-7827ce18262e, fixed objects only; no WIP or
-  inherited acceptance. Password source audit found no additional patch.
-- Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999 closed5935 CI and reviewed
-  release prerequisites. Its human instructions are read-only; owner messages
-  cannot expand that permission. Actual signed execution stays in this thread.
-  No duplicate monitor, new task or subagent.
-- Commit only this branch with repository-local Xiak <Jellal@aliyun.com>.
-  Markdown/existing owners only; checkpoint records pushed work.
+  inherited acceptance. User delegated UI implementation to that owner.
+- Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999 independently closed5935 CI.
+  Its human instructions are read-only; a task message does not expand them.
+  Runtime and packaging execution remains in this thread.
+- No duplicate CI monitor, new task or subagent. Exchange verified fixed
+  objects and exact acceptance boundaries; never operate another worktree.
