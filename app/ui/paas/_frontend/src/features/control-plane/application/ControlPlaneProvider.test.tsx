@@ -470,6 +470,40 @@ describe("ControlPlaneProvider", () => {
     expect(replacement.createInstallation).not.toHaveBeenCalled();
   });
 
+  it.each([401, "success"] as const)("preserves a new Session's restored UNKNOWN command when the old mutation returns %s", async (completion) => {
+    let settleMutation!: () => void;
+    let login = 0;
+    const iam = iamRepository();
+    const firstLogin = iam.login;
+    iam.login = async () => ({ ...await firstLogin({ loginName: "admin", password: "in-memory" }), credential: `session-${++login}` });
+    const screen = recoveryView(vi.fn(async () => []), iam);
+    vi.mocked(screen.repository.createInstallation).mockImplementation(() => new Promise<ServiceInstallation>((resolve, reject) => {
+      settleMutation = () => {
+        if (completion === "success") resolve({ ...readyInstallation, id: "postgres-recovery", name: "Postgres recovery" });
+        else reject(new HttpProblem(401, "OLD_SESSION"));
+      };
+    }));
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    await act(async () => { fireEvent.click(screen.getByText("create recovery installation")); });
+    expect(screen.getByTestId("command-phase").textContent).toBe("submitting");
+    const requestId = screen.getByTestId("command-request").textContent;
+    const storedIntent = localStorage.getItem("matrix.managed-service.commands.v1");
+    expect(storedIntent).toContain(requestId);
+
+    await act(async () => { fireEvent.click(screen.getByText("logout")); });
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    await waitFor(() => expect(screen.getByTestId("command-phase").textContent).toBe("unknown"));
+    expect(screen.getByTestId("command-restored").textContent).toBe("true");
+    await act(async () => { settleMutation(); });
+
+    expect(screen.getByTestId("session-phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("command-phase").textContent).toBe("unknown");
+    expect(screen.getByTestId("command-request").textContent).toBe(requestId);
+    expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBe(storedIntent);
+    await act(async () => { fireEvent.click(screen.getByText("create recovery installation")); });
+    expect(screen.repository.createInstallation).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a slow managed-service command local to its data region and preserves the caller idempotency key", async () => {
     vi.useFakeTimers();
     let resolveInstallation!: (installation: ServiceInstallation) => void;

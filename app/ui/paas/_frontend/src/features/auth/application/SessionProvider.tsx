@@ -69,6 +69,7 @@ type SessionContextValue = {
   passwordChange: { identity: string; state: "idle" | "pending" | "outcome-unknown" };
   changePassword(currentPassword: string, newPassword: string, revokeOtherSessions?: boolean): Promise<boolean>;
   logout(): Promise<boolean>;
+  isCurrentSession(expectedCredential: string, expectedRevision: number): boolean;
   expire(expectedCredential: string, expectedSessionRevision?: number, notice?: SessionSignInNotice): boolean;
 };
 
@@ -880,8 +881,9 @@ export function SessionProvider({
     passwordChange,
     changePassword,
     logout,
+    isCurrentSession,
     expire
-  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmAuthenticatorRecovery, confirmFirstEnrollmentContact, confirmFirstEnrollmentFactor, current, enrollmentRecovery, firstEnrollment, reauthenticationReason, signInNotice, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, leaveAuthenticatorRecovery, login, logout, passwordChange, phase, sessionRevision, restartAuthenticatorRecovery, startAuthenticatorRecovery, startFirstEnrollmentContact, startFirstEnrollmentFactor, verifyAuthenticationChallenge]);
+  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmAuthenticatorRecovery, confirmFirstEnrollmentContact, confirmFirstEnrollmentFactor, current, enrollmentRecovery, firstEnrollment, reauthenticationReason, signInNotice, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, isCurrentSession, leaveAuthenticatorRecovery, login, logout, passwordChange, phase, sessionRevision, restartAuthenticatorRecovery, startAuthenticatorRecovery, startFirstEnrollmentContact, startFirstEnrollmentFactor, verifyAuthenticationChallenge]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (
