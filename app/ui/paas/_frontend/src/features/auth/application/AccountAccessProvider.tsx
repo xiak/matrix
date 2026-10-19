@@ -654,6 +654,7 @@ type AccountAccess = {
   roles: RoleAccessClient | null;
   roleSessionRevokeIntent: RoleSessionRevokeIntent | null;
   changeRoleSessionRevokeIntent(expectedRequestId: string | null, next: RoleSessionRevokeIntent | null): void;
+  userPolicyChangeReady: boolean;
   userPolicyChangeIntent: UserPolicyChangeIntent | null;
   beginUserPolicyAttachment(user: AccountUserScene, policyId: string): boolean;
   beginUserPolicyRevocation(user: AccountUserScene, attachmentId: string): boolean;
@@ -825,6 +826,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       if (currentUserPolicyChangeOwner.current === userPolicyChangeOwner) currentUserPolicyChangeOwner.current = null;
     };
   }, [userPolicyChangeOwner]);
+  const userPolicyChangeReady = Boolean(active && verifiedIdentityOwner?.session === viewSession && verifiedIdentityOwner.repository === repository);
+  const ownsVerifiedUserPolicyChange = useCallback(() => userPolicyChangeReady &&
+    currentViewSession.current === viewSession && currentUserPolicyChangeOwner.current === userPolicyChangeOwner,
+  [userPolicyChangeOwner, userPolicyChangeReady, viewSession]);
   const userPolicyChangeIdentityKey = active && tenantId && principalId && !repository.workspace
     ? userPolicyChangeStorageKey(tenantId, principalId) : null;
   const [storedUserPolicyChange, setStoredUserPolicyChange] = useState<{
@@ -2299,7 +2304,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   }, [loadAccountsPage, loadPolicyDirectory, loadUsersPage, scene]);
 
   const beginUserPolicyAttachment = useCallback((user: AccountUserScene, policyId: string): boolean => {
-    if (!active || !credential || !scene || loading || mutationPending.current || !tenantId || !principalId) return false;
+    if (!ownsVerifiedUserPolicyChange() || !active || !credential || !scene || loading || mutationPending.current || !tenantId || !principalId) return false;
     const policy = scene.policies.find((item) => item.id === policyId);
     if (user.accountId !== tenantId || user.id === scene.accountOwner.id || !policy || policy.status !== "ACTIVE" ||
       !(policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy)) return false;
@@ -2309,10 +2314,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       defaultVersionId: policy.defaultVersionId, policyResourceVersion: policy.resourceVersion,
       requestId: requestToken("ui-user-attachment-"), phase: "review", lookupStatus: "unchecked", completion: null, error: null
     });
-  }, [active, credential, loading, principalId, rememberUserPolicyChange, scene, tenantId]);
+  }, [active, credential, loading, ownsVerifiedUserPolicyChange, principalId, rememberUserPolicyChange, scene, tenantId]);
 
   const beginUserPolicyRevocation = useCallback((user: AccountUserScene, attachmentId: string): boolean => {
-    if (!active || !credential || !scene || loading || mutationPending.current || !tenantId || !principalId || user.accountId !== tenantId) return false;
+    if (!ownsVerifiedUserPolicyChange() || !active || !credential || !scene || loading || mutationPending.current || !tenantId || !principalId || user.accountId !== tenantId) return false;
     const attachment = user.attachments.find((item) => item.id === attachmentId);
     if (!attachment || !attachment.canRevoke || attachment.accountId !== tenantId || attachment.target.id !== user.id) return false;
     return rememberUserPolicyChange(null, {
@@ -2321,13 +2326,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       attachmentId: attachment.id, attachmentResourceVersion: attachment.resourceVersion,
       requestId: requestToken("ui-user-revocation-"), phase: "review", lookupStatus: "unchecked", completion: null, error: null
     });
-  }, [active, credential, loading, principalId, rememberUserPolicyChange, scene, tenantId]);
+  }, [active, credential, loading, ownsVerifiedUserPolicyChange, principalId, rememberUserPolicyChange, scene, tenantId]);
 
   const submitUserPolicyChange = useCallback(async (requestId: string): Promise<boolean> => {
     const owner = userPolicyChangeOwner;
     const stored = userPolicyChangeRef.current;
     const intent = stored?.owner === owner && stored.intent.requestId === requestId ? stored.intent : null;
-    if (!active || !credential || !scene || !intent || intent.accountId !== tenantId || loading || mutationPending.current ||
+    if (!ownsVerifiedUserPolicyChange() || !active || !credential || !scene || !intent || intent.accountId !== tenantId || loading || mutationPending.current ||
       intent.phase !== "review") return false;
     // A first submission must still match the selected directory revision.
     // Once its result is unknown, recovery is read-only through the immutable
@@ -2372,14 +2377,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         setBusy(false);
       }
     }
-  }, [active, credential, expireSession, loading, rememberUserPolicyChange, repository, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
+  }, [active, credential, expireSession, loading, ownsVerifiedUserPolicyChange, rememberUserPolicyChange, repository, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
 
   const inspectUserPolicyChange = useCallback(async (requestId: string): Promise<boolean> => {
     const owner = userPolicyChangeOwner;
     const stored = userPolicyChangeRef.current;
     const intent = stored?.owner === owner && stored.intent.requestId === requestId ? stored.intent : null;
     const read = repository.readPolicyAttachmentChange;
-    if (!active || !credential || !scene || !intent || intent.phase !== "unknown" || intent.accountId !== tenantId ||
+    if (!ownsVerifiedUserPolicyChange() || !active || !credential || !scene || !intent || intent.phase !== "unknown" || intent.accountId !== tenantId ||
         intent.actorId !== principalId || loading || mutationPending.current) return false;
     if (!read) {
       rememberUserPolicyChange(requestId, { ...intent, lookupStatus: "unavailable", completion: null, error: "unavailable" });
@@ -2421,7 +2426,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         setBusy(false);
       }
     }
-  }, [active, credential, expireSession, loading, principalId, rememberUserPolicyChange, repository, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
+  }, [active, credential, expireSession, loading, ownsVerifiedUserPolicyChange, principalId, rememberUserPolicyChange, repository, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
 
   const endUserPolicyChange = useCallback((requestId: string): boolean => {
     const stored = userPolicyChangeRef.current;
@@ -2455,6 +2460,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   const value = useMemo<AccountAccess>(() => ({
     userCreation,
+    userPolicyChangeReady,
     supportsUserBatch: Boolean(repository.executeUserBatch),
     async executeUserBatch(command) {
       if (!active || !credential || !scene || !workspace || !repository.executeUserBatch || loading || mutationPending.current) return false;
@@ -2648,7 +2654,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, userManagement, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, userManagement, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, userPolicyChangeReady, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>
