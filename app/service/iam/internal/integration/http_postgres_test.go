@@ -14616,14 +14616,15 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 	path := func(session iamv1.SessionID) string { return "/v1/auth/sessions/" + string(session) + ":revoke" }
 	mutations := []string{"mutual", "logout", "change-default", "change-true", "change-false", "forced-change", "reset", "disable-user", "disable-account", "recover-root"}
 	if bulk {
-		mutations = append(mutations, "single", "same-intent", "login")
+		mutations = append(mutations, "single", "same-intent", "login", "login-retry")
 	}
 	for _, mutation := range mutations {
 		for _, selfFirst := range []bool{true, false} {
-			if mutation == "same-intent" && !selfFirst {
+			if (mutation == "same-intent" && !selfFirst) || (mutation == "login-retry" && selfFirst) {
 				continue
 			}
 			t.Run(fmt.Sprintf("concurrent_%s_self-first-%t", mutation, selfFirst), func(t *testing.T) {
+				concurrentLogin := mutation == "login" || mutation == "login-retry"
 				prefix := fmt.Sprintf("own-race-%s-%t", mutation, selfFirst)
 				if bulk {
 					prefix = "bulk-" + prefix
@@ -14675,7 +14676,7 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 					}
 				case "same-intent":
 					other = self
-				case "login":
+				case "login", "login-retry":
 					other.path, other.bearer, other.action = "/v1/auth/login", "", auditv1.ActionIAMSessionIssued
 					other.body = map[string]any{"loginName": realm, "password": password, "requestId": other.request}
 				case "logout":
@@ -14724,6 +14725,31 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 				first, second := self, other
 				if !selfFirst {
 					first, second = other, self
+				}
+				if mutation == "login-retry" {
+					// A first attempt may read the snapshot preceding the overlapping
+					// login. Force one real SQLSTATE 40001 before its outbox commit so
+					// the production transaction retry must read the now-committed login.
+					if _, err := database.Exec(ctx, `CREATE SEQUENCE public.matrix_bulk_retry;
+					 GRANT USAGE ON SEQUENCE public.matrix_bulk_retry TO matrix_iam_owner;
+					 CREATE FUNCTION public.matrix_bulk_retry_once() RETURNS trigger LANGUAGE plpgsql AS $body$
+					 BEGIN IF NEW.event_document->>'requestId'=TG_ARGV[0]
+					     AND NEW.event_document->>'action'='iam.session.others-revoked'
+					     AND nextval('public.matrix_bulk_retry')=1 THEN
+					   RAISE EXCEPTION USING ERRCODE='40001',MESSAGE='synthetic bulk completion retry';
+					 END IF; RETURN NEW; END $body$;
+					 CREATE TRIGGER matrix_bulk_retry_once BEFORE INSERT ON iam.audit_outbox
+					 FOR EACH ROW EXECUTE FUNCTION public.matrix_bulk_retry_once('`+self.request+`')`); err != nil {
+						t.Fatal("install bulk completion retry fixture", err)
+					}
+					t.Cleanup(func() {
+						cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+						defer stop()
+						if _, err := database.Exec(cleanup, `DROP TRIGGER IF EXISTS matrix_bulk_retry_once ON iam.audit_outbox;
+						 DROP FUNCTION IF EXISTS public.matrix_bulk_retry_once(); DROP SEQUENCE IF EXISTS public.matrix_bulk_retry`); err != nil {
+							t.Error("remove bulk completion retry fixture", err)
+						}
+					})
 				}
 				await, release := holdIAMRequest(t, ctx, database, first.request, true, first.action)
 				firstBody, secondBody := mustIAMJSON(t, first.body), mustIAMJSON(t, second.body)
@@ -14777,6 +14803,18 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 				if responseFirst.Code != http.StatusOK || (responseSecond.Code != wantSecond && !(wantSecond == http.StatusUnauthorized && responseSecond.Code == http.StatusForbidden)) {
 					t.Fatalf("session lock outcome first=%d second=%d want=%d", responseFirst.Code, responseSecond.Code, wantSecond)
 				}
+				var fresh loginResult
+				if concurrentLogin {
+					loginResponse := responseSecond
+					if !selfFirst {
+						loginResponse = responseFirst
+					}
+					if json.Unmarshal(loginResponse.Body.Bytes(), &fresh) != nil || iamv1.ValidateSession(fresh.Session) != nil || fresh.Credential == "" ||
+						fresh.Session.AccountID != member.AccountID || fresh.Session.PrincipalID != member.ID || fresh.MustChangePassword ||
+						fresh.Session.ID == firstLogin.Session.ID || fresh.Session.ID == secondLogin.Session.ID {
+						t.Fatal("concurrent login did not issue a distinct session for the expected user")
+					}
+				}
 				var firstFacts, secondFacts int
 				if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE event_document->>'requestId'=$1 AND event_document->>'action'=$2),
 				 count(*) FILTER(WHERE event_document->>'requestId'=$3 AND event_document->>'action'=$4) FROM iam.audit_outbox
@@ -14787,6 +14825,8 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 				if wantSecond == http.StatusOK {
 					wantFacts = 1
 				}
+				var completed iamv1.RevokeOtherSessionsResponse
+				freshRevoked := false
 				if bulk {
 					selfResponse := responseFirst
 					if !selfFirst {
@@ -14800,15 +14840,54 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 						t.Fatal(err)
 					}
 					if selfResponse.Code == http.StatusOK {
-						var completed iamv1.RevokeOtherSessionsResponse
 						wantCount := uint64(1)
 						if !selfFirst && (mutation == "single" || mutation == "change-default" || mutation == "change-true" || mutation == "forced-change") {
 							wantCount = 0
 						}
-						if json.Unmarshal(selfResponse.Body.Bytes(), &completed) != nil || iamv1.ValidateRevokeOtherSessionsResponse(completed) != nil ||
+						if err := json.Unmarshal(selfResponse.Body.Bytes(), &completed); err != nil {
+							t.Fatal("decode bulk completion", err)
+						}
+						if concurrentLogin {
+							var targetIDs []string
+							var exactTerminals bool
+							if err := database.QueryRow(ctx, `SELECT coalesce(array_agg(t.session_id ORDER BY t.session_id),ARRAY[]::text[]),
+							 coalesce(bool_and(t.resource_version=2 AND s.resource_version=t.resource_version AND s.status='REVOKED'
+							 AND s.revoked_at=r.completed_at AND r.completed_at=$4),false)
+							 FROM iam.session_other_revocation_targets t
+							 JOIN iam.session_other_revocations r USING(tenant_id,user_id,request_id)
+							 JOIN iam.sessions s ON s.tenant_id=t.tenant_id AND s.principal_id=t.user_id AND s.id=t.session_id
+							 WHERE t.tenant_id=$1 AND t.user_id=$2 AND t.request_id=$3`,
+								member.AccountID, member.ID, self.request, completed.CompletedAt).Scan(&targetIDs, &exactTerminals); err != nil {
+								t.Fatal("read concurrent login reduction targets", err)
+							}
+							// Both requests overlap. The successful Serializable snapshot,
+							// not commit/response order, determines whether it includes C.
+							// A fresh retry after C commits must include it. In every case B
+							// is ended, A is retained, and no unrelated target is permitted.
+							wantIDs := []string{string(secondLogin.Session.ID)}
+							if !selfFirst && (mutation == "login-retry" || slices.Contains(targetIDs, string(fresh.Session.ID))) {
+								wantIDs = append(wantIDs, string(fresh.Session.ID))
+								freshRevoked = true
+							}
+							slices.Sort(wantIDs)
+							if !slices.Equal(targetIDs, wantIDs) || !exactTerminals || len(targetIDs) != targets {
+								t.Fatal("concurrent login reduction changed the allowed target set or exact terminal evidence")
+							}
+							wantCount = uint64(len(wantIDs))
+							if mutation == "login-retry" {
+								var attempts int
+								if err := database.QueryRow(ctx, "SELECT last_value FROM public.matrix_bulk_retry").Scan(&attempts); err != nil || attempts < 2 {
+									t.Fatal("bulk completion did not traverse the real serialization retry", err)
+								}
+							}
+						}
+						if iamv1.ValidateRevokeOtherSessionsResponse(completed) != nil ||
 							completed.Outcome != "APPLIED" || completed.RevokedCount != wantCount || completed.CurrentSessionID != firstLogin.Session.ID ||
-							completed.AccountID != member.AccountID || completed.UserID != member.ID || completions != 1 || targets != int(wantCount) {
-							t.Fatal("bulk completion did not reflect the actually serialized set")
+							completed.AccountID != member.AccountID || completed.UserID != member.ID || completed.RequestID != self.request || completions != 1 || targets != int(wantCount) {
+							t.Fatalf("bulk completion did not reflect the actually serialized set: valid=%t outcome=%q revoked=%d want=%d caller_matches=%t account_matches=%t user_matches=%t request_matches=%t completions=%d targets=%d",
+								iamv1.ValidateRevokeOtherSessionsResponse(completed) == nil, completed.Outcome, completed.RevokedCount, wantCount,
+								completed.CurrentSessionID == firstLogin.Session.ID, completed.AccountID == member.AccountID,
+								completed.UserID == member.ID, completed.RequestID == self.request, completions, targets)
 						}
 						if mutation == "same-intent" {
 							var replay iamv1.RevokeOtherSessionsResponse
@@ -14827,21 +14906,27 @@ func proveOwnSessionWriters(t *testing.T, ctx context.Context, handlers []http.H
 				if firstFacts != 1 || secondFacts != wantFacts {
 					t.Fatal("failed peer left partial or duplicate success facts")
 				}
-				if mutation == "login" {
-					loginResponse := responseSecond
-					if !selfFirst {
-						loginResponse = responseFirst
+				if concurrentLogin {
+					freshStatus := http.StatusOK
+					if freshRevoked {
+						freshStatus = http.StatusUnauthorized
 					}
-					var fresh loginResult
-					if json.Unmarshal(loginResponse.Body.Bytes(), &fresh) != nil || iamv1.ValidateSession(fresh.Session) != nil || fresh.Credential == "" {
-						t.Fatal("concurrent login did not issue a real session")
-					}
+					call(t, 1, http.MethodGet, "/v1/auth/sessions", fresh.Credential, nil, freshStatus, nil)
+					// This login starts strictly after the completion. Neither legal
+					// overlapping outcome may let an equal replay revoke this session.
+					later := login(t, realm, password)
 					var replay iamv1.RevokeOtherSessionsResponse
 					call(t, 0, http.MethodPost, self.path, self.bearer, self.body, http.StatusOK, &replay)
-					if replay.Outcome != "EQUAL_REPLAY" || replay.RevokedCount != 1 {
-						t.Fatal("overlapping login changed the original reduction intent")
+					if replay.Outcome != "EQUAL_REPLAY" {
+						t.Fatal("overlapping login did not reuse its original completion")
 					}
-					call(t, 1, http.MethodGet, "/v1/auth/sessions", fresh.Credential, nil, http.StatusOK, nil)
+					replay.Outcome = "APPLIED"
+					if replay != completed {
+						t.Fatal("overlapping login changed the original reduction count, scope or time")
+					}
+					call(t, 1, http.MethodGet, "/v1/auth/sessions", fresh.Credential, nil, freshStatus, nil)
+					call(t, 1, http.MethodGet, "/v1/auth/sessions", later.Credential, nil, http.StatusOK, nil)
+					call(t, 0, http.MethodGet, "/v1/auth/sessions", firstLogin.Credential, nil, http.StatusOK, nil)
 				}
 				if mutation == "mutual" {
 					survivor, ended := firstLogin, secondLogin

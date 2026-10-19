@@ -40,9 +40,11 @@
 
 最新已接受测试固定源码`c80e58165b46f57ad309eabbdb3c33b0e2bc782e`的[Verification 39191085161](https://github.com/xiak/matrix/actions/runs/39191085161) attempt 1已按精确SHA核实十九项作业全部`completed/success`，测试owner完成全部必要日志核对：十四条authority lane的57个顶层根均实际RUN/PASS，175个成功step与195个设计skip分开记录，没有被job绿色掩盖的Test/package/worker失败；当前前驱、真实受限进程、四产品与容量均有各自结果。十三个opt-in浏览器flag未开启、七项真实Postfix子测试跳过，不纳入真实页面/邮件结论。它保留已接受`0c00ef9`的附件回执fixture、`77923f7`的原浏览器观察预算接线，并增加Group删除后的实际成员访问断言，不改变生产API、SQL、UI或Profile；此前失败不回填。
 
-后继UI消费候选`28f2da7e15c4720c262cae241f3425ada200ca9e`修正完成回执及重新登录说明，Profile保持IAM87/Audit39/PaaS7+r37；其[Verification 39193669814](https://github.com/xiak/matrix/actions/runs/39193669814) attempt 1仍待整轮确认。本地组件/构建及新页面复验边界由010拥有，不继承donor、c80测试CI或741签名发布结论。
+后继UI消费候选`28f2da7e15c4720c262cae241f3425ada200ca9e`修正完成回执及重新登录说明，Profile保持IAM87/Audit39/PaaS7+r37；其[Verification 39193669814](https://github.com/xiak/matrix/actions/runs/39193669814) attempt 1已按精确SHA及全部必要日志核实`completed/failure`：十九项中十七项成功，authority-runtime及汇总失败。唯一原始失败为`TestIAMOwnSessionBulkPostgres/concurrent_login_self-first-false`的完成复合断言；实际五十个authority顶层根中四十九通过、一个失败，runtime后续三个required进程根及最终全存储扫描未执行，四项缺专属Postfix的邮件子测试明确跳过。旧日志未输出复合断言中的具体差异，不能据此单独断定唯一根因。控制台1956项测试及本地组件/构建通过不替代整轮结论；新页面复验边界由010拥有，不继承donor、c80测试CI或741签名发布结论。
 
-当前真实浏览器已证明User资料/状态恢复、Group Membership添加/移除恢复、Group策略附件CREATE/REVOKE只读恢复、Group最终删除效果，以及Account安全设置的正常完整替换。Group附件恢复与删除后的可见完成回执已有固定UI修正，但新版本的纯页面最终操作尚未验收；日常改密、直接User/Role附件和010矩阵中的其他非Deferred路径仍未完成，精确范围由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有。默认CI跳过的浏览器入口、七项专属Postfix邮件子测试不能按成功计；当前Linux前端通过也不宣称此前Windows边缘超时和既有React警告已消失。安全通知的真实投递证据仍由009拥有，不能以Audit或通知任务入队替代。
+该失败的聚焦复查在专属PG18.4、两个真实IAM HTTP handler及受限API登录上，原场景两次通过，不能将偶发通过当作修复。既有owner随后用outbox前一次真实SQLSTATE40001确定触发生产整事务重试：旧断言以`APPLIED/revoked=2/want=1`失败，归属、当前caller、一份完成和两条目标均合法，证明固定数量断言遗漏最终成功快照。测试修正逐项核对允许的Session集合及终态、强制重试后包含已提交新登录、当前会话保留、跨副本拒绝和原结果精确重放；严格在完成之后开始的新登录不得受原重放影响。聚焦双向及重试52.48秒通过；三份全新数据库串行race通过批量107.45秒、单项94.15秒、真实锁后到期64.57秒，package267.261秒。PG与Go runner各限2CPU/2GiB，Go为1.26.3、GOMAXPROCS2/GOMEMLIMIT1024MiB、`-p 1`，保留原密码成本、fixture期限和真实时间窗口。默认integration/architecture race及integration vet也通过。仅测试和所属说明改变，生产API/SQL/UI/Profile未改；本地PG18.4不冒充CI的PG18.6，后继固定源码仍需独立CI，不回填旧失败或扩大签名发布验收。
+
+当前真实浏览器已证明User资料/状态恢复、Group Membership添加/移除恢复、Group策略附件CREATE/REVOKE只读恢复、Group最终删除效果，以及Account安全设置的正常完整替换。Group附件恢复与删除后的可见完成回执已有固定UI修正，但新版本的纯页面最终操作尚未验收；日常改密、直接User/Role附件和010矩阵中的其他非Deferred路径仍未完成，精确范围由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有。默认CI跳过的浏览器入口、专属Postfix邮件子测试不能按成功计；当前Linux前端通过也不宣称此前Windows边缘超时和既有React警告已消失。安全通知的真实投递证据仍由009拥有，不能以Audit或通知任务入队替代。
 
 ## 高风险测试矩阵
 
