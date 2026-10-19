@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；最近已接受的签名产品源码`741dceb6f0092fbc33706842862980816fe72d15`的IAM87/Audit39/PaaS7、`contractRevision=37`已通过[Verification 39012317180](https://github.com/xiak/matrix/actions/runs/39012317180)十九项独立作业、同源签名A/B完整离线生命周期和重启后复验。User资料/状态、Group Membership、Account安全设置、Group附件恢复及Group删除效果已有各自真实证据。后继UI候选`101dc339`因新repository身份未验证时USER附件入口未关闭而被拒绝，其独立CI已主动取消；本切片已在原owner修正该缺口，完成本分支聚焦回归和嵌入产物重建，但仍需后继固定源码的独立CI、真实页面和签名组合验收。日常改密及矩阵中其余非Deferred页面写路径尚未全部验收，因此整个FEAT仍为实施中。
+- 状态：实施中；最近已接受的签名产品源码仍为`741dceb6f0092fbc33706842862980816fe72d15`，IAM87/Audit39/PaaS7、`contractRevision=37`，其同源签名A/B完整离线生命周期和重启后复验已通过。User资料/状态、Group Membership、Account安全设置、Group附件恢复及Group删除效果已有各自真实证据。当前后继`9621bb6e66b1076576649d3f6b224725a60d6848`已修复新repository身份未验证时的USER附件入口，完成本分支红绿回归、嵌入重建和精确独立CI；真实页面及新签名组合仍需验收。日常改密及矩阵中其余非Deferred页面写路径尚未全部验收，因此整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -360,7 +360,7 @@ Group删除沿用原严格结果校验，并在对话框卸载后保留独立回
 
 本分支先仅加入两项pending-identity回归，未修改生产源码时两项均以错误enabled状态失败；接入修复后相同两项通过。User/Role两个相关文件随后267项通过（78.96秒），测试专用后继再补不依赖生产按钮disabled的Context探针；补强后的四项聚焦全部通过（7.59秒），覆盖新repository身份pending而目标User读取已完成时禁止开始关系命令及读取原UNKNOWN结果，核验后显式正常提交/只读恢复继续可用。使用Node22.22.2/npm11.6.4、单Vitest worker和2GiB堆，通过typecheck、三个变更路径ESLint、architecture、234组对比度与8项Node边界。两个构建worker的59页/57分段路径导出在未设置与显式0模式下得到324个逐字相同文件，并由本分支重建匹配的嵌入产物；Go UI/architecture race、UI vet及Linux amd64 UI构建也通过。未重跑无关后端真库矩阵，也未把donor的247项结果或本地组件检查当作后继精确SHA的独立CI、User/Role真实浏览器操作或新签名组合验收。
 
-消费源码固定为`9621bb6e66b1076576649d3f6b224725a60d6848`，保持IAM87/Audit39/PaaS7+r37；准确[Verification 39203431655](https://github.com/xiak/matrix/actions/runs/39203431655) attempt 1已启动，尚未取得接受终态。前述局部回归、独立源码审查和产物一致性不会自动关闭真实页面与签名组合缺口。
+消费源码固定为`9621bb6e66b1076576649d3f6b224725a60d6848`，保持IAM87/Audit39/PaaS7+r37；准确[Verification 39203431655](https://github.com/xiak/matrix/actions/runs/39203431655) attempt 1已核实`completed/success`。console实际通过77个文件1965项Vitest测试和8项Node测试，类型/lint/架构/234组对比度、CI三个worker的双模式导出及324项embedded逐字匹配均通过；仍有33条既有React act警告。完整独立门禁由011拥有；这关闭本候选的组件、构建与CI缺口，不自动关闭真实页面或新签名组合。
 
 ### 首次登录强制改密
 

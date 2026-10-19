@@ -20,7 +20,14 @@
   two-worker deterministic unset/0 exports and 324 matching embedded files,
   Go UI/architecture race, UI vet and Linux amd64 UI build. Exact
   [Verification 39203431655](https://github.com/xiak/matrix/actions/runs/39203431655)
-  attempt 1 is running, not accepted. No API/SQL/backend/Profile change.
+  attempt 1 is completed/success: all 19 jobs and all 57 authority roots were
+  independently verified, including required processes/final storage scan,
+  the real 40001 retry, the rolling predecessor and four real products.
+  Console passed 77 files/1965 tests plus eight Node tests and 324 matching
+  exports/embedded files; 33 existing act warnings remain. Seven dedicated
+  Postfix subtests and 13 opt-in browser flags did not run. FEAT011 owns the
+  closed CI evidence; do not fetch the same attempt logs again. No API/SQL/
+  backend/Profile change. Its new signed combination is still not accepted.
 - Rejected predecessor `101dc339f9ad368f293f95a3834b5613e5a6d669` /
   Verification 39199323432 attempt 1 is closed as completed/cancelled after
   the fixed-source owner-fence finding. Cancellation was intentional, not
@@ -79,12 +86,16 @@ remain separate required outcomes.
   own branch. Consume fixed reviewed deltas only, preserve consumer tests and
   rebuild assets; no foreign WIP or inherited acceptance. Its 101dc/42c
   fixed review found the USER pending-identity blocker now corrected in 9621.
-  Test Expert independently reviewed the fixed 829 production fence; its
-  source review is not browser or exact consuming-commit CI acceptance.
+  Test Expert independently reviewed the fixed 829 production fence and
+  closed the exact consuming 9621 CI. UX confirmed no outstanding production
+  delta in its source subtree; current matrix gaps are real-page/combination
+  evidence, not permission to invent another UI implementation. The obsolete
+  security-settings wording gap was removed in pushed 183e91a0a.
 - Test expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns read-only
-  independent CI/log review. Its existing monitor follows the exact new
-  candidate after closing 38a and the cancelled 101dc. Do not duplicate automations or delegate
-  execution beyond its human-authorized read-only scope.
+  independent CI/log review. It closed 9621/run39203431655/attempt1 after 38a
+  and the cancelled 101dc; the existing monitor remains responsible for new
+  fixed tuples only. Do not duplicate automations, repeat closed log audits,
+  or delegate execution beyond its human-authorized read-only scope.
 - Routine product development/testing is human-authorized without repetitive
   approval. Mandatory tool-specific handoff still binds. Do not reset shared
   Docker/WSL, restart remote machines/shared services or touch other resources.
