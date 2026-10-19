@@ -13,7 +13,21 @@
   tests and regenerates its own 324 embedded assets. Local static, component,
   deterministic build and Go UI/architecture gates passed. Its exact
   [Verification 39193669814](https://github.com/xiak/matrix/actions/runs/39193669814)
-  attempt 1 is still pending whole-run confirmation.
+  attempt 1 completed/failure: 17 jobs succeeded, authority-runtime and the
+  aggregate failed. The sole original failure was the existing bulk Session
+  concurrent-login completion assertion; blocked runtime gates did not run.
+  The test expert closed the complete actual-log audit; do not reread it.
+- Latest fixed test correction:
+  `38a2cda69ec547c9e8d9d557bf61a3bcd992335c`, same production/Profile.
+  The existing integration owner now proves exact legal serialization targets,
+  a deterministic real SQLSTATE40001 retry, immutable completion and protection
+  of strictly later logins from replay. Old count=1 failed with a valid count=2
+  under the forced retry. Final focused and complete single/bulk/real-expiry
+  PostgreSQL gates passed, package267.261s; default integration/architecture
+  race and vet passed. No production/API/SQL/UI changes. Exact
+  [Verification 39196850326](https://github.com/xiak/matrix/actions/runs/39196850326)
+  attempt 1 is in progress, not accepted. Evidence belongs to FEAT011, the
+  serialization requirement to FEAT009 S1b. Old CI failure is not backfilled.
 - Latest accepted test predecessor:
   `c80e58165b46f57ad309eabbdb3c33b0e2bc782e` /
   [Verification 39191085161](https://github.com/xiak/matrix/actions/runs/39191085161)
@@ -35,6 +49,12 @@ Read AGENTS, IAM/FEAT-IAM-010-console.md, then
 IAM/FEAT-IAM-011-acceptance.md and the relevant existing
 test/authorityprocess/process_e2e_test.go fixture. FEAT010 owns individual
 UI paths, evidence and gaps; FEAT011 owns combined acceptance.
+For the current Session CI correction additionally read FEAT009 S1b and
+app/service/iam/internal/integration/http_postgres_test.go. The full new
+remote test batch was cleaned after zero database clients; its dedicated
+container/network/volume and temporary source/toolchain directory are gone.
+No remote host or shared service was restarted. This does not claim every
+historical local resource was cleaned.
 
 The old UI has accepted Group attachment CREATE/REVOKE response-loss and
 Group deletion effects, including exact immutable results, next-request
