@@ -439,7 +439,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
   </WorkspaceDetail>{deleting && access ? <LiveRoleDelete key={`${client.sessionRevision}:${access.role.id}:delete`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setDeleting(false)} onDeleted={() => onOpen("roles")} /> : null}</>;
 }
 
-export function AccountLiveRoles({ client, serviceRoleTemplates, serviceLinkedRoles, entityId, onCreate, onOpen, revokeIntent, onRevokeIntentChange }: {
+type AccountLiveRolesProps = {
   client: RoleAccessClient;
   serviceRoleTemplates?: ServiceRoleTemplateClient | null;
   serviceLinkedRoles?: ServiceLinkedRoleClient | null;
@@ -448,7 +448,9 @@ export function AccountLiveRoles({ client, serviceRoleTemplates, serviceLinkedRo
   onOpen: OpenRoleEntity;
   revokeIntent: RoleSessionRevokeIntent | null;
   onRevokeIntentChange(expectedRequestId: string | null, intent: RoleSessionRevokeIntent | null): void;
-}) {
+};
+
+function AccountLiveRolesWorkspace({ client, serviceRoleTemplates, serviceLinkedRoles, entityId, onCreate, onOpen, revokeIntent, onRevokeIntentChange }: AccountLiveRolesProps) {
   const t = useTranslations("RoleWorkspace");
   const w = useTranslations("IamWorkspace");
   const a = useTranslations("AccountAccess");
@@ -549,4 +551,8 @@ export function AccountLiveRoles({ client, serviceRoleTemplates, serviceLinkedRo
       {error ? <Alert status="warning">{error}</Alert> : null}
     </> : null}
   </Card>;
+}
+
+export function AccountLiveRoles(props: AccountLiveRolesProps) {
+  return <AccountLiveRolesWorkspace key={props.client.identity} {...props} />;
 }

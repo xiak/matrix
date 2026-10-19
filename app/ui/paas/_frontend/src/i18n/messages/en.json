@@ -1767,10 +1767,6 @@
       "expired": "The current login session expired. Sign in again as the original account and actor, then inspect the same requestId.",
       "confirmed": "IAM confirmed the original request completed."
     },
-    "attachmentConfirmedTitle": "Original policy relationship request confirmed",
-    "attachmentConfirmedCreate": "IAM confirmed attachment {id} was created. This is immutable completion evidence for the original command, not a promise of effective access.",
-    "attachmentConfirmedRevoke": "IAM confirmed attachment {id} was revoked. Other direct grants, group inheritance, permission boundaries, and explicit denies still apply independently.",
-    "attachmentConfirmedAt": "Completed",
     "acknowledgeAttachmentCompletion": "Finish and reread",
     "attachmentOtherUserPending": "The policy relationship request for {user} is still unconfirmed. Return to that user and inspect the original requestId; no other relationship change can begin until it is confirmed.",
     "attachmentOtherUserReview": "The policy relationship review for {user} is still open. Return to that user to complete or cancel the review before another change.",

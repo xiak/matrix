@@ -366,6 +366,7 @@ export type AccessKeyCreateIntent = Readonly<{
 } & ({ phase: "unknown" } | { phase: "recovered"; keyId: string })>;
 
 export type RoleAccessClient = {
+  identity: string;
   accountId: string;
   actorPrincipalId: string;
   sessionRevision: number;
@@ -768,6 +769,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const settingsOwner = useMemo(() => ({ repository, viewSession, active, identity: requestToken("ui-settings-view-") }), [repository, viewSession, active]);
   const currentSettingsOwner = useRef<typeof settingsOwner | null>(settingsOwner);
   useLayoutEffect(() => { currentSettingsOwner.current = settingsOwner; return () => { currentSettingsOwner.current = null; }; }, [settingsOwner]);
+  const policyAttachmentReadOwner = useMemo(() => ({ repository, viewSession, active }), [repository, viewSession, active]);
+  const currentPolicyAttachmentReadOwner = useRef<typeof policyAttachmentReadOwner | null>(policyAttachmentReadOwner);
+  useLayoutEffect(() => {
+    currentPolicyAttachmentReadOwner.current = policyAttachmentReadOwner;
+    return () => {
+      if (currentPolicyAttachmentReadOwner.current === policyAttachmentReadOwner) currentPolicyAttachmentReadOwner.current = null;
+    };
+  }, [policyAttachmentReadOwner]);
   // Exact target reads are not members of the signed directory. Retain only
   // advisory UI facts for this Session, repository and read generation.
   const exactUsers = useMemo(() => ({ active, repository, revision, viewSession,
@@ -808,28 +817,44 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   }, [accountLifecycleOwner, commitLifecycleObservation]);
   const [storedRoleSessionRevokeIntent, setStoredRoleSessionRevokeIntent] = useState<{ session: typeof viewSession; intent: RoleSessionRevokeIntent } | null>(null);
   const roleSessionRevokeIntent = storedRoleSessionRevokeIntent?.session === viewSession ? storedRoleSessionRevokeIntent.intent : null;
+  const userPolicyChangeOwner = useMemo(() => ({ repository, viewSession, active }), [repository, viewSession, active]);
+  const currentUserPolicyChangeOwner = useRef<typeof userPolicyChangeOwner | null>(userPolicyChangeOwner);
+  useLayoutEffect(() => {
+    currentUserPolicyChangeOwner.current = userPolicyChangeOwner;
+    return () => {
+      if (currentUserPolicyChangeOwner.current === userPolicyChangeOwner) currentUserPolicyChangeOwner.current = null;
+    };
+  }, [userPolicyChangeOwner]);
   const userPolicyChangeIdentityKey = active && tenantId && principalId && !repository.workspace
     ? userPolicyChangeStorageKey(tenantId, principalId) : null;
   const [storedUserPolicyChange, setStoredUserPolicyChange] = useState<{
-    session: typeof viewSession;
+    owner: typeof userPolicyChangeOwner;
     intent: UserPolicyChangeIntent | null;
   }>(() => ({
-    session: viewSession,
+    owner: userPolicyChangeOwner,
     intent: userPolicyChangeIdentityKey && typeof window !== "undefined" && tenantId && principalId
       ? readUserPolicyChangeIntent(tenantId, principalId) : null
   }));
-  if (storedUserPolicyChange.session !== viewSession) {
+  if (storedUserPolicyChange.owner !== userPolicyChangeOwner) {
     const restored = userPolicyChangeIdentityKey && typeof window !== "undefined" && tenantId && principalId
       ? readUserPolicyChangeIntent(tenantId, principalId) : null;
-    setStoredUserPolicyChange({ session: viewSession, intent: restored });
+    setStoredUserPolicyChange({ owner: userPolicyChangeOwner, intent: restored });
   }
-  const userPolicyChangeIntent = storedUserPolicyChange.session === viewSession ? storedUserPolicyChange.intent : null;
-  const userPolicyChangeRef = useRef<{ session: typeof viewSession; intent: UserPolicyChangeIntent } | null>(
-    userPolicyChangeIntent ? { session: viewSession, intent: userPolicyChangeIntent } : null
+  const userPolicyChangeIntent = storedUserPolicyChange.owner === userPolicyChangeOwner ? storedUserPolicyChange.intent : null;
+  const userPolicyChangeRef = useRef<{ owner: typeof userPolicyChangeOwner; intent: UserPolicyChangeIntent } | null>(
+    userPolicyChangeIntent ? { owner: userPolicyChangeOwner, intent: userPolicyChangeIntent } : null
   );
   useLayoutEffect(() => {
-    userPolicyChangeRef.current = userPolicyChangeIntent ? { session: viewSession, intent: userPolicyChangeIntent } : null;
-  }, [userPolicyChangeIntent, viewSession]);
+    userPolicyChangeRef.current = userPolicyChangeIntent ? { owner: userPolicyChangeOwner, intent: userPolicyChangeIntent } : null;
+  }, [userPolicyChangeIntent, userPolicyChangeOwner]);
+  const userPolicySubmission = useRef<{ owner: typeof userPolicyChangeOwner; requestId: string } | null>(null);
+  useLayoutEffect(() => {
+    const submission = userPolicySubmission.current;
+    if (!submission || submission.owner === userPolicyChangeOwner) return;
+    userPolicySubmission.current = null;
+    mutationPending.current = false;
+    setBusy(false);
+  }, [userPolicyChangeOwner]);
   const passwordResetUnknownRef = useRef<{ session: typeof viewSession; intent: PasswordResetUnknown } | null>(null);
   const [storedPasswordResetUnknown, setStoredPasswordResetUnknown] = useState<typeof passwordResetUnknownRef.current>(null);
   const passwordResetUnknown = storedPasswordResetUnknown?.session === viewSession ? storedPasswordResetUnknown.intent : null;
@@ -886,9 +911,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return true;
   }, [principalId, securitySettingsIdentityKey, settingsOwner, tenantId, viewSession]);
   const rememberUserPolicyChange = useCallback((expectedRequestId: string | null, next: UserPolicyChangeIntent | null): boolean => {
-    if (currentViewSession.current !== viewSession) return false;
+    if (currentViewSession.current !== viewSession || currentUserPolicyChangeOwner.current !== userPolicyChangeOwner) return false;
     const stored = userPolicyChangeRef.current;
-    const current = stored?.session === viewSession ? stored.intent : null;
+    const current = stored?.owner === userPolicyChangeOwner ? stored.intent : null;
     if (expectedRequestId === null) {
       if (current || !next || next.accountId !== tenantId || next.actorId !== principalId) return false;
     } else if (!current || current.requestId !== expectedRequestId || next && (
@@ -900,12 +925,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         next.kind === "revoke" && current.kind === "revoke" ?
           next.attachmentId !== current.attachmentId || next.attachmentResourceVersion !== current.attachmentResourceVersion : true)
     )) return false;
-    userPolicyChangeRef.current = next ? { session: viewSession, intent: next } : null;
-    setStoredUserPolicyChange({ session: viewSession, intent: next });
+    userPolicyChangeRef.current = next ? { owner: userPolicyChangeOwner, intent: next } : null;
+    setStoredUserPolicyChange({ owner: userPolicyChangeOwner, intent: next });
     if (next && (next.phase === "submitting" || next.phase === "unknown" || next.phase === "checking" || next.phase === "confirmed")) storeUserPolicyChangeIntent(next);
     else if (current) clearUserPolicyChangeIntent(current);
     return true;
-  }, [principalId, tenantId, viewSession]);
+  }, [principalId, tenantId, userPolicyChangeOwner, viewSession]);
   const policyCreateRef = useRef<{ session: typeof viewSession; intent: PolicyCreateIntent } | null>(null);
   const [storedPolicyCreate, setStoredPolicyCreate] = useState<typeof policyCreateRef.current>(null);
   const policyCreateIntent = storedPolicyCreate?.session === viewSession ? storedPolicyCreate.intent : null;
@@ -1123,7 +1148,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   const inspectPolicyAttachmentChange = useCallback(async (expectation: PolicyAttachmentChangeOperationExpectation): Promise<PolicyAttachmentChange> => {
     const read = repository.readPolicyAttachmentChange;
-    if (!active || !credential || !scene || scene.accountId !== tenantId || scene.currentUserId !== principalId || !read) {
+    const owner = policyAttachmentReadOwner;
+    if (currentPolicyAttachmentReadOwner.current !== owner || !active || !credential || !scene || scene.accountId !== tenantId ||
+        scene.currentUserId !== principalId || verifiedIdentityOwner?.session !== viewSession ||
+        verifiedIdentityOwner.repository !== repository || !read) {
       throw new Error("IAM_POLICY_ATTACHMENT_COMPLETION_UNAVAILABLE");
     }
     const bound: PolicyAttachmentChangeExpectation = {
@@ -1132,14 +1160,17 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       actorPrincipalId: scene.currentUserId
     };
     try {
-      return await read(credential, bound);
+      const completion = await read(credential, bound);
+      if (currentPolicyAttachmentReadOwner.current !== owner) throw new Error("STALE_IAM_POLICY_ATTACHMENT_OWNER");
+      return completion;
     } catch (failure) {
+      if (currentPolicyAttachmentReadOwner.current !== owner) throw new Error("STALE_IAM_POLICY_ATTACHMENT_OWNER");
       if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
         setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
       }
       throw failure;
     }
-  }, [active, credential, expireSession, principalId, repository, scene, sessionRevision, tenantId]);
+  }, [active, credential, expireSession, policyAttachmentReadOwner, principalId, repository, scene, sessionRevision, tenantId, verifiedIdentityOwner, viewSession]);
 
   const projectAccountSnapshot = useCallback((account: Account, access?: AccountAccessResource) => {
     setScene((current) => {
@@ -2099,13 +2130,29 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, exactUsers, expireSession, principalId, repository, scene, sessionRevision, tenantId, viewSession]);
 
+  const rolesOwner = useMemo(() => ({ active, repository, viewSession, identity: requestToken("ui-roles-view-") }), [active, repository, viewSession]);
+  const currentRolesOwner = useRef<typeof rolesOwner | null>(rolesOwner);
+  useLayoutEffect(() => {
+    currentRolesOwner.current = rolesOwner;
+    return () => {
+      if (currentRolesOwner.current === rolesOwner) currentRolesOwner.current = null;
+    };
+  }, [rolesOwner]);
   const roles = useMemo<RoleAccessClient | null>(() => {
     const roleRepository = repository.roles;
-    if (!active || !credential || !scene || scene.accountId !== tenantId || !roleRepository || (!scene.canListRoles && !scene.canCreateRoles)) return null;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !roleRepository || (!scene.canListRoles && !scene.canCreateRoles) ||
+        verifiedIdentityOwner?.session !== viewSession || verifiedIdentityOwner.repository !== repository) return null;
     const accountId = scene.accountId;
-    const scoped = async <T,>(request: Promise<T>): Promise<T> => {
-      try { return await request; }
+    const owns = () => currentRolesOwner.current === rolesOwner && currentViewSession.current === viewSession;
+    const scoped = async <T,>(request: () => Promise<T>): Promise<T> => {
+      if (!owns()) throw new Error("STALE_IAM_ROLE_OWNER");
+      try {
+        const result = await request();
+        if (!owns()) throw new Error("STALE_IAM_ROLE_OWNER");
+        return result;
+      }
       catch (failure) {
+        if (!owns()) throw new Error("STALE_IAM_ROLE_OWNER");
         if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
           setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
         }
@@ -2113,37 +2160,38 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
     };
     return {
+      identity: rolesOwner.identity,
       accountId,
       actorPrincipalId: scene.currentUserId,
       sessionRevision,
       canCreate: scene.canCreateRoles,
       createRestrictionReason: scene.createRolesRestrictionReason,
-      list: (after) => scoped(roleRepository.list(credential, accountId, after)),
-      read: (roleId) => scoped(roleRepository.read(credential, accountId, roleId)),
-      readPermissionBoundary: (roleId) => scoped(roleRepository.readPermissionBoundary(credential, accountId, roleId)),
-      listTenantPolicies: () => scoped((async () => {
+      list: (after) => scoped(() => roleRepository.list(credential, accountId, after)),
+      read: (roleId) => scoped(() => roleRepository.read(credential, accountId, roleId)),
+      readPermissionBoundary: (roleId) => scoped(() => roleRepository.readPermissionBoundary(credential, accountId, roleId)),
+      listTenantPolicies: () => scoped(async () => {
         if (!scene.tenantPoliciesAvailable) return { items: [], available: false };
         const directory = await readWhenAuthorized(() => repository.listPolicies(credential, false));
         if (!directory) return { items: [], available: false };
         if (directory.accountId !== accountId || directory.scope !== "TENANT" || directory.installationId !== null) throw new Error("INVALID_IAM_TENANT");
         return { items: directory.items, available: true };
-      })()),
-      setPermissionBoundary: (roleId, command) => protectedMutation(() => scoped(roleRepository.setPermissionBoundary(credential, accountId, roleId, command))),
-      removePermissionBoundary: (roleId, command) => protectedMutation(() => scoped(roleRepository.removePermissionBoundary(credential, accountId, roleId, command))),
-      listTrustVersions: (roleId, after) => scoped(roleRepository.listTrustVersions(credential, accountId, roleId, after)),
-      create: (command) => protectedMutation(() => scoped(roleRepository.create(credential, accountId, command))),
-      update: (roleId, command) => protectedMutation(() => scoped(roleRepository.update(credential, accountId, roleId, command))),
-      setStatus: (roleId, command) => protectedMutation(() => scoped(roleRepository.setStatus(credential, accountId, roleId, command))),
-      setTrustPolicy: (roleId, command) => protectedMutation(() => scoped(roleRepository.setTrustPolicy(credential, accountId, roleId, command))),
-      delete: (roleId, command) => protectedMutation(() => scoped(roleRepository.delete(credential, accountId, roleId, command))),
-      createPolicyAttachment: (roleId, command) => protectedMutation(() => scoped(roleRepository.createPolicyAttachment(credential, accountId, roleId, command))),
-      revokePolicyAttachment: (attachmentId, command) => protectedMutation(() => scoped(repository.revokePolicyAttachment(credential, attachmentId, command))),
+      }),
+      setPermissionBoundary: (roleId, command) => protectedMutation(() => scoped(() => roleRepository.setPermissionBoundary(credential, accountId, roleId, command))),
+      removePermissionBoundary: (roleId, command) => protectedMutation(() => scoped(() => roleRepository.removePermissionBoundary(credential, accountId, roleId, command))),
+      listTrustVersions: (roleId, after) => scoped(() => roleRepository.listTrustVersions(credential, accountId, roleId, after)),
+      create: (command) => protectedMutation(() => scoped(() => roleRepository.create(credential, accountId, command))),
+      update: (roleId, command) => protectedMutation(() => scoped(() => roleRepository.update(credential, accountId, roleId, command))),
+      setStatus: (roleId, command) => protectedMutation(() => scoped(() => roleRepository.setStatus(credential, accountId, roleId, command))),
+      setTrustPolicy: (roleId, command) => protectedMutation(() => scoped(() => roleRepository.setTrustPolicy(credential, accountId, roleId, command))),
+      delete: (roleId, command) => protectedMutation(() => scoped(() => roleRepository.delete(credential, accountId, roleId, command))),
+      createPolicyAttachment: (roleId, command) => protectedMutation(() => scoped(() => roleRepository.createPolicyAttachment(credential, accountId, roleId, command))),
+      revokePolicyAttachment: (attachmentId, command) => protectedMutation(() => scoped(() => repository.revokePolicyAttachment(credential, attachmentId, command))),
       inspectPolicyAttachmentChange,
-      listSessions: (roleId, filter, after) => scoped(roleRepository.listSessions(credential, accountId, roleId, filter, after)),
-      readSession: (roleId, sessionId) => scoped(roleRepository.readSession(credential, accountId, roleId, sessionId)),
-      revokeSession: (roleId, sessionId, requestId) => scoped(roleRepository.revokeSession(credential, accountId, roleId, sessionId, requestId))
+      listSessions: (roleId, filter, after) => scoped(() => roleRepository.listSessions(credential, accountId, roleId, filter, after)),
+      readSession: (roleId, sessionId) => scoped(() => roleRepository.readSession(credential, accountId, roleId, sessionId)),
+      revokeSession: (roleId, sessionId, requestId) => scoped(() => roleRepository.revokeSession(credential, accountId, roleId, sessionId, requestId))
     };
-  }, [active, credential, expireSession, inspectPolicyAttachmentChange, protectedMutation, repository, scene, sessionRevision, tenantId]);
+  }, [active, credential, expireSession, inspectPolicyAttachmentChange, protectedMutation, repository, rolesOwner, scene, sessionRevision, tenantId, verifiedIdentityOwner, viewSession]);
 
   const loadUsersPage = useCallback(async (after: string) => {
     if (!active || !credential || !scene || loading || mutationPending.current) return;
@@ -2276,8 +2324,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   }, [active, credential, loading, principalId, rememberUserPolicyChange, scene, tenantId]);
 
   const submitUserPolicyChange = useCallback(async (requestId: string): Promise<boolean> => {
+    const owner = userPolicyChangeOwner;
     const stored = userPolicyChangeRef.current;
-    const intent = stored?.session === viewSession && stored.intent.requestId === requestId ? stored.intent : null;
+    const intent = stored?.owner === owner && stored.intent.requestId === requestId ? stored.intent : null;
     if (!active || !credential || !scene || !intent || intent.accountId !== tenantId || loading || mutationPending.current ||
       intent.phase !== "review") return false;
     // A first submission must still match the selected directory revision.
@@ -2289,6 +2338,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       return false;
     }
     if (!rememberUserPolicyChange(requestId, { ...intent, phase: "submitting", completion: null, error: null })) return false;
+    const submission = { owner, requestId };
+    userPolicySubmission.current = submission;
     mutationPending.current = true;
     setBusy(true); setError(null); setSuccess(null);
     try {
@@ -2299,24 +2350,34 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       else await repository.revokePolicyAttachment(credential, intent.attachmentId, {
         resourceVersion: intent.attachmentResourceVersion, requestId: intent.requestId
       });
-      if (currentViewSession.current !== viewSession) return false;
+      if (currentViewSession.current !== viewSession || currentUserPolicyChangeOwner.current !== owner) return false;
       rememberUserPolicyChange(requestId, null);
       setSuccess("completed"); setLoading(true); setRevision((current) => current + 1);
       return true;
     } catch (failure) {
-      if (currentViewSession.current !== viewSession) return false;
+      if (currentViewSession.current !== viewSession || currentUserPolicyChangeOwner.current !== owner) return false;
       const reason = accountError(failure);
       rememberUserPolicyChange(requestId, {
         ...intent, phase: reason === "unavailable" ? "unknown" : reason === "conflict" ? "conflict" : "rejected",
         lookupStatus: reason === "unavailable" ? intent.lookupStatus : "unchecked", completion: null, error: reason
       });
+      if (reason === "expired" && expireSession(credential, sessionRevision)) {
+        setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+      }
       return false;
-    } finally { mutationPending.current = false; setBusy(false); }
-  }, [active, credential, loading, rememberUserPolicyChange, repository, scene, tenantId, viewSession]);
+    } finally {
+      if (userPolicySubmission.current === submission) {
+        userPolicySubmission.current = null;
+        mutationPending.current = false;
+        setBusy(false);
+      }
+    }
+  }, [active, credential, expireSession, loading, rememberUserPolicyChange, repository, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
 
   const inspectUserPolicyChange = useCallback(async (requestId: string): Promise<boolean> => {
+    const owner = userPolicyChangeOwner;
     const stored = userPolicyChangeRef.current;
-    const intent = stored?.session === viewSession && stored.intent.requestId === requestId ? stored.intent : null;
+    const intent = stored?.owner === owner && stored.intent.requestId === requestId ? stored.intent : null;
     const read = repository.readPolicyAttachmentChange;
     if (!active || !credential || !scene || !intent || intent.phase !== "unknown" || intent.accountId !== tenantId ||
         intent.actorId !== principalId || loading || mutationPending.current) return false;
@@ -2332,16 +2393,18 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       attachmentId: intent.attachmentId, expectedResourceVersion: intent.attachmentResourceVersion
     };
     if (!rememberUserPolicyChange(requestId, { ...intent, phase: "checking", completion: null, error: null })) return false;
+    const submission = { owner, requestId };
+    userPolicySubmission.current = submission;
     mutationPending.current = true;
     setBusy(true); setError(null); setSuccess(null);
     try {
       const completion = await read(credential, expectation);
-      if (currentViewSession.current !== viewSession) return false;
+      if (currentViewSession.current !== viewSession || currentUserPolicyChangeOwner.current !== owner) return false;
       rememberUserPolicyChange(requestId, { ...intent, phase: "confirmed", lookupStatus: "confirmed", completion, error: null });
       setLoading(true); setRevision((current) => current + 1);
       return true;
     } catch (failure) {
-      if (currentViewSession.current !== viewSession) return false;
+      if (currentViewSession.current !== viewSession || currentUserPolicyChangeOwner.current !== owner) return false;
       const status = failure instanceof HttpProblem && failure.status === 404 ? "stillUnknown" :
         failure instanceof HttpProblem && failure.status === 403 ? "forbidden" :
           failure instanceof HttpProblem && failure.status === 401 ? "expired" : "unavailable";
@@ -2351,12 +2414,18 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
       }
       return false;
-    } finally { mutationPending.current = false; setBusy(false); }
-  }, [active, credential, expireSession, loading, principalId, rememberUserPolicyChange, repository, scene, sessionRevision, tenantId, viewSession]);
+    } finally {
+      if (userPolicySubmission.current === submission) {
+        userPolicySubmission.current = null;
+        mutationPending.current = false;
+        setBusy(false);
+      }
+    }
+  }, [active, credential, expireSession, loading, principalId, rememberUserPolicyChange, repository, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
 
   const endUserPolicyChange = useCallback((requestId: string): boolean => {
     const stored = userPolicyChangeRef.current;
-    const intent = stored?.session === viewSession && stored.intent.requestId === requestId ? stored.intent : null;
+    const intent = stored?.owner === userPolicyChangeOwner && stored.intent.requestId === requestId ? stored.intent : null;
     if (!intent || intent.phase === "submitting" || intent.phase === "checking" || intent.phase === "unknown" ||
         !rememberUserPolicyChange(requestId, null)) return false;
     if (intent.phase !== "review") {
@@ -2366,7 +2435,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       setRevision((current) => current + 1);
     }
     return true;
-  }, [rememberUserPolicyChange, viewSession]);
+  }, [rememberUserPolicyChange, userPolicyChangeOwner]);
 
   const expireUserCreationOwner = useCallback((expectedCredential: string, expectedRevision: number) => {
     if (expireSession(expectedCredential, expectedRevision)) {

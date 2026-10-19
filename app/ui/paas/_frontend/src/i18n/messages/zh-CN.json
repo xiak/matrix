@@ -1767,10 +1767,6 @@
       "expired": "当前登录会话已失效。请以原账号和原操作者重新登录后，再检查同一 requestId。",
       "confirmed": "IAM 已确认原请求完成。"
     },
-    "attachmentConfirmedTitle": "原策略关系请求已确认",
-    "attachmentConfirmedCreate": "IAM 已确认创建关联 {id}。这是原命令的不可变完成记录，不代表最终访问一定允许。",
-    "attachmentConfirmedRevoke": "IAM 已确认撤销关联 {id}。其他直接关联、用户组继承、权限边界和显式拒绝仍分别生效。",
-    "attachmentConfirmedAt": "完成时间",
     "acknowledgeAttachmentCompletion": "完成并重新读取",
     "attachmentOtherUserPending": "{user} 的策略关系请求仍待处理且结果尚未确认。请返回该用户检查原 requestId；确认前不能开始其他关系变更。",
     "attachmentOtherUserReview": "{user} 的策略关系审阅尚未结束。请返回该用户完成或取消审阅，再开始其他变更。",

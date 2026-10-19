@@ -352,6 +352,10 @@ Group删除沿用原严格结果校验，并在对话框卸载后保留独立回
 
 主增量在本分支Node22.22.2/npm11.6.4、单测试worker及2GiB Node堆限制下通过typecheck、完整lint、architecture、234组对比度、77个Vitest文件/1956项测试（479.40秒）及8项Node边界测试。两处修正再通过相同静态门禁和三个完整受影响组件文件/466项测试（210.23秒），不重复无关全量。最终源码以2个构建worker完成59页静态导出和57条分段归一化；未设置与显式0两种生产模式的324个文件逐字一致，本分支重新生成的Go嵌入产物与之完全匹配，Go UI/architecture race及UI vet通过。最终消费源码固定为`28f2da7e15c4720c262cae241f3425ada200ca9e`，其[Verification 39193669814](https://github.com/xiak/matrix/actions/runs/39193669814) attempt 1已完成且失败；控制台测试通过不替代011记录的整轮结论。该源的独立Group浏览器复验只到最终确认、没有提交，随后停止专属进程；新REVOKE回执复验未启动，两者均不计通过。不能继承donor全量结论或把旧741页面的效果验收视为新UI已验收；同Profile签名release也仍保留独立发布门禁。
 
+后继选择性`ADAPT`固定`b99849623eb673dcfc6167e8a33978e70802a617`的八个现有源码、测试和消息增量，不导入其生成物或验收状态。直接User附件命令及完成查询绑定当前repository、已认证view和Session；旧所有者的成功、401、检查结果及finally均不得清除新所有者的UNKNOWN意图、结束其pending或让其退出。Role客户端在发送前和接收后验证同一所有者，替换身份时重新建立页面工作区；权限仍由服务端判断。User附件恢复回执补齐原operation/request ID、完成时间、目标User、Policy、附件及结果版本，必须显式完成后才返回；回执不证明当前授权。
+
+本分支保留既有renderer测试，仅应用对应增量；其余七个源码/测试/消息blob与固定donor逐项一致。Node22.22.2/npm11.6.4、单测试worker和2GiB Node堆下，typecheck、全量lint、architecture、234组对比度及77个Vitest文件/1961项测试（393.80秒）、8项Node导出边界测试均通过。最终源码以两个构建worker完成59页和57条分段路径归一化；未设置与显式0的两次生产导出得到324个逐字相同文件，并由本分支重建匹配的嵌入产物；Go UI/architecture race及UI vet也通过。该结果不替代后继精确SHA独立CI、User/Role真实浏览器操作或新签名组合验收，也不回填旧失败。
+
 ### 首次登录强制改密
 
 固定`6298e7532`在既有`authorityprocess` owner增加显式opt-in的首次登录改密浏览器门禁，不改变生产API、SQL或发布Profile。全新专属PostgreSQL 18以1.5 CPU、1 GiB、PIDs 256运行真实受限IAM/Audit/PaaS、双dispatcher与嵌入控制台；测试先为普通User签发另一条受限Session，随后浏览器以`username@account-id`和初始密码登录，从纯页面提交当前初始密码、新密码及确认值并进入所请求的IAM概览。数据库证明User和credential generation各只推进一次至版本2，`must_change_password=false`；另一条受限Session终态为REVOKED版本2且仍保留旧credential generation，浏览器调用Session是唯一ACTIVE会话并在同一事务提升至新generation。旧密码真实登录返回401且不泄露输入，新密码重新登录后`CurrentIdentity`仍为原Account/User且不再要求改密；唯一`ui-password-*`成功事实以本人USER为actor/target进入完整租户Audit链。fixture/race package分别通过76.68/80.216秒。结束前数据库外部客户端为0，按任务标签只删除本轮容器、网络和卷，未动共享或其他任务资源。
