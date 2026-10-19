@@ -76,6 +76,7 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
   showLiveEvidenceBoundary?: boolean;
 }) {
   const t = useTranslations("AccountAccess");
+  const policyChange = useTranslations("PolicyAttachmentChange");
   const access = useAccountAccess();
   const deleteId = useId();
   const [password, setPassword] = useState("");
@@ -172,12 +173,18 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
           {relationIntent.lookupStatus !== "unchecked" ? <p role="status">{t(`attachmentLookup.${relationIntent.lookupStatus}`)}</p> : null}
           <p>{t("attachmentUnknownLockHint")}</p>
         </div></Alert> : null}
-        {relationIntent.phase === "confirmed" && relationIntent.completion ? <Alert status="success"><div className={styles.confirmation}>
-          <strong>{t("attachmentConfirmedTitle")}</strong>
-          <p>{t(relationIntent.kind === "attach" ? "attachmentConfirmedCreate" : "attachmentConfirmedRevoke", {
-            id: relationIntent.kind === "attach" ? relationIntent.completion.operation === "CREATE" ? relationIntent.completion.attachment.id : "—" : relationIntent.attachmentId
-          })}</p>
-          <p>{t("attachmentConfirmedAt")} <WorkspaceTime value={relationIntent.completion.completedAt} /></p>
+        {relationIntent.phase === "confirmed" && relationIntent.completion ? <Alert status="success" role="status" aria-label={policyChange("completedTitle")}><div className={styles.confirmation}>
+          <strong>{policyChange("completedTitle")}</strong>
+          <p>{policyChange("completedHint")}</p>
+          <dl className={styles.facts}>
+            <div><dt>{policyChange("operation")}</dt><dd>{policyChange(relationIntent.completion.operation === "CREATE" ? "attach" : "revoke")}</dd></div>
+            <div><dt>{policyChange("requestId")}</dt><dd><Typography.Code>{relationIntent.completion.requestId}</Typography.Code></dd></div>
+            <div><dt>{policyChange("completedAt")}</dt><dd><WorkspaceTime value={relationIntent.completion.completedAt} /></dd></div>
+            <div><dt>{policyChange("target")}</dt><dd><Typography.Code>{relationIntent.userId}</Typography.Code></dd></div>
+            <div><dt>{policyChange("policyId")}</dt><dd><Typography.Code>{relationIntent.policyId}</Typography.Code></dd></div>
+            <div><dt>{policyChange("attachmentId")}</dt><dd><Typography.Code>{relationIntent.completion.operation === "CREATE" ? relationIntent.completion.attachment.id : relationIntent.completion.attachmentId}</Typography.Code></dd></div>
+            <div><dt>{policyChange("resultingRevision")}</dt><dd>{relationIntent.completion.operation === "CREATE" ? relationIntent.completion.attachment.resourceVersion : relationIntent.completion.revocation.resourceVersion}</dd></div>
+          </dl>
         </div></Alert> : null}
         {relationIntent.phase === "conflict" || relationIntent.phase === "rejected" ? <Alert status="danger">{t("attachmentRetryNeedsReview", { requestId: relationIntent.requestId })}{relationIntent.error ? ` ${t(`errors.${relationIntent.error}`)}` : ""}</Alert> : null}
         <div className={styles.actions}>

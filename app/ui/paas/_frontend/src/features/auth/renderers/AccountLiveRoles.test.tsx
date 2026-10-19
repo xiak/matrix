@@ -82,6 +82,7 @@ const serviceSessionItem = {
 
 function client(overrides: Partial<RoleAccessClient> = {}): RoleAccessClient {
   return {
+    identity: "role-client-one",
     accountId: role.accountId,
     actorPrincipalId: "root-acme",
     sessionRevision: 1,
@@ -331,6 +332,42 @@ describe("AccountLiveRoles", () => {
     await user.click(screen.getByRole("button", { name: "完成并返回详情" }));
     expect(await screen.findByRole("button", { name: boundaryPolicy.id })).toBeTruthy();
     expect(sessionStorage.length).toBe(0);
+  });
+
+  it.each(["Session", "repository"])("keeps the original role attachment unknown when a late success arrives after the %s owner changes", async (owner) => {
+    const user = userEvent.setup();
+    const attached = { id: "attachment-late-owner", accountId: role.accountId, target: { kind: "ROLE" as const, id: role.id }, policyId: boundaryPolicy.id,
+      scope: "TENANT" as const, resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp };
+    let finishOldRequest: ((value: typeof attached) => void) | undefined;
+    const createPolicyAttachment = vi.fn(() => new Promise<typeof attached>((resolve) => { finishOldRequest = resolve; }));
+    const previous = client({
+      identity: "role-owner-before",
+      listTenantPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true }),
+      createPolicyAttachment
+    });
+    const replacement = client({
+      identity: `role-owner-after-${owner}`,
+      sessionRevision: owner === "Session" ? 2 : previous.sessionRevision,
+      listTenantPolicies: vi.fn().mockResolvedValue({ items: [boundaryPolicy], available: true })
+    });
+    const view = render(<LocaleProvider><RolesHarness api={previous} entityId={role.id} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
+    await user.click(await screen.findByRole("combobox", { name: "要关联的策略" }));
+    await user.click(await screen.findByRole("option", { name: `${boundaryPolicy.displayName} · ${boundaryPolicy.id}` }));
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认关联策略" }));
+    await waitFor(() => expect(createPolicyAttachment).toHaveBeenCalledTimes(1));
+    expect(sessionStorage.length).toBe(1);
+
+    view.rerender(<LocaleProvider><RolesHarness api={replacement} entityId={role.id} /></LocaleProvider>);
+    expect(await screen.findByText("策略关联结果尚未确认")).toBeTruthy();
+    await act(async () => { finishOldRequest?.(attached); });
+
+    expect(screen.getByText("策略关联结果尚未确认")).toBeTruthy();
+    expect(replacement.createPolicyAttachment).not.toHaveBeenCalled();
+    expect(screen.queryByRole("status", { name: "原策略关联命令已确认" })).toBeNull();
+    expect(sessionStorage.length).toBe(1);
   });
 
   it("keeps one delete intent after an unknown result and retries the exact request", async () => {
