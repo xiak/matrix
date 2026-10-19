@@ -2406,9 +2406,9 @@ slices; this candidate does not claim either or add phone/email/MFA behavior.
 
 #### LIVE recoverable-command outcome UX follow-up
 
-The recoverable IAM command UX is fixed at source
-`dbe5add33d8ef1cac663f2186e965f8fff041671`, based on source parent
-`8d1aa991fd9568d5d67e6d5bdcff24d1a95e5bfc`. User and Group Membership
+The cumulative recoverable IAM command UX is fixed at source
+`b99849623eb673dcfc6167e8a33978e70802a617`, based on source parent
+`b9410b719d654791e6506bd1abf2cc93d451e0e9`. User and Group Membership
 UNKNOWN states now render one warning
 with the latest inspection failure as subordinate evidence; their secondary
 action says that the operator may return later and never implies that leaving
@@ -2426,6 +2426,20 @@ proof of the original command and no second write is offered. The request ID
 is renderable state rather than a ref read during render, so review and submit
 use the same value without violating the React ownership model.
 
+Direct User and Role policy-relationship commands are now also bound to the
+concrete repository and Session owner, not only the Account and actor values.
+A replacement repository receives a new Role-client identity and remounts the
+owned workspace; a submitted User command restores its non-secret UNKNOWN
+reminder under the replacement owner. A late result from the previous owner
+cannot clear that reminder, render success, refresh the replacement detail or
+expire its Session. An old repository's late `401` is rejected as stale, while
+a `401` from the current owner's ordinary User submission still expires that
+Session. Recovered User CREATE and REVOKE completions now use the same explicit
+immutable receipt hierarchy as Group and Role: operation, original request ID,
+completion time, target, Policy, attachment ID and resulting revision remain
+visible until explicit acknowledgement. No completion lookup or owner change
+can issue a second relationship write.
+
 A confirmed complete Account security-settings replacement expires only the
 submitting Session and carries its exact request ID to the next login view.
 The explanation says why a new identity context is required without claiming
@@ -2439,10 +2453,13 @@ accurately states that the four rule groups are read and replaced together;
 it no longer calls the surface read-only.
 
 Windows Node 22.22.2/npm 11.6.4 typecheck, full lint, architecture and all 234
-theme contrast pairs pass. The complete frontend gate passes all 77 files and
-1,969 cases in 505.54 seconds, followed by all eight export-boundary script
-cases; the focused User, Group, Role, Session, login and Account-security
-owners also pass. `git diff --check` and both locale JSON parses pass.
+theme contrast pairs pass. The focused User/Role suites pass 269 cases. The
+complete frontend gate passes all 77 files and 1,974 cases in 377.39 seconds,
+followed by all eight export-boundary script cases. The production build emits
+59 static pages and normalizes 57 segment files; unset/zero production exports
+and the synchronized Go embed match all 324 generated files byte-for-byte.
+Full repository `go test ./...` and `go vet ./...` pass. `git diff --check` and
+both locale JSON parses pass.
 
 The fixed product browser at backend source `741dceb6f` supplied independent
 REVOKE evidence: the operator submitted one PaaSViewer revocation, observed
@@ -2454,6 +2471,9 @@ marker, IAM independently confirmed one revocation write, denial on the
 member's next protected request, one completion record, one outbox/Audit event
 and a valid Audit chain. Those backend assertions remain owned by IAM and are
 cited here rather than inherited as this branch's release acceptance.
+No current-source browser write was performed: attachment and deletion writes
+require action-time human confirmation, so component, export and Go evidence
+does not claim LIVE browser mutation acceptance.
 No backend/API/SQL/profile, shared DEV, real Account/resource or mandatory
 authentication setting changed. The isolated MOCK and Phase 1 email-only
 contact-verification/security-notification receiving scope remain intact;
