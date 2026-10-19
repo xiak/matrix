@@ -137,6 +137,7 @@ function Probe() {
       <textarea aria-label="original summary" onChange={(event) => setSummary(event.target.value)} value={summary} />
       <button onClick={() => { controlPlane.restoreManagedServiceCommand(summary); }} type="button">restore original command</button>
       <button onClick={() => void controlPlane.inspectManagedServiceCommand()} type="button">inspect managed command</button>
+      <span data-testid="session-phase">{session.phase}</span>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
       <span data-testid="error">{controlPlane.error ?? "none"}</span>
@@ -256,7 +257,7 @@ describe("ControlPlaneProvider", () => {
       expect(records(screen)[0].available).toBe(1);
     });
 
-    it.each([401, 403, 503, "protocol"] as const)("keeps completion separate from a failed %s entitlement read", async failure => {
+    it.each([403, 503, "protocol"] as const)("keeps completion separate from a failed %s entitlement read", async failure => {
       const intent = quotaIntent();
       const load = vi.fn(async (_credential: string, resources: readonly ControlPlaneResourceKind[]) => {
         if (resources.length === 1) {
@@ -272,8 +273,25 @@ describe("ControlPlaneProvider", () => {
       expect(screen.getByTestId("command-error").textContent).toBe("none");
       expect(screen.getByTestId("command-checking").textContent).toBe("false");
       expect(screen.getByTestId("quota-records").textContent).toBe("unavailable");
-      expect(screen.getByTestId("error").textContent).toBe(failure === 401 ? "expired" : failure === 403 ? "forbidden" : "unavailable");
+      expect(screen.getByTestId("error").textContent).toBe(failure === 403 ? "forbidden" : "unavailable");
       expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBeNull();
+      expect(screen.repository.activateQuota).not.toHaveBeenCalled();
+    });
+
+    it("keeps a confirmed command result final while a 401 entitlement read expires the current User", async () => {
+      const intent = quotaIntent();
+      const read = vi.fn(async () => [originalResult(intent)]);
+      const load = vi.fn(async (_credential: string, resources: readonly ControlPlaneResourceKind[]) => {
+        if (resources.length === 1) throw new HttpProblem(401, "CURRENT_SESSION_REVOKED");
+        return page(resources, false);
+      });
+      const screen = recoveryView(read, iamRepository(), { load, selection: { section: "quotas" } });
+      await bringOriginal(screen, intent);
+      await act(async () => { fireEvent.click(screen.getByText("inspect managed command")); });
+      await waitFor(() => expect(screen.getByTestId("session-phase").textContent).toBe("anonymous"));
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBeNull();
+      expect(screen.getByTestId("command-phase").textContent).toBe("none");
       expect(screen.repository.activateQuota).not.toHaveBeenCalled();
     });
 
@@ -424,6 +442,34 @@ describe("ControlPlaneProvider", () => {
     expect(screen.getByTestId("command-restored").textContent).toBe("true");
     expect(read).toHaveBeenCalledTimes(1);
   });
+  it("does not expire the current User from a replaced repository's late resource 401", async () => {
+    let rejectOldRead!: (reason: unknown) => void;
+    const iam = iamRepository();
+    const previous: ControlPlaneRepository = {
+      load: vi.fn(() => new Promise<ControlPlaneResourceSnapshot>((_resolve, reject) => { rejectOldRead = reject; })),
+      getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn()
+    };
+    const replacement: ControlPlaneRepository = {
+      ...previous, load: vi.fn(async () => snapshot(readyInstallation, 0))
+    };
+    const view = (repository: ControlPlaneRepository) => <SessionProvider repository={iam}>
+      <ControlPlaneProvider repository={repository} selection={{ section: "regions" }}><Probe /></ControlPlaneProvider>
+    </SessionProvider>;
+    const screen = render(view(previous));
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    await waitFor(() => expect(previous.load).toHaveBeenCalledTimes(1));
+
+    screen.rerender(view(replacement));
+    await act(async () => { fireEvent.click(screen.getByText("refresh current page")); });
+    expect(replacement.load).toHaveBeenCalledWith("memory-only-session", ["regions"]);
+    expect(screen.getByTestId("session-phase").textContent).toBe("authenticated");
+    await act(async () => { rejectOldRead(new HttpProblem(401, "RETIRED_REPOSITORY")); });
+
+    expect(screen.getByTestId("session-phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("error").textContent).toBe("none");
+    expect(replacement.createInstallation).not.toHaveBeenCalled();
+  });
+
   it("keeps a slow managed-service command local to its data region and preserves the caller idempotency key", async () => {
     vi.useFakeTimers();
     let resolveInstallation!: (installation: ServiceInstallation) => void;

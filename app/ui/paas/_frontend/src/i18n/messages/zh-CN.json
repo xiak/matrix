@@ -1491,8 +1491,8 @@
     "sourceUnknownTitle": "来源用户仍需重新验证",
     "sourceUnknownHint": "角色已结束，但在 /auth/me 校验成功前不会恢复用户模式。",
     "revalidateSource": "重新验证来源用户",
-    "expiredTitle": "角色会话已到期",
-    "expiredHint": "控制台已停止使用角色凭据。恢复用户模式前仍需重新验证原用户会话。",
+    "expiredTitle": "角色会话已失效",
+    "expiredHint": "角色可能已到期、被撤销或权限发生变化。控制台已停止使用该凭据；返回用户模式前仍需重新验证原用户会话。",
     "returnToSource": "验证并返回用户模式",
     "errors": {
       "expired": "来源用户会话已失效，请重新登录。",

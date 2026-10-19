@@ -1,11 +1,17 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { AuthenticatedSession } from "../domain/session";
 import type { AssumableRole, CurrentRoleIdentity, LiveRoleSession } from "../domain/roles";
 import type { IamRepository } from "../repositories/iamRepository";
-import { RoleSessionProvider, useEffectiveCredential, useRoleSession } from "./RoleSessionProvider";
+import {
+  RoleSessionProvider,
+  useEffectiveCredential,
+  useExpireEffectiveCredential,
+  useRoleSession
+} from "./RoleSessionProvider";
 
 const current: AuthenticatedSession = {
   loginName: "qiao",
@@ -70,6 +76,7 @@ function repository(overrides: Partial<NonNullable<IamRepository["roleSelfServic
 function Probe() {
   const roleSession = useRoleSession();
   const credential = useEffectiveCredential();
+  const expireEffectiveCredential = useExpireEffectiveCredential();
   return <div>
     <output aria-label="stage">{roleSession.stage}</output>
     <output aria-label="credential">{credential ?? "none"}</output>
@@ -84,8 +91,9 @@ function Probe() {
     <button onClick={() => void roleSession.retryExit()}>retry-exit</button>
     <button onClick={() => void roleSession.restoreSource()}>restore-source</button>
     <button onClick={() => roleSession.clearAttempt()}>clear</button>
-    <button onClick={() => roleSession.expireCredential("role-secret")}>expire-role</button>
-    <button onClick={() => roleSession.expireCredential("old-role-secret")}>expire-old-role</button>
+    <button onClick={() => expireEffectiveCredential("role-secret")}>expire-role</button>
+    <button onClick={() => expireEffectiveCredential("old-role-secret")}>expire-old-role</button>
+    <button onClick={() => expireEffectiveCredential("user-secret")}>expire-user</button>
   </div>;
 }
 
@@ -99,6 +107,36 @@ function view(iam: IamRepository, expireSource = vi.fn(() => true)) {
 afterEach(cleanup);
 
 describe("RoleSessionProvider", () => {
+  it("expires only the exact current User credential while User mode owns business requests", async () => {
+    const user = userEvent.setup(), iam = repository(), page = view(iam);
+    await user.click(screen.getByRole("button", { name: "expire-old-role" }));
+    expect(page.expireSource).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "expire-user" }));
+    expect(page.expireSource).toHaveBeenCalledTimes(1);
+    expect(page.expireSource).toHaveBeenCalledWith("user-secret");
+  });
+
+  it("ignores a User-owned expiry callback after a Role becomes the effective identity", async () => {
+    const user = userEvent.setup(), iam = repository(), expireSource = vi.fn(() => true);
+    let currentExpiry!: (expectedCredential: string) => boolean;
+    function CaptureExpiry() {
+      const expiry = useExpireEffectiveCredential();
+      useEffect(() => { currentExpiry = expiry; }, [expiry]);
+      return null;
+    }
+    render(<RoleSessionProvider current={current} expireSource={expireSource} repository={iam} sourceCredential="user-secret">
+      <CaptureExpiry /><Probe />
+    </RoleSessionProvider>);
+    const previousUserExpiry = currentExpiry;
+    await user.click(screen.getByRole("button", { name: "discover" }));
+    await user.click(screen.getByRole("button", { name: "assume" }));
+    await waitFor(() => expect(screen.getByLabelText("stage").textContent).toBe("role-active"));
+
+    await act(async () => { expect(previousUserExpiry("user-secret")).toBe(false); });
+    expect(expireSource).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("credential").textContent).toBe("role-secret");
+  });
+
   it("expires only the exact active Role credential without expiring or silently restoring the source User", async () => {
     const user = userEvent.setup(), iam = repository(), page = view(iam);
     await user.click(screen.getByRole("button", { name: "discover" }));

@@ -1491,8 +1491,8 @@
     "sourceUnknownTitle": "The source user still needs revalidation",
     "sourceUnknownHint": "The role ended, but user mode stays blocked until /auth/me succeeds.",
     "revalidateSource": "Revalidate source user",
-    "expiredTitle": "The role session expired",
-    "expiredHint": "The console stopped using the role credential. User mode still requires revalidation of the original login session.",
+    "expiredTitle": "The role session is no longer valid",
+    "expiredHint": "The role may have expired, been revoked, or lost permission. The console stopped using its credential; returning to User mode still requires revalidating the original login session.",
     "returnToSource": "Validate and return to user mode",
     "errors": {
       "expired": "The source user session expired. Sign in again.",

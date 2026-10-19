@@ -2380,11 +2380,16 @@ describe("ConsoleShellRenderer", () => {
       };
     }
 
-    async function enterAudit(service: NonNullable<IamRepository["roleSelfService"]>) {
+    async function enterAudit(service: NonNullable<IamRepository["roleSelfService"]>, roleStatus: 401 | 403 = 403) {
       const fetchAudit = vi.fn(async (path: RequestInfo | URL, init?: RequestInit) => {
         if (String(path) !== "/api/audit/v1/records:query") throw new Error("Unexpected test API request");
         const role = new Headers(init?.headers).get("Authorization") === "Bearer synthetic-role-bearer";
-        return new Response(JSON.stringify(role ? { code: "PERMISSION_DENIED" } : { apiVersion: AUDIT_API_VERSION, kind: "AuditRecordPage", tenantId: "organization-test", records: [] }), { status: role ? 403 : 200, headers: { "Content-Type": "application/json" } });
+        return new Response(JSON.stringify(role
+          ? { code: roleStatus === 401 ? "SESSION_EXPIRED" : "PERMISSION_DENIED" }
+          : { apiVersion: AUDIT_API_VERSION, kind: "AuditRecordPage", tenantId: "organization-test", records: [] }), {
+          status: role ? roleStatus : 200,
+          headers: { "Content-Type": "application/json" }
+        });
       });
       vi.stubGlobal("fetch", fetchAudit);
       const sourceLogout = vi.fn(async () => undefined);
@@ -2393,10 +2398,88 @@ describe("ConsoleShellRenderer", () => {
       await result.user.click(screen.getByRole("button", { name: "承担角色" }));
       await screen.findByRole("heading", { name: "当前角色身份" });
       await act(async () => result.commitRoute("/console/audit/"));
-      await screen.findByText("当前身份没有 audit.record.read 或 audit.integrity.verify 权限。");
+      if (roleStatus === 401) await screen.findByRole("button", { name: "验证并返回用户模式" });
+      else await screen.findByText("当前身份没有 audit.record.read 或 audit.integrity.verify 权限。");
       navigation.push.mockClear(); navigation.replace.mockClear();
       return { ...result, fetchAudit, sourceLogout };
     }
+
+    it("blocks a rejected Role bearer and restores the User only after explicit source validation", async () => {
+      let restoreSource!: () => void;
+      const service = selfService({ revalidateSource: vi.fn(() => new Promise<void>(resolve => { restoreSource = resolve; })) });
+      const { user, fetchAudit, sourceLogout } = await enterAudit(service, 401);
+      expect(fetchAudit).toHaveBeenCalledTimes(1);
+      expect(new Headers(fetchAudit.mock.calls[0]![1]?.headers).get("Authorization")).toBe("Bearer synthetic-role-bearer");
+      expect(service.assume).toHaveBeenCalledTimes(1);
+      expect(service.revalidateSource).not.toHaveBeenCalled();
+      expect(sourceLogout).not.toHaveBeenCalled();
+
+      await user.click(screen.getByRole("button", { name: "验证并返回用户模式" }));
+      expect(service.revalidateSource).toHaveBeenCalledWith("renderer-test-memory-only-session", "organization-test", "principal-test");
+      expect(fetchAudit).toHaveBeenCalledTimes(1);
+      await act(async () => restoreSource());
+
+      await waitFor(() => expect(fetchAudit).toHaveBeenCalledTimes(2));
+      expect(new Headers(fetchAudit.mock.calls[1]![1]?.headers).get("Authorization")).toBe("Bearer renderer-test-memory-only-session");
+      expect(service.assume).toHaveBeenCalledTimes(1);
+      expect(navigation.push).not.toHaveBeenCalled();
+      expect(navigation.replace).not.toHaveBeenCalled();
+      expect(sourceLogout).not.toHaveBeenCalled();
+    });
+
+    it("blocks a Role after a protected product read returns 401 without probing as the source User", async () => {
+      let restoreSource!: () => void;
+      const service = selfService({ revalidateSource: vi.fn(() => new Promise<void>(resolve => { restoreSource = resolve; })) });
+      const load = vi.fn<ControlPlaneRepository["load"]>(async (credential) => {
+        if (credential === "synthetic-role-bearer") throw new HttpProblem(401, "ROLE_POLICY_CHANGED");
+        return snapshot;
+      });
+      const result = await renderConsole({ section: "access", view: "role-access", roleSelfService: service, load });
+      await result.user.click(await screen.findByRole("button", { name: "审阅并承担 Signed UI Support Reader" }));
+      await result.user.click(screen.getByRole("button", { name: "承担角色" }));
+      await screen.findByRole("heading", { name: "当前角色身份" });
+      await act(async () => result.commitRoute("/console/regions/"));
+
+      await screen.findByRole("button", { name: "验证并返回用户模式" });
+      expect(load).toHaveBeenCalledTimes(1);
+      expect(load.mock.calls[0]![0]).toBe("synthetic-role-bearer");
+      expect(service.assume).toHaveBeenCalledTimes(1);
+      await result.user.click(screen.getByRole("button", { name: "验证并返回用户模式" }));
+      expect(load).toHaveBeenCalledTimes(1);
+      await act(async () => restoreSource());
+
+      await waitFor(() => expect(load.mock.calls.some(([credential]) => credential === "renderer-test-memory-only-session")).toBe(true));
+      expect(await screen.findByRole("heading", { level: 1, name: "区域与节点" })).toBeTruthy();
+      expect(service.assume).toHaveBeenCalledTimes(1);
+      expect(navigation.push).not.toHaveBeenCalled();
+      expect(navigation.replace).not.toHaveBeenCalled();
+    });
+
+    it("ignores a late 401 from a retired Role after the source User has been revalidated", async () => {
+      let rejectRoleRead!: (reason: unknown) => void;
+      const service = selfService();
+      const load = vi.fn<ControlPlaneRepository["load"]>((credential) => credential === "synthetic-role-bearer"
+        ? new Promise((_resolve, reject) => { rejectRoleRead = reject; })
+        : Promise.resolve(snapshot));
+      const result = await renderConsole({ section: "access", view: "role-access", roleSelfService: service, load });
+      await result.user.click(await screen.findByRole("button", { name: "审阅并承担 Signed UI Support Reader" }));
+      await result.user.click(screen.getByRole("button", { name: "承担角色" }));
+      await screen.findByRole("heading", { name: "当前角色身份" });
+      await act(async () => result.commitRoute("/console/regions/"));
+      await waitFor(() => expect(load.mock.calls.some(([credential]) => credential === "synthetic-role-bearer")).toBe(true));
+
+      await result.user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+      await result.user.click(screen.getByRole("menuitem", { name: "结束当前角色会话" }));
+      await waitFor(() => expect(load.mock.calls.some(([credential]) => credential === "renderer-test-memory-only-session")).toBe(true));
+      expect(await screen.findByRole("heading", { level: 1, name: "区域与节点" })).toBeTruthy();
+      await act(async () => rejectRoleRead(new HttpProblem(401, "STALE_ROLE_POLICY")));
+
+      expect(screen.queryByRole("button", { name: "验证并返回用户模式" })).toBeNull();
+      expect(screen.getByRole("heading", { level: 1, name: "区域与节点" })).toBeTruthy();
+      await result.user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+      expect(within(screen.getByRole("dialog", { name: "账号菜单" })).getByText("admin", { exact: true })).toBeTruthy();
+      expect(service.assume).toHaveBeenCalledTimes(1);
+    });
 
     it("restores the same Audit route with the User bearer only after source validation", async () => {
       let restoreSource!: () => void;
@@ -2472,18 +2555,14 @@ describe("ConsoleShellRenderer", () => {
     expect(view.container.textContent).not.toContain("renderer-test-memory-only-session");
   });
 
-  it("allows logout after the resource load fails", async () => {
+  it("expires the exact current User after a protected resource read returns 401", async () => {
     const load = vi.fn().mockRejectedValue(new HttpProblem(401, "SESSION_REVOKED"));
     const logout = vi.fn().mockResolvedValue(undefined);
-    const { user } = await renderConsole({ load, logout });
-    expect((await screen.findByRole("alert")).textContent).toContain("IAM 会话已失效");
-
-    await user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
-    await user.click(screen.getByRole("menuitem", { name: "注销并撤销 IAM 会话" }));
-
+    await renderConsole({ load, logout });
     await screen.findByRole("button", { name: "登录控制台" });
-    expect(logout).toHaveBeenCalledWith("renderer-test-memory-only-session");
-    expect(navigation.replace).toHaveBeenCalledWith("/");
+    expect(load).toHaveBeenCalledWith("renderer-test-memory-only-session", expect.any(Array));
+    expect(logout).not.toHaveBeenCalled();
+    expect(navigation.replace).not.toHaveBeenCalled();
   });
 
   it("keeps logout reachable while resources are still loading and disables duplicate revocation", async () => {

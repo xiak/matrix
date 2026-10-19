@@ -25,7 +25,7 @@
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果；后继独立真实浏览器已从普通User首次登录完成纯页面强制改密，并验证仅保留调用Session、撤销另一受限Session、旧密码失效和新密码重新登录 | 日常主动改密的可选会话处置、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
 | IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；IAM87+r37已通过前端/嵌入构建与独立CI。User资料/停用以原意图只读恢复，Membership添加/移除只显式等值重放原命令，Group附件CREATE/REVOKE已有响应丢失与下一请求权限效果。当前9621页面进一步证明Group删除的1+1级联及准确可见回执，以及GROUP/USER附件撤销的一次提交、一次原回执读取、零再写、明确完成导航与唯一outbox/Audit；User、Policy及不在级联范围内的资源保持 | 当前CREATE回执及直接Role附件仍缺页面证据；ROLE/REVOKE本轮只到最终确认，未提交且已收尾，不计通过。日常关系隔离不能替代这些写路径；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version。后继候选UI已在同一r36后端从页面创建零附件Policy、改名并整策略退役，稳定ID/默认版本/摘要及不可变版本保持，活动目录移除且三条outbox/Audit事实和完整租户链均已核对；独立真实浏览器门禁进一步证明改名与整策略退役各自在响应半断后的双标签排他、关闭持锁标签和完全相同原命令恢复 | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略；当前签名组合已通过，但不能替代所列纯页面写路径 |
-| IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role。当前后端与真实PG已证明Role附件变化使原RoleSession失效，显式新承担才按新授权求值，历史发行记录不被改写 | 当前9621部分业务/Audit读取的401只显示局部过期，未统一失效准确Role上下文；UX/UI owner正在原身份owner和消费者中修复，尚无已消费固定源码或页面验收。管理员撤销、Role凭据精确业务读取及显式返回来源身份仍须完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
+| IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role。当前后端与真实PG已证明Role附件变化使原RoleSession失效，显式新承担才按新授权求值，历史发行记录不被改写。后继候选已选择性采用UX固定c5f858d与必要修复3ddbd991，在原身份owner中统一处理业务/Audit的401；七个相关文件280项本地回归通过 | 当前已接受的9621签名包仍有部分业务/Audit的401只显示局部过期；后继候选的精确CI、新签名组合及管理员撤销、Role凭据精确业务读取和显式返回来源身份的真实页面门禁尚未完成。跨Account、角色链、服务/外部身份trust明确Deferred |
 | IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；IAM86+r36签名页面读取已验证通知地址、本人TOTP状态和有效Session，并对缺少读取权限显示真实拒绝。固定`a119ffdb`的独立真实浏览器已证明普通User首次绑定、换绑、主动移除、重新绑定、四次MFA登录及跨浏览器撤销其他Session，准确因子/恢复码代次和Audit证据由[本人安全与会话](#live-本人安全与会话浏览器闭环)拥有；这不是强制MFA或签名APISIX页面验收。后继最小权限普通User已完成Account安全设置的真实TOTP step-up、完整版本替换、旧Session围栏和重新登录后权威读取 | 账号强制MFA下普通User首次绑定及受限重新绑定、AccessKey全生命周期、恢复码再生/自助恢复及其他敏感用途step-up仍缺完整浏览器门禁；已接受的普通TOTP路径仍缺当前签名APISIX页面组合证据。受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、外部物理认证器及WebAuthn明确Deferred |
 | IAM-UI-07 | 四个真实产品、协议、授权/撤权、错误矩阵和五类命令恢复已有分层证据；当前IAM86+r36签名页面又以`offline.alpha.primary`从真实RabbitMQ配额创建`iam-r36-terminate-test`并观察QUEUED→INSTALLING→RUNNING和AMQP端点，同一签名运行时已证明终止单写响应丢失、跨来源结果恢复、物理清理与配额归还 | 终止的纯页面最终提交与UNKNOWN呈现仍须实跑；不支持跨主体恢复，查无结果不得推断原写未发生 |
 | IAM-UI-08 | 当前IAM86+r36签名入口再次证明角色SSO、用户SSO和跨账号协作直达路由只有明确“尚未接入后端”EmptyState且没有提交控件 | 企业微信/外部IdP、Passkey/WebAuthn、跨账号与角色链保持禁用和Deferred；新增Deferred入口仍须沿同一边界验收 |
@@ -43,6 +43,10 @@
 请求所有者同时包含其有效凭据、当前Session/Role身份及repository边界。旧请求在切换身份或替换repository后迟到的401，不得使后来身份退出、清除其待核对命令或覆盖新页面状态。403表示当前身份没有业务权限，不等于凭据失效；显式重新承担后得到的403也不能被解释成旧RoleSession重新可用。返回来源User或新承担不能重放先前的业务写入。
 
 该处理只适用于证明请求Bearer无效的认证失败；当前密码、TOTP、恢复码或用途限定step-up校验失败的401，不足以证明Bearer已撤销，仍由各自认证流程处理。验收沿现有真实消费者测试，覆盖当前Role的401、旧请求迟到401、403不升级为退出、显式返回及来源验证失败；组件测试不替代管理员撤权后的真实Role业务页面与权威后验。
+
+本分支选择性采用UX固定`c5f858d64ddb7ea4355fec794d950401e85edb1d`及必要后继`3ddbd9911eb144f36eeecb4bbf8596df286b8ed9`的九个既有源码/测试/消息路径，保留本分支renderer原交互，不导入对方生成物或验收状态。消费者复核先在c5上证明两条真实组件回归：同Bearer替换repository后，旧请求迟到401错误退出当前User；USER模式保留的旧失效回调在Role生效后错误清除来源User。前者在固定父实现通过，两条原样回归在3dd修复后均通过。当前请求必须同时匹配repository、Session修订及actor owner；共享失效回调读取提交后的当前USER/ROLE归属，而非调用闭包捕获的旧模式。
+
+本地Node22.22.2、2GiB heap、单worker的七文件280项相关回归以56.05秒通过，覆盖Role/Session、ControlPlane、Audit、服务开通及专用TOTP路径。类型/lint/架构、234组样式对比度及八项静态导出Node测试通过；2-worker生产构建的preview unset/0两种模式逐字等价，324项嵌入资产由本分支重新生成并匹配。Go UI/architecture race分别7.305/2.438秒及相关vet通过。已确认命令与后续资源读取分离：当前401使身份失效且不重放已完成命令；403/503/协议错误保留各自拒绝或不可用语义。未改变后端API/SQL/完整Profile。此证据不等于后继候选精确CI、签名发布或真实Role撤权页面已验收。
 
 ### 当前身份的权限上限投影
 

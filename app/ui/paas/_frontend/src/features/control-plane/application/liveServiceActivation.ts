@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useExpireEffectiveCredential } from "@/features/auth/application/RoleSessionProvider";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
 import type {
@@ -94,6 +95,7 @@ export function useLiveServiceActivation({
   repository: ControlPlaneRepository;
   serviceKey?: ManagedServiceProductId;
 }) {
+  const expireEffectiveCredential = useExpireEffectiveCredential();
   const [observation, setObservation] = useState<ScopedActivationSnapshot | null>(null);
   const revision = useRef(0);
   const intent = useRef<ActivationIntent | null>(null);
@@ -105,6 +107,10 @@ export function useLiveServiceActivation({
   const setSnapshot = useCallback((value: LiveActivationSnapshot) => {
     setObservation({ repository, scopeKey, value });
   }, [repository, scopeKey]);
+  const expireUnauthorized = useCallback((failure: unknown) => {
+    if (!credential || !(failure instanceof HttpProblem) || failure.status !== 401) return false;
+    return expireEffectiveCredential(credential);
+  }, [credential, expireEffectiveCredential]);
 
   const load = useCallback(async () => {
     const currentRevision = ++revision.current;
@@ -147,6 +153,11 @@ export function useLiveServiceActivation({
         });
       } catch (failure) {
         if (currentRevision !== revision.current) return;
+        if (failure instanceof HttpProblem && failure.status === 401) {
+          expireUnauthorized(failure);
+          setSnapshot(unavailable);
+          return;
+        }
         if (failure instanceof HttpProblem && failure.status === 404) {
           setSnapshot({ access, definition, state: { status: "not-enabled" } });
           return;
@@ -161,10 +172,13 @@ export function useLiveServiceActivation({
         }
         setSnapshot({ access, definition, state: { status: "unavailable" } });
       }
-    } catch {
-      if (currentRevision === revision.current) setSnapshot(unavailable);
+    } catch (failure) {
+      if (currentRevision === revision.current) {
+        expireUnauthorized(failure);
+        setSnapshot(unavailable);
+      }
     }
-  }, [accountId, active, credential, repository, scopeKey, serviceKey, setSnapshot]);
+  }, [accountId, active, credential, expireUnauthorized, repository, scopeKey, serviceKey, setSnapshot]);
 
   useEffect(() => {
     let mounted = true;
@@ -203,6 +217,11 @@ export function useLiveServiceActivation({
       });
     } catch (failure) {
       if (currentRevision !== revision.current) return;
+      if (failure instanceof HttpProblem && failure.status === 401) {
+        expireUnauthorized(failure);
+        setSnapshot(unavailable);
+        return;
+      }
       if (failure instanceof HttpProblem && failure.status >= 400 && failure.status < 500) {
         await load();
         return;
@@ -222,7 +241,10 @@ export function useLiveServiceActivation({
         });
       } catch (readFailure) {
         if (currentRevision !== revision.current) return;
-        if (readFailure instanceof HttpProblem && readFailure.status === 404) {
+        if (readFailure instanceof HttpProblem && readFailure.status === 401) {
+          expireUnauthorized(readFailure);
+          setSnapshot(unavailable);
+        } else if (readFailure instanceof HttpProblem && readFailure.status === 404) {
           setSnapshot({ ...snapshot, state: { status: "failed" } });
         } else if (readFailure instanceof HttpProblem && readFailure.status === 403) {
           setSnapshot({
@@ -235,7 +257,7 @@ export function useLiveServiceActivation({
         }
       }
     }
-  }, [accountId, active, credential, load, repository, scopeKey, serviceKey, setSnapshot, snapshot]);
+  }, [accountId, active, credential, expireUnauthorized, load, repository, scopeKey, serviceKey, setSnapshot, snapshot]);
 
   return { ...snapshot, enable, preview: false as const };
 }
