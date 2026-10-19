@@ -897,6 +897,35 @@ and `git diff --check` gates must pass on the same committed worktree.
   The result belongs only to that fixed commit; this documentation update does
   not inherit or replace the final signed-release gate.
 
+### Bounded worker observation diagnostics
+
+The managed-product gate recorded an execution-profile observation timeout
+before worker readiness in [Issue #6](https://github.com/xiak/matrix/issues/6).
+The original failure does not identify whether Docker Engine inspection or
+Compose plugin inspection exhausted its budget. A later successful run does
+not prove that failure's cause or close the issue.
+
+The diagnostic slice preserves only those two closed probe phases through the
+existing normalized adapter failure and worker stderr code. Unknown probe
+identifiers and native errors remain undisclosed. The five-second observation
+budget, three-second CLI budget, retry behavior, readiness rejection,
+transaction boundary and release profile stay unchanged. Acceptance requires
+unchanged normalized API errors, distinct Engine/Compose timeout codes, zero
+profile writes after failed observation, and negative cases for unknown
+identifiers and mismatched failure kinds. This does not itself fix or reproduce
+the original runtime timeout.
+
+The original adapter and worker regressions failed in 0.913s/1.517s because
+both phases were lost; the unchanged assertions passed in 0.889s/1.545s after
+the fix. The final focused adapter/worker/refresh/architecture race gates
+passed in 2.289s/3.104s/1.252s/2.303s, with vet and diff checks. Linux
+deterministic probe and composition tests also passed (0.005s/0.013s) in the
+existing task-owned bounded runner; these inject classified failures and do
+not reproduce a real Docker CLI timeout. Native error wrappers are discarded,
+the public normalized fault is unchanged, and a failed observation invokes
+no repository transaction. Independent CI and the next real managed-product
+run remain separate evidence; the issue stays open.
+
 ## Deferred
 
 Money movement, invoices, tax, discounts, metering-based billing, marketplace

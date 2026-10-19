@@ -8,6 +8,7 @@ import (
 	"time"
 
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	localmachineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshexecutionprofile"
 )
 
@@ -161,6 +162,104 @@ func TestExecutionProfileRefreshStageFailureUsesOnlyClosedCodes(t *testing.T) {
 	native := errors.New("database password and /host/path must not escape")
 	if got := executionProfileRefreshFailure(native); got != workerFailureExecutionProfileRefresh {
 		t.Fatalf("unexpected refresh failure code = %q", got)
+	}
+}
+
+type rejectedExecutionProbe struct {
+	failure error
+	calls   int
+}
+
+func (probe *rejectedExecutionProbe) Inspect(context.Context, string) (localmachineadapter.HostFacts, error) {
+	probe.calls++
+	return localmachineadapter.HostFacts{}, probe.failure
+}
+
+type unusedExecutionProfileRepository struct {
+	calls int
+}
+
+func (repository *unusedExecutionProfileRepository) WithinTransaction(
+	context.Context,
+	paasv1.TenantID,
+	func(context.Context, refreshexecutionprofile.Transaction) error,
+) error {
+	repository.calls++
+	return errors.New("failed observation must not start a profile transaction")
+}
+
+func TestExecutionProfileRefreshRetainsClosedProbeTimeoutCode(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		failure error
+		want    workerFailureStage
+	}{
+		{
+			name:    "engine timeout",
+			failure: localmachineadapter.ProbeFailure{Kind: localmachineadapter.ProbeFailureTimeout, ID: string(localmachineadapter.ProbeDockerEngine)},
+			want:    "PAAS_WORKER_EXECUTION_PROFILE_DOCKER_ENGINE_TIMEOUT",
+		},
+		{
+			name:    "compose timeout",
+			failure: localmachineadapter.ProbeFailure{Kind: localmachineadapter.ProbeFailureTimeout, ID: string(localmachineadapter.ProbeComposePlugin)},
+			want:    "PAAS_WORKER_EXECUTION_PROFILE_COMPOSE_PLUGIN_TIMEOUT",
+		},
+		{
+			name:    "unknown probe timeout",
+			failure: localmachineadapter.ProbeFailure{Kind: localmachineadapter.ProbeFailureTimeout, ID: "password=must-not-leak /host/private"},
+			want:    workerFailureExecutionObserveTimeout,
+		},
+		{
+			name:    "engine unavailable is not timeout",
+			failure: localmachineadapter.ProbeFailure{Kind: localmachineadapter.ProbeFailureUnavailable, ID: string(localmachineadapter.ProbeDockerEngine)},
+			want:    workerFailureExecutionObserveDown,
+		},
+		{
+			name:    "compose rejected is not timeout",
+			failure: localmachineadapter.ProbeFailure{Kind: localmachineadapter.ProbeFailureValidation, ID: string(localmachineadapter.ProbeComposePlugin)},
+			want:    workerFailureExecutionObserveReject,
+		},
+		{
+			name:    "native error does not escape",
+			failure: errors.New("password=must-not-leak /host/private"),
+			want:    workerFailureExecutionProfileRefresh,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			binding, err := localmachineadapter.NewMachineBinding(localmachineadapter.MachineBindingSpec{
+				ID: "local", Kind: localmachineadapter.BindingLocal,
+				AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			bindings, err := localmachineadapter.NewStaticBindingResolver(binding)
+			if err != nil {
+				t.Fatal(err)
+			}
+			probe := &rejectedExecutionProbe{failure: test.failure}
+			adapter, err := localmachineadapter.New(localmachineadapter.Config{Bindings: bindings, LocalProbe: probe})
+			if err != nil {
+				t.Fatal(err)
+			}
+			repository := &unusedExecutionProfileRepository{}
+			service, err := refreshexecutionprofile.New(adapter, repository, refreshexecutionprofile.Config{
+				TenantID: "organization-default", IDs: localExecutionProfileIDs,
+				MachineBindingRef: "local", ObservationTimeout: executionTargetTimeout,
+				MaximumObservationAge: executionTargetMaximumAge, MaxTransactionAttempts: 5,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure := service.Refresh(context.Background())
+			if probe.calls != 1 || repository.calls != 0 {
+				t.Fatalf("failed observation: probe calls=%d, transaction calls=%d", probe.calls, repository.calls)
+			}
+			code := workerFailureCode(failWorker(executionProfileRefreshFailure(failure)))
+			if code != test.want {
+				t.Fatalf("worker failure code = %q, want %q", code, test.want)
+			}
+		})
 	}
 }
 

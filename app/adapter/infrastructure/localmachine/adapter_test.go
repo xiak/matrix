@@ -186,6 +186,38 @@ func TestInspectExecutionTargetNormalizesBindingAndProbeFailures(t *testing.T) {
 	}
 }
 
+func TestInspectExecutionTargetPreservesOnlyClosedTimeoutProbePhases(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		id        string
+		preserved bool
+	}{
+		{name: "engine", id: string(ProbeDockerEngine), preserved: true},
+		{name: "compose", id: string(ProbeComposePlugin), preserved: true},
+		{name: "unknown", id: "password=must-not-leak /host/private"},
+		{name: "empty"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			native := errors.New("password=must-not-leak /host/private")
+			adapter := mustAdapter(t, mustLocalBinding(t, ""), &fakeHostProbe{
+				err: errors.Join(native, ProbeFailure{Kind: ProbeFailureTimeout, ID: test.id}),
+			})
+			_, err := adapter.InspectExecutionTarget(context.Background(), validInspectExecutionTargetRequest())
+			fault := requireAdapterFault(t, err)
+			if fault.Normalized != timeoutFault("local").Normalized || err.Error() != fault.Error() || errors.Is(err, native) {
+				t.Fatalf("timeout normalization changed: %v", err)
+			}
+			var phase ProbeFailure
+			if found := errors.As(err, &phase); found != test.preserved {
+				t.Fatalf("closed timeout phase preserved = %v, want %v", found, test.preserved)
+			}
+			if test.preserved && (phase.Kind != ProbeFailureTimeout || phase.ID != test.id) {
+				t.Fatalf("closed timeout phase = %#v", phase)
+			}
+		})
+	}
+}
+
 func TestInspectExecutionTargetRejectsUnknownAndUnavailableBindings(t *testing.T) {
 	resolver, err := NewStaticBindingResolver()
 	if err != nil {

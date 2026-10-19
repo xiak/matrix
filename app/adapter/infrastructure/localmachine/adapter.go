@@ -265,7 +265,7 @@ func resolveFault(id string, err error) paasv1.AdapterFault {
 	}
 }
 
-func normalizeProbeFault(id string, err error) paasv1.AdapterFault {
+func normalizeProbeFault(id string, err error) error {
 	var failure ProbeFailure
 	if !errors.As(err, &failure) {
 		return newAdapterFault(
@@ -284,7 +284,15 @@ func normalizeProbeFault(id string, err error) paasv1.AdapterFault {
 			false,
 		)
 	case ProbeFailureTimeout:
-		return timeoutFault(id)
+		fault := timeoutFault(id)
+		switch failure.ID {
+		case string(ProbeDockerEngine), string(ProbeComposePlugin):
+			// Preserve only a closed phase, never an unchecked ID or native cause.
+			// Error() and errors.As(AdapterFault) keep the normalized contract.
+			return ProbeFailure{Kind: ProbeFailureTimeout, ID: failure.ID, normalized: &fault}
+		default:
+			return fault
+		}
 	case ProbeFailureUnavailable:
 		return newAdapterFault(
 			paasv1.AdapterErrorUnavailable,

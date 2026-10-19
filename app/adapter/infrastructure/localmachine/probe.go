@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"golang.org/x/sys/execabs"
 )
 
@@ -59,12 +60,23 @@ const (
 )
 
 type ProbeFailure struct {
-	Kind ProbeFailureKind
-	ID   string
+	Kind       ProbeFailureKind
+	ID         string
+	normalized *paasv1.AdapterFault
 }
 
 func (failure ProbeFailure) Error() string {
+	if failure.normalized != nil {
+		return failure.normalized.Error()
+	}
 	return fmt.Sprintf("machine probe %s failed with %s", failure.ID, failure.Kind)
+}
+
+func (failure ProbeFailure) Unwrap() error {
+	if failure.normalized == nil {
+		return nil
+	}
+	return *failure.normalized
 }
 
 type CapabilityProbeID string

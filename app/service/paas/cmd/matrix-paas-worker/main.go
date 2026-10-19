@@ -85,6 +85,8 @@ const (
 	workerFailureExecutionProfile        workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE"
 	workerFailureExecutionProfileRefresh workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_REFRESH"
 	workerFailureExecutionObserveTimeout workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_TIMEOUT"
+	workerFailureExecutionEngineTimeout  workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_DOCKER_ENGINE_TIMEOUT"
+	workerFailureExecutionComposeTimeout workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_COMPOSE_PLUGIN_TIMEOUT"
 	workerFailureExecutionObserveDown    workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_UNAVAILABLE"
 	workerFailureExecutionObserveReject  workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_REJECTED"
 	workerFailureExecutionValidate       workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_VALIDATE"
@@ -408,8 +410,20 @@ func executionProfileRefreshFailure(err error) workerFailureStage {
 	if errors.As(err, &adapterFault) {
 		adapterClass = adapterFault.Normalized.Class
 	}
+	stage := refreshexecutionprofile.ClassifyRefreshFailure(err)
+	if stage == refreshexecutionprofile.RefreshFailureObserve && adapterClass == paasv1.AdapterErrorTimeout {
+		var probeFailure localmachineadapter.ProbeFailure
+		if errors.As(err, &probeFailure) && probeFailure.Kind == localmachineadapter.ProbeFailureTimeout {
+			switch probeFailure.ID {
+			case string(localmachineadapter.ProbeDockerEngine):
+				return workerFailureExecutionEngineTimeout
+			case string(localmachineadapter.ProbeComposePlugin):
+				return workerFailureExecutionComposeTimeout
+			}
+		}
+	}
 	return executionProfileRefreshStageFailure(
-		refreshexecutionprofile.ClassifyRefreshFailure(err),
+		stage,
 		adapterClass,
 	)
 }

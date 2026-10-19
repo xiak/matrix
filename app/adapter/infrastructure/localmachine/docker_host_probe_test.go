@@ -34,12 +34,28 @@ func TestDockerHostProbePreservesDeadlineClassification(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Docker Engine host observation targets Linux")
 	}
-	probe := newDockerHostProbe(dockerHostProbeStub{infoErr: context.DeadlineExceeded})
-	_, err := probe.Inspect(context.Background(), t.TempDir())
-	var failure ProbeFailure
-	if !errors.As(err, &failure) || failure.Kind != ProbeFailureTimeout ||
-		failure.ID != "docker-engine" {
-		t.Fatalf("Docker host deadline failure = %#v / %v", failure, err)
+	for _, test := range []struct {
+		name    string
+		runtime dockerHostProbeStub
+		want    CapabilityProbeID
+	}{
+		{name: "engine", runtime: dockerHostProbeStub{infoErr: context.DeadlineExceeded}, want: ProbeDockerEngine},
+		{
+			name: "compose", want: ProbeComposePlugin,
+			runtime: dockerHostProbeStub{
+				info:       []byte(`{"ID":"engine-a","NCPU":2,"MemTotal":4294967296,"OSType":"linux","Architecture":"amd64"}`),
+				composeErr: context.DeadlineExceeded,
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			probe := newDockerHostProbe(test.runtime)
+			_, err := probe.Inspect(context.Background(), t.TempDir())
+			var failure ProbeFailure
+			if !errors.As(err, &failure) || failure.Kind != ProbeFailureTimeout || failure.ID != string(test.want) {
+				t.Fatalf("Docker host deadline failure = %#v / %v", failure, err)
+			}
+		})
 	}
 }
 
