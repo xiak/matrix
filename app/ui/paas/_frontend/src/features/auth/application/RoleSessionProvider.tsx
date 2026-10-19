@@ -5,6 +5,7 @@ import {
   useCallback,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -119,14 +120,28 @@ export function RoleSessionProvider({
   const [identity, setIdentity] = useState<CurrentRoleIdentity | null>(null);
   const [activeCredential, setActiveCredential] = useState<string | null>(null);
   const [activeSourceCredential, setActiveSourceCredential] = useState<string | null>(null);
+  const blocked = stage === "exit-unknown" || stage === "source-validation-unknown" || stage === "role-expired";
+  const mode = stage === "role-active" ? "ROLE" : blocked ? "BLOCKED" : "USER";
+  const sourceCredentialUnchanged = sourceCredential !== null && sourceCredential === activeSourceCredential;
+  const effectiveCredential = mode === "ROLE" ? sourceCredentialUnchanged ? activeCredential : null : mode === "USER" ? sourceCredential : null;
   const roleCredential = useRef<string | null>(null);
   const sourceCredentialRef = useRef(sourceCredential);
+  const expireSourceRef = useRef(expireSource);
+  const effectiveOwnerRef = useRef<{ credential: string; mode: "USER" | "ROLE" } | null>(effectiveCredential
+    ? { credential: effectiveCredential, mode: mode === "ROLE" ? "ROLE" : "USER" }
+    : null);
   const intentRef = useRef<RoleAssumeIntent | null>(null);
   const identityRef = useRef<CurrentRoleIdentity | null>(null);
   const operationRevision = useRef(0);
 
   useEffect(() => { intentRef.current = intent; }, [intent]);
   useEffect(() => { identityRef.current = identity; }, [identity]);
+  useLayoutEffect(() => {
+    expireSourceRef.current = expireSource;
+    effectiveOwnerRef.current = effectiveCredential
+      ? { credential: effectiveCredential, mode: mode === "ROLE" ? "ROLE" : "USER" }
+      : null;
+  }, [effectiveCredential, expireSource, mode]);
 
   const resetRole = useCallback((nextStage: RoleSessionStage = "idle") => {
     operationRevision.current += 1;
@@ -186,8 +201,8 @@ export function RoleSessionProvider({
   }, [expireSource, resetRole]);
 
   const expireCredential = useCallback((expectedCredential: string): boolean => {
-    if (stage !== "role-active" || roleCredential.current !== expectedCredential ||
-        sourceCredential !== sourceCredentialRef.current || activeSourceCredential !== sourceCredential) return false;
+    const owner = effectiveOwnerRef.current;
+    if (owner?.mode !== "ROLE" || owner.credential !== expectedCredential || roleCredential.current !== expectedCredential) return false;
     operationRevision.current += 1;
     roleCredential.current = null;
     setActiveCredential(null);
@@ -196,17 +211,17 @@ export function RoleSessionProvider({
     setError("expired");
     setStage("role-expired");
     return true;
-  }, [activeSourceCredential, sourceCredential, stage]);
+  }, []);
 
   const expireEffectiveCredential = useCallback((expectedCredential: string): boolean => {
-    if (expireCredential(expectedCredential)) return true;
-    if (["role-active", "role-expired", "exit-unknown", "source-validation-unknown"].includes(stage) ||
-        sourceCredentialRef.current !== expectedCredential || sourceCredential !== expectedCredential) return false;
+    const owner = effectiveOwnerRef.current;
+    if (!owner || owner.credential !== expectedCredential) return false;
+    if (owner.mode === "ROLE") return expireCredential(expectedCredential);
     // SessionProvider owns source-session cleanup. Its credential fence prevents
     // a late User response from expiring a replacement login; the source-change
     // effect above then retires any unresolved Role credential best-effort.
-    return expireSource(expectedCredential);
-  }, [expireCredential, expireSource, sourceCredential, stage]);
+    return expireSourceRef.current(expectedCredential);
+  }, [expireCredential]);
 
   const validateDirectory = useCallback((page: AssumableRoleDirectory) => {
     if (!current || page.accountId !== current.session.organizationId || page.sourceUserId !== current.session.principalId) {
@@ -498,10 +513,6 @@ export function RoleSessionProvider({
     setStage(directory ? "ready" : "idle");
   }, [busy, directory, stage]);
 
-  const blocked = stage === "exit-unknown" || stage === "source-validation-unknown" || stage === "role-expired";
-  const mode = stage === "role-active" ? "ROLE" : blocked ? "BLOCKED" : "USER";
-  const sourceCredentialUnchanged = sourceCredential !== null && sourceCredential === activeSourceCredential;
-  const effectiveCredential = mode === "ROLE" ? sourceCredentialUnchanged ? activeCredential : null : mode === "USER" ? sourceCredential : null;
   const value = useMemo<RoleSessionContextValue>(() => ({
     supported: Boolean(service), mode, stage, busy, error, directory, intent, observedSession, identity,
     discover, assume, retryAssume, locateOriginal, revokeOriginal, retryActivation,

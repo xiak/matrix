@@ -1,5 +1,6 @@
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { useEffect } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { AuthenticatedSession } from "../domain/session";
@@ -113,6 +114,27 @@ describe("RoleSessionProvider", () => {
     await user.click(screen.getByRole("button", { name: "expire-user" }));
     expect(page.expireSource).toHaveBeenCalledTimes(1);
     expect(page.expireSource).toHaveBeenCalledWith("user-secret");
+  });
+
+  it("ignores a User-owned expiry callback after a Role becomes the effective identity", async () => {
+    const user = userEvent.setup(), iam = repository(), expireSource = vi.fn(() => true);
+    let currentExpiry!: (expectedCredential: string) => boolean;
+    function CaptureExpiry() {
+      const expiry = useExpireEffectiveCredential();
+      useEffect(() => { currentExpiry = expiry; }, [expiry]);
+      return null;
+    }
+    render(<RoleSessionProvider current={current} expireSource={expireSource} repository={iam} sourceCredential="user-secret">
+      <CaptureExpiry /><Probe />
+    </RoleSessionProvider>);
+    const previousUserExpiry = currentExpiry;
+    await user.click(screen.getByRole("button", { name: "discover" }));
+    await user.click(screen.getByRole("button", { name: "assume" }));
+    await waitFor(() => expect(screen.getByLabelText("stage").textContent).toBe("role-active"));
+
+    await act(async () => { expect(previousUserExpiry("user-secret")).toBe(false); });
+    expect(expireSource).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("credential").textContent).toBe("role-secret");
   });
 
   it("expires only the exact active Role credential without expiring or silently restoring the source User", async () => {
