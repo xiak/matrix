@@ -6,6 +6,15 @@
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   The renewed IAM first-release goal remains ACTIVE and incomplete.
+- Latest pushed test-only source is
+  `8c60cb686d740c07ddd23a88d0040d45aa28a3d4`, following fixed
+  `83d7c42cf665296d10de5fec15cf5ea26feb8dd7`. It prepares the existing
+  Policy browser owner's SET_DEFAULT mode and exhausts action-scoped Audit
+  pages in four existing browser gates. It does not add global request-ID
+  uniqueness, a completion API, a test framework or production changes.
+  Focused authority/architecture race took 4.223/2.109s; vet passed.
+  Exact Verification 39241486192 / attempt 1 is a new pending tuple,
+  not covered by the previous commit's accepted CI.
 - Current accepted production and same-profile signed consumer:
   `9621bb6e66b1076576649d3f6b224725a60d6848`,
   IAM87/Audit39/PaaS7+r37. It consumes the fixed UX USER attachment
@@ -29,14 +38,15 @@
   30m under 35m. The real post-fault recovery bound remains at most 5m or
   the remaining outer budget. Product deadlines, costs, crypto/profile
   checks and resource limits were not relaxed.
-- Exact [Verification 39224178428](https://github.com/xiak/matrix/actions/runs/39224178428)
-  attempt 1 / fixed 26deca2 is CLOSED completed/success: all 19 jobs,
+- Exact [Verification 39237503801](https://github.com/xiak/matrix/actions/runs/39237503801)
+  attempt 1 / fixed 41ef11188 is CLOSED completed/success: all 19 jobs,
   all 57 authority roots and complete necessary logs were independently
   verified. Console: 1965 Vitest tests, eight Node tests, 234 contrast pairs,
   324 matching exports/embedded files; 33 existing act warnings remain.
-  Created-to-terminal was 1874s. Seven dedicated Postfix subtests and
+  Created-to-terminal was 1740s. Seven dedicated Postfix subtests and
   thirteen opt-in browser entries did not run in CI and are not evidence.
-  FEAT011 owns details; do not fetch this closed tuple's jobs/logs again.
+  FEAT011 owns details; do not fetch this closed tuple or the prior accepted
+  26deca2 / 39224178428 jobs/logs again.
 - Production 9621 / Verification 39203431655 and test-only 5708545f /
   39212113957, 75a1fa61 / 39216883017, 38a2cda6 / 39196850326 are also
   independently closed. The rejected 101dc339 / 39199323432 remains
@@ -52,8 +62,15 @@
   explicit false, preserves a prior logged-out Session, and verifies both
   valid peers through their next real identity requests. Focused default,
   race, architecture and vet checks passed with Go1.26.3/GOMAXPROCS2.
-  Neither daily-password page mode has run; this test-only increment's
-  independent CI must be verified separately. Production/profile unchanged.
+  Neither daily-password page mode has run; the accepted 41 CI does not
+  execute opt-in browser entries. Production/profile unchanged.
+- SET_DEFAULT on fixed test 83d7 reached only the final review; the browser
+  owner's tool required human action-time confirmation and no click occurred.
+  The authoritative Policy stayed at revision 2/default V1 with only setup
+  create/publish facts and no completion marker. The exact process was
+  intentionally terminated, not a Go PASS. The disposable database had zero
+  clients before its exclusive PG, volume, network, tunnel and temporary
+  directory were removed. FEAT010 owns this still-unaccepted path.
 - Issue https://github.com/xiak/matrix/issues/3 stays OPEN for repeated
   large-payload I/O and bounded runtime limitations. The 640.84s fixture
   startup failure, 1084.08s pre-injection timeout and 1800.01s whole-budget
@@ -95,9 +112,11 @@ observation window. All databases from this browser batch reached zero
 clients before removal; its exclusive PostgreSQL container, volume, network
 and tunnels were removed. The pre-existing image was retained. The accepted
 signed runtime remains stopped and retained for remaining signed-page work.
-Consult current CUA rules before actions: product-test authorization does
-not override tool-mandated credential handoff or action-time requirements.
-Do not repeat obsolete permission blockers without checking the actual rule.
+Consult the executing browser owner's actual CUA rules before actions:
+product-test authorization does not override its tool-mandated credential
+handoff or action-time requirements. Different threads may receive different
+tool rules; a coordinator message is not human confirmation. Do not use an
+API or another execution surface to evade an explicit browser restriction.
 
 Deferred IdP/WebAuthn/role chains/protected-identity all-factor-loss recovery
 are not silently added. Current package integrity, unused-resource cleanup
