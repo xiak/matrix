@@ -6,177 +6,101 @@
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   The renewed IAM first-release goal remains ACTIVE and incomplete.
-- Latest fixed production candidate:
-  `9621bb6e66b1076576649d3f6b224725a60d6848`, IAM87/Audit39/PaaS7+r37.
-  It selectively consumes UX fixed `82954bcefe2abcad4d3f1d9c2189e0d5e6408a66`
-  and test-only `64311a0b14e9bb2fd5f9fe9ef21b412e89fe505c`: three existing
-  source/test paths, preserving this branch's renderer tests and rebuilding
-  its own embedded assets. USER attachment begin/submit/UNKNOWN inspect now
-  require both the current owner and verified repo+Session before effects.
-  The consuming branch observed two new tests fail on the unchanged old
-  source, then pass with the correction. Two related files/267 tests passed;
-  after the direct-context test addition, four focused cases passed, as did
-  type/changed-path lint/architecture/234 contrast pairs, eight Node tests,
-  two-worker deterministic unset/0 exports and 324 matching embedded files,
-  Go UI/architecture race, UI vet and Linux amd64 UI build. Exact
-  [Verification 39203431655](https://github.com/xiak/matrix/actions/runs/39203431655)
-  attempt 1 is completed/success: all 19 jobs and all 57 authority roots were
-  independently verified, including required processes/final storage scan,
-  the real 40001 retry, the rolling predecessor and four real products.
-  Console passed 77 files/1965 tests plus eight Node tests and 324 matching
-  exports/embedded files; 33 existing act warnings remain. Seven dedicated
-  Postfix subtests and 13 opt-in browser flags did not run. FEAT011 owns the
-  closed CI evidence; do not fetch the same attempt logs again. No API/SQL/
-  backend/Profile change. Its new signed combination is still not accepted.
-- Rejected predecessor `101dc339f9ad368f293f95a3834b5613e5a6d669` /
-  Verification 39199323432 attempt 1 is closed as completed/cancelled after
-  the fixed-source owner-fence finding. Cancellation was intentional, not
-  a newly proven backend assertion failure; its aggregate failed because
-  lanes were cancelled. Do not reopen its full log audit or backfill it.
-- Its fixed test predecessor `42c957aa4bd4614777513aff782b2071c67f2a9d`
-  extends the existing attachment browser fixture to USER and ROLE, preserving
-  default GROUP. RoleSession business permission remains separate from its
-  source USER. Default compilation/race/architecture/vet passed; the new opt-in
-  browser paths have not run and are not accepted.
-- Latest accepted independent test correction:
-  `38a2cda69ec547c9e8d9d557bf61a3bcd992335c` /
-  [Verification 39196850326](https://github.com/xiak/matrix/actions/runs/39196850326),
-  attempt 1, all 19 jobs completed/success. The test expert closed all required
-  logs: all 57 top-level authority roots RUN/PASS, the deterministic real
-  SQLSTATE40001 retry passed, and required processes plus final storage scan
-  actually ran. Seven dedicated-Postfix skips and default opt-in browsers
-  are not execution evidence. Do not repeat this closed log audit or backfill
-  the older 28f CI failure. FEAT011 owns the evidence; FEAT009 owns the invariant.
-- Test-only release-gate correction
-  `5708545f54e15adeadca79d947ebb99802bac5ea` is committed and pushed.
-  FEAT-005 owns the native-Linux first-run failure and focused reproduction:
-  the unchanged Postfix fixture exited when its inherited descriptor limit
-  exceeded the observed kernel ceiling; explicit `nofile=4096:4096` kept it
-  running and strict original-CA/SAN STARTTLS passed. The existing fixture
-  now supplies and inspects that finite limit, with ordinary negative unit
-  coverage. Phase1e2e unit/race, architecture race, vet and Linux driver build
-  passed. Exact Verification 39212113957 attempt 1 is closed as
-  completed/success: all 19 jobs, all 57 authority roots and necessary logs
-  were independently verified. FEAT011 owns the evidence; do not GET this
-  closed attempt's jobs/logs again. Production bits and profile
-  are unchanged: the signed source remains 9621. Its corrected fresh native
-  Linux run passed actual SMTP contact verification, TOTP/security notice,
-  all four products, two application generations, Audit and backup, but failed
-  after 1084.08 seconds at the existing five-minute pre-injection deadline.
-  The original upgrade stayed at MIGRATING with A current; there was no OOM,
-  limit event or unexpected restart. A separate bounded resume preserved the
-  original command ID and completed B READY in 164.8 seconds. This does not
-  prove fault injection/automatic rollback or the full fresh lifecycle.
-  FEAT-005 owns this rejected run; actionable investigation is GitHub issue
-  https://github.com/xiak/matrix/issues/3. The dedicated engine was normally
-  stopped with necessary diagnosis state retained. Full fresh runtime and
-  restart acceptance remain required; do not backfill either failed run,
-  enlarge timeouts merely to pass, or substitute the focused resume for them.
-- Fixed test-only follow-up
-  `75a1fa61e51a218fd37b8137c4a86602568ecab3` retains the whole lifecycle's
-  30-minute deadline and starts the existing five-minute recovery window
-  only after the real target APISIX fault. Cancellation kills/joins the
-  command and cannot accept a coincident result. The same test owner now has
-  an opt-in focused upgrade-fault entry reusing authentication, injection,
-  exact failure, source restoration, target absence and status/verify; it
-  cannot emit the full lifecycle completion marker. Four virtual-clock cases,
-  phase1e2e race (2.747s), architecture race (1.821s), vet and fixed Linux
-  driver build passed. Production 9621 bits and profile are unchanged.
-  The Test Expert reviewed this exact fixed patch without a confirmed new
-  blocker. Its native-Linux focused gate passed in 689.05 seconds on unchanged
-  signed 9621 A/B: actual B APISIX fault, expected CLI failure, A automatic
-  restoration, B absence and repeated status/verify. An earlier strict
-  precondition failure before upgrade effects remains recorded separately;
-  no health check or limit was relaxed. The following fresh run passed actual
-  products, application generations, mail/MFA, Audit, backup and automatic
-  fault rollback, but failed after 1800.01s at B's repeated-status check as
-  the whole context expired. B was observed READY/current with A previous,
-  eleven healthy platform containers and no OOM; this is not acceptance.
-  Exact Verification 39216883017
-  attempt 1 is now independently closed as completed/success at
-  2026-10-19 08:05:05 UTC: all 19 jobs, 57 authority roots and complete
-  necessary logs were verified. FEAT011 owns the evidence; do not GET this
-  closed attempt's jobs/logs again. Do not infer a product timing SLO or
-  complete release acceptance from the focused gate. The one-use test signing
-  private key and superseded test-driver copies were removed; signed A/B,
-  public trust and the current driver remain. This is not all-resource cleanup.
-- Fixed test-only `26deca2ae9df57cf2913a4868bca47f9332dd7c4` now permits
-  explicit bounded whole-lifecycle observation on slower media: default 30m,
-  maximum 1h, more than 1m before the Go test deadline for teardown. No phase
-  resets the budget; the post-fault 5m bound, product deadlines, byte/profile
-  verification, all assertions and resource limits remain unchanged. Unit,
-  full phase1e2e race 2.601s, architecture race 1.875s, vet and Linux build
-  passed; the Linux entry also proved oversized/short-parent budgets reject
-  before effects. Exact Verification 39224178428 attempt 1 is independently
-  closed as completed/success at 2026-10-19 09:09:26 UTC: all 19 jobs,
-  57 authority roots and complete necessary logs passed. FEAT011 owns the
-  evidence; do not fetch this closed tuple's jobs/logs again. Its seven
-  dedicated-Postfix skips and default opt-in browser/lifecycle entries are
-  not runtime evidence. A distinct fresh engine is now running the
-  unchanged signed 9621 A/B with an explicit 50m budget/55m Go deadline;
-  its full lifecycle and restart are unaccepted. The two retired diagnostic
-  engines, exclusive volumes and private installation directories were
-  removed after ownership/mount checks. Issue #3 retains both failures,
-  measured I/O and the performance limitation; the larger observation budget
-  is not an I/O optimization or a latency SLO. Do not re-sign production or
-  claim an accepted release merely because this test-only source changed.
-- Accepted signed-release source remains
-  `741dceb6f0092fbc33706842862980816fe72d15`,
-  IAM87/Audit39/PaaS7+r37. Its exact CI and same-profile signed A/B lifecycle
-  and restart verification passed. The new UI is not accepted as a signed
-  combination. The single rolling predecessor remains
+- Current accepted production and same-profile signed consumer:
+  `9621bb6e66b1076576649d3f6b224725a60d6848`,
+  IAM87/Audit39/PaaS7+r37. It consumes the fixed UX USER attachment
+  repository/Session-owner fence, preserves consumer tests and regenerates
+  its own embedded UI. No later production API/SQL/Profile changes.
+  The sole rolling data predecessor remains
   `08e1dc4a6ce81386ea7223e62d03356f82aeee58`, IAM86/Audit39/PaaS7+r36.
+- FEAT-005 owns the current signed A/B identities, trust digest, resource
+  limits and native-Linux evidence. The unchanged signed production passed
+  the fresh full lifecycle in 2787.02 seconds and, after only its exact
+  task-owned engine was normally stopped/started, the existing restart gate
+  in 261.79 seconds. The external synthetic mail-input copy was removed
+  before restart; installed custody was retained. Full backup/upgrade/
+  rollback/recovery, real mail/MFA, four products, Audit, retained identity,
+  credential fences and capacity-release assertions passed. Remote boot and
+  shared Docker start time did not change. Browser acceptance is separate.
+- The release driver is test-only
+  `26deca2ae9df57cf2913a4868bca47f9332dd7c4`: default whole budget 30m,
+  explicit maximum 1h, more than 1m before the Go deadline for teardown;
+  no phase resets it. Actual main budget was 50m under 55m, restart used
+  30m under 35m. The real post-fault recovery bound remains at most 5m or
+  the remaining outer budget. Product deadlines, costs, crypto/profile
+  checks and resource limits were not relaxed.
+- Exact [Verification 39224178428](https://github.com/xiak/matrix/actions/runs/39224178428)
+  attempt 1 / fixed 26deca2 is CLOSED completed/success: all 19 jobs,
+  all 57 authority roots and complete necessary logs were independently
+  verified. Console: 1965 Vitest tests, eight Node tests, 234 contrast pairs,
+  324 matching exports/embedded files; 33 existing act warnings remain.
+  Created-to-terminal was 1874s. Seven dedicated Postfix subtests and
+  thirteen opt-in browser entries did not run in CI and are not evidence.
+  FEAT011 owns details; do not fetch this closed tuple's jobs/logs again.
+- Production 9621 / Verification 39203431655 and test-only 5708545f /
+  39212113957, 75a1fa61 / 39216883017, 38a2cda6 / 39196850326 are also
+  independently closed. The rejected 101dc339 / 39199323432 remains
+  intentionally cancelled; do not backfill or reopen it.
+- Issue https://github.com/xiak/matrix/issues/3 stays OPEN for repeated
+  large-payload I/O and bounded runtime limitations. The 640.84s fixture
+  startup failure, 1084.08s pre-injection timeout and 1800.01s whole-budget
+  failure remain failures. Finite Postfix nofile4096, the actual-fault
+  recovery window and the explicit bounded observation budget are test
+  corrections, not a production latency/SLO optimization. Fixed source
+  analysis is in comment 6263605076, not a new research document.
+- Retired diagnostic engines, their exclusive volumes/private installations,
+  superseded drivers and the ephemeral signing private key were cleaned
+  after exact ownership checks. This does not prove all historical local
+  objects are gone. A blocked cleanup must not be retried via another tool.
 
 ## Reading route and remaining outcome
 
 Read AGENTS, IAM/FEAT-IAM-010-console.md, IAM/FEAT-IAM-011-acceptance.md,
 then the relevant existing test/authorityprocess/process_e2e_test.go owner.
 FEAT010 owns individual UI paths and gaps; FEAT011 owns combined acceptance.
-Read the current FEAT005 and verified runbook before signed lifecycle work.
+Read FEAT005 and the verified platform-installation runbook for release work.
 
-Prior Group attachment CREATE/REVOKE response-loss and Group deletion effects
-have real evidence. The new UI keeps visible immutable receipts and explicit
-completion navigation; User/Role commands fence stale repository/Session
-owners. Historical Account-settings receipts do not expire later Sessions.
-These source/component facts do not close the remaining LIVE journeys.
+Prior User profile/status, Group Membership, Group attachment CREATE/REVOKE
+response-loss, Group deletion effects and normal Account-settings replacement
+have real evidence at their recorded fixed sources. Do not relabel them as
+new 9621 browser executions. The new UI has visible immutable receipts and
+completion navigation; current owner/repository/Session fences do not replace
+LIVE evidence.
 
-The new Group browser run stopped before its final deletion without a finish
-marker; the new REVOKE receipt rerun did not start. Neither is accepted.
-Tool-mandated action-time human confirmation cannot be replaced by blanket
-authorization or another tool/API. Do not repeatedly ask or start a long
-waiting fixture without this prerequisite.
+Continue the nonDeferred FEAT010 matrix. Priority is the new visible Group
+deletion and attachment receipts, direct User/Role attachment paths, then
+daily password choices and the remaining policy/security/resource journeys.
+The existing fixtures must use fresh disposable databases and actual
+IAM/Audit/PaaS processes; only observed browser completion authorizes their
+finish marker and authoritative postconditions. No mocks/health-only pass.
 
-Continue the existing nonDeferred FEAT010 matrix, including final receipt
-operations, daily password change, direct User/Role attachments and remaining
-policy/security/resource paths. Do not repeat accepted gates without an
-affected boundary. Deferred integrations are not silently added to this goal.
-The final new-source signed combination and unused-task-resource cleanup
-remain separate required outcomes. Before another heavy signed rerun, resolve
-the focused upgrade preparation/injection issue in the existing installation
-owner; do not weaken release byte verification or claim a production timing
-SLO from the fixture deadline. Current CI review continues independently.
+The previous Group run stopped before final deletion and no finish marker
+was produced; its follow-up receipt run did not start. Neither is accepted.
+Consult current CUA rules before actions: product-test authorization does
+not override tool-mandated credential handoff or action-time requirements.
+Do not repeat obsolete permission blockers without checking the actual rule.
+
+Deferred IdP/WebAuthn/role chains/protected-identity all-factor-loss recovery
+are not silently added. Current package integrity, unused-resource cleanup
+and the remaining page matrix must all close before the goal is complete.
 
 ## Coordination and delivery boundaries
 
-- UX/UI engineer `01a07b21-9a0d-7fd0-b090-7827ce18262e` owns UI on its
-  own branch. Consume fixed reviewed deltas only, preserve consumer tests and
-  rebuild assets; no foreign WIP or inherited acceptance. Its 101dc/42c
-  fixed review found the USER pending-identity blocker now corrected in 9621.
-  Test Expert independently reviewed the fixed 829 production fence and
-  closed the exact consuming 9621 CI. UX confirmed no outstanding production
-  delta in its source subtree; current matrix gaps are real-page/combination
-  evidence, not permission to invent another UI implementation. The obsolete
-  security-settings wording gap was removed in pushed 183e91a0a.
-- Test expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns read-only
-  independent CI/log review. It closed 9621/run39203431655/attempt1 after 38a
-  and the cancelled 101dc; the existing monitor remains responsible for new
-  fixed tuples only. Do not duplicate automations, repeat closed log audits,
-  or delegate execution beyond its human-authorized read-only scope.
-- Routine product development/testing is human-authorized without repetitive
+- UX/UI engineer `01a07b21-9a0d-7fd0-b090-7827ce18262e` owns UI and
+  browser work on its own branch. Current fixed UX 64311a0 / production
+  82954bc is already consumed in 9621; no outstanding production subtree
+  delta was reported. Supply a verified exact disposable endpoint/target
+  and wait for page evidence; IAM owns runtime/DB/Audit postconditions.
+  No foreign WIP or inherited acceptance.
+- Test Expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns read-only
+  independent CI/log review. Its existing monitor handles new fixed tuples;
+  do not add duplicate monitors, repeat closed logs or delegate runtime
+  mutation beyond human-authorized scope.
+- Routine product development/testing is authorized without repetitive
   approval. Mandatory tool-specific handoff still binds. Do not reset shared
-  Docker/WSL, restart remote machines/shared services or touch other resources.
-- Use unique task-owned limited resources, GOMAXPROCS2 and bounded concurrency;
-  serialize heavy real gates and remove unused task resources after evidence.
-  A successful CI cleanup does not prove all historical local objects are gone.
-- Markdown and existing owners; local Git identity Xiak <Jellal@aliyun.com>.
-  Push only this feature branch.
+  Docker/WSL or restart remote machines/shared services.
+- Unique labeled resources, explicit CPU/memory/PID limits, GOMAXPROCS2,
+  bounded concurrency and serialized heavy real gates. Remove disposable
+  task objects after evidence; never use prune or clean unrelated resources.
+- Markdown and existing owners only; Git identity is repository-local
+  Xiak <Jellal@aliyun.com>. Push only this feature branch.

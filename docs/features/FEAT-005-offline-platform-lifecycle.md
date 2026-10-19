@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted signed release consumer at fixed `741dceb6f0092fbc33706842862980816fe72d15`, IAM/Audit/PaaS `87/39/7+r37`. Its sole rolling development predecessor is fixed `86/39/7+r36`. The newer `9621bb6e` signed combination remains unaccepted after the bounded native-Linux upgrade-injection failure tracked in [#3](https://github.com/xiak/matrix/issues/3). Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by a lifecycle result
+- Status: Accepted signed release consumer at fixed `9621bb6e66b1076576649d3f6b224725a60d6848`, IAM/Audit/PaaS `87/39/7+r37`, after the 2787.02-second native-Linux A/B lifecycle and 261.79-second post-restart gate. Its sole rolling development predecessor remains fixed `86/39/7+r36`. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by this result
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `87/39/7` revision 37 and its sole rolling data predecessor is fixed `86/39/7` revision 36; a signed upgrade still requires an immediate same-profile release predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -901,171 +901,101 @@ FEAT-IAM-010 continues to own that final browser path.
 
 ### Current IAM87 User-management-completion release-consumer gate
 
-The newer fixed production candidate
-`9621bb6e66b1076576649d3f6b224725a60d6848` retains `87/39/7+r37` and has
-passed exact independent Verification 39203431655. Its same-source signed
-A/B have been assembled, authenticated and transferred with all twelve
-payload digests and Linux modes verified. They are not yet accepted as a
-release combination. The original Postfix fixture startup failure was
-corrected in test-only fixed `5708545f54e15adeadca79d947ebb99802bac5ea`;
-the subsequent fresh run reached a different upgrade-injection timeout.
+Fixed production source
+`9621bb6e66b1076576649d3f6b224725a60d6848` is the accepted current
+same-profile signed consumer, IAM/Audit/PaaS `87/39/7+r37`. On 2026-10-19,
+the existing native-Linux lifecycle gate passed in 2787.02 seconds and its
+separate post-restart gate passed in 261.79 seconds. This replaces the
+previous accepted consumer, not the rolling data predecessor
+`08e1dc4a6ce81386ea7223e62d03356f82aeee58` (`86/39/7+r36`).
 
-The failure was reproduced in the unchanged test-only Postfix image.
-A bounded trace showed its master binding port 25, then receiving `EPERM`
-when setting its inherited `RLIMIT_NOFILE` of 1073741816; the host's observed
-`nr_open` was 52706963. An otherwise identical diagnostic container with
-explicit `nofile=4096:4096` remained running and completed strict STARTTLS
-with the original CA and exact server name. The existing phase1e2e owner
-now supplies and inspects that finite limit together with its existing
-CPU/memory/PID limits; its ordinary unit gate rejects missing, duplicate,
-wrong-kind and drifted soft/hard limits. No production image, IAM/Audit
-contract, authentication policy, host limit or shared daemon configuration
-was changed. The original 640.84-second failed run is not backfilled.
+The exact same-source pair is A
+`matrix-v0.1.0-iam.r37.5-9621bb6e66b1` and B
+`matrix-v0.1.0-iam.r37.6-9621bb6e66b1`; B names A as its immediate
+predecessor. Both have twelve signed payloads, ten pinned images and topology
+digest
+`sha256:ca31ccec97d52776d61c8bdcea0be04b2d5a6fe7fc28d9d0055c4d2a3ff75c30`.
+Their 284-byte public trust document has SHA-256
+`e0490333afbd632e85f23f83ac6403b4cb9c0c32df5060fa87f853e1aae0b618`.
+The private signing key was removed after assembly; protected mail input,
+installation state and test credentials are not release payloads.
 
-The corrected driver ran the unchanged signed A/B on a fresh, disconnected
-native-Linux Docker 27.5.1 engine limited to 2 CPUs, 4 GiB memory and 1024
-PIDs. A installation/status/verify, APISIX USER/AccessKey, two-Account
-revocation, actual SMTP contact verification, TOTP/security notice, access
-analysis, all four real managed products, two application generations,
-Audit integrity and protected backup passed. The complete run nevertheless
-failed after 1084.08 seconds at `failed-upgrade-injection`: the existing
-five-minute window expired before the target APISIX container appeared.
-The original upgrade remained at `MIGRATING`, with A still current, and no
-OOM, memory-limit event or unexpected engine restart was observed.
+The delivery archives were made from those authenticated Linux trees, then
+independently extracted and compared file-by-file and by object type,
+owner/group and mode. No links are present; `bin/mx` remains `0700 root:root`,
+other files `0600` and directories `0700`. These are the archive identities,
+not image IDs or substitutes for the release signature:
 
-A separate, 300-second-bounded resume of that exact original command
-completed in 164.8 seconds, preserving its command ID and making B READY
-with A as previous. This is interrupted-command recovery evidence, not the
-missing fault injection/automatic rollback or a complete fresh lifecycle.
-The investigation and required closure are tracked in
-[#3](https://github.com/xiak/matrix/issues/3). Neither deadline was changed
-for those observations. The last accepted combination stays the `741dceb6`
-release recorded by FEAT-IAM-011.
+| Archive | Bytes | SHA-256 |
+| --- | --- | --- |
+| `matrix-v0.1.0-iam.r37.5-9621bb6e66b1-linux-amd64.tar.gz` | 1695944515 | `a4f2c2c7bba2a746422c7b35940f56914b90e255504a550da8b2d536a88b4e1f` |
+| `matrix-v0.1.0-iam.r37.6-9621bb6e66b1-linux-amd64.tar.gz` | 1695942670 | `aa0bf0eff5f5e7d6ffff551a172ab5a913412b89ecbb14f54da3a73ef8240af1` |
 
-The current test owner separates signed preparation from fault recovery.
-Preparation consumes one whole-lifecycle budget, thirty minutes by default; once
-the actual target APISIX container is removed, command completion has at
-most five minutes or the remaining outer budget, whichever expires first.
-Cancellation terminates and joins the command before inspecting its output;
-a cancelled caller cannot accept a coincident ready result. Virtual-clock
-unit checks cover preparation, the recovery limit, the shorter outer deadline
-and cancellation. No product performance SLO is inferred from this test
-deadline, and no signature, payload, profile or expected failure check is
-relaxed.
+The public trust document is delivered separately. A is the tested fresh
+installation base; B is its tested same-profile upgrade/rollback counterpart.
+Neither archive includes a private key, installation backup or test secret.
 
-`TestOfflinePhase1UpgradeFault` in the same test owner provides an opt-in
-focused check on a previously prepared, authenticated A installation. It
-reuses the existing real target-container injection, exact CLI failure,
-source restoration, target absence and status/verify assertions; it emits
-only a focused-completion marker. The ordinary fresh-host lifecycle and
-restart gates remain required, and this focused entry cannot stand in for
-them. Fixed test driver `75a1fa61e51a218fd37b8137c4a86602568ecab3` passed
-this focused gate in 689.05 seconds on the unchanged signed 9621 A/B and the
-same 2-CPU/4-GiB isolated engine. The real B APISIX removal led to the expected
-CLI failure, a sealed `ROLLED_BACK` journal result with A current, no remaining B
-platform containers and successful repeated status/verify. Both the existing
-whole-gate bound and post-injection five-minute recovery bound were retained.
-An earlier focused attempt failed its strict A container-state precondition
-before any upgrade effect while the PaaS worker had two non-OOM restarts;
-that failure is not backfilled. The passing attempt began only after the
-original A was again observed healthy, without changing health checks or
-limits. This closes the focused injection/recovery check, not the required
-new-source fresh lifecycle, retained business state or restart acceptance.
+The accepted run began with zero images, containers and volumes in a new
+task-owned Docker 27.5.1 engine on native Debian, with no external route,
+a private cgroup namespace, 2 CPUs, 4 GiB memory and 1024 PIDs.
+The unmodified signed production binaries passed installation,
+restricted runtime database logins, APISIX USER and AccessKey paths,
+two-Account primary/member revocation, real STARTTLS/SASL SMTP contact
+verification, TOTP login and security notification, access-analysis
+disposition, all four real managed-product provider lifecycles and service
+roles, two application generations, tenant and installation Audit chains,
+protected backup, actual target-container fault and automatic upgrade
+rollback, normal B retained-state upgrade, explicit platform rollback,
+selected-backup recovery and session reissuance, permanent old-AccessKey
+fencing, application rollback, stop/capacity release and bounded support
+zero-leakage checks. The separately authenticated test-only mail image
+archive has SHA-256
+`20d890545ed758797d6de3725c1a8992ee1c95478b203cfaecb94e4435a3d1d0`.
 
-The one-use test signing private key has been removed after authenticated A/B
-assembly. Both signed releases, their public trust root and the current fixed
-driver remain available; superseded driver copies were hash-checked and
-removed locally and from the task input directory. Old drivers remain
-rebuildable from Git. This is scoped artifact cleanup, not a claim that all
-historical runtime objects have been removed. The two completed diagnostic
-engines, their exclusive data volumes and private installation directories
-were also removed after verifying exact ownership and mounts; signed inputs
-and the bounded failure evidence remain, not the disposable database state.
+Only the copied external synthetic mail configuration was then removed.
+The exact task-owned engine was normally stopped and started with its
+installation volume unchanged; all eleven platform containers became
+healthy without restaging the input. The existing `after-restart` gate
+proved repeated status/verify, retained AccessKey retirement, fresh MFA
+login, retained primary recovery and revocation, absent stopped workload,
+zero active capacity claims and sanitized support, ending with
+`complete-offline-lifecycle`. Both stops were exit 0; no OOM or memory-limit
+event was observed. The remote machine boot ID and shared Docker service
+start time stayed unchanged. Neither remote machines nor shared services
+were restarted.
 
-The subsequent fresh-host run passed the real product, application, mail/MFA,
-Audit, backup and injected automatic-rollback assertions, then exhausted its
-unchanged thirty-minute budget at B's repeated status check (1800.01 seconds).
-Read-only observation found B current/READY, A previous, no active command,
-all eleven platform containers healthy and no memory-limit/OOM event. The
-leaf block-device counter recorded 274.52 GB read; stacked device counters
-must not be added together. These observations do not turn the timed-out
-fresh run into acceptance or prove that repeated release hashing is the sole
-source of latency.
+The driver is fixed test-only
+`26deca2ae9df57cf2913a4868bca47f9332dd7c4`, SHA-256
+`aafed66f2106da365d7acfe60ccf3a7683e2a156f576f172e2904ef3d1bffcf2`.
+Its explicit main observation budget was 50 minutes under a 55-minute Go
+deadline; the restart phase used the unchanged 30-minute default under
+35 minutes. A run has one budget, never a reset at each phase. The actual
+post-fault recovery bound stays at most five minutes or the remaining outer
+budget; product deadlines, password cost, cryptographic/profile checks,
+assertions and resource limits are unchanged. Twelve budget cases and four
+virtual-clock cases passed; the Linux entry rejected 61 minutes and 50
+minutes under a 35-minute parent before runtime effects. Exact independent
+CI and its deliberate browser/mail skips are owned by FEAT-IAM-011.
 
-The existing test entry now permits an explicit `MATRIX_PHASE1_E2E_TIMEOUT`
-whole-run observation budget for slower acceptance media: default 30 minutes,
-minimum one minute, maximum one hour, with more than one minute left before
-the enclosing Go test deadline for teardown. Invalid, unbounded and oversized
-inputs fail before runtime effects. The measured run had used roughly 24
-minutes through fault recovery and still required normal B verification,
-explicit rollback and retained-backup recovery; a 50-minute fresh run is the
-next bounded check, not a successful result. No phase resets this budget;
-the separate five-minute post-fault recovery bound, product deadlines,
-cryptographic checks, resource limits and all original assertions remain.
-The extra observation allowance does not resolve the I/O-performance lead in
-issue #3 or establish an installation-latency SLO.
+The rejected 640.84-second Postfix startup, 1084.08-second pre-injection
+timeout and 1800.01-second whole-budget runs remain failures, not backfilled
+by this result. The existing fixture now uses explicit `nofile=4096:4096`;
+fixed `75a1fa61` starts the five-minute recovery window after the actual
+fault and passed its separate focused gate in 689.05 seconds. The larger
+whole-run observation budget is not an I/O optimization or a production
+latency SLO. Repeated signed-payload reads and the bounded failure evidence
+remain actionable in [#3](https://github.com/xiak/matrix/issues/3).
 
-Fixed `26deca2ae9df57cf2913a4868bca47f9332dd7c4` passed the complete
-phase1e2e race gate (2.601s), architecture race (1.875s), vet and Linux driver
-build. That Linux driver separately passed all twelve budget cases and four
-existing virtual-clock recovery cases. Its real opt-in entry rejected both
-61 minutes and 50 minutes under a 35-minute Go deadline before creating any
-installation, image, container or volume in the fresh test engine. These are
-budget-admission checks, not the still-pending full 50-minute-budget lifecycle
-or its restart acceptance.
-
-On 2026-10-17, fixed source
-`1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` assembled and authenticated
-Release A `matrix-v0.1.0-iam.r37.1-1fc35c6c17b7` and its immediate
-same-source successor B `matrix-v0.1.0-iam.r37.2-1fc35c6c17b7`. B names A by
-its exact release ID and version. Both carry IAM/Audit/PaaS `87/39/7+r37`,
-topology digest
-`sha256:ca31ccec97d52776d61c8bdcea0be04b2d5a6fe7fc28d9d0055c4d2a3ff75c30`,
-12 signed files and ten pinned images. The public 294-byte trust document has
-SHA-256 `3d6c4ef3669091ed201e06d66de12eaa042ae6257574086d11fca8e6aadf08a6`;
-the private signing key, protected mail configuration and installation state
-are outside both release trees.
-
-The releases ran in a fresh task-owned Docker 27.5.1 engine with no external
-route, constrained to 2 CPUs, 6 GiB memory, 1024 PIDs and a private cgroup
-namespace. The engine started the accepted run with zero images, containers
-and volumes, so every runtime image came from the authenticated release or the
-separately authenticated test-only mail fixture. The 1569.78-second effectful
-gate passed A installation, restricted runtime database identities, APISIX
-USER and AccessKey paths, two-Account primary/member revocation, real
-STARTTLS/SASL SMTP contact verification, TOTP login and security notice,
-access-analysis disposition, all four signed managed-product provider
-lifecycles, explicit service-role authority, two application generations,
-complete tenant and installation Audit chains, protected backup, injected
-upgrade automatic rollback, B upgrade, explicit platform rollback, selected
-backup recovery with permanent AccessKey fencing, application rollback and
-stop/capacity release, and bounded support zero-leakage checks. The mail
-fixture archive was authenticated as
-`sha256:20d890545ed758797d6de3725c1a8992ee1c95478b203cfaecb94e4435a3d1d0`.
-
-The protected mail input copy was then deleted and only that exact outer
-engine was stopped and started, retaining the same container identity. The
-126.43-second post-restart gate proved retired AccessKey state, fresh MFA
-login, both retained Accounts' primary recovery and member revocation,
-status/verify and the complete offline lifecycle. No Docker Desktop daemon,
-remote machine, shared service or unrelated Docker object was restarted or
-modified.
-
-[Verification 39002693982](https://github.com/xiak/matrix/actions/runs/39002693982)
-completed successfully on attempt 1 with all 19 jobs successful. All 57
-authority roots actually ran and passed. In particular, the fixed IAM86
-executable to IAM87 migration/runtime root passed in 50.46 seconds, retaining
-old canonical Audit facts and consumed request IDs without inventing old
-completion snapshots; the IAM PostgreSQL HTTP vertical slice passed in 149.09
-seconds with the User-management completion RLS, least-privilege,
-immutability, tamper and fail-closed checks. The default workflow did not run
-opt-in browser journeys or dedicated-Postfix subtests, so this result does not
-replace the signed lifecycle above or FEAT-IAM-010's installed browser gate.
-
-This accepts the current same-profile signed lifecycle and the rolling
-IAM86-to-IAM87 development predecessor at their respective owners. It does
-not admit a cross-profile signed upgrade, arbitrary historical N-1 operation,
-production database HA or LIVE UI consumption of the new completion route.
+This accepts this exact current same-profile signed lifecycle. It does not
+admit cross-profile signed upgrade, arbitrary historical N-1 operation,
+production database HA or unexecuted browser journeys. FEAT-IAM-010 owns
+those page results. Retired diagnostic engines, their exclusive volumes
+and disposable installation directories were removed after ownership
+checks. The two temporary archive re-extraction trees were removed after
+successful byte/mode comparison; they can be reconstructed from the retained
+archives. The accepted engine is normally stopped and retained only for the
+remaining current signed-page acceptance. Historical local-resource cleanup
+is not implied.
 
 ### IAM86 Account-lifecycle release-consumer evidence
 

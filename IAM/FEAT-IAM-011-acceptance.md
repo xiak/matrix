@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；当前已接受的产品与签名发布源码`741dceb6f0092fbc33706842862980816fe72d15`为IAM87/Audit39/PaaS7、`contractRevision=37`，唯一滚动直接前驱仍是固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。该源码已通过十九项独立CI、同Profile签名A/B完整离线生命周期和重启后复验；User资料/状态、Group Membership恢复及Account安全设置正常完整替换也已完成真实浏览器门禁与精确数据库/Audit核对。日常改密等IAM-UI-01–08仍列出的非Deferred写路径尚未全部验收，因此整体需求仍为实施中；生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
+- 状态：实施中；当前已接受的产品与签名发布源码`9621bb6e66b1076576649d3f6b224725a60d6848`为IAM87/Audit39/PaaS7、`contractRevision=37`，唯一滚动直接前驱仍是固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。该源码已通过十九项独立CI、同Profile签名A/B完整离线生命周期和重启后复验；User资料/状态、Group Membership恢复及Account安全设置正常完整替换也已完成真实浏览器门禁与精确数据库/Audit核对。日常改密等IAM-UI-01–08仍列出的非Deferred写路径尚未全部验收，因此整体需求仍为实施中；生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -30,15 +30,15 @@
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
 | 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态、Group Membership及Group附件CREATE/REVOKE恢复有真实浏览器响应丢失门禁，Account安全设置正常完整替换和Group最终删除效果也有真实证据。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；可见附件/删除完成回执、日常改密及010矩阵其余非Deferred路径仍须闭合 |
-| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`741dceb6f0092fbc33706842862980816fe72d15`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；IAM-AC-09现由测试修正`26deca2ae9df57cf2913a4868bca47f9332dd7c4`的[Verification 39224178428](https://github.com/xiak/matrix/actions/runs/39224178428)十九项全部成功及完整必要日志核对接受，其生产源码仍为`9621bb6e`。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。当前浏览器路径的精确请求、权限/Session效果、唯一outbox/Audit与可见回执缺口均由010拥有。其余IAM-UI-01–08非Deferred效果及新签名组合仍未完成，生产账号公平性SLO和安装级数据库HA保持Deferred，不冒充已交付能力 |
+| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`9621bb6e66b1076576649d3f6b224725a60d6848`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；IAM-AC-09现由测试修正`26deca2ae9df57cf2913a4868bca47f9332dd7c4`的[Verification 39224178428](https://github.com/xiak/matrix/actions/runs/39224178428)十九项全部成功及完整必要日志核对接受，其生产源码仍为`9621bb6e`。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。当前浏览器路径的精确请求、权限/Session效果、唯一outbox/Audit与可见回执缺口均由010拥有。其余IAM-UI-01–08非Deferred页面效果仍未完成，生产账号公平性SLO和安装级数据库HA保持Deferred，不冒充已交付能力 |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
 
 ### 当前控制台与发布门禁
 
-当前产品固定源码为`741dceb6f0092fbc33706842862980816fe72d15`，完整Profile为IAM87/Audit39/PaaS7+r37；唯一滚动前驱为`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。产品源码的[Verification 39012317180](https://github.com/xiak/matrix/actions/runs/39012317180)十九项作业全部成功，控制台实际通过77个Vitest文件、1954项测试、8项Node边界、234组对比度和324项双模式导出/嵌入一致。同源签名A/B已完成1072.25秒完整离线生命周期和76.26秒重启后复验；这些证据接受该固定产品组合，不自动接受后继UI修改或未执行的页面路径。
+当前产品固定源码为`9621bb6e66b1076576649d3f6b224725a60d6848`，完整Profile为IAM87/Audit39/PaaS7+r37；唯一滚动前驱为`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。产品源码的[Verification 39203431655](https://github.com/xiak/matrix/actions/runs/39203431655)及后继测试修正的精确CI均已独立闭合。同源签名A/B以未修改的生产二进制完成2787.02秒完整离线生命周期和261.79秒重启后复验，准确包、信任根、限额和有界观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有。这接受当前固定签名组合，不自动接受尚未执行的页面路径，也不解决重复大包读取的性能问题。
 
-Session并发测试的固定修正为`38a2cda69ec547c9e8d9d557bf61a3bcd992335c`；其[Verification 39196850326](https://github.com/xiak/matrix/actions/runs/39196850326) attempt 1已独立闭合。下段保留该当前不变量的确定性红绿证据；最新独立门禁以本节测试固定`75a1fa61`为准，不重复扩展旧候选矩阵。
+Session并发测试的固定修正为`38a2cda69ec547c9e8d9d557bf61a3bcd992335c`；其[Verification 39196850326](https://github.com/xiak/matrix/actions/runs/39196850326) attempt 1已独立闭合。下段保留该当前不变量的确定性红绿证据；最新独立门禁以本节测试固定`26deca2`为准，不重复扩展旧候选矩阵。
 
 该切片只修正既有Session并发测试，不改变生产API、SQL、UI或Profile。最终成功的Serializable重试可以合法纳入并发期间已提交的新登录；测试必须验证精确Session集合、版本和终态，而非固定只撤销一个。专属PG18.4上的确定性真实40001先使旧断言以`APPLIED/revoked=2/want=1`失败，再证明B+C精确目标、当前caller保留、原回执重放及严格在完成后开始的新登录不受重放影响。聚焦双向及重试52.48秒通过；三份全新数据库串行race的批量107.45秒、单项94.15秒、真实锁后到期64.57秒，package267.261秒，默认integration/architecture race及vet也通过。PG与Go runner各限2CPU/2GiB，Go1.26.3、GOMAXPROCS2/GOMEMLIMIT1024MiB、`-p 1`；保留原密码成本、fixture期限和真实时间窗口。本地PG18.4不冒充CI的PG18.6。旧UI源`28f2da7e15c4720c262cae241f3425ada200ca9e`的[Verification 39193669814](https://github.com/xiak/matrix/actions/runs/39193669814)仍为失败，原日志不足以区分复合断言的具体差异，不能回填为通过或单独据此宣称唯一根因。
 
@@ -286,7 +286,7 @@ CI实际记录Go1.26.5、GOMAXPROCS2、CPU quota/period=200000/100000、memory.m
 
 当前控制台组合的事实分属既有owner：`ffdedcde2f324e121f9a643b679a06530fd23a5d`的精确UX子树、前端与嵌入回归及原LIVE缺口，以及后继`0d9d0b12e9f95e9a2110697021d591916552da9a`的精确详情重新鉴权与真实产品资源浏览器证据，均由[010](FEAT-IAM-010-console.md#当前-ux-owner-快照集成)维护；`83/37/3+r31`签名A/B安装、升级、回滚、指定备份恢复与引擎重启证据由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-ux-snapshot-release-consumer-gate)维护。本文件据前者接受IAM-AC-08、据后者接受IAM-AC-07的当前组合候选，但不把任一结论扩大为跨Profile兼容或总goal完成。
 
-当前发布消费者固定于源码`741dceb6f0092fbc33706842862980816fe72d15`的IAM87/Audit39/PaaS7+r37同源签名A/B。任务专属断网引擎中的完整效果门禁和仅重启该引擎后的复验通过受限数据库身份、APISIX身份、真实SMTP/TOTP、四产品、服务Role、Audit、备份、升级/回滚/恢复、容量释放与凭据围栏；准确清单、信任根摘要、资源限制和未声明边界由FEAT-005对应当前消费者门禁拥有。据此IAM-AC-07只对当前同Profile生命周期及滚动单前驱接受，不接受跨Profile、任意历史N-1、生产数据库HA或浏览器效果。User资料/状态与Group Membership恢复在同一产品源码上另由四个全新数据库的真实浏览器门禁证明：两类User命令只读取一次原完成结果且零目标写重放，两类Membership命令只显式等值重放一次；下一请求权限/Session效果、唯一outbox/Audit和完整租户链均准确。该本地真实进程证据不是签名APISIX运行，准确范围和剩余非Deferred页面缺口由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有。
+当前发布消费者固定于源码`9621bb6e66b1076576649d3f6b224725a60d6848`的IAM87/Audit39/PaaS7+r37同源签名A/B。任务专属断网引擎中的完整效果门禁和仅重启该引擎后的复验通过受限数据库身份、APISIX身份、真实SMTP/TOTP、四产品、服务Role、Audit、备份、升级/回滚/恢复、容量释放与凭据围栏；准确清单、信任根摘要、资源限制和未声明边界由FEAT-005对应当前消费者门禁拥有。据此IAM-AC-07只对当前同Profile生命周期及滚动单前驱接受，不接受跨Profile、任意历史N-1、生产数据库HA或浏览器效果。User资料/状态与Group Membership恢复先前在固定`741dceb6`上另由四个全新数据库的真实浏览器门禁证明：两类User命令只读取一次原完成结果且零目标写重放，两类Membership命令只显式等值重放一次；下一请求权限/Session效果、唯一outbox/Audit和完整租户链均准确。该本地真实进程证据不是签名APISIX运行，准确范围和剩余非Deferred页面缺口由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有。
 
 此前IAM86+r36的签名Release D又完成真实错误矩阵：授权代际变化后的旧Session返回401，普通User/受限Role的未授权资源读取返回403；已存在实例的新意图由PaaS和APISIX共同返回409，页面保留输入且不创建资源；只停止任务内IAM权威、保持PaaS API/APISIX运行时，同一安装请求返回503，页面冻结原幂等键、禁止再次提交并只允许读取结果。权威恢复后原结果查无记录仍保持UNKNOWN，干净来源的实例目录保持原两项。任务内IAM与PaaS API均恢复原容器ID及healthy，外层引擎、共享服务和远端机器未重启。准确页面与访问日志证据归010；本段只接受此前签名401/403/409/503缺口，不把它继承给IAM87+r37，也不把网关502、查无回执或当前实例列表解释成命令从未到达的一般证明。
 
