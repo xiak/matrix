@@ -27521,9 +27521,42 @@ func proveRoleAuthorityRevisions(t *testing.T, ctx context.Context, handler http
 					}
 					call(http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root, iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: prefix + "-detach"}, http.StatusOK, nil)
 					invalid("-away")
+					var ungrantedToken string
+					if scenario == "role-attachment" {
+						// Revoking a Role grant invalidates the old credential (401),
+						// but a fresh explicitly issued session is authenticated and
+						// has no business Allow. Reattaching must invalidate it too.
+						call(http.MethodGet, rolePath, root, nil, http.StatusOK, &access)
+						var ungranted iamv1.AssumeRoleResponse
+						call(http.MethodPost, rolePath+":assume", login, iamv1.AssumeRoleRequest{
+							ResourceVersion: access.Role.ResourceVersion, RequestID: prefix + "-while-ungranted"}, http.StatusOK, &ungranted)
+						if iamv1.ValidateAssumeRoleResponse(ungranted) != nil || ungranted.Outcome != "APPLIED" || ungranted.Session.ID == issued.Session.ID {
+							t.Fatal("ungranted Role did not produce a distinct explicit issuance")
+						}
+						material := ungranted.Credential.CopyBytes()
+						ungrantedToken = string(material)
+						clear(material)
+						call(http.MethodGet, "/v1/auth/role-session", ungrantedToken, nil, http.StatusOK, nil)
+						request, err := iamv1.NewAuthorizationRequest(iamv1.ActionPaaSApplicationRead,
+							iamv1.ResourceReference{Kind: iamv1.ResourceApplication, ID: "revision-application"},
+							iamv1.AuthorizationResourceInstance, "", prefix+"-ungranted-read", prefix)
+						if err != nil {
+							t.Fatal(err)
+						}
+						response := performIAMRequestWithSubject(handler, mustIAMJSON(t, request), paasCredential, ungrantedToken)
+						var denied iamv1.AuthorizationDecision
+						if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &denied) != nil ||
+							iamv1.CheckAuthorizationDecisionForRequest(denied, request) != nil || denied.Allowed {
+							t.Fatal("fresh ungranted Role inherited business permission")
+						}
+					}
 					replacement := attach(target, policy, "-reattach")
 					if replacement.ID == attachment.ID {
 						t.Fatal("reattachment revived an old relationship")
+					}
+					if ungrantedToken != "" {
+						call(http.MethodGet, "/v1/auth/role-session", ungrantedToken, nil, http.StatusUnauthorized, nil)
+						business(ungrantedToken, "-ungranted-after-reattach", http.StatusUnauthorized)
 					}
 				case "group-membership":
 					groupPath := "/v1/groups/" + string(group.ID) + "/memberships"

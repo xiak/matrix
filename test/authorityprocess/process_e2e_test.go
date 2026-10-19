@@ -4239,6 +4239,7 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 		}
 	}
 	businessBearer := member.Credential
+	var roleSessionBefore iamv1.RoleSession
 	if targetKind == iamv1.PolicyTargetRole {
 		assumeResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/roles/"+string(role.ID)+":assume", member.Credential,
 			iamv1.AssumeRoleRequest{ResourceVersion: boundary.ResourceVersion, RequestID: "browser-attachment-recovery-role-session"})
@@ -4251,6 +4252,7 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 		credentialBytes := assumed.Credential.CopyBytes()
 		businessBearer = string(credentialBytes)
 		clear(credentialBytes)
+		roleSessionBefore = assumed.Session
 		protected = append(protected, businessBearer)
 		if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", member.Credential, nil); response.Status != http.StatusForbidden {
 			t.Fatalf("source USER inherited Role business permission before the browser command: status=%d", response.Status)
@@ -4374,13 +4376,60 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 		Scan(&changeRows); err != nil || changeRows != 1 {
 		t.Fatalf("policy-attachment recovery retained %d immutable completions: err=%v", changeRows, err)
 	}
-	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", businessBearer, nil); response.Status != wantAfter {
-		t.Fatalf("policy-attachment permission was not effective on the next request: status=%d want=%d", response.Status, wantAfter)
-	}
 	if targetKind == iamv1.PolicyTargetRole {
+		// A RoleSession seals its issuance authority vector. Either attachment
+		// mutation invalidates that credential; it cannot inherit a new grant or
+		// remain authenticated with fewer permissions like a USER LoginSession.
+		for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session", paasEndpoint + "/v1/applications"} {
+			if response := performJSON(t, http.MethodGet, endpoint, businessBearer, nil); response.Status != http.StatusUnauthorized {
+				t.Fatalf("changed Role attachment retained the original RoleSession: status=%d", response.Status)
+			}
+		}
+		var original iamv1.RoleSession
+		originalResponse := performJSON(t, http.MethodGet,
+			iamEndpoint+"/v1/auth/role-sessions/by-request/browser-attachment-recovery-role-session", member.Credential, nil)
+		if originalResponse.Status != http.StatusOK || json.Unmarshal(originalResponse.Body, &original) != nil ||
+			!reflect.DeepEqual(original, roleSessionBefore) {
+			t.Fatal("attachment change rewrote the original RoleSession issuance record")
+		}
+		var access iamv1.RoleAccess
+		rolePath := "/v1/roles/" + string(role.ID)
+		accessResponse := performJSON(t, http.MethodGet, iamEndpoint+rolePath, ownerBearer, nil)
+		if accessResponse.Status != http.StatusOK || json.Unmarshal(accessResponse.Body, &access) != nil ||
+			iamv1.ValidateRoleAccess(access) != nil || access.Role.ID != role.ID || access.Role.AccountID != user.AccountID ||
+			access.Role.ResourceVersion != boundary.ResourceVersion {
+			t.Fatal("attachment change altered the Role identity or management revision")
+		}
+		var fresh iamv1.AssumeRoleResponse
+		freshResponse := performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+			iamv1.AssumeRoleRequest{ResourceVersion: access.Role.ResourceVersion, RequestID: "browser-attachment-recovery-role-session-after"})
+		if freshResponse.Status != http.StatusOK || json.Unmarshal(freshResponse.Body, &fresh) != nil ||
+			iamv1.ValidateAssumeRoleResponse(fresh) != nil || fresh.Outcome != "APPLIED" ||
+			fresh.Session.ID == roleSessionBefore.ID || fresh.Session.AccountID != user.AccountID ||
+			fresh.Session.RoleID != role.ID || fresh.Session.SourceUserID != user.ID {
+			t.Fatal("fresh explicit Role assumption did not retain its exact source and target")
+		}
+		credentialBytes := fresh.Credential.CopyBytes()
+		freshBearer := string(credentialBytes)
+		clear(credentialBytes)
+		protected = append(protected, freshBearer)
+		var current iamv1.CurrentRoleIdentity
+		identityResponse := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/role-session", freshBearer, nil)
+		if identityResponse.Status != http.StatusOK || json.Unmarshal(identityResponse.Body, &current) != nil ||
+			iamv1.ValidateCurrentRoleIdentity(current) != nil || !reflect.DeepEqual(current.Session, fresh.Session) {
+			t.Fatal("new RoleSession is not a current authenticated identity")
+		}
+		if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", freshBearer, nil); response.Status != wantAfter {
+			t.Fatalf("fresh RoleSession did not use the changed attachment: status=%d want=%d", response.Status, wantAfter)
+		}
+		if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", businessBearer, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("explicit re-assumption revived the original RoleSession")
+		}
 		if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", member.Credential, nil); response.Status != http.StatusForbidden {
 			t.Fatalf("source USER inherited Role business permission after the browser command: status=%d", response.Status)
 		}
+	} else if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", businessBearer, nil); response.Status != wantAfter {
+		t.Fatalf("policy-attachment permission was not effective on the next request: status=%d want=%d", response.Status, wantAfter)
 	}
 
 	var outboxFacts, actionRequestFacts int
