@@ -327,9 +327,9 @@ func TestIAMGroupMembershipRecoveryConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessGroupMembershipRecoveryBrowser)
 }
 
-// This opt-in fixture proves that a Group policy attachment command can only
+// This opt-in fixture proves that a User, Group or Role attachment command can only
 // be completed from its immutable receipt after the successful response is
-// lost. Current Group state is not a completion result or permission to write.
+// lost. Current target state is not a completion result or permission to write.
 func TestIAMPolicyAttachmentRecoveryConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_POLICY_ATTACHMENT_RECOVERY_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_POLICY_ATTACHMENT_RECOVERY_BROWSER=1 for the bounded LIVE policy-attachment recovery browser fixture")
@@ -4049,20 +4049,19 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	if operation != "CREATE" && operation != "REVOKE" {
 		t.Fatalf("MATRIX_IAM_POLICY_ATTACHMENT_RECOVERY_OPERATION is not CREATE or REVOKE: %q", operation)
 	}
+	targetKind := iamv1.PolicyAttachmentTargetKind(strings.ToUpper(strings.TrimSpace(os.Getenv("MATRIX_IAM_POLICY_ATTACHMENT_RECOVERY_TARGET"))))
+	if targetKind == "" {
+		targetKind = iamv1.PolicyTargetGroup
+	}
+	if targetKind != iamv1.PolicyTargetGroup && targetKind != iamv1.PolicyTargetUser && targetKind != iamv1.PolicyTargetRole {
+		t.Fatalf("MATRIX_IAM_POLICY_ATTACHMENT_RECOVERY_TARGET is not GROUP, USER or ROLE: %q", targetKind)
+	}
 
 	const (
 		groupName   = "Browser attachment recovery operators"
 		loginName   = "browser.attachment.recovery"
 		displayName = "Browser attachment recovery User"
 	)
-	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups", ownerBearer,
-		iamv1.CreateGroupRequest{Name: groupName, Description: "Response-loss attachment recovery target.",
-			RequestID: "browser-attachment-recovery-group"})
-	var group iamv1.Group
-	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &group) != nil ||
-		iamv1.ValidateGroup(group) != nil || group.AccountID != "organization-process" || group.ResourceVersion != 1 {
-		t.Fatalf("prepare policy-attachment recovery Group status=%d body=%s", createdResponse.Status, createdResponse.Body)
-	}
 	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, displayName,
 		initialDeveloperPassword, "browser-attachment-recovery-user")
 	initial := loginIAM(t, iamEndpoint, loginName+"@organization-process", initialDeveloperPassword,
@@ -4071,33 +4070,98 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 		changedDeveloperPassword, "browser-attachment-recovery-password")
 	member := loginIAM(t, iamEndpoint, loginName+"@organization-process", changedDeveloperPassword,
 		"browser-attachment-recovery-login")
-	membershipResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups/"+string(group.ID)+"/memberships", ownerBearer,
-		iamv1.CreateGroupMembershipRequest{UserID: user.ID, RequestID: "browser-attachment-recovery-membership"})
-	var membership iamv1.GroupMembership
-	if membershipResponse.Status != http.StatusOK || json.Unmarshal(membershipResponse.Body, &membership) != nil ||
-		iamv1.ValidateGroupMembership(membership) != nil || membership.GroupID != group.ID || membership.UserID != user.ID {
-		t.Fatalf("prepare policy-attachment recovery membership status=%d body=%s", membershipResponse.Status, membershipResponse.Body)
+	protected := []string{initial.Credential, member.Credential}
+	target := iamv1.PolicyAttachmentTarget{Kind: targetKind, ID: string(user.ID)}
+	browserDirectory := "users"
+	var role iamv1.Role
+	var boundary iamv1.RolePermissionBoundary
+	switch targetKind {
+	case iamv1.PolicyTargetGroup:
+		createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups", ownerBearer,
+			iamv1.CreateGroupRequest{Name: groupName, Description: "Response-loss attachment recovery target.",
+				RequestID: "browser-attachment-recovery-group"})
+		var group iamv1.Group
+		if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &group) != nil ||
+			iamv1.ValidateGroup(group) != nil || group.AccountID != user.AccountID || group.ResourceVersion != 1 {
+			t.Fatalf("prepare policy-attachment recovery Group status=%d body=%s", createdResponse.Status, createdResponse.Body)
+		}
+		membershipResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/groups/"+string(group.ID)+"/memberships", ownerBearer,
+			iamv1.CreateGroupMembershipRequest{UserID: user.ID, RequestID: "browser-attachment-recovery-membership"})
+		var membership iamv1.GroupMembership
+		if membershipResponse.Status != http.StatusOK || json.Unmarshal(membershipResponse.Body, &membership) != nil ||
+			iamv1.ValidateGroupMembership(membership) != nil || membership.GroupID != group.ID || membership.UserID != user.ID {
+			t.Fatalf("prepare policy-attachment recovery membership status=%d body=%s", membershipResponse.Status, membershipResponse.Body)
+		}
+		target.ID, browserDirectory = string(group.ID), "groups"
+	case iamv1.PolicyTargetRole:
+		createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/roles", ownerBearer, iamv1.CreateRoleRequest{
+			Name: "Browser attachment recovery role", Tags: []iamv1.RoleTag{}, RequestID: "browser-attachment-recovery-role",
+			TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{SID: "source", Effect: iamv1.PolicyAllow,
+				Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: user.ID}}}}}})
+		if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &role) != nil ||
+			iamv1.ValidateRole(role) != nil || role.AccountID != user.AccountID || role.ResourceVersion != 1 {
+			t.Fatalf("prepare policy-attachment recovery Role status=%d body=%s", createdResponse.Status, createdResponse.Body)
+		}
+		rolePath := "/v1/roles/" + string(role.ID)
+		boundaryResponse := performJSON(t, http.MethodPut, iamEndpoint+rolePath+"/permission-boundary", ownerBearer,
+			iamv1.SetRolePermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+				ResourceVersion: role.ResourceVersion, RequestID: "browser-attachment-recovery-role-boundary"})
+		if boundaryResponse.Status != http.StatusOK || json.Unmarshal(boundaryResponse.Body, &boundary) != nil ||
+			iamv1.ValidateRolePermissionBoundary(boundary) != nil || boundary.AccountID != user.AccountID ||
+			boundary.RoleID != role.ID || boundary.Policy == nil || boundary.Policy.PolicyID != iamv1.SystemPolicyPaaSViewer {
+			t.Fatalf("prepare policy-attachment recovery Role boundary status=%d", boundaryResponse.Status)
+		}
+		policyResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+			DisplayName: "Assume browser attachment role", RequestID: "browser-attachment-recovery-assume-policy",
+			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{{SID: "assume", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRoleAssume},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceExact, ID: string(role.ID)}}}}}})
+		var assumePolicy iamv1.PolicyDetail
+		if policyResponse.Status != http.StatusCreated || json.Unmarshal(policyResponse.Body, &assumePolicy) != nil ||
+			iamv1.ValidatePolicyDetail(assumePolicy) != nil || assumePolicy.Policy.AccountID != user.AccountID {
+			t.Fatalf("prepare exact Role assumption policy status=%d", policyResponse.Status)
+		}
+		createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, user.ID, assumePolicy.Policy.ID, "browser-attachment-recovery-assume-grant")
+		target.ID, browserDirectory = string(role.ID), "roles"
 	}
 
 	var prepared iamv1.PolicyAttachment
 	if operation == "REVOKE" {
 		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", ownerBearer,
 			iamv1.CreatePolicyAttachmentRequest{
-				Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetGroup, ID: string(group.ID)},
+				Target:   target,
 				PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
 				RequestID: "browser-attachment-recovery-prepare",
 			})
 		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &prepared) != nil ||
-			iamv1.ValidatePolicyAttachment(prepared) != nil || prepared.Target.Kind != iamv1.PolicyTargetGroup ||
-			prepared.Target.ID != string(group.ID) || prepared.PolicyID != iamv1.SystemPolicyPaaSViewer {
-			t.Fatalf("prepare Group policy attachment status=%d body=%s", response.Status, response.Body)
+			iamv1.ValidatePolicyAttachment(prepared) != nil || prepared.AccountID != user.AccountID ||
+			prepared.Target != target || prepared.PolicyID != iamv1.SystemPolicyPaaSViewer {
+			t.Fatalf("prepare policy attachment status=%d body=%s", response.Status, response.Body)
+		}
+	}
+	businessBearer := member.Credential
+	if targetKind == iamv1.PolicyTargetRole {
+		assumeResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/roles/"+string(role.ID)+":assume", member.Credential,
+			iamv1.AssumeRoleRequest{ResourceVersion: boundary.ResourceVersion, RequestID: "browser-attachment-recovery-role-session"})
+		var assumed iamv1.AssumeRoleResponse
+		if assumeResponse.Status != http.StatusOK || json.Unmarshal(assumeResponse.Body, &assumed) != nil ||
+			iamv1.ValidateAssumeRoleResponse(assumed) != nil || assumed.Outcome != "APPLIED" ||
+			assumed.Session.AccountID != user.AccountID || assumed.Session.RoleID != role.ID || assumed.Session.SourceUserID != user.ID {
+			t.Fatalf("prepare attachment recovery RoleSession status=%d", assumeResponse.Status)
+		}
+		credentialBytes := assumed.Credential.CopyBytes()
+		businessBearer = string(credentialBytes)
+		clear(credentialBytes)
+		protected = append(protected, businessBearer)
+		if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", member.Credential, nil); response.Status != http.StatusForbidden {
+			t.Fatalf("source USER inherited Role business permission before the browser command: status=%d", response.Status)
 		}
 	}
 	wantBefore, wantAfter := http.StatusForbidden, http.StatusOK
 	if operation == "REVOKE" {
 		wantBefore, wantAfter = http.StatusOK, http.StatusForbidden
 	}
-	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", member.Credential, nil); response.Status != wantBefore {
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", businessBearer, nil); response.Status != wantBefore {
 		t.Fatalf("policy-attachment precondition permission status=%d want=%d", response.Status, wantBefore)
 	}
 
@@ -4115,13 +4179,13 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	)
 	defer closeBrowser()
 	finish := filepath.Join(temporary, "browser-policy-attachment-recovery-finished")
-	browserPath := "/console/access/groups/?id=" + url.QueryEscape(string(group.ID))
+	browserPath := "/console/access/" + browserDirectory + "/?id=" + url.QueryEscape(target.ID)
 	intent := "attach the system PaaS viewer policy"
 	if operation == "REVOKE" {
 		intent = "remove the existing system PaaS viewer policy attachment"
 	}
-	t.Logf("POLICY_ATTACHMENT_RECOVERY_BROWSER_FIXTURE operation=%s url=%s%s finish=%s group=%s login=%s realm=admin; %s, observe the committed-response-loss state, inspect only the original request, and create the completion marker after the authoritative Group view refreshes; use the existing changed admin password",
-		operation, server.URL, browserPath, finish, group.ID, loginName, intent)
+	t.Logf("POLICY_ATTACHMENT_RECOVERY_BROWSER_FIXTURE operation=%s target_kind=%s url=%s%s finish=%s target=%s login=%s realm=admin; %s, observe the committed-response-loss state, inspect only the original request, and create the completion marker after the visible immutable receipt and authoritative target view agree; use the existing changed admin password",
+		operation, target.Kind, server.URL, browserPath, finish, target.ID, loginName, intent)
 	waitForBrowserMarker(t, ctx, ui, finish, "same-origin policy-attachment recovery completion")
 
 	observation := loss.snapshot()
@@ -4132,16 +4196,16 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	if operation == "CREATE" {
 		var request iamv1.CreatePolicyAttachmentRequest
 		if json.Unmarshal(observation.RequestBody, &request) != nil || iamv1.ValidateCreatePolicyAttachmentRequest(request) != nil ||
-			request.Target.Kind != iamv1.PolicyTargetGroup || request.Target.ID != string(group.ID) ||
+			request.Target != target ||
 			request.PolicyID != iamv1.SystemPolicyPaaSViewer || request.PolicyResourceVersion != 1 {
-			t.Fatal("browser submitted an invalid Group policy attachment creation")
+			t.Fatal("browser submitted an invalid policy attachment creation")
 		}
 		requestID = request.RequestID
 	} else {
 		var request iamv1.RevokePolicyAttachmentRequest
 		if json.Unmarshal(observation.RequestBody, &request) != nil || iamv1.ValidateRevokePolicyAttachmentRequest(request) != nil ||
 			request.ResourceVersion != prepared.ResourceVersion {
-			t.Fatal("browser submitted an invalid Group policy attachment revocation")
+			t.Fatal("browser submitted an invalid policy attachment revocation")
 		}
 		requestID, wantAction = request.RequestID, auditv1.ActionIAMPolicyAttachmentRevoked
 	}
@@ -4171,13 +4235,13 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 		iamEndpoint+"/v1/policy-attachment-changes/by-request/"+url.PathEscape(requestID), ownerBearer, nil)
 	var completion iamv1.PolicyAttachmentChange
 	if completionResponse.Status != http.StatusOK || json.Unmarshal(completionResponse.Body, &completion) != nil ||
-		iamv1.ValidatePolicyAttachmentChange(completion) != nil || completion.AccountID != group.AccountID ||
+		iamv1.ValidatePolicyAttachmentChange(completion) != nil || completion.AccountID != user.AccountID ||
 		completion.ActorPrincipalID != "principal-admin" || completion.RequestID != requestID {
 		t.Fatalf("read original policy-attachment completion status=%d body=%s", completionResponse.Status, completionResponse.Body)
 	}
 	if operation == "CREATE" {
 		if completion.Operation != iamv1.PolicyAttachmentChangeCreate || completion.Target == nil ||
-			completion.Target.Kind != iamv1.PolicyTargetGroup || completion.Target.ID != string(group.ID) ||
+			*completion.Target != target ||
 			completion.PolicyID != iamv1.SystemPolicyPaaSViewer || completion.PolicyResourceVersion != 1 ||
 			completion.Attachment == nil {
 			t.Fatalf("invalid policy-attachment creation completion: %#v", completion)
@@ -4196,8 +4260,8 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 		wantVersion = prepared.ResourceVersion + 1
 	}
 	if err := database.QueryRow(ctx, `SELECT count(*),COALESCE(max(resource_version),0),COALESCE(bool_or(revoked_at IS NOT NULL),false)
-		FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 AND target_kind='GROUP' AND target_id=$3 AND policy_id=$4`,
-		group.AccountID, wantAttachmentID, group.ID, iamv1.SystemPolicyPaaSViewer).
+		FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 AND target_kind=$3 AND target_id=$4 AND policy_id=$5`,
+		user.AccountID, wantAttachmentID, target.Kind, target.ID, iamv1.SystemPolicyPaaSViewer).
 		Scan(&attachmentRows, &storedVersion, &revoked); err != nil || attachmentRows != 1 ||
 		storedVersion != wantVersion || revoked != (operation == "REVOKE") {
 		t.Fatalf("policy-attachment recovery changed the authoritative row: rows=%d version=%d revoked=%t err=%v",
@@ -4206,13 +4270,18 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	var changeRows int
 	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.policy_attachment_changes
 		WHERE tenant_id=$1 AND actor_principal_id='principal-admin' AND request_id=$2 AND operation=$3
-		  AND attachment_id=$4 AND target_kind='GROUP' AND target_id=$5 AND policy_id=$6`,
-		group.AccountID, requestID, operation, wantAttachmentID, group.ID, iamv1.SystemPolicyPaaSViewer).
+		  AND attachment_id=$4 AND target_kind=$5 AND target_id=$6 AND policy_id=$7`,
+		user.AccountID, requestID, operation, wantAttachmentID, target.Kind, target.ID, iamv1.SystemPolicyPaaSViewer).
 		Scan(&changeRows); err != nil || changeRows != 1 {
 		t.Fatalf("policy-attachment recovery retained %d immutable completions: err=%v", changeRows, err)
 	}
-	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", member.Credential, nil); response.Status != wantAfter {
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", businessBearer, nil); response.Status != wantAfter {
 		t.Fatalf("policy-attachment permission was not effective on the next request: status=%d want=%d", response.Status, wantAfter)
+	}
+	if targetKind == iamv1.PolicyTargetRole {
+		if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications", member.Credential, nil); response.Status != http.StatusForbidden {
+			t.Fatalf("source USER inherited Role business permission after the browser command: status=%d", response.Status)
+		}
 	}
 
 	var outboxFacts, requestFacts int
@@ -4220,7 +4289,7 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 		count(*) FILTER(WHERE event_document#>>'{target,kind}'='POLICY_ATTACHMENT' AND event_document#>>'{target,id}'=$4),
 		count(*) FROM iam.audit_outbox
 		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document->>'requestId'=$3`,
-		group.AccountID, wantAction, requestID, wantAttachmentID).Scan(&outboxFacts, &requestFacts); err != nil ||
+		user.AccountID, wantAction, requestID, wantAttachmentID).Scan(&outboxFacts, &requestFacts); err != nil ||
 		outboxFacts != 1 || requestFacts != 1 {
 		t.Fatalf("policy-attachment recovery retained target=%d request=%d original outbox facts: err=%v",
 			outboxFacts, requestFacts, err)
@@ -4238,7 +4307,7 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 			continue
 		}
 		auditMatches++
-		if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(group.AccountID) ||
+		if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(user.AccountID) ||
 			record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
 			record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetPolicyAttachment ||
 			record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded {
@@ -4250,11 +4319,11 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	}
 	chain := verifyAudit(t, auditEndpoint, ownerBearer)
 	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
-		chain.TenantID != auditv1.TenantID(group.AccountID) || chain.InstallationID != "" {
+		chain.TenantID != auditv1.TenantID(user.AccountID) || chain.InstallationID != "" {
 		t.Fatalf("policy-attachment tenant Audit chain is incomplete: %#v", chain)
 	}
-	t.Logf("one committed Group policy attachment %s was recovered by one receipt read and zero post-loss writes; the permission change was effective on the next PaaS request and the unique outbox fact and verified tenant Audit chain matched", operation)
-	return []string{initial.Credential, member.Credential}
+	t.Logf("one committed %s policy attachment %s was recovered by one receipt read and zero post-loss writes; the permission change was effective on the next PaaS request and the unique outbox fact and verified tenant Audit chain matched", target.Kind, operation)
+	return protected
 }
 
 func runIAMGroupDeletionConsoleBrowser(

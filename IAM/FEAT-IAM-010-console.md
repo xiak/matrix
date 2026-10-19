@@ -336,6 +336,8 @@ REVOKE使用固定`77923f7839633002eb2a6c732c35fec6bea19436`的同一owner，先
 
 实际旧UI在原结果查询成功后直接返回Group详情并显示零附件，未保留可见的不可变完成回执。这不否定精确只读恢复与权限效果，但完整UX仍需修正：区分原完成记录、当前授权状态及Audit投递，保留原request/结果让操作者明确完成后返回。直接User/Role附件的页面路径不在这两条证据内，不能由组件或默认SKIP代替。
 
+原`TestIAMPolicyAttachmentRecoveryConsoleBrowser`现可用仅测试配置`MATRIX_IAM_POLICY_ATTACHMENT_RECOVERY_TARGET`选择`GROUP`（默认）、`USER`或`ROLE`，仍使用同一个CREATE/REVOKE和响应丢失owner，不另造流程或套件。USER用真实普通登录会话检查下一次PaaS请求；ROLE只信任一个真实来源User，其User正向策略仅允许承担该精确Role，Role boundary限定为PaaSViewer，业务检查使用真实RoleSession而非来源User凭据。命令前后来源User均不得继承角色业务权限。三类目标共用精确Account/target/policy/version/request、唯一完成/outbox/Audit、一次原回执读取和零丢包后写入断言。新增模式目前仅通过默认测试/编译、architecture race及vet；没有页面最终操作和独立真实进程结果，不计USER/ROLE浏览器验收，也不回填既有GROUP证据。
+
 ### Group删除真实效果与回执缺口
 
 固定`c80e58165b46f57ad309eabbdb3c33b0e2bc782e`的`TestIAMGroupDeletionConsoleBrowser`在另一空白数据库与同一限额原生Linux环境实跑。浏览器审阅实际删除语义、输入准确测试组名并只提交一次，随后权威目录加载为零。数据库证明同一Group只推进到版本2，同事务解除一条Membership并撤销一条直接附件，两个关系的版本和终态时间与Group完全匹配；原User仍ACTIVE、同一成员Session读取`/v1/auth/me`仍200，但下一次PaaS请求由200变为403，系统Policy仍ACTIVE。原request `603039ff-6bbb-439a-be3a-82bc607f6425`恰有一个决定绑定的outbox/Audit事实，完整租户链通过；fixture/race package为276.42/277.489秒。
