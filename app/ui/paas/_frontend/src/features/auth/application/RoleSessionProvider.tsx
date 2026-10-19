@@ -73,6 +73,7 @@ type RoleSessionContextValue = {
 
 const RoleSessionContext = createContext<RoleSessionContextValue | null>(null);
 const EffectiveCredentialContext = createContext<string | null>(null);
+const ExpireEffectiveCredentialContext = createContext<(expectedCredential: string) => boolean>(() => false);
 
 function operationFailure(error: unknown): RoleSessionError {
   if (error instanceof HttpProblem) {
@@ -196,6 +197,16 @@ export function RoleSessionProvider({
     setStage("role-expired");
     return true;
   }, [activeSourceCredential, sourceCredential, stage]);
+
+  const expireEffectiveCredential = useCallback((expectedCredential: string): boolean => {
+    if (expireCredential(expectedCredential)) return true;
+    if (["role-active", "role-expired", "exit-unknown", "source-validation-unknown"].includes(stage) ||
+        sourceCredentialRef.current !== expectedCredential || sourceCredential !== expectedCredential) return false;
+    // SessionProvider owns source-session cleanup. Its credential fence prevents
+    // a late User response from expiring a replacement login; the source-change
+    // effect above then retires any unresolved Role credential best-effort.
+    return expireSource(expectedCredential);
+  }, [expireCredential, expireSource, sourceCredential, stage]);
 
   const validateDirectory = useCallback((page: AssumableRoleDirectory) => {
     if (!current || page.accountId !== current.session.organizationId || page.sourceUserId !== current.session.principalId) {
@@ -498,7 +509,9 @@ export function RoleSessionProvider({
   }), [assume, busy, clearAttempt, directory, discover, error, expireCredential, identity, intent, locateOriginal, mode, observedSession, performExit, retryActivation, retryAssume, revokeAndRestoreSource, revokeOriginal, restoreSource, service, stage]);
 
   return <EffectiveCredentialContext.Provider value={effectiveCredential}>
-    <RoleSessionContext.Provider value={value}>{children}</RoleSessionContext.Provider>
+    <ExpireEffectiveCredentialContext.Provider value={expireEffectiveCredential}>
+      <RoleSessionContext.Provider value={value}>{children}</RoleSessionContext.Provider>
+    </ExpireEffectiveCredentialContext.Provider>
   </EffectiveCredentialContext.Provider>;
 }
 
@@ -510,4 +523,8 @@ export function useRoleSession(): RoleSessionContextValue {
 
 export function useEffectiveCredential(): string | null {
   return useContext(EffectiveCredentialContext);
+}
+
+export function useExpireEffectiveCredential(): (expectedCredential: string) => boolean {
+  return useContext(ExpireEffectiveCredentialContext);
 }

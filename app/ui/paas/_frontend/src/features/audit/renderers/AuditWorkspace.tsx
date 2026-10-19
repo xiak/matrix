@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ListFilter, RefreshCcw, ShieldCheck } from "lucide-react";
-import { useEffectiveCredential } from "@/features/auth/application/RoleSessionProvider";
+import {
+  useEffectiveCredential,
+  useExpireEffectiveCredential
+} from "@/features/auth/application/RoleSessionProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import {
   Alert,
@@ -192,7 +195,12 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
   </section>;
 }
 
-function IntegrityWorkspace({ repository, credential, onBack }: { repository: AuditRepository; credential: string | null; onBack(): void }) {
+function IntegrityWorkspace({ repository, credential, expireCredential, onBack }: {
+  repository: AuditRepository;
+  credential: string | null;
+  expireCredential(expectedCredential: string): boolean;
+  onBack(): void;
+}) {
   const t = useTranslations("AuditService");
   const format = useFormatter();
   const [fromSequence, setFromSequence] = useState("1");
@@ -214,6 +222,7 @@ function IntegrityWorkspace({ repository, credential, onBack }: { repository: Au
       setResult(await repository.verify(credential, { fromSequence: from, maximumRecords: maximum }));
     } catch (reason) {
       setResult(null);
+      if (credential && reason instanceof HttpProblem && reason.status === 401) expireCredential(credential);
       setError(loadError(reason));
     } finally {
       setBusy(false);
@@ -256,6 +265,7 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
   const collection = useTranslations("Collection");
   const format = useFormatter();
   const effectiveCredential = useEffectiveCredential();
+  const expireEffectiveCredential = useExpireEffectiveCredential();
   const credential = effectiveCredential ?? (preview ? "preview-audit-session" : null);
   const repository = preview ? previewAuditRepository : httpAuditRepository;
   const [appliedFilters, setAppliedFilters] = useState<DraftFilters>(emptyFilters);
@@ -293,12 +303,15 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
         const next = await repository.query(credential, { ...request, cursor });
         if (revision === loadRevision.current) setPage(next);
       } catch (reason) {
-        if (revision === loadRevision.current) setError(loadError(reason));
+        if (revision === loadRevision.current) {
+          if (reason instanceof HttpProblem && reason.status === 401) expireEffectiveCredential(credential);
+          setError(loadError(reason));
+        }
       } finally {
         if (revision === loadRevision.current) setLoading(false);
       }
     })();
-  }, [credential, cursor, refreshRevision, repository, request]);
+  }, [credential, cursor, expireEffectiveCredential, refreshRevision, repository, request]);
 
   useEffect(() => () => { loadRevision.current += 1; }, []);
   useLayoutEffect(() => {
@@ -336,7 +349,7 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
     restoreSequence.current = opener.current;
     setSelected(null);
   }} />;
-  if (verifying) return <IntegrityWorkspace credential={credential} repository={repository} onBack={() => setVerifying(false)} />;
+  if (verifying) return <IntegrityWorkspace credential={credential} expireCredential={expireEffectiveCredential} repository={repository} onBack={() => setVerifying(false)} />;
 
   const status = page ? t("directory.pageStatus", { page: pageIndex + 1, count: page.records.length }) : t("directory.loading");
   return <section className={styles.stack}>
