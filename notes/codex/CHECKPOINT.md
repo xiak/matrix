@@ -55,8 +55,10 @@
   running and strict original-CA/SAN STARTTLS passed. The existing fixture
   now supplies and inspects that finite limit, with ordinary negative unit
   coverage. Phase1e2e unit/race, architecture race, vet and Linux driver build
-  passed. Exact Verification 39212113957 attempt 1 is running, assigned to
-  the existing Test Expert's read-only monitor. Production bits and profile
+  passed. Exact Verification 39212113957 attempt 1 is closed as
+  completed/success: all 19 jobs, all 57 authority roots and necessary logs
+  were independently verified. FEAT011 owns the evidence; do not GET this
+  closed attempt's jobs/logs again. Production bits and profile
   are unchanged: the signed source remains 9621. Its corrected fresh native
   Linux run passed actual SMTP contact verification, TOTP/security notice,
   all four products, two application generations, Audit and backup, but failed
@@ -66,10 +68,23 @@
   original command ID and completed B READY in 164.8 seconds. This does not
   prove fault injection/automatic rollback or the full fresh lifecycle.
   FEAT-005 owns this rejected run; actionable investigation is GitHub issue
-  https://github.com/xiak/matrix/issues/3. The dedicated engine is normally
+  https://github.com/xiak/matrix/issues/3. The dedicated engine was normally
   stopped with necessary diagnosis state retained. Full fresh runtime and
   restart acceptance remain required; do not backfill either failed run,
   enlarge timeouts merely to pass, or substitute the focused resume for them.
+- Fixed test-only follow-up
+  `75a1fa61e51a218fd37b8137c4a86602568ecab3` retains the whole lifecycle's
+  30-minute deadline and starts the existing five-minute recovery window
+  only after the real target APISIX fault. Cancellation kills/joins the
+  command and cannot accept a coincident result. The same test owner now has
+  an opt-in focused upgrade-fault entry reusing authentication, injection,
+  exact failure, source restoration, target absence and status/verify; it
+  cannot emit the full lifecycle completion marker. Four virtual-clock cases,
+  phase1e2e race (2.747s), architecture race (1.821s), vet and fixed Linux
+  driver build passed. Production 9621 bits and profile are unchanged.
+  Exact Verification 39216883017 attempt 1 is running with the existing
+  Test Expert; its fixed review and actual focused/full signed gates remain
+  required. Do not infer a product timing SLO from either fixture deadline.
 - Accepted signed-release source remains
   `741dceb6f0092fbc33706842862980816fe72d15`,
   IAM87/Audit39/PaaS7+r37. Its exact CI and same-profile signed A/B lifecycle
