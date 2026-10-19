@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted current release consumer at IAM/Audit/PaaS `87/39/7+r37`. Its sole rolling development predecessor is fixed `86/39/7+r36`; the current source's signed four-product A/B offline lifecycle, APISIX consumer paths, restart verification, rolling-predecessor gate and independent CI have passed. Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by this lifecycle result
+- Status: Accepted signed release consumer at fixed `741dceb6f0092fbc33706842862980816fe72d15`, IAM/Audit/PaaS `87/39/7+r37`. Its sole rolling development predecessor is fixed `86/39/7+r36`. The newer `9621bb6e` signed combination remains unaccepted after the bounded native-Linux upgrade-injection failure tracked in [#3](https://github.com/xiak/matrix/issues/3). Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by a lifecycle result
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `87/39/7` revision 37 and its sole rolling data predecessor is fixed `86/39/7` revision 36; a signed upgrade still requires an immediate same-profile release predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -906,9 +906,9 @@ The newer fixed production candidate
 passed exact independent Verification 39203431655. Its same-source signed
 A/B have been assembled, authenticated and transferred with all twelve
 payload digests and Linux modes verified. They are not yet accepted as a
-release combination: the first native-Linux offline run failed after 640.84
-seconds at `security-mail-delivery-not-accepted`, following successful A
-installation, APISIX USER/AccessKey and two-Account revocation checks.
+release combination. The original Postfix fixture startup failure was
+corrected in test-only fixed `5708545f54e15adeadca79d947ebb99802bac5ea`;
+the subsequent fresh run reached a different upgrade-injection timeout.
 
 The failure was reproduced in the unchanged test-only Postfix image.
 A bounded trace showed its master binding port 25, then receiving `EPERM`
@@ -920,10 +920,28 @@ now supplies and inspects that finite limit together with its existing
 CPU/memory/PID limits; its ordinary unit gate rejects missing, duplicate,
 wrong-kind and drifted soft/hard limits. No production image, IAM/Audit
 contract, authentication policy, host limit or shared daemon configuration
-was changed. This focused diagnostic does not prove SMTP message acceptance
-or the remaining lifecycle: a fresh complete run and restart gate are still
-required. The last accepted combination remains the `741dceb6` release
-recorded by FEAT-IAM-011; the failed candidate is not backfilled as passing.
+was changed. The original 640.84-second failed run is not backfilled.
+
+The corrected driver ran the unchanged signed A/B on a fresh, disconnected
+native-Linux Docker 27.5.1 engine limited to 2 CPUs, 4 GiB memory and 1024
+PIDs. A installation/status/verify, APISIX USER/AccessKey, two-Account
+revocation, actual SMTP contact verification, TOTP/security notice, access
+analysis, all four real managed products, two application generations,
+Audit integrity and protected backup passed. The complete run nevertheless
+failed after 1084.08 seconds at `failed-upgrade-injection`: the existing
+five-minute window expired before the target APISIX container appeared.
+The original upgrade remained at `MIGRATING`, with A still current, and no
+OOM, memory-limit event or unexpected engine restart was observed.
+
+A separate, 300-second-bounded resume of that exact original command
+completed in 164.8 seconds, preserving its command ID and making B READY
+with A as previous. This is interrupted-command recovery evidence, not the
+missing fault injection/automatic rollback or a complete fresh lifecycle.
+The investigation and required closure are tracked in
+[#3](https://github.com/xiak/matrix/issues/3); neither the five-minute window
+nor the thirty-minute whole-gate deadline was enlarged. A fresh complete
+run and restart gate remain required. The last accepted combination stays
+the `741dceb6` release recorded by FEAT-IAM-011.
 
 On 2026-10-17, fixed source
 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` assembled and authenticated

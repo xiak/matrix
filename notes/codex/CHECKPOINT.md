@@ -57,9 +57,19 @@
   coverage. Phase1e2e unit/race, architecture race, vet and Linux driver build
   passed. Exact Verification 39212113957 attempt 1 is running, assigned to
   the existing Test Expert's read-only monitor. Production bits and profile
-  are unchanged: the signed source remains 9621, and its full fresh runtime
-  and restart gates still need actual passing evidence. Do not backfill the
-  failed 640.84-second first run or substitute the TLS diagnostic for SMTP.
+  are unchanged: the signed source remains 9621. Its corrected fresh native
+  Linux run passed actual SMTP contact verification, TOTP/security notice,
+  all four products, two application generations, Audit and backup, but failed
+  after 1084.08 seconds at the existing five-minute pre-injection deadline.
+  The original upgrade stayed at MIGRATING with A current; there was no OOM,
+  limit event or unexpected restart. A separate bounded resume preserved the
+  original command ID and completed B READY in 164.8 seconds. This does not
+  prove fault injection/automatic rollback or the full fresh lifecycle.
+  FEAT-005 owns this rejected run; actionable investigation is GitHub issue
+  https://github.com/xiak/matrix/issues/3. The dedicated engine is normally
+  stopped with necessary diagnosis state retained. Full fresh runtime and
+  restart acceptance remain required; do not backfill either failed run,
+  enlarge timeouts merely to pass, or substitute the focused resume for them.
 - Accepted signed-release source remains
   `741dceb6f0092fbc33706842862980816fe72d15`,
   IAM87/Audit39/PaaS7+r37. Its exact CI and same-profile signed A/B lifecycle
@@ -91,7 +101,10 @@ operations, daily password change, direct User/Role attachments and remaining
 policy/security/resource paths. Do not repeat accepted gates without an
 affected boundary. Deferred integrations are not silently added to this goal.
 The final new-source signed combination and unused-task-resource cleanup
-remain separate required outcomes.
+remain separate required outcomes. Before another heavy signed rerun, resolve
+the focused upgrade preparation/injection issue in the existing installation
+owner; do not weaken release byte verification or claim a production timing
+SLO from the fixture deadline. Current CI review continues independently.
 
 ## Coordination and delivery boundaries
 
