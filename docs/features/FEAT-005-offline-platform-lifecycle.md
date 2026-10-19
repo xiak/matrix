@@ -901,6 +901,30 @@ FEAT-IAM-010 continues to own that final browser path.
 
 ### Current IAM87 User-management-completion release-consumer gate
 
+The newer fixed production candidate
+`9621bb6e66b1076576649d3f6b224725a60d6848` retains `87/39/7+r37` and has
+passed exact independent Verification 39203431655. Its same-source signed
+A/B have been assembled, authenticated and transferred with all twelve
+payload digests and Linux modes verified. They are not yet accepted as a
+release combination: the first native-Linux offline run failed after 640.84
+seconds at `security-mail-delivery-not-accepted`, following successful A
+installation, APISIX USER/AccessKey and two-Account revocation checks.
+
+The failure was reproduced in the unchanged test-only Postfix image.
+A bounded trace showed its master binding port 25, then receiving `EPERM`
+when setting its inherited `RLIMIT_NOFILE` of 1073741816; the host's observed
+`nr_open` was 52706963. An otherwise identical diagnostic container with
+explicit `nofile=4096:4096` remained running and completed strict STARTTLS
+with the original CA and exact server name. The existing phase1e2e owner
+now supplies and inspects that finite limit together with its existing
+CPU/memory/PID limits; its ordinary unit gate rejects missing, duplicate,
+wrong-kind and drifted soft/hard limits. No production image, IAM/Audit
+contract, authentication policy, host limit or shared daemon configuration
+was changed. This focused diagnostic does not prove SMTP message acceptance
+or the remaining lifecycle: a fresh complete run and restart gate are still
+required. The last accepted combination remains the `741dceb6` release
+recorded by FEAT-IAM-011; the failed candidate is not backfilled as passing.
+
 On 2026-10-17, fixed source
 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` assembled and authenticated
 Release A `matrix-v0.1.0-iam.r37.1-1fc35c6c17b7` and its immediate

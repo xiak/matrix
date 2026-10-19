@@ -376,6 +376,37 @@ func TestSecurityMailFixtureTrustCoversLifecycleWindow(t *testing.T) {
 	}
 }
 
+func TestSecurityMailFixtureRuntimeResourceBounds(t *testing.T) {
+	valid := securityMailFixtureRuntime{NanoCPUs: 1_000_000_000, Memory: 536870912, MemorySwap: 536870912, Pids: 128}
+	valid.Ulimits = append(valid.Ulimits, struct {
+		Name       string
+		Soft, Hard int64
+	}{Name: "nofile", Soft: 4096, Hard: 4096})
+	if !valid.boundedResources() {
+		t.Fatal("explicit mail fixture resource limits were rejected")
+	}
+	for name, mutate := range map[string]func(*securityMailFixtureRuntime){
+		"unbounded-cpu":        func(value *securityMailFixtureRuntime) { value.NanoCPUs = 0 },
+		"unbounded-memory":     func(value *securityMailFixtureRuntime) { value.Memory = 0 },
+		"unbounded-swap":       func(value *securityMailFixtureRuntime) { value.MemorySwap = -1 },
+		"unbounded-pids":       func(value *securityMailFixtureRuntime) { value.Pids = 0 },
+		"inherited-nofile":     func(value *securityMailFixtureRuntime) { value.Ulimits = nil },
+		"different-limit":      func(value *securityMailFixtureRuntime) { value.Ulimits[0].Name = "nproc" },
+		"wrong-soft-limit":     func(value *securityMailFixtureRuntime) { value.Ulimits[0].Soft = 1024 },
+		"inherited-hard-limit": func(value *securityMailFixtureRuntime) { value.Ulimits[0].Hard = 1073741816 },
+		"duplicate-limit":      func(value *securityMailFixtureRuntime) { value.Ulimits = append(value.Ulimits, value.Ulimits[0]) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			actual := valid
+			actual.Ulimits = append(actual.Ulimits[:0:0], actual.Ulimits...)
+			mutate(&actual)
+			if actual.boundedResources() {
+				t.Fatal("drifted mail fixture resource limits were accepted")
+			}
+		})
+	}
+}
+
 func TestOptionsRequirePrivateSecurityMailOnlyForEffectfulLifecycle(t *testing.T) {
 	root := t.TempDir()
 	for name, value := range map[string]string{

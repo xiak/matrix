@@ -40,6 +40,29 @@ type securityMailFixture struct {
 	sender      string
 }
 
+type securityMailFixtureRuntime struct {
+	ID, Name, Image, NetworkMode, Restart string
+	Running                               bool
+	Labels                                map[string]string
+	NanoCPUs, Memory, MemorySwap, Pids    int64
+	Ports                                 map[string][]struct{ HostIP, HostPort string }
+	Mounts                                []json.RawMessage
+	Networks                              map[string]struct{ Aliases []string }
+	Ulimits                               []struct {
+		Name       string
+		Soft, Hard int64
+	}
+}
+
+func (runtime securityMailFixtureRuntime) boundedResources() bool {
+	// Do not inherit the daemon's descriptor limit: a native host can pass a
+	// hard limit above its kernel nr_open into this container.
+	return runtime.NanoCPUs == 1_000_000_000 && runtime.Memory == 536870912 &&
+		runtime.MemorySwap == 536870912 && runtime.Pids == 128 &&
+		len(runtime.Ulimits) == 1 && runtime.Ulimits[0].Name == "nofile" &&
+		runtime.Ulimits[0].Soft == 4096 && runtime.Ulimits[0].Hard == 4096
+}
+
 func validSHA256(value string) bool {
 	if len(value) != len("sha256:")+sha256.Size*2 || !strings.HasPrefix(value, "sha256:") {
 		return false
@@ -168,6 +191,7 @@ func startSecurityMailFixture(
 		"--network", network.ID,
 		"--network-alias", fixture.alias,
 		"--cpus", "1", "--memory", "536870912", "--memory-swap", "536870912", "--pids-limit", "128",
+		"--ulimit", "nofile=4096:4096",
 		config.securityMailFixtureID,
 	)
 	if err != nil {
@@ -177,24 +201,15 @@ func startSecurityMailFixture(
 	if !regexp.MustCompile(`^[a-f0-9]{64}$`).MatchString(fixture.containerID) {
 		return failFixture("security-mail-fixture-container-identity")
 	}
-	var observed struct {
-		ID, Name, Image, NetworkMode, Restart string
-		Running                               bool
-		Labels                                map[string]string
-		NanoCPUs, Memory, MemorySwap, Pids    int64
-		Ports                                 map[string][]struct{ HostIP, HostPort string }
-		Mounts                                []json.RawMessage
-		Networks                              map[string]struct{ Aliases []string }
-	}
-	projection = `{"ID":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},"Running":{{json .State.Running}},"Labels":{{json .Config.Labels}},"NetworkMode":{{json .HostConfig.NetworkMode}},"Restart":{{json .HostConfig.RestartPolicy.Name}},"NanoCPUs":{{json .HostConfig.NanoCpus}},"Memory":{{json .HostConfig.Memory}},"MemorySwap":{{json .HostConfig.MemorySwap}},"Pids":{{json .HostConfig.PidsLimit}},"Ports":{{json .NetworkSettings.Ports}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}}}`
+	var observed securityMailFixtureRuntime
+	projection = `{"ID":{{json .Id}},"Name":{{json .Name}},"Image":{{json .Image}},"Running":{{json .State.Running}},"Labels":{{json .Config.Labels}},"NetworkMode":{{json .HostConfig.NetworkMode}},"Restart":{{json .HostConfig.RestartPolicy.Name}},"NanoCPUs":{{json .HostConfig.NanoCpus}},"Memory":{{json .HostConfig.Memory}},"MemorySwap":{{json .HostConfig.MemorySwap}},"Pids":{{json .HostConfig.PidsLimit}},"Ports":{{json .NetworkSettings.Ports}},"Mounts":{{json .Mounts}},"Networks":{{json .NetworkSettings.Networks}},"Ulimits":{{json .HostConfig.Ulimits}}}`
 	encoded, err = docker(ctx, "container", "inspect", "--format", projection, fixture.containerID)
 	if err != nil || json.Unmarshal(encoded, &observed) != nil || observed.ID != fixture.containerID ||
 		observed.Name != "/"+name || observed.Image != fixture.imageID || !observed.Running ||
 		observed.Labels["com.xiak.matrix.test"] != "phase1-security-mail" ||
 		observed.Labels["com.xiak.matrix.installation"] != installationID || observed.Restart != "no" ||
 		observed.NetworkMode != network.ID ||
-		observed.NanoCPUs != 1_000_000_000 || observed.Memory != 536870912 || observed.MemorySwap != 536870912 ||
-		observed.Pids != 128 || len(observed.Mounts) != 0 || len(observed.Networks) != 1 {
+		!observed.boundedResources() || len(observed.Mounts) != 0 || len(observed.Networks) != 1 {
 		return failFixture("security-mail-fixture-runtime-boundary")
 	}
 	for _, bindings := range observed.Ports {
