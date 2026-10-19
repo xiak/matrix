@@ -56,6 +56,8 @@ Session并发测试的固定修正为`38a2cda69ec547c9e8d9d557bf61a3bcd992335c`�
 
 当前真实浏览器已证明User资料/状态恢复、Group Membership添加/移除恢复、Group策略附件CREATE/REVOKE只读恢复，以及Account安全设置的正常完整替换。2026-10-19的当前9621产品与26deca2测试固定对象另已完成Group删除和GROUP/USER附件撤销的可见完成回执、明确导航、下一请求权限变化、唯一完成/outbox/Audit及完整链；精确请求、查询范围与运行证据由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有，不扩大为跨action的request唯一性。ROLE/REVOKE及后继SET_DEFAULT都只到最终确认，未提交且已停止各自fixture；当前CREATE回执、Role附件、默认切换、日常改密和010其余非Deferred页面仍未完成。日常改密原测试owner已补true/false及已退出Session不复活的后置断言，默认/聚焦race与静态检查通过不等于页面已执行。默认CI跳过的浏览器入口、专属Postfix邮件子测试不能按成功计；当前Linux前端通过也不宣称此前Windows边缘超时和既有React警告已消失。安全通知的真实投递证据仍由009拥有，不能以Audit或通知任务入队替代。
 
+当前后继UI消费者`2d853754ab0f1f0608355665fbb9011315b3779f`的[Verification 39288898228](https://github.com/xiak/matrix/actions/runs/39288898228) attempt 1仍在运行，不能继承已接受源码或先前CI。它只补AccessKey页面衔接，本地组件与交付构建证据归010。此前`ef10d51bfbf120ec521e665bac9d54b14fa26c0d`的[Verification 39284297226](https://github.com/xiak/matrix/actions/runs/39284297226) attempt 1已独立闭合为failure：19项job为17成功、managed-products及派生汇总失败；57个顶层根为56 PASS、1 FAIL。唯一失败根`TestManagedProductProviderProcesses`为39.94秒，worker在取得HTTP 200之前以exit 1输出`PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_TIMEOUT`；原5秒Observe预算没有修改。日志不含底层命令/连接根因，不能归因为网络或资源抖动，两个前置PostgreSQL根成功不等于四产品完成。[Issue #6](https://github.com/xiak/matrix/issues/6)拥有后续诊断工作。原失败不会被新SHA或局部绿色结果覆盖；现有签名接受基线仍为9621。
+
 ## 高风险测试矩阵
 
 - Tenant/Account：相同用户名、组名、策略名、资源 ID/key，错误 header/body/path/cursor 不能切换。

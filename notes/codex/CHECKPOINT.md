@@ -7,37 +7,50 @@
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   The IAM first-release goal remains ACTIVE and incomplete.
 - Current fixed UI consumer:
-  `f31267814e6449772ded8c785aed897531329533`, parent
-  `72fd2dbcbcec89de4babecfb680ce397483278f2`.
-  Selectively ADAPT UX `1da15f7e005d9b888d0f5342d8a42a0f17f1e2f2`
-  and required correction `1329abbb0a30349eda8f939d3df469b0abdb0561`.
-  Six production blobs match the corrected donor; original consumer tests
-  remain and embedded assets were rebuilt here. No backend API, SQL or
+  `2d853754ab0f1f0608355665fbb9011315b3779f`, parent
+  `5e78e32c1dacb9ce095403155ee755b53d708524`.
+  Selectively ADAPT UX `fd3cf32c70f608b4048749a5289750e473975825`,
+  parent `9d0e3b9729eeb53cc07cbff54b651ff730afd648`.
+  Seven production blobs match the fixed donor; both consumer test files'
+  differences and original login interactions remain. Embedded assets were
+  rebuilt here. No backend API, SQL or
   IAM87/Audit39/PaaS7+r37 change.
-- Four independent regressions fail on the first donor (7.72s) and pass
-  unchanged on its correction (8.37s): failed storage reads/writes,
-  malformed persisted intents, and completed read-back incorrectly requiring
-  the old write permission. Both complete renderer files pass 278/278 in
-  75.77s. Type/lint/architecture,234 contrast pairs,eight Node tests and
+- The earlier f312 storage/read-back fixes remain, including four independent
+  7.72s red / 8.37s unchanged green regressions. The new four page connections
+  fail before fd3 and pass unchanged after it; the prior client-change case
+  remains green. Three added consumer negatives prove rejected/wrong-owner
+  reads stay locked with zero key writes and stale client callbacks cannot
+  open a later identity's directory. Both complete renderer files pass 285/285
+  in85.99s. Type/lint/architecture,234 contrast pairs,eight Node tests and
   dual two-worker export comparison (324 files) pass. Go UI/architecture/
-  default authorityprocess race, vet and Linux UI build pass.
+  default authorityprocess race 7.277/2.342/3.910s, vet and Linux UI build pass.
   These are local gates, not LIVE or independent-CI acceptance.
 - Issue https://github.com/xiak/matrix/issues/5 remains OPEN. Fixed consumer
-  and remaining UI items are recorded at
-  https://github.com/xiak/matrix/issues/5#issuecomment-6271949487 .
+  and remaining real-browser items are recorded at
+  https://github.com/xiak/matrix/issues/5#issuecomment-6272714813 .
   FEAT010 owns exact-owner recovery across directory pages/failures,
   User policies/keys section navigation and one-time Secret leave protection.
-  No global key lookup or invented Access Analysis owner relationship.
-- Test-only descendant
+  These three connections are implemented, not browser-accepted. No global
+  key lookup or invented Access Analysis owner relationship.
+- Earlier test-only fixed source
   `ef10d51bfbf120ec521e665bac9d54b14fa26c0d` keeps closed rollback error
   categories and original receipt assertions in the existing phase1e2e owner.
   Its opt-in prepared-B rollback diagnostic is not a second lifecycle suite.
   phase1e2e/platformcommand/CLI race 3.133/20.880/2.534s and vet pass.
 - Sole unclosed CI tuple:
-  ef10d51 / Verification39284297226 / attempt1,
-  https://github.com/xiak/matrix/actions/runs/39284297226 .
-  Last independently observed queued; no terminal acceptance yet.
+  2d853754 / Verification39288898228 / attempt1,
+  https://github.com/xiak/matrix/actions/runs/39288898228 .
+  Last independently observed in_progress; no terminal acceptance yet.
   Audit this exact tuple rather than restarting or retrieving closed runs.
+- ef10d51 / Verification39284297226 / attempt1 is CLOSED FAILURE, not queued
+  or cancelled: independent audit sealed19 logs,17success/2failure jobs,
+  56PASS/1FAIL of57 roots. ManagedProductProviderProcesses39.94s failed when
+  the worker exited1 before HTTP200 with
+  PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_TIMEOUT. The five-second Observe
+  budget is unchanged; the underlying command/connection cause is unproven.
+  Issue https://github.com/xiak/matrix/issues/6 owns diagnosis. No independent
+  IAM contract/security assertion failure is evidenced. Never re-fetch this
+  closed attempt or reinterpret two passing PG roots as four-product success.
 - Prior production `e1a96db06142f62508a26870edd8ce36cdc32780` has closed
   Verification39258833606 / attempt1: all nineteen jobs and necessary logs
   independently verified success. 57 authority roots RUN1/PASS1, complete
@@ -77,9 +90,9 @@ Read AGENTS, IAM/FEAT-IAM-010-console.md and IAM/FEAT-IAM-011-acceptance.md,
 then owning code/tests. Release work additionally reads FEAT005 and the
 verified platform-installation runbook. Keep each fact in its existing owner.
 
-Close the exact current CI and consume only a verified fixed UX follow-up for
-the three AccessKey page connections. Preserve the original four consumer
-regressions and no-secret/no-second-write boundaries. Real browser response-
+Close the exact current CI and complete the three AccessKey page connections'
+real-browser evidence. Preserve the original four consumer regressions and
+no-secret/no-second-write boundaries. Real browser response-
 loss, navigation, reauthentication and replay/read-back remain separate gates.
 Use a clean fixed signed candidate for final release acceptance; do not rerun
 the retired e1 full lifecycle merely to overwrite its earlier failure.
@@ -117,9 +130,10 @@ Keyboard专项 stays lower priority, not accepted.
 
 - UX/UI engineer `01a07b21-9a0d-7fd0-b090-7827ce18262e` owns UI/browser
   work. Fixed objects only, never WIP or inherited acceptance. Current
-  consumed1da+1329 and the three page gaps are in FEAT010/Issue5.
+  consumedfd3 and pending page acceptance are in FEAT010/Issue5; the donor's
+  900618f documentation/checkpoint was not imported.
 - Test Expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns independent
-  audit of the sole unclosed ef10/39284297226/attempt1 tuple.
+  audit of the sole unclosed2d853/39288898228/attempt1 tuple.
   No duplicate monitor, new task or new subagent.
 - User permits routine development/testing without repetitive approval;
   actual tool-specific restrictions remain.

@@ -72,7 +72,7 @@
 
 ### AccessKey 变更的原意图恢复
 
-沿用[007 的 K1 契约](FEAT-IAM-007-programmatic-credentials.md#k1管理入口与原子事实)，在既有 provider/renderer 内补齐状态变更、网络限制修改和删除的恢复流程，不新增通用回执接口、秘密恢复能力或第二套凭据模型。固定消费者`f31267814e6449772ded8c785aed897531329533`已修正离页或重新登录丢失原意图、已提交删除的key从目录消失后不能恢复的问题。本轮在其基础上选择性采用固定`fd3cf32c70f608b4048749a5289750e473975825`的准确User导航、原意图所属User读取和一次性Secret离页保护；具体采用边界归既有adoption owner。[Issue #5](https://github.com/xiak/matrix/issues/5)仍保持打开，本轮增量的独立CI及真实浏览器故障注入尚未验收。
+沿用[007 的 K1 契约](FEAT-IAM-007-programmatic-credentials.md#k1管理入口与原子事实)，在既有 provider/renderer 内补齐状态变更、网络限制修改和删除的恢复流程，不新增通用回执接口、秘密恢复能力或第二套凭据模型。固定消费者`f31267814e6449772ded8c785aed897531329533`已修正离页或重新登录丢失原意图、已提交删除的key从目录消失后不能恢复的问题。后继固定消费者`2d853754ab0f1f0608355665fbb9011315b3779f`在其基础上选择性采用固定`fd3cf32c70f608b4048749a5289750e473975825`的准确User导航、原意图所属User读取和一次性Secret离页保护；具体采用边界归既有adoption owner。[Issue #5](https://github.com/xiak/matrix/issues/5)仍保持打开，独立CI状态归[011](FEAT-IAM-011-acceptance.md#当前控制台与发布门禁)，真实浏览器故障注入尚未验收。
 
 待核对意图只保存非敏感的Account、actor、目标User/key、预期资源版本、操作、冻结输入、requestId及阶段；严格解析，不保存Secret、Bearer、OTP或密文。真正没有记录与存储不可读、畸形或错误绑定必须区分；后三者不得被当作空闲状态允许新写，发送前必须成功持久化原意图，清除失败不得解锁。离页、重挂载和同actor重新登录必须保留原意图，其他Account/actor不得消费它。UNKNOWN期间禁止自动重试或新意图替代；操作者只能明确重放完全相同的原请求，不能编辑原CIDR、状态或版本后继续沿用requestId。
 
