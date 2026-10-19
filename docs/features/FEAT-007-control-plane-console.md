@@ -2440,6 +2440,22 @@ completion time, target, Policy, attachment ID and resulting revision remain
 visible until explicit acknowledgement. No completion lookup or owner change
 can issue a second relationship write.
 
+The verified-owner follow-up is fixed at source
+`82954bcefe2abcad4d3f1d9c2189e0d5e6408a66`, based on parent
+`4d52ca50486aef230ae33df264756d45967e489b`. A replacement repository can
+finish an exact User or permission-boundary read before its independent
+current-identity read; that early detail must not make a direct User policy
+command actionable. One owner predicate now requires the current repository,
+Session and successfully verified identity before attachment review,
+revocation review, submission or original-completion inspection. The content
+controls remain disabled across that gap. The original non-secret UNKNOWN
+intent is retained and becomes inspectable, without replay, only after the
+replacement owner verifies. Two regressions first reproduced the unfenced
+controls and receipt read, then the complete Account access renderer file
+passed all 245 cases. Typecheck, changed-file lint, architecture and diff
+checks pass. No generated asset, backend contract, real IAM write or browser
+acceptance is claimed by this source-only follow-up.
+
 A confirmed complete Account security-settings replacement expires only the
 submitting Session and carries its exact request ID to the next login view.
 The explanation says why a new identity context is required without claiming
