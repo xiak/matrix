@@ -1,6 +1,6 @@
 # FEAT-IAM-003：主账号、用户与凭据生命周期
 
-- 状态：实现中；Account/RootIdentity/User 命名替换、现有生命周期、显式管理能力、用户详情/资料/安全删除及 User 资料/状态命令的不确定响应恢复已有真实后端验证。固定源码 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` 的 IAM87+r37 独立 CI、同 Profile 签名生命周期和重启复验已通过；010 拥有的 User 资料/状态与 Group Membership 原命令恢复 UI 源码、完整前端检查和嵌入构建已经消费分支验证，仍待该固定消费源码的独立 CI、同 Profile 签名运行及真实浏览器效果门禁，整体未验收。
+- 状态：实施中；Account/RootIdentity/User 命名、生命周期、显式管理能力、User 详情/资料/安全删除及不确定响应的只读完成查询已实现。当前消费源码的独立 CI、同 Profile 签名生命周期和重启证据归[011](FEAT-IAM-011-acceptance.md)及原安装 owner；User 资料/状态与 Group Membership 恢复的真实浏览器证据由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有，不再列作未执行。日常改密选项、原 Root 恢复最终提交及010矩阵其余非Deferred路径仍未全部验收，因此整体未验收。
 - 依赖：002。
 - Owner：IAM 账号/身份与安装 primary 的接口协作。
 
