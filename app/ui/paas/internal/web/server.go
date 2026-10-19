@@ -141,6 +141,17 @@ func validStaticQuery(request *http.Request, assetName string) bool {
 			default:
 				return false
 			}
+		case "tab":
+			// User detail tabs are client-owned view state, not authority
+			// selectors. Keep them bound to one exact User workspace.
+			if route != "console/access/users" || len(values["id"]) != 1 || values["id"][0] == "" {
+				return false
+			}
+			switch entries[0] {
+			case "identity", "access", "policies", "groups", "security", "keys":
+			default:
+				return false
+			}
 		default:
 			return false
 		}
