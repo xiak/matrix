@@ -86,7 +86,7 @@
 
 既有authorityprocess owner新增可选AccessKey浏览器恢复入口，选择SET_STATUS、NETWORK或DELETE之一，API只准备可丢弃User、密钥及显式Policy/Attachment；冻结bootstrap策略不能隐式取得新增密钥权限。响应丢失后必须实际操作页面，沿原意图精确重放一次并另做授权目录读取；结束标记只触发原版本单增、唯一完成/outbox/Audit及租户完整链的后验，标记本身不构成验收。默认observer回归拒绝变化的请求体、来源、目标、失败重放、额外写以及重放前的读取。该门禁不声称浏览器创建密钥、保存一次性Secret或程序访问已完成。
 
-本轮Windows服务经SSH访问远端数据库的准备在PaaS installation verify处71.75秒超时；改为同机独立PG18.4及真实服务后越过该步骤，随后修正了测试遗漏显式密钥授权导致的合法403，未放宽产品权限。服务与PG合计2CPU/4GiB，现有入口使用校验过的Go1.26.3、GOMAXPROCS2、`-p 2`和独立源码副本。该浏览器运行未启用race，不替代前述race/独立CI。修复静态服务后的真实URL已显示登录页；尚未提交任何浏览器密钥命令或完成标记，UNKNOWN恢复、三项效果和签名组合仍未验收。
+本轮Windows服务经SSH访问远端数据库的准备在PaaS installation verify处71.75秒超时；改为同机独立PG18.4及真实服务后越过该步骤，随后修正了测试遗漏显式密钥授权导致的合法403，未放宽产品权限。服务与PG合计2CPU/4GiB，现有入口使用校验过的Go1.26.3、GOMAXPROCS2、`-p 2`和独立源码副本。该浏览器运行未启用race，不替代前述race/独立CI。修复静态服务后的真实URL只取得登录页证据；SET_STATUS门禁最终在1800.02秒以浏览器完成超时失败退出（package1800.038秒、容器exit1、OOM=false），没有完成标记，不能接受UNKNOWN恢复或密钥效果，也不能据此断言产品命令失败。准确核对终态和owner/task标签后，已关闭转发并删除该轮独占runner、PG容器及空网络；PG仅使用tmpfs，合成数据不保留。没有重启远端/共享引擎，没有自动重跑此页面门禁；先前工具拒绝删除的源码、依赖和SDK归档仍保留，不将其计为已清理。三项真实页面效果及后继签名组合仍未验收。
 
 最小验收沿原provider/repository/renderer及真实进程owner，不另建测试框架：
 
@@ -442,7 +442,9 @@ Group删除沿用原严格结果校验，并在对话框卸载后保留独立回
 
 请求pending时禁止重复写；401、409、422和非法回包不得显示成功或切换到首次登录流程。无法确认结果时立即清除密码字段并锁住同一Session的后续改密，repository替换和迟到响应不得解除；只有新的正常认证所有者才能清除该非敏感阻断状态。成功后仍在当前内容区展示结果，不写入浏览器存储、不退出当前Session、不导航；明示`false`只请求保留服务端判定仍有效的其他会话，不能复活已过期或已撤销会话。
 
-消费分支固定`53bca8baeb15283d4c3100169e19eb73ae4b87ab`的[Verification 38994516955](https://github.com/xiak/matrix/actions/runs/38994516955)已按精确SHA核实十九项作业全部`completed/success`。`console`在Node22.22.2/npm11.6.4实际通过75个Vitest文件、1732项测试和8项Node构建边界测试，234组对比度、两次59页/57路径生产导出与324项嵌入逐字一致；十四个authority lane的57个顶层根全部实际RUN/PASS。七个需要专属Postfix的邮件子测试和默认opt-in浏览器入口按既定边界跳过，因此该CI接受组件、HTTP适配、生成物和默认回归，不替代真实日常改密页面提交。
+当前消费者`5935fa5005529b2c4e1da943b98f49300430ba10`的SessionProvider、PasswordChangeForm、iamRepository和httpIamRepository四个生产blob均与UX/UI固定`14dccb1df71952fed5f6eb5581114a82c3da6ad1`一致，没有新的UI实现缺口或补丁。本分支独立运行现有SessionProvider、LoginRenderer和httpIamRepository三个测试文件，在Node22.22.2、单worker、2GiB堆下306项22.58秒通过，typecheck及四个生产路径ESLint通过；不继承另一分支的测试结果。
+
+这些用例证明省略/true/false的准确wire、强制模式两层固定true、同一认证所有者的重复/UNKNOWN写阻断，以及更换Session/repository后丢弃迟到成功与401。HTTP成功只接受严格的changedAt与bootstrapFileRetirable，不接受伪Session或额外字段；提示不推断其他Session的撤销数量，不把bootstrapFileRetirable变成普通用户权限。精确独立CI与签名组合状态由011拥有；这里的组件和HTTP适配结果不替代真实改密页面提交或数据库后验。
 
 既有`authorityprocess` owner提供同一个显式opt-in日常改密浏览器门禁。`MATRIX_IAM_DAILY_PASSWORD_REVOKE_OTHER_SESSIONS`省略或为`true`时检查默认退出其他会话，为`false`时要求页面显式取消该选项；其他值拒绝。两个模式各用独立空库，先准备同一普通User的两个有效generation-2 Session及一个已正常退出的Session，再由浏览器建立准确调用Session并提交下一密码，不另造套件或生产开关。
 
