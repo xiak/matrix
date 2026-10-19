@@ -2,7 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
-import { useSession, useSessionCredential } from "./SessionProvider";
+import { useSession, useSessionCredential, type SessionSignInNotice } from "./SessionProvider";
 import { useLiveUserCreation, type UserCreationClient } from "./userCreation";
 import { useLivePolicyMutation, type PolicyMutationClient } from "./policyMutation";
 import { UserManagementReviewRejected } from "./userManagementMutation";
@@ -1752,9 +1752,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     const mutationIntent = securitySettingsIntent?.accountId === accountId && securitySettingsIntent.actorId === principalId
       ? securitySettingsIntent : null;
     const knownStartRejection = (failure: unknown) => failure instanceof HttpProblem && [400, 401, 403, 409, 413, 415, 422, 429].includes(failure.status);
-    const expireCurrent = () => {
+    const expireCurrent = (notice?: SessionSignInNotice) => {
       if (currentSettingsOwner.current !== settingsOwner) return;
-      if (expireSession(credential, sessionRevision)) {
+      if (expireSession(credential, sessionRevision, notice)) {
         setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
       }
     };
@@ -1892,7 +1892,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
             });
             const completed = { ...unknown, state: "COMPLETED" as const };
             replaceMutation(unknown, completed);
-            expireCurrent();
+            expireCurrent({ kind: "SECURITY_SETTINGS_UPDATED", requestId: current.requestId });
             return result.change;
           } catch (failure) {
             // Once PUT was dispatched, every failure is outcome-unknown. Keep
@@ -1910,6 +1910,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           try {
             const change = await updater.changeByRequest(credential, accountId, current.requestId, current.settings);
             replaceMutation(current, { ...current, state: "COMPLETED" });
+            expireCurrent({ kind: "SECURITY_SETTINGS_UPDATED", requestId: current.requestId });
             return change;
           } catch (failure) {
             if (failure instanceof HttpProblem && failure.status === 401) expireCurrent();

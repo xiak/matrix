@@ -439,6 +439,7 @@ function SecuritySettingsIntentProbe({ proposed = { expectedResourceVersion: acc
   return <>
     <button onClick={() => void session.login("admin", "password")}>login-settings-probe</button>
     <output aria-label="settings-probe-session">{session.phase}</output>
+    <output aria-label="settings-sign-in-notice">{session.signInNotice ? `${session.signInNotice.kind}:${session.signInNotice.requestId}` : "none"}</output>
     <button disabled={!update || Boolean(intent)} onClick={() => { if (update) void update.begin(accountSecuritySettings, proposed, 7).catch(() => {}); }}>begin-settings</button>
     <button disabled={!update || intent?.state !== "STEP_UP_UNKNOWN"} onClick={() => { if (update) void update.retryStepUp().catch(() => {}); }}>retry-settings-step-up</button>
     <button disabled={!update || intent?.state !== "PENDING"} onClick={() => { if (update) void update.verifyStepUp({ requestId: `ui-account-security-settings-verify-${"b".repeat(32)}`, password: "test-password", code: "123456" }).catch(() => {}); }}>verify-settings-step-up</button>
@@ -1097,6 +1098,7 @@ describe("account access", () => {
     expect(JSON.stringify(sessionStorage)).not.toContain("test-password");
     await user.click(screen.getByRole("button", { name: "apply-settings" }));
     await waitFor(() => expect(screen.getByLabelText("settings-probe-session").textContent).toBe("anonymous"));
+    expect(screen.getByLabelText("settings-sign-in-notice").textContent).toBe(`SECURITY_SETTINGS_UPDATED:${startStepUp.mock.calls[1]![1].requestId}`);
     expect(apply).toHaveBeenCalledWith(credential, account.id, expect.objectContaining({
       requestId: startStepUp.mock.calls[1]![1].requestId,
       stepUpId: "step-up-settings-one",
@@ -1160,9 +1162,13 @@ describe("account access", () => {
     expect(apply).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByRole("button", { name: "inspect-settings" }));
-    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("COMPLETED"));
+    await waitFor(() => expect(screen.getByLabelText("settings-probe-session").textContent).toBe("anonymous"));
     expect(changeByRequest).toHaveBeenNthCalledWith(2, credential, account.id, originalRequestId, startStepUp.mock.calls[0]![1].intent);
-    expect(screen.getByLabelText("settings-probe-session").textContent).toBe("authenticated");
+    expect(screen.getByLabelText("settings-sign-in-notice").textContent).toBe(`SECURITY_SETTINGS_UPDATED:${originalRequestId}`);
+    expect(sessionStorage.getItem(sessionStorage.key(0)!)).toContain('"state":"COMPLETED"');
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("COMPLETED"));
+    expect(screen.getByLabelText("settings-sign-in-notice").textContent).toBe("none");
     expect(apply).toHaveBeenCalledTimes(1);
   });
 
@@ -2061,6 +2067,9 @@ describe("account access", () => {
     expect(readUserManagementIntent(sessionStorage, intent)).toEqual(intent); expect(readCompletion).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "查询原请求结果" }));
     await waitFor(() => expect(readCompletion).toHaveBeenCalledExactlyOnceWith(credential, intent));
+    const workflow = within(screen.getByRole("group", { name: /变更用户状态 · developer/ }));
+    expect(workflow.getAllByText("尚未确认原请求结果，请勿再次提交其他更改。")).toHaveLength(1);
+    expect(workflow.getByRole("button", { name: "稍后查询" })).toBeTruthy();
     expect(readUserManagementIntent(sessionStorage, intent)).toEqual(intent); expect(screen.queryByRole("button", { name: "确认禁用" })).toBeNull();
     expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull(); expect(screen.queryByRole("status", { name: "已确认原用户变更" })).toBeNull();
     expect(submit).toHaveBeenCalledOnce(); expect(repository.execute).not.toHaveBeenCalled(); expect(view.container.textContent).not.toContain("PRIVATE LOOKUP");

@@ -13,6 +13,8 @@
 .capabilities span { display: flex; align-items: center; gap: var(--xiak-spacing-tight); }
 .capabilities svg { width: 16px; height: 16px; color: var(--xiak-color-brand); }
 .loginCard { min-width: 0; border: var(--xiak-border-subtle); border-top: 2px solid var(--xiak-color-brand); border-radius: var(--xiak-radius-small); padding: clamp(24px, 3vw, 40px); background: var(--xiak-color-bg-panel); }
+.signInNotice { margin-bottom: var(--xiak-spacing-roomy); }
+.signInNotice code { overflow-wrap: anywhere; }
 .cardHeading { display: grid; gap: var(--xiak-spacing-default); margin-bottom: var(--xiak-spacing-roomy); }
 .cardHeading h1 { margin: 0; color: var(--xiak-color-text-strong); font-size: 24px; font-weight: var(--xiak-font-weight-semibold); line-height: 1.4; }
 .cardHeading > p { color: var(--xiak-color-text-muted); line-height: 1.7; }

@@ -157,9 +157,9 @@ export function WorkspaceDetail({ title, onBack, backLabel, actions, children, e
   return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{resolvedBackLabel}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: resolvedBackLabel, onClick: onBack }} actions={commands} focus={focus} />}{children}</div>;
 }
 
-export function WorkspaceInlineForm({ title, onClose, onBack, onSubmit, children, backLabel, submitLabel, submitDisabled, submitVariant, validationError, operation, draft }: {
+export function WorkspaceInlineForm({ title, onClose, onBack, onSubmit, children, backLabel, submitLabel, cancelLabel, submitDisabled, submitVariant, validationError, operation, draft }: {
   title: string; onClose(): void; onBack?(): void; onSubmit(): Promise<boolean>; children: ReactNode;
-  backLabel?: string; submitLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"];
+  backLabel?: string; submitLabel?: string; cancelLabel?: string; submitDisabled?: boolean; submitVariant?: ComponentProps<typeof Button>["variant"];
   validationError?: string; operation?: { busy: boolean; error?: string; clearError(): void };
   draft?: { dirty: boolean; title: string; description: string };
 }) {
@@ -193,7 +193,7 @@ export function WorkspaceInlineForm({ title, onClose, onBack, onSubmit, children
     }}>
       {error ? <Alert status="danger" tabIndex={-1}>{error}</Alert> : null}
       <fieldset className={styles.editorFields} disabled={busy}>{children}</fieldset>
-      <div className={styles.actions}><Button type="submit" variant={submitVariant} disabled={busy || submitDisabled}>{submitLabel ?? t("save")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={leave}>{t("cancel")}</Button></div>
+      <div className={styles.actions}><Button type="submit" variant={submitVariant} disabled={busy || submitDisabled}>{submitLabel ?? t("save")}</Button><Button type="button" variant="secondary" disabled={busy} onClick={leave}>{cancelLabel ?? t("cancel")}</Button></div>
     </form>
   </section>;
 }
@@ -235,7 +235,7 @@ export function WorkspaceDelete({ name, onClose, onConfirm, impact, hint, operat
   </WorkspaceDialog>;
 }
 
-export function WorkspaceSelection({ label, options, value, onChange, limit = 30 }: { label: string; options: { id: string; name: string; description?: string }[]; value: string[]; onChange(ids: string[]): void; limit?: number }) {
+export function WorkspaceSelection({ label, options, value, onChange, limit = 30, footnote }: { label: string; options: { id: string; name: string; description?: string }[]; value: string[]; onChange(ids: string[]): void; limit?: number; footnote?: ReactNode }) {
   const t = useTranslations("IamWorkspace");
   const selectionLimit = Math.max(1, Math.floor(limit));
   const remove = (id: string) => onChange(value.filter((entry) => entry !== id));
@@ -243,5 +243,5 @@ export function WorkspaceSelection({ label, options, value, onChange, limit = 30
     selected={value.map((id) => { const option = options.find((entry) => entry.id === id); return { id, label: option?.name ?? id, description: option?.description }; })}
     onSelect={(ids, checked) => { const next = checked ? [...new Set([...value, ...ids])] : value.filter((id) => !ids.includes(id)); if (next.length <= selectionLimit) onChange(next); }} onRemove={remove} onClear={() => onChange([])}
     labels={{ available: label, selected: t("selectCount", { count: value.length }), search: label + " · " + t("search"), clearSearch: t("clear"), clearSelected: t("clearSelection"), empty: t("selectionEmpty"), emptyHint: t("selectionEmptyHint"), noResults: t("noResults"), noOptions: t("empty"), remove: (name) => t("removeSelection", { name }), previous: t("previous"), next: t("next"), page: (page, pages) => t("page", { page, pages }), selectPage: t("selectPage"), clearPage: t("clearPage"), pageSelection: (selected, total) => t("pageSelection", { selected, total }), limit: (remaining, needed) => t("pageSelectionLimit", { remaining, needed }) }}
-    footnote={t(selectionLimit === 1 ? "singleSelectionLimit" : "selectionLimit")} />;
+    footnote={footnote ?? t(selectionLimit === 1 ? "singleSelectionLimit" : "selectionLimit")} />;
 }

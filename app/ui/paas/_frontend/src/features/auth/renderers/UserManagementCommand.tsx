@@ -41,6 +41,7 @@ export function UserManagementEditor({ userId, user, mode, command, onClose, onC
   return <WorkspaceInlineForm title={title} backLabel={t(pending ? "backToUsers" : "backToUser")} onClose={onClose}
     operation={{ busy: command.busy, clearError: () => undefined }}
     draft={{ dirty: !pending && mode === "rename" && (Boolean(review) || name !== (user?.name ?? "")), title, description: t("leaveHint") }}
+    cancelLabel={pending && !command.receipt ? t("later") : undefined}
     submitLabel={pending ? command.receipt ? t("finish") : t("inspect") : !review ? t("review") : review.operation === "USER_UPDATE" ? a("saveDisplayName") : a(review.intendedStatus === "DISABLED" ? "confirmDisable" : "confirmEnable")}
     submitVariant={!pending && review?.operation === "USER_SET_STATUS" && review.intendedStatus === "DISABLED" ? "danger" : "primary"}
     submitDisabled={pending && command.receipt ? false : !command.ready || !pending && (!allowed || stale || !review && (!userManagementDisplayNameValid(name.trim()) || name.trim() === user?.name))}
@@ -55,9 +56,9 @@ export function UserManagementEditor({ userId, user, mode, command, onClose, onC
       return false;
     }}>
     {command.recoveryError ? <Alert status="danger">{t("storageUnavailable")}</Alert> : null}
-    {command.busy ? <p role="status">{t("working")}</p> : command.error ? <Alert status={pending ? "warning" : "danger"}>{pending ? t("unconfirmed") : a(`errors.${command.error}`)}</Alert> : null}
+    {command.busy ? <p role="status">{t("working")}</p> : command.error && !pending ? <Alert status="danger">{a(`errors.${command.error}`)}</Alert> : null}
     {pending ? <>
-      {!command.receipt && !command.busy && !command.recoveryError ? <Alert status="warning">{t("unknown")}</Alert> : null}
+      {!command.receipt && !command.busy && !command.recoveryError ? <Alert status="warning"><strong>{t("unknown")}</strong>{command.error ? <p>{t("lastInspection", { reason: a(`errors.${command.error}`) })}</p> : null}</Alert> : null}
       <dl className={styles.facts}>
         <div><dt>{t("account")}</dt><dd><code>{pending.accountId}</code></dd></div><div><dt>{t("actor")}</dt><dd><code>{pending.actorPrincipalId}</code></dd></div>
         <div><dt>{t("user")}</dt><dd><code>{pending.userId}</code></dd></div><div><dt>{t("request")}</dt><dd><code>{pending.commandRequestId}</code></dd></div>

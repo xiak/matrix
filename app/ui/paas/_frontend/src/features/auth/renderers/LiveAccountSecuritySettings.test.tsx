@@ -50,7 +50,7 @@ describe("live account security settings", () => {
     expect(screen.getByRole("heading", { name: "账号安全规则" })).toBeTruthy();
     expect(await screen.findByText("用户可选")).toBeTruthy();
     expect(screen.getByText("account-one")).toBeTruthy();
-    expect(screen.getByText(/不能证明本人已绑定验证器/)).toBeTruthy();
+    expect(screen.getByText(/不代表当前本人已绑定验证器/)).toBeTruthy();
     expect(screen.getByText(/至少 15 个码点/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: /编辑|保存/ })).toBeNull();
     expect(source.load).toHaveBeenCalledTimes(1);

@@ -25,7 +25,7 @@ import {
   type GroupDirectoryRecord
 } from "./GroupAccessWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
-import { PolicyAttachmentChangeFeedback, readPendingPolicyAttachmentChange, usePolicyAttachmentCommand } from "./PolicyAttachmentChangeFlow";
+import { PolicyAttachmentChangeFeedback, PolicyAttachmentReview, readPendingPolicyAttachmentChange, usePolicyAttachmentCommand } from "./PolicyAttachmentChangeFlow";
 
 type OpenGroupEntity = (view: AccountAccessView, id?: string) => void;
 type GroupChange = { kind: "members" | "policies"; mode: "add" | "remove" };
@@ -121,7 +121,7 @@ function LiveGroupPolicyEditor({ client, access, scene, mode, onClose, onChanged
     ? [restoredPolicyIntent.operation === "CREATE" ? restoredPolicyIntent.policyId : restoredPolicyIntent.attachmentId]
     : []);
   const [review, setReview] = useState(Boolean(restoredPolicyIntent));
-  const requestId = useRef(restoredPolicyIntent?.requestId ?? commandId());
+  const [requestId, setRequestId] = useState(restoredPolicyIntent?.requestId ?? commandId());
   const policyById = useMemo(() => new Map(scene.policies.map((policy) => [policy.id, policy])), [scene.policies]);
   const attachedPolicyIds = useMemo(() => new Set(access.policyAttachments.map((entry) => entry.policyId)), [access.policyAttachments]);
   const options = useMemo(() => {
@@ -162,12 +162,21 @@ function LiveGroupPolicyEditor({ client, access, scene, mode, onClose, onChanged
   const selectedName = selected?.name ?? (policyCommand.intent?.operation === "CREATE"
     ? policyCommand.intent.policyId
     : policyCommand.intent?.attachmentId);
+  const selectedPolicy = mode === "add" && selection[0] ? policyById.get(selection[0]) : undefined;
+  const selectedAttachment = mode === "remove" ? access.policyAttachments.find((entry) => entry.id === selection[0]) : undefined;
+  const reviewExpectation = policyCommand.intent ?? (mode === "add" && selectedPolicy
+    ? { operation: "CREATE" as const, target: policyScope.target, policyId: selectedPolicy.id, policyResourceVersion: selectedPolicy.resourceVersion, requestId }
+    : mode === "remove" && selectedAttachment
+      ? { operation: "REVOKE" as const, attachmentId: selectedAttachment.id, expectedResourceVersion: selectedAttachment.resourceVersion, requestId }
+      : null);
+  const reviewPolicyId = reviewExpectation?.operation === "CREATE" ? reviewExpectation.policyId : selectedAttachment?.policyId;
+  const reviewPolicyName = reviewPolicyId ? policyById.get(reviewPolicyId)?.displayName : undefined;
 
   const select = (ids: string[]) => {
     if (policyLocked) return;
     setSelection(ids);
     setReview(false);
-    requestId.current = commandId();
+    setRequestId(commandId());
     policyCommand.reset();
   };
 
@@ -175,34 +184,37 @@ function LiveGroupPolicyEditor({ client, access, scene, mode, onClose, onChanged
     title={`${label} · ${access.group.name}`}
     backLabel={t("backToGroupDetails")}
     onClose={onClose}
-    submitLabel={policyCommand.state.phase === "unknown" ? p("checkOriginalRequest") : policyCommand.state.phase === "checking" ? p("checking") : t(review ? "confirmChange" : "reviewChange")}
-    submitDisabled={policyCommand.state.phase === "refreshFailed" || !recoveringPolicy && !selection.length}
+    cancelLabel={recoveringPolicy ? p("later") : policyCommand.state.phase === "completed" ? p("backToDetail") : undefined}
+    submitLabel={policyCommand.state.phase === "completed" ? p("finish") : policyCommand.state.phase === "unknown" ? p("checkOriginalRequest") : policyCommand.state.phase === "checking" ? p("checking") : t(review ? "confirmChange" : "reviewChange")}
+    submitDisabled={policyCommand.state.phase !== "completed" && (policyCommand.state.phase === "refreshFailed" || !recoveringPolicy && !selection.length)}
     operation={{ busy: policyBusy, clearError: () => undefined }}
-    draft={{ dirty: Boolean(selection.length) || review || policyLocked, title: label, description: p("unknownHint") }}
+    draft={{ dirty: policyCommand.state.phase === "idle" && (Boolean(selection.length) || review), title: label, description: p("unknownHint") }}
     onSubmit={async () => {
+      if (policyCommand.state.phase === "completed") { policyCommand.reset(); return true; }
       if (policyCommand.state.phase === "unknown") return policyCommand.inspectOriginal();
       if (!selected) return false;
       if (!review) { setReview(true); return false; }
       if (mode === "add") {
           const policy = scene.policies.find((entry) => entry.id === selected.id);
           if (!policy) throw new Error("STALE_GROUP_POLICY");
-          return policyCommand.run({ operation: "CREATE", target: { kind: "GROUP", id: access.group.id }, policyId: policy.id, policyResourceVersion: policy.resourceVersion, requestId: requestId.current });
+          return policyCommand.run({ operation: "CREATE", target: { kind: "GROUP", id: access.group.id }, policyId: policy.id, policyResourceVersion: policy.resourceVersion, requestId });
       } else {
           const attachment = access.policyAttachments.find((entry) => entry.id === selected.id);
           if (!attachment) throw new Error("STALE_GROUP_ATTACHMENT");
-          return policyCommand.run({ operation: "REVOKE", attachmentId: attachment.id, expectedResourceVersion: attachment.resourceVersion, requestId: requestId.current });
+          return policyCommand.run({ operation: "REVOKE", attachmentId: attachment.id, expectedResourceVersion: attachment.resourceVersion, requestId });
       }
     }}
   >
     <PolicyAttachmentChangeFeedback state={policyCommand.state} onRetryRead={policyCommand.retryRead} />
     {review ? <>
       <Alert status={mode === "remove" ? "warning" : "info"}>{t("singleRelationImpact")}</Alert>
-      <div className={styles.roleTags}><Badge>{selectedName}</Badge></div>
+      {reviewExpectation ? <PolicyAttachmentReview scope={policyScope} expectation={reviewExpectation} policyName={reviewPolicyName ?? selectedName} policyId={reviewPolicyId} /> : null}
       {mode === "remove" ? <Alert status="warning">{t("remainingSources")}</Alert> : null}
       <div><Button type="button" variant="secondary" disabled={policyLocked} onClick={() => { policyCommand.reset(); setReview(false); }}>{t("backToSelection")}</Button></div>
     </> : <>
       <Alert>{t("policyChangeHint")}</Alert>
-      <WorkspaceSelection label={label} options={options} value={selection} onChange={select} limit={1} />
+      <WorkspaceSelection label={label} options={options} value={selection} onChange={select} limit={1}
+        footnote={p(mode === "remove" ? "singleRevokeSelection" : "singleAttachSelection")} />
     </>}
   </WorkspaceInlineForm>;
 }
@@ -243,6 +255,7 @@ function LiveGroupMembershipEditor({ group, mode, memberships, scene, command, c
   const title = `${t(`${pending ? pending.operation === "CREATE" ? "add" : "remove" : mode}Members`)} · ${group.name}`;
   return <WorkspaceInlineForm title={title} onClose={onClose} backLabel={t("backToGroupDetails")}
     operation={{ busy: command.busy, clearError: () => undefined }}
+    cancelLabel={pending && !command.receipt ? m("later") : undefined}
     submitLabel={command.receipt && pending ? m("finish") : pending ? m("retryExact") : t(review ? "confirmChange" : "reviewChange")}
     submitDisabled={command.receipt && pending ? false : !command.ready || !pending && (!canBegin || !selected || staleReview)}
     draft={{ dirty: !pending && (Boolean(review) || selection.length > 0), title, description: m("leaveHint") }}
@@ -268,9 +281,9 @@ function LiveGroupMembershipEditor({ group, mode, memberships, scene, command, c
       return false;
     }}>
     {command.recoveryError ? <Alert status="danger">{m("storageUnavailable")}</Alert> : null}
-    {command.busy ? <p role="status">{m("working")}</p> : command.error ? <Alert status={pending ? "warning" : "danger"}>{a(`errors.${command.error}`)}</Alert> : null}
+    {command.busy ? <p role="status">{m("working")}</p> : command.error && !pending ? <Alert status="danger">{a(`errors.${command.error}`)}</Alert> : null}
     {pending ? <>
-      {!command.receipt && !command.busy && !command.recoveryError ? <Alert status="warning">{m("unknown")}</Alert> : null}
+      {!command.receipt && !command.busy && !command.recoveryError ? <Alert status="warning"><strong>{m("unknown")}</strong>{command.error ? <p>{m("lastAttempt", { reason: a(`errors.${command.error}`) })}</p> : null}</Alert> : null}
       <dl className={styles.facts}>
         <div><dt>{m("account")}</dt><dd><code>{pending.accountId}</code></dd></div>
         <div><dt>{m("actor")}</dt><dd><code>{pending.actorPrincipalId}</code></dd></div>
@@ -290,7 +303,8 @@ function LiveGroupMembershipEditor({ group, mode, memberships, scene, command, c
       <Button variant="secondary" type="button" onClick={() => setReview(null)}>{t("backToSelection")}</Button>
     </> : <>
       <Alert>{t("membershipHint")}</Alert>
-      <WorkspaceSelection label={t(`${mode}Members`)} options={options} value={selection} onChange={(value) => { setSelection(value); setReview(null); }} limit={1} />
+      <WorkspaceSelection label={t(`${mode}Members`)} options={options} value={selection} onChange={(value) => { setSelection(value); setReview(null); }} limit={1}
+        footnote={m(mode === "remove" ? "singleRemoveSelection" : "singleAddSelection")} />
       {mode === "add" && !scene.directoryComplete ? <p className={styles.note}>{t("loadedUsersOnly")}</p> : null}
     </>}
   </WorkspaceInlineForm>;

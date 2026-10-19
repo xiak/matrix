@@ -2370,7 +2370,7 @@ describe("CAM-style access workspace", () => {
     let workflow = within(screen.getByRole("group", { name: "添加成员 · LiveOperators" }));
     await user.click(workflow.getByRole("checkbox", { name: "chen" }));
     expect(workflow.getByRole("checkbox", { name: "qiao" })).toHaveProperty("disabled", true);
-    expect(workflow.getByText(/每次选择 1 项/)).toBeTruthy();
+    expect(workflow.getByText(/本次添加命令选择 1 个用户/)).toBeTruthy();
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
     expect(workflow.getByText(liveGroup.group.id)).toBeTruthy();
     await user.click(workflow.getByRole("button", { name: "确认变更" }));
@@ -2379,6 +2379,8 @@ describe("CAM-style access workspace", () => {
     expect(retained).toEqual(expect.any(String));
     workflow = within(screen.getByRole("group", { name: "添加成员 · LiveOperators" }));
     expect(workflow.getByText(/原命令结果未知/)).toBeTruthy();
+    expect(workflow.getAllByText(/原命令结果未知/)).toHaveLength(1);
+    expect(workflow.getByRole("button", { name: "稍后处理" })).toBeTruthy();
     expect(workflow.queryByRole("button", { name: "返回选择" })).toBeNull();
     await user.click(workflow.getByRole("button", { name: "等价重试原请求" }));
     expect(await screen.findByText("原成员关系命令已确认")).toBeTruthy();
@@ -2393,6 +2395,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByText("正在更新成员关系；更新完成前暂不可修改。")).toBeNull();
     expect(screen.getByRole("tab", { name: "成员" })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "成员 (2)" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "移除成员" }));
+    expect(within(screen.getByRole("group", { name: "移除成员 · LiveOperators" })).getByText(/本次移除命令选择 1 条成员关系/)).toBeTruthy();
   });
   it("restores an original Membership after remount without needing a current Group read or automatically replaying it", async () => {
     const groupId = "group-restored-membership"; const subject = reviewUsers.find((entry) => entry.user.loginName === "chen")!.user;
@@ -2489,6 +2493,9 @@ describe("CAM-style access workspace", () => {
     const workflow = within(screen.getByRole("group", { name: `关联策略 · ${liveGroup.group.name}` }));
     await user.click(workflow.getByRole("checkbox", { name: policy.displayName }));
     await user.click(workflow.getByRole("button", { name: "审阅变更" }));
+    expect(workflow.getByText(policy.displayName)).toBeTruthy();
+    expect(workflow.getByText(policy.id)).toBeTruthy();
+    expect(workflow.getByText(liveGroup.group.id)).toBeTruthy();
     await user.click(workflow.getByRole("button", { name: "确认变更" }));
 
     expect(await workflow.findByText("策略关联结果尚未确认")).toBeTruthy();
@@ -2506,6 +2513,10 @@ describe("CAM-style access workspace", () => {
       target: { kind: "GROUP", id: liveGroup.group.id }, policyId: policy.id, policyResourceVersion: policy.resourceVersion
     }));
     expect(createGroupPolicyAttachment).toHaveBeenCalledTimes(1);
+    const receipt = within(await resumedWorkflow.findByRole("status", { name: "原策略关联命令已确认" }));
+    expect(receipt.getByText(original.requestId)).toBeTruthy();
+    expect(receipt.getByText(attachment.id)).toBeTruthy();
+    await resumed.user.click(resumedWorkflow.getByRole("button", { name: "完成并返回详情" }));
     await resumed.user.click(await screen.findByRole("tab", { name: "直接关联策略 (1)" }));
     expect(await screen.findByRole("button", { name: policy.displayName })).toBeTruthy();
     expect(sessionStorage.length).toBe(0);

@@ -25,6 +25,11 @@ function open(iam = repository(), returnTo: string | undefined = "/console/resou
   render(<LocaleProvider><SessionProvider repository={iam}><LoginRenderer returnTo={returnTo} /></SessionProvider></LocaleProvider>);
   return { user, iam };
 }
+function SecuritySettingsSignOutHarness() {
+  const active = useSession();
+  if (!active.current) return <><button type="button" onClick={() => void active.login("admin", "password")}>Establish test Session</button><LoginRenderer /></>;
+  return <button type="button" onClick={() => active.expire("memory-only-token", active.sessionRevision, { kind: "SECURITY_SETTINGS_UPDATED", requestId: "settings-request-one" })}>Confirm security settings change</button>;
+}
 afterEach(() => { cleanup(); localStorage.clear(); sessionStorage.clear(); resetPreviewEnvironment(); vi.clearAllMocks(); window.history.replaceState(null, "", "/"); });
 
 function SelfPasswordRoute() {
@@ -145,6 +150,17 @@ describe("self-service password change", () => {
 });
 
 describe("branded sign-in flows", () => {
+  it("explains why a confirmed account-security change requires a new sign-in", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={repository()}><SecuritySettingsSignOutHarness /></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "Establish test Session" }));
+    await user.click(await screen.findByRole("button", { name: "Confirm security settings change" }));
+    const notice = await screen.findByRole("status");
+    expect(notice.textContent).toContain("账号安全规则已更新");
+    expect(notice.textContent).toContain("后续请求按新规则重新建立身份上下文");
+    expect(notice.textContent).toContain("settings-request-one");
+  });
+
   it("does not navigate or resubmit when required first-login password replacement has an unknown outcome", async () => {
     const iam = repository(true); vi.mocked(iam.changePassword).mockRejectedValue(new HttpProblem(503, "PRIVATE"));
     const { user } = open(iam);
