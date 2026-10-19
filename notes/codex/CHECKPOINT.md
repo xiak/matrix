@@ -87,9 +87,12 @@
   signed 9621 A/B: actual B APISIX fault, expected CLI failure, A automatic
   restoration, B absence and repeated status/verify. An earlier strict
   precondition failure before upgrade effects remains recorded separately;
-  no health check or limit was relaxed. A new isolated engine started with
-  zero images/containers/volumes for the full fresh lifecycle, whose result
-  and subsequent restart gate remain pending. Exact Verification 39216883017
+  no health check or limit was relaxed. The following fresh run passed actual
+  products, application generations, mail/MFA, Audit, backup and automatic
+  fault rollback, but failed after 1800.01s at B's repeated-status check as
+  the whole context expired. B was observed READY/current with A previous,
+  eleven healthy platform containers and no OOM; this is not acceptance.
+  Exact Verification 39216883017
   attempt 1 is now independently closed as completed/success at
   2026-10-19 08:05:05 UTC: all 19 jobs, 57 authority roots and complete
   necessary logs were verified. FEAT011 owns the evidence; do not GET this
@@ -97,6 +100,22 @@
   complete release acceptance from the focused gate. The one-use test signing
   private key and superseded test-driver copies were removed; signed A/B,
   public trust and the current driver remain. This is not all-resource cleanup.
+- Fixed test-only `26deca2ae9df57cf2913a4868bca47f9332dd7c4` now permits
+  explicit bounded whole-lifecycle observation on slower media: default 30m,
+  maximum 1h, more than 1m before the Go test deadline for teardown. No phase
+  resets the budget; the post-fault 5m bound, product deadlines, byte/profile
+  verification, all assertions and resource limits remain unchanged. Unit,
+  full phase1e2e race 2.601s, architecture race 1.875s, vet and Linux build
+  passed; the Linux entry also proved oversized/short-parent budgets reject
+  before effects. Exact Verification 39224178428 attempt 1 is in progress
+  with the existing Test Expert. A distinct fresh engine is now running the
+  unchanged signed 9621 A/B with an explicit 50m budget/55m Go deadline;
+  its full lifecycle and restart are unaccepted. The two retired diagnostic
+  engines, exclusive volumes and private installation directories were
+  removed after ownership/mount checks. Issue #3 retains both failures,
+  measured I/O and the performance limitation; the larger observation budget
+  is not an I/O optimization or a latency SLO. Do not re-sign production or
+  claim an accepted release merely because this test-only source changed.
 - Accepted signed-release source remains
   `741dceb6f0092fbc33706842862980816fe72d15`,
   IAM87/Audit39/PaaS7+r37. Its exact CI and same-profile signed A/B lifecycle

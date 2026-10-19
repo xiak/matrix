@@ -977,7 +977,10 @@ assembly. Both signed releases, their public trust root and the current fixed
 driver remain available; superseded driver copies were hash-checked and
 removed locally and from the task input directory. Old drivers remain
 rebuildable from Git. This is scoped artifact cleanup, not a claim that all
-historical runtime objects have been removed.
+historical runtime objects have been removed. The two completed diagnostic
+engines, their exclusive data volumes and private installation directories
+were also removed after verifying exact ownership and mounts; signed inputs
+and the bounded failure evidence remain, not the disposable database state.
 
 The subsequent fresh-host run passed the real product, application, mail/MFA,
 Audit, backup and injected automatic-rollback assertions, then exhausted its
@@ -1001,6 +1004,15 @@ the separate five-minute post-fault recovery bound, product deadlines,
 cryptographic checks, resource limits and all original assertions remain.
 The extra observation allowance does not resolve the I/O-performance lead in
 issue #3 or establish an installation-latency SLO.
+
+Fixed `26deca2ae9df57cf2913a4868bca47f9332dd7c4` passed the complete
+phase1e2e race gate (2.601s), architecture race (1.875s), vet and Linux driver
+build. That Linux driver separately passed all twelve budget cases and four
+existing virtual-clock recovery cases. Its real opt-in entry rejected both
+61 minutes and 50 minutes under a 35-minute Go deadline before creating any
+installation, image, container or volume in the fresh test engine. These are
+budget-admission checks, not the still-pending full 50-minute-budget lifecycle
+or its restart acceptance.
 
 On 2026-10-17, fixed source
 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` assembled and authenticated
