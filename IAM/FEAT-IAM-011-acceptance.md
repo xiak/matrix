@@ -42,7 +42,7 @@
 
 该切片只修正既有Session并发测试，不改变生产API、SQL、UI或Profile。最终成功的Serializable重试可以合法纳入并发期间已提交的新登录；测试必须验证精确Session集合、版本和终态，而非固定只撤销一个。专属PG18.4上的确定性真实40001先使旧断言以`APPLIED/revoked=2/want=1`失败，再证明B+C精确目标、当前caller保留、原回执重放及严格在完成后开始的新登录不受重放影响。聚焦双向及重试52.48秒通过；三份全新数据库串行race的批量107.45秒、单项94.15秒、真实锁后到期64.57秒，package267.261秒，默认integration/architecture race及vet也通过。PG与Go runner各限2CPU/2GiB，Go1.26.3、GOMAXPROCS2/GOMEMLIMIT1024MiB、`-p 1`；保留原密码成本、fixture期限和真实时间窗口。本地PG18.4不冒充CI的PG18.6。旧UI源`28f2da7e15c4720c262cae241f3425ada200ca9e`的[Verification 39193669814](https://github.com/xiak/matrix/actions/runs/39193669814)仍为失败，原日志不足以区分复合断言的具体差异，不能回填为通过或单独据此宣称唯一根因。
 
-后继UI候选`101dc339f9ad368f293f95a3834b5613e5a6d669`和测试前置`42c957aa4bd4614777513aff782b2071c67f2a9d`保持IAM87/Audit39/PaaS7+r37，具体User/Role命令所有者、回执和联调支持由010拥有。其[Verification 39199323432](https://github.com/xiak/matrix/actions/runs/39199323432) attempt 1仍在运行，不能继承38a的独立CI、旧741签名组合或默认跳过的浏览器结论。
+后继UI候选`101dc339f9ad368f293f95a3834b5613e5a6d669`和测试前置`42c957aa4bd4614777513aff782b2071c67f2a9d`保持IAM87/Audit39/PaaS7+r37，具体User/Role命令所有者、回执和联调支持由010拥有。其[Verification 39199323432](https://github.com/xiak/matrix/actions/runs/39199323432) attempt 1仍在运行；固定源码审查又确认010所述的新repository身份待验证期间USER直接附件操作未关闭，候选不得发布。独立CI即使通过也不关闭该未覆盖断言，更不能继承38a的独立CI、旧741签名组合或默认跳过的浏览器结论。
 
 当前真实浏览器已证明User资料/状态恢复、Group Membership添加/移除恢复、Group策略附件CREATE/REVOKE只读恢复、Group最终删除效果，以及Account安全设置的正常完整替换。Group附件恢复与删除后的可见完成回执已有固定UI修正，但新版本的纯页面最终操作尚未验收；日常改密、直接User/Role附件和010矩阵中的其他非Deferred路径仍未完成，精确范围由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有。默认CI跳过的浏览器入口、专属Postfix邮件子测试不能按成功计；当前Linux前端通过也不宣称此前Windows边缘超时和既有React警告已消失。安全通知的真实投递证据仍由009拥有，不能以Audit或通知任务入队替代。
 

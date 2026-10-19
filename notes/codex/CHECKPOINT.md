@@ -14,7 +14,12 @@
   tests plus eight Node tests, deterministic unset/0 export, Go UI/architecture
   race/vet and Linux amd64 build passed. Exact
   [Verification 39199323432](https://github.com/xiak/matrix/actions/runs/39199323432)
-  attempt 1 is running, not accepted.
+  attempt 1 is running, not accepted. A fixed-source UX review identified a
+  release-blocking USER attachment owner fence: after repository replacement,
+  User reads can complete before currentIdentity while begin/submit/UNKNOWN
+  inspect lack the verified repo+Session check. FEAT010 owns the required
+  pending-identity zero-dispatch regression. Do not accept 101dc even if this
+  CI succeeds; consume only the UX owner's subsequent fixed correction.
 - Its fixed test predecessor `42c957aa4bd4614777513aff782b2071c67f2a9d`
   extends the existing attachment browser fixture to USER and ROLE, preserving
   default GROUP. RoleSession business permission remains separate from its
@@ -66,8 +71,10 @@ remain separate required outcomes.
 
 - UX/UI engineer `01a07b21-9a0d-7fd0-b090-7827ce18262e` owns UI on its
   own branch. Consume fixed reviewed deltas only, preserve consumer tests and
-  rebuild assets; no foreign WIP or inherited acceptance. The 101dc/42c fixed
-  review was requested; an email-scope reply is not a code-review verdict.
+  rebuild assets; no foreign WIP or inherited acceptance. Its 101dc/42c
+  fixed review found the USER pending-identity blocker above; the other
+  reviewed RoleSession/source USER and receipt boundaries had no reported
+  blocker. The UI owner is responsible for the narrow source correction.
 - Test expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns read-only
   independent CI/log review. Its existing monitor follows the exact new
   candidate after closing 38a. Do not duplicate automations or delegate

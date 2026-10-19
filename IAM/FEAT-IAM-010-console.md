@@ -23,10 +23,10 @@
 | --- | --- | --- |
 | IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，当前IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
 | IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；当前IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果；后继独立真实浏览器已从普通User首次登录完成纯页面强制改密，并验证仅保留调用Session、撤销另一受限Session、旧密码失效和新密码重新登录 | 日常主动改密的可选会话处置、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
-| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；已接受的IAM87+r37产品源码通过完整前端/嵌入构建与独立CI。User显示名更新和停用各自在一次成功写入响应丢失后，只以原Account/actor/User/operation/requestId/expected version读取一次不可变完成结果且零目标写重放；停用立即撤销旧Session，恢复User不复活旧Session。Membership添加和移除各自在一次成功写入响应丢失后，只显式等值重放一次原method/path/Host/requestId/version/body，最终各只有一个成员关系效果、一个outbox/Audit事实，组权限在下一次PaaS请求生效或撤销；Group策略附件CREATE/REVOKE均已证明单次提交丢回包后只读一次原回执、零再写与下一请求授权变化。Group最终删除已证明准确1+1级联、目录移除、成员身份与系统Policy保留、继承权限下一请求撤销及唯一outbox/Audit | 可见附件/删除回执修复已固定于`28f2da7e`，本地组件/构建通过，新的纯页面最终操作尚未验收。直接User/Role附件仍需浏览器门禁；批量User不在本轮需求 |
+| IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；已接受的IAM87+r37产品源码通过完整前端/嵌入构建与独立CI。User显示名更新和停用各自在一次成功写入响应丢失后，只以原Account/actor/User/operation/requestId/expected version读取一次不可变完成结果且零目标写重放；停用立即撤销旧Session，恢复User不复活旧Session。Membership添加和移除各自在一次成功写入响应丢失后，只显式等值重放一次原method/path/Host/requestId/version/body，最终各只有一个成员关系效果、一个outbox/Audit事实，组权限在下一次PaaS请求生效或撤销；Group策略附件CREATE/REVOKE均已证明单次提交丢回包后只读一次原回执、零再写与下一请求授权变化。Group最终删除已证明准确1+1级联、目录移除、成员身份与系统Policy保留、继承权限下一请求撤销及唯一outbox/Audit | 可见附件/删除回执及User/Role命令所有者修复已集成到候选`101dc339`，但USER直接附件在新repository身份待验证期间的操作围栏仍有阻断性缺口。`42c957a`只扩展既有fixture，不替代新回执及直接User/Role附件的真实浏览器门禁；批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；当前IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version。后继候选UI已在同一r36后端从页面创建零附件Policy、改名并整策略退役，稳定ID/默认版本/摘要及不可变版本保持，活动目录移除且三条outbox/Audit事实和完整租户链均已核对；独立真实浏览器门禁进一步证明改名与整策略退役各自在响应半断后的双标签排他、关闭持锁标签和完全相同原命令恢复 | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略；候选UI尚未随完整签名release重打，不能冒充签名组合验收 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入并已有真实承担/退出证据；当前IAM86+r36签名页面按权威空目录显示零Role | 管理员撤销与Role凭据精确业务读取仍需完整门禁；跨Account、角色链、服务/外部身份trust明确Deferred |
-| IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；当前IAM86+r36签名页面读取已验证通知地址、本人TOTP状态、六个有效Session，并对缺少`iam.access-key.list`和`iam.security-settings.read`显示真实权限拒绝；后继独立最小权限普通User已完成Account安全设置的真实TOTP step-up、完整版本替换、旧Session围栏和重新登录后权威读取 | 账号强制MFA下普通User首次绑定、普通User换绑/解绑后的受限重新绑定、AccessKey全生命周期、恢复码再生/自助恢复和step-up仍缺完整浏览器门禁；受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、外部物理认证器及WebAuthn明确Deferred |
+| IAM-UI-06 | AccessKey、可信联系人、TOTP、恢复码和本人Session均为LIVE；IAM86+r36签名页面读取已验证通知地址、本人TOTP状态和有效Session，并对缺少读取权限显示真实拒绝。固定`a119ffdb`的独立真实浏览器已证明普通User首次绑定、换绑、主动移除、重新绑定、四次MFA登录及跨浏览器撤销其他Session，准确因子/恢复码代次和Audit证据由[本人安全与会话](#live-本人安全与会话浏览器闭环)拥有；这不是强制MFA或签名APISIX页面验收。后继最小权限普通User已完成Account安全设置的真实TOTP step-up、完整版本替换、旧Session围栏和重新登录后权威读取 | 账号强制MFA下普通User首次绑定及受限重新绑定、AccessKey全生命周期、恢复码再生/自助恢复及其他敏感用途step-up仍缺完整浏览器门禁；已接受的普通TOTP路径仍缺当前签名APISIX页面组合证据。受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定、外部物理认证器及WebAuthn明确Deferred |
 | IAM-UI-07 | 四个真实产品、协议、授权/撤权、错误矩阵和五类命令恢复已有分层证据；当前IAM86+r36签名页面又以`offline.alpha.primary`从真实RabbitMQ配额创建`iam-r36-terminate-test`并观察QUEUED→INSTALLING→RUNNING和AMQP端点，同一签名运行时已证明终止单写响应丢失、跨来源结果恢复、物理清理与配额归还 | 终止的纯页面最终提交与UNKNOWN呈现仍须实跑；不支持跨主体恢复，查无结果不得推断原写未发生 |
 | IAM-UI-08 | 当前IAM86+r36签名入口再次证明角色SSO、用户SSO和跨账号协作直达路由只有明确“尚未接入后端”EmptyState且没有提交控件 | 企业微信/外部IdP、Passkey/WebAuthn、跨账号与角色链保持禁用和Deferred；新增Deferred入口仍须沿同一边界验收 |
 
@@ -40,7 +40,7 @@
 
 现有 `/console/access` 客户端严格消费 `CurrentIdentity.permissionBoundary`，匹配当前 Account、User 和 User resourceVersion；缺失字段、错误归属/修订或非法版本摘要直接使当前身份读取失败，不能降级为无边界。原 Account Root 仅允许明确无边界。页面独立展示“租户权限上限”及精确 Policy/默认版本 ID，不把它加入正向附件或从名称推导权限。
 
-无边界不等于拥有权限，有边界不等于获得授权；目录和按钮继续消费服务端逐资源 capability/实际响应，不在浏览器实现策略求值。无 Policy 读取权限时仍可展示自身的版本引用，但不能因此读取正文或另一个账号的内容。刷新重新读取当前状态；失败清除该投影，不以旧的 null 或引用当作当前事实。User 边界设置/替换/移除由下节管理交互拥有，完整策略编辑和 Role 页面尚未交付；当前身份展示不替代真实浏览器验收。
+无边界不等于拥有权限，有边界不等于获得授权；目录和按钮继续消费服务端逐资源 capability/实际响应，不在浏览器实现策略求值。无 Policy 读取权限时仍可展示自身的版本引用，但不能因此读取正文或另一个账号的内容。刷新重新读取当前状态；失败清除该投影，不以旧的 null 或引用当作当前事实。User 边界设置/替换/移除由下节管理交互拥有；策略编辑和 Role 页面的当前实现与缺口以交付矩阵为准，当前身份展示不替代它们的真实浏览器验收。
 
 ### User 边界管理交互
 
@@ -280,7 +280,7 @@ UX/UI owner后继固定`029a6ec3b9061efe46c30bfd496ece4135390926`只修改现有
 
 2026-10-17，本分支选择性`ADAPT` UX/UI owner固定`c8981dd160474710868bf84712f2b7792f283973`，其公开Membership契约来源固定为`ffb305f859338cd8954f1476374b0d7d61c774b9`。十个既有或新增消费路径与UX固定对象逐个blob一致；综合工作区测试以三方增量保留本分支后继断言。没有导入donor后端、FEAT状态、checkpoint或生成资产。创建/移除命令在发出前冻结当前Account、actor、Group、User、request ID，以及移除时的准确Membership ID与版本；UNKNOWN只允许操作者显式等价重试原命令，当前关系读取、后继401/403/409或404均不能证明原写未提交。恢复材料只含非秘密命令身份，不缓存permit；存储失败阻止新写，重新认证、换owner及迟到响应继续失败关闭。
 
-受支持Node 22.22.2/npm 11.6.4下，三个聚焦文件共283项测试、typecheck、architecture、234组主题对比度及九个变更TypeScript路径的零警告lint通过。测试覆盖无Group读取权限时只呈现已知locator和原命令恢复、remount不自动重放、401保留原意图并使当前Session过期、成功回执不因独立刷新失败而丢失，以及相同request ID的显式等价重试。后继User恢复片已与本片共同重建并验证消费分支完整嵌入资产；独立CI和真实IAM浏览器效果仍由下述组合门禁补齐，因此当前不关闭IAM-UI-03的Membership运行缺口。
+受支持Node 22.22.2/npm 11.6.4下，三个聚焦文件共283项测试、typecheck、architecture、234组主题对比度及九个变更TypeScript路径的零警告lint通过。测试覆盖无Group读取权限时只呈现已知locator和原命令恢复、remount不自动重放、401保留原意图并使当前Session过期、成功回执不因独立刷新失败而丢失，以及相同request ID的显式等价重试。后继User恢复片已与本片共同重建并验证消费分支完整嵌入资产；独立CI及真实Membership添加/移除恢复已由[组合门禁](#user-与-group-恢复真实浏览器验收)接受，不能把本段源码检查单独当作运行证据，也不外推到直接User/Role附件。
 
 ### 精确目标读取与目录故障隔离
 
@@ -355,6 +355,8 @@ Group删除沿用原严格结果校验，并在对话框卸载后保留独立回
 后继选择性`ADAPT`固定`b99849623eb673dcfc6167e8a33978e70802a617`的八个现有源码、测试和消息增量，不导入其生成物或验收状态。直接User附件命令及完成查询绑定当前repository、已认证view和Session；旧所有者的成功、401、检查结果及finally均不得清除新所有者的UNKNOWN意图、结束其pending或让其退出。Role客户端在发送前和接收后验证同一所有者，替换身份时重新建立页面工作区；权限仍由服务端判断。User附件恢复回执补齐原operation/request ID、完成时间、目标User、Policy、附件及结果版本，必须显式完成后才返回；回执不证明当前授权。
 
 消费源码固定为`101dc339f9ad368f293f95a3834b5613e5a6d669`。本分支保留既有renderer测试，仅应用对应增量；其余七个源码/测试/消息blob与固定donor逐项一致。Node22.22.2/npm11.6.4、单测试worker和2GiB Node堆下，typecheck、全量lint、architecture、234组对比度及77个Vitest文件/1961项测试（393.80秒）、8项Node导出边界测试均通过。最终源码以两个构建worker完成59页和57条分段路径归一化；未设置与显式0的两次生产导出得到324个逐字相同文件，并由本分支重建匹配的嵌入产物；Go UI/architecture race、UI vet和Linux amd64全仓构建也通过。该结果不替代仍在运行的[Verification 39199323432](https://github.com/xiak/matrix/actions/runs/39199323432)、User/Role真实浏览器操作或新签名组合验收，也不回填旧失败。
+
+该固定候选的独立源码审查确认一个发布阻断：USER直接附件的begin/submit/UNKNOWN inspect只绑定当前repository与Session，没有同时要求该组合已通过`currentIdentity`核验。切换到新repository时，目标User/边界读取可能先完成，旧scene仍可驱动操作；“依赖是当前的”不能替代“当前身份已验证”。现有Role client及通用附件inspect的验证条件不能自动保护这四个USER入口。修复必须在原owner统一关闭该待验证窗口，保留原UNKNOWN意图和不可变回执，并证明新repository的`currentIdentity`保持pending而目标读取已完成时，写入和completion读取均为零；身份验证后仅可显式读取原UNKNOWN结果。当前组件通过或候选CI全绿都不能代替这条尚未闭合的断言。
 
 ### 首次登录强制改密
 
