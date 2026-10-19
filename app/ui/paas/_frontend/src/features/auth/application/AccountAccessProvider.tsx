@@ -277,6 +277,7 @@ export type AccessKeyClient = {
   read(userId: string, accessKeyId: string): Promise<AccessKeyAccess>;
   create(userId: string, command: { userResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string }): Promise<AccessKeyCreation>;
   acknowledgeIssued(requestId: string, accessKeyId: string): boolean;
+  acknowledgeMutation(requestId: string): boolean;
   setStatus(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; requestId: string; status: AccessKeyStatus }): Promise<AccessKeyStatusChange>;
   setNetworkRestrictions(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; networkRestrictions: AccessKeyNetworkRestrictions; requestId: string }): Promise<AccessKeyNetworkChange>;
   delete(userId: string, accessKeyId: string, command: { accessKeyResourceVersion: number; requestId: string }): Promise<AccessKeyDeletion>;
@@ -365,6 +366,22 @@ export type AccessKeyCreateIntent = Readonly<{
   requestId: string;
 } & ({ phase: "unknown" } | { phase: "recovered"; keyId: string })>;
 
+type AccessKeyMutationBase = Readonly<{
+  accountId: string;
+  actorId: string;
+  userId: string;
+  accessKeyId: string;
+  accessKeyResourceVersion: number;
+  requestId: string;
+  phase: "unknown" | "completed";
+}>;
+
+export type AccessKeyMutationIntent = AccessKeyMutationBase & Readonly<
+  | { operation: "set-status"; status: AccessKeyStatus }
+  | { operation: "set-network-restrictions"; networkRestrictions: AccessKeyNetworkRestrictions }
+  | { operation: "delete" }
+>;
+
 export type RoleAccessClient = {
   identity: string;
   accountId: string;
@@ -435,6 +452,7 @@ export type PasswordResetLookup =
 
 const passwordResetUnknownStoragePrefix = "matrix-iam-user-reset-unknown:v1:";
 const accessKeyCreateStoragePrefix = "matrix-iam-access-key-create:v1:";
+const accessKeyMutationStoragePrefix = "matrix-iam-access-key-mutation:v1:";
 const accountSecuritySettingsStoragePrefix = "matrix-iam-account-security-settings:v1:";
 const userPolicyChangeStoragePrefix = "matrix-iam-user-policy-change:v1:";
 
@@ -566,12 +584,14 @@ function clearAccountSecuritySettingsIntent(intent: AccountSecuritySettingsMutat
 function accessKeyCreateStorageKey(accountId: string, actorId: string): string {
   return accessKeyCreateStoragePrefix + encodeURIComponent(accountId) + ":" + encodeURIComponent(actorId);
 }
-function readAccessKeyCreateIntent(accountId: string, actorId: string): AccessKeyCreateIntent | null {
+type AccessKeyStoredIntent<T> = { status: "empty" } | { status: "ready"; intent: T } | { status: "blocked" };
+function readAccessKeyCreateIntent(accountId: string, actorId: string): AccessKeyStoredIntent<AccessKeyCreateIntent> {
   try {
     const raw = window.sessionStorage.getItem(accessKeyCreateStorageKey(accountId, actorId));
-    if (!raw || raw.length > 2048) return null;
+    if (raw === null) return { status: "empty" };
+    if (!raw || raw.length > 2048) return { status: "blocked" };
     const value: unknown = JSON.parse(raw);
-    if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { status: "blocked" };
     const record = value as Record<string, unknown>;
     const base = ["accountId", "actorId", "userId", "userResourceVersion", "networkRestrictions", "requestId", "phase"];
     if (record.accountId !== accountId || record.actorId !== actorId ||
@@ -583,17 +603,85 @@ function readAccessKeyCreateIntent(accountId: string, actorId: string): AccessKe
       (record.phase !== "unknown" && record.phase !== "recovered") ||
       Object.keys(record).length !== base.length + (record.phase === "recovered" ? 1 : 0) ||
       base.some((field) => !Object.hasOwn(record, field)) ||
-      (record.phase === "recovered" && (typeof record.keyId !== "string" || !record.keyId || record.keyId.length > 256))) return null;
-    return record as AccessKeyCreateIntent;
-  } catch { return null; }
+      (record.phase === "recovered" && (typeof record.keyId !== "string" || !record.keyId || record.keyId.length > 256))) return { status: "blocked" };
+    return { status: "ready", intent: record as AccessKeyCreateIntent };
+  } catch { return { status: "blocked" }; }
 }
-function storeAccessKeyCreateIntent(intent: AccessKeyCreateIntent): void {
-  try { window.sessionStorage.setItem(accessKeyCreateStorageKey(intent.accountId, intent.actorId), JSON.stringify(intent)); }
-  catch { /* The in-memory lock remains active if tab storage is unavailable. */ }
+function storeAccessKeyCreateIntent(intent: AccessKeyCreateIntent): boolean {
+  try { window.sessionStorage.setItem(accessKeyCreateStorageKey(intent.accountId, intent.actorId), JSON.stringify(intent)); return true; }
+  catch { return false; }
 }
-function clearAccessKeyCreateIntent(intent: AccessKeyCreateIntent): void {
-  try { window.sessionStorage.removeItem(accessKeyCreateStorageKey(intent.accountId, intent.actorId)); }
-  catch { /* Storage loss does not prove the original request was not applied. */ }
+function clearAccessKeyCreateIntent(intent: AccessKeyCreateIntent): boolean {
+  try { window.sessionStorage.removeItem(accessKeyCreateStorageKey(intent.accountId, intent.actorId)); return true; }
+  catch { return false; }
+}
+
+function accessKeyMutationStorageKey(accountId: string, actorId: string): string {
+  return accessKeyMutationStoragePrefix + encodeURIComponent(accountId) + ":" + encodeURIComponent(actorId);
+}
+function readAccessKeyMutationIntent(accountId: string, actorId: string): AccessKeyStoredIntent<AccessKeyMutationIntent> {
+  try {
+    const raw = window.sessionStorage.getItem(accessKeyMutationStorageKey(accountId, actorId));
+    if (raw === null) return { status: "empty" };
+    if (!raw || raw.length > 4096) return { status: "blocked" };
+    const value: unknown = JSON.parse(raw);
+    if (!value || typeof value !== "object" || Array.isArray(value)) return { status: "blocked" };
+    const record = value as Record<string, unknown>;
+    const base = ["accountId", "actorId", "userId", "accessKeyId", "accessKeyResourceVersion", "operation", "requestId", "phase"];
+    if (record.accountId !== accountId || record.actorId !== actorId ||
+      typeof record.userId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(record.userId) ||
+      typeof record.accessKeyId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(record.accessKeyId) ||
+      typeof record.accessKeyResourceVersion !== "number" || !Number.isSafeInteger(record.accessKeyResourceVersion) || record.accessKeyResourceVersion < 1 ||
+      (record.phase !== "unknown" && record.phase !== "completed") ||
+      (record.operation !== "set-status" && record.operation !== "set-network-restrictions" && record.operation !== "delete") ||
+      typeof record.requestId !== "string") return { status: "blocked" };
+    if (record.operation === "set-status") {
+      if (Object.keys(record).length !== base.length + 1 || base.some((field) => !Object.hasOwn(record, field)) ||
+        !Object.hasOwn(record, "status") || (record.status !== "ENABLED" && record.status !== "DISABLED") ||
+        !/^ui-access-key-status-[0-9a-f]{32}$/.test(record.requestId)) return { status: "blocked" };
+    } else if (record.operation === "set-network-restrictions") {
+      if (Object.keys(record).length !== base.length + 1 || base.some((field) => !Object.hasOwn(record, field)) ||
+        !Object.hasOwn(record, "networkRestrictions") || !record.networkRestrictions || typeof record.networkRestrictions !== "object" ||
+        Array.isArray(record.networkRestrictions) || !accessKeyNetworkRestrictionsValid(record.networkRestrictions as AccessKeyNetworkRestrictions) ||
+        !/^ui-access-key-network-[0-9a-f]{32}$/.test(record.requestId)) return { status: "blocked" };
+    } else if (Object.keys(record).length !== base.length || base.some((field) => !Object.hasOwn(record, field)) ||
+      !/^ui-access-key-delete-[0-9a-f]{32}$/.test(record.requestId)) return { status: "blocked" };
+    return { status: "ready", intent: record as AccessKeyMutationIntent };
+  } catch { return { status: "blocked" }; }
+}
+function storeAccessKeyMutationIntent(intent: AccessKeyMutationIntent): boolean {
+  try { window.sessionStorage.setItem(accessKeyMutationStorageKey(intent.accountId, intent.actorId), JSON.stringify(intent)); return true; }
+  catch { return false; }
+}
+function clearAccessKeyMutationIntent(intent: AccessKeyMutationIntent): boolean {
+  try { window.sessionStorage.removeItem(accessKeyMutationStorageKey(intent.accountId, intent.actorId)); return true; }
+  catch { return false; }
+}
+
+function sameAccessKeyMutationIntent(left: AccessKeyMutationIntent, right: AccessKeyMutationIntent): boolean {
+  if (left.accountId !== right.accountId || left.actorId !== right.actorId || left.userId !== right.userId ||
+    left.accessKeyId !== right.accessKeyId || left.accessKeyResourceVersion !== right.accessKeyResourceVersion ||
+    left.requestId !== right.requestId || left.operation !== right.operation) return false;
+  if (left.operation === "set-status" && right.operation === "set-status") return left.status === right.status;
+  if (left.operation === "set-network-restrictions" && right.operation === "set-network-restrictions") {
+    return accessKeyNetworkRestrictionsEqual(left.networkRestrictions, right.networkRestrictions);
+  }
+  return left.operation === "delete" && right.operation === "delete";
+}
+
+function accessKeyMutationIntentValid(intent: AccessKeyMutationIntent): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(intent.accountId) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(intent.actorId) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(intent.userId) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(intent.accessKeyId) ||
+    !Number.isSafeInteger(intent.accessKeyResourceVersion) || intent.accessKeyResourceVersion < 1) return false;
+  if (intent.operation === "set-status") {
+    return /^ui-access-key-status-[0-9a-f]{32}$/.test(intent.requestId) && (intent.status === "ENABLED" || intent.status === "DISABLED");
+  }
+  if (intent.operation === "set-network-restrictions") {
+    return /^ui-access-key-network-[0-9a-f]{32}$/.test(intent.requestId) && accessKeyNetworkRestrictionsValid(intent.networkRestrictions);
+  }
+  return /^ui-access-key-delete-[0-9a-f]{32}$/.test(intent.requestId);
 }
 function passwordResetUnknownStorageKey(accountId: string, actorId: string): string {
   return passwordResetUnknownStoragePrefix + encodeURIComponent(accountId) + ":" + encodeURIComponent(actorId);
@@ -650,7 +738,9 @@ type AccountAccess = {
   accessAnalysis: AccessAnalysisClient | null;
   securityReports: SecurityReportClient | null;
   accessKeys: AccessKeyClient | null;
+  accessKeyRecoveryError: boolean;
   accessKeyCreateIntent: AccessKeyCreateIntent | null;
+  accessKeyMutationIntent: AccessKeyMutationIntent | null;
   roles: RoleAccessClient | null;
   roleSessionRevokeIntent: RoleSessionRevokeIntent | null;
   changeRoleSessionRevokeIntent(expectedRequestId: string | null, next: RoleSessionRevokeIntent | null): void;
@@ -785,9 +875,27 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const currentExactUsers = useRef(exactUsers);
   const currentScene = useRef(scene);
   const verifiedIdentitySession = useRef<typeof viewSession | null>(null);
+  const accessKeyOwner = useMemo(() => ({ repository, viewSession, exactUsers, identity: requestToken("ui-access-key-view-") }), [exactUsers, repository, viewSession]);
+  const currentAccessKeyOwner = useRef<typeof accessKeyOwner | null>(accessKeyOwner);
+  const accessKeyStorageObservationRef = useRef<{ owner: typeof accessKeyOwner; status: "ready" | "blocked" } | null>(null);
+  const [accessKeyStorageObservation, setAccessKeyStorageObservation] = useState<typeof accessKeyStorageObservationRef.current>(null);
+  const markAccessKeyStorage = useCallback((owner: typeof accessKeyOwner, status: "ready" | "blocked") => {
+    if (currentAccessKeyOwner.current !== owner) return false;
+    const next = { owner, status };
+    accessKeyStorageObservationRef.current = next;
+    setAccessKeyStorageObservation(next);
+    return true;
+  }, []);
+  const accessKeyRecoveryError = accessKeyStorageObservation?.owner !== accessKeyOwner || accessKeyStorageObservation.status !== "ready";
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
   useLayoutEffect(() => { currentExactUsers.current = exactUsers; }, [exactUsers]);
   useLayoutEffect(() => { currentScene.current = scene; }, [scene]);
+  useLayoutEffect(() => {
+    currentAccessKeyOwner.current = accessKeyOwner;
+    return () => {
+      if (currentAccessKeyOwner.current === accessKeyOwner) currentAccessKeyOwner.current = null;
+    };
+  }, [accessKeyOwner]);
   const accountLifecycleOwner = useMemo<AccountLifecycleOwner | null>(() => {
     if (!active || !credential || !tenantId || !principalId || !repository.accountLifecycle || repository.workspace) return null;
     return { repository: repository.accountLifecycle, credential, sessionRevision, actorAccountId: tenantId, actorPrincipalId: principalId };
@@ -869,6 +977,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const accessKeyIssuedRef = useRef<{ session: typeof viewSession; requestId: string; accessKeyId: string } | null>(null);
   const [storedAccessKeyCreate, setStoredAccessKeyCreate] = useState<typeof accessKeyCreateRef.current>(null);
   const accessKeyCreateIntent = storedAccessKeyCreate?.session === viewSession ? storedAccessKeyCreate.intent : null;
+  const accessKeyMutationRef = useRef<{ session: typeof viewSession; intent: AccessKeyMutationIntent } | null>(null);
+  const accessKeyMutationSubmitting = useRef<{ session: typeof viewSession; requestId: string } | null>(null);
+  const [storedAccessKeyMutation, setStoredAccessKeyMutation] = useState<typeof accessKeyMutationRef.current>(null);
+  const accessKeyMutationIntent = storedAccessKeyMutation?.session === viewSession ? storedAccessKeyMutation.intent : null;
   const securitySettingsIntentRef = useRef<AccountSecuritySettingsMutationIntent | null>(null);
   const securitySettingsIdentityKey = active && tenantId && principalId && !repository.workspace
     ? accountSecuritySettingsStorageKey(tenantId, principalId) : null;
@@ -899,6 +1011,11 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     accessKeyCreateRef.current = null;
     accessKeyIssuedRef.current = null;
     setStoredAccessKeyCreate(null);
+  }, [viewSession]);
+  useEffect(() => {
+    if (accessKeyMutationRef.current?.session === viewSession) return;
+    accessKeyMutationRef.current = null;
+    setStoredAccessKeyMutation(null);
   }, [viewSession]);
   const rememberSecuritySettingsIntent = useCallback((expectedRequestId: string | null, next: AccountSecuritySettingsMutationIntent | null): boolean => {
     if (currentViewSession.current !== viewSession || currentSettingsOwner.current !== settingsOwner || !tenantId || !principalId || !securitySettingsIdentityKey) return false;
@@ -1111,13 +1228,19 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           setStoredPasswordResetUnknown(stored);
         }
       }
-      if (!repository.workspace && loaded.scene.accountId === tenantId && loaded.scene.currentUserId === principalId &&
-        accessKeyCreateRef.current?.session !== viewSession) {
-        const intent = readAccessKeyCreateIntent(tenantId, principalId);
-        if (intent) {
-          const stored = { session: viewSession, intent };
+      if (!repository.workspace && loaded.scene.accountId === tenantId && loaded.scene.currentUserId === principalId) {
+        const createStored = readAccessKeyCreateIntent(tenantId, principalId);
+        const mutationStored = readAccessKeyMutationIntent(tenantId, principalId);
+        markAccessKeyStorage(accessKeyOwner, createStored.status === "blocked" || mutationStored.status === "blocked" ? "blocked" : "ready");
+        if (createStored.status === "ready" && accessKeyCreateRef.current?.session !== viewSession) {
+          const stored = { session: viewSession, intent: createStored.intent };
           accessKeyCreateRef.current = stored;
           setStoredAccessKeyCreate(stored);
+        }
+        if (mutationStored.status === "ready" && accessKeyMutationRef.current?.session !== viewSession) {
+          const stored = { session: viewSession, intent: mutationStored.intent };
+          accessKeyMutationRef.current = stored;
+          setStoredAccessKeyMutation(stored);
         }
       }
       setScene(loaded.scene); setWorkspace(loaded.extension); setError(null);
@@ -1128,7 +1251,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } })
       .finally(() => { if (mounted) setLoading(false); });
     return () => { mounted = false; };
-  }, [active, credential, expireSession, principalId, repository, revision, sessionRevision, tenantId, viewSession]);
+  }, [accessKeyOwner, active, credential, expireSession, markAccessKeyStorage, principalId, repository, revision, sessionRevision, tenantId, viewSession]);
 
   const loadUser = useCallback(async (userId: string): Promise<AccountUserScene> => {
     if (!active || !credential || !scene || !userId || userId === scene.accountOwner.id ||
@@ -2040,23 +2163,71 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     const keyRepository = repository.accessKeys;
     if (!active || !credential || !principalId || !scene || scene.accountId !== tenantId || !keyRepository) return null;
     const accountId = scene.accountId;
+    const owns = () => currentAccessKeyOwner.current === accessKeyOwner;
+    const recoveryAvailable = () => accessKeyStorageObservationRef.current?.owner === accessKeyOwner && accessKeyStorageObservationRef.current.status === "ready";
+    const recoveryFailure = () => new HttpProblem(503, "ACCESS_KEY_RECOVERY_STORAGE_UNAVAILABLE");
+    const blockRecovery = () => { markAccessKeyStorage(accessKeyOwner, "blocked"); };
     const target = (userId: string) => {
       if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(userId) || userId === scene.accountOwner.id ||
-          currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) throw new Error("INVALID_IAM_USER_TARGET");
+          !owns()) throw new Error("INVALID_IAM_USER_TARGET");
       return userId;
     };
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
       try {
         const value = await request;
-        if (currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) throw new Error("STALE_IAM_STATE");
+        if (!owns()) throw new Error("STALE_IAM_STATE");
         return value;
       }
       catch (failure) {
-        if (currentViewSession.current === viewSession && currentExactUsers.current === exactUsers &&
-            failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
+        if (owns() && failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
           setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
         }
         throw failure;
+      }
+    };
+    const submitMutation = async <T,>(intent: AccessKeyMutationIntent, request: () => Promise<T>): Promise<T> => {
+      if (!accessKeyMutationIntentValid(intent)) throw new HttpProblem(400, "INVALID_ACCESS_KEY_MUTATION_INTENT");
+      if (!recoveryAvailable()) throw recoveryFailure();
+      if (accessKeyMutationSubmitting.current?.session === viewSession) throw new HttpProblem(409, "ACCESS_KEY_MUTATION_IN_FLIGHT");
+      const pending = accessKeyMutationRef.current?.session === viewSession ? accessKeyMutationRef.current.intent : null;
+      if (pending && (pending.phase !== "unknown" || !sameAccessKeyMutationIntent(pending, intent))) {
+        throw new HttpProblem(409, "ACCESS_KEY_MUTATION_INTENT_LOCKED");
+      }
+      const activeIntent = pending ?? intent;
+      if (!pending) {
+        if (!storeAccessKeyMutationIntent(activeIntent)) { blockRecovery(); throw recoveryFailure(); }
+        const stored = { session: viewSession, intent: activeIntent };
+        accessKeyMutationRef.current = stored;
+        setStoredAccessKeyMutation(stored);
+      }
+      const submission = { session: viewSession, requestId: activeIntent.requestId };
+      accessKeyMutationSubmitting.current = submission;
+      try {
+        const result = await scoped(request());
+        const stored = accessKeyMutationRef.current;
+        if (owns() && stored?.session === viewSession &&
+          stored.intent.phase === "unknown" && sameAccessKeyMutationIntent(stored.intent, activeIntent)) {
+          const completed: AccessKeyMutationIntent = { ...activeIntent, phase: "completed" };
+          if (!storeAccessKeyMutationIntent(completed)) { blockRecovery(); throw recoveryFailure(); }
+          const next = { session: viewSession, intent: completed };
+          accessKeyMutationRef.current = next;
+          setStoredAccessKeyMutation(next);
+        }
+        return result;
+      } catch (failure) {
+        if (!pending && failure instanceof HttpProblem && [400, 401, 403, 404, 409, 413, 415, 422].includes(failure.status)) {
+          const stored = accessKeyMutationRef.current;
+          if (owns() && stored?.session === viewSession &&
+            stored.intent.phase === "unknown" && sameAccessKeyMutationIntent(stored.intent, activeIntent)) {
+            if (clearAccessKeyMutationIntent(stored.intent)) {
+              accessKeyMutationRef.current = null;
+              setStoredAccessKeyMutation(null);
+            } else blockRecovery();
+          }
+        }
+        throw failure;
+      } finally {
+        if (accessKeyMutationSubmitting.current === submission) accessKeyMutationSubmitting.current = null;
       }
     };
     return {
@@ -2067,7 +2238,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         target(userId);
         if (!Number.isSafeInteger(command.userResourceVersion) || command.userResourceVersion < 1 ||
           !/^ui-access-key-create-[0-9a-f]{32}$/.test(command.requestId)) throw new HttpProblem(400, "INVALID_ACCESS_KEY_CREATE_INTENT");
+        if (!recoveryAvailable()) throw recoveryFailure();
         if (accessKeyCreateSubmitting.current?.session === viewSession) throw new HttpProblem(409, "ACCESS_KEY_CREATE_IN_FLIGHT");
+        if (accessKeyMutationRef.current?.session === viewSession) throw new HttpProblem(409, "ACCESS_KEY_MUTATION_INTENT_LOCKED");
         const pending = accessKeyCreateRef.current?.session === viewSession ? accessKeyCreateRef.current.intent : null;
         if (pending && (pending.phase !== "unknown" || pending.userId !== userId || pending.userResourceVersion !== command.userResourceVersion ||
           !accessKeyNetworkRestrictionsEqual(pending.networkRestrictions, command.networkRestrictions) || pending.requestId !== command.requestId)) {
@@ -2079,31 +2252,32 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           requestId: command.requestId, phase: "unknown"
         };
         if (!pending) {
+          if (!storeAccessKeyCreateIntent(intent)) { blockRecovery(); throw recoveryFailure(); }
           const stored = { session: viewSession, intent };
           accessKeyCreateRef.current = stored;
           setStoredAccessKeyCreate(stored);
-          storeAccessKeyCreateIntent(intent);
         }
         const submission = { session: viewSession, requestId: command.requestId };
         accessKeyCreateSubmitting.current = submission;
         try {
           const result = await scoped(keyRepository.create(credential, accountId, userId, command));
-          if (currentViewSession.current === viewSession && accessKeyCreateRef.current?.intent.requestId === intent.requestId) {
+          if (owns() && accessKeyCreateRef.current?.session === viewSession && accessKeyCreateRef.current.intent.requestId === intent.requestId) {
             const recovered: AccessKeyCreateIntent = { ...intent, phase: "recovered", keyId: result.key.id };
+            if (!storeAccessKeyCreateIntent(recovered)) { blockRecovery(); throw recoveryFailure(); }
             const stored = { session: viewSession, intent: recovered };
             accessKeyCreateRef.current = stored;
             setStoredAccessKeyCreate(stored);
-            storeAccessKeyCreateIntent(recovered);
             accessKeyIssuedRef.current = result.outcome === "APPLIED"
               ? { session: viewSession, requestId: intent.requestId, accessKeyId: result.key.id } : null;
           }
           return result;
         } catch (failure) {
           if (!pending && failure instanceof HttpProblem && [400, 401, 403, 404, 409, 413, 415, 422].includes(failure.status) &&
-            currentViewSession.current === viewSession && accessKeyCreateRef.current?.intent.requestId === intent.requestId) {
-            clearAccessKeyCreateIntent(intent);
-            accessKeyCreateRef.current = null;
-            setStoredAccessKeyCreate(null);
+            owns() && accessKeyCreateRef.current?.session === viewSession && accessKeyCreateRef.current.intent.requestId === intent.requestId) {
+            if (clearAccessKeyCreateIntent(intent)) {
+              accessKeyCreateRef.current = null;
+              setStoredAccessKeyCreate(null);
+            } else blockRecovery();
           }
           throw failure;
         } finally { if (accessKeyCreateSubmitting.current === submission) accessKeyCreateSubmitting.current = null; }
@@ -2111,29 +2285,58 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       acknowledgeIssued: (requestId, accessKeyId) => {
         const issued = accessKeyIssuedRef.current;
         const pending = accessKeyCreateRef.current?.session === viewSession ? accessKeyCreateRef.current.intent : null;
-        if (currentViewSession.current !== viewSession || issued?.session !== viewSession || issued.requestId !== requestId ||
+        if (!owns() || issued?.session !== viewSession || issued.requestId !== requestId ||
           issued.accessKeyId !== accessKeyId || pending?.phase !== "recovered" || pending.requestId !== requestId || pending.keyId !== accessKeyId) return false;
-        clearAccessKeyCreateIntent(pending);
+        if (!clearAccessKeyCreateIntent(pending)) { blockRecovery(); return false; }
         accessKeyIssuedRef.current = null;
         accessKeyCreateRef.current = null;
         setStoredAccessKeyCreate(null);
         return true;
       },
-      setStatus: (userId, accessKeyId, command) => scoped(keyRepository.setStatus(credential, accountId, target(userId), accessKeyId, command)),
-      setNetworkRestrictions: (userId, accessKeyId, command) => scoped(keyRepository.setNetworkRestrictions(credential, accountId, target(userId), accessKeyId, command)),
-      delete: async (userId, accessKeyId, command) => {
-        const result = await scoped(keyRepository.delete(credential, accountId, target(userId), accessKeyId, command));
-        const pending = accessKeyCreateRef.current?.session === viewSession ? accessKeyCreateRef.current.intent : null;
-        if (pending?.phase === "recovered" && pending.userId === userId && pending.keyId === accessKeyId && currentViewSession.current === viewSession) {
-          clearAccessKeyCreateIntent(pending);
+      acknowledgeMutation: (requestId) => {
+        const stored = accessKeyMutationRef.current;
+        if (!owns() || stored?.session !== viewSession ||
+          stored.intent.requestId !== requestId || stored.intent.phase !== "completed") return false;
+        const intent = stored.intent;
+        const pendingCreate = accessKeyCreateRef.current?.session === viewSession ? accessKeyCreateRef.current.intent : null;
+        if (intent.operation === "delete" && pendingCreate?.phase === "recovered" &&
+          pendingCreate.userId === intent.userId && pendingCreate.keyId === intent.accessKeyId) {
+          if (!clearAccessKeyCreateIntent(pendingCreate)) { blockRecovery(); return false; }
+        }
+        if (!clearAccessKeyMutationIntent(intent)) { blockRecovery(); return false; }
+        accessKeyMutationRef.current = null;
+        setStoredAccessKeyMutation(null);
+        if (intent.operation === "delete" && pendingCreate?.phase === "recovered" &&
+          pendingCreate.userId === intent.userId && pendingCreate.keyId === intent.accessKeyId) {
           accessKeyIssuedRef.current = null;
           accessKeyCreateRef.current = null;
           setStoredAccessKeyCreate(null);
         }
-        return result;
+        return true;
+      },
+      setStatus: (userId, accessKeyId, command) => {
+        const targetUser = target(userId);
+        const intent: AccessKeyMutationIntent = { accountId, actorId: principalId, userId: targetUser, accessKeyId,
+          accessKeyResourceVersion: command.accessKeyResourceVersion, operation: "set-status", status: command.status,
+          requestId: command.requestId, phase: "unknown" };
+        return submitMutation(intent, () => keyRepository.setStatus(credential, accountId, targetUser, accessKeyId, command));
+      },
+      setNetworkRestrictions: (userId, accessKeyId, command) => {
+        const targetUser = target(userId);
+        const intent: AccessKeyMutationIntent = { accountId, actorId: principalId, userId: targetUser, accessKeyId,
+          accessKeyResourceVersion: command.accessKeyResourceVersion, operation: "set-network-restrictions",
+          networkRestrictions: command.networkRestrictions, requestId: command.requestId, phase: "unknown" };
+        return submitMutation(intent, () => keyRepository.setNetworkRestrictions(credential, accountId, targetUser, accessKeyId, command));
+      },
+      delete: async (userId, accessKeyId, command) => {
+        const targetUser = target(userId);
+        const intent: AccessKeyMutationIntent = { accountId, actorId: principalId, userId: targetUser, accessKeyId,
+          accessKeyResourceVersion: command.accessKeyResourceVersion, operation: "delete",
+          requestId: command.requestId, phase: "unknown" };
+        return submitMutation(intent, () => keyRepository.delete(credential, accountId, targetUser, accessKeyId, command));
       }
     };
-  }, [active, credential, exactUsers, expireSession, principalId, repository, scene, sessionRevision, tenantId, viewSession]);
+  }, [accessKeyOwner, active, credential, expireSession, markAccessKeyStorage, principalId, repository, scene, sessionRevision, tenantId, viewSession]);
 
   const rolesOwner = useMemo(() => ({ active, repository, viewSession, identity: requestToken("ui-roles-view-") }), [active, repository, viewSession]);
   const currentRolesOwner = useRef<typeof rolesOwner | null>(rolesOwner);
@@ -2505,7 +2708,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     accessAnalysis,
     securityReports,
     accessKeys,
+    accessKeyRecoveryError,
     accessKeyCreateIntent: accessKeyCreateIntent?.accountId === tenantId ? accessKeyCreateIntent : null,
+    accessKeyMutationIntent: accessKeyMutationIntent?.accountId === tenantId ? accessKeyMutationIntent : null,
     roles,
     roleSessionRevokeIntent: roleSessionRevokeIntent?.accountId === tenantId ? roleSessionRevokeIntent : null,
     changeRoleSessionRevokeIntent,
@@ -2654,7 +2859,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, userManagement, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, userPolicyChangeReady, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyCreateIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, userManagement, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, userPolicyChangeReady, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyRecoveryError, accessKeyCreateIntent, accessKeyMutationIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>
