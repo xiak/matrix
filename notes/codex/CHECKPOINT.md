@@ -47,6 +47,19 @@
   actually ran. Seven dedicated-Postfix skips and default opt-in browsers
   are not execution evidence. Do not repeat this closed log audit or backfill
   the older 28f CI failure. FEAT011 owns the evidence; FEAT009 owns the invariant.
+- Test-only release-gate correction
+  `5708545f54e15adeadca79d947ebb99802bac5ea` is committed and pushed.
+  FEAT-005 owns the native-Linux first-run failure and focused reproduction:
+  the unchanged Postfix fixture exited when its inherited descriptor limit
+  exceeded the observed kernel ceiling; explicit `nofile=4096:4096` kept it
+  running and strict original-CA/SAN STARTTLS passed. The existing fixture
+  now supplies and inspects that finite limit, with ordinary negative unit
+  coverage. Phase1e2e unit/race, architecture race, vet and Linux driver build
+  passed. Exact Verification 39212113957 attempt 1 is running, assigned to
+  the existing Test Expert's read-only monitor. Production bits and profile
+  are unchanged: the signed source remains 9621, and its full fresh runtime
+  and restart gates still need actual passing evidence. Do not backfill the
+  failed 640.84-second first run or substitute the TLS diagnostic for SMTP.
 - Accepted signed-release source remains
   `741dceb6f0092fbc33706842862980816fe72d15`,
   IAM87/Audit39/PaaS7+r37. Its exact CI and same-profile signed A/B lifecycle
