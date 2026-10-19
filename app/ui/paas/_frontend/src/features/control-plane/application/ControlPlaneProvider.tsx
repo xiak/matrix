@@ -16,7 +16,7 @@ import {
   useRoleSession,
   useEffectiveCredential
 } from "@/features/auth/application/RoleSessionProvider";
-import { useSession } from "@/features/auth/application/SessionProvider";
+import { useSession, useSessionCredential } from "@/features/auth/application/SessionProvider";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { ExperienceSnapshot } from "../domain/experience";
 import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
@@ -122,6 +122,7 @@ type ProductDataAccess = { product: ManagedServiceProductId; ready: boolean } | 
 
 type ControlPlaneRequestOwner = Readonly<{
   credential: string | null;
+  sourceCredential: string | null;
   repository: ControlPlaneRepository;
   sessionRevision: number;
   ownerKey: string | null;
@@ -214,8 +215,9 @@ export function ControlPlaneProvider({
   selection: ControlPlaneRouteSelection;
 }) {
   const credential = useEffectiveCredential();
+  const sourceCredential = useSessionCredential();
   const expireEffectiveCredential = useExpireEffectiveCredential();
-  const { current, sessionRevision } = useSession();
+  const { current, isCurrentSession, sessionRevision } = useSession();
   const roleSession = useRoleSession();
   const isAccess = selection.section === "access";
   const [cache, setCache] = useState<ControlPlaneCache | null>(null);
@@ -253,16 +255,18 @@ export function ControlPlaneProvider({
   const managedServiceCommandOwnerKey = managedServiceCommandOwner
     ? JSON.stringify(managedServiceCommandOwner)
     : null;
-  const commandReadOwner = useRef<ControlPlaneRequestOwner>({ credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey });
+  const commandReadOwner = useRef<ControlPlaneRequestOwner>({ credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey });
   useLayoutEffect(() => {
-    commandReadOwner.current = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
-  }, [credential, managedServiceCommandOwnerKey, repository, sessionRevision]);
+    commandReadOwner.current = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+  }, [credential, managedServiceCommandOwnerKey, repository, sessionRevision, sourceCredential]);
 
   const ownsRequest = useCallback((owner: ControlPlaneRequestOwner): boolean => {
     const latest = commandReadOwner.current;
-    return owner.credential !== null && latest.credential === owner.credential && latest.repository === owner.repository &&
+    return owner.credential !== null && owner.sourceCredential !== null &&
+      isCurrentSession(owner.sourceCredential, owner.sessionRevision) &&
+      latest.credential === owner.credential && latest.sourceCredential === owner.sourceCredential && latest.repository === owner.repository &&
       latest.sessionRevision === owner.sessionRevision && latest.ownerKey === owner.ownerKey;
-  }, []);
+  }, [isCurrentSession]);
 
   const expireUnauthorizedCredential = useCallback((failure: unknown, owner: ControlPlaneRequestOwner): boolean => {
     if (!(failure instanceof HttpProblem) || failure.status !== 401 || !owner.credential || !ownsRequest(owner)) return false;
@@ -326,18 +330,21 @@ export function ControlPlaneProvider({
     }
   }, [commandStorage]);
 
-  const completeManagedServiceCommand = useCallback((intent: ManagedServiceCommandIntent) => {
+  const completeManagedServiceCommand = useCallback((intent: ManagedServiceCommandIntent, owner: ControlPlaneRequestOwner): boolean => {
+    if (!ownsRequest(owner)) return false;
     clearManagedServiceCommandSlowTimer();
     clearPersistedManagedServiceCommand(intent);
     const currentCommand = managedServiceCommandRef.current;
     if (currentCommand?.intent.requestId === intent.requestId) {
       commitManagedServiceCommand({ ...currentCommand, phase: "completed", error: null, slow: false, restored: false });
     }
-  }, [clearManagedServiceCommandSlowTimer, clearPersistedManagedServiceCommand, commitManagedServiceCommand]);
+    return true;
+  }, [clearManagedServiceCommandSlowTimer, clearPersistedManagedServiceCommand, commitManagedServiceCommand, ownsRequest]);
 
-  const failManagedServiceCommand = useCallback((intent: ManagedServiceCommandIntent, failure: unknown, owner: ControlPlaneRequestOwner) => {
-    clearManagedServiceCommandSlowTimer();
+  const failManagedServiceCommand = useCallback((intent: ManagedServiceCommandIntent, failure: unknown, owner: ControlPlaneRequestOwner): ManagedServiceCommandError | null => {
     const error = managedServiceCommandError(failure);
+    if (!ownsRequest(owner)) return null;
+    clearManagedServiceCommandSlowTimer();
     expireUnauthorizedCredential(failure, owner);
     if (error !== "unknown") clearPersistedManagedServiceCommand(intent);
     const currentCommand = managedServiceCommandRef.current;
@@ -350,7 +357,7 @@ export function ControlPlaneProvider({
       });
     }
     return error;
-  }, [clearManagedServiceCommandSlowTimer, clearPersistedManagedServiceCommand, commitManagedServiceCommand, expireUnauthorizedCredential]);
+  }, [clearManagedServiceCommandSlowTimer, clearPersistedManagedServiceCommand, commitManagedServiceCommand, expireUnauthorizedCredential, ownsRequest]);
 
   useEffect(() => {
     let active = true;
@@ -414,7 +421,7 @@ export function ControlPlaneProvider({
     mayCommit?: () => boolean
   ) => {
     if (!credential || resources.length === 0) return;
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     let current = cacheRef.current;
     if (!current || current.owner !== credential) {
       current = { owner: credential, snapshot: emptySnapshot, loaded: new Set() };
@@ -452,7 +459,7 @@ export function ControlPlaneProvider({
       waits.add(request);
     }
     await Promise.all(waits);
-  }, [commitResources, credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [commitResources, credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision, sourceCredential]);
 
   const readEnrichments = useCallback((
     resources: readonly ControlPlaneResourceKind[],
@@ -469,14 +476,14 @@ export function ControlPlaneProvider({
 
   const readServiceDefinitions = useCallback(async () => {
     if (!credential || !repository.listServiceDefinitions) throw new Error("SERVICE_DIRECTORY_UNAVAILABLE");
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     try {
       return await repository.listServiceDefinitions(credential);
     } catch (failure) {
       expireUnauthorizedCredential(failure, owner);
       throw failure;
     }
-  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision, sourceCredential]);
 
   const prepare = useCallback(async (target: ControlPlaneRouteSelection) => {
     // Route chrome and preview-owned content render synchronously. Only the
@@ -548,6 +555,7 @@ export function ControlPlaneProvider({
     setCache(null);
     setError(null);
     setLoading(false);
+    setMutation(null);
     serviceAuthorizationIntentRef.current = null;
     setServiceAuthorizationIntent(null);
     installationTerminationIntentRef.current = null;
@@ -567,7 +575,7 @@ export function ControlPlaneProvider({
   useEffect(() => {
     if (!credential || selection.section !== "installations" || !productResourcesReady) return;
     if (!ownedCache?.loaded.has("installations")) return;
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     const pending = ownedCache.snapshot.installations.filter((item) => [
       "PENDING", "PROVISIONING", "TERMINATION_PENDING", "TERMINATING"
     ].includes(item.phase));
@@ -627,11 +635,11 @@ export function ControlPlaneProvider({
       active = false;
       window.clearTimeout(timer);
     };
-  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, ownedCache, productResourcesReady, readEnrichments, readResources, repository, selection.product, selection.section, sessionRevision]);
+  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, ownedCache, productResourcesReady, readEnrichments, readResources, repository, selection.product, selection.section, sessionRevision, sourceCredential]);
 
   const activateQuota = useCallback(async (command: ActivateQuotaCommand) => {
     if (!credential || !managedServiceCommandOwner) return false;
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     const intent: ManagedServiceCommandIntent = {
       owner: managedServiceCommandOwner,
       requestId: requestToken("ui-quota-"),
@@ -644,8 +652,11 @@ export function ControlPlaneProvider({
     if (!beginManagedServiceCommand(intent)) return false;
     setMutation("quota");
     setError(null);
+    let settledByCurrentOwner = false;
     try {
       const entitlement = await repository.activateQuota(credential, intent.payload, intent.requestId);
+      settledByCurrentOwner = ownsRequest(owner);
+      if (!settledByCurrentOwner) return false;
       const current = cacheRef.current;
       if (current?.owner === credential) {
         const next = {
@@ -658,19 +669,21 @@ export function ControlPlaneProvider({
         cacheRef.current = next;
         setCache(next);
       }
-      completeManagedServiceCommand(intent);
+      completeManagedServiceCommand(intent, owner);
       return true;
     } catch (mutationError) {
+      settledByCurrentOwner = ownsRequest(owner);
+      if (!settledByCurrentOwner) return false;
       failManagedServiceCommand(intent, mutationError, owner);
       return false;
     } finally {
-      setMutation(null);
+      if (settledByCurrentOwner) setMutation(null);
     }
-  }, [beginManagedServiceCommand, completeManagedServiceCommand, credential, failManagedServiceCommand, managedServiceCommandOwner, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [beginManagedServiceCommand, completeManagedServiceCommand, credential, failManagedServiceCommand, managedServiceCommandOwner, managedServiceCommandOwnerKey, ownsRequest, repository, sessionRevision, sourceCredential]);
 
   const createInstallation = useCallback(async (command: CreateInstallationCommand) => {
     if (!credential || !managedServiceCommandOwner) return false;
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     const intent: ManagedServiceCommandIntent = {
       owner: managedServiceCommandOwner,
       requestId: requestToken("ui-install-"),
@@ -683,8 +696,11 @@ export function ControlPlaneProvider({
     if (!beginManagedServiceCommand(intent)) return false;
     setMutation("installation");
     setError(null);
+    let settledByCurrentOwner = false;
     try {
       const installation = await repository.createInstallation(credential, intent.payload, intent.requestId);
+      settledByCurrentOwner = ownsRequest(owner);
+      if (!settledByCurrentOwner) return false;
       const current = cacheRef.current;
       if (current?.owner === credential) {
         const next = {
@@ -697,15 +713,17 @@ export function ControlPlaneProvider({
         cacheRef.current = next;
         setCache(next);
       }
-      completeManagedServiceCommand(intent);
+      completeManagedServiceCommand(intent, owner);
       return true;
     } catch (mutationError) {
+      settledByCurrentOwner = ownsRequest(owner);
+      if (!settledByCurrentOwner) return false;
       failManagedServiceCommand(intent, mutationError, owner);
       return false;
     } finally {
-      setMutation(null);
+      if (settledByCurrentOwner) setMutation(null);
     }
-  }, [beginManagedServiceCommand, completeManagedServiceCommand, credential, failManagedServiceCommand, managedServiceCommandOwner, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [beginManagedServiceCommand, completeManagedServiceCommand, credential, failManagedServiceCommand, managedServiceCommandOwner, managedServiceCommandOwnerKey, ownsRequest, repository, sessionRevision, sourceCredential]);
 
   const commitInstallationTerminationIntent = useCallback((intent: InstallationTerminationIntent | null) => {
     installationTerminationIntentRef.current = intent;
@@ -735,7 +753,7 @@ export function ControlPlaneProvider({
   const submitInstallationTermination = useCallback(async () => {
     const intent = installationTerminationIntentRef.current;
     if (!credential || !managedServiceCommandOwner || !intent || intent.phase === "submitting" || !repository.terminateInstallation) return null;
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     const commandIntent: ManagedServiceCommandIntent = {
       owner: managedServiceCommandOwner,
       requestId: intent.requestId,
@@ -757,6 +775,7 @@ export function ControlPlaneProvider({
         frozenIntent.payload.installationId,
         frozenIntent.requestId
       );
+      if (!ownsRequest(owner)) return null;
       const current = cacheRef.current;
       if (current?.owner === credential) {
         const next = {
@@ -774,10 +793,11 @@ export function ControlPlaneProvider({
       if (installationTerminationIntentRef.current?.requestId === intent.requestId) {
         commitInstallationTerminationIntent(null);
       }
-      completeManagedServiceCommand(frozenIntent);
+      completeManagedServiceCommand(frozenIntent, owner);
       return installation;
     } catch (terminationError) {
       const commandError = failManagedServiceCommand(frozenIntent, terminationError, owner);
+      if (commandError === null) return null;
       if (installationTerminationIntentRef.current?.requestId === intent.requestId) {
         commitInstallationTerminationIntent({
           ...intent,
@@ -789,7 +809,7 @@ export function ControlPlaneProvider({
       if (commandError !== "unknown") commitManagedServiceCommand(null);
       return null;
     }
-  }, [beginManagedServiceCommand, commitInstallationTerminationIntent, commitManagedServiceCommand, completeManagedServiceCommand, credential, failManagedServiceCommand, managedServiceCommandOwner, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [beginManagedServiceCommand, commitInstallationTerminationIntent, commitManagedServiceCommand, completeManagedServiceCommand, credential, failManagedServiceCommand, managedServiceCommandOwner, managedServiceCommandOwnerKey, ownsRequest, repository, sessionRevision, sourceCredential]);
 
   const closeInstallationTerminationIntent = useCallback(() => {
     const intent = installationTerminationIntentRef.current;
@@ -808,7 +828,7 @@ export function ControlPlaneProvider({
 
   const readInstallation = useCallback(async (installationId: string): Promise<InstallationReadLoad> => {
     if (!credential) return { status: "expired" };
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     try {
       return {
         status: "ready",
@@ -825,14 +845,14 @@ export function ControlPlaneProvider({
       }
       return { status: "unavailable" };
     }
-  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision, sourceCredential]);
 
   const inspectServiceAuthorization = useCallback(async (
     accountId: string,
     installationId: string
   ): Promise<ManagedServiceAuthorizationLoad> => {
     if (!credential || !repository.inspectServiceAuthorization) return { status: "unavailable" };
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     try {
       return { status: "ready", observation: await repository.inspectServiceAuthorization(credential, accountId, installationId) };
     } catch (inspectionError) {
@@ -843,12 +863,12 @@ export function ControlPlaneProvider({
       if (inspectionError instanceof HttpProblem && inspectionError.status === 403) return { status: "forbidden" };
       return { status: "unavailable" };
     }
-  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision, sourceCredential]);
 
   const readApplication = useCallback(async (applicationId: string): Promise<ApplicationReadLoad> => {
     if (!validApplicationId(applicationId)) return { status: "invalid" };
     if (!credential || !repository.readApplication) return { status: "unavailable" };
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     try {
       return { status: "ready", snapshot: await repository.readApplication(credential, applicationId) };
     } catch (readError) {
@@ -862,12 +882,12 @@ export function ControlPlaneProvider({
       if (readError.status === 404) return { status: "notFound" };
       return { status: "unavailable" };
     }
-  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision, sourceCredential]);
 
   const listApplications = useCallback(async (after?: string): Promise<ApplicationDirectoryLoad> => {
     if (after !== undefined && !validApplicationCursor(after)) return { status: "invalidCursor" };
     if (!credential || !repository.listApplications) return { status: "unavailable" };
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     try {
       return { status: "ready", page: await repository.listApplications(credential, after) };
     } catch (directoryError) {
@@ -880,7 +900,7 @@ export function ControlPlaneProvider({
       if (directoryError.status === 403) return { status: "forbidden" };
       return { status: "unavailable" };
     }
-  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision, sourceCredential]);
 
   const commitServiceAuthorizationIntent = useCallback((intent: ManagedServiceAuthorizationIntent | null) => {
     serviceAuthorizationIntentRef.current = intent;
@@ -918,7 +938,7 @@ export function ControlPlaneProvider({
   const submitServiceAuthorization = useCallback(async () => {
     const intent = serviceAuthorizationIntentRef.current;
     if (!credential || !managedServiceCommandOwner || !intent || intent.phase === "submitting") return false;
-    const owner: ControlPlaneRequestOwner = { credential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
+    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     const template = {
       id: intent.template.id,
       version: intent.template.version,
@@ -971,11 +991,13 @@ export function ControlPlaneProvider({
           requestId: frozenIntent.requestId
         });
       }
+      if (!ownsRequest(owner)) return false;
       if (serviceAuthorizationIntentRef.current?.requestId === intent.requestId) commitServiceAuthorizationIntent(null);
-      completeManagedServiceCommand(frozenIntent);
+      completeManagedServiceCommand(frozenIntent, owner);
       return true;
     } catch (mutationError) {
       const commandError = failManagedServiceCommand(frozenIntent, mutationError, owner);
+      if (commandError === null) return false;
       if (serviceAuthorizationIntentRef.current?.requestId === intent.requestId) {
         commitServiceAuthorizationIntent({
           ...intent,
@@ -987,7 +1009,7 @@ export function ControlPlaneProvider({
       if (commandError !== "unknown") commitManagedServiceCommand(null);
       return false;
     }
-  }, [beginManagedServiceCommand, commitManagedServiceCommand, commitServiceAuthorizationIntent, completeManagedServiceCommand, credential, failManagedServiceCommand, managedServiceCommandOwner, managedServiceCommandOwnerKey, repository, sessionRevision]);
+  }, [beginManagedServiceCommand, commitManagedServiceCommand, commitServiceAuthorizationIntent, completeManagedServiceCommand, credential, failManagedServiceCommand, managedServiceCommandOwner, managedServiceCommandOwnerKey, ownsRequest, repository, sessionRevision, sourceCredential]);
 
   const closeServiceAuthorizationIntent = useCallback(() => {
     const intent = serviceAuthorizationIntentRef.current;
