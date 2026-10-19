@@ -5,91 +5,78 @@
 ## Pushed milestone
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
-  The renewed IAM first-release goal is ACTIVE and incomplete.
+  The renewed IAM first-release goal remains ACTIVE and incomplete.
 - Latest fixed production candidate:
-  `28f2da7e15c4720c262cae241f3425ada200ca9e`, IAM87/Audit39/PaaS7+r37.
-  It selectively consumes UX fixed `dbe5add33d8ef1cac663f2186e965f8fff041671`
-  and `323d7417ae230cf20d83d3903429b2492c0efb7f`, preserves IAM renderer
-  tests and regenerates its own 324 embedded assets. Local static, component,
-  deterministic build and Go UI/architecture gates passed. Its exact
-  [Verification 39193669814](https://github.com/xiak/matrix/actions/runs/39193669814)
-  attempt 1 completed/failure: 17 jobs succeeded, authority-runtime and the
-  aggregate failed. The sole original failure was the existing bulk Session
-  concurrent-login completion assertion; blocked runtime gates did not run.
-  The test expert closed the complete actual-log audit; do not reread it.
-- Latest fixed test correction:
-  `38a2cda69ec547c9e8d9d557bf61a3bcd992335c`, same production/Profile.
-  The existing integration owner now proves exact legal serialization targets,
-  a deterministic real SQLSTATE40001 retry, immutable completion and protection
-  of strictly later logins from replay. Old count=1 failed with a valid count=2
-  under the forced retry. Final focused and complete single/bulk/real-expiry
-  PostgreSQL gates passed, package267.261s; default integration/architecture
-  race and vet passed. No production/API/SQL/UI changes. Exact
-  [Verification 39196850326](https://github.com/xiak/matrix/actions/runs/39196850326)
-  attempt 1 is in progress, not accepted. Evidence belongs to FEAT011, the
-  serialization requirement to FEAT009 S1b. Old CI failure is not backfilled.
-- Latest accepted test predecessor:
-  `c80e58165b46f57ad309eabbdb3c33b0e2bc782e` /
-  [Verification 39191085161](https://github.com/xiak/matrix/actions/runs/39191085161)
-  attempt 1. All 19 jobs completed/success; the test expert finished the
-  necessary actual-log audit, all 57 top-level authority roots RUN/PASS.
-  Default opt-in browsers and seven Postfix subtests are not real execution
-  evidence. Do not repeat the closed log audit.
+  `101dc339f9ad368f293f95a3834b5613e5a6d669`, IAM87/Audit39/PaaS7+r37.
+  It selectively consumes UX fixed `b99849623eb673dcfc6167e8a33978e70802a617`:
+  eight frontend source/test/locale deltas, preserving this branch's renderer
+  tests and regenerating its own embedded assets. Local static, 77 files/1961
+  tests plus eight Node tests, deterministic unset/0 export, Go UI/architecture
+  race/vet and Linux amd64 build passed. Exact
+  [Verification 39199323432](https://github.com/xiak/matrix/actions/runs/39199323432)
+  attempt 1 is running, not accepted.
+- Its fixed test predecessor `42c957aa4bd4614777513aff782b2071c67f2a9d`
+  extends the existing attachment browser fixture to USER and ROLE, preserving
+  default GROUP. RoleSession business permission remains separate from its
+  source USER. Default compilation/race/architecture/vet passed; the new opt-in
+  browser paths have not run and are not accepted.
+- Latest accepted independent test correction:
+  `38a2cda69ec547c9e8d9d557bf61a3bcd992335c` /
+  [Verification 39196850326](https://github.com/xiak/matrix/actions/runs/39196850326),
+  attempt 1, all 19 jobs completed/success. The test expert closed all required
+  logs: all 57 top-level authority roots RUN/PASS, the deterministic real
+  SQLSTATE40001 retry passed, and required processes plus final storage scan
+  actually ran. Seven dedicated-Postfix skips and default opt-in browsers
+  are not execution evidence. Do not repeat this closed log audit or backfill
+  the older 28f CI failure. FEAT011 owns the evidence; FEAT009 owns the invariant.
 - Accepted signed-release source remains
   `741dceb6f0092fbc33706842862980816fe72d15`,
-  IAM87/Audit39/PaaS7 + contractRevision37. Its exact CI39012317180 and
-  same-profile signed A/B lifecycle and restart verification passed.
-  New UI is not yet accepted as a signed combination. The single rolling
-  predecessor remains `08e1dc4a6ce81386ea7223e62d03356f82aeee58`,
-  IAM86/Audit39/PaaS7+r36.
+  IAM87/Audit39/PaaS7+r37. Its exact CI and same-profile signed A/B lifecycle
+  and restart verification passed. The new UI is not accepted as a signed
+  combination. The single rolling predecessor remains
+  `08e1dc4a6ce81386ea7223e62d03356f82aeee58`, IAM86/Audit39/PaaS7+r36.
 
 ## Reading route and remaining outcome
 
-Read AGENTS, IAM/FEAT-IAM-010-console.md, then
-IAM/FEAT-IAM-011-acceptance.md and the relevant existing
-test/authorityprocess/process_e2e_test.go fixture. FEAT010 owns individual
-UI paths, evidence and gaps; FEAT011 owns combined acceptance.
-For the current Session CI correction additionally read FEAT009 S1b and
-app/service/iam/internal/integration/http_postgres_test.go. The full new
-remote test batch was cleaned after zero database clients; its dedicated
-container/network/volume and temporary source/toolchain directory are gone.
-No remote host or shared service was restarted. This does not claim every
-historical local resource was cleaned.
+Read AGENTS, IAM/FEAT-IAM-010-console.md, IAM/FEAT-IAM-011-acceptance.md,
+then the relevant existing test/authorityprocess/process_e2e_test.go owner.
+FEAT010 owns individual UI paths and gaps; FEAT011 owns combined acceptance.
+Read the current FEAT005 and verified runbook before signed lifecycle work.
 
-The old UI has accepted Group attachment CREATE/REVOKE response-loss and
-Group deletion effects, including exact immutable results, next-request
-authorization and unique outbox/Audit facts. The new fixed UI retains
-visible completion receipts and explicit completion navigation. Historical
-Account settings receipt reads no longer expire a later valid Session;
-actual apply and real 401 retain their scoped behavior.
+Prior Group attachment CREATE/REVOKE response-loss and Group deletion effects
+have real evidence. The new UI keeps visible immutable receipts and explicit
+completion navigation; User/Role commands fence stale repository/Session
+owners. Historical Account-settings receipts do not expire later Sessions.
+These source/component facts do not close the remaining LIVE journeys.
 
-The new Group browser run stopped before its final deletion, without a
-finish marker; the new REVOKE receipt rerun did not start. Neither is
-accepted. Tool-mandated action-time human confirmation cannot be replaced
-by blanket authorization or another tool/API. Do not repeatedly ask the
-user or start another long waiting fixture without this prerequisite.
+The new Group browser run stopped before its final deletion without a finish
+marker; the new REVOKE receipt rerun did not start. Neither is accepted.
+Tool-mandated action-time human confirmation cannot be replaced by blanket
+authorization or another tool/API. Do not repeatedly ask or start a long
+waiting fixture without this prerequisite.
 
-Continue the existing nonDeferred FEAT010 matrix, including these final
-receipt operations, daily password change, direct User/Role attachments
-and remaining policy/security/resource paths. Do not repeat accepted
-gates without an affected boundary. Deferred integrations and deployment
-prerequisites are not silently part of this goal.
+Continue the existing nonDeferred FEAT010 matrix, including final receipt
+operations, daily password change, direct User/Role attachments and remaining
+policy/security/resource paths. Do not repeat accepted gates without an
+affected boundary. Deferred integrations are not silently added to this goal.
+The final new-source signed combination and unused-task-resource cleanup
+remain separate required outcomes.
 
 ## Coordination and delivery boundaries
 
 - UX/UI engineer `01a07b21-9a0d-7fd0-b090-7827ce18262e` owns UI on its
-  own branch. Consume fixed reviewed deltas only, preserve this branch's
-  tests and rebuild embedded assets; no foreign WIP or inherited acceptance.
-- Test expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns independent
-  CI/log review. Continue independent work while necessary CI runs;
-  fix security/contract failures before acceptance.
-- Routine product development/test actions are human-authorized without
-  repetitive approval. Mandatory tool-specific human handoff remains binding.
-  Isolate task resources; do not reset shared Docker/WSL, restart remote
-  machines/shared services or touch unrelated resources.
-- Use uniquely owned limited resources, GOMAXPROCS2 and bounded Go concurrency;
-  serialize heavy real database gates. Verify ownership and remove unused
-  task resources after evidence collection. Do not infer all historical
-  local resources are removed from one successful remote cleanup.
-- Markdown and existing document owners; repository-local Git identity
-  Xiak <Jellal@aliyun.com>; push only the task branch.
+  own branch. Consume fixed reviewed deltas only, preserve consumer tests and
+  rebuild assets; no foreign WIP or inherited acceptance. The 101dc/42c fixed
+  review was requested; an email-scope reply is not a code-review verdict.
+- Test expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns read-only
+  independent CI/log review. Its existing monitor follows the exact new
+  candidate after closing 38a. Do not duplicate automations or delegate
+  execution beyond its human-authorized read-only scope.
+- Routine product development/testing is human-authorized without repetitive
+  approval. Mandatory tool-specific handoff still binds. Do not reset shared
+  Docker/WSL, restart remote machines/shared services or touch other resources.
+- Use unique task-owned limited resources, GOMAXPROCS2 and bounded concurrency;
+  serialize heavy real gates and remove unused task resources after evidence.
+  A successful CI cleanup does not prove all historical local objects are gone.
+- Markdown and existing owners; local Git identity Xiak <Jellal@aliyun.com>.
+  Push only this feature branch.

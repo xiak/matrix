@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；最近已接受的签名产品源码`741dceb6f0092fbc33706842862980816fe72d15`的IAM87/Audit39/PaaS7、`contractRevision=37`已通过[Verification 39012317180](https://github.com/xiak/matrix/actions/runs/39012317180)十九项独立作业、同源签名A/B完整离线生命周期和重启后复验。User资料/状态只读原结果恢复、Group Membership显式等值重放、Account安全设置正常完整替换、Group策略附件CREATE/REVOKE只读回执恢复及Group删除效果已有各自真实浏览器与后端证据。后继UI候选`28f2da7e15c4720c262cae241f3425ada200ca9e`保留原Profile，已修正可见完成回执及重新登录说明，但其独立CI失败于既有Session并发断言，完整结论由011拥有；两条新回执的页面最终操作和签名组合仍分别待验收。日常改密及矩阵中其余非Deferred页面写路径也尚未全部验收，因此整个FEAT仍为实施中。
+- 状态：实施中；最近已接受的签名产品源码`741dceb6f0092fbc33706842862980816fe72d15`的IAM87/Audit39/PaaS7、`contractRevision=37`已通过[Verification 39012317180](https://github.com/xiak/matrix/actions/runs/39012317180)十九项独立作业、同源签名A/B完整离线生命周期和重启后复验。User资料/状态只读原结果恢复、Group Membership显式等值重放、Account安全设置正常完整替换、Group策略附件CREATE/REVOKE只读回执恢复及Group删除效果已有各自真实浏览器与后端证据。最新UI候选`101dc339f9ad368f293f95a3834b5613e5a6d669`保留原Profile，补齐可见完成回执、重新登录说明及User/Role命令所有者隔离，本分支组件/构建检查已通过；其[Verification 39199323432](https://github.com/xiak/matrix/actions/runs/39199323432)仍在运行。会话并发测试修正的前序独立CI已由011接受，但不替代新候选、真实页面或签名组合验收。日常改密及矩阵中其余非Deferred页面写路径也尚未全部验收，因此整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -350,11 +350,11 @@ REVOKE使用固定`77923f7839633002eb2a6c732c35fec6bea19436`的同一owner，先
 
 Group删除沿用原严格结果校验，并在对话框卸载后保留独立回执页：实际Group稳定ID/name、原命令request ID、结果修订、解除Membership/撤销附件数量及删除时间均取自本次命令与经验证的响应。只有明确“完成并返回用户组列表”才触发普通受保护导航及独立目录读取，不从空目录补造结果。Account安全设置的正常apply成功仍只清理准确调用Session的本地上下文，并向登录页传递非秘密原request说明；只读历史完成查询不退出后来建立的有效Session，真实401仍只失效准确当前认证所有者。没有扩展邮箱登录/MFA、手机能力、通用恢复框架、API/SQL或发布Profile。
 
-主增量在本分支Node22.22.2/npm11.6.4、单测试worker及2GiB Node堆限制下通过typecheck、完整lint、architecture、234组对比度、77个Vitest文件/1956项测试（479.40秒）及8项Node边界测试。两处修正再通过相同静态门禁和三个完整受影响组件文件/466项测试（210.23秒），不重复无关全量。最终源码以2个构建worker完成59页静态导出和57条分段归一化；未设置与显式0两种生产模式的324个文件逐字一致，本分支重新生成的Go嵌入产物与之完全匹配，Go UI/architecture race及UI vet通过。最终消费源码固定为`28f2da7e15c4720c262cae241f3425ada200ca9e`，其[Verification 39193669814](https://github.com/xiak/matrix/actions/runs/39193669814) attempt 1已完成且失败；控制台测试通过不替代011记录的整轮结论。该源的独立Group浏览器复验只到最终确认、没有提交，随后停止专属进程；新REVOKE回执复验未启动，两者均不计通过。不能继承donor全量结论或把旧741页面的效果验收视为新UI已验收；同Profile签名release也仍保留独立发布门禁。
+旧消费源码`28f2da7e15c4720c262cae241f3425ada200ca9e`的[Verification 39193669814](https://github.com/xiak/matrix/actions/runs/39193669814) attempt 1失败不回填；后继会话测试修正及独立CI的准确结论归011。该源的独立Group浏览器复验只到最终确认、没有提交，随后停止专属进程；新REVOKE回执复验未启动，两者均不计通过。不能继承donor全量结论或把旧741页面的效果验收视为新UI已验收；同Profile签名release也仍保留独立发布门禁。
 
 后继选择性`ADAPT`固定`b99849623eb673dcfc6167e8a33978e70802a617`的八个现有源码、测试和消息增量，不导入其生成物或验收状态。直接User附件命令及完成查询绑定当前repository、已认证view和Session；旧所有者的成功、401、检查结果及finally均不得清除新所有者的UNKNOWN意图、结束其pending或让其退出。Role客户端在发送前和接收后验证同一所有者，替换身份时重新建立页面工作区；权限仍由服务端判断。User附件恢复回执补齐原operation/request ID、完成时间、目标User、Policy、附件及结果版本，必须显式完成后才返回；回执不证明当前授权。
 
-本分支保留既有renderer测试，仅应用对应增量；其余七个源码/测试/消息blob与固定donor逐项一致。Node22.22.2/npm11.6.4、单测试worker和2GiB Node堆下，typecheck、全量lint、architecture、234组对比度及77个Vitest文件/1961项测试（393.80秒）、8项Node导出边界测试均通过。最终源码以两个构建worker完成59页和57条分段路径归一化；未设置与显式0的两次生产导出得到324个逐字相同文件，并由本分支重建匹配的嵌入产物；Go UI/architecture race及UI vet也通过。该结果不替代后继精确SHA独立CI、User/Role真实浏览器操作或新签名组合验收，也不回填旧失败。
+消费源码固定为`101dc339f9ad368f293f95a3834b5613e5a6d669`。本分支保留既有renderer测试，仅应用对应增量；其余七个源码/测试/消息blob与固定donor逐项一致。Node22.22.2/npm11.6.4、单测试worker和2GiB Node堆下，typecheck、全量lint、architecture、234组对比度及77个Vitest文件/1961项测试（393.80秒）、8项Node导出边界测试均通过。最终源码以两个构建worker完成59页和57条分段路径归一化；未设置与显式0的两次生产导出得到324个逐字相同文件，并由本分支重建匹配的嵌入产物；Go UI/architecture race、UI vet和Linux amd64全仓构建也通过。该结果不替代仍在运行的[Verification 39199323432](https://github.com/xiak/matrix/actions/runs/39199323432)、User/Role真实浏览器操作或新签名组合验收，也不回填旧失败。
 
 ### 首次登录强制改密
 
