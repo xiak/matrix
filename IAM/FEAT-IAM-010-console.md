@@ -360,6 +360,8 @@ Group删除沿用原严格结果校验，并在对话框卸载后保留独立回
 
 本分支先仅加入两项pending-identity回归，未修改生产源码时两项均以错误enabled状态失败；接入修复后相同两项通过。User/Role两个相关文件随后267项通过（78.96秒），测试专用后继再补不依赖生产按钮disabled的Context探针；补强后的四项聚焦全部通过（7.59秒），覆盖新repository身份pending而目标User读取已完成时禁止开始关系命令及读取原UNKNOWN结果，核验后显式正常提交/只读恢复继续可用。使用Node22.22.2/npm11.6.4、单Vitest worker和2GiB堆，通过typecheck、三个变更路径ESLint、architecture、234组对比度与8项Node边界。两个构建worker的59页/57分段路径导出在未设置与显式0模式下得到324个逐字相同文件，并由本分支重建匹配的嵌入产物；Go UI/architecture race、UI vet及Linux amd64 UI构建也通过。未重跑无关后端真库矩阵，也未把donor的247项结果或本地组件检查当作后继精确SHA的独立CI、User/Role真实浏览器操作或新签名组合验收。
 
+消费源码固定为`9621bb6e66b1076576649d3f6b224725a60d6848`，保持IAM87/Audit39/PaaS7+r37；准确[Verification 39203431655](https://github.com/xiak/matrix/actions/runs/39203431655) attempt 1已启动，尚未取得接受终态。前述局部回归、独立源码审查和产物一致性不会自动关闭真实页面与签名组合缺口。
+
 ### 首次登录强制改密
 
 固定`6298e7532`在既有`authorityprocess` owner增加显式opt-in的首次登录改密浏览器门禁，不改变生产API、SQL或发布Profile。全新专属PostgreSQL 18以1.5 CPU、1 GiB、PIDs 256运行真实受限IAM/Audit/PaaS、双dispatcher与嵌入控制台；测试先为普通User签发另一条受限Session，随后浏览器以`username@account-id`和初始密码登录，从纯页面提交当前初始密码、新密码及确认值并进入所请求的IAM概览。数据库证明User和credential generation各只推进一次至版本2，`must_change_password=false`；另一条受限Session终态为REVOKED版本2且仍保留旧credential generation，浏览器调用Session是唯一ACTIVE会话并在同一事务提升至新generation。旧密码真实登录返回401且不泄露输入，新密码重新登录后`CurrentIdentity`仍为原Account/User且不再要求改密；唯一`ui-password-*`成功事实以本人USER为actor/target进入完整租户Audit链。fixture/race package分别通过76.68/80.216秒。结束前数据库外部客户端为0，按任务标签只删除本轮容器、网络和卷，未动共享或其他任务资源。

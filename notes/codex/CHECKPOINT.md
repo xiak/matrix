@@ -7,19 +7,25 @@
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   The renewed IAM first-release goal remains ACTIVE and incomplete.
 - Latest fixed production candidate:
-  `101dc339f9ad368f293f95a3834b5613e5a6d669`, IAM87/Audit39/PaaS7+r37.
-  It selectively consumes UX fixed `b99849623eb673dcfc6167e8a33978e70802a617`:
-  eight frontend source/test/locale deltas, preserving this branch's renderer
-  tests and regenerating its own embedded assets. Local static, 77 files/1961
-  tests plus eight Node tests, deterministic unset/0 export, Go UI/architecture
-  race/vet and Linux amd64 build passed. Exact
-  [Verification 39199323432](https://github.com/xiak/matrix/actions/runs/39199323432)
-  attempt 1 is running, not accepted. A fixed-source UX review identified a
-  release-blocking USER attachment owner fence: after repository replacement,
-  User reads can complete before currentIdentity while begin/submit/UNKNOWN
-  inspect lack the verified repo+Session check. FEAT010 owns the required
-  pending-identity zero-dispatch regression. Do not accept 101dc even if this
-  CI succeeds; consume only the UX owner's subsequent fixed correction.
+  `9621bb6e66b1076576649d3f6b224725a60d6848`, IAM87/Audit39/PaaS7+r37.
+  It selectively consumes UX fixed `82954bcefe2abcad4d3f1d9c2189e0d5e6408a66`
+  and test-only `64311a0b14e9bb2fd5f9fe9ef21b412e89fe505c`: three existing
+  source/test paths, preserving this branch's renderer tests and rebuilding
+  its own embedded assets. USER attachment begin/submit/UNKNOWN inspect now
+  require both the current owner and verified repo+Session before effects.
+  The consuming branch observed two new tests fail on the unchanged old
+  source, then pass with the correction. Two related files/267 tests passed;
+  after the direct-context test addition, four focused cases passed, as did
+  type/changed-path lint/architecture/234 contrast pairs, eight Node tests,
+  two-worker deterministic unset/0 exports and 324 matching embedded files,
+  Go UI/architecture race, UI vet and Linux amd64 UI build. Exact
+  [Verification 39203431655](https://github.com/xiak/matrix/actions/runs/39203431655)
+  attempt 1 is running, not accepted. No API/SQL/backend/Profile change.
+- Rejected predecessor `101dc339f9ad368f293f95a3834b5613e5a6d669` /
+  Verification 39199323432 attempt 1 is closed as completed/cancelled after
+  the fixed-source owner-fence finding. Cancellation was intentional, not
+  a newly proven backend assertion failure; its aggregate failed because
+  lanes were cancelled. Do not reopen its full log audit or backfill it.
 - Its fixed test predecessor `42c957aa4bd4614777513aff782b2071c67f2a9d`
   extends the existing attachment browser fixture to USER and ROLE, preserving
   default GROUP. RoleSession business permission remains separate from its
@@ -72,12 +78,12 @@ remain separate required outcomes.
 - UX/UI engineer `01a07b21-9a0d-7fd0-b090-7827ce18262e` owns UI on its
   own branch. Consume fixed reviewed deltas only, preserve consumer tests and
   rebuild assets; no foreign WIP or inherited acceptance. Its 101dc/42c
-  fixed review found the USER pending-identity blocker above; the other
-  reviewed RoleSession/source USER and receipt boundaries had no reported
-  blocker. The UI owner is responsible for the narrow source correction.
+  fixed review found the USER pending-identity blocker now corrected in 9621.
+  Test Expert independently reviewed the fixed 829 production fence; its
+  source review is not browser or exact consuming-commit CI acceptance.
 - Test expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns read-only
   independent CI/log review. Its existing monitor follows the exact new
-  candidate after closing 38a. Do not duplicate automations or delegate
+  candidate after closing 38a and the cancelled 101dc. Do not duplicate automations or delegate
   execution beyond its human-authorized read-only scope.
 - Routine product development/testing is human-authorized without repetitive
   approval. Mandatory tool-specific handoff still binds. Do not reset shared
