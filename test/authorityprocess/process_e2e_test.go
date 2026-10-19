@@ -190,6 +190,7 @@ const (
 	authorityProcessPasswordChangeBrowser
 	authorityProcessDailyPasswordChangeBrowser
 	authorityProcessAccountSecuritySettingsBrowser
+	authorityProcessAccessKeyRecoveryBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
@@ -396,6 +397,19 @@ func TestIAMAccountSecuritySettingsConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessAccountSecuritySettingsBrowser)
 }
 
+// This opt-in fixture observes an actual browser recovering one committed
+// AccessKey mutation. Setup uses the API; only the browser may issue the
+// selected mutation and its explicit, identical replay through the relay.
+func TestIAMAccessKeyRecoveryConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_ACCESS_KEY_RECOVERY_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_ACCESS_KEY_RECOVERY_BROWSER=1 for the bounded LIVE AccessKey recovery fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("AccessKey recovery fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessAccessKeyRecoveryBrowser)
+}
+
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
 // and RabbitMQ 4.1 product resources through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
@@ -442,7 +456,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		mode == authorityProcessUserManagementRecoveryBrowser || mode == authorityProcessGroupMembershipRecoveryBrowser ||
 		mode == authorityProcessPolicyAttachmentRecoveryBrowser ||
 		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
-		mode == authorityProcessDailyPasswordChangeBrowser || mode == authorityProcessAccountSecuritySettingsBrowser {
+		mode == authorityProcessDailyPasswordChangeBrowser || mode == authorityProcessAccountSecuritySettingsBrowser ||
+		mode == authorityProcessAccessKeyRecoveryBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -928,6 +943,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)
+		return
+	}
+	if mode == authorityProcessAccessKeyRecoveryBrowser {
+		sensitive = append(sensitive, runIAMAccessKeyRecoveryConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
 		return
 	}
 	if mode == authorityProcessManagedProducts {
@@ -3910,6 +3932,243 @@ func runIAMUserManagementRecoveryConsoleBrowser(
 	return []string{initial.Credential, member.Credential}
 }
 
+func runIAMAccessKeyRecoveryConsoleBrowser(
+	t *testing.T, ctx context.Context, database *pgx.Conn,
+	root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	operation := strings.ToUpper(strings.TrimSpace(os.Getenv("MATRIX_IAM_ACCESS_KEY_RECOVERY_OPERATION")))
+	if operation == "" {
+		operation = "SET_STATUS"
+	}
+	if operation != "SET_STATUS" && operation != "NETWORK" && operation != "DELETE" {
+		t.Fatal("MATRIX_IAM_ACCESS_KEY_RECOVERY_OPERATION must be SET_STATUS, NETWORK or DELETE")
+	}
+	const loginName = "browser.key.recovery"
+	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser AccessKey recovery User",
+		initialDeveloperPassword, "browser-key-recovery-user")
+	initial := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), initialDeveloperPassword,
+		"browser-key-recovery-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-key-recovery-password")
+	collectionPath := "/v1/users/" + string(user.ID) + "/access-keys"
+	// Bootstrap's frozen IAM policy is not automatically expanded when a
+	// product adds credential actions. Prove denial, then use the real policy
+	// APIs to grant this browser operator the explicit fixture permissions.
+	if response := performJSON(t, http.MethodGet, iamEndpoint+collectionPath, ownerBearer, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("ungranted browser key directory status=%d", response.Status)
+	}
+	policyResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser AccessKey recovery operator", RequestID: "browser-key-recovery-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{
+				{SID: "target-user", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceExact, ID: string(user.ID)}}},
+				{SID: "keys", Effect: iamv1.PolicyAllow,
+					Actions: []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus,
+						iamv1.ActionIAMAccessKeySetNetworkRestrictions, iamv1.ActionIAMAccessKeyDelete},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccessKey, Match: iamv1.PolicyResourceAnyInAuthority}}},
+			}},
+	})
+	var policy iamv1.PolicyDetail
+	if policyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(policyResponse.Body), &policy) != nil ||
+		iamv1.ValidatePolicyDetail(policy) != nil {
+		t.Fatalf("prepare explicit browser key policy status=%d", policyResponse.Status)
+	}
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, "principal-admin", policy.Policy.ID, "browser-key-recovery-grant")
+	readDirectory := func() iamv1.AccessKeyList {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, iamEndpoint+collectionPath, ownerBearer, nil)
+		var value iamv1.AccessKeyList
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &value) != nil ||
+			iamv1.ValidateAccessKeyList(value) != nil || value.AccountID != user.AccountID || value.UserID != user.ID {
+			t.Fatalf("read browser key directory status=%d", response.Status)
+		}
+		return value
+	}
+	directory := readDirectory()
+	if len(directory.Items) != 0 {
+		t.Fatal("browser key recovery target already has keys")
+	}
+	response := performJSON(t, http.MethodPost, iamEndpoint+collectionPath, ownerBearer, iamv1.CreateAccessKeyRequest{
+		UserResourceVersion: directory.UserResourceVersion, RequestID: "browser-key-recovery-prepare",
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+	})
+	defer clear(response.Body)
+	var created iamv1.CreateAccessKeyResponse
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &created) != nil ||
+		iamv1.ValidateCreateAccessKeyResponse(created) != nil || created.Outcome != "APPLIED" ||
+		created.Key.AccountID != user.AccountID || created.Key.UserID != user.ID {
+		t.Fatalf("prepare browser key status=%d", response.Status)
+	}
+	secret := created.Secret.CopyBytes()
+	sensitive := []string{initial.Credential, string(secret)}
+	clear(secret)
+	key := created.Key
+	keyPath := collectionPath + "/" + string(key.ID)
+	if operation == "DELETE" {
+		disabledResponse := performJSON(t, http.MethodPost, iamEndpoint+keyPath+":set-status", ownerBearer,
+			iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: key.ResourceVersion,
+				Status: iamv1.AccessKeyDisabled, RequestID: "browser-key-recovery-prepare-disable"})
+		var disabled iamv1.SetAccessKeyStatusResponse
+		if disabledResponse.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(disabledResponse.Body), &disabled) != nil ||
+			iamv1.ValidateSetAccessKeyStatusResponse(disabled) != nil || disabled.Outcome != "APPLIED" ||
+			disabled.Key.ID != key.ID || disabled.Key.Status != iamv1.AccessKeyDisabled || disabled.Key.ResourceVersion != 2 {
+			t.Fatalf("prepare disabled browser key status=%d", disabledResponse.Status)
+		}
+		key = disabled.Key
+	}
+	method, mutationPath := http.MethodPost, "/api/iam"+keyPath+":set-status"
+	wantAction, wantEvent := iamv1.ActionIAMAccessKeySetStatus, auditv1.ActionIAMAccessKeyDisabled
+	wantStatus, wantNetwork := iamv1.AccessKeyDisabled, iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}
+	if operation == "NETWORK" {
+		method, mutationPath = http.MethodPut, "/api/iam"+keyPath+"/network-restrictions"
+		wantAction, wantEvent = iamv1.ActionIAMAccessKeySetNetworkRestrictions, auditv1.ActionIAMAccessKeyNetworkRestrictionsUpdated
+		wantStatus, wantNetwork = iamv1.AccessKeyEnabled, iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"192.0.2.0/24"}}
+	} else if operation == "DELETE" {
+		mutationPath = "/api/iam" + keyPath + ":delete"
+		wantAction, wantEvent = iamv1.ActionIAMAccessKeyDelete, auditv1.ActionIAMAccessKeyDeleted
+	}
+	loss := &browserResponseLoss{method: method, path: mutationPath,
+		recoveryPath: "/api/iam" + collectionPath, allowSameHostRecovery: true,
+		postLossWritePrefix: "/api/iam/v1/users"}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, loss)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-access-key-recovery-finished")
+	t.Logf("ACCESS_KEY_RECOVERY_BROWSER_FIXTURE operation=%s url=%s/console/access/users/?id=%s&tab=keys finish=%s user=%s key=%s version=%d login=admin; use the existing changed admin password; submit exactly one %s (NETWORK CIDR=192.0.2.0/24), observe UNKNOWN, leave and return or reauthenticate as the same actor, explicitly replay the original unchanged intent once, then observe authoritative read-back; API setup is not browser creation/Secret acceptance",
+		operation, server.URL, url.QueryEscape(string(user.ID)), finish, user.ID, key.ID, key.ResourceVersion, operation)
+	waitForBrowserMarker(t, ctx, ui, finish, "AccessKey original-intent recovery completion")
+	observation := loss.snapshot()
+	defer clear(observation.RequestBody)
+	if err := checkAccessKeyBrowserRecovery(observation, method, mutationPath, "/api/iam"+collectionPath); err != nil {
+		t.Fatal(err)
+	}
+	requestID := ""
+	switch operation {
+	case "SET_STATUS":
+		var request iamv1.SetAccessKeyStatusRequest
+		if iamv1.DecodeRequest(bytes.NewReader(observation.RequestBody), &request) != nil ||
+			iamv1.ValidateSetAccessKeyStatusRequest(request) != nil || request.AccessKeyResourceVersion != key.ResourceVersion ||
+			request.Status != wantStatus || !strings.HasPrefix(request.RequestID, "ui-access-key-status-") {
+			t.Fatal("browser replay changed the original key status intent")
+		}
+		requestID = request.RequestID
+	case "NETWORK":
+		var request iamv1.SetAccessKeyNetworkRestrictionsRequest
+		if iamv1.DecodeRequest(bytes.NewReader(observation.RequestBody), &request) != nil ||
+			iamv1.ValidateSetAccessKeyNetworkRestrictionsRequest(request) != nil || request.AccessKeyResourceVersion != key.ResourceVersion ||
+			!reflect.DeepEqual(request.NetworkRestrictions, wantNetwork) || !strings.HasPrefix(request.RequestID, "ui-access-key-network-") {
+			t.Fatal("browser replay changed the original key network intent")
+		}
+		requestID = request.RequestID
+	case "DELETE":
+		var request iamv1.DeleteAccessKeyRequest
+		if iamv1.DecodeRequest(bytes.NewReader(observation.RequestBody), &request) != nil ||
+			iamv1.ValidateDeleteAccessKeyRequest(request) != nil || request.AccessKeyResourceVersion != key.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-access-key-delete-") {
+			t.Fatal("browser replay changed the original key deletion intent")
+		}
+		requestID = request.RequestID
+	}
+	var storedVersion uint64
+	var storedStatus string
+	var deleted, materialPresent bool
+	var storedNetwork []byte
+	if err := database.QueryRow(ctx, `SELECT resource_version,status,deleted_at IS NOT NULL,
+		nonce IS NOT NULL AND ciphertext IS NOT NULL,network_restrictions FROM iam.access_keys
+		WHERE tenant_id=$1 AND user_id=$2 AND id=$3`, user.AccountID, user.ID, key.ID).
+		Scan(&storedVersion, &storedStatus, &deleted, &materialPresent, &storedNetwork); err != nil {
+		t.Fatal("read browser key recovery effect", err)
+	}
+	var network iamv1.AccessKeyNetworkRestrictions
+	if storedVersion != key.ResourceVersion+1 || storedStatus != string(wantStatus) ||
+		deleted != (operation == "DELETE") || materialPresent == deleted ||
+		json.Unmarshal(storedNetwork, &network) != nil || !reflect.DeepEqual(network, wantNetwork) {
+		t.Fatal("key replay changed the version, terminal material state, status or network more than once")
+	}
+	directory = readDirectory()
+	if operation == "DELETE" {
+		if len(directory.Items) != 0 {
+			t.Fatal("deleted key survived the authoritative directory read")
+		}
+	} else if len(directory.Items) != 1 || directory.Items[0].Key.ID != key.ID ||
+		directory.Items[0].Key.ResourceVersion != storedVersion || directory.Items[0].Key.Status != wantStatus ||
+		directory.Items[0].Key.CredentialState != iamv1.AccessKeyCredentialCurrent ||
+		!reflect.DeepEqual(directory.Items[0].Key.NetworkRestrictions, wantNetwork) {
+		t.Fatal("browser key current directory differs from the single committed effect")
+	}
+	var completions, facts int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.access_key_intents
+		WHERE tenant_id=$1 AND actor_id='principal-admin' AND request_id=$2 AND action_name=$3
+		AND user_id=$4 AND key_id=$5 AND result->>'resourceVersion'=$6`,
+		user.AccountID, requestID, wantAction, user.ID, key.ID, strconv.FormatUint(storedVersion, 10)).Scan(&completions); err != nil || completions != 1 {
+		t.Fatalf("browser key immutable completion count=%d err=%v", completions, err)
+	}
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox o
+		JOIN iam.access_key_intents i ON i.tenant_id=o.tenant_id AND i.event_id=o.event_id
+		WHERE i.tenant_id=$1 AND i.actor_id='principal-admin' AND i.request_id=$2
+		AND o.event_document->>'action'=$3 AND o.event_document#>>'{target,kind}'='ACCESS_KEY'
+		AND o.event_document#>>'{target,id}'=$4 AND o.event_document->>'iamDecisionId'=i.decision_id`,
+		user.AccountID, requestID, wantEvent, key.ID).Scan(&facts); err != nil || facts != 1 {
+		t.Fatalf("browser key linked original outbox count=%d err=%v", facts, err)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	query, matching := auditv1.QueryRecordsRequest{PageSize: 100, Action: wantEvent}, 0
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if record.Event.RequestID != requestID {
+				continue
+			}
+			matching++
+			if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(user.AccountID) ||
+				record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
+				record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetAccessKey ||
+				record.Event.Target.ID != string(key.ID) || record.Event.Result != auditv1.ResultSucceeded {
+				t.Fatal("browser key recovery Audit attribution differs")
+			}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		query.Cursor = page.NextCursor
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if matching != 1 || chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(user.AccountID) || chain.InstallationID != "" {
+		t.Fatal("browser key recovery did not retain one fact in a complete tenant Audit chain")
+	}
+	t.Logf("AccessKey %s browser recovery retained one original effect/completion/outbox/Audit after one explicit exact replay and a separate authorized directory read; this fixture does not prove UI creation, Secret saving or programmatic business use", operation)
+	return sensitive
+}
+
+func checkAccessKeyBrowserRecovery(value browserResponseLossObservation, method, mutationPath, readPath string) error {
+	if value.Attempts != 2 || value.SelectedAttempt != 1 || value.MutationOverflow || !value.ResponseLost ||
+		value.BackendStatus != http.StatusOK || value.IdempotencyKey != "" || len(value.MutationAttempts) != 2 ||
+		value.PostLossWrites != 1 || value.PostLossMethod != method || value.PostLossPath != mutationPath ||
+		value.PostLossHost != value.MutationHost {
+		return errors.New("AccessKey browser recovery did not make exactly one original mutation and one explicit replay")
+	}
+	for index, attempt := range value.MutationAttempts {
+		if attempt.Sequence != index+1 || attempt.Method != method || attempt.Host != value.MutationHost ||
+			attempt.RequestURI != mutationPath || !attempt.BackendCalled || attempt.BackendStatus != http.StatusOK ||
+			!attempt.RequestBodyCompared || !attempt.RequestBodyMatchesSelected ||
+			!attempt.IdempotencyKeyCompared || !attempt.IdempotencyKeyMatchesSelected || attempt.SelectedForLoss != (index == 0) {
+			return errors.New("AccessKey browser recovery changed or repeated an unconfirmed command")
+		}
+	}
+	for _, read := range value.RecoveryAttempts {
+		if read.Method == http.MethodGet && read.Host == value.MutationHost && read.RequestURI == readPath &&
+			read.BackendStatus == http.StatusOK && read.MutationAttemptsObserved == 2 {
+			return nil
+		}
+	}
+	return errors.New("AccessKey browser recovery lacks an authorized read-back after the original replay")
+}
+
 func runIAMGroupMembershipRecoveryConsoleBrowser(
 	t *testing.T,
 	ctx context.Context,
@@ -5809,10 +6068,11 @@ type browserResponseLossMutationAttempt struct {
 }
 
 type browserResponseLossRecoveryAttempt struct {
-	Method        string
-	Host          string
-	RequestURI    string
-	BackendStatus int
+	Method                   string
+	Host                     string
+	RequestURI               string
+	BackendStatus            int
+	MutationAttemptsObserved int
 }
 
 type browserResponseLossObservation struct {
@@ -5943,6 +6203,7 @@ func (value *browserResponseLoss) observeRecovery(request *http.Request, backend
 	}
 	value.recoveryAttempts = append(value.recoveryAttempts, browserResponseLossRecoveryAttempt{
 		Method: request.Method, Host: request.Host, RequestURI: request.URL.RequestURI(), BackendStatus: backendStatus,
+		MutationAttemptsObserved: len(value.mutationAttempts),
 	})
 	if value.mutationHost == "" || !value.allowSameHostRecovery && request.Host == value.mutationHost ||
 		backendStatus < http.StatusOK || backendStatus >= http.StatusMultipleChoices {
@@ -6221,6 +6482,78 @@ func TestBrowserResponseLossTracksAllPostLossUserWrites(t *testing.T) {
 		observation.PostLossPath != "/api/iam/v1/users/user-one:update" ||
 		observation.PostLossHost != "browser.example" {
 		t.Fatalf("User recovery did not count every post-loss User write exactly: %#v", observation)
+	}
+}
+
+func TestBrowserResponseLossRequiresExactAccessKeyReplayAndSubsequentRead(t *testing.T) {
+	for _, test := range []struct{ method, suffix string }{
+		{http.MethodPost, ":set-status"},
+		{http.MethodPut, "/network-restrictions"},
+		{http.MethodPost, ":delete"},
+	} {
+		t.Run(test.suffix, func(t *testing.T) {
+			const host = "http://browser.example"
+			const directoryPath = "/api/iam/v1/users/user-one/access-keys"
+			path := directoryPath + "/key-one" + test.suffix
+			body := []byte(`{"accessKeyResourceVersion":2,"requestId":"original-intent"}`)
+			loss := &browserResponseLoss{method: test.method, path: path,
+				recoveryPath: directoryPath, allowSameHostRecovery: true, postLossWritePrefix: "/api/iam/v1/users"}
+			mutation := httptest.NewRequest(test.method, host+path, bytes.NewReader(body))
+			if !loss.observe(mutation, http.StatusOK, body) {
+				t.Fatal("first AccessKey response was not selected for loss")
+			}
+			loss.markLost()
+			read := httptest.NewRequest(http.MethodGet, host+directoryPath, nil)
+			loss.observeRecovery(read, http.StatusOK)
+			if checkAccessKeyBrowserRecovery(loss.snapshot(), test.method, path, directoryPath) == nil {
+				t.Fatal("a current directory read was accepted instead of the original completion")
+			}
+			loss.observePostLossWrite(mutation)
+			if loss.observe(mutation, http.StatusOK, body) {
+				t.Fatal("the exact original replay was selected for a second response loss")
+			}
+			if checkAccessKeyBrowserRecovery(loss.snapshot(), test.method, path, directoryPath) == nil {
+				t.Fatal("a read from before replay was accepted as post-completion reconciliation")
+			}
+			loss.observeRecovery(read, http.StatusOK)
+			observation := loss.snapshot()
+			defer clear(observation.RequestBody)
+			if err := checkAccessKeyBrowserRecovery(observation, test.method, path, directoryPath); err != nil {
+				t.Fatal(err)
+			}
+			for name, corrupt := range map[string]func(*browserResponseLossObservation){
+				"changed-body": func(value *browserResponseLossObservation) {
+					value.MutationAttempts[1].RequestBodyMatchesSelected = false
+				},
+				"changed-key": func(value *browserResponseLossObservation) {
+					value.MutationAttempts[1].IdempotencyKeyMatchesSelected = false
+				},
+				"other-origin": func(value *browserResponseLossObservation) { value.MutationAttempts[1].Host = "other.example" },
+				"failed-replay": func(value *browserResponseLossObservation) {
+					value.MutationAttempts[1].BackendStatus = http.StatusForbidden
+				},
+				"extra-write": func(value *browserResponseLossObservation) { value.PostLossWrites++ },
+				"wrong-target": func(value *browserResponseLossObservation) {
+					value.MutationAttempts[1].RequestURI = directoryPath + "/key-two:delete"
+				},
+				"failed-read": func(value *browserResponseLossObservation) {
+					value.RecoveryAttempts[1].BackendStatus = http.StatusServiceUnavailable
+				},
+				"other-user-read": func(value *browserResponseLossObservation) {
+					value.RecoveryAttempts[1].RequestURI = "/api/iam/v1/users/user-two/access-keys"
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					invalid := observation
+					invalid.MutationAttempts = slices.Clone(observation.MutationAttempts)
+					invalid.RecoveryAttempts = slices.Clone(observation.RecoveryAttempts)
+					corrupt(&invalid)
+					if checkAccessKeyBrowserRecovery(invalid, test.method, path, directoryPath) == nil {
+						t.Fatal("invalid AccessKey browser recovery observation was accepted")
+					}
+				})
+			}
+		})
 	}
 }
 

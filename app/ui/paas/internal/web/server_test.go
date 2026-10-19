@@ -109,6 +109,12 @@ func TestHandlerServesBoundedClientWorkspaceQueriesWithoutSelectingContent(t *te
 	handler := NewHandler()
 	for _, target := range []string{
 		"/console/access/users/?id=principal-member",
+		"/console/access/users/?id=principal-member&tab=identity",
+		"/console/access/users/?id=principal-member&tab=access",
+		"/console/access/users/?id=principal-member&tab=groups",
+		"/console/access/users/?id=principal-member&tab=security",
+		"/console/access/users/?id=principal-member&tab=keys",
+		"/console/access/users/?id=principal-member&tab=policies",
 		"/console/access/groups/?id=group%2Fexample",
 		"/console/access/policies/?id=policy-reviewer",
 		"/console/access/roles/?id=role-reviewer",
@@ -118,6 +124,8 @@ func TestHandlerServesBoundedClientWorkspaceQueriesWithoutSelectingContent(t *te
 		"/console/access/create-policy/?method=tags",
 		"/console/access/create-policy/?method=features",
 		"/console/access/users/__next.console.access.$d$view.__PAGE__.txt?id=principal-member&_rsc=probe",
+		"/console/access/users/__next.console.access.$d$view.__PAGE__.txt?id=principal-member&tab=keys&_rsc=probe",
+		"/console/access/users/__next.console.access.$d$view.__PAGE__.txt?id=principal-member&tab=policies&_rsc=probe",
 	} {
 		t.Run(target, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, target, nil)
@@ -140,6 +148,17 @@ func TestHandlerRejectsAuthoritySelectorsAndAmbiguousWorkspaceQueries(t *testing
 		"/console/access/users/?id=member&authorization=secret",
 		"/console/access/users/?id=member&resourceVersion=1",
 		"/console/access/users/?id=a&id=b",
+		"/console/access/users/?id=member&tab=keys&tab=policies",
+		"/console/access/users/?id=member&tab=unknown",
+		"/console/access/users/?id=member&tab=",
+		"/console/access/users/?tab=keys",
+		"/console/access/users/?id=&tab=keys",
+		"/console/access/users/?id=member&tab=keys&tenantId=other",
+		"/console/access/groups/?id=group&tab=keys",
+		"/console/access/policies/?id=policy&tab=policies",
+		"/console/access/roles/?id=role&tab=keys",
+		"/console/access/keys/?id=member&tab=keys",
+		"/console/access/users/__next.console.access.$d$view.__PAGE__.txt?id=member&tab=unknown&_rsc=probe",
 		"/console/access/users/?id=",
 		"/console/access/users/?id=%GG",
 		"/console/access/users/?id=%FF",

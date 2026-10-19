@@ -82,6 +82,12 @@
 
 本分支保留原renderer用例及登录交互，未导入对方生成物或验收状态。既有四条独立消费者回归继续覆盖存储读失败、写失败、畸形记录仍派发新写，以及completed状态错误依赖原写权限：前一候选7.72秒确定失败、必要修正上原样8.37秒通过。本轮另在旧消费者证明四条页面连接回归失败，采用修正后原样通过；旧client清理用例保持通过。增加的三条负向用例证明exact-owner读取失败或返回错误User时保留原锁、零密钥写入，以及旧client的迟到User回包不能打开新身份的目录。七个生产文件与固定fd3cf32c逐字一致；两个完整测试文件285项85.99秒通过。Node22.22.2、单worker、2GiB heap下类型/lint/架构、234组对比度及八项导出Node测试通过，两个2-worker生产构建的324项资产逐字一致并由本分支重新嵌入。Go UI/architecture/default authorityprocess race分别7.277/2.342/3.910秒，vet及Linux UI编译通过；未启用的数据库和浏览器用例不计真实运行。这些证据不等于LIVE命令效果、Audit唯一性或签名发布验收。后端API、SQL和IAM87/Audit39/PaaS7+r37完整Profile没有变化。
 
+真实生产入口复核发现，仅前端消费`tab`仍不完整：Go静态服务在用户详情HTML与Next文本预取上拒绝`tab=keys/policies`，浏览器实际返回400 `INVALID_REQUEST`。当前候选选择性采用固定`14dccb1df71952fed5f6eb5581114a82c3da6ad1`的唯一生产文件修正，前后blob均与固定donor匹配，保留本分支四条原样红例：修复前2.532秒失败，修复后3.505秒通过。仅用户详情、单一非空id与现有六种页签组合可用，未知/重复页签、其他路由和authority selector继续拒绝；返回内容和CSP不受查询参数影响。完整UI/architecture/default authorityprocess race分别7.300/2.340/3.962秒及vet通过，不改变前端生成物、API、SQL或发布Profile。
+
+既有authorityprocess owner新增可选AccessKey浏览器恢复入口，选择SET_STATUS、NETWORK或DELETE之一，API只准备可丢弃User、密钥及显式Policy/Attachment；冻结bootstrap策略不能隐式取得新增密钥权限。响应丢失后必须实际操作页面，沿原意图精确重放一次并另做授权目录读取；结束标记只触发原版本单增、唯一完成/outbox/Audit及租户完整链的后验，标记本身不构成验收。默认observer回归拒绝变化的请求体、来源、目标、失败重放、额外写以及重放前的读取。该门禁不声称浏览器创建密钥、保存一次性Secret或程序访问已完成。
+
+本轮Windows服务经SSH访问远端数据库的准备在PaaS installation verify处71.75秒超时；改为同机独立PG18.4及真实服务后越过该步骤，随后修正了测试遗漏显式密钥授权导致的合法403，未放宽产品权限。服务与PG合计2CPU/4GiB，现有入口使用校验过的Go1.26.3、GOMAXPROCS2、`-p 2`和独立源码副本。该浏览器运行未启用race，不替代前述race/独立CI。修复静态服务后的真实URL已显示登录页；尚未提交任何浏览器密钥命令或完成标记，UNKNOWN恢复、三项效果和签名组合仍未验收。
+
 最小验收沿原provider/repository/renderer及真实进程owner，不另建测试框架：
 
 - 三类命令分别覆盖UNKNOWN→离页/重挂载→同actor新登录→显式原请求重放；替换Account、actor、目标、版本或冻结输入均不得执行另一意图。
