@@ -56,14 +56,75 @@ func TestOfflinePhase1Lifecycle(t *testing.T) {
 	if os.Getenv("MATRIX_PHASE1_E2E") != "1" {
 		t.Skip("set MATRIX_PHASE1_E2E=1 inside a clean external-network-disabled Linux Docker host")
 	}
+	var available time.Duration
+	if deadline, ok := t.Deadline(); ok {
+		available = time.Until(deadline)
+	}
+	budget, err := lifecycleObservationBudget(os.Getenv("MATRIX_PHASE1_E2E_TIMEOUT"), available)
+	if err != nil {
+		t.Fatal(safeFailure(err))
+	}
 	config, err := optionsFromEnvironment()
 	if err != nil {
 		t.Fatal(safeFailure(err))
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	defer cancel()
 	if err := runGate(ctx, config); err != nil {
 		t.Fatal(safeFailure(err))
+	}
+}
+
+// This is a whole-run observation bound, not a product latency promise or a
+// replacement for the five-minute recovery bound after a real injected fault.
+// A slower acceptance host must opt in explicitly; no phase resets the budget.
+func lifecycleObservationBudget(raw string, available time.Duration) (time.Duration, error) {
+	budget := 30 * time.Minute
+	if raw != "" {
+		var err error
+		budget, err = time.ParseDuration(raw)
+		if err != nil {
+			return 0, fail("lifecycle-observation-budget")
+		}
+	}
+	if budget < time.Minute || budget > time.Hour || available <= budget+time.Minute {
+		return 0, fail("lifecycle-observation-budget")
+	}
+	return budget, nil
+}
+
+func TestLifecycleObservationBudget(t *testing.T) {
+	for _, scenario := range []struct {
+		name      string
+		raw       string
+		available time.Duration
+		want      time.Duration
+	}{
+		{"default stays thirty minutes", "", 35 * time.Minute, 30 * time.Minute},
+		{"explicit slower-host budget", "50m", 55 * time.Minute, 50 * time.Minute},
+		{"maximum remains bounded", "1h", 65 * time.Minute, time.Hour},
+		{"reject missing test deadline", "", 0, 0},
+		{"reject expired test deadline", "", -time.Second, 0},
+		{"reserve teardown time", "30m", 31 * time.Minute, 0},
+		{"cannot exceed caller deadline", "50m", 35 * time.Minute, 0},
+		{"reject invalid duration", "unlimited", 65 * time.Minute, 0},
+		{"reject zero", "0", 65 * time.Minute, 0},
+		{"reject negative", "-1m", 65 * time.Minute, 0},
+		{"reject subminute", "59s", 65 * time.Minute, 0},
+		{"reject above maximum", "61m", 65 * time.Minute, 0},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			got, err := lifecycleObservationBudget(scenario.raw, scenario.available)
+			if scenario.want == 0 {
+				if err == nil || got != 0 {
+					t.Fatal("invalid observation budget reached an effectful gate")
+				}
+				return
+			}
+			if err != nil || got != scenario.want {
+				t.Fatal("observation budget lost its explicit or default bound")
+			}
+		})
 	}
 }
 

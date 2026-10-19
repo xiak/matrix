@@ -943,7 +943,7 @@ for those observations. The last accepted combination stays the `741dceb6`
 release recorded by FEAT-IAM-011.
 
 The current test owner separates signed preparation from fault recovery.
-Preparation consumes the existing thirty-minute whole-lifecycle budget; once
+Preparation consumes one whole-lifecycle budget, thirty minutes by default; once
 the actual target APISIX container is removed, command completion has at
 most five minutes or the remaining outer budget, whichever expires first.
 Cancellation terminates and joins the command before inspecting its output;
@@ -978,6 +978,29 @@ driver remain available; superseded driver copies were hash-checked and
 removed locally and from the task input directory. Old drivers remain
 rebuildable from Git. This is scoped artifact cleanup, not a claim that all
 historical runtime objects have been removed.
+
+The subsequent fresh-host run passed the real product, application, mail/MFA,
+Audit, backup and injected automatic-rollback assertions, then exhausted its
+unchanged thirty-minute budget at B's repeated status check (1800.01 seconds).
+Read-only observation found B current/READY, A previous, no active command,
+all eleven platform containers healthy and no memory-limit/OOM event. The
+leaf block-device counter recorded 274.52 GB read; stacked device counters
+must not be added together. These observations do not turn the timed-out
+fresh run into acceptance or prove that repeated release hashing is the sole
+source of latency.
+
+The existing test entry now permits an explicit `MATRIX_PHASE1_E2E_TIMEOUT`
+whole-run observation budget for slower acceptance media: default 30 minutes,
+minimum one minute, maximum one hour, with more than one minute left before
+the enclosing Go test deadline for teardown. Invalid, unbounded and oversized
+inputs fail before runtime effects. The measured run had used roughly 24
+minutes through fault recovery and still required normal B verification,
+explicit rollback and retained-backup recovery; a 50-minute fresh run is the
+next bounded check, not a successful result. No phase resets this budget;
+the separate five-minute post-fault recovery bound, product deadlines,
+cryptographic checks, resource limits and all original assertions remain.
+The extra observation allowance does not resolve the I/O-performance lead in
+issue #3 or establish an installation-latency SLO.
 
 On 2026-10-17, fixed source
 `1fc35c6c17b76b12d3352fdd46f1bd3bd76eafb2` assembled and authenticated
