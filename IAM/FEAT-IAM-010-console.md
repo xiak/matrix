@@ -72,7 +72,7 @@
 
 ### AccessKey 变更的原意图恢复
 
-沿用[007 的 K1 契约](FEAT-IAM-007-programmatic-credentials.md#k1管理入口与原子事实)，在既有 provider/renderer 内补齐状态变更、网络限制修改和删除的恢复流程，不新增通用回执接口、秘密恢复能力或第二套凭据模型。原消费者`e1a96db06142f62508a26870edd8ce36cdc32780`的页面局部意图在离页或重新登录后丢失；已恢复创建的key若删除成功但回包丢失，还会失去从目录进入原删除恢复的入口。本切片选择性消费固定`1da15f7e005d9b888d0f5342d8a42a0f17f1e2f2`及必要后继`1329abbb0a30349eda8f939d3df469b0abdb0561`修正这些路径；[Issue #5](https://github.com/xiak/matrix/issues/5)仍保持打开，精确消费者CI与真实浏览器故障注入尚未验收。
+沿用[007 的 K1 契约](FEAT-IAM-007-programmatic-credentials.md#k1管理入口与原子事实)，在既有 provider/renderer 内补齐状态变更、网络限制修改和删除的恢复流程，不新增通用回执接口、秘密恢复能力或第二套凭据模型。原消费者`e1a96db06142f62508a26870edd8ce36cdc32780`的页面局部意图在离页或重新登录后丢失；已恢复创建的key若删除成功但回包丢失，还会失去从目录进入原删除恢复的入口。固定消费者`f31267814e6449772ded8c785aed897531329533`选择性采用`1da15f7e005d9b888d0f5342d8a42a0f17f1e2f2`及必要后继`1329abbb0a30349eda8f939d3df469b0abdb0561`修正这些路径；[Issue #5](https://github.com/xiak/matrix/issues/5)仍保持打开。后继仅测试诊断提交`ef10d51bfbf120ec521e665bac9d54b14fa26c0d`的[Verification 39284297226](https://github.com/xiak/matrix/actions/runs/39284297226)尚未闭合，真实浏览器故障注入也未验收。
 
 待核对意图只保存非敏感的Account、actor、目标User/key、预期资源版本、操作、冻结输入、requestId及阶段；严格解析，不保存Secret、Bearer、OTP或密文。真正没有记录与存储不可读、畸形或错误绑定必须区分；后三者不得被当作空闲状态允许新写，发送前必须成功持久化原意图，清除失败不得解锁。离页、重挂载和同actor重新登录必须保留原意图，其他Account/actor不得消费它。UNKNOWN期间禁止自动重试或新意图替代；操作者只能明确重放完全相同的原请求，不能编辑原CIDR、状态或版本后继续沿用requestId。
 
@@ -87,6 +87,7 @@
 - 三类命令分别覆盖UNKNOWN→离页/重挂载→同actor新登录→显式原请求重放；替换Account、actor、目标、版本或冻结输入均不得执行另一意图。
 - 覆盖旧Session迟到成功/401及并发收尾，原requestId和后来Session的待核对状态保持。
 - 覆盖recovered-create→删除已提交丢包→目录无key→原删除重放→权威回读后解锁；回读失败保留完成状态且不再写。
+- 当前固定消费者仍缺三项页面衔接，交既有UX owner补齐：User详情应消费`policies`/`keys`目标区块；原意图的User不在当前目录页或目录失败时仍应沿exact getUser/loadUser明确打开准确目标；一次性Secret尚未确认时应使用既有内部离页保护。Session/client改变仍须立即清除秘密，不受离页确认阻挡。Access Analysis只有keyId时不得猜测owner或伪造精确深链。
 - 分别证明一次性Secret清除、完成事实与当前状态分离、命令效果及Audit唯一性。组件红绿、独立CI与真实浏览器证据分开记录，任何一层都不能冒充其他层已通过。
 
 ## 验收

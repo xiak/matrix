@@ -926,8 +926,7 @@ lifecycle passed through B retained-state upgrade, then failed at
 `platform-rollback` after 2000.90 seconds. The original CLI output was not
 retained, so its precise failure category cannot be recovered; a later
 authenticated read-only status of B/previous A as READY does not convert the
-failed run into a pass. No rollback or lifecycle retry was used to overwrite
-that observation. The existing test owner now preserves closed process,
+failed run into a pass. The existing test owner now preserves closed process,
 cancellation/deadline, output-bound/safety, known CLI fault and response-field
 categories, followed by separate rollback receipt checks. It never emits raw
 output or messages and keeps the strict JSON, READY, target release, empty
@@ -940,6 +939,24 @@ secret-output checks, and requires A/empty predecessor/changed plus the
 original container, status and verify postconditions. It does not replace
 fresh installation, business-data retention, backup recovery or restart
 acceptance; neither diagnostic establishes the original failure's root cause.
+
+Fixed test source `ef10d51bfbf120ec521e665bac9d54b14fa26c0d` then ran that
+focused diagnostic against the same retained `e1a96db` B/previous-A pair on
+2026-10-20 (Asia/Shanghai). It passed in 373.84 seconds under the original
+2-CPU/4-GiB/PIDs-1024, external-network-disabled engine limits. Driver SHA-256
+is `a94c0050c054cfcb1ff59a75c8cf3376e95a92ca63ae7db4810bf97842e0f13e`.
+The signed production binaries were not changed. The target A receipt,
+empty predecessor, changed result, exact healthy A inventory, absence of B
+containers, read-only repeated status and repeated verify/profile checks all
+passed. This separate successful run did not reproduce the original failure
+and does not recover its missing error category or accept the whole release.
+A preceding driver invocation rejected a CR-suffixed timeout argument before
+entering the test; it performed no rollback and is not runtime evidence. The
+native host boot identity and shared Docker start time stayed unchanged.
+Afterward, the no-longer-needed task engine, its exclusive Docker volume and
+the 7.6-GiB synthetic installation directory (including protected test input
+and retained credentials) were removed. Signed inputs, public trust and the
+fixed driver remain; no disposable installation is left online by this run.
 
 The accepted `9621bb6` delivery archives were made from its authenticated Linux trees, then
 independently extracted and compared file-by-file and by object type,
