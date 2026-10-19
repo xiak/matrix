@@ -4713,6 +4713,89 @@ describe("account access", () => {
     expect(sessionStorage.length).toBe(1);
   });
 
+  it("withholds direct USER policy controls until a replacement repository identity is verified", async () => {
+    let verifyReplacement!: (value: AccountIdentity) => void;
+    const replacementExecute = vi.fn().mockResolvedValue(undefined);
+    const replacementRevoke = vi.fn().mockResolvedValue({
+      id: "attachment-child-a-system.paas-viewer", resourceVersion: 2, revokedAt: timestamp
+    });
+    const replacement = accounts({
+      currentIdentity: vi.fn(() => new Promise<AccountIdentity>((resolve) => { verifyReplacement = resolve; })),
+      getUser: vi.fn().mockResolvedValue(structuredClone(child)),
+      execute: replacementExecute,
+      revokePolicyAttachment: replacementRevoke
+    });
+    const { user, replaceRepository } = await openAccess();
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await screen.findByRole("combobox", { name: "关联策略" });
+
+    replaceRepository(replacement);
+    await waitFor(() => expect(replacement.currentIdentity).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(replacement.getUser).toHaveBeenCalledTimes(1));
+    const policySelector = await screen.findByRole("combobox", { name: "关联策略" }) as HTMLButtonElement;
+    const revoke = screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }) as HTMLButtonElement;
+    expect(policySelector.disabled).toBe(true);
+    expect(revoke.disabled).toBe(true);
+    expect(replacementExecute).not.toHaveBeenCalled();
+    expect(replacementRevoke).not.toHaveBeenCalled();
+
+    await act(async () => { verifyReplacement(structuredClone(identity)); });
+    await waitFor(() => expect((screen.getByRole("combobox", { name: "关联策略" }) as HTMLButtonElement).disabled).toBe(false));
+    expect((screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }) as HTMLButtonElement).disabled).toBe(false);
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await user.click(screen.getByRole("button", { name: "确认关联" }));
+    await waitFor(() => expect(replacementExecute).toHaveBeenCalledTimes(1));
+  });
+
+  it("withholds original USER attachment completion reads until a replacement repository identity is verified", async () => {
+    let verifyReplacement!: (value: AccountIdentity) => void;
+    const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
+    const readPolicyAttachmentChange = vi.fn(async (_credential: string, expected: PolicyAttachmentChangeExpectation) => {
+      if (expected.operation !== "CREATE") throw new Error("unexpected operation");
+      return {
+        operation: "CREATE" as const,
+        accountId: expected.accountId,
+        actorPrincipalId: expected.actorPrincipalId,
+        requestId: expected.requestId,
+        completedAt: timestamp,
+        target: expected.target,
+        policyId: expected.policyId,
+        policyResourceVersion: expected.policyResourceVersion,
+        attachment: attachment(expected.target.id, platformPolicy)
+      };
+    });
+    const replacement = accounts({
+      currentIdentity: vi.fn(() => new Promise<AccountIdentity>((resolve) => { verifyReplacement = resolve; })),
+      getUser: vi.fn().mockResolvedValue(structuredClone(child)),
+      readPolicyAttachmentChange
+    });
+    const { user, replaceRepository } = await openAccess(accounts({ execute }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(screen.getByRole("combobox", { name: "关联策略" }));
+    await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
+    await user.click(screen.getByRole("button", { name: "审阅关联" }));
+    await user.click(screen.getByRole("button", { name: "确认关联" }));
+    expect(await screen.findByText("策略关系结果待确认")).toBeTruthy();
+
+    replaceRepository(replacement);
+    await waitFor(() => expect(replacement.currentIdentity).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(replacement.getUser).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("策略关系结果待确认")).toBeTruthy();
+    const inspect = screen.getByRole("button", { name: "检查原请求结果" }) as HTMLButtonElement;
+    expect(inspect.disabled).toBe(true);
+    await user.click(inspect);
+    expect(readPolicyAttachmentChange).not.toHaveBeenCalled();
+
+    await act(async () => { verifyReplacement(structuredClone(identity)); });
+    await waitFor(() => expect((screen.getByRole("button", { name: "检查原请求结果" }) as HTMLButtonElement).disabled).toBe(false));
+    await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
+    expect(await screen.findByRole("status", { name: "原策略关联命令已确认" })).toBeTruthy();
+    expect(readPolicyAttachmentChange).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("expires the current Session when a normal direct attachment submission is rejected with 401", async () => {
     const execute = vi.fn().mockRejectedValue(new HttpProblem(401, "IAM_SESSION_EXPIRED"));
     const { user } = await openAccess(accounts({ execute }));

@@ -99,7 +99,8 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
   const attached = new Set(user.attachments.map((attachment) => attachment.policyId));
   const availablePolicies = policies.filter((policy) => policy.status === "ACTIVE" && !attached.has(policy.id));
   const disabled = access.busy || access.loading;
-  const relationDisabled = disabled || Boolean(relationIntent);
+  const policyChangeDisabled = disabled || !access.userPolicyChangeReady;
+  const relationDisabled = policyChangeDisabled || Boolean(relationIntent);
   const attachablePolicies = availablePolicies.filter((policy) => policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy);
   const platformAttachmentBlocked = !user.canAttachPlatformPolicy && availablePolicies.some((policy) => policy.scope === "INSTALLATION");
   const tenantAttachmentBlocked = !user.canAttachTenantPolicy && availablePolicies.some((policy) => policy.scope === "TENANT");
@@ -189,7 +190,7 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
         {relationIntent.phase === "conflict" || relationIntent.phase === "rejected" ? <Alert status="danger">{t("attachmentRetryNeedsReview", { requestId: relationIntent.requestId })}{relationIntent.error ? ` ${t(`errors.${relationIntent.error}`)}` : ""}</Alert> : null}
         <div className={styles.actions}>
           {relationIntent.phase === "review" ? <>
-            <Button disabled={disabled} onClick={async () => {
+            <Button disabled={policyChangeDisabled} onClick={async () => {
               if (await access.submitUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
             }} variant={relationIntent.kind === "revoke" ? "danger" : "primary"}>{t(relationIntent.kind === "revoke" ? "confirmRevoke" : "confirmAttachPolicy")}</Button>
             <Button disabled={disabled} onClick={() => {
@@ -198,7 +199,7 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
             }} variant="secondary">{t(relationIntent.kind === "attach" ? "changeAttachmentSelection" : "cancel")}</Button>
           </> : null}
           {relationIntent.phase === "unknown" || relationIntent.phase === "checking" ? <>
-            <Button disabled={disabled || relationIntent.phase === "checking"} onClick={() => void access.inspectUserPolicyChange(relationIntent.requestId)}>{t(relationIntent.phase === "checking" ? "checkingOriginalAttachment" : "checkOriginalAttachment")}</Button>
+            <Button disabled={policyChangeDisabled || relationIntent.phase === "checking"} onClick={() => void access.inspectUserPolicyChange(relationIntent.requestId)}>{t(relationIntent.phase === "checking" ? "checkingOriginalAttachment" : "checkOriginalAttachment")}</Button>
           </> : null}
           {relationIntent.phase === "confirmed" ? <Button disabled={disabled} onClick={() => {
             if (access.endUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
