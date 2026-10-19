@@ -4396,7 +4396,15 @@
     "liveDeleteConfirmHint": "This is a live IAM delete command. The group will leave the active group list. Audit history is retained; restoring the group is not supported. Review dependencies before confirming.",
     "liveDeleteImpact": "The service returns authoritative counts for removed memberships and revoked direct policy attachments. Users, policies and resources are not deleted.",
     "liveDeleteReceiptTitle": "Group deletion receipt",
-    "liveDeleteReceipt": "Deleted {name} ({id}), resource revision v{revision}; removed {members} memberships and revoked {policies} direct policy attachments. Deleted at:",
+    "liveDeleteReceiptHint": "This is the server receipt for the deletion command. The current directory is read independently and is not used to infer the original command result.",
+    "liveDeleteReceiptName": "Group name",
+    "liveDeleteReceiptId": "Stable group ID",
+    "liveDeleteReceiptRequest": "Original request ID",
+    "liveDeleteReceiptRevision": "Result resource version",
+    "liveDeleteReceiptMembers": "Memberships removed",
+    "liveDeleteReceiptPolicies": "Direct policy attachments revoked",
+    "liveDeleteReceiptTime": "Deleted at",
+    "liveDeleteFinish": "Finish and return to groups",
     "liveDeleteUnconfirmed": "No verifiable Group deletion receipt was received; the outcome is unconfirmed. This window retains the original request ID. Closing or reloading does not undo server effects, and a fresh read or 404 does not prove original success."
   },
   "RelationshipDirectory": {

@@ -1162,13 +1162,11 @@ describe("account access", () => {
     expect(apply).toHaveBeenCalledTimes(1);
 
     await user.click(screen.getByRole("button", { name: "inspect-settings" }));
-    await waitFor(() => expect(screen.getByLabelText("settings-probe-session").textContent).toBe("anonymous"));
-    expect(changeByRequest).toHaveBeenNthCalledWith(2, credential, account.id, originalRequestId, startStepUp.mock.calls[0]![1].intent);
-    expect(screen.getByLabelText("settings-sign-in-notice").textContent).toBe(`SECURITY_SETTINGS_UPDATED:${originalRequestId}`);
-    expect(sessionStorage.getItem(sessionStorage.key(0)!)).toContain('"state":"COMPLETED"');
-    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
     await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("COMPLETED"));
+    expect(changeByRequest).toHaveBeenNthCalledWith(2, credential, account.id, originalRequestId, startStepUp.mock.calls[0]![1].intent);
+    expect(screen.getByLabelText("settings-probe-session").textContent).toBe("authenticated");
     expect(screen.getByLabelText("settings-sign-in-notice").textContent).toBe("none");
+    expect(sessionStorage.getItem(sessionStorage.key(0)!)).toContain('"state":"COMPLETED"');
     expect(apply).toHaveBeenCalledTimes(1);
   });
 

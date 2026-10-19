@@ -30,6 +30,7 @@ import { PolicyAttachmentChangeFeedback, PolicyAttachmentReview, readPendingPoli
 type OpenGroupEntity = (view: AccountAccessView, id?: string) => void;
 type GroupChange = { kind: "members" | "policies"; mode: "add" | "remove" };
 type OperationState = { busy: boolean; error: string | null };
+type LiveGroupDeletionReceipt = { client: GroupAccessClient; requestId: string; result: GroupDeletion };
 
 function commandId(): string {
   return crypto.randomUUID();
@@ -310,11 +311,28 @@ function LiveGroupMembershipEditor({ group, mode, memberships, scene, command, c
   </WorkspaceInlineForm>;
 }
 
+function GroupDeletionReceipt({ receipt }: { receipt: LiveGroupDeletionReceipt }) {
+  const t = useTranslations("GroupWorkspace");
+  return <Alert status="success" role="status" aria-label={t("liveDeleteReceiptTitle")}>
+    <strong>{t("liveDeleteReceiptTitle")}</strong>
+    <p>{t("liveDeleteReceiptHint")}</p>
+    <dl className={styles.facts}>
+      <div><dt>{t("liveDeleteReceiptName")}</dt><dd>{receipt.result.name}</dd></div>
+      <div><dt>{t("liveDeleteReceiptId")}</dt><dd><code>{receipt.result.id}</code></dd></div>
+      <div><dt>{t("liveDeleteReceiptRequest")}</dt><dd><code>{receipt.requestId}</code></dd></div>
+      <div><dt>{t("liveDeleteReceiptRevision")}</dt><dd>{receipt.result.resourceVersion}</dd></div>
+      <div><dt>{t("liveDeleteReceiptMembers")}</dt><dd>{receipt.result.removedMemberships}</dd></div>
+      <div><dt>{t("liveDeleteReceiptPolicies")}</dt><dd>{receipt.result.revokedPolicyAttachments}</dd></div>
+      <div><dt>{t("liveDeleteReceiptTime")}</dt><dd><WorkspaceTime value={receipt.result.deletedAt} /></dd></div>
+    </dl>
+  </Alert>;
+}
+
 function LiveGroupDelete({ client, access, onClose, onDeleted }: {
   client: GroupAccessClient;
   access: GroupAccess;
   onClose(): void;
-  onDeleted(result: GroupDeletion): void;
+  onDeleted(receipt: LiveGroupDeletionReceipt): void;
 }) {
   const t = useTranslations("GroupWorkspace");
   const w = useTranslations("IamWorkspace");
@@ -338,7 +356,7 @@ function LiveGroupDelete({ client, access, onClose, onDeleted }: {
         if (result.id !== access.group.id || result.accountId !== client.accountId || result.name !== access.group.name ||
             result.resourceVersion !== access.group.resourceVersion + 1 || !Number.isSafeInteger(result.removedMemberships) || result.removedMemberships < 0 ||
             !Number.isSafeInteger(result.revokedPolicyAttachments) || result.revokedPolicyAttachments < 0 || !Number.isFinite(Date.parse(result.deletedAt))) throw new Error("INVALID_IAM_GROUP_DELETION");
-        onDeleted(structuredClone(result));
+        onDeleted({ client, requestId: requestId.current, result: structuredClone(result) });
         return true;
       } catch (failure) {
         if (currentClient.current !== client) return false;
@@ -357,7 +375,7 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen, onDeleted }: {
   entityId: string;
   scene: AccountAccessScene;
   onOpen: OpenGroupEntity;
-  onDeleted(result: GroupDeletion): void;
+  onDeleted(receipt: LiveGroupDeletionReceipt): void;
 }) {
   const t = useTranslations("GroupWorkspace");
   const a = useTranslations("AccountAccess");
@@ -375,16 +393,14 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen, onDeleted }: {
   const [change, setChange] = useState<GroupChange | null>(null);
   const [editing, setEditing] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [deleted, setDeleted] = useState<{ client: GroupAccessClient; result: GroupDeletion } | null>(null);
+  const [deleted, setDeleted] = useState<LiveGroupDeletionReceipt | null>(null);
   const deletionNavigationStarted = useRef(false);
-  useEffect(() => {
-    if (!deleted || deleted.client !== client || deleting || deletionNavigationStarted.current) return;
+  const finishDeletion = useCallback(() => {
+    if (!deleted || deleted.client !== client || deletionNavigationStarted.current) return;
     deletionNavigationStarted.current = true;
-    // The dialog has unmounted and its busy/draft registration has cleaned up.
-    // Only the actual command receipt triggers this ordinary guarded navigation.
-    onDeleted(deleted.result);
+    onDeleted(deleted);
     onOpen("groups");
-  }, [client, deleted, deleting, onDeleted, onOpen]);
+  }, [client, deleted, onDeleted, onOpen]);
   const [loadingMore, setLoadingMore] = useState(false);
   const editTrigger = useRef<HTMLButtonElement>(null);
   const pageActionFocus = useRef<{ focus(): void }>(null);
@@ -530,6 +546,10 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen, onDeleted }: {
       scene={scene} memberships={memberships} command={membershipCommand} onClose={() => onOpen("groups")}
       onCompleted={() => { setChange(null); void load(); }} />
   </WorkspaceDetail>;
+  if (deleted?.client === client && !deleting) return <WorkspaceDetail title={`${t("liveDeleteReceiptTitle")} · ${deleted.result.name}`}
+    onBack={finishDeletion} backLabel={t("liveDeleteFinish")}>
+    <GroupDeletionReceipt receipt={deleted} />
+  </WorkspaceDetail>;
   if (phase === "loading") return <WorkspaceDetail title={stableTitle} onBack={() => onOpen("groups")}>
     <TableSkeleton label={t("loadingGroup")} rows={4} header={false} />
   </WorkspaceDetail>;
@@ -587,7 +607,7 @@ function LiveGroupWorkspace({ client, entityId, scene, onOpen, onDeleted }: {
       onOpenMember={(userId) => onOpen("users", userId)}
       onOpenPolicy={(policyId) => onOpen("policies", policyId)}
     />
-    {deleting ? <LiveGroupDelete client={client} access={access} onClose={() => setDeleting(false)} onDeleted={(result) => setDeleted({ client, result })} /> : null}
+    {deleting ? <LiveGroupDelete client={client} access={access} onClose={() => setDeleting(false)} onDeleted={setDeleted} /> : null}
   </>;
 }
 
@@ -604,15 +624,11 @@ export function AccountLiveGroups(props: AccountLiveGroupsProps) {
 }
 
 function AccountLiveGroupsWorkspace({ client, entityId, scene, onCreate, onOpen }: AccountLiveGroupsProps) {
-  const t = useTranslations("GroupWorkspace");
-  const [receipt, setReceipt] = useState<{ client: GroupAccessClient; result: GroupDeletion } | null>(null);
+  const [receipt, setReceipt] = useState<LiveGroupDeletionReceipt | null>(null);
   if (entityId) return <LiveGroupWorkspace key={entityId} client={client} entityId={entityId} scene={scene} onOpen={onOpen}
-    onDeleted={(result) => setReceipt({ client, result })} />;
+    onDeleted={setReceipt} />;
   return <>
-    {receipt?.client === client ? <Alert status="success" role="status" aria-label={t("liveDeleteReceiptTitle")}>
-      {t("liveDeleteReceipt", { name: receipt.result.name, id: receipt.result.id, revision: receipt.result.resourceVersion,
-        members: receipt.result.removedMemberships, policies: receipt.result.revokedPolicyAttachments })} <WorkspaceTime value={receipt.result.deletedAt} />
-    </Alert> : null}
+    {receipt?.client === client ? <GroupDeletionReceipt receipt={receipt} /> : null}
     <LiveGroupDirectory client={client} onCreate={onCreate} onOpen={onOpen} />
   </>;
 }

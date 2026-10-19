@@ -1910,7 +1910,6 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           try {
             const change = await updater.changeByRequest(credential, accountId, current.requestId, current.settings);
             replaceMutation(current, { ...current, state: "COMPLETED" });
-            expireCurrent({ kind: "SECURITY_SETTINGS_UPDATED", requestId: current.requestId });
             return change;
           } catch (failure) {
             if (failure instanceof HttpProblem && failure.status === 401) expireCurrent();
