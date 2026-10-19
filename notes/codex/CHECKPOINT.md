@@ -7,14 +7,20 @@
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   The renewed IAM first-release goal remains ACTIVE and incomplete.
 - Latest pushed test-only source is
-  `8c60cb686d740c07ddd23a88d0040d45aa28a3d4`, following fixed
-  `83d7c42cf665296d10de5fec15cf5ea26feb8dd7`. It prepares the existing
-  Policy browser owner's SET_DEFAULT mode and exhausts action-scoped Audit
-  pages in four existing browser gates. It does not add global request-ID
-  uniqueness, a completion API, a test framework or production changes.
-  Focused authority/architecture race took 4.223/2.109s; vet passed.
-  Exact Verification 39241486192 / attempt 1 is a new pending tuple,
-  not covered by the previous commit's accepted CI.
+  `ca7d35c971f4325801d1357881928e4a3530cdd1`, parent
+  `bb960447f7726932c0e70d9dd67d830952065adf`. It retains the existing
+  Policy SET_DEFAULT fixture and complete action-scoped Audit paging, fixes
+  colon-action post-loss observation and corrects ROLE attachment effects.
+  Both CREATE and REVOKE invalidate the old RoleSession (401); only explicit
+  re-assumption produces a fresh credential evaluated against the new grants.
+  The original issuance record and source USER isolation remain unchanged.
+  The real PG18 role-attachment subcase/parent/race package passed in
+  2.96/23.56/24.646s. Local authority/architecture race took 3.978/1.813s;
+  related vet passed. No production, API, schema or new test-suite changes.
+  Exact Verification 39245573647 / attempt 1 is pending independent closure.
+  Earlier 8c60 / 39241486192 is independently closed as cancelled, not PASS;
+  bb960 / 39243201762 was still nonterminal at handoff. The R1 fixed-source
+  review passed, but partial CI jobs and unsubmitted pages are not acceptance.
 - Current accepted production and same-profile signed consumer:
   `9621bb6e66b1076576649d3f6b224725a60d6848`,
   IAM87/Audit39/PaaS7+r37. It consumes the fixed UX USER attachment
@@ -71,6 +77,14 @@
   intentionally terminated, not a Go PASS. The disposable database had zero
   clients before its exclusive PG, volume, network, tunnel and temporary
   directory were removed. FEAT010 owns this still-unaccepted path.
+- ROLE browser expectations are now aligned with the existing production
+  authority snapshot. The original PG owner proves revoke -> old credential
+  invalid -> fresh authenticated but business Deny -> reattach -> that
+  intermediate credential invalid -> explicit fresh Allow. This is backend
+  evidence, not a substitute for the still-unsubmitted ROLE page action.
+  The test-only PostgreSQL, volume and network were removed after zero
+  external clients. Temporary source/archive cleanup was tool-blocked and
+  must not be retried through another tool or equivalent command.
 - Issue https://github.com/xiak/matrix/issues/3 stays OPEN for repeated
   large-payload I/O and bounded runtime limitations. The 640.84s fixture
   startup failure, 1084.08s pre-injection timeout and 1800.01s whole-budget
@@ -111,7 +125,14 @@ Its native process was explicitly stopped instead of consuming the remaining
 observation window. All databases from this browser batch reached zero
 clients before removal; its exclusive PostgreSQL container, volume, network
 and tunnels were removed. The pre-existing image was retained. The accepted
-signed runtime remains stopped and retained for remaining signed-page work.
+signed runtime was opened for one existing-factor login attempt, but the
+browser owner required human action-time credential confirmation. No password
+or OTP was submitted: six REVOKED Sessions and four consumed historical
+challenges remained unchanged. The tab, proxy and tunnel were closed, and
+only the task-owned engine was normally stopped; installation data remains
+retained. Do not submit the login or generate an OTP before the outstanding
+precise human confirmation is answered. The broader product-test approval is
+not a substitute for the executing tool's explicit requirement.
 Consult the executing browser owner's actual CUA rules before actions:
 product-test authorization does not override its tool-mandated credential
 handoff or action-time requirements. Different threads may receive different
