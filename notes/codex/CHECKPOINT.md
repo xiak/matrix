@@ -5,161 +5,118 @@
 ## Pushed milestone
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
-  The renewed IAM first-release goal remains ACTIVE and incomplete.
-- Latest pushed test-only source is
-  `ca7d35c971f4325801d1357881928e4a3530cdd1`, parent
-  `bb960447f7726932c0e70d9dd67d830952065adf`. It retains the existing
-  Policy SET_DEFAULT fixture and complete action-scoped Audit paging, fixes
-  colon-action post-loss observation and corrects ROLE attachment effects.
-  Both CREATE and REVOKE invalidate the old RoleSession (401); only explicit
-  re-assumption produces a fresh credential evaluated against the new grants.
-  The original issuance record and source USER isolation remain unchanged.
-  The real PG18 role-attachment subcase/parent/race package passed in
-  2.96/23.56/24.646s. Local authority/architecture race took 3.978/1.813s;
-  related vet passed. No production, API, schema or new test-suite changes.
-  Exact Verification 39245573647 / attempt 1 is pending independent closure.
-  Earlier 8c60 / 39241486192 is independently closed as cancelled, not PASS;
-  bb960 / 39243201762 was still nonterminal at handoff. The R1 fixed-source
-  review passed, but partial CI jobs and unsubmitted pages are not acceptance.
-- Current accepted production and same-profile signed consumer:
-  `9621bb6e66b1076576649d3f6b224725a60d6848`,
-  IAM87/Audit39/PaaS7+r37. It consumes the fixed UX USER attachment
-  repository/Session-owner fence, preserves consumer tests and regenerates
-  its own embedded UI. No later production API/SQL/Profile changes.
-  The sole rolling data predecessor remains
+  The IAM first-release goal remains ACTIVE and incomplete.
+- Latest production candidate:
+  `5384e4421877069f9ad4bc4e47ca219d46be9798`, parent
+  `477b766d3e3a55151b16d9d1cd80c95bf8a5ff6e`.
+  It selectively consumes UX fixed
+  `c5f858d64ddb7ea4355fec794d950401e85edb1d` plus required
+  `3ddbd9911eb144f36eeecb4bbf8596df286b8ed9`.
+  Nine existing frontend source/test/locale paths and locally regenerated
+  assets changed; backend API/SQL and IAM87/Audit39/PaaS7+r37 are unchanged.
+  Protected business/Audit 401 expires only the current effective identity.
+  ROLE blocks until explicit source revalidation, without auto-assumption or
+  silent USER fallback. Late responses must match repository, Session revision
+  and actor ownership. Dedicated password/TOTP/step-up failures remain separate.
+- Main reproduced both c5 regressions before taking 3dd: a replaced repository's
+  late 401 logged out the unchanged User bearer; a captured USER expiry callback
+  cleared the source after ROLE activation. Both unchanged regressions now pass.
+  Seven related files/280 tests passed in 56.05s on Node22.22.2, one worker,
+  2GiB heap. Full lint, type/architecture, 234 contrast pairs, eight Node tests,
+  2-worker unset/0 exports and all 324 embedded bytes passed. Go UI/architecture
+  race passed in 7.305/2.438s, with related vet. Donor MOCK observations and test
+  counts are not inherited.
+- Exact new Verification
+  https://github.com/xiak/matrix/actions/runs/39252717070 /
+  attempt 1 / `5384e4421877069f9ad4bc4e47ca219d46be9798`
+  was confirmed in_progress via GitHub API and handed to Test Expert.
+  No new signed or real browser acceptance is claimed for this candidate.
+- Prior test-only `ca7d35c971f4325801d1357881928e4a3530cdd1` /
+  Verification39245573647 / attempt1 is independently CLOSED success.
+  All nineteen jobs, complete necessary logs and 57 authority roots passed;
+  console 77 files/1965 Vitest + eight Node tests, 234 contrast pairs and
+  324 matching exports passed. Seven Postfix child tests and thirteen opt-in
+  browser entries did not run. FEAT011 owns the exact scope and 2002s duration.
+  Do not refetch this closed tuple or 41ef/39237503801, 26deca/39224178428.
+  Replaced bb960/39243201762, 8c60/39241486192 and rejected
+  101dc339/39199323432 remain cancelled, not PASS.
+- Accepted signed production remains
+  `9621bb6e66b1076576649d3f6b224725a60d6848`, IAM87/Audit39/PaaS7+r37.
+  Sole rolling data predecessor:
   `08e1dc4a6ce81386ea7223e62d03356f82aeee58`, IAM86/Audit39/PaaS7+r36.
-- FEAT-005 owns the current signed A/B identities, trust digest, resource
-  limits and native-Linux evidence. The unchanged signed production passed
-  the fresh full lifecycle in 2787.02 seconds and, after only its exact
-  task-owned engine was normally stopped/started, the existing restart gate
-  in 261.79 seconds. The external synthetic mail-input copy was removed
-  before restart; installed custody was retained. Full backup/upgrade/
-  rollback/recovery, real mail/MFA, four products, Audit, retained identity,
-  credential fences and capacity-release assertions passed. Remote boot and
-  shared Docker start time did not change. Browser acceptance is separate.
-- The release driver is test-only
-  `26deca2ae9df57cf2913a4868bca47f9332dd7c4`: default whole budget 30m,
-  explicit maximum 1h, more than 1m before the Go deadline for teardown;
-  no phase resets it. Actual main budget was 50m under 55m, restart used
-  30m under 35m. The real post-fault recovery bound remains at most 5m or
-  the remaining outer budget. Product deadlines, costs, crypto/profile
-  checks and resource limits were not relaxed.
-- Exact [Verification 39237503801](https://github.com/xiak/matrix/actions/runs/39237503801)
-  attempt 1 / fixed 41ef11188 is CLOSED completed/success: all 19 jobs,
-  all 57 authority roots and complete necessary logs were independently
-  verified. Console: 1965 Vitest tests, eight Node tests, 234 contrast pairs,
-  324 matching exports/embedded files; 33 existing act warnings remain.
-  Created-to-terminal was 1740s. Seven dedicated Postfix subtests and
-  thirteen opt-in browser entries did not run in CI and are not evidence.
-  FEAT011 owns details; do not fetch this closed tuple or the prior accepted
-  26deca2 / 39224178428 jobs/logs again.
-- Production 9621 / Verification 39203431655 and test-only 5708545f /
-  39212113957, 75a1fa61 / 39216883017, 38a2cda6 / 39196850326 are also
-  independently closed. The rejected 101dc339 / 39199323432 remains
-  intentionally cancelled; do not backfill or reopen it.
-- Current 9621 production / fixed 26deca2 driver now also passed fresh native
-  browser gates for Group deletion (699.49s), GROUP attachment REVOKE
-  (403.43s), and USER attachment REVOKE (578.23s). UX observed the immutable
-  receipt and explicit completion navigation; IAM verified exact effects,
-  next-request permission loss, unique completion/outbox/Audit and the tenant
-  chain. The existing FEAT010 owns precise requests and limits. These are
-  independent-process browser gates, not signed APISIX page evidence.
-- The existing daily-password browser owner now selects default/true or
-  explicit false, preserves a prior logged-out Session, and verifies both
-  valid peers through their next real identity requests. Focused default,
-  race, architecture and vet checks passed with Go1.26.3/GOMAXPROCS2.
-  Neither daily-password page mode has run; the accepted 41 CI does not
-  execute opt-in browser entries. Production/profile unchanged.
-- SET_DEFAULT on fixed test 83d7 reached only the final review; the browser
-  owner's tool required human action-time confirmation and no click occurred.
-  The authoritative Policy stayed at revision 2/default V1 with only setup
-  create/publish facts and no completion marker. The exact process was
-  intentionally terminated, not a Go PASS. The disposable database had zero
-  clients before its exclusive PG, volume, network, tunnel and temporary
-  directory were removed. FEAT010 owns this still-unaccepted path.
-- ROLE browser expectations are now aligned with the existing production
-  authority snapshot. The original PG owner proves revoke -> old credential
-  invalid -> fresh authenticated but business Deny -> reattach -> that
-  intermediate credential invalid -> explicit fresh Allow. This is backend
-  evidence, not a substitute for the still-unsubmitted ROLE page action.
-  The test-only PostgreSQL, volume and network were removed after zero
-  external clients. Temporary source/archive cleanup was tool-blocked and
-  must not be retried through another tool or equivalent command.
-- Issue https://github.com/xiak/matrix/issues/3 stays OPEN for repeated
-  large-payload I/O and bounded runtime limitations. The 640.84s fixture
-  startup failure, 1084.08s pre-injection timeout and 1800.01s whole-budget
-  failure remain failures. Finite Postfix nofile4096, the actual-fault
-  recovery window and the explicit bounded observation budget are test
-  corrections, not a production latency/SLO optimization. Fixed source
-  analysis is in comment 6263605076, not a new research document.
-- Retired diagnostic engines, their exclusive volumes/private installations,
-  superseded drivers and the ephemeral signing private key were cleaned
-  after exact ownership checks. This does not prove all historical local
-  objects are gone. A blocked cleanup must not be retried via another tool.
+  FEAT005 owns fixed A/B/trust identities and native-Linux full lifecycle
+  2787.02s plus own-engine post-restart 261.79s, using test driver
+  `26deca2ae9df57cf2913a4868bca47f9332dd7c4`.
+  Real SMTP/MFA, four products, backups, failed-upgrade rollback, B upgrade,
+  explicit rollback, recovery, retained identity/Audit and capacity release
+  passed. This does not accept the new 5384 UI or unfinished page journeys.
+- Current 9621 real-process browser passes include Group deletion699.49s,
+  GROUP attachment REVOKE403.43s and USER attachment REVOKE578.23s, with visible
+  immutable receipts/navigation, next-request authorization, unique completion/
+  outbox/Audit and complete chains. Older User/Group/Account evidence retains
+  its original fixed sources. No API-only postcondition is relabeled a page run.
+- Issue https://github.com/xiak/matrix/issues/3 stays OPEN for repeated large
+  payload I/O and bounded runtime limitations. Failed fixture/deadline runs
+  remain failures. Signed lifecycle acceptance does not establish production SLO.
 
-## Reading route and remaining outcome
+## Reading route and next outcome
 
 Read AGENTS, IAM/FEAT-IAM-010-console.md, IAM/FEAT-IAM-011-acceptance.md,
-then the relevant existing test/authorityprocess/process_e2e_test.go owner.
-FEAT010 owns individual UI paths and gaps; FEAT011 owns combined acceptance.
-Read FEAT005 and the verified platform-installation runbook for release work.
+then the directly owning code/tests. For release work read FEAT005 and the
+verified platform-installation runbook. FEAT010 owns the remaining page matrix;
+FEAT011 owns combined acceptance. Update existing owners, not new diaries.
 
-Prior User profile/status, Group Membership, Group attachment CREATE and
-normal Account-settings replacement have evidence at their recorded fixed
-sources; do not relabel them as new 9621 page runs. The current Group deletion
-and GROUP/USER REVOKE evidence above closes those exact visible-receipt gaps,
-not CREATE, ROLE or other page actions. Owner/repository/Session fences do
-not replace LIVE evidence.
+Continue exact 5384 CI through Test Expert while preparing the remaining ROLE
+journey with UX. The existing
+`TestIAMPolicyAttachmentRecoveryConsoleBrowser` covers GROUP/USER/ROLE
+CREATE/REVOKE; its ROLE re-assumption and business checks are backend fixture
+postconditions, not browser source switching. Do not mistake that fixture
+passing for actual ROLE -> protected business401 -> explicit source validation.
+The UX owner has been asked for fixed-source-only review and minimum page/fixture
+steps; no new real endpoint or credential window has been opened.
 
-Continue the nonDeferred FEAT010 matrix. Priority is remaining CREATE
-receipts and direct Role attachment paths, then daily password choices and
-the remaining policy/security/resource journeys.
-The existing fixtures must use fresh disposable databases and actual
-IAM/Audit/PaaS processes; only observed browser completion authorizes their
-finish marker and authoritative postconditions. No mocks/health-only pass.
+Remaining nonDeferred work includes attachment CREATE receipts, ROLE page
+actions, Policy default/permission-boundary/error/conflict paths, both daily
+password options, AccessKey lifecycle, forced/restricted MFA and relevant
+recovery/step-up pages, original Root recovery and product termination UNKNOWN
+final submissions. IdP/WebAuthn/role chains/all-factor-loss protected Root
+recovery and production fairness/installed database HA remain explicitly
+Deferred. Keyboard专项 remains lower priority, not accepted.
 
-The latest ROLE/REVOKE run stopped before submission: attachment remained
-version 1 and unrevoked, original REVOKE completions remained zero, no finish
-marker was written. It is not accepted and must use a fresh fixture later.
-Its native process was explicitly stopped instead of consuming the remaining
-observation window. All databases from this browser batch reached zero
-clients before removal; its exclusive PostgreSQL container, volume, network
-and tunnels were removed. The pre-existing image was retained. The accepted
-signed runtime was opened for one existing-factor login attempt, but the
-browser owner required human action-time credential confirmation. No password
-or OTP was submitted: six REVOKED Sessions and four consumed historical
-challenges remained unchanged. The tab, proxy and tunnel were closed, and
-only the task-owned engine was normally stopped; installation data remains
-retained. Do not submit the login or generate an OTP before the outstanding
-precise human confirmation is answered. The broader product-test approval is
-not a substitute for the executing tool's explicit requirement.
-Consult the executing browser owner's actual CUA rules before actions:
-product-test authorization does not override its tool-mandated credential
-handoff or action-time requirements. Different threads may receive different
-tool rules; a coordinator message is not human confirmation. Do not use an
-API or another execution surface to evade an explicit browser restriction.
+## Runtime and tool boundaries
 
-Deferred IdP/WebAuthn/role chains/protected-identity all-factor-loss recovery
-are not silently added. Current package integrity, unused-resource cleanup
-and the remaining page matrix must all close before the goal is complete.
+- Signed 9621 task engine was normally STOPPED and its installation volume
+  retained; proxy/tunnel were stopped. It is not an online integration endpoint.
+  No remote machine or shared Docker was restarted. New UI tests/builds in this
+  milestone created no containers, databases, tunnels or signing material.
+- Previous SET_DEFAULT and ROLE/REVOKE page runs stopped before final submit
+  because their executing browser tool required human action-time confirmation.
+  No finish marker or successful operation was claimed; their disposable PG,
+  volume and network were removed after zero external clients.
+- Signed existing-factor login likewise stopped before password/OTP submission.
+  The precise action-time confirmation remains unanswered; do not generate or
+  submit credentials, use another tool/API/agent, or relabel broad authorization
+  as satisfaction of a tool-specific requirement. Source-code review can proceed.
+- Native/local Role-fence source/archive cleanup was explicitly tool-blocked.
+  Those files were not removed; do not retry equivalent cleanup through another
+  tool. Retain reusable caches and the accepted installation until no longer
+  needed; no prune or broad deletion.
+- Use unique labeled resources, bounded CPU/memory/PIDs, GOMAXPROCS2/-p2 and
+  serialized heavy real gates. Only clean exact task-owned objects after evidence.
+  Do not touch other tasks' environments or remote hosts 1.3/1.5/161.
 
-## Coordination and delivery boundaries
+## Coordination
 
 - UX/UI engineer `01a07b21-9a0d-7fd0-b090-7827ce18262e` owns UI and
-  browser work on its own branch. Current fixed UX 64311a0 / production
-  82954bc is already consumed in 9621; no outstanding production subtree
-  delta was reported. Supply a verified exact disposable endpoint/target
-  and wait for page evidence; IAM owns runtime/DB/Audit postconditions.
-  No foreign WIP or inherited acceptance.
+  browser work on its branch. Consume only fixed Git objects, never its WIP.
+  Correct follow-up is 3ddbd9911eb144f36eeecb4bbf8596df286b8ed9;
+  the earlier misreported 3ddbd991125e... object does not exist.
+  Current request is fixed-code review only, not MOCK or live credential actions.
 - Test Expert `01a12f7b-be04-7590-acb1-3ba4f0dab999` owns read-only
-  independent CI/log review. Its existing monitor handles new fixed tuples;
-  do not add duplicate monitors, repeat closed logs or delegate runtime
-  mutation beyond human-authorized scope.
-- Routine product development/testing is authorized without repetitive
-  approval. Mandatory tool-specific handoff still binds. Do not reset shared
-  Docker/WSL or restart remote machines/shared services.
-- Unique labeled resources, explicit CPU/memory/PID limits, GOMAXPROCS2,
-  bounded concurrency and serialized heavy real gates. Remove disposable
-  task objects after evidence; never use prune or clean unrelated resources.
-- Markdown and existing owners only; Git identity is repository-local
-  Xiak <Jellal@aliyun.com>. Push only this feature branch.
+  independent CI/log review. Its existing monitor follows the exact new tuple;
+  no duplicate monitor, repeat reads of closed logs, or runtime mutation.
+- User permits routine product development/testing without repetitive approval;
+  actual tool-specific restrictions still apply. No new user tasks/subagents.
+- Commit only this feature branch, repository-local Xiak <Jellal@aliyun.com>.
+  Markdown and existing owners only; do not merge other branches or inherit their
+  profile/acceptance claims.
