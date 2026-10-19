@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；当前已接受的产品与签名发布源码`741dceb6f0092fbc33706842862980816fe72d15`为IAM87/Audit39/PaaS7、`contractRevision=37`，唯一滚动直接前驱仍是固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。该源码已通过十九项独立CI、同Profile签名A/B完整离线生命周期和重启后复验；User资料/状态与Group Membership恢复UI也已完成真实浏览器响应丢失门禁、零错误重放、下一请求权限/Session效果及唯一outbox/Audit链核对。Account安全设置、日常改密等IAM-UI-01–08仍列出的非Deferred写路径尚未全部验收，因此整体需求仍为实施中；生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
+- 状态：实施中；当前已接受的产品与签名发布源码`741dceb6f0092fbc33706842862980816fe72d15`为IAM87/Audit39/PaaS7、`contractRevision=37`，唯一滚动直接前驱仍是固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。该源码已通过十九项独立CI、同Profile签名A/B完整离线生命周期和重启后复验；User资料/状态、Group Membership恢复及Account安全设置正常完整替换也已完成真实浏览器门禁与精确数据库/Audit核对。日常改密等IAM-UI-01–08仍列出的非Deferred写路径尚未全部验收，因此整体需求仍为实施中；生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -29,34 +29,18 @@
 | 总体架构、高可用与容量边界 | [000总体架构](FEAT-IAM-000-product-contract.md#总体架构)及其可用性、容量与一致性段落，跨产品边界由ADR-0002拥有 | 设计已完成；当前多IAM副本、失败关闭、受限容量与数据库切换夹具已有证据，部署尚不支持的完整数据库HA继续明确列为缺口，不虚构SLO |
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
-| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态和Group Membership恢复UI已完成源码接入、完整前端/嵌入构建以及四条真实浏览器响应丢失门禁。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；Account安全设置、日常改密、附件回执、Group最终删除等010矩阵仍列出的非Deferred页面写路径尚缺验收 |
-| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`741dceb6f0092fbc33706842862980816fe72d15`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；IAM-AC-09由同一固定源码的[Verification 39012317180](https://github.com/xiak/matrix/actions/runs/39012317180)十九项全部成功接受。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。User两类命令以一次只读completion恢复且零目标写重放，Group Membership两类命令以一次完全相同原请求显式重放；四条路径均有下一请求权限/Session效果、唯一outbox/Audit事实和完整租户链证据，准确范围由010拥有。其余IAM-UI-01–08非Deferred效果仍未完成；生产账号公平性SLO和安装级数据库HA保持Deferred，不冒充已交付能力 |
+| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态和Group Membership恢复UI已完成源码接入、完整前端/嵌入构建以及四条真实浏览器响应丢失门禁，Account安全设置正常完整替换也已通过真实浏览器。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；日常改密、附件回执、Group最终删除等010矩阵仍列出的非Deferred页面写路径尚缺验收 |
+| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`741dceb6f0092fbc33706842862980816fe72d15`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；IAM-AC-09当前由测试后继`a79ca1454401e24427c0bbef667b4d43b2db1522`的[Verification 39118086883](https://github.com/xiak/matrix/actions/runs/39118086883)十九项全部成功接受。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。User两类命令以一次只读completion恢复且零User写重放，Group Membership两类命令以一次完全相同原请求显式重放；四条路径均有下一请求权限/Session效果、全request唯一outbox/Audit事实和完整租户链证据。Account安全设置已证明step-up、版本替换、旧Session围栏、重新认证、通知和唯一Audit事实，准确范围由010拥有。其余IAM-UI-01–08非Deferred效果仍未完成，生产账号公平性SLO和安装级数据库HA保持Deferred，不冒充已交付能力 |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
 
-### 当前控制台候选的发布门禁
+### 当前控制台与发布门禁
 
-2026-10-16选择性采用的控制台功能源码固定为`ddd1a7760e2560e2ad2b2ea5fbe9ddffb27d6761`，测试组织固定至`1090fcafabc14b541c70a41968d485cde5c347e7`；UX/UI owner的`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提供分支专属生成资产和未接受证据。本分支精确源码blob、聚焦行为、静态边界、三次生产导出及Go UI门禁均已有通过证据，但完整前端测试仍未接受：默认fork与threads对照在`AccessWorkspace`出现不同的五秒超时，本分支独立默认fork又在`AccountAccessRenderer`出现三个不同超时。失败均来自未改业务用例，不能据此判定生产回归；同样也不能因失败集合随机、聚焦用例通过或旧源码CI成功而忽略完整门禁。
+当前产品固定源码为`741dceb6f0092fbc33706842862980816fe72d15`，完整Profile为IAM87/Audit39/PaaS7+r37；唯一滚动前驱为`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。产品源码的[Verification 39012317180](https://github.com/xiak/matrix/actions/runs/39012317180)十九项作业全部成功，控制台实际通过77个Vitest文件、1954项测试、8项Node边界、234组对比度和324项双模式导出/嵌入一致。同源签名A/B已完成1072.25秒完整离线生命周期和76.26秒重启后复验；这些证据接受该固定产品组合，不自动接受后继UI修改或未执行的页面路径。
 
-当前固定`2c60db2dabff618cc7841a7cefc3b253b13bc618`的独立CI已全部成功，准确运行范围和不能覆盖前述多次前端边缘超时的边界由[010当前控制台证据](FEAT-IAM-010-console.md#精确目标读取与目录故障隔离)拥有。本候选仍不能取得IAM-AC-02或整体发布结论；后继必须在不提高单用例预算、不删除/跳过断言、不缩小业务fixture和不改变生产行为的条件下查明执行/异步根因，并以当前全部前端文件真实通过为准。任何测试调整都由既有测试owner承担并单独固定；签名APISIX浏览器、Account与产品命令UNKNOWN门禁仍按010独立验收，不能用组件测试补齐。
+最新测试固定源码`a79ca1454401e24427c0bbef667b4d43b2db1522`的[Verification 39118086883](https://github.com/xiak/matrix/actions/runs/39118086883) attempt 1已按精确SHA核实十九项作业全部`completed/success`。它收紧User写入观察及原request唯一事实断言，并修正合法Audit结构摘要的低熵秘密误报，不改变生产API、SQL、UI或Profile。此前`b958698`的runtime失败不回填为通过；修正边界及真实浏览器效果由[010](FEAT-IAM-010-console.md#user-与-group-恢复真实浏览器验收)拥有。
 
-后继固定`94cabe999378b7fdae9b5074546aab156e1d7553`选择性采用UX/UI owner的五个Group删除文案、renderer与测试路径，当前独立运行时已验证真实删除语义、精确名称确认和权威影响范围；最终删除尚未点击。其[Verification 38889687143](https://github.com/xiak/matrix/actions/runs/38889687143)在Vitest前因直接取得的donor生成资产与本分支完整源码build identity不一致而失败：三项manifest及292个内容文件漂移。固定`d7f182be308b63bfa7867b0bfdc16577faae16f2`从消费分支最终源码在Linux重新生成295个嵌入文件，不改变业务源码；[Verification 38892035119](https://github.com/xiak/matrix/actions/runs/38892035119)按精确SHA核实十九项作业全部`completed/success`，包括73/73个Vitest文件、1640/1640项测试、8/8项Node测试及324文件的双模式导出/嵌入逐字一致。
-
-该成功终态只接受当前候选的Linux控制台回归和生成物闭合：日志仍有33条既有React `act`警告，不能抹掉此前Windows完整套件已经观察到的五秒边缘超时。Group最终页面提交、返回计数、唯一outbox/Audit和目录消失尚待点击当刻确认后实跑；独立CI跳过七项专属Postfix真实邮件子测试，也不能用当前结果宣称真实SMTP验收或IAM-AC-02/整体发布完成。
-
-Policy元数据与整策略退役候选固定为`a12093895ca7461c15f50b8ca0ff5ddbe01e7803`；其[Verification 38916417206](https://github.com/xiak/matrix/actions/runs/38916417206) attempt 1已按精确SHA核实十九项作业全部`completed/success`，370个步骤均终态为175 success和195个矩阵条件skip，零失败、取消或job skip。十四个authority lane的57个顶层根均实际RUN/PASS且无SKIP/FAIL；`console`在Node22.22.2/npm11.6.4实际通过75/75个Vitest文件、1696/1696项测试、8/8项Node测试、234组对比度和324项两次生产导出/嵌入逐字一致，仍有33条既有React `act`警告。该CI同样明确跳过七项缺少专属Postfix的真实邮件子测试，默认工作流也不执行六个opt-in浏览器fixture；因此不能用本轮成功替代真实SMTP、Policy Web Locks、签名浏览器或UNKNOWN视觉验收。
-
-后继固定`f529279db3911e4c104d14d00f2c186dde306e0a`只在既有`authorityprocess` owner增加Policy mutation真实浏览器门禁及其响应丢失夹具，不改变生产代码、API、数据库或发布Profile。两个独立空白PostgreSQL 18运行已分别证明UPDATE和RETIRE在后端2xx后半响应丢失、同源双标签Web Lock排他、关闭持锁标签及完全相同原命令单次恢复；每次只有一个权威状态推进、一条outbox事实、一条成功Audit记录，稳定Policy/不可变版本或活动目录退役结果及完整租户链准确。UPDATE fixture/race package为179.86/183.424秒，RETIRE为209.35/212.884秒；本轮专属容器、网络和卷在零外部数据库连接后已精确删除。[Verification 38936057920](https://github.com/xiak/matrix/actions/runs/38936057920)已通过GitHub API核实精确SHA，19个job全部`completed/success`；该独立结果只接受该固定源包含的门禁，不替代默认CI跳过的opt-in浏览器场景或当前后继工作树的发布验收。
-
-固定`53bca8baeb15283d4c3100169e19eb73ae4b87ab`从UX/UI owner固定`3079bf6749f68857ad6fab048311fba0cf468a99`选择性采用普通User日常改密的九个既有认证源码、测试和消息路径，并由消费分支最终源码重建嵌入资产。日常默认撤销其他Session、允许显式请求保留仍有效的其他Session，首次登录强制改密始终撤销其他Session；pending、明确拒绝、结果未知、Session/repository换主和迟到响应均有失败关闭边界。[Verification 38994516955](https://github.com/xiak/matrix/actions/runs/38994516955)已按精确SHA核实十九项作业全部`completed/success`；`console`实际通过75个Vitest文件、1732项测试、8项Node边界、234组对比度及324项双模式导出/嵌入一致，十四个authority lane的57个顶层根全部RUN/PASS。默认CI仍跳过七项专属Postfix邮件子测试及opt-in浏览器，因此IAM-AC-02和总目标状态不变。
-
-后继`authorityprocess` opt-in门禁已冻结日常默认撤销其他Session的真实验收形状，包括两个既有旧Session、浏览器调用Session、凭据代次、旧/新密码和唯一Audit事实；当前仅编译并以默认skip通过，尚无最终页面提交或真库结果，不能改变上述未验收结论。明示`revokeOtherSessions=false`继续由API/并发和组件门禁持有，后续是否增加第二条人工浏览器旅程按风险和重复成本决定，不把同一语义重复为发布前置。
-
-固定`ffb305f859338cd8954f1476374b0d7d61c774b9`同源签名Release A/B `iam.r36.3/.4`已在任务独立的network-none Docker 27.5.1+PostgreSQL 18中完成1135.40秒完整生命周期和95.52秒重启后验证，证明上述生产UI所在源码可以进入当前`86/39/7+r36`签名组合并保留账号、凭据、MFA、Session和Audit周边契约。[Verification 38997696246](https://github.com/xiak/matrix/actions/runs/38997696246) attempt 1 已核实精确 SHA，十九项作业全部 `completed/success`；十四个 authority lane 的57个顶层根均实际运行并通过，console 通过75个Vitest文件、1732项测试、8项Node测试和324项双模式导出/嵌入一致。该运行仍明确跳过七项缺少专属Postfix的真实邮件子测试，默认工作流也没有执行日常改密浏览器门禁；因此不能接受精确Session效果、真实SMTP或IAM-AC-02。
-
-当前切片又选择性采用UX/UI owner固定`7ebc8700a5e23651047222e8e7f5f414b854342a`的Account `security-settings`编辑增量：八个路径逐字采用，一个既有测试owner以三方增量保留本分支后继断言，嵌入资产全部从消费分支源码重建。Account级MFA、密码、Session空闲期限和AccessKey CIDR采用完整替换、resourceVersion、step-up及分阶段UNKNOWN失败关闭；验证秘密不进入持久化状态，Session/repository换主清除草稿秘密。七个聚焦文件535项、typecheck、全量lint、architecture、234组对比度、双模式324项嵌入一致及Go UI test/vet已通过。当前提交的完整前端/独立CI、真实浏览器+后端step-up/应用/冲突/UNKNOWN和包含本切片的签名release均未完成，故不得据此接受IAM-AC-02、IAM-UI-06或整体发布。
-
-后继`authorityprocess` opt-in门禁已冻结该编辑器的真实验收形状：精确最小权限普通User、已验证通知地址和真实TOTP，浏览器PASSWORD_TOTP登录及设置step-up，一个完整版本替换，旧设置代次Session下一请求全部拒绝，重新认证后只读原完成回执、单一通知任务、唯一原USER/Account/授权决定事实和完整租户Audit链。当前仅通过编译、默认skip和`go vet`，尚无页面最终提交或真库结果；冲突及分阶段UNKNOWN也仍由API/并发和组件门禁持有，是否增加独立浏览器响应丢失旅程按风险与重复成本决定。
+当前真实浏览器已接受User资料/状态恢复、Group Membership添加/移除恢复、Group策略附件CREATE回执恢复，以及Account安全设置的正常完整替换。日常改密、Group策略附件REVOKE、Group最终页面删除和010矩阵中的其他非Deferred路径仍未完成。默认CI跳过的浏览器入口、七项专属Postfix邮件子测试不能按成功计；当前Linux前端通过也不宣称此前Windows边缘超时和既有React警告已消失。安全通知的真实投递证据仍由009拥有，不能以Audit或通知任务入队替代。
 
 ## 高风险测试矩阵
 
