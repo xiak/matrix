@@ -213,6 +213,43 @@ describe("LiveAccessCredentials", () => {
     expect(list).toHaveBeenCalledTimes(3);
   });
 
+  it("rereads a completed AccessKey mutation without requiring the revoked write capability", async () => {
+    const user = userEvent.setup();
+    const deniedDirectory: AccessKeyDirectory = {
+      ...directory,
+      items: [{
+        ...directory.items[0]!,
+        capabilities: directory.items[0]!.capabilities.map((entry) => entry.action === "iam.access-key.set-network-restrictions"
+          ? { ...entry, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const }
+          : entry)
+      }]
+    };
+    const mutationIntent: AccessKeyMutationIntent = {
+      accountId: scene.accountId,
+      actorId: "root-acme",
+      userId: owner.id,
+      accessKeyId: key.id,
+      accessKeyResourceVersion: key.resourceVersion,
+      operation: "set-network-restrictions",
+      networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24"] },
+      requestId: `ui-access-key-network-${"f".repeat(32)}`,
+      phase: "completed"
+    };
+    const list = vi.fn().mockResolvedValue(deniedDirectory);
+    const setNetworkRestrictions = vi.fn();
+    const api = client({ list, setNetworkRestrictions });
+    render(<LocaleProvider><LiveAccessCredentials client={api} mutationIntent={mutationIntent} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: "继续处理原请求" }));
+    const reread = screen.getByRole("button", { name: "重新读取当前状态" });
+    expect(reread.hasAttribute("disabled")).toBe(false);
+    await user.click(reread);
+
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(api.acknowledgeMutation).toHaveBeenCalledWith(mutationIntent.requestId);
+    expect(setNetworkRestrictions).not.toHaveBeenCalled();
+  });
+
   it("replays an uncertain delete even when the key row is already absent, then acknowledges only after the full list reread", async () => {
     const user = userEvent.setup();
     const emptyDirectory: AccessKeyDirectory = { ...directory, items: [] };

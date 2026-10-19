@@ -481,6 +481,7 @@ function AccessKeyIntentProbe() {
       <button disabled={!client} onClick={() => { if (client) void client.delete(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, requestId: originalKeyDeleteRequestId }).catch(() => {}); }}>retire-recovered-key</button>
       <button disabled={!client} onClick={() => { if (client) void client.delete(childUser.id, "mak1.lost-secret", { accessKeyResourceVersion: 2, requestId: replacementKeyDeleteRequestId }).catch(() => {}); }}>retire-recovered-key-new-intent</button>
       <button disabled={!client} onClick={() => { client?.acknowledgeMutation(originalKeyStatusRequestId); client?.acknowledgeMutation(originalKeyNetworkRequestId); client?.acknowledgeMutation(originalKeyDeleteRequestId); }}>acknowledge-key-mutation</button>
+      <output aria-label="key-recovery-error">{String(access.accessKeyRecoveryError)}</output>
       <output aria-label="key-create-intent">{access.accessKeyCreateIntent ? `${access.accessKeyCreateIntent.phase}:${access.accessKeyCreateIntent.userId}:${access.accessKeyCreateIntent.requestId}` : "none"}</output>
       <output aria-label="key-mutation-intent">{access.accessKeyMutationIntent ? `${access.accessKeyMutationIntent.phase}:${access.accessKeyMutationIntent.operation}:${access.accessKeyMutationIntent.userId}:${access.accessKeyMutationIntent.requestId}` : "none"}</output>
     </> : null}
@@ -2225,6 +2226,155 @@ describe("account access", () => {
       expect(screen.getByLabelText("key-mutation-intent").textContent).toBe("none");
       expect(remove).not.toHaveBeenCalled();
       view.unmount();
+    }
+  });
+
+  it.each(["read", "write"] as const)("does not dispatch an AccessKey mutation when intent storage %s fails", async (failure) => {
+    const storagePrefix = "matrix-iam-access-key-mutation:v1:";
+    const originalRead = Storage.prototype.getItem;
+    const originalWrite = Storage.prototype.setItem;
+    let storageFault: ReturnType<typeof vi.spyOn> | null = null;
+    const setStatus = vi.fn().mockResolvedValue({ outcome: "APPLIED", key: {
+      id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      credentialState: "CURRENT" as const, networkRestrictions: { allowedSourceCidrs: [] },
+      resourceVersion: 3, createdAt: timestamp, updatedAt: timestamp
+    } });
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus, setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const user = userEvent.setup();
+
+    try {
+      if (failure === "read") {
+        storageFault = vi.spyOn(Storage.prototype, "getItem").mockImplementation(function(this: Storage, key: string) {
+          if (key.startsWith(storagePrefix)) throw new Error("storage read blocked");
+          return originalRead.call(this, key);
+        });
+      }
+      render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+      await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "disable-key" }).hasAttribute("disabled")).toBe(false));
+      if (failure === "write") {
+        await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("false"));
+        storageFault = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key: string, value: string) {
+          if (key.startsWith(storagePrefix)) throw new Error("storage write blocked");
+          return originalWrite.call(this, key, value);
+        });
+      }
+
+      await user.click(screen.getByRole("button", { name: "disable-key" }));
+
+      await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("true"));
+      expect(setStatus).not.toHaveBeenCalled();
+    } finally {
+      storageFault?.mockRestore();
+    }
+  });
+
+  it("does not replace a malformed stored AccessKey mutation with a new write", async () => {
+    const storageKey = `matrix-iam-access-key-mutation:v1:${encodeURIComponent(account.id)}:${encodeURIComponent(rootUser.id)}`;
+    const malformed = JSON.stringify({
+      accountId: account.id,
+      actorId: rootUser.id,
+      userId: childUser.id,
+      accessKeyId: "mak1.lost-secret",
+      accessKeyResourceVersion: 2,
+      operation: "delete",
+      requestId: originalKeyDeleteRequestId,
+      phase: "unknown",
+      unexpected: true
+    });
+    sessionStorage.setItem(storageKey, malformed);
+    const setStatus = vi.fn();
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus, setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("true"));
+    await user.click(screen.getByRole("button", { name: "disable-key" }));
+
+    expect(setStatus).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem(storageKey)).toBe(malformed);
+  });
+
+  it("does not dispatch an AccessKey create before its intent is durably stored", async () => {
+    const storagePrefix = "matrix-iam-access-key-create:v1:";
+    const originalWrite = Storage.prototype.setItem;
+    const create = vi.fn();
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("false"));
+    const storageFault = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key: string, value: string) {
+      if (key.startsWith(storagePrefix)) throw new Error("storage write blocked");
+      return originalWrite.call(this, key, value);
+    });
+
+    try {
+      await user.click(screen.getByRole("button", { name: "create-original-key" }));
+      await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("true"));
+      expect(create).not.toHaveBeenCalled();
+      expect(screen.getByLabelText("key-create-intent").textContent).toBe("none");
+    } finally {
+      storageFault.mockRestore();
+    }
+  });
+
+  it("keeps a recovered AccessKey create locked when clearing its intent storage fails", async () => {
+    const storagePrefix = "matrix-iam-access-key-create:v1:";
+    const storageKey = `${storagePrefix}${encodeURIComponent(account.id)}:${encodeURIComponent(rootUser.id)}`;
+    const key = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      credentialState: "CURRENT" as const, networkRestrictions: { allowedSourceCidrs: [] }, resourceVersion: 2, createdAt: timestamp, updatedAt: timestamp };
+    const create = vi.fn().mockResolvedValue({ outcome: "APPLIED", key, secret: "test-only-one-time-secret" });
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create, setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("false"));
+    await user.click(screen.getByRole("button", { name: "create-original-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`));
+    const originalRemove = Storage.prototype.removeItem;
+    const storageFault = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function(this: Storage, storageItem: string) {
+      if (storageItem.startsWith(storagePrefix)) throw new Error("storage clear blocked");
+      return originalRemove.call(this, storageItem);
+    });
+
+    try {
+      await user.click(screen.getByRole("button", { name: "acknowledge-issued-key" }));
+      await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("true"));
+      expect(screen.getByLabelText("key-create-intent").textContent).toBe(`recovered:${childUser.id}:${originalKeyRequestId}`);
+      expect(sessionStorage.getItem(storageKey)).not.toBeNull();
+    } finally {
+      storageFault.mockRestore();
+    }
+  });
+
+  it("keeps a completed AccessKey mutation locked when clearing its intent storage fails", async () => {
+    const storagePrefix = "matrix-iam-access-key-mutation:v1:";
+    const storageKey = `${storagePrefix}${encodeURIComponent(account.id)}:${encodeURIComponent(rootUser.id)}`;
+    const changedKey = { id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      credentialState: "CURRENT" as const, networkRestrictions: { allowedSourceCidrs: [] }, resourceVersion: 3, createdAt: timestamp, updatedAt: timestamp };
+    const setStatus = vi.fn().mockResolvedValue({ outcome: "APPLIED", key: changedKey });
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus, setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "login-key-probe" }));
+    await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("false"));
+    await user.click(screen.getByRole("button", { name: "disable-key" }));
+    await waitFor(() => expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`completed:set-status:${childUser.id}:${originalKeyStatusRequestId}`));
+    const originalRemove = Storage.prototype.removeItem;
+    const storageFault = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(function(this: Storage, storageItem: string) {
+      if (storageItem.startsWith(storagePrefix)) throw new Error("storage clear blocked");
+      return originalRemove.call(this, storageItem);
+    });
+
+    try {
+      await user.click(screen.getByRole("button", { name: "acknowledge-key-mutation" }));
+      await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("true"));
+      expect(screen.getByLabelText("key-mutation-intent").textContent).toBe(`completed:set-status:${childUser.id}:${originalKeyStatusRequestId}`);
+      expect(sessionStorage.getItem(storageKey)).not.toBeNull();
+    } finally {
+      storageFault.mockRestore();
     }
   });
 

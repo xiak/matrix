@@ -5157,6 +5157,7 @@
     "keyMutationTargetMissing": "This key is absent from the current directory. The original delete may have completed, but absence alone is not proof; replay the original delete and finish the authoritative reread.",
     "keyRefreshAuthoritative": "Reread current state",
     "keyResourceVersion": "Key resource version",
+    "keyRecoveryStorageUnavailable": "The browser cannot safely read, save, or clear the original access-key request record, so all new key writes are stopped. Restore session storage for this site and reopen this page; no invalid record will be discarded and no request will be replayed automatically.",
     "keyConfirmCreate": "Confirm creation",
     "keyLiveCreated": "Access key created",
     "keyLiveSecretWarning": "Save the Secret in protected credential storage now. It cannot be viewed again after you leave this step. Never paste it into chat, tickets, or source code.",
@@ -5167,6 +5168,7 @@
       "forbidden": "Your current identity cannot manage access keys for this user.",
       "routeUnavailable": "The running IAM process does not provide the access-key management route yet.",
       "conflict": "The user or key state changed. Reload before acting; if this result is uncertain, keep the original operation reference and confirm it first.",
+      "recoveryUnavailable": "The browser could not safely save or clear the original request record, so no new access-key write was sent. Restore session storage for this site and reopen this page.",
       "unavailable": "The result of this access-key operation cannot be confirmed right now. Stay in this flow and retry instead of starting another creation."
     },
     "keyInlineWorkflow": "The operation stays in the content area and does not open a modal.",

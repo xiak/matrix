@@ -17,7 +17,7 @@ import { AccessKeyCredentialStateBadge, ProgrammaticAccessGuide, RotationGuide }
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccessCredentials.module.css";
 
-type LiveKeyError = "forbidden" | "routeUnavailable" | "conflict" | "unavailable";
+type LiveKeyError = "forbidden" | "routeUnavailable" | "conflict" | "recoveryUnavailable" | "unavailable";
 type WithoutMutationOwner<T> = T extends AccessKeyMutationIntent ? Omit<T, "accountId" | "actorId"> : never;
 type LiveAccessKeyMutation = WithoutMutationOwner<AccessKeyMutationIntent>;
 type LiveKeyFlow =
@@ -43,6 +43,7 @@ const loadingAccessKeyDirectory: AccessKeyDirectoryState = { status: "loading" }
 
 function keyError(error: unknown): LiveKeyError {
   if (error instanceof HttpProblem) {
+    if (error.code === "ACCESS_KEY_RECOVERY_STORAGE_UNAVAILABLE") return "recoveryUnavailable";
     if (error.status === 403) return "forbidden";
     if (error.status === 404) return "routeUnavailable";
     if (error.status === 409) return "conflict";
@@ -224,18 +225,19 @@ function LiveKeyWorkflow({ flow, owner, directory, client, retryingOriginal, onC
         </dl>
         {active.intent.operation === "set-network-restrictions" ? <div className={styles.operationReference}><strong>{network("keyLayer")}</strong><code>{active.intent.networkRestrictions.allowedSourceCidrs.join(", ") || network("unrestrictedLayer")}</code></div> : null}
         {!active.access ? <Alert status="info">{t("keyMutationTargetMissing")}</Alert> : null}
-        {active.access && !actionCapability?.available && actionCapability?.restrictionReason ? <Alert status="warning">{restrictions(actionCapability.restrictionReason)}</Alert> : null}
-        <div className={styles.actions}><Button disabled={busy || Boolean(active.access && !actionCapability?.available)} onClick={() => void run()}>{busy ? t("keyLiveSaving") : t(active.intent.phase === "unknown" ? "keyLiveRetryOriginal" : "keyRefreshAuthoritative")}</Button><Button disabled={busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
+        {active.intent.phase === "unknown" && active.access && !actionCapability?.available && actionCapability?.restrictionReason ? <Alert status="warning">{restrictions(actionCapability.restrictionReason)}</Alert> : null}
+        <div className={styles.actions}><Button disabled={busy || Boolean(active.intent.phase === "unknown" && active.access && !actionCapability?.available)} onClick={() => void run()}>{busy ? t("keyLiveSaving") : t(active.intent.phase === "unknown" ? "keyLiveRetryOriginal" : "keyRefreshAuthoritative")}</Button><Button disabled={busy} onClick={onClose} variant="ghost">{t("cancel")}</Button></div>
       </> : null}
     </Card.Body>
   </Card>;
 }
 
-export function LiveAccessCredentials({ client, scene, createIntent = null, mutationIntent = null, scopedOwner, userDirectory, accountSecuritySettings = null, authorizationProfiles = null, onInspectPermissions }: {
+export function LiveAccessCredentials({ client, scene, createIntent = null, mutationIntent = null, recoveryError = false, scopedOwner, userDirectory, accountSecuritySettings = null, authorizationProfiles = null, onInspectPermissions }: {
   client: AccessKeyClient;
   scene: AccountAccessScene;
   createIntent?: AccessKeyCreateIntent | null;
   mutationIntent?: AccessKeyMutationIntent | null;
+  recoveryError?: boolean;
   scopedOwner?: AccountUserScene;
   userDirectory?: { busy: boolean; loading: boolean; readPage(after: string): void };
   accountSecuritySettings?: AccountSecuritySettingsClient | null;
@@ -364,6 +366,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
   if (!owner) return <section className={styles.root}>
     <ContentPage.Heading title={t("keys")} scrollKey="live-access-key-user-directory" />
     <Alert status="info"><KeyRound aria-hidden="true" />{t("keyBoundary")}</Alert>
+    {recoveryError ? <Alert status="danger">{t("keyRecoveryStorageUnavailable")}</Alert> : null}
     {createIntent ? <Alert status="warning">{currentCreateIntent
       ? t("keyLivePendingOwner", { id: currentCreateIntent.userId })
       : t("keyClientChangedIntent", { id: createIntent.requestId })} {currentCreateIntent && scene.users.some((user) => user.id === currentCreateIntent.userId)
@@ -378,7 +381,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
   </section>;
 
   const startCreate = () => {
-    if (createIntent || mutationIntent) return;
+    if (createIntent || mutationIntent || recoveryError) return;
     if (directory) setFlow({ kind: "create", requestId: requestToken("ui-access-key-create-"), userResourceVersion: directory.userResourceVersion, networkRestrictions: { allowedSourceCidrs: [] } });
   };
   const resumeCreate = () => {
@@ -417,8 +420,8 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
     const deleteCapability = capability(selected, "iam.access-key.delete");
     const restrictionReason = (value: typeof statusCapability) => value?.restrictionReason
       ? restrictions(value.restrictionReason) : undefined;
-    const mutationBlocked = Boolean(mutationIntent);
-    const mutationBlockedReason = mutationBlocked ? t("keyMutationPendingReason") : undefined;
+    const mutationBlocked = Boolean(mutationIntent) || recoveryError;
+    const mutationBlockedReason = recoveryError ? t("keyRecoveryStorageUnavailable") : mutationIntent ? t("keyMutationPendingReason") : undefined;
     const createDisabled = Boolean(createIntent) || mutationBlocked || directory.items.length >= 2 || !createCapability?.available;
     const createDisabledReason = mutationBlockedReason ?? (createIntent ? t("keyCreatePendingReason")
       : directory.items.length >= 2 ? t("keyQuotaReached")
@@ -450,6 +453,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
     return <section className={styles.root}>
       <WorkspaceDetail embedded={Boolean(scopedOwner)} title={selected.key.id} onBack={() => setSelection(null)} actions={actions}>
         {!scopedOwner ? <Alert status="info">{t("keyLiveProductBoundary")}</Alert> : null}
+        {recoveryError ? <Alert status="danger">{t("keyRecoveryStorageUnavailable")}</Alert> : null}
         {mutationIntent ? <Alert status="warning">{currentMutationIntent
           ? currentMutationIntent.userId === owner.id ? t("keyMutationPending", { id: currentMutationIntent.requestId }) : t("keyMutationPendingOwner", { id: currentMutationIntent.userId })
           : t("keyMutationClientChanged", { id: mutationIntent.requestId })} {currentMutationIntent?.userId === owner.id
@@ -468,9 +472,10 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
   }
 
   return <section className={styles.root}>
-    {scopedOwner ? <div className={styles.embeddedHeading}><h3>{t("keys")}</h3><Button disabled={Boolean(flow || createIntent || mutationIntent) || !createCapability?.available} onClick={startCreate} size="small">{t("createKey")}</Button></div>
-      : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: Boolean(createIntent || mutationIntent) || !createCapability?.available, disabledReason: mutationIntent ? t("keyMutationPendingReason") : createIntent ? t("keyCreatePendingReason") : createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
+    {scopedOwner ? <div className={styles.embeddedHeading}><h3>{t("keys")}</h3><Button disabled={Boolean(flow || createIntent || mutationIntent) || recoveryError || !createCapability?.available} onClick={startCreate} size="small">{t("createKey")}</Button></div>
+      : <ContentPage.Heading title={`${owner.loginName} · ${t("keys")}`} scrollKey={`live-access-keys:${owner.id}`} back={{ label: t("back"), onClick: closeOwner }} actions={!flow && directory ? <ContentPage.Commands label={t("keys")} primary={{ id: "create-key", label: t("createKey"), disabled: Boolean(createIntent || mutationIntent) || recoveryError || !createCapability?.available, disabledReason: recoveryError ? t("keyRecoveryStorageUnavailable") : mutationIntent ? t("keyMutationPendingReason") : createIntent ? t("keyCreatePendingReason") : createCapability?.restrictionReason ? restrictions(createCapability.restrictionReason) : undefined, onSelect: startCreate }} /> : undefined} focus />}
     {!scopedOwner ? <Alert status="info">{t("keyLiveProductBoundary")}</Alert> : null}
+    {recoveryError ? <Alert status="danger">{t("keyRecoveryStorageUnavailable")}</Alert> : null}
     {createIntent && !flow ? <Alert status="warning">{currentCreateIntent
       ? currentCreateIntent.userId === owner.id
         ? currentCreateIntent.phase === "unknown" ? t("keyCreateUncertain", { id: currentCreateIntent.requestId }) : t("keyRecovered", { id: currentCreateIntent.keyId })
