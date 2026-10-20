@@ -146,7 +146,10 @@ describe("LiveAccessCredentials", () => {
     const api = client({ list: vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED")) });
     render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
 
-    expect(await screen.findByText("当前身份没有管理该用户访问密钥的权限。")).toBeTruthy();
+    const denial = await screen.findByRole("alert");
+    expect(within(denial).getByText(/当前身份没有管理该用户访问密钥的权限/)).toBeTruthy();
+    expect(within(denial).getByText(/请联系账号管理员核对授权/)).toBeTruthy();
+    expect(within(denial).queryByRole("button", { name: "重试读取" })).toBeNull();
     expect(screen.queryByRole("table", { name: "访问密钥" })).toBeNull();
     expect(screen.getByRole("button", { name: "新建访问密钥" }).hasAttribute("disabled")).toBe(true);
   });

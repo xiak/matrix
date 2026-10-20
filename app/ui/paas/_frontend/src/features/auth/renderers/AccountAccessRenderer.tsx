@@ -271,7 +271,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "access-diagnosis" ? <CurrentAccessDiagnosisPreview workspace={workspace ?? undefined} scene={scene} onOpen={onNavigate} /> :
       view === "access-analysis" && !workspace && access.accessAnalysis ? <LiveAccessAnalysis key={`${access.accessAnalysis.accountId}:${access.accessAnalysis.sessionRevision}`} authorizationPending={access.loading} client={access.accessAnalysis} onNavigate={onNavigate} /> :
       view === "access-analysis" ? <AccessAnalysisPreview workspace={workspace ?? undefined} scene={scene} onNavigate={onNavigate} /> :
-      view === "security-reports" && !workspace && access.securityReports ? <LiveSecurityReport key={`${access.securityReports.accountId}:${access.securityReports.sessionRevision}`} client={access.securityReports} /> :
+      view === "security-reports" && !workspace && access.securityReports ? <LiveSecurityReport key={`${access.securityReports.accountId}:${access.securityReports.sessionRevision}`} authorizationPending={access.loading} client={access.securityReports} /> :
       view === "security-reports" ? <SecurityReportDirectoryPreview workspace={workspace ?? undefined} scene={scene} currentSession={session.current?.session} /> :
       !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
       view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :

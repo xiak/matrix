@@ -930,8 +930,10 @@ describe("account access", () => {
       .mockReturnValueOnce(pendingRefresh);
     const updateAnalyzer = vi.fn();
     const analysis = liveAnalysis();
+    let finishExactRefresh!: (value: typeof revoked) => void;
+    const pendingExactRefresh = new Promise<typeof revoked>((resolve) => { finishExactRefresh = resolve; });
     analysis.listAnalyzers = vi.fn().mockResolvedValue({ accountId: account.id, items: [liveAnalyzer], nextAfter: null });
-    analysis.readAnalyzer = vi.fn().mockResolvedValueOnce(writable).mockResolvedValue(revoked);
+    analysis.readAnalyzer = vi.fn().mockResolvedValueOnce(writable).mockReturnValueOnce(pendingExactRefresh);
     analysis.updateAnalyzer = updateAnalyzer;
     const repository = accounts({ currentIdentity, accessAnalysis: analysis });
     const { user } = await openAccess(repository, iam(), "access-analysis");
@@ -952,11 +954,37 @@ describe("account access", () => {
 
     await act(async () => { finishRefresh(structuredClone(identity)); await pendingRefresh; });
     await waitFor(() => expect(analysis.readAnalyzer).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+    await act(async () => { finishExactRefresh(revoked); await pendingExactRefresh; });
     expect(analysis.listAnalyzers).toHaveBeenCalledTimes(2);
     expect(screen.getByRole("tab", { name: "分析规则" }).getAttribute("data-state")).toBe("active");
     expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
     expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
     expect(updateAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("rereads the current exact Policy after an explicit same-session authority refresh", async () => {
+    let finishRefresh!: (value: AccountIdentity) => void;
+    const pendingRefresh = new Promise<AccountIdentity>((resolve) => { finishRefresh = resolve; });
+    const currentIdentity = vi.fn().mockResolvedValueOnce(structuredClone(identity)).mockReturnValueOnce(pendingRefresh);
+    let finishPolicy!: (value: AccountPolicyAccess) => void;
+    const pendingPolicy = new Promise<AccountPolicyAccess>((resolve) => { finishPolicy = resolve; });
+    const readPolicy = vi.fn().mockResolvedValueOnce(policyAccess(tenantPolicyDetail)).mockReturnValueOnce(pendingPolicy);
+    const repository = accounts({ currentIdentity, readPolicy });
+    const { user } = await openAccess(repository, iam(), "policies", credential, tenantPolicy.id);
+    await waitFor(() => expect(readPolicy).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("heading", { name: tenantPolicy.displayName })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: tenantPolicy.displayName })).toBeTruthy();
+    await act(async () => { finishRefresh(structuredClone(identity)); await pendingRefresh; });
+    await waitFor(() => expect(readPolicy).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: tenantPolicy.displayName })).toBeTruthy();
+    await act(async () => { finishPolicy({ detail: tenantPolicyDetail, capabilities: [] }); await pendingPolicy; });
+    expect(readPolicy).toHaveBeenLastCalledWith(credential, account.id, tenantPolicy.id);
   });
 
   it("keeps a reviewed policy draft visible but blocks creation until permission recheck completes", async () => {

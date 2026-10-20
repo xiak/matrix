@@ -307,6 +307,7 @@ export type AccessAnalysisClient = {
 export type SecurityReportClient = {
   accountId: string;
   sessionRevision: number;
+  continuityIdentity: object;
   canCreate: boolean;
   create(command: { formatVersion: 2; requestId: string }): Promise<AccountSecurityReportCreation>;
   read(reportId: string): Promise<AccountSecurityReportAccess>;
@@ -898,9 +899,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const currentResourceAccessOwner = useRef<typeof resourceAccessOwner | null>(resourceAccessOwner);
   const verifiedAuthority = verifiedIdentityOwner?.session === viewSession && verifiedIdentityOwner.repository === repository
     ? verifiedIdentityOwner : null;
-  const accessAnalysisOwner = useMemo(() => ({ continuity: resourceAccessOwner, authority: verifiedAuthority }),
+  const exactAuthorityOwner = useMemo(() => ({ continuity: resourceAccessOwner, authority: verifiedAuthority }),
     [resourceAccessOwner, verifiedAuthority]);
-  const currentAccessAnalysisOwner = useRef<typeof accessAnalysisOwner | null>(accessAnalysisOwner);
+  const currentExactAuthorityOwner = useRef<typeof exactAuthorityOwner | null>(exactAuthorityOwner);
   const accessKeyStorageObservationRef = useRef<{ owner: typeof accessKeyOwner; status: "ready" | "blocked" } | null>(null);
   const [accessKeyStorageObservation, setAccessKeyStorageObservation] = useState<typeof accessKeyStorageObservationRef.current>(null);
   const markAccessKeyStorage = useCallback((owner: typeof accessKeyOwner, status: "ready" | "blocked") => {
@@ -919,12 +920,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [resourceAccessOwner]);
   useLayoutEffect(() => {
-    currentAccessAnalysisOwner.current = accessAnalysisOwner;
-    authorityRefreshPending.current = accessAnalysisOwner.authority === null;
+    currentExactAuthorityOwner.current = exactAuthorityOwner;
+    authorityRefreshPending.current = exactAuthorityOwner.authority === null;
     return () => {
-      if (currentAccessAnalysisOwner.current === accessAnalysisOwner) currentAccessAnalysisOwner.current = null;
+      if (currentExactAuthorityOwner.current === exactAuthorityOwner) currentExactAuthorityOwner.current = null;
     };
-  }, [accessAnalysisOwner]);
+  }, [exactAuthorityOwner]);
   useLayoutEffect(() => { currentExactUsers.current = exactUsers; }, [exactUsers]);
   useLayoutEffect(() => { currentScene.current = scene; }, [scene]);
   useLayoutEffect(() => {
@@ -1733,9 +1734,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   const policyReadAccountId = scene?.accountId;
   const policyRead = useMemo<AccountPolicyReadClient | null>(() => {
-    if (!active || !credential || !policyReadAccountId || policyReadAccountId !== tenantId || !repository.readPolicy || repository.workspace) return null;
+    if (!active || !credential || !policyReadAccountId || policyReadAccountId !== tenantId || !repository.readPolicy || repository.workspace || !exactAuthorityOwner.authority) return null;
     const accountId = policyReadAccountId;
-    const owns = () => currentResourceAccessOwner.current === resourceAccessOwner;
+    const owns = () => currentExactAuthorityOwner.current === exactAuthorityOwner && !authorityRefreshPending.current;
     const readFailure = (failure: unknown): AccountPolicyReadFailure => {
       if (failure instanceof HttpProblem) {
         if (failure.status === 401) {
@@ -1753,6 +1754,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       accountId, sessionRevision,
       async read(policyId) {
         try {
+          if (!owns()) throw new HttpProblem(409, "IAM_AUTHORITY_REFRESH_IN_PROGRESS");
           const access = await repository.readPolicy!(credential, accountId, policyId);
           const detail = access.detail;
           if (!owns()) throw new Error("STALE_IAM_STATE");
@@ -1764,6 +1766,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       },
       listVersions: repository.listPolicyVersions ? async (policyId) => {
         try {
+          if (!owns()) throw new HttpProblem(409, "IAM_AUTHORITY_REFRESH_IN_PROGRESS");
           const directory = await repository.listPolicyVersions!(credential, accountId, policyId);
           if (!owns()) throw new Error("STALE_IAM_STATE");
           if (directory.policy.id !== policyId || directory.policy.management !== "CUSTOMER" ||
@@ -1776,6 +1779,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } : undefined,
       readVersion: repository.readPolicyVersion ? async (policyId, versionId) => {
         try {
+          if (!owns()) throw new HttpProblem(409, "IAM_AUTHORITY_REFRESH_IN_PROGRESS");
           const detail = await repository.readPolicyVersion!(credential, accountId, policyId, versionId);
           if (!owns()) throw new Error("STALE_IAM_STATE");
           if (detail.policy.id !== policyId || detail.policy.management !== "CUSTOMER" ||
@@ -1787,7 +1791,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         } catch (failure) { return readFailure(failure); }
       } : undefined
     };
-  }, [active, credential, expireSession, repository, resourceAccessOwner, policyReadAccountId, sessionRevision, tenantId]);
+  }, [active, credential, exactAuthorityOwner, expireSession, repository, policyReadAccountId, sessionRevision, tenantId]);
 
   const policyCreate = useMemo<PolicyCreateClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace || !repository.createPolicy) return null;
@@ -2184,9 +2188,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const observedAccountId = scene && scene.accountId === tenantId ? scene.accountId : null;
   const accessAnalysis = useMemo<AccessAnalysisClient | null>(() => {
     const analysisRepository = repository.accessAnalysis;
-    if (!active || !credential || !observedAccountId || !analysisRepository || repository.workspace || !accessAnalysisOwner.authority) return null;
+    if (!active || !credential || !observedAccountId || !analysisRepository || repository.workspace || !exactAuthorityOwner.authority) return null;
     const accountId = observedAccountId;
-    const owns = () => currentAccessAnalysisOwner.current === accessAnalysisOwner && !authorityRefreshPending.current;
+    const owns = () => currentExactAuthorityOwner.current === exactAuthorityOwner && !authorityRefreshPending.current;
     const scoped = async <T,>(request: () => Promise<T>): Promise<T> => {
       if (!owns()) throw new HttpProblem(409, "IAM_AUTHORITY_REFRESH_IN_PROGRESS");
       try {
@@ -2204,7 +2208,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       accountId,
       sessionRevision,
-      continuityIdentity: accessAnalysisOwner.continuity,
+      continuityIdentity: exactAuthorityOwner.continuity,
       canList: scene?.canListAccessAnalyzers ?? false,
       canCreate: scene?.canCreateAccessAnalyzers ?? false,
       listAnalyzers: (after) => scoped(() => analysisRepository.listAnalyzers(credential, accountId, after)),
@@ -2217,16 +2221,17 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       archiveFinding: (analyzerId, findingId, command) => scoped(() => analysisRepository.archiveFinding(credential, accountId, analyzerId, findingId, command)),
       unarchiveFinding: (analyzerId, findingId, command) => scoped(() => analysisRepository.unarchiveFinding(credential, accountId, analyzerId, findingId, command))
     };
-  }, [accessAnalysisOwner, active, credential, expireSession, observedAccountId, repository, scene?.canCreateAccessAnalyzers, scene?.canListAccessAnalyzers, sessionRevision]);
+  }, [active, credential, exactAuthorityOwner, expireSession, observedAccountId, repository, scene?.canCreateAccessAnalyzers, scene?.canListAccessAnalyzers, sessionRevision]);
 
   const securityReports = useMemo<SecurityReportClient | null>(() => {
     const reportRepository = repository.securityReports;
-    if (!active || !credential || !observedAccountId || !reportRepository || repository.workspace) return null;
+    if (!active || !credential || !observedAccountId || !reportRepository || repository.workspace || !exactAuthorityOwner.authority) return null;
     const accountId = observedAccountId;
-    const owns = () => currentResourceAccessOwner.current === resourceAccessOwner;
-    const scoped = async <T,>(request: Promise<T>): Promise<T> => {
+    const owns = () => currentExactAuthorityOwner.current === exactAuthorityOwner && !authorityRefreshPending.current;
+    const scoped = async <T,>(request: () => Promise<T>): Promise<T> => {
+      if (!owns()) throw new HttpProblem(409, "IAM_AUTHORITY_REFRESH_IN_PROGRESS");
       try {
-        const value = await request;
+        const value = await request();
         if (!owns()) throw new Error("STALE_IAM_STATE");
         return value;
       }
@@ -2240,12 +2245,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       accountId,
       sessionRevision,
+      continuityIdentity: exactAuthorityOwner.continuity,
       canCreate: scene?.canCreateSecurityReports ?? false,
-      create: (command) => scoped(reportRepository.create(credential, accountId, command)),
-      read: (reportId) => scoped(reportRepository.read(credential, accountId, reportId)),
-      download: (reportId) => scoped(reportRepository.download(credential, accountId, reportId))
+      create: (command) => scoped(() => reportRepository.create(credential, accountId, command)),
+      read: (reportId) => scoped(() => reportRepository.read(credential, accountId, reportId)),
+      download: (reportId) => scoped(() => reportRepository.download(credential, accountId, reportId))
     };
-  }, [active, credential, expireSession, observedAccountId, repository, resourceAccessOwner, scene?.canCreateSecurityReports, sessionRevision]);
+  }, [active, credential, exactAuthorityOwner, expireSession, observedAccountId, repository, scene?.canCreateSecurityReports, sessionRevision]);
 
   const accessKeys = useMemo<AccessKeyClient | null>(() => {
     const keyRepository = repository.accessKeys;

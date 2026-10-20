@@ -101,12 +101,48 @@ describe("live access analysis", () => {
     view(value);
     expect(await screen.findByRole("heading", { name: "按已知 ID 查看分析器" })).toBeTruthy();
     expect(value.listAnalyzers).not.toHaveBeenCalled();
-    await user.type(screen.getByLabelText("分析器 ID"), analyzer.id);
+    await user.type(screen.getByLabelText("分析器 ID", { selector: "input#known-access-analyzer-id" }), analyzer.id);
     await user.click(screen.getByRole("button", { name: "查看分析器" }));
     await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
     expect(await screen.findByRole("button", { name: "user-alex" })).toBeTruthy();
     expect(value.listFindings).toHaveBeenCalledWith(analyzer.id, "ACTIVE", undefined);
     expect(value.createAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("opens an exact known Finding without analyzer-list, analyzer-read, or finding-list authority", async () => {
+    const user = userEvent.setup();
+    const readFinding = vi.fn().mockResolvedValue(findingAccess());
+    const value = client({
+      canList: false,
+      canCreate: false,
+      readAnalyzer: vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED")),
+      listFindings: vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED")),
+      readFinding
+    });
+    view(value);
+
+    await user.type(screen.getByLabelText("分析器 ID", { selector: "input#known-access-finding-analyzer-id" }), analyzer.id);
+    await user.type(screen.getByLabelText("Finding ID"), finding.id);
+    await user.click(screen.getByRole("button", { name: "查看 Finding" }));
+
+    await waitFor(() => expect(readFinding).toHaveBeenCalledWith(analyzer.id, finding.id));
+    expect(await screen.findByRole("heading", { name: "复核 Finding · user-alex" })).toBeTruthy();
+    expect(value.listAnalyzers).not.toHaveBeenCalled();
+    expect(value.listFindings).not.toHaveBeenCalled();
+    expect(value.readAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("does not disclose a target when an exact known Finding read is denied", async () => {
+    const user = userEvent.setup();
+    const value = client({ canList: false, canCreate: false,
+      readFinding: vi.fn().mockRejectedValue(new HttpProblem(404, "iam.access-finding.not-found")) });
+    view(value);
+    await user.type(screen.getByLabelText("分析器 ID", { selector: "input#known-access-finding-analyzer-id" }), analyzer.id);
+    await user.type(screen.getByLabelText("Finding ID"), "finding-private");
+    await user.click(screen.getByRole("button", { name: "查看 Finding" }));
+
+    expect(await screen.findByText(/IAM 未确认指定 Analyzer 或 Finding 可读取/)).toBeTruthy();
+    expect(screen.queryByText("user-alex")).toBeNull();
   });
 
   it.each([
@@ -119,7 +155,7 @@ describe("live access analysis", () => {
     const user = userEvent.setup();
     const readAnalyzer = vi.fn().mockRejectedValue(new HttpProblem(status, code));
     view(client({ canList: false, canCreate: false, readAnalyzer }));
-    await user.type(await screen.findByLabelText("分析器 ID"), analyzer.id);
+    await user.type(await screen.findByLabelText("分析器 ID", { selector: "input#known-access-analyzer-id" }), analyzer.id);
     await user.click(screen.getByRole("button", { name: "查看分析器" }));
 
     expect(await screen.findByText(message)).toBeTruthy();
@@ -198,10 +234,9 @@ describe("live access analysis", () => {
     await user.click(screen.getByRole("button", { name: "保存分析规则" }));
     expect(updateAnalyzer).not.toHaveBeenCalled();
 
-    const readAnalyzer = vi.fn().mockResolvedValue({
-      analyzer,
-      capabilities: [capability("iam.access-finding.list", "ACCESS_ANALYZER", analyzer.id)]
-    });
+    let resolveRefreshedAnalyzer!: (value: AccessAnalyzerAccess) => void;
+    const refreshedAnalyzer = new Promise<AccessAnalyzerAccess>((resolve) => { resolveRefreshedAnalyzer = resolve; });
+    const readAnalyzer = vi.fn().mockReturnValue(refreshedAnalyzer);
     const otherAnalyzer = { ...analyzer, id: "analyzer-directory-first", resourceVersion: 4 };
     const refreshed = client({ continuityIdentity, readAnalyzer, updateAnalyzer,
       listAnalyzers: vi.fn().mockResolvedValue({ accountId: analyzer.accountId, items: [otherAnalyzer, analyzer], nextAfter: null }) });
@@ -211,7 +246,36 @@ describe("live access analysis", () => {
     expect(screen.getByRole("tab", { name: "分析规则" }).getAttribute("data-state")).toBe("active");
     expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
     expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
     expect(updateAnalyzer).not.toHaveBeenCalled();
+    resolveRefreshedAnalyzer({ analyzer, capabilities: [capability("iam.access-finding.list", "ACCESS_ANALYZER", analyzer.id)] });
+    await refreshedAnalyzer;
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true));
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("keeps exact Finding writes frozen until the same-session detail authority is reread", async () => {
+    const user = userEvent.setup();
+    const continuityIdentity = {};
+    const first = client({ continuityIdentity });
+    const rendered = view(first);
+    await user.click(await screen.findByRole("button", { name: "user-alex" }));
+    expect(await screen.findByRole("button", { name: "归档 Finding" })).toHaveProperty("disabled", false);
+
+    let resolveFinding!: (value: AccessFindingAccess) => void;
+    const refreshedFinding = new Promise<AccessFindingAccess>((resolve) => { resolveFinding = resolve; });
+    const archiveFinding = vi.fn();
+    const refreshed = client({ continuityIdentity, archiveFinding, readFinding: vi.fn().mockReturnValue(refreshedFinding) });
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
+
+    const archive = screen.getByRole("button", { name: "归档 Finding" });
+    expect(archive).toHaveProperty("disabled", true);
+    await user.click(archive);
+    expect(archiveFinding).not.toHaveBeenCalled();
+    resolveFinding({ finding, capabilities: [] });
+    await refreshedFinding;
+    await waitFor(() => expect(screen.queryByRole("button", { name: "归档 Finding" })).toBeNull());
+    expect(archiveFinding).not.toHaveBeenCalled();
   });
 
   it("ignores a late exact Analyzer response from an older authority snapshot in the same Session", async () => {
@@ -386,6 +450,32 @@ describe("live access analysis", () => {
     await waitFor(() => expect(updateAnalyzer).toHaveBeenCalledTimes(2));
     expect(updateAnalyzer.mock.calls[1]?.[1]).toEqual(original);
     expect(await screen.findByText("分析规则已更新；这不会立即重算 Finding 或处置任何对象。")).toBeTruthy();
+  });
+
+  it("retains an unknown Analyzer command across same-session reauthorization and a later denial", async () => {
+    const user = userEvent.setup();
+    const continuityIdentity = {};
+    const firstUpdate = vi.fn().mockRejectedValue(new HttpProblem(503, "UNAVAILABLE"));
+    const first = client({ continuityIdentity, updateAnalyzer: firstUpdate });
+    const rendered = view(first);
+    await user.click(screen.getByRole("tab", { name: "分析规则" }));
+    const window = await screen.findByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window); await user.type(window, "30");
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+    const original = firstUpdate.mock.calls[0]?.[1];
+    expect(await screen.findByRole("button", { name: "重试原命令" })).toBeTruthy();
+
+    const retryUpdate = vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED"));
+    const refreshed = client({ continuityIdentity, updateAnalyzer: retryUpdate });
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
+    await waitFor(() => expect(refreshed.readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    expect(screen.queryByText(/原命令.*仍须由原连接核对/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "重试原命令" }));
+
+    await waitFor(() => expect(retryUpdate).toHaveBeenCalledTimes(1));
+    expect(retryUpdate.mock.calls[0]?.[1]).toEqual(original);
+    expect(screen.getByRole("button", { name: "重试原命令" })).toBeTruthy();
+    expect(screen.getByText(new RegExp(original.requestId))).toBeTruthy();
   });
 
   it("keeps an applied Analyzer update successful when only its authoritative reread fails", async () => {

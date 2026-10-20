@@ -89,8 +89,13 @@ export function LiveAccessAnalysis(props: LiveAccessAnalysisProps) {
       ? binding.generation : binding.generation + 1 };
     setBinding(current);
   }
-  const currentIntent = intent?.client === props.client ? intent : null;
-  const blockedIntent = intent && intent.client !== props.client ? intent : null;
+  let retainedIntent = intent;
+  if (intent && intent.client !== props.client && intent.client.continuityIdentity === props.client.continuityIdentity) {
+    retainedIntent = { ...intent, client: props.client };
+    setIntent(retainedIntent);
+  }
+  const currentIntent = retainedIntent?.client === props.client ? retainedIntent : null;
+  const blockedIntent = retainedIntent && retainedIntent.client !== props.client ? retainedIntent : null;
   const begin = (candidate: AccessAnalysisMutationIntent) => {
     if (intent) {
       if (intent.client !== props.client) return null;
@@ -102,9 +107,9 @@ export function LiveAccessAnalysis(props: LiveAccessAnalysisProps) {
     return candidate;
   };
   const resolve = (source: AccessAnalysisClient, requestId: string) => setIntent((pending) =>
-    pending?.client === source && pending.requestId === requestId ? null : pending);
+    pending?.client.continuityIdentity === source.continuityIdentity && pending.requestId === requestId ? null : pending);
   const markUnknown = (source: AccessAnalysisClient, requestId: string) => setIntent((pending) =>
-    pending?.client === source && pending.requestId === requestId ? { ...pending, phase: "unknown" } : pending);
+    pending?.client.continuityIdentity === source.continuityIdentity && pending.requestId === requestId ? { ...pending, phase: "unknown" } : pending);
   return <LiveAccessAnalysisGeneration key={current.generation} {...props} blockedIntent={blockedIntent} currentIntent={currentIntent}
     onBegin={begin} onResolved={resolve} onUnknown={markUnknown} />;
 }
@@ -117,6 +122,8 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
   const [analyzerAccess, setAnalyzerAccess] = useState<AccessAnalyzerAccess | null>(null);
   const [analyzersLoading, setAnalyzersLoading] = useState(client.canList);
   const [knownAnalyzerId, setKnownAnalyzerId] = useState("");
+  const [knownFindingAnalyzerId, setKnownFindingAnalyzerId] = useState("");
+  const [knownFindingId, setKnownFindingId] = useState("");
   const [filter, setFilter] = useState<AccessFindingStatusFilter>("ACTIVE");
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined]);
   const [pageIndex, setPageIndex] = useState(0);
@@ -131,12 +138,20 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
   const [error, setError] = useState<Failure | null>(null);
   const [readProblem, setReadProblem] = useState<HttpProblem | null>(null);
   const [notice, setNotice] = useState<"created" | "updated" | "dispositionUpdated" | "archived" | "unarchived" | null>(null);
-  const [busy, setBusy] = useState(false);
+  const [busyClient, setBusyClient] = useState<AccessAnalysisClient | null>(null);
+  const busy = busyClient === client;
+  const setBusy = (value: boolean) => setBusyClient((current) => value ? client : current === client ? null : current);
   const [reloadRevision, setReloadRevision] = useState(0);
   const currentClient = useRef<AccessAnalysisClient | null>(client);
   const currentAnalyzerId = useRef<string | null>(null);
+  const [analyzerAuthorityClient, setAnalyzerAuthorityClient] = useState<AccessAnalysisClient | null>(null);
+  const [findingAuthorityClient, setFindingAuthorityClient] = useState<AccessAnalysisClient | null>(null);
   const analyzer = analyzerAccess?.analyzer ?? null;
   const selectedFinding = selected?.finding ?? null;
+  const exactAuthorityPending = Boolean(
+    (analyzerAccess && analyzerAuthorityClient !== client) ||
+    (selected && findingAuthorityClient !== client)
+  );
   const currentCursor = cursorStack[pageIndex];
   const analyzerCan = (action: IamAction) => Boolean(analyzerAccess &&
     findActionCapability(analyzerAccess.capabilities, action, "ACCESS_ANALYZER", analyzerAccess.analyzer.id)?.available);
@@ -174,11 +189,12 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       } else {
         setAnalyzers([]);
       }
-      if (!analyzerId) { setAnalyzerAccess(null); return; }
+      if (!analyzerId) { setAnalyzerAccess(null); setAnalyzerAuthorityClient(null); return; }
       const access = await client.readAnalyzer(analyzerId);
       if (!active) return;
       setKnownAnalyzerId(access.analyzer.id);
       setAnalyzerAccess(access);
+      setAnalyzerAuthorityClient(client);
       setFindingsLoading(findActionCapability(access.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", access.analyzer.id)?.available === true);
     })().catch((failure) => {
       if (!active) return;
@@ -212,9 +228,11 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       if (!active) return;
       setDetailProblem(null);
       setSelected(finding);
+      setFindingAuthorityClient(client);
     }).catch((failure) => {
       if (!active) return;
       setSelected(null);
+      setFindingAuthorityClient(null);
       setDetailProblem(failure instanceof HttpProblem ? failure : null);
       setDetailError(failureCode(failure));
     }).finally(() => { if (active) setSelectedLoading(false); });
@@ -244,6 +262,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
 
   const replaceFinding = (updated: AccessFinding, access?: AccessFindingAccess) => {
     setSelected((current) => current?.finding.id === updated.id ? access ?? { ...current, finding: updated } : current);
+    if (access) setFindingAuthorityClient(client);
     setFindings((current) => current ? {
       ...current,
       items: filter === "ALL" || filter === updated.status
@@ -264,6 +283,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       const latest = await client.readAnalyzer(intent.analyzerId);
       if (!ownsClient()) return;
       setAnalyzerAccess(latest);
+      setAnalyzerAuthorityClient(client);
       setAnalyzers([latest.analyzer]);
       setCursorStack([undefined]); setPageIndex(0); setFindings(null);
       setFindingsLoading(findActionCapability(latest.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", latest.analyzer.id)?.available === true);
@@ -278,7 +298,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
     }
   };
 
-  const executeMutation = async (intent: AccessAnalysisMutationIntent) => {
+  const executeMutation = async (intent: AccessAnalysisMutationIntent, retrying = false) => {
     const findingMutation = intent.operation === "archive" || intent.operation === "unarchive";
     setBusy(true); setNotice(null);
     if (findingMutation) { setDetailError(null); setDetailProblem(null); }
@@ -298,10 +318,10 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
           : await client.unarchiveFinding(intent.analyzerId, intent.findingId, command);
       }
     } catch (failure) {
+      if (!ownsClient()) { onUnknown(client, intent.requestId); return; }
       const code = failureCode(failure);
-      if (code === "unavailable") onUnknown(client, intent.requestId);
+      if (retrying || code === "unavailable") onUnknown(client, intent.requestId);
       else onResolved(client, intent.requestId);
-      if (!ownsClient()) return;
       if (findingMutation) setDetailError(code); else setError(code);
       if (code === "expired") {
         setAnalyzers(null); setFindings(null); setSelectedReference(null); setSelected(null);
@@ -322,8 +342,8 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
     // A successful command and its authoritative follow-up read are separate
     // outcomes. Never turn an applied mutation into an outcome-unknown write
     // merely because the detail refresh failed.
+    if (!ownsClient()) { onUnknown(client, intent.requestId); return; }
     onResolved(client, intent.requestId);
-    if (!ownsClient()) return;
     if (intent.operation === "create") { setNotice("created"); setSection("rule"); }
     else if (intent.operation === "update") setNotice("updated");
     else if (intent.operation === "setDisposition") setNotice("dispositionUpdated");
@@ -335,7 +355,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
         setKnownAnalyzerId(analyzerId);
         const latest = await client.readAnalyzer(analyzerId);
         if (!ownsClient()) return;
-        setAnalyzerAccess(latest); setAnalyzers([latest.analyzer]);
+        setAnalyzerAccess(latest); setAnalyzerAuthorityClient(client); setAnalyzers([latest.analyzer]);
         setReadProblem(null); setError(null);
         if (intent.operation === "update") {
           setCursorStack([undefined]); setPageIndex(0); setFindings(null);
@@ -362,7 +382,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
   };
 
   const startMutation = async (mutation: AccessAnalysisMutation) => {
-    if (authorizationPending || currentIntent || blockedIntent || busy) return;
+    if (authorizationPending || exactAuthorityPending || currentIntent || blockedIntent || busy) return;
     const prefix = mutation.operation === "create" ? "ui-access-analyzer-create-"
       : mutation.operation === "update" ? "ui-access-analyzer-update-"
         : mutation.operation === "setDisposition" ? "ui-access-analyzer-set-disposition-"
@@ -373,9 +393,9 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
   };
 
   const retryMutation = async () => {
-    if (authorizationPending || !currentIntent || busy) return;
+    if (authorizationPending || exactAuthorityPending || !currentIntent || busy) return;
     const started = onBegin(currentIntent);
-    if (started) await executeMutation(started);
+    if (started) await executeMutation(started, true);
   };
 
   const createAnalyzer = async () => startMutation({ operation: "create", command: { type: "UNUSED_ACCESS" } });
@@ -387,13 +407,21 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
     try {
       const access = await client.readAnalyzer(analyzerId);
       if (!ownsClient()) return;
-      setAnalyzerAccess(access); setAnalyzers([access.analyzer]);
+      setAnalyzerAccess(access); setAnalyzerAuthorityClient(client); setAnalyzers([access.analyzer]);
       setFindingsLoading(findActionCapability(access.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", access.analyzer.id)?.available === true);
     } catch (failure) {
       if (!ownsClient()) return;
       setAnalyzerAccess(null); setAnalyzers(null); setFindingsLoading(false);
       setReadProblem(failure instanceof HttpProblem ? failure : null); setError(failureCode(failure));
     } finally { if (ownsClient()) setAnalyzersLoading(false); }
+  };
+
+  const openKnownFinding = () => {
+    const analyzerId = knownFindingAnalyzerId.trim();
+    const findingId = knownFindingId.trim();
+    if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(analyzerId) || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(findingId)) return;
+    setSelectedReference({ analyzerId, findingId, targetId: findingId });
+    setSelected(null); setFindingAuthorityClient(null); setSelectedLoading(true); setDetailError(null); setDetailProblem(null); setNotice(null);
   };
 
   const updateAnalyzer = async (next: { status: AccessAnalyzer["status"]; unusedAccessAgeDays: number }) => {
@@ -419,7 +447,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
   };
 
   const retryingOriginal = Boolean(currentIntent && !busy);
-  const writeBlocked = Boolean(authorizationPending || busy || currentIntent || blockedIntent);
+  const writeBlocked = Boolean(authorizationPending || exactAuthorityPending || busy || currentIntent || blockedIntent);
   const findingTransitionAction = selectedFinding?.status === "ACTIVE" ? "iam.access-finding.archive" : "iam.access-finding.unarchive";
   const canTransitionFinding = Boolean(selected && selectedFinding && selectedFinding.status !== "RESOLVED" &&
     findActionCapability(selected.capabilities, findingTransitionAction, "ACCESS_FINDING", selectedFinding.id)?.available);
@@ -430,7 +458,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       : null;
 
   if (selectedReference) return <WorkspaceDetail title={t("live.findingTitle", { id: selectedFinding?.target.id ?? selectedReference.targetId })} onBack={() => {
-    setSelectedReference(null); setSelected(null); setDetailError(null); setNotice(null);
+    setSelectedReference(null); setSelected(null); setFindingAuthorityClient(null); setDetailError(null); setNotice(null);
   }}>
     {mutationBoundary}
     {!selectedLoading && !selected && detailError ? <AccountReadBoundary status={readStatus(detailError)} loading={null}
@@ -478,6 +506,20 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       </FormField></Card.Body>
       <Card.Footer><Button disabled={analyzersLoading || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(knownAnalyzerId.trim())} onClick={() => void openKnownAnalyzer()}>{t("live.openKnownAnalyzer")}</Button></Card.Footer>
     </Card> : null}
+    <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.knownFindingTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.knownFindingHint")}</Typography.Text></div></Card.Header>
+      <Card.Body><div className={styles.settingsGrid}>
+        <FormField id="known-access-finding-analyzer-id" label={t("unused.analyzerId")} hint={t("live.knownFindingAnalyzerHint")}>
+          <Input id="known-access-finding-analyzer-id" autoComplete="off" maxLength={128} value={knownFindingAnalyzerId} onChange={(event) => setKnownFindingAnalyzerId(event.target.value)} />
+        </FormField>
+        <FormField id="known-access-finding-id" label={t("unused.findingId")} hint={t("live.knownFindingIdHint")}>
+          <Input id="known-access-finding-id" autoComplete="off" maxLength={128} value={knownFindingId} onChange={(event) => setKnownFindingId(event.target.value)} />
+        </FormField>
+      </div></Card.Body>
+      <Card.Footer><Button disabled={authorizationPending || selectedLoading ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(knownFindingAnalyzerId.trim()) ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(knownFindingId.trim())} onClick={openKnownFinding}>{t("live.openKnownFinding")}</Button></Card.Footer>
+    </Card>
     {mutationBoundary}
     {error && analyzers !== null && presentedFindings !== null ? <Alert status="danger"><strong>{t(`live.errors.${error}`)}</strong></Alert> : null}
     {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
