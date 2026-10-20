@@ -6,8 +6,8 @@
 - Updated: 2026-10-20
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed candidate: `dfb99958c51eea552b455831b6cd31063b69dd64`
-- Source commit: `4fe5c2be3`
+- Pushed candidate: `3b59b9350abf052d9d73be092b07c1424bc2bde1`
+- Source commit: `892cf0439fba342765305cad3e0dfcdd563618d8`
 
 ## Authoritative route
 
@@ -20,11 +20,10 @@
 
 ## Pushed milestone
 
-The shared content header now separates accepted route focus from nested-view
-focus restoration. Service authorization is an independent top-level IAM
-destination; its internal template, observation, review and Account-relation
-returns restore their exact source controls without a timeout or a second H1
-focus. The source and synchronized embed above are pushed and match the current
+The Log Service compact renderer now keeps event summaries and expanded facts
+inside the mobile content width instead of retaining a 560px inner canvas.
+Topic and collection directories use the shared labelled stack-table contract.
+The source and synchronized embed above are pushed and match the current
 branch. Exact implementation, browser observations, complete frontend/export
 counts and limitations belong to FEAT-007; IAM semantics remain with
 FEAT-IAM-010.

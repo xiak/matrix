@@ -3992,7 +3992,18 @@ and is not inherited as a new backend acceptance result.
   DevOps and Monitoring expose deep-linked local pages. Log Service is an
   explicitly labelled MOCK workspace with region-scoped overview, topic and
   collection pages, keyword/topic/severity filtering, and expandable event
-  fields. Fixed sample timestamps never imply live collection. Browser checks
+  fields. Fixed sample timestamps never imply live collection. The compact
+  renderer now replaces the event list's former `560px` horizontal canvas with
+  a two-line event summary and single-column expanded facts, while topic and
+  collection directories use the shared labelled stack table. At `390 × 844px`
+  the overview and topic directory kept document, body and viewport at 390px,
+  exposed one H1, left no over-wide content descendants or Dialog, and emitted
+  no browser warning/error. Source [`892cf0439`](https://github.com/xiak/matrix/commit/892cf0439)
+  and synchronized embed [`3b59b9350`](https://github.com/xiak/matrix/commit/3b59b9350)
+  passed the focused four-case renderer suite, the complete 79-file/2,065-case
+  frontend suite, typecheck, lint, architecture, 234-pair theme styles, eight
+  static-export checks, 59-page/57-normalized-segment production build,
+  324-file source/export/embed equality and PaaS Go test/vet. Browser checks
   at 1440px, 840px and 360px confirm full-viewport discovery, no page horizontal
   overflow, retained search while resizing, trigger/X closure, and inert
   background controls. Chinese/English and dark/light checks cover the new
