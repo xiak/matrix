@@ -51,7 +51,8 @@ function Header({ className, title, back, leading, trailing, progress, navigatio
   const focus = heading?.focus;
   const displayedBack = heading ? heading.back : back;
   const safeBack = displayedBack && pending ? { ...displayedBack, disabled: true } : displayedBack;
-  useLayoutEffect(() => { if (focus || navigationFocusKey) titleRef.current?.focus({ preventScroll: true }); }, [owner, focus, navigationFocusKey]);
+  useLayoutEffect(() => { if (navigationFocusKey) titleRef.current?.focus({ preventScroll: true }); }, [navigationFocusKey]);
+  useLayoutEffect(() => { if (focus) titleRef.current?.focus({ preventScroll: true }); }, [owner, focus]);
   return <header className={classNames(styles.header, className)} {...props}>
     {leading}
     <div className={styles.headerContent}>

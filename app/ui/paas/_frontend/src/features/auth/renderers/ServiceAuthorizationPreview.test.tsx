@@ -2,12 +2,27 @@ import { cleanup, render, screen, waitFor, within } from "@testing-library/react
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { ContentPage } from "@ui/xiak";
 import { initialAccessWorkspace } from "../repositories/previewAccessWorkspace";
 import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
 
 afterEach(cleanup);
 
 describe("ServiceAuthorizationPreview", () => {
+  it("restores the template trigger when the shared page header owns the visible title", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ContentPage><ContentPage.Header title="服务授权" navigationFocusKey="/console/access/service-authorizations/" /><ContentPage.Body>
+      <ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} />
+    </ContentPage.Body></ContentPage></LocaleProvider>);
+
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
+    const template = screen.getByRole("button", { name: "托管服务安装访问" });
+    await user.click(template);
+    expect(screen.getByRole("heading", { level: 1, name: "服务授权模板" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "返回服务授权" }));
+    expect(screen.getByRole("button", { name: "托管服务安装访问" })).toBe(document.activeElement);
+  });
+
   it("moves focus through the current consent step without returning to the page title", async () => {
     const user = userEvent.setup();
     render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
