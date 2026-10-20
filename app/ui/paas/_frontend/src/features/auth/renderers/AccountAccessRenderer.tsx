@@ -49,7 +49,7 @@ import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
 import { AuthorizationProfilePublishingWorkspace } from "./AccountAuthorizationProfileCatalog";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
-import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
+import { AccountDirectoryReadFailure } from "./AccountReadBoundary";
 
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
 const accountSignInSettingsId = "account-sign-in-settings";

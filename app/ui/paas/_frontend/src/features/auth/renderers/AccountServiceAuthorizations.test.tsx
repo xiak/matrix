@@ -343,21 +343,35 @@ describe("AccountServiceAuthorizations", () => {
     expect(templateClient.load).toHaveBeenCalledTimes(1);
   });
 
-  it("localizes relation authorization failure and retries without MOCK fallback", async () => {
+  it("localizes relation authorization failure without offering a blind retry", async () => {
+    const relations: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockResolvedValue({ status: "forbidden" }),
+      read: vi.fn()
+    };
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+
+    expect(await screen.findByText("无权查看当前账号服务授权")).toBeTruthy();
+    expect(screen.queryByText(/MOCK/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /重试/ })).toBeNull();
+    expect(relations.list).toHaveBeenCalledOnce();
+  });
+
+  it("retries only a temporary relation-directory failure", async () => {
     const relations: ServiceLinkedRoleClient = {
       accountId: "account-xiak",
       sessionRevision: 1,
       list: vi.fn()
-        .mockResolvedValueOnce({ status: "forbidden" })
+        .mockResolvedValueOnce({ status: "unavailable" })
         .mockResolvedValueOnce({ status: "ready", directory: { accountId: "account-xiak", items: [], nextAfter: null } }),
       read: vi.fn()
     };
     const user = userEvent.setup();
     render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
 
-    expect(await screen.findByText("无权查看当前账号服务授权")).toBeTruthy();
-    expect(screen.getByText("不会回退到 MOCK", { exact: false })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("暂时无法读取服务授权")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试读取" }));
     expect(await screen.findByText("当前账号暂无服务授权")).toBeTruthy();
     expect(relations.list).toHaveBeenCalledTimes(2);
   });

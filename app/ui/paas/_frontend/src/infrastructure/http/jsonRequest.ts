@@ -1,13 +1,22 @@
 export class HttpProblem extends Error {
   readonly code: string;
+  readonly requestId: string | null;
   readonly status: number;
 
-  constructor(status: number, code: string) {
+  constructor(status: number, code: string, requestId: string | null = null) {
     super(code);
     this.name = "HttpProblem";
     this.status = status;
     this.code = code;
+    this.requestId = requestId;
   }
+}
+
+const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function problemRequestId(body: unknown): string | null {
+  if (typeof body !== "object" || body === null || !("requestId" in body) || typeof body.requestId !== "string") return null;
+  return requestIdPattern.test(body.requestId) ? body.requestId : null;
 }
 
 export async function requestJSONResponse<T>(
@@ -36,7 +45,7 @@ export async function requestJSONResponse<T>(
       typeof body.code === "string"
         ? body.code
         : "PLATFORM_REQUEST_REJECTED";
-    throw new HttpProblem(response.status, code);
+    throw new HttpProblem(response.status, code, problemRequestId(body));
   }
 
   return { body: body as T, headers: response.headers, status: response.status };

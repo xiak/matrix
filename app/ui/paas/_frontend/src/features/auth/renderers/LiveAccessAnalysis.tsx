@@ -9,6 +9,7 @@ import type { AccountAccessView } from "../domain/accounts";
 import type { AccessAnalyzer, AccessDispositionRule, AccessFinding, AccessFindingDirectory, AccessFindingStatusFilter, AccessObservationCoverage } from "../domain/accessAnalysis";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessFindingRecoveryBoundary, AccessRecoveryGapBoundary } from "./AccessRecoveryBoundary";
+import { AccountReadBoundary, type AccountReadStatus } from "./AccountReadBoundary";
 import styles from "./AccountAccessRenderer.module.css";
 
 type Failure = "expired" | "forbidden" | "routeUnavailable" | "conflict" | "invalid" | "unavailable";
@@ -44,6 +45,11 @@ function failureCode(error: unknown): Failure {
     if (error.status === 409) return "conflict";
     if (error.status === 400 || error.status === 422) return "invalid";
   }
+  return "unavailable";
+}
+
+function readStatus(error: Failure | null): Exclude<AccountReadStatus, "loading" | "ready" | "empty"> {
+  if (error === "forbidden" || error === "routeUnavailable" || error === "expired" || error === "unavailable") return error;
   return "unavailable";
 }
 
@@ -116,7 +122,9 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
   const [selectedLoading, setSelectedLoading] = useState(false);
   const [selectedRevision, setSelectedRevision] = useState(0);
   const [detailError, setDetailError] = useState<Failure | null>(null);
+  const [detailProblem, setDetailProblem] = useState<HttpProblem | null>(null);
   const [error, setError] = useState<Failure | null>(null);
+  const [readProblem, setReadProblem] = useState<HttpProblem | null>(null);
   const [notice, setNotice] = useState<"created" | "updated" | "dispositionUpdated" | "archived" | "unarchived" | null>(null);
   const [busy, setBusy] = useState(false);
   const [reloadRevision, setReloadRevision] = useState(0);
@@ -132,11 +140,13 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
     let active = true;
     void client.listAnalyzers().then((directory) => {
       if (!active) return;
+      setReadProblem(null);
       setFindingsLoading(directory.items.length > 0);
       setAnalyzers(directory.items);
     }).catch((failure) => {
       if (!active) return;
       setAnalyzers(null);
+      setReadProblem(failure instanceof HttpProblem ? failure : null);
       setError(failureCode(failure));
     }).finally(() => { if (active) setAnalyzersLoading(false); });
     return () => { active = false; };
@@ -147,10 +157,12 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
     let active = true;
     void client.listFindings(analyzer.id, filter, currentCursor).then((directory) => {
       if (!active) return;
+      setReadProblem(null);
       setFindings(directory);
     }).catch((failure) => {
       if (!active) return;
       setFindings(null);
+      setReadProblem(failure instanceof HttpProblem ? failure : null);
       setError(failureCode(failure));
     }).finally(() => { if (active) setFindingsLoading(false); });
     return () => { active = false; };
@@ -161,10 +173,12 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
     let active = true;
     void client.readFinding(selectedReference.analyzerId, selectedReference.findingId).then((finding) => {
       if (!active) return;
+      setDetailProblem(null);
       setSelected(finding);
     }).catch((failure) => {
       if (!active) return;
       setSelected(null);
+      setDetailProblem(failure instanceof HttpProblem ? failure : null);
       setDetailError(failureCode(failure));
     }).finally(() => { if (active) setSelectedLoading(false); });
     return () => { active = false; };
@@ -173,6 +187,7 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
   const changeFilter = (value: string) => {
     setFindingsLoading(true);
     setError(null);
+    setReadProblem(null);
     setFilter(value as AccessFindingStatusFilter);
     setCursorStack([undefined]);
     setPageIndex(0);
@@ -186,6 +201,7 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
     setAnalyzersLoading(true);
     setFindingsLoading(Boolean(analyzer));
     setError(null);
+    setReadProblem(null);
     setReloadRevision((current) => current + 1);
   };
 
@@ -327,7 +343,10 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
     setSelectedReference(null); setSelected(null); setDetailError(null); setNotice(null);
   }}>
     {mutationBoundary}
-    {detailError ? <Alert status="danger"><div className={styles.confirmation}><strong>{t(`live.errors.${detailError}`)}</strong>{!currentIntent ? <Button variant="secondary" onClick={() => {
+    {!selectedLoading && !selected && detailError ? <AccountReadBoundary status={readStatus(detailError)} loading={null}
+      failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${detailError}`) }} problem={detailProblem}
+      onRetry={() => { setSelectedLoading(true); setDetailError(null); setDetailProblem(null); setSelectedRevision((current) => current + 1); }} /> : null}
+    {selected && detailError ? <Alert status="danger"><div className={styles.confirmation}><strong>{t(`live.errors.${detailError}`)}</strong>{!currentIntent && detailError === "unavailable" ? <Button variant="secondary" onClick={() => {
       setSelected(null); setSelectedLoading(true); setDetailError(null); setSelectedRevision((current) => current + 1);
     }}>{t("live.retry")}</Button> : null}</div></Alert> : null}
     {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
@@ -363,7 +382,7 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
     <ContentPage.Heading title={t("title")} scrollKey={`access-analysis-live:${client.accountId}`} />
     <Alert status="info">{t("live.connectedBoundary")}</Alert>
     {mutationBoundary}
-    {error ? <Alert status="danger"><div className={styles.confirmation}><strong>{t(`live.errors.${error}`)}</strong>{!currentIntent ? <Button variant="secondary" onClick={reload}>{t("live.retry")}</Button> : null}</div></Alert> : null}
+    {error && analyzers !== null && findings !== null ? <Alert status="danger"><strong>{t(`live.errors.${error}`)}</strong></Alert> : null}
     {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
     <Tabs.Root value={section} onValueChange={(value) => setSection(value as typeof section)}>
       <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}>
@@ -371,25 +390,35 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
         <Tabs.Trigger value="unused">{t("tabs.unused")}</Tabs.Trigger>
         <Tabs.Trigger value="rule">{t("tabs.rule")}</Tabs.Trigger>
       </Tabs.List>
-      {analyzersLoading ? <Tabs.Content value={section}><Card><TableSkeleton header label={t("live.loading")} labelVisible={false} rows={4} /></Card></Tabs.Content> : analyzers === null ? <Tabs.Content value={section} className={styles.stack}>
-        <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} />
-      </Tabs.Content> : !analyzer ? <Tabs.Content value={section} className={styles.stack}>
-        <EmptyState title={t("live.noAnalyzerTitle")} description={t("live.noAnalyzerHint")} action={<Button disabled={writeBlocked || error === "forbidden"} onClick={() => void createAnalyzer()}>{t("live.createAnalyzer")}</Button>} />
-      </Tabs.Content> : <>
+      <AccountReadBoundary
+        status={analyzersLoading ? "loading" : analyzers === null ? readStatus(error) : !analyzer ? "empty" : "ready"}
+        loading={<Tabs.Content value={section}><Card><TableSkeleton header label={t("live.loading")} labelVisible={false} rows={4} /></Card></Tabs.Content>}
+        empty={{ title: t("live.noAnalyzerTitle"), description: t("live.noAnalyzerHint"), action: <Button disabled={writeBlocked} onClick={() => void createAnalyzer()}>{t("live.createAnalyzer")}</Button> }}
+        failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${error ?? "unavailable"}`) }}
+        onRetry={reload} problem={readProblem}>
+      {analyzer ? <>
         <Tabs.Content className={styles.stack} value="coverage">
-          {findingsLoading ? <Card><TableSkeleton header label={t("live.loadingCoverage")} labelVisible={false} rows={6} /></Card> : !findings ? <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} /> : <Card>
+          <AccountReadBoundary status={findingsLoading ? "loading" : findings ? "ready" : readStatus(error)}
+            loading={<Card><TableSkeleton header label={t("live.loadingCoverage")} labelVisible={false} rows={6} /></Card>}
+            failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${error ?? "unavailable"}`) }} onRetry={reload} problem={readProblem}>
+          {findings ? <Card>
             <Card.Header><div><Typography.Title as="h2" level={3}>{t("external.coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.coverageHint")}</Typography.Text></div><Badge status="info"><WorkspaceTime value={findings.observedAt} /></Badge></Card.Header>
             <Card.Body className={styles.securityReportBody}><dl className={styles.activityEvidence}>{findings.coverage.map((entry) => <div key={entry.source}><dt>{t(`external.coverage.${entry.source}.title`)}</dt><dd><Badge status={coverageBadge[entry.state]}>{t(`external.coverageStates.${entry.state}`)}</Badge><span>{entry.reason ? t(`external.coverageReasons.${entry.reason}`) : t("live.coverageComplete")}</span>{entry.observedFrom && entry.observedThrough ? <small><WorkspaceTime value={entry.observedFrom} /> – <WorkspaceTime value={entry.observedThrough} /></small> : null}</dd></div>)}</dl></Card.Body>
-          </Card>}
+          </Card> : null}
+          </AccountReadBoundary>
           {findings ? <AccessRecoveryGapBoundary coverage={findings.coverage} /> : null}
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="unused">
           <Card>
             <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.findingsTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.findingsHint")}</Typography.Text></div><FormField id="live-access-finding-status" label={t("unused.status")}><Select id="live-access-finding-status" disabled={findingsLoading} value={filter} onValueChange={changeFilter} options={(['ALL', 'ACTIVE', 'ARCHIVED', 'RESOLVED'] as const).map((value) => ({ value, label: t(`live.filters.${value}`) }))} /></FormField></Card.Header>
-            {findingsLoading ? <TableSkeleton label={t("live.loadingFindings")} labelVisible={false} rows={6} /> : !findings ? <EmptyState title={t("live.loadFailedTitle")} description={t("live.loadFailedHint")} action={<Button variant="secondary" onClick={reload}>{t("live.retry")}</Button>} /> : findings.items.length ? <Table aria-label={t("live.findingsTitle")} mobileLayout="stack"><thead><tr><th scope="col">{t("unused.principal")}</th><th scope="col">{t("unused.findingType")}</th><th scope="col">{t("unused.status")}</th><th scope="col">{t("live.observedAt")}</th></tr></thead><tbody>{findings.items.map((finding) => <tr key={finding.id}><td data-label={t("unused.principal")}><Table.PrimaryAction onClick={() => {
+            <AccountReadBoundary status={findingsLoading ? "loading" : findings ? "ready" : readStatus(error)}
+              loading={<TableSkeleton label={t("live.loadingFindings")} labelVisible={false} rows={6} />}
+              failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${error ?? "unavailable"}`) }} onRetry={reload} problem={readProblem}>
+            {findings ? findings.items.length ? <Table aria-label={t("live.findingsTitle")} mobileLayout="stack"><thead><tr><th scope="col">{t("unused.principal")}</th><th scope="col">{t("unused.findingType")}</th><th scope="col">{t("unused.status")}</th><th scope="col">{t("live.observedAt")}</th></tr></thead><tbody>{findings.items.map((finding) => <tr key={finding.id}><td data-label={t("unused.principal")}><Table.PrimaryAction onClick={() => {
               setSelectedReference({ analyzerId: finding.analyzerId, findingId: finding.id, targetId: finding.target.id });
               setSelected(null); setSelectedLoading(true); setDetailError(null); setNotice(null);
-            }}>{finding.target.id}</Table.PrimaryAction><small>{finding.id}</small></td><td data-label={t("unused.findingType")}>{t(`unused.types.${findingTypeKey(finding.type)}`)}</td><td data-label={t("unused.status")}><Badge status={findingBadge[finding.status]}>{t(`unused.lifecycle.${finding.status}`)}</Badge></td><td data-label={t("live.observedAt")}><WorkspaceTime value={finding.observedAt} /></td></tr>)}</tbody></Table> : <EmptyState title={t("live.noFindingsTitle")} description={t("live.noFindingsHint")} />}
+            }}>{finding.target.id}</Table.PrimaryAction><small>{finding.id}</small></td><td data-label={t("unused.findingType")}>{t(`unused.types.${findingTypeKey(finding.type)}`)}</td><td data-label={t("unused.status")}><Badge status={findingBadge[finding.status]}>{t(`unused.lifecycle.${finding.status}`)}</Badge></td><td data-label={t("live.observedAt")}><WorkspaceTime value={finding.observedAt} /></td></tr>)}</tbody></Table> : <EmptyState title={t("live.noFindingsTitle")} description={t("live.noFindingsHint")} /> : null}
+            </AccountReadBoundary>
             <Table.Footer note={t("live.cursorBoundary")}><TablePagination mode="cursor" disabled={findingsLoading} summary={t("live.page", { page: pageIndex + 1 })}
               previous={{ label: t("live.previous"), disabled: pageIndex === 0, onClick: () => { setFindingsLoading(true); setError(null); setPageIndex((current) => Math.max(0, current - 1)); } }}
               next={{ label: t("live.next"), disabled: !findings?.nextAfter, onClick: () => { if (!findings?.nextAfter) return; setFindingsLoading(true); setError(null); setCursorStack((current) => [...current.slice(0, pageIndex + 1), findings.nextAfter ?? undefined]); setPageIndex((current) => current + 1); } }} /></Table.Footer>
@@ -399,7 +428,8 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
           <LiveAnalyzerRule analyzer={analyzer} busy={writeBlocked} onSave={updateAnalyzer} />
           <LiveDispositionRule analyzer={analyzer} busy={writeBlocked} onSave={setDisposition} />
         </Tabs.Content>
-      </>}
+      </> : null}
+      </AccountReadBoundary>
     </Tabs.Root>
   </div>;
 }

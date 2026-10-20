@@ -15,7 +15,7 @@ import { UserBoundarySummary } from "./PermissionBoundary";
 import { policyUsageCounts } from "../domain/accessWorkspace";
 import { policyDocumentDiagnostics } from "../domain/policyDocument";
 import styles from "./AccountAccessRenderer.module.css";
-import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
+import { AccountDirectoryReadFailure } from "./AccountReadBoundary";
 
 // Only non-secret account identifiers may be passed to this control.
 export function AccountIdentifier({ value, label }: { value: string; label: string }) {

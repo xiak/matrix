@@ -18,7 +18,7 @@ import { PolicyVisualReview } from "./AccountPolicyVisualEditor";
 import { PolicyCreateRecovery } from "./LivePolicyCreationWizard";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
-import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
+import { AccountDirectoryReadFailure } from "./AccountReadBoundary";
 
 type PolicyDetailState = { status: "loading" } | AccountPolicyReadLoad;
 type PolicyVersionDirectoryState = { status: "loading" } | AccountPolicyVersionDirectoryLoad;

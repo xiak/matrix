@@ -66,7 +66,8 @@ describe("live access analysis", () => {
     expect(screen.getByRole("tab", { name: "来源覆盖" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "未使用访问" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "分析规则" })).toBeTruthy();
-    expect(screen.getByText(/LIVE · 本页直接读取/)).toBeTruthy();
+    expect(screen.getByText(/本页读取当前账号的 Analyzer/)).toBeTruthy();
+    expect(screen.queryByText(/LIVE|MOCK/)).toBeNull();
   });
 
   it("loads a server-filtered cursor directory without inventing a total", async () => {
@@ -181,7 +182,7 @@ describe("live access analysis", () => {
     await user.click(await screen.findByRole("button", { name: "user-alex" }));
     expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "归档 Finding" })).toBeNull();
-    expect(screen.getByRole("button", { name: "重新加载" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重新加载" })).toBeNull();
   });
 
   it("archives a Finding in the content area using its exact resource version", async () => {

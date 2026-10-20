@@ -3098,6 +3098,24 @@
     "authorizePreview": "Simulate service authorization",
     "finish": "Finish review"
   },
+  "AccountReadBoundary": {
+    "retry": "Try again",
+    "copyDiagnostic": "Copy diagnostic info",
+    "copied": "Diagnostic info copied",
+    "copyFailed": "Could not copy; try again later",
+    "titles": {
+      "forbidden": "This identity cannot read this content",
+      "routeUnavailable": "This feature is unavailable",
+      "unavailable": "This content is temporarily unavailable",
+      "expired": "Your session has expired"
+    },
+    "descriptions": {
+      "forbidden": "This identity does not have read access to this region. Other authorized pages remain available.",
+      "routeUnavailable": "The current runtime cannot provide this feature. This does not prove that the service is inactive or the identity was denied.",
+      "unavailable": "The service did not return a trustworthy result. Failure does not mean the data is empty; try again later.",
+      "expired": "Sign in again before reading this content."
+    }
+  },
   "ServiceAuthorizationDirectory": {
     "title": "Service authorization",
     "hint": "Inspect this account's consented service-linked roles and resource-binding history, plus platform templates available to future consent flows.",
@@ -3167,14 +3185,14 @@
     },
     "errors": {
       "relations": {
-        "forbidden": { "title": "Current-account service authorization is restricted", "description": "This identity cannot read service-linked roles. The console will not fall back to MOCK data or infer authorization relations." },
-        "routeUnavailable": { "title": "The service authorization read route is not connected", "description": "This environment has not published the current-account service-linked-role read route." },
+        "forbidden": { "title": "Current-account service authorization is restricted", "description": "This identity cannot read service-linked roles. Other authorized IAM pages remain available." },
+        "routeUnavailable": { "title": "Service authorization cannot be read here", "description": "This runtime does not provide a compatible service-linked-role read capability. This does not mean that the account has not activated the service." },
         "unavailable": { "title": "Service authorization is temporarily unavailable", "description": "IAM did not return verifiable relation or binding data. Try again later." },
         "expired": { "title": "Your session has expired", "description": "Sign in again before reading this account's service authorization." }
       },
       "templates": {
-        "forbidden": { "title": "Service authorization templates are restricted", "description": "This identity cannot read the service-role template directory. The console will not fall back to MOCK data or infer its contents." },
-        "routeUnavailable": { "title": "The service authorization template route is not connected", "description": "This environment has not published the read-only template directory. The isolated MOCK remains independently available in preview mode." },
+        "forbidden": { "title": "Service authorization templates are restricted", "description": "This identity cannot read the service-role template directory. Current-account authorizations remain independently available." },
+        "routeUnavailable": { "title": "Service authorization templates cannot be read here", "description": "This runtime does not provide a compatible read-only template directory. This does not mean that the account has not activated the service." },
         "unavailable": { "title": "The template directory is temporarily unavailable", "description": "IAM did not return a verifiable template directory. Try again later." },
         "expired": { "title": "Your session has expired", "description": "Sign in again before reading service authorization templates." }
       }
@@ -5176,12 +5194,14 @@
     "keyLiveReplayTitle": "Original creation already completed",
     "keyLiveReplay": "The original creation already produced key {id}. Follow-up queries return only the non-secret result, so the Secret cannot be shown again.",
     "keyLiveErrors": {
+      "expired": "The login session expired. Sign in again before reading access keys.",
       "forbidden": "Your current identity cannot manage access keys for this user.",
-      "routeUnavailable": "The running IAM process does not provide the access-key management route yet.",
+      "routeUnavailable": "This runtime cannot provide a compatible access-key feature. This does not mean that the account or user has not activated the service.",
       "conflict": "The user or key state changed. Reload before acting; if this result is uncertain, keep the original operation reference and confirm it first.",
       "recoveryUnavailable": "The browser could not safely save or clear the original request record, so no new access-key write was sent. Restore session storage for this site and reopen this page.",
       "unavailable": "The result of this access-key operation cannot be confirmed right now. Stay in this flow and retry instead of starting another creation."
     },
+    "keyLiveLoadFailedTitle": "Access keys could not be loaded",
     "keyInlineWorkflow": "The operation stays in the content area and does not open a modal.",
     "keyCreateReview": "Review and create access key",
     "keyCreateNetworkTitle": "Freeze source networks at creation",
@@ -5316,22 +5336,22 @@
       "mockConfiguration": "MOCK configuration snapshot",
       "account": "Target account",
       "live": {
-        "connectedBoundary": "LIVE · This page reads the current account's Analyzer, source coverage, and Findings through the authenticated session. A Finding is review evidence, not remediation authority, and the page never falls back to MOCK data.",
+        "connectedBoundary": "This page reads the current account's Analyzer, source coverage, and Findings. A Finding is review evidence, not remediation authority.",
         "loading": "Loading access analysis",
         "loadingCoverage": "Loading source coverage",
         "loadingFindings": "Loading Findings",
         "loadingFindingDetail": "Reauthorizing and loading the Finding detail",
         "retry": "Reload",
         "loadFailedTitle": "Access analysis could not be loaded",
-        "loadFailedHint": "This response is not an authoritative empty directory. Retry or verify the identity's access-analysis authority and service status.",
+        "loadFailedHint": "This response is not an authoritative empty directory. Check access or try again later.",
         "tabs": { "coverage": "Source coverage" },
         "errors": {
           "expired": "The login session expired. The page cleared its Analyzer, Finding, and pending-command projections. Sign in again and review from current authority.",
           "forbidden": "The current identity cannot read or manage access analysis. Other IAM workspaces remain available.",
-          "routeUnavailable": "The access-analysis API is not published in this environment.",
+          "routeUnavailable": "This runtime cannot provide a compatible access-analysis feature. This does not mean that the service is inactive.",
           "conflict": "The resource version changed. The page has reloaded authoritative state; review the latest result before retrying.",
           "invalid": "The server rejected this configuration or lifecycle transition.",
-          "unavailable": "Access analysis is temporarily unavailable. The page does not replace failure with MOCK data or an empty list."
+          "unavailable": "Access analysis is temporarily unavailable. Failure does not mean that this account has no Analyzer or Findings."
         },
         "retryOriginalMutation": "Retry original command",
         "uncertainMutation": "The original command result is unknown. An explicit retry must use the same backend client, target, version, input, and request ID {id}; the page never creates a second command automatically.",

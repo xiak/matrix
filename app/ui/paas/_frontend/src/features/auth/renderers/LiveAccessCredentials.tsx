@@ -15,9 +15,10 @@ import { accessKeyNetworkRestrictionsEqual, parseAccessKeyNetworkDraft, type Acc
 import { AccessKeyNetworkDetail, AccessKeyNetworkDraftField, AccessKeySecuritySignals, AccessKeyUsagePreview, type AccessKeyAccountNetworkState } from "./AccessKeyNetworkPreview";
 import { AccessKeyCredentialStateBadge, ProgrammaticAccessGuide, RotationGuide } from "./AccessCredentials";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { AccountReadBoundary, type AccountReadStatus } from "./AccountReadBoundary";
 import styles from "./AccessCredentials.module.css";
 
-type LiveKeyError = "forbidden" | "routeUnavailable" | "conflict" | "recoveryUnavailable" | "unavailable";
+type LiveKeyError = "expired" | "forbidden" | "routeUnavailable" | "conflict" | "recoveryUnavailable" | "unavailable";
 type WithoutMutationOwner<T> = T extends AccessKeyMutationIntent ? Omit<T, "accountId" | "actorId"> : never;
 type LiveAccessKeyMutation = WithoutMutationOwner<AccessKeyMutationIntent>;
 type LiveKeyFlow =
@@ -31,11 +32,11 @@ type LiveKeyFlow =
 type AccessKeyDirectoryState =
   | { status: "loading" }
   | { status: "ready"; directory: AccessKeyDirectory }
-  | { status: "error"; error: LiveKeyError };
+  | { status: "error"; error: LiveKeyError; problem: HttpProblem | null };
 type OwnedAccessKeyDirectory = { client: AccessKeyClient; userId: string; state: AccessKeyDirectoryState };
 type OwnedAccessKeySelection = { client: AccessKeyClient; userId: string; access: AccessKeyAccess };
 type OwnedLiveKeyFlow = { client: AccessKeyClient; userId: string; flow: LiveKeyFlow };
-type OwnedLiveKeyError = { client: AccessKeyClient; userId: string; error: LiveKeyError };
+type OwnedLiveKeyError = { client: AccessKeyClient; userId: string; error: LiveKeyError; problem: HttpProblem | null };
 type AccessKeyIntentBinding = { client: AccessKeyClient; observed: AccessKeyCreateIntent | null; requestId: string | null };
 type AccessKeyMutationBinding = { client: AccessKeyClient; observed: AccessKeyMutationIntent | null; requestId: string | null };
 type ExactOwnerView = { client: AccessKeyClient; userId: string; state: "loading" | "error" } |
@@ -46,10 +47,16 @@ const loadingAccessKeyDirectory: AccessKeyDirectoryState = { status: "loading" }
 function keyError(error: unknown): LiveKeyError {
   if (error instanceof HttpProblem) {
     if (error.code === "ACCESS_KEY_RECOVERY_STORAGE_UNAVAILABLE") return "recoveryUnavailable";
+    if (error.status === 401) return "expired";
     if (error.status === 403) return "forbidden";
     if (error.status === 404) return "routeUnavailable";
     if (error.status === 409) return "conflict";
   }
+  return "unavailable";
+}
+
+function keyReadStatus(error: LiveKeyError): Exclude<AccountReadStatus, "loading" | "ready" | "empty"> {
+  if (error === "expired" || error === "forbidden" || error === "routeUnavailable" || error === "unavailable") return error;
   return "unavailable";
 }
 
@@ -276,6 +283,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
   const directory = directoryState?.status === "ready" ? directoryState.directory : null;
   const loading = directoryState?.status === "loading";
   const directoryError = directoryState?.status === "error" ? directoryState.error : null;
+  const directoryProblem = directoryState?.status === "error" ? directoryState.problem : null;
   const [selection, setSelection] = useState<OwnedAccessKeySelection | null>(null);
   const selected = activeOwnerId && selection?.client === client && selection.userId === activeOwnerId ? selection.access : null;
   const [flowView, setFlowView] = useState<OwnedLiveKeyFlow | null>(null);
@@ -283,7 +291,6 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
   const [interactionErrorView, setInteractionErrorView] = useState<OwnedLiveKeyError | null>(null);
   const interactionError = activeOwnerId && interactionErrorView?.client === client && interactionErrorView.userId === activeOwnerId
     ? interactionErrorView.error : null;
-  const error = interactionError ?? directoryError;
   const setFlow = (next: LiveKeyFlow | null) => {
     if (next && activeOwnerId) {
       setFlowView({ client, userId: activeOwnerId, flow: next });
@@ -367,7 +374,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
       if (clientRevisions.get(userId) === request) {
         if (foreground) {
           setDirectoryView((current) => current?.client === client && current.userId === userId
-            ? { client, userId, state: { status: "error", error: keyError(failure) } } : current);
+            ? { client, userId, state: { status: "error", error: keyError(failure), problem: failure instanceof HttpProblem ? failure : null } } : current);
           setSelection((current) => current?.client === client && current.userId === userId ? null : current);
         }
       }
@@ -457,7 +464,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
         ? { client, userId, access: next } : current);
     } catch (failure) {
       if (clientRevisions.get(userId) === request) setInteractionErrorView((current) => current && (current.client !== client || current.userId !== userId)
-        ? current : { client, userId, error: keyError(failure) });
+        ? current : { client, userId, error: keyError(failure), problem: failure instanceof HttpProblem ? failure : null });
     }
   };
   const createCapability = directory ? capability(directory, "iam.access-key.create") : null;
@@ -506,7 +513,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
           ? currentMutationIntent.userId === owner.id ? t("keyMutationPending", { id: currentMutationIntent.requestId }) : t("keyMutationPendingOwner", { id: currentMutationIntent.userId })
           : t("keyMutationClientChanged", { id: mutationIntent.requestId })} {currentMutationIntent?.userId === owner.id
             ? <Button onClick={resumeMutation} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
-        {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
+        {interactionError ? <Alert status="danger">{t(`keyLiveErrors.${interactionError}`)} {interactionError === "unavailable" ? <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button> : null}</Alert> : null}
         {selected.key.credentialState === "RECOVERY_FENCED" ? <Alert status="danger">{t("keyCredentialFencedAlert")}</Alert> : null}
         <Card><Card.Body className={styles.detailBody}>
           <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.key.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("keyCredentialState")}</dt><dd><AccessKeyCredentialStateBadge value={selected.key.credentialState} /><span>{t(selected.key.credentialState === "RECOVERY_FENCED" ? "keyCredentialFencedHint" : "keyCredentialCurrentHint")}</span></dd></div><div><dt>{t("keyManagementState")}</dt><dd><Badge status={selected.key.credentialState === "CURRENT" && selected.key.status === "ENABLED" ? "success" : "neutral"}>{t(selected.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.key.createdAt} /></dd></div></dl>
@@ -541,11 +548,14 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
           ? <Button onClick={resumeMutation} size="small" variant="ghost">{t("keyLiveResume")}</Button>
           : intentOwnerButton(currentMutationIntent.userId)
         : null}</Alert> : null}
-    {error ? <Alert status="danger">{t(`keyLiveErrors.${error}`)} <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button></Alert> : null}
-    {loading && !directory ? <Card>
-      <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div></Card.Header>
-      <TableSkeleton header={false} label={t("keyLiveLoading")} labelVisible={false} rows={2} />
-    </Card> : null}
+    {interactionError ? <Alert status="danger">{t(`keyLiveErrors.${interactionError}`)} {interactionError === "unavailable" ? <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button> : null}</Alert> : null}
+    <AccountReadBoundary status={loading && !directory ? "loading" : directoryError ? keyReadStatus(directoryError) : "ready"}
+      loading={<Card>
+        <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div></Card.Header>
+        <TableSkeleton header={false} label={t("keyLiveLoading")} labelVisible={false} rows={2} />
+      </Card>}
+      failure={directoryError ? { title: t("keyLiveLoadFailedTitle"), description: t(`keyLiveErrors.${directoryError}`) } : undefined}
+      onRetry={() => void load(owner.id)} problem={directoryProblem}>
     {flow && directory ? <LiveKeyWorkflow flow={flow} owner={owner} directory={directory} client={client}
       retryingOriginal={flow.kind === "create" && currentCreateIntent?.phase === "unknown" && currentCreateIntent.requestId === flow.requestId}
       onChanged={() => load(owner.id, false)} onClose={() => setFlow(null)}
@@ -555,5 +565,6 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
       <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
       <RotationGuide />
     </> : null}
+    </AccountReadBoundary>
   </section>;
 }
