@@ -268,11 +268,11 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
   const activeOwnerLoader = useRef(loadOwner);
   activeOwnerLoader.current = loadOwner;
   const ownerRequest = useRef<object | null>(null);
-  const [ownerId, setOwnerId] = useState<string | null>(scopedOwner?.id ?? ((!scene.canListUsers || scene.directoryFailures?.users) && !scene.isRoot ? scene.currentUserId : null));
+  const [ownerId, setOwnerId] = useState<string | null>(scopedOwner?.id ?? ((!scene.canListUsers || scene.directoryFailures?.users) && scene.canListOwnAccessKeys ? scene.currentUserId : null));
   const [exactOwnerView, setExactOwnerView] = useState<ExactOwnerView | null>(null);
   const exactOwner = exactOwnerView?.client === client && exactOwnerView.userId === ownerId && exactOwnerView.state === "ready" ? exactOwnerView.owner : null;
   const owner = scopedOwner ?? scene.users.find((user) => user.id === ownerId) ?? exactOwner ??
-    (ownerId === scene.currentUserId && !scene.isRoot ? {
+    (ownerId === scene.currentUserId ? {
       id: scene.currentUserId, name: scene.identityLabel, loginName: scene.currentLoginName, enabled: scene.currentUserEnabled
     } : null);
   const activeOwnerId = owner?.id ?? null;
@@ -431,7 +431,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
       : t("keyMutationClientChanged", { id: mutationIntent.requestId })} {currentMutationIntent ? intentOwnerButton(currentMutationIntent.userId) : null}</Alert> : null}
     {ownerResolutionNotice}
     {scene.canListUsers && !scene.directoryFailures?.users ? <AccessKeyOwnerDirectory scene={scene} busy={userDirectory?.busy} loading={userDirectory?.loading} onOpen={chooseOwner} onReadPage={userDirectory?.readPage} />
-      : <Alert status="info">{t("keyOwnerDirectoryUnavailable")}{!scene.isRoot ? <Button onClick={() => chooseOwner(scene.currentUserId)} size="small" variant="ghost">{t("keyViewOwn")}</Button> : null}{scene.directoryFailures?.users ? <Button disabled={userDirectory?.busy || userDirectory?.loading} onClick={() => userDirectory?.readPage("")} size="small" variant="secondary">{t("keyRetryUserDirectory")}</Button> : null}</Alert>}
+      : <Alert status="info">{t("keyOwnerDirectoryUnavailable")}{scene.canListOwnAccessKeys ? <Button onClick={() => chooseOwner(scene.currentUserId)} size="small" variant="ghost">{t("keyViewOwn")}</Button> : null}{scene.directoryFailures?.users ? <Button disabled={userDirectory?.busy || userDirectory?.loading} onClick={() => userDirectory?.readPage("")} size="small" variant="secondary">{t("keyRetryUserDirectory")}</Button> : null}</Alert>}
     <RotationGuide />
   </section>;
 

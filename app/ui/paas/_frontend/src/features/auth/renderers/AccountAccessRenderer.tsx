@@ -225,7 +225,10 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     (view === "create-role" && !workspace && (!access.roles || !scene.canCreateRoles)) ||
     (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
     (view === "tenants" && !scene.canReadAccounts) ||
-    (view === "policies" && !(workspace ? scene.canListUsers : scene.canViewPolicies)) ||
+    (view === "policies" && !(workspace ? scene.canListUsers : entityId || scene.canViewPolicies)) ||
+    (view === "create-policy" && !workspace && !scene.canCreatePolicies) ||
+    (view === "keys" && !workspace && !scene.canListOwnAccessKeys) ||
+    (view === "service-authorizations" && !workspace && !access.serviceRoleTemplates && !access.serviceLinkedRoles) ||
     (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)
   );
   return <section aria-label={t("title")} aria-busy={access.loading || access.busy} className={styles.stack}>

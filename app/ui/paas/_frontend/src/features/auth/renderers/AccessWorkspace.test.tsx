@@ -4269,7 +4269,17 @@ describe("CAM-style access workspace", () => {
     expect(screen.queryByRole("button", { name: "新建用户组" })).toBeNull();
   });
   it.each(["keys", "create-policy", "policy-language", "policy-configuration"] as const)("shows an honest unavailable state for %s on the live adapter", async (view) => {
-    const { repository } = await open(view, { live: true });
+    const requiredCapability = view === "keys"
+      ? capability("iam.access-key.list", "USER", rootUser.id)
+      : view === "create-policy"
+        ? capability("iam.policy.create", "ACCOUNT", account.id)
+        : null;
+    const { repository } = await open(view, {
+      live: true,
+      repository: requiredCapability ? {
+        currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: [...identity.capabilities, requiredCapability] })
+      } : undefined
+    });
     await screen.findByText("此能力尚未接入后端");
     expect(repository.execute).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: "新建密钥" })).toBeNull();

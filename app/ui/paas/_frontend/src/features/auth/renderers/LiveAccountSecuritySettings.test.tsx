@@ -19,7 +19,8 @@ const currentSettings = {
 };
 
 function client(result: AccountSecuritySettingsLoad = { status: "ready", settings: currentSettings }, update?: AccountSecuritySettingsClient["update"]): AccountSecuritySettingsClient {
-  return { identity: "settings-view-one", accountId: "account-one", principalId: "user-one", sessionId: "session-one", sessionRevision: 1, update, load: vi.fn().mockResolvedValue(result) };
+  return { identity: "settings-view-one", accountId: "account-one", principalId: "user-one", sessionId: "session-one", sessionRevision: 1,
+    canRead: true, canUpdate: Boolean(update), update, load: vi.fn().mockResolvedValue(result) };
 }
 function render(value: ReactNode) { return renderRoot(value, { wrapper: UnsavedChangesProvider }); }
 function updater(overrides: Partial<NonNullable<AccountSecuritySettingsClient["update"]>> = {}): NonNullable<AccountSecuritySettingsClient["update"]> {

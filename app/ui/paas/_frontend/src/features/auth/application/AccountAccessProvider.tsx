@@ -18,6 +18,7 @@ import type {
   AccountSecuritySettingsChange,
   AccountSecuritySettings,
   AccountPolicy,
+  AccountPolicyAccess,
   AuthorizationProfileDirectory,
   CapabilityRestriction,
   CreateAccountLifecycleCommand,
@@ -54,8 +55,8 @@ import { clearAccountLifecycleIntent, parseAccountLifecycleIntent, readAccountLi
 import { buildAccountAccessScene, buildAccountPolicyScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene, type AccountDirectoryKind, type AccountDirectoryFailures } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 import type { CreateRoleCommand, CreateRolePolicyAttachmentCommand, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand } from "../domain/roles";
-import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
-import type { AccountSecurityReport, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
+import type { AccessAnalyzer, AccessAnalyzerAccess, AccessAnalyzerDirectory, AccessFinding, AccessFindingAccess, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
+import type { AccountSecurityReportAccess, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
 import type { SecurityStepUp } from "../domain/personalSecurity";
 import { sameSecuritySettingsIntent } from "../domain/accounts";
 
@@ -154,7 +155,8 @@ export type ServiceLinkedRoleClient = {
 };
 
 type AccountPolicyReadFailure = { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
-export type AccountPolicyReadLoad = { status: "ready"; detail: AccountPolicyDetail } | AccountPolicyReadFailure;
+export type AccountPolicyReadLoad = { status: "ready"; access: AccountPolicyAccess } | AccountPolicyReadFailure;
+export type AccountPolicyVersionReadLoad = { status: "ready"; detail: AccountPolicyDetail } | AccountPolicyReadFailure;
 export type AccountPolicyVersionDirectoryLoad = { status: "ready"; directory: AccountPolicyVersionDirectory } | AccountPolicyReadFailure;
 
 export type PolicyCreateIntent = {
@@ -182,7 +184,7 @@ export type AccountPolicyReadClient = {
   sessionRevision: number;
   read(policyId: string): Promise<AccountPolicyReadLoad>;
   listVersions?(policyId: string): Promise<AccountPolicyVersionDirectoryLoad>;
-  readVersion?(policyId: string, versionId: string): Promise<AccountPolicyReadLoad>;
+  readVersion?(policyId: string, versionId: string): Promise<AccountPolicyVersionReadLoad>;
 };
 
 type PolicyVersionMutationBase = {
@@ -267,6 +269,8 @@ export type AccountSecuritySettingsClient = {
   principalId: string;
   sessionId: string;
   sessionRevision: number;
+  canRead: boolean;
+  canUpdate: boolean;
   update?: AccountSecuritySettingsUpdateClient;
   load(): Promise<AccountSecuritySettingsLoad>;
 };
@@ -286,13 +290,15 @@ export type AccessKeyClient = {
 export type AccessAnalysisClient = {
   accountId: string;
   sessionRevision: number;
+  canList: boolean;
+  canCreate: boolean;
   listAnalyzers(after?: string): Promise<AccessAnalyzerDirectory>;
-  readAnalyzer(analyzerId: string): Promise<AccessAnalyzer>;
+  readAnalyzer(analyzerId: string): Promise<AccessAnalyzerAccess>;
   createAnalyzer(command: CreateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
   updateAnalyzer(analyzerId: string, command: UpdateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
   setDisposition(analyzerId: string, command: SetAccessDispositionCommand): Promise<AccessAnalyzer>;
   listFindings(analyzerId: string, status: AccessFindingStatusFilter, after?: string): Promise<AccessFindingDirectory>;
-  readFinding(analyzerId: string, findingId: string): Promise<AccessFinding>;
+  readFinding(analyzerId: string, findingId: string): Promise<AccessFindingAccess>;
   archiveFinding(analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
   unarchiveFinding(analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
 };
@@ -300,8 +306,9 @@ export type AccessAnalysisClient = {
 export type SecurityReportClient = {
   accountId: string;
   sessionRevision: number;
+  canCreate: boolean;
   create(command: { formatVersion: 2; requestId: string }): Promise<AccountSecurityReportCreation>;
-  read(reportId: string): Promise<AccountSecurityReport>;
+  read(reportId: string): Promise<AccountSecurityReportAccess>;
   download(reportId: string): Promise<AccountSecurityReportDownload>;
 };
 
@@ -771,7 +778,10 @@ type AccountAccess = {
 };
 
 const AccountAccessContext = createContext<AccountAccess | null>(null);
-type AccountCapabilities = Pick<AccountAccessScene, "canListUsers" | "canListGroups" | "canListRoles" | "canReadAccounts" | "canCreateAccounts" | "canViewPolicies"> & {
+type AccountCapabilities = Pick<AccountAccessScene,
+  "canListUsers" | "canListGroups" | "canListRoles" | "canReadAccounts" | "canCreateAccounts" | "canViewPolicies" |
+  "canListOwnAccessKeys" | "canListAccessAnalyzers" | "canCreateAccessAnalyzers" | "canCreateSecurityReports" |
+  "canListServiceRoleTemplates" | "canListServiceLinkedRoles" | "canReadSecuritySettings" | "canCreatePolicies"> & {
   hasPreviewWorkspace: boolean;
   supportsLiveRoles: boolean;
   supportsLiveAccessKeys: boolean;
@@ -877,6 +887,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const verifiedIdentitySession = useRef<typeof viewSession | null>(null);
   const accessKeyOwner = useMemo(() => ({ repository, viewSession, exactUsers, identity: requestToken("ui-access-key-view-") }), [exactUsers, repository, viewSession]);
   const currentAccessKeyOwner = useRef<typeof accessKeyOwner | null>(accessKeyOwner);
+  const resourceAccessOwner = useMemo(() => ({ repository, viewSession, active }), [active, repository, viewSession]);
+  const currentResourceAccessOwner = useRef<typeof resourceAccessOwner | null>(resourceAccessOwner);
   const accessKeyStorageObservationRef = useRef<{ owner: typeof accessKeyOwner; status: "ready" | "blocked" } | null>(null);
   const [accessKeyStorageObservation, setAccessKeyStorageObservation] = useState<typeof accessKeyStorageObservationRef.current>(null);
   const markAccessKeyStorage = useCallback((owner: typeof accessKeyOwner, status: "ready" | "blocked") => {
@@ -888,6 +900,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   }, []);
   const accessKeyRecoveryError = accessKeyStorageObservation?.owner !== accessKeyOwner || accessKeyStorageObservation.status !== "ready";
   useLayoutEffect(() => { currentViewSession.current = viewSession; }, [viewSession]);
+  useLayoutEffect(() => {
+    currentResourceAccessOwner.current = resourceAccessOwner;
+    return () => {
+      if (currentResourceAccessOwner.current === resourceAccessOwner) currentResourceAccessOwner.current = null;
+    };
+  }, [resourceAccessOwner]);
   useLayoutEffect(() => { currentExactUsers.current = exactUsers; }, [exactUsers]);
   useLayoutEffect(() => { currentScene.current = scene; }, [scene]);
   useLayoutEffect(() => {
@@ -1136,6 +1154,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const canReadAccounts = Boolean(scene?.canReadAccounts);
   const canCreateAccounts = Boolean(scene?.canCreateAccounts);
   const canViewPolicies = Boolean(scene?.canViewPolicies);
+  const canListOwnAccessKeys = Boolean(scene?.canListOwnAccessKeys);
+  const canListAccessAnalyzers = Boolean(scene?.canListAccessAnalyzers);
+  const canCreateAccessAnalyzers = Boolean(scene?.canCreateAccessAnalyzers);
+  const canCreateSecurityReports = Boolean(scene?.canCreateSecurityReports);
+  const canListServiceRoleTemplates = Boolean(scene?.canListServiceRoleTemplates);
+  const canListServiceLinkedRoles = Boolean(scene?.canListServiceLinkedRoles);
+  const canReadSecuritySettings = Boolean(scene?.canReadSecuritySettings);
+  const canCreatePolicies = Boolean(scene?.canCreatePolicies);
   const hasPreviewWorkspace = Boolean(repository.workspace);
   const supportsLiveRoles = Boolean(repository.roles);
   const supportsLiveAccessKeys = Boolean(!repository.workspace && repository.accessKeys);
@@ -1150,13 +1176,23 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     canReadAccounts,
     canCreateAccounts,
     canViewPolicies,
+    canListOwnAccessKeys,
+    canListAccessAnalyzers,
+    canCreateAccessAnalyzers,
+    canCreateSecurityReports,
+    canListServiceRoleTemplates,
+    canListServiceLinkedRoles,
+    canReadSecuritySettings,
+    canCreatePolicies,
     hasPreviewWorkspace,
     supportsLiveRoles,
     supportsLiveAccessKeys,
     supportsLiveAccessAnalysis,
     supportsLiveSecurityReports,
     supportsLiveServiceAuthorizations
-  }), [canCreateAccounts, canListGroups, canListRoles, canListUsers, canReadAccounts, canViewPolicies, hasPreviewWorkspace,
+  }), [canCreateAccounts, canCreateAccessAnalyzers, canCreatePolicies, canCreateSecurityReports, canListAccessAnalyzers,
+    canListGroups, canListOwnAccessKeys, canListRoles, canListServiceLinkedRoles, canListServiceRoleTemplates, canListUsers,
+    canReadAccounts, canReadSecuritySettings, canViewPolicies, hasPreviewWorkspace,
     supportsLiveAccessAnalysis, supportsLiveAccessKeys, supportsLiveRoles, supportsLiveSecurityReports, supportsLiveServiceAuthorizations]);
 
   useEffect(() => {
@@ -1617,7 +1653,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   const serviceRoleTemplates = useMemo<ServiceRoleTemplateClient | null>(() => {
     const read = repository.listServiceRoleTemplates;
-    if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace || !read) return null;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canListServiceRoleTemplates || repository.workspace || !read) return null;
     return {
       sessionRevision,
       async load() {
@@ -1643,7 +1679,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const serviceLinkedRoles = useMemo<ServiceLinkedRoleClient | null>(() => {
     const list = repository.listServiceLinkedRoles;
     const read = repository.getServiceLinkedRole;
-    if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace || !list || !read) return null;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canListServiceLinkedRoles || repository.workspace || !list || !read) return null;
     const accountId = scene.accountId;
     const failed = (failure: unknown): Exclude<ServiceLinkedRoleDirectoryLoad, { status: "ready" }> => {
       if (failure instanceof HttpProblem) {
@@ -1672,13 +1708,15 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
   }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
 
+  const policyReadAccountId = scene?.accountId;
   const policyRead = useMemo<AccountPolicyReadClient | null>(() => {
-    if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canViewPolicies || !repository.readPolicy || repository.workspace) return null;
-    const accountId = scene.accountId;
+    if (!active || !credential || !policyReadAccountId || policyReadAccountId !== tenantId || !repository.readPolicy || repository.workspace) return null;
+    const accountId = policyReadAccountId;
+    const owns = () => currentResourceAccessOwner.current === resourceAccessOwner;
     const readFailure = (failure: unknown): AccountPolicyReadFailure => {
       if (failure instanceof HttpProblem) {
         if (failure.status === 401) {
-          if (expireSession(credential, sessionRevision)) {
+          if (owns() && expireSession(credential, sessionRevision)) {
             setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
           }
           return { status: "expired" };
@@ -1692,16 +1730,19 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       accountId, sessionRevision,
       async read(policyId) {
         try {
-          const detail = await repository.readPolicy!(credential, accountId, policyId);
+          const access = await repository.readPolicy!(credential, accountId, policyId);
+          const detail = access.detail;
+          if (!owns()) throw new Error("STALE_IAM_STATE");
           if (detail.policy.id !== policyId || detail.policy.scope !== "TENANT" ||
               detail.policy.accountId !== null && detail.policy.accountId !== accountId ||
               detail.version.policyId !== policyId || detail.version.versionId !== detail.policy.defaultVersionId) throw new Error("INVALID_IAM_RESPONSE");
-          return { status: "ready", detail };
+          return { status: "ready", access };
         } catch (failure) { return readFailure(failure); }
       },
       listVersions: repository.listPolicyVersions ? async (policyId) => {
         try {
           const directory = await repository.listPolicyVersions!(credential, accountId, policyId);
+          if (!owns()) throw new Error("STALE_IAM_STATE");
           if (directory.policy.id !== policyId || directory.policy.management !== "CUSTOMER" ||
               directory.policy.accountId !== accountId || directory.policy.scope !== "TENANT" ||
               directory.policy.status !== "ACTIVE" || !directory.items.some((item) => item.versionId === directory.policy.defaultVersionId)) {
@@ -1713,6 +1754,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       readVersion: repository.readPolicyVersion ? async (policyId, versionId) => {
         try {
           const detail = await repository.readPolicyVersion!(credential, accountId, policyId, versionId);
+          if (!owns()) throw new Error("STALE_IAM_STATE");
           if (detail.policy.id !== policyId || detail.policy.management !== "CUSTOMER" ||
               detail.policy.accountId !== accountId || detail.policy.scope !== "TENANT" ||
               detail.policy.status !== "ACTIVE" || detail.version.policyId !== policyId || detail.version.versionId !== versionId) {
@@ -1722,10 +1764,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         } catch (failure) { return readFailure(failure); }
       } : undefined
     };
-  }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
+  }, [active, credential, expireSession, repository, resourceAccessOwner, policyReadAccountId, sessionRevision, tenantId]);
 
   const policyCreate = useMemo<PolicyCreateClient | null>(() => {
-    if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace || !repository.createPolicy) return null;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canCreatePolicies || repository.workspace || !repository.createPolicy) return null;
     const accountId = scene.accountId;
     const expire = () => {
       if (expireSession(credential, sessionRevision)) {
@@ -1871,7 +1913,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         const intent = { ...current.intent, phase: "observing" as const, observation: null, observationError: null };
         if (!rememberVersionMutation(intent.requestId, intent)) return false;
         try {
-          const detail = await repository.readPolicy!(credential, accountId, intent.policyId);
+          const access = await repository.readPolicy!(credential, accountId, intent.policyId);
+          const detail = access.detail;
           const directory = await repository.listPolicyVersions!(credential, accountId, intent.policyId);
           if (detail.policy.id !== intent.policyId || directory.policy.id !== intent.policyId ||
               detail.policy.accountId !== accountId || directory.policy.accountId !== accountId ||
@@ -1907,6 +1950,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     if (!active || !credential || !scene || scene.accountId !== tenantId || !principalId || !sessionId || !reader ||
         verifiedIdentityOwner?.session !== viewSession || verifiedIdentityOwner.repository !== repository) return null;
     const accountId = scene.accountId;
+    const canRead = scene.canReadSecuritySettings;
+    const canUpdate = scene.canUpdateSecuritySettings;
     const updater = reader.update;
     const mutationIntent = securitySettingsIntent?.accountId === accountId && securitySettingsIntent.actorId === principalId
       ? securitySettingsIntent : null;
@@ -1944,8 +1989,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       return stepUp;
     };
     return {
-      identity: settingsOwner.identity, accountId, principalId, sessionId, sessionRevision,
-      update: updater ? {
+      identity: settingsOwner.identity, accountId, principalId, sessionId, sessionRevision, canRead, canUpdate,
+      update: updater && canRead && canUpdate ? {
         intent: mutationIntent,
         async begin(current, proposed, expectedFactorRevision) {
           if (securitySettingsIntentRef.current || currentViewSession.current !== viewSession || current.accountId !== accountId ||
@@ -2085,6 +2130,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         }
       } : undefined,
       async load() {
+        if (!canRead) return { status: "forbidden" };
         try {
           const settings = await reader.read(credential, accountId);
           if (currentSettingsOwner.current !== settingsOwner) throw new Error("STALE_IAM_STATE");
@@ -2113,10 +2159,15 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     const analysisRepository = repository.accessAnalysis;
     if (!active || !credential || !observedAccountId || !analysisRepository || repository.workspace) return null;
     const accountId = observedAccountId;
+    const owns = () => currentResourceAccessOwner.current === resourceAccessOwner;
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
-      try { return await request; }
+      try {
+        const value = await request;
+        if (!owns()) throw new Error("STALE_IAM_STATE");
+        return value;
+      }
       catch (failure) {
-        if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
+        if (owns() && failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
           setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
         }
         throw failure;
@@ -2125,6 +2176,8 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       accountId,
       sessionRevision,
+      canList: scene?.canListAccessAnalyzers ?? false,
+      canCreate: scene?.canCreateAccessAnalyzers ?? false,
       listAnalyzers: (after) => scoped(analysisRepository.listAnalyzers(credential, accountId, after)),
       readAnalyzer: (analyzerId) => scoped(analysisRepository.readAnalyzer(credential, accountId, analyzerId)),
       createAnalyzer: (command) => scoped(analysisRepository.createAnalyzer(credential, accountId, command)),
@@ -2135,16 +2188,21 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       archiveFinding: (analyzerId, findingId, command) => scoped(analysisRepository.archiveFinding(credential, accountId, analyzerId, findingId, command)),
       unarchiveFinding: (analyzerId, findingId, command) => scoped(analysisRepository.unarchiveFinding(credential, accountId, analyzerId, findingId, command))
     };
-  }, [active, credential, expireSession, observedAccountId, repository, sessionRevision]);
+  }, [active, credential, expireSession, observedAccountId, repository, resourceAccessOwner, scene?.canCreateAccessAnalyzers, scene?.canListAccessAnalyzers, sessionRevision]);
 
   const securityReports = useMemo<SecurityReportClient | null>(() => {
     const reportRepository = repository.securityReports;
     if (!active || !credential || !observedAccountId || !reportRepository || repository.workspace) return null;
     const accountId = observedAccountId;
+    const owns = () => currentResourceAccessOwner.current === resourceAccessOwner;
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
-      try { return await request; }
+      try {
+        const value = await request;
+        if (!owns()) throw new Error("STALE_IAM_STATE");
+        return value;
+      }
       catch (failure) {
-        if (failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
+        if (owns() && failure instanceof HttpProblem && failure.status === 401 && expireSession(credential, sessionRevision)) {
           setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
         }
         throw failure;
@@ -2153,11 +2211,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       accountId,
       sessionRevision,
+      canCreate: scene?.canCreateSecurityReports ?? false,
       create: (command) => scoped(reportRepository.create(credential, accountId, command)),
       read: (reportId) => scoped(reportRepository.read(credential, accountId, reportId)),
       download: (reportId) => scoped(reportRepository.download(credential, accountId, reportId))
     };
-  }, [active, credential, expireSession, observedAccountId, repository, sessionRevision]);
+  }, [active, credential, expireSession, observedAccountId, repository, resourceAccessOwner, scene?.canCreateSecurityReports, sessionRevision]);
 
   const accessKeys = useMemo<AccessKeyClient | null>(() => {
     const keyRepository = repository.accessKeys;
@@ -2168,8 +2227,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     const recoveryFailure = () => new HttpProblem(503, "ACCESS_KEY_RECOVERY_STORAGE_UNAVAILABLE");
     const blockRecovery = () => { markAccessKeyStorage(accessKeyOwner, "blocked"); };
     const target = (userId: string) => {
-      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(userId) || userId === scene.accountOwner.id ||
-          !owns()) throw new Error("INVALID_IAM_USER_TARGET");
+      const knownUser = userId === scene.currentUserId || exactUsers.users.has(userId) || scene.users.some((user) => user.id === userId);
+      if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(userId) || !owns() || !knownUser) {
+        throw new Error("INVALID_IAM_USER_TARGET");
+      }
       return userId;
     };
     const scoped = async <T,>(request: Promise<T>): Promise<T> => {
@@ -2336,7 +2397,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         return submitMutation(intent, () => keyRepository.delete(credential, accountId, targetUser, accessKeyId, command));
       }
     };
-  }, [accessKeyOwner, active, credential, expireSession, markAccessKeyStorage, principalId, repository, scene, sessionRevision, tenantId, viewSession]);
+  }, [accessKeyOwner, active, credential, exactUsers, expireSession, markAccessKeyStorage, principalId, repository, scene, sessionRevision, tenantId, viewSession]);
 
   const rolesOwner = useMemo(() => ({ active, repository, viewSession, identity: requestToken("ui-roles-view-") }), [active, repository, viewSession]);
   const currentRolesOwner = useRef<typeof rolesOwner | null>(rolesOwner);

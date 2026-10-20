@@ -15,6 +15,7 @@ import type {
   AccountCommand,
   AccountIdentity,
   AccountPolicy,
+  AccountPolicyAccess,
   AccountPolicyDetail,
   AccountPolicyDocument,
   AccountPolicyVersionDirectory,
@@ -55,8 +56,8 @@ import type { AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import type { AuthenticatorRemoval, AuthenticatorState, EnrollmentChallengeState, NotificationContact, NotificationContactReplacementIntent, NotificationContactReplacementVerification, NotificationContactVerification, RecoveryCodeRegeneration, RecoveryCodeRegenerationResponse, SecurityStepUp, TOTPEnrollment, TOTPEnrollmentConfirmation, TOTPEnrollmentStart, TOTPRemovalResponse } from "../domain/personalSecurity";
 import type { UserBatchCommand } from "../domain/userBatch";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRoleDirectory, CreateRoleCommand, CreateRolePolicyAttachmentCommand, CurrentRoleIdentity, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand, UserRoleSession } from "../domain/roles";
-import type { AccessAnalyzer, AccessAnalyzerDirectory, AccessFinding, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
-import type { AccountSecurityReport, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
+import type { AccessAnalyzer, AccessAnalyzerAccess, AccessAnalyzerDirectory, AccessFinding, AccessFindingAccess, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
+import type { AccountSecurityReportAccess, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
 
 export type LoginCommand = { loginName: string; password: string };
 export type ChangePasswordCommand = { currentPassword: string; newPassword: string; revokeOtherSessions?: boolean };
@@ -180,7 +181,7 @@ export interface AccountRepository {
   // selects the account; accountId only binds returned resources locally.
   securityReports?: {
     create(credential: string, accountId: string, command: { formatVersion: 2; requestId: string }): Promise<AccountSecurityReportCreation>;
-    read(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReport>;
+    read(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReportAccess>;
     /** Re-reads metadata, then validates the exact CSV bytes before returning them. */
     download(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReportDownload>;
   };
@@ -188,12 +189,12 @@ export interface AccountRepository {
   // account and analyzer IDs below only verify returned resources locally.
   accessAnalysis?: {
     listAnalyzers(credential: string, accountId: string, after?: string): Promise<AccessAnalyzerDirectory>;
-    readAnalyzer(credential: string, accountId: string, analyzerId: string): Promise<AccessAnalyzer>;
+    readAnalyzer(credential: string, accountId: string, analyzerId: string): Promise<AccessAnalyzerAccess>;
     createAnalyzer(credential: string, accountId: string, command: CreateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
     updateAnalyzer(credential: string, accountId: string, analyzerId: string, command: UpdateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
     setDisposition(credential: string, accountId: string, analyzerId: string, command: SetAccessDispositionCommand): Promise<AccessAnalyzer>;
     listFindings(credential: string, accountId: string, analyzerId: string, status: AccessFindingStatusFilter, after?: string): Promise<AccessFindingDirectory>;
-    readFinding(credential: string, accountId: string, analyzerId: string, findingId: string): Promise<AccessFinding>;
+    readFinding(credential: string, accountId: string, analyzerId: string, findingId: string): Promise<AccessFindingAccess>;
     archiveFinding(credential: string, accountId: string, analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
     unarchiveFinding(credential: string, accountId: string, analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
   };
@@ -281,7 +282,7 @@ export interface AccountRepository {
   listPolicies(credential: string, platform: boolean): Promise<PolicyDirectory>;
   // TENANT default-version read only. A list permission is not a read grant;
   // the server independently authorizes the exact Policy target.
-  readPolicy?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyDetail>;
+  readPolicy?(credential: string, accountId: string, policyId: string): Promise<AccountPolicyAccess>;
   createPolicy?(credential: string, accountId: string,
     command: { displayName: string; document: AccountPolicyDocument; requestId: string }): Promise<AccountPolicyDetail>;
   // The source snapshot binds the target/result locally; it is not sent as

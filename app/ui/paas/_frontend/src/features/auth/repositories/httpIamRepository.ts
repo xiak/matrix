@@ -16,6 +16,7 @@ import type {
   SecuritySettingsUpdateIntent,
   SetAccountLifecycleStatusCommand,
   AccountPolicy,
+  AccountPolicyAccess,
   AccountPolicyDetail,
   AccountPolicyDocument,
   AccountPolicyVersion,
@@ -83,10 +84,10 @@ import type { ChangePasswordCommand, AccountRepository, IamRepository, LoginComm
 import { parseAccountLifecycleIntent } from "./accountLifecycleRecoveryStorage";
 import { parseUserManagementIntent } from "./userManagementRecoveryStorage";
 import type { AssumeRoleCommand, AssumeRoleResult, AssumableRole, AssumableRoleDirectory, CurrentRoleIdentity, LiveRoleSession, Role, RoleAccess, RoleCapability, RoleCapabilityAction, RoleDeletion, RoleDirectory, RoleListing, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionLifecycle, RoleSessionListing, RoleSessionRevocation, RoleSessionSource, RoleTrustDocument, RoleTrustVersion, RoleTrustVersionDirectory, UserRoleSession } from "../domain/roles";
-import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
+import { accessObservationSources, type AccessAnalyzer, type AccessAnalyzerAccess, type AccessAnalyzerDirectory, type AccessDispositionRule, type AccessFinding, type AccessFindingAccess, type AccessFindingDirectory, type AccessFindingStatusFilter, type AccessObservationCoverage } from "../domain/accessAnalysis";
 import { sourceCidrValid } from "../domain/policyLanguage";
 import { accessKeyAuthorizationSourceIpValid, accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions, type AccessKeyUsageObservation } from "../domain/accessKeyNetwork";
-import { accountSecurityReportCoverage, accountSecurityReportLimits, type AccountSecurityReport, type AccountSecurityReportCreation, type AccountSecurityReportDownload, type AccountSecurityReportMetadata, type SecurityReportAccessKey, type SecurityReportMFAState, type SecurityReportTimeObservation, type SecurityReportUser } from "../domain/securityReports";
+import { accountSecurityReportCoverage, accountSecurityReportLimits, type AccountSecurityReport, type AccountSecurityReportAccess, type AccountSecurityReportCreation, type AccountSecurityReportDownload, type AccountSecurityReportMetadata, type SecurityReportAccessKey, type SecurityReportMFAState, type SecurityReportTimeObservation, type SecurityReportUser } from "../domain/securityReports";
 
 function accountRecord(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_IAM_RESPONSE");
@@ -174,6 +175,13 @@ const capabilityActions = new Set<IamAction>([
   "iam.group-membership.list", "iam.group-membership.create", "iam.group-membership.remove",
   "iam.group-policy-attachment.create", "iam.group-policy-attachment.revoke",
   "iam.role.list", "iam.role.create",
+  "iam.access-analyzer.list", "iam.access-analyzer.create", "iam.access-analyzer.update",
+  "iam.access-analyzer.set-disposition", "iam.access-finding.list", "iam.access-finding.archive", "iam.access-finding.unarchive",
+  "iam.security-report.create", "iam.security-report.download",
+  "iam.service-role-template.list", "iam.service-linked-role.list",
+  "iam.security-settings.read", "iam.security-settings.update",
+  "iam.policy.create", "iam.policy.update", "iam.policy.delete", "iam.policy-version.list", "iam.policy-version.read",
+  "iam.policy-version.create", "iam.policy-version.delete", "iam.policy.set-default-version",
   "iam.user.update", "iam.user.delete", "iam.user.set-status",
   "iam.user.permission-boundary.set", "iam.user.permission-boundary.remove",
   "iam.user.reset-password", "iam.policy-attachment.create", "iam.platform-policy-attachment.create",
@@ -189,6 +197,13 @@ const capabilityRestrictions = new Set<CapabilityRestriction>([
 ]);
 
 function capabilityResourceKind(action: IamAction): ActionCapability["resource"]["kind"] {
+  if (action === "iam.policy.update" || action === "iam.policy.delete" || action === "iam.policy-version.list" ||
+      action === "iam.policy-version.read" || action === "iam.policy-version.create" || action === "iam.policy-version.delete" ||
+      action === "iam.policy.set-default-version") return "POLICY";
+  if (action === "iam.access-analyzer.update" || action === "iam.access-analyzer.set-disposition" ||
+      action === "iam.access-finding.list") return "ACCESS_ANALYZER";
+  if (action === "iam.access-finding.archive" || action === "iam.access-finding.unarchive") return "ACCESS_FINDING";
+  if (action === "iam.security-report.download") return "SECURITY_REPORT";
   if (action === "iam.access-key.read" || action === "iam.access-key.set-status" ||
       action === "iam.access-key.set-network-restrictions" || action === "iam.access-key.delete") return "ACCESS_KEY";
   if (action === "iam.user.read" || action === "iam.user.update" || action === "iam.user.delete" ||
@@ -643,6 +658,19 @@ function parseAccessAnalyzer(value: unknown, accountId: string, analyzerId?: str
   return result;
 }
 
+function parseAccessAnalyzerAccess(value: unknown, accountId: string, analyzerId: string): AccessAnalyzerAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "analyzer", "capabilities"]);
+  requireAccountKind(wire, "AccessAnalyzerDetail");
+  const analyzer = parseAccessAnalyzer(wire.analyzer, accountId, analyzerId);
+  const resource = { kind: "ACCESS_ANALYZER" as const, id: analyzer.id };
+  return { analyzer, capabilities: parseCapabilities(wire.capabilities, [
+    { action: "iam.access-analyzer.update", resource },
+    { action: "iam.access-analyzer.set-disposition", resource },
+    { action: "iam.access-finding.list", resource }
+  ]) };
+}
+
 function parseAccessAnalyzerDirectory(value: unknown, accountId: string, after?: string): AccessAnalyzerDirectory {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "accountId", "items"], ["nextAfter"]);
@@ -761,6 +789,18 @@ function parseAccessFinding(value: unknown, accountId: string, analyzerId: strin
   if (findingType === "UNUSED_PASSWORD") return { ...common, type: "UNUSED_PASSWORD", target: target as { kind: "USER"; id: string } };
   if (findingType === "UNUSED_ACCESS_KEY") return { ...common, type: "UNUSED_ACCESS_KEY", target: target as { kind: "ACCESS_KEY"; id: string } };
   return { ...common, type: "UNUSED_ROLE", target: target as { kind: "ROLE"; id: string } };
+}
+
+function parseAccessFindingAccess(value: unknown, accountId: string, analyzerId: string, findingId: string): AccessFindingAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "finding", "capabilities"]);
+  requireAccountKind(wire, "AccessFindingDetail");
+  const finding = parseAccessFinding(wire.finding, accountId, analyzerId, findingId);
+  const resource = { kind: "ACCESS_FINDING" as const, id: finding.id };
+  return { finding, capabilities: parseCapabilities(wire.capabilities, [
+    { action: "iam.access-finding.archive", resource },
+    { action: "iam.access-finding.unarchive", resource }
+  ]) };
 }
 
 function parseAccessFindingDirectory(value: unknown, accountId: string, analyzerId: string, status: AccessFindingStatusFilter, after?: string): AccessFindingDirectory {
@@ -2265,6 +2305,24 @@ function parsePolicyDetail(value: unknown, accountId: string, policyId: string):
   return { policy, version };
 }
 
+function parsePolicyAccess(value: unknown, accountId: string, policyId: string): AccountPolicyAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "detail", "capabilities"]);
+  requireAccountKind(wire, "PolicyAccess");
+  const detail = parsePolicyDetail(wire.detail, accountId, policyId);
+  const resource = { kind: "POLICY" as const, id: detail.policy.id };
+  const capabilities = parseCapabilities(wire.capabilities, [
+    { action: "iam.policy.update", resource },
+    { action: "iam.policy.delete", resource },
+    { action: "iam.policy-version.list", resource },
+    { action: "iam.policy-version.read", resource },
+    { action: "iam.policy-version.create", resource },
+    { action: "iam.policy-version.delete", resource },
+    { action: "iam.policy.set-default-version", resource }
+  ]);
+  return { detail, capabilities };
+}
+
 function customerPolicyMutationTarget(source: AccountPolicy, accountId: string, resourceVersion: number) {
   if (source.management !== "CUSTOMER" || source.scope !== "TENANT" || source.status !== "ACTIVE" ||
       source.accountId !== accountIdentifier(accountId) || source.resourceVersion !== accountVersion(resourceVersion) ||
@@ -2387,7 +2445,16 @@ function parseAccountIdentity(value: unknown): AccountIdentity {
     { action: "iam.group.list", resource: accountResource },
     { action: "iam.group.create", resource: accountResource },
     { action: "iam.role.list", resource: accountResource },
-    { action: "iam.role.create", resource: accountResource }
+    { action: "iam.role.create", resource: accountResource },
+    { action: "iam.access-key.list", resource: { kind: "USER", id: user.id } },
+    { action: "iam.access-analyzer.list", resource: accountResource },
+    { action: "iam.access-analyzer.create", resource: accountResource },
+    { action: "iam.security-report.create", resource: accountResource },
+    { action: "iam.service-role-template.list", resource: accountResource },
+    { action: "iam.service-linked-role.list", resource: accountResource },
+    { action: "iam.security-settings.read", resource: accountResource },
+    { action: "iam.security-settings.update", resource: accountResource },
+    { action: "iam.policy.create", resource: accountResource }
   ]);
   if (
     account.id !== user.accountId ||
@@ -2662,6 +2729,17 @@ function parseAccountSecurityReport(value: unknown, accountId: string, reportId?
   return { metadata, accountSecuritySettingsVersion: accountVersion(wire.accountSecuritySettingsVersion), coverage, users, accessKeys };
 }
 
+function parseAccountSecurityReportAccess(value: unknown, accountId: string, reportId: string): AccountSecurityReportAccess {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "report", "capabilities"]);
+  requireAccountKind(wire, "AccountSecurityReportDetail");
+  const report = parseAccountSecurityReport(wire.report, accountId, reportId);
+  return { report, capabilities: parseCapabilities(wire.capabilities, [{
+    action: "iam.security-report.download",
+    resource: { kind: "SECURITY_REPORT", id: report.metadata.id }
+  }]) };
+}
+
 function parseAccountSecurityReportCreation(value: unknown, accountId: string, requestId: string): AccountSecurityReportCreation {
   const wire = accountRecord(value);
   exactKeys(wire, ["outcome", "metadata"]);
@@ -2699,7 +2777,7 @@ async function rejectedSecurityReportResponse(response: Response): Promise<never
   throw new HttpProblem(response.status, code);
 }
 
-async function readAccountSecurityReport(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReport> {
+async function readAccountSecurityReport(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReportAccess> {
   const response = await fetch(`/api/iam/v1/account/security-reports/${encodeURIComponent(reportId)}`, {
     cache: "no-store",
     headers: { ...accountHeaders(credential), Accept: "application/json" }
@@ -2712,7 +2790,7 @@ async function readAccountSecurityReport(credential: string, accountId: string, 
   let body: unknown;
   try { body = await response.json(); }
   catch { throw new Error("INVALID_IAM_RESPONSE"); }
-  return parseAccountSecurityReport(body, accountId, reportId);
+  return parseAccountSecurityReportAccess(body, accountId, reportId);
 }
 
 async function downloadAccountSecurityReportCSV(credential: string, metadata: AccountSecurityReportMetadata): Promise<AccountSecurityReportDownload> {
@@ -2918,7 +2996,7 @@ export const httpAccountRepository: AccountRepository = {
       const owner = accountIdentifier(accountId);
       const target = accountIdentifier(reportId);
       const current = await readAccountSecurityReport(credential, owner, target);
-      return downloadAccountSecurityReportCSV(credential, current.metadata);
+      return downloadAccountSecurityReportCSV(credential, current.report.metadata);
     }
   },
   accessAnalysis: {
@@ -2932,7 +3010,7 @@ export const httpAccountRepository: AccountRepository = {
     async readAnalyzer(credential, accountId, analyzerId) {
       const owner = accountIdentifier(accountId);
       const target = accountIdentifier(analyzerId);
-      return parseAccessAnalyzer(await requestJSON<unknown>(
+      return parseAccessAnalyzerAccess(await requestJSON<unknown>(
         `/api/iam/v1/account/access-analyzers/${encodeURIComponent(target)}`,
         { headers: accountHeaders(credential) }
       ), owner, target);
@@ -3000,7 +3078,7 @@ export const httpAccountRepository: AccountRepository = {
       const owner = accountIdentifier(accountId);
       const analyzer = accountIdentifier(analyzerId);
       const target = accountIdentifier(findingId);
-      return parseAccessFinding(await requestJSON<unknown>(
+      return parseAccessFindingAccess(await requestJSON<unknown>(
         `/api/iam/v1/account/access-analyzers/${encodeURIComponent(analyzer)}/findings/${encodeURIComponent(target)}`,
         { headers: accountHeaders(credential) }
       ), owner, analyzer, target);
@@ -3398,7 +3476,7 @@ export const httpAccountRepository: AccountRepository = {
     return parsePolicyDirectory(await requestJSON<unknown>(platform ? "/api/iam/v1/platform-policies" : "/api/iam/v1/policies", { headers: accountHeaders(credential) }), platform ? "INSTALLATION" : "TENANT");
   },
   async readPolicy(credential, accountId, policyId) {
-    return parsePolicyDetail(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId);
+    return parsePolicyAccess(await requestJSON<unknown>(`/api/iam/v1/policies/${encodeURIComponent(accountIdentifier(policyId))}`, { headers: accountHeaders(credential) }), accountIdentifier(accountId), policyId);
   },
   async createPolicy(credential, accountId, command) {
     const displayName = command.displayName.trim();

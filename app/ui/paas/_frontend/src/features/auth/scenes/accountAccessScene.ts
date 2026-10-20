@@ -157,8 +157,8 @@ export function buildAccountAccessScene(
   const policies = [...(tenantPolicies?.items ?? []), ...(platformPolicies?.items ?? [])];
   if (new Set(policies.map((policy) => policy.id)).size !== policies.length) throw new Error("INVALID_IAM_POLICY_DIRECTORY");
   const policyById = new Map(policies.map((policy) => [policy.id, policy]));
-  const identityCapability = (action: IamAction, id = account.id) =>
-    findActionCapability(identity.capabilities, action, "ACCOUNT", id);
+  const identityCapability = (action: IamAction, id = account.id, kind: ActionCapability["resource"]["kind"] = "ACCOUNT") =>
+    findActionCapability(identity.capabilities, action, kind, id);
   const rootIsCurrent = identity.identityKind === "ROOT_IDENTITY";
 
   return {
@@ -188,6 +188,24 @@ export function buildAccountAccessScene(
     listRolesRestrictionReason: identityCapability("iam.role.list")?.restrictionReason ?? null,
     canCreateRoles: identityCapability("iam.role.create")?.available === true,
     createRolesRestrictionReason: identityCapability("iam.role.create")?.restrictionReason ?? null,
+    canListOwnAccessKeys: identityCapability("iam.access-key.list", identity.user.id, "USER")?.available === true,
+    ownAccessKeysRestrictionReason: identityCapability("iam.access-key.list", identity.user.id, "USER")?.restrictionReason ?? null,
+    canListAccessAnalyzers: identityCapability("iam.access-analyzer.list")?.available === true,
+    listAccessAnalyzersRestrictionReason: identityCapability("iam.access-analyzer.list")?.restrictionReason ?? null,
+    canCreateAccessAnalyzers: identityCapability("iam.access-analyzer.create")?.available === true,
+    createAccessAnalyzersRestrictionReason: identityCapability("iam.access-analyzer.create")?.restrictionReason ?? null,
+    canCreateSecurityReports: identityCapability("iam.security-report.create")?.available === true,
+    createSecurityReportsRestrictionReason: identityCapability("iam.security-report.create")?.restrictionReason ?? null,
+    canListServiceRoleTemplates: identityCapability("iam.service-role-template.list")?.available === true,
+    serviceRoleTemplatesRestrictionReason: identityCapability("iam.service-role-template.list")?.restrictionReason ?? null,
+    canListServiceLinkedRoles: identityCapability("iam.service-linked-role.list")?.available === true,
+    serviceLinkedRolesRestrictionReason: identityCapability("iam.service-linked-role.list")?.restrictionReason ?? null,
+    canReadSecuritySettings: identityCapability("iam.security-settings.read")?.available === true,
+    securitySettingsReadRestrictionReason: identityCapability("iam.security-settings.read")?.restrictionReason ?? null,
+    canUpdateSecuritySettings: identityCapability("iam.security-settings.update")?.available === true,
+    securitySettingsUpdateRestrictionReason: identityCapability("iam.security-settings.update")?.restrictionReason ?? null,
+    canCreatePolicies: identityCapability("iam.policy.create")?.available === true,
+    createPoliciesRestrictionReason: identityCapability("iam.policy.create")?.restrictionReason ?? null,
     canSetAlias: identityCapability("iam.account.alias-set")?.available === true,
     setAliasRestrictionReason: identityCapability("iam.account.alias-set")?.restrictionReason ?? null,
     canReadAccounts: identityCapability("iam.account.read", "collection")?.available === true && (accounts !== null || Boolean(directoryFailures.accounts)),

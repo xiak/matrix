@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { SecurityReportClient } from "../application/AccountAccessProvider";
-import { accountSecurityReportCoverage, type AccountSecurityReport } from "../domain/securityReports";
+import { accountSecurityReportCoverage, type AccountSecurityReport, type AccountSecurityReportAccess } from "../domain/securityReports";
 import { LiveSecurityReport } from "./LiveSecurityReport";
 
 const report: AccountSecurityReport = {
@@ -35,13 +35,17 @@ const legacyReport: AccountSecurityReport = {
     resourceVersion: 2, createdAt: "2026-02-01T00:00:00Z"
   }]
 };
+const reportAccess = (value: AccountSecurityReport): AccountSecurityReportAccess => ({ report: value, capabilities: [{
+  action: "iam.security-report.download", resource: { kind: "SECURITY_REPORT", id: value.metadata.id }, available: true, restrictionReason: null
+}] });
 
 function client(overrides: Partial<SecurityReportClient> = {}): SecurityReportClient {
   return {
     accountId: report.metadata.accountId,
     sessionRevision: 1,
+    canCreate: true,
     create: vi.fn().mockResolvedValue({ outcome: "APPLIED", metadata: report.metadata }),
-    read: vi.fn().mockResolvedValue(report),
+    read: vi.fn().mockResolvedValue(reportAccess(report)),
     download: vi.fn().mockResolvedValue({ metadata: report.metadata, bytes: new TextEncoder().encode("report"), filename: "matrix-iam-security-report-report-one.csv" }),
     ...overrides
   };
@@ -68,6 +72,18 @@ describe("live account security report", () => {
     expect(screen.queryByText(/MOCK/)).toBeNull();
   });
 
+  it("keeps generation unavailable without minting a request ID when create authority is absent", async () => {
+    const user = userEvent.setup();
+    const value = client({ canCreate: false });
+    view(value);
+    const generate = screen.getByRole("button", { name: "生成当前账号安全报告" }) as HTMLButtonElement;
+    expect(generate.disabled).toBe(true);
+    expect(generate.getAttribute("title")).toMatch(/iam.security-report.create/);
+    await user.click(generate);
+    expect(value.create).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toMatch(/ui-security-report-[0-9a-f]{32}/);
+  });
+
   it("creates with the fixed command and then reauthorizes the returned report read", async () => {
     const user = userEvent.setup();
     const value = client();
@@ -83,7 +99,7 @@ describe("live account security report", () => {
 
   it("keeps a retained format-1 report readable without defaulting its missing credential state to CURRENT", async () => {
     const user = userEvent.setup();
-    view(client({ read: vi.fn().mockResolvedValue(legacyReport) }));
+    view(client({ read: vi.fn().mockResolvedValue(reportAccess(legacyReport)) }));
     await user.type(screen.getByLabelText("报告 ID"), legacyReport.metadata.id);
     await user.click(screen.getByRole("button", { name: "读取报告" }));
     expect(await screen.findByText("CSV v1 · 服务端规范化")).toBeTruthy();
@@ -115,7 +131,7 @@ describe("live account security report", () => {
   it("clears report identifiers and content when the login session expires", async () => {
     const user = userEvent.setup();
     const read = vi.fn()
-      .mockResolvedValueOnce(report)
+      .mockResolvedValueOnce(reportAccess(report))
       .mockRejectedValueOnce(new HttpProblem(401, "UNAUTHORIZED"));
     view(client({ read }));
     await user.type(screen.getByLabelText("报告 ID"), report.metadata.id);
@@ -143,6 +159,22 @@ describe("live account security report", () => {
     expect(createObjectURL).toHaveBeenCalledTimes(1);
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:report");
     expect(screen.getByText(/重新读取最新元数据并核对精确字节数与 SHA-256/)).toBeTruthy();
+  });
+
+  it("keeps an independently readable report visible without exposing download when report authority is absent", async () => {
+    const user = userEvent.setup();
+    const denied: AccountSecurityReportAccess = { report, capabilities: [{
+      action: "iam.security-report.download", resource: { kind: "SECURITY_REPORT", id: report.metadata.id },
+      available: false, restrictionReason: "AUTHORITY_REQUIRED"
+    }] };
+    const value = client({ read: vi.fn().mockResolvedValue(denied) });
+    view(value);
+    await user.type(screen.getByLabelText("报告 ID"), report.metadata.id);
+    await user.click(screen.getByRole("button", { name: "读取报告" }));
+    expect(await screen.findByRole("heading", { name: report.metadata.id })).toBeTruthy();
+    expect(screen.getByText(/当前报告可以读取，但当前身份不能下载/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "下载已校验 CSV" })).toBeNull();
+    expect(value.download).not.toHaveBeenCalled();
   });
 
   it("keeps an unknown generation bound to its exact client and retries the original request ID", async () => {
@@ -175,8 +207,8 @@ describe("live account security report", () => {
 
   it("clears report projection on exact client replacement and ignores an old pending read", async () => {
     const user = userEvent.setup();
-    let resolveOldRead!: (value: AccountSecurityReport) => void;
-    const oldRead = new Promise<AccountSecurityReport>((resolve) => { resolveOldRead = resolve; });
+    let resolveOldRead!: (value: AccountSecurityReportAccess) => void;
+    const oldRead = new Promise<AccountSecurityReportAccess>((resolve) => { resolveOldRead = resolve; });
     const original = client({ read: vi.fn().mockReturnValue(oldRead) });
     const replacement = client();
     const rendered = view(original);
@@ -188,7 +220,7 @@ describe("live account security report", () => {
     expect(screen.queryByRole("heading", { name: report.metadata.id })).toBeNull();
     expect((screen.getByLabelText("报告 ID") as HTMLInputElement).value).toBe("");
     await act(async () => {
-      resolveOldRead(report);
+      resolveOldRead(reportAccess(report));
       await oldRead;
     });
     expect(screen.queryByRole("heading", { name: report.metadata.id })).toBeNull();

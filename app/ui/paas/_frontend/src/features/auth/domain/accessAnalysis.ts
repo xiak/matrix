@@ -1,3 +1,5 @@
+import type { ActionCapability } from "./accounts";
+
 export type AccessAnalyzerStatus = "ACTIVE" | "DISABLED";
 
 export type AccessDispositionMode = "REVIEW_ONLY" | "DISABLE_UNUSED_ACCESS_KEYS";
@@ -22,6 +24,11 @@ export type AccessAnalyzerDirectory = {
   accountId: string;
   items: AccessAnalyzer[];
   nextAfter: string | null;
+};
+
+export type AccessAnalyzerAccess = {
+  analyzer: AccessAnalyzer;
+  capabilities: ActionCapability[];
 };
 
 export type AccessObservationSource =
@@ -112,6 +119,10 @@ export type UnusedRoleFinding = AccessFindingRecord & {
 };
 
 export type AccessFinding = UnusedPasswordFinding | UnusedAccessKeyFinding | UnusedRoleFinding;
+export type AccessFindingAccess = {
+  finding: AccessFinding;
+  capabilities: ActionCapability[];
+};
 export type AccessFindingStatus = AccessFinding["status"];
 export type AccessFindingStatusFilter = AccessFindingStatus | "ALL";
 

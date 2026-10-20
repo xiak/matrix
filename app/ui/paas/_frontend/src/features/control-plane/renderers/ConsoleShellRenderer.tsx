@@ -401,13 +401,15 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
     if (item.id === "policies") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.canViewPolicies;
     if (item.id === "roles") return accountCapabilities.hasPreviewWorkspace ? accountCapabilities.canListUsers : accountCapabilities.supportsLiveRoles && accountCapabilities.canListRoles;
     if (item.id === "service-authorizations") return accountCapabilities.hasPreviewWorkspace
-      ? accountCapabilities.canListUsers : accountCapabilities.supportsLiveServiceAuthorizations;
+      ? accountCapabilities.canListUsers : accountCapabilities.supportsLiveServiceAuthorizations &&
+        (accountCapabilities.canListServiceRoleTemplates || accountCapabilities.canListServiceLinkedRoles);
     if (item.id === "keys") return accountCapabilities.hasPreviewWorkspace
       ? accountCapabilities.canListUsers
-      : accountCapabilities.supportsLiveAccessKeys;
+      : accountCapabilities.supportsLiveAccessKeys && accountCapabilities.canListOwnAccessKeys;
     if (item.id === "access-analysis") return accountCapabilities.hasPreviewWorkspace
       ? accountCapabilities.canListUsers
-      : accountCapabilities.supportsLiveAccessAnalysis;
+      : accountCapabilities.supportsLiveAccessAnalysis &&
+        (accountCapabilities.canListAccessAnalyzers || accountCapabilities.canCreateAccessAnalyzers);
     if (item.id === "security-reports") return accountCapabilities.hasPreviewWorkspace
       ? accountCapabilities.canListUsers
       : accountCapabilities.supportsLiveSecurityReports;

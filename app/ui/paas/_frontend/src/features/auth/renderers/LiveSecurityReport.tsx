@@ -6,7 +6,8 @@ import { Download, FilePlus2 } from "lucide-react";
 import { Alert, Badge, Button, Card, ContentPage, FormField, Input, TableSkeleton, Tabs, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { SecurityReportClient } from "../application/AccountAccessProvider";
-import { accountSecurityReportLimits, type AccountSecurityReport, type AccountSecurityReportCreation } from "../domain/securityReports";
+import { accountSecurityReportLimits, type AccountSecurityReport, type AccountSecurityReportAccess, type AccountSecurityReportCreation } from "../domain/securityReports";
+import { findActionCapability } from "../scenes/accountAccessScene";
 import { WorkspaceCollection, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessKeyCredentialStateBadge } from "./AccessCredentials";
 import styles from "./AccountAccessRenderer.module.css";
@@ -140,7 +141,8 @@ function LiveSecurityReportGeneration({ blockedIntent, client, currentIntent, on
   const [openedAt] = useState(() => Date.now());
   const [knownReportId, setKnownReportId] = useState("");
   const [creation, setCreation] = useState<AccountSecurityReportCreation | null>(null);
-  const [report, setReport] = useState<AccountSecurityReport | null>(null);
+  const [reportAccess, setReportAccess] = useState<AccountSecurityReportAccess | null>(null);
+  const report = reportAccess?.report ?? null;
   const [busy, setBusy] = useState<Operation | null>(null);
   const [failure, setFailure] = useState<ReportFailure | null>(null);
   const [downloaded, setDownloaded] = useState(false);
@@ -153,19 +155,19 @@ function LiveSecurityReportGeneration({ blockedIntent, client, currentIntent, on
   const clearSensitiveProjection = () => {
     setKnownReportId("");
     setCreation(null);
-    setReport(null);
+    setReportAccess(null);
     setDownloaded(false);
   };
 
   const read = async (reportId: string, preserveCreation = false) => {
     setBusy("read"); setFailure(null); setDownloaded(false);
     if (!preserveCreation) setCreation(null);
-    setReport(null);
+    setReportAccess(null);
     try {
       const result = await client.read(reportId);
       if (!mounted.current) return;
-      setKnownReportId(result.metadata.id);
-      setReport(result);
+      setKnownReportId(result.report.metadata.id);
+      setReportAccess(result);
     } catch (error) {
       if (mounted.current) {
         const next = reportFailure("read", error);
@@ -177,10 +179,10 @@ function LiveSecurityReportGeneration({ blockedIntent, client, currentIntent, on
   };
 
   const generate = async () => {
-    if (creation || busy || blockedIntent) return;
+    if (!client.canCreate || creation || busy || blockedIntent) return;
     const requestId = onBegin();
     if (!requestId) return;
-    setBusy("create"); setFailure(null); setDownloaded(false); setReport(null);
+    setBusy("create"); setFailure(null); setDownloaded(false); setReportAccess(null);
     try {
       const created = await client.create({ formatVersion: 2, requestId });
       onResolved(client, requestId);
@@ -202,7 +204,8 @@ function LiveSecurityReportGeneration({ blockedIntent, client, currentIntent, on
   };
 
   const download = async () => {
-    if (!report || busy) return;
+    if (!report || !reportAccess || busy ||
+        findActionCapability(reportAccess.capabilities, "iam.security-report.download", "SECURITY_REPORT", report.metadata.id)?.available !== true) return;
     setBusy("download"); setFailure(null); setDownloaded(false);
     try {
       const result = await client.download(report.metadata.id);
@@ -220,9 +223,11 @@ function LiveSecurityReportGeneration({ blockedIntent, client, currentIntent, on
   };
 
   const expired = report ? openedAt >= Date.parse(report.metadata.expiresAt) : false;
+  const canDownload = Boolean(report && reportAccess &&
+    findActionCapability(reportAccess.capabilities, "iam.security-report.download", "SECURITY_REPORT", report.metadata.id)?.available);
   const retryingOriginal = Boolean(currentIntent && !busy);
   return <div className={styles.stack}>
-    <ContentPage.Heading title={t("title")} scrollKey={`security-report-live:${client.accountId}:${client.sessionRevision}`} actions={<ContentPage.Commands label={t("pageActions")} primary={{ id: "generate", label: t(retryingOriginal ? "retryOriginal" : "generate"), icon: <FilePlus2 aria-hidden="true" />, disabled: Boolean(creation || busy || blockedIntent), disabledReason: creation ? t("singleIntent") : blockedIntent ? t("foreignIntentReason") : undefined, onSelect: () => void generate() }} />} />
+    <ContentPage.Heading title={t("title")} scrollKey={`security-report-live:${client.accountId}:${client.sessionRevision}`} actions={<ContentPage.Commands label={t("pageActions")} primary={{ id: "generate", label: t(retryingOriginal ? "retryOriginal" : "generate"), icon: <FilePlus2 aria-hidden="true" />, disabled: Boolean(!client.canCreate || creation || busy || blockedIntent), disabledReason: !client.canCreate ? t("createDenied") : creation ? t("singleIntent") : blockedIntent ? t("foreignIntentReason") : undefined, onSelect: () => void generate() }} />} />
     <Alert status="info">{t("boundary")}</Alert>
     {retryingOriginal && currentIntent ? <Alert status="warning">{t("uncertainIntent", { id: currentIntent.requestId })}</Alert> : null}
     {blockedIntent ? <Alert status="warning">{t("foreignIntent", { id: blockedIntent.requestId })}</Alert> : null}
@@ -262,7 +267,7 @@ function LiveSecurityReportGeneration({ blockedIntent, client, currentIntent, on
     {busy === "read" ? <Card><TableSkeleton header label={t("loadingReport")} rows={4} /></Card> : null}
     {report ? <>
       <Card>
-        <Card.Header><div><Typography.Title as="h2" level={3}>{report.metadata.id}</Typography.Title><Typography.Text tone="muted">{t("detailHint")}</Typography.Text></div><div className={styles.actions}><Badge status={expired ? "warning" : "success"}>{t(expired ? "expired" : "readable")}</Badge><Button disabled={Boolean(busy || expired)} onClick={() => void download()} variant="secondary"><Download aria-hidden="true" />{busy === "download" ? t("downloading") : t("download")}</Button></div></Card.Header>
+        <Card.Header><div><Typography.Title as="h2" level={3}>{report.metadata.id}</Typography.Title><Typography.Text tone="muted">{t("detailHint")}</Typography.Text></div><div className={styles.actions}><Badge status={expired ? "warning" : "success"}>{t(expired ? "expired" : "readable")}</Badge>{canDownload ? <Button disabled={Boolean(busy || expired)} onClick={() => void download()} variant="secondary"><Download aria-hidden="true" />{busy === "download" ? t("downloading") : t("download")}</Button> : null}</div></Card.Header>
         <Card.Body className={styles.detail}><dl className={styles.facts}>
           <div><dt>{preview("account")}</dt><dd><code>{report.metadata.accountId}</code></dd></div>
           <div><dt>{preview("observedAt")}</dt><dd><WorkspaceTime value={report.metadata.observedAt} /></dd></div>
@@ -270,7 +275,7 @@ function LiveSecurityReportGeneration({ blockedIntent, client, currentIntent, on
           <div><dt>{preview("settingsVersion")}</dt><dd>v{report.accountSecuritySettingsVersion}</dd></div>
           <div><dt>{preview("format")}</dt><dd>{preview("formatValue", { version: report.metadata.formatVersion })}</dd></div>
           <div><dt>{t("csvBytes")}</dt><dd>{report.metadata.csvBytes.toLocaleString()} B</dd></div>
-        </dl>{expired ? <Alert status="warning">{t("expiredHint")}</Alert> : null}</Card.Body>
+        </dl>{expired ? <Alert status="warning">{t("expiredHint")}</Alert> : null}{!canDownload ? <Alert status="info">{t("downloadDenied")}</Alert> : null}</Card.Body>
       </Card>
       <SecurityReportDocument report={report} />
     </> : null}

@@ -682,7 +682,18 @@ function currentIdentity(): AccountIdentity {
       capability("iam.user.create", "ACCOUNT", account.id),
       capability("iam.policy.list", "ACCOUNT", account.id),
       capability("iam.group.list", "ACCOUNT", account.id),
-      capability("iam.group.create", "ACCOUNT", account.id)
+      capability("iam.group.create", "ACCOUNT", account.id),
+      capability("iam.role.list", "ACCOUNT", account.id),
+      capability("iam.role.create", "ACCOUNT", account.id),
+      capability("iam.access-key.list", "USER", user.id),
+      capability("iam.access-analyzer.list", "ACCOUNT", account.id),
+      capability("iam.access-analyzer.create", "ACCOUNT", account.id),
+      capability("iam.security-report.create", "ACCOUNT", account.id),
+      capability("iam.service-role-template.list", "ACCOUNT", account.id),
+      capability("iam.service-linked-role.list", "ACCOUNT", account.id),
+      capability("iam.security-settings.read", "ACCOUNT", account.id),
+      capability("iam.security-settings.update", "ACCOUNT", account.id),
+      capability("iam.policy.create", "ACCOUNT", account.id)
     ],
   };
 }

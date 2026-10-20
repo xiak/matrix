@@ -61,7 +61,8 @@ function client(overrides: Partial<AccessKeyClient> = {}): AccessKeyClient {
 }
 
 function settings(): AccountSecuritySettingsClient {
-  return { identity: "settings-view-one", accountId: scene.accountId, principalId: "root-acme", sessionId: "session-one", sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", settings: {
+  return { identity: "settings-view-one", accountId: scene.accountId, principalId: "root-acme", sessionId: "session-one", sessionRevision: 1,
+    canRead: true, canUpdate: false, load: vi.fn().mockResolvedValue({ status: "ready", settings: {
     accountId: scene.accountId, resourceVersion: 4, mfa: { requiredForUsers: true },
     password: { minimumLength: 15, requireLowercase: true, requireUppercase: true, requireDigit: true, requireSymbol: true, historyCount: 3, maxAgeDays: 90, expiryMode: "CHANGE_PASSWORD" },
     session: { idleTimeoutMinutes: 30 }, accessKeyNetwork: { allowedSourceCidrs: ["2001:db8::/32"] }, updatedAt: "2026-09-21T08:00:00Z"

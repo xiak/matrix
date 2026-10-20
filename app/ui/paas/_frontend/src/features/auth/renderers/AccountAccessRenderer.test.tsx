@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent, type UserManagementClient } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyAccess, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AccountLifecycleCompletion, AccountLifecycleIntent, UserManagementIntent, UserManagementCompletion } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
@@ -55,7 +55,7 @@ const tenantPolicyDetail: AccountPolicyDetail = { policy: tenantPolicy, version:
     actions: ["paas.application.read"], resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }] }] }
 } };
 const capability = (action: IamAction, kind: ActionCapability["resource"]["kind"], id: string, reason: CapabilityRestriction | null = null): ActionCapability => ({ action, resource: { kind, id }, available: reason === null, restrictionReason: reason });
-const currentCapabilities = (available = true): ActionCapability[] => [
+const currentCapabilities = (available = true, accessKeyUserId = rootUser.id, accessKeyAvailable = available): ActionCapability[] => [
   capability("iam.account.create", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.account.read", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.account.alias-set", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
@@ -63,8 +63,24 @@ const currentCapabilities = (available = true): ActionCapability[] => [
   capability("iam.user.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.group.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
-  capability("iam.group.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
+  capability("iam.group.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.role.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.role.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.access-key.list", "USER", accessKeyUserId, accessKeyAvailable ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.access-analyzer.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.access-analyzer.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.security-report.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.service-role-template.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.service-linked-role.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.security-settings.read", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.security-settings.update", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.policy.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
 ];
+const policyCapabilities = (policyId: string): ActionCapability[] => [
+  "iam.policy.update", "iam.policy.delete", "iam.policy-version.list", "iam.policy-version.read",
+  "iam.policy-version.create", "iam.policy-version.delete", "iam.policy.set-default-version"
+].map((action) => capability(action as IamAction, "POLICY", policyId));
+const policyAccess = (detail: AccountPolicyDetail) => ({ detail, capabilities: policyCapabilities(detail.policy.id) });
 const userCapabilities = (user: User, attachments: UserPolicyAttachment[] = [], reason: CapabilityRestriction | null = null): ActionCapability[] => [
   capability("iam.user.read", "USER", user.id, reason),
   capability("iam.user.update", "USER", user.id, reason),
@@ -258,7 +274,7 @@ function livePolicyVersions() {
   const earlier: AccountPolicyVersion = { ...current, versionId: "version-a", contentDigest: `sha256:${"b".repeat(64)}`,
     document: { ...current.document, statements: [{ ...current.document.statements[0]!, actions: ["paas.application.delete"] }] } };
   let versions = [earlier, current];
-  const readPolicy = vi.fn(async () => ({ policy: structuredClone(policy), version: structuredClone(versions.find((item) => item.versionId === policy.defaultVersionId)!) }));
+  const readPolicy = vi.fn(async () => policyAccess({ policy: structuredClone(policy), version: structuredClone(versions.find((item) => item.versionId === policy.defaultVersionId)!) }));
   const listPolicyVersions = vi.fn(async () => ({ policy: structuredClone(policy), items: structuredClone(versions) }));
   const createPolicyVersion = vi.fn(async (_credential: string, _accountId: string, _policyId: string,
     command: { document: AccountPolicyDocument; resourceVersion: number; expectedDefaultVersionId: string; requestId: string }) => {
@@ -293,8 +309,8 @@ function livePolicyMetadata() {
   let policy: AccountPolicy = { ...tenantPolicy, id: "customer.logs", management: "CUSTOMER", accountId: account.id,
     displayName: "LogBoundary", defaultVersionId: "version-logs", resourceVersion: 4 };
   const version = { ...tenantPolicyDetail.version, policyId: policy.id, versionId: policy.defaultVersionId };
-  const readPolicy = vi.fn(async (_credential: string, _accountId: string, id: string) => id === tenantPolicy.id
-    ? structuredClone(tenantPolicyDetail) : { policy: structuredClone(policy), version: structuredClone(version) });
+  const readPolicy = vi.fn(async (_credential: string, _accountId: string, id: string) => policyAccess(id === tenantPolicy.id
+    ? structuredClone(tenantPolicyDetail) : { policy: structuredClone(policy), version: structuredClone(version) }));
   const updatePolicy = vi.fn(async (_credential: string, _accountId: string, _source: { policy: AccountPolicy; contentDigest: string }, command: { displayName: string; resourceVersion: number; requestId: string }) => {
     if (command.resourceVersion !== policy.resourceVersion) throw new HttpProblem(409, "STALE");
     policy = { ...policy, displayName: command.displayName, resourceVersion: policy.resourceVersion + 1 };
@@ -1004,6 +1020,31 @@ describe("account access", () => {
     expect(read).toHaveBeenCalledWith(credential, account.id);
     expect(screen.getByTestId("nav-settings").getAttribute("aria-current")).toBe("page");
     expect(screen.queryByText("用户可选")).toBeNull();
+  });
+
+  it("keeps security-settings read and update authority independent", async () => {
+    const update = { startStepUp: vi.fn(), stepUpByRequest: vi.fn(), verifyStepUp: vi.fn(), apply: vi.fn(), changeByRequest: vi.fn() };
+    const readDeniedIdentity = structuredClone(identity);
+    readDeniedIdentity.capabilities = readDeniedIdentity.capabilities.map((item) => item.action === "iam.security-settings.read"
+      ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item);
+    const deniedRead = vi.fn().mockResolvedValue(accountSecuritySettings);
+    await openAccess(accounts({ currentIdentity: vi.fn().mockResolvedValue(readDeniedIdentity),
+      accountSecuritySettings: { read: deniedRead, update } }), iam(), "settings");
+    expect(await screen.findByText(/没有查看账号安全规则的权限/)).toBeTruthy();
+    expect(deniedRead).not.toHaveBeenCalled();
+    expect(update.startStepUp).not.toHaveBeenCalled();
+    cleanup();
+
+    const updateDeniedIdentity = structuredClone(identity);
+    updateDeniedIdentity.capabilities = updateDeniedIdentity.capabilities.map((item) => item.action === "iam.security-settings.update"
+      ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item);
+    const readable = vi.fn().mockResolvedValue(accountSecuritySettings);
+    await openAccess(accounts({ currentIdentity: vi.fn().mockResolvedValue(updateDeniedIdentity),
+      accountSecuritySettings: { read: readable, update } }), iam(), "settings");
+    expect(await screen.findByText(/可以查看账号安全规则，但不能修改/)).toBeTruthy();
+    expect(readable).toHaveBeenCalledWith(credential, account.id);
+    expect(screen.queryByRole("button", { name: "编辑安全规则" })).toBeNull();
+    expect(update.startStepUp).not.toHaveBeenCalled();
   });
 
   it("expires the credential on a real account-rule 401 instead of treating it as read denial", async () => {
@@ -1774,7 +1815,9 @@ describe("account access", () => {
   it("reads service consent independently without ordinary Role-list authority", async () => {
     const roleRepository = { list: vi.fn() } as unknown as NonNullable<AccountRepository["roles"]>;
     const listServiceLinkedRoles = vi.fn().mockResolvedValue({ accountId: account.id, items: [], nextAfter: null });
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }), roles: roleRepository,
+    const serviceCapabilities = currentCapabilities(false).map((item) => item.action === "iam.service-role-template.list" || item.action === "iam.service-linked-role.list"
+      ? { ...item, available: true, restrictionReason: null } : item);
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: serviceCapabilities }), roles: roleRepository,
       listServiceLinkedRoles, getServiceLinkedRole: vi.fn(), listServiceRoleTemplates: vi.fn().mockResolvedValue({ accountId: account.id, items: [] }) });
     await openAccess(repository, iam(), "service-authorizations");
     expect(await screen.findByText("当前账号暂无服务授权")).toBeTruthy();
@@ -1879,7 +1922,7 @@ describe("account access", () => {
 
   it("reads a member's own keys without any user-list or user-detail request", async () => {
     const list = vi.fn().mockResolvedValue({ accountId: account.id, userId: childUser.id, userResourceVersion: childUser.resourceVersion, capabilities: [], items: [] });
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: childUser.id, resourceVersion: childUser.resourceVersion, policy: null }, capabilities: currentCapabilities(false) }),
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: childUser.id, resourceVersion: childUser.resourceVersion, policy: null }, capabilities: currentCapabilities(false, childUser.id, true) }),
       accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
     await openAccess(repository, iam({}, childUser.id), "keys");
     expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
@@ -3570,7 +3613,7 @@ describe("account access", () => {
   });
 
   it("reads a tenant policy's default document only after opening its detail and keeps platform metadata separate", async () => {
-    const readPolicy = vi.fn().mockResolvedValue(tenantPolicyDetail);
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess(tenantPolicyDetail));
     const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");
     await screen.findByRole("table", { name: "策略元数据目录" });
     expect(readPolicy).not.toHaveBeenCalled();
@@ -3594,13 +3637,13 @@ describe("account access", () => {
   });
 
   it("separates authored family syntax from the frozen v2 action expansion", async () => {
-    const readPolicy = vi.fn().mockResolvedValue({ ...tenantPolicyDetail, version: {
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess({ ...tenantPolicyDetail, version: {
       ...tenantPolicyDetail.version, contractVersion: 2,
       document: { ...tenantPolicyDetail.version.document, statements: [{ ...tenantPolicyDetail.version.document.statements[0],
         actions: ["paas.application.*"] }] },
       compilation: { compilationVersion: "1", profiles: [{ product: "paas", revision: 2,
         contentDigest: `sha256:${"b".repeat(64)}` }], resolvedStatements: [{ sid: "read-applications", actions: ["paas.application.read"] }] }
-    } });
+    } } as AccountPolicyDetail));
     const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");
     await user.click(await screen.findByRole("button", { name: tenantPolicy.displayName }));
     const table = await screen.findByRole("table", { name: "策略声明" });
@@ -3620,7 +3663,7 @@ describe("account access", () => {
       displayName: "LogBoundary", defaultVersionId: "version-logs" };
     const current = { ...tenantPolicyDetail.version, policyId: customer.id, versionId: customer.defaultVersionId };
     const earlier = { ...current, versionId: "version-a", contentDigest: `sha256:${"b".repeat(64)}` };
-    const readPolicy = vi.fn().mockResolvedValue({ policy: customer, version: current });
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess({ policy: customer, version: current }));
     const listPolicyVersions = vi.fn().mockResolvedValue({ policy: customer, items: [earlier, current] });
     const readPolicyVersion = vi.fn().mockResolvedValue({ policy: customer, version: earlier });
     const repository = accounts({ readPolicy, listPolicyVersions, readPolicyVersion,
@@ -3752,8 +3795,8 @@ describe("account access", () => {
     enablePolicyLocks(); const fixture = livePolicyMetadata();
     const { user, replaceRepository } = await openAccess(fixture.repository, iam(), "policies");
     await user.click(await screen.findByRole("button", { name: "LogBoundary" })); await screen.findByRole("table", { name: "策略声明" });
-    const next = livePolicyMetadata(); const fresh = await next.readPolicy(credential, account.id, "customer.logs"); let complete!: (value: AccountPolicyDetail) => void;
-    const read = vi.fn(() => new Promise<AccountPolicyDetail>((resolve) => { complete = resolve; }));
+    const next = livePolicyMetadata(); const fresh = await next.readPolicy(credential, account.id, "customer.logs"); let complete!: (value: AccountPolicyAccess) => void;
+    const read = vi.fn(() => new Promise<AccountPolicyAccess>((resolve) => { complete = resolve; }));
     const repository = { ...next.repository, readPolicy: read };
     replaceRepository(repository); await waitFor(() => expect(read).toHaveBeenCalled());
     await user.click(await screen.findByRole("button", { name: "更多操作" }));
@@ -4013,7 +4056,7 @@ describe("account access", () => {
     const readPolicy = vi.fn(async (_credential: string, _accountId: string, policyId: string) => {
       const call = createPolicy.mock.calls[0];
       if (policyId !== "customer.new" || !call) throw new Error("INVALID_TEST_TARGET");
-      return createPolicy.mock.results[0]!.value;
+      return policyAccess(await createPolicy.mock.results[0]!.value);
     });
     const { user } = await openAccess(accounts({ createPolicy, readPolicy, listAuthorizationProfiles }), iam(), "policies");
     await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
@@ -4373,8 +4416,8 @@ describe("account access", () => {
   it("keeps a forbidden version directory local while the independently readable default remains visible", async () => {
     const customer = { ...tenantPolicy, id: "customer.logs", management: "CUSTOMER" as const, accountId: account.id,
       displayName: "LogBoundary", defaultVersionId: "version-logs" };
-    const readPolicy = vi.fn().mockResolvedValue({ policy: customer, version: { ...tenantPolicyDetail.version,
-      policyId: customer.id, versionId: customer.defaultVersionId } });
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess({ policy: customer, version: { ...tenantPolicyDetail.version,
+      policyId: customer.id, versionId: customer.defaultVersionId } }));
     const listPolicyVersions = vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN"));
     const repository = accounts({ readPolicy, listPolicyVersions, readPolicyVersion: vi.fn(),
       listPolicies: vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) : { ...directory(false), items: [customer] }) });

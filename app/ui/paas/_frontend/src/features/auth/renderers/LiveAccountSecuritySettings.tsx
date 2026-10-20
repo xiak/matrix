@@ -323,7 +323,7 @@ function AccountSecuritySettingsWorkspace({ client }: { client: AccountSecurityS
             <AccountSecurityRulesValues value={currentSettings} />
             <Typography.Text tone="muted">{password("liveBoundary")}</Typography.Text>
             <Alert>{network("live.boundary")}</Alert>
-            {!update ? <Alert status="warning">{network("live.updateUnavailable")}</Alert> : <div className={accessStyles.actions}><Button ref={editButton} disabled={refreshing} onClick={editSettings} variant="secondary">{security("edit")}</Button></div>}
+            {!update ? <Alert status="warning">{client?.canUpdate ? network("live.updateUnavailable") : t("accountUpdateDenied")}</Alert> : <div className={accessStyles.actions}><Button ref={editButton} disabled={refreshing} onClick={editSettings} variant="secondary">{security("edit")}</Button></div>}
           </> : null}
         </> : null}
         {renderSettingsFlow()}
