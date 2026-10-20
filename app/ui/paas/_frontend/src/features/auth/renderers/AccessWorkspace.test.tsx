@@ -1260,7 +1260,7 @@ describe("CAM-style access workspace", () => {
     expect(within(directory).getByRole("button", { name: "ProductionLogReviewRole" }).closest("td")?.getAttribute("data-label")).toBe("名称");
     expect(within(directory).getByText("客户角色（CUSTOMER）").closest("td")?.getAttribute("data-label")).toBe("信任入口");
   });
-  it("previews service authorization as an inline consent review without creating a role or grant", async () => {
+  it("opens the top-level service authorization review without creating a role or grant", async () => {
     const { user, repository, extension } = await open("roles");
     const before = await extension.read("preview");
     await invokePageAction(user, "服务授权");
@@ -1324,9 +1324,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "审阅服务授权" })).toBe(document.activeElement);
     await user.click(screen.getByRole("button", { name: "返回服务授权" }));
     expect(screen.getByRole("button", { name: "托管服务安装访问" })).toBe(document.activeElement);
-    await user.click(screen.getByRole("button", { name: "返回角色列表" }));
-    expect(await screen.findByRole("heading", { name: "角色" })).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "服务授权" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "返回角色列表" })).toBeNull();
+    expect(screen.getByRole("heading", { level: 1, name: "服务授权" })).toBeTruthy();
   });
   it("keeps the fixed service-template contract independent of tenant policy revisions", async () => {
     const { user } = await open("roles", { seed: async (extension) => {
