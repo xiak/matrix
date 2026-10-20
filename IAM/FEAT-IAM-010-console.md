@@ -283,6 +283,12 @@ Role 管理 list/read/create/update/status/delete、R1 trust 完整替换、单�
 - `1280px` DEV 浏览器从用户页连续进入 Group 与 Policy，目标标题和内容在同一外壳内切换，document/body/viewport 同为 1280px，warning/error 为空。该检查验证隔离 MOCK 中的共享导航和布局，不冒充 LIVE 慢响应、失败注入或真实 IAM 进程浏览器验收。
 - 2026-10-07 的 [`0fa57bbd9`](https://github.com/xiak/matrix/commit/0fa57bbd9) 将剩余即时“加载中”文本收敛到共享 `LoadingNotice`：辅助技术立即获得状态，视觉反馈延迟 200ms，快速读取不再闪出单帧提示；已验证场景刷新、可视化授权目录、角色边界策略目录、角色策略目录及账号安全设置均复用同一语义。AccessKey 目录固定呈现所选用户和目录标题，只让密钥数据行进入局部骨架。完整 63 文件/1113 条前端用例与三条静态归一化用例通过，类型、lint、架构、228 组主题对比、46 条生产路由、44 个归一化分段、254 个 Go 嵌入文件及全仓 Go test/vet 均通过；桌面与 `390x844` DEV 浏览器无横向溢出，warning/error 为空。该证据仍只覆盖隔离 MOCK 与前端契约，不替代真实 IAM 慢响应和故障注入验收。
 
+### 当前权限与精确资源重查的开发验收证据
+
+- 2026-10-20，已推送的 [`365460927`](https://github.com/xiak/matrix/commit/365460927)、[`dc85855de`](https://github.com/xiak/matrix/commit/dc85855de)、[`a13e336f7`](https://github.com/xiak/matrix/commit/a13e336f7) 与 [`e70c2d659`](https://github.com/xiak/matrix/commit/e70c2d659) 固定当前客户端的权限变化边界：LIVE IAM 页面操作只在现有 `LOGIN_SESSION` 中重新读取 CurrentIdentity，不重载页面、不退出或重新登录；身份返回后还必须分别重读当前已知 Policy、Analyzer、Finding、SecurityReport 或 User 等准确目标，目录成功和入口 capability 都不能替代精确资源 capability。重查期间保留稳定标题、详情定位、审阅草稿及原 UNKNOWN 请求，但冻结所有新写入和原请求重试；旧权限代次的迟到回包不能恢复能力、覆盖新目标或重新开放按钮。
+- Analyzer/Finding 写入、Policy 元数据／版本变更与 Report 下载都只在相应精确读取成功后恢复。创建 Report 成功不自动证明可读，读取成功也不自动证明可下载；Finding 的 `403` 显示授权拒绝并停止自动重试，`503` 才显示临时不可用和原目标重试，二者均不回退隔离 MOCK。显式重查后 capability 变为不可用时，已经确认的写入结果和原 UNKNOWN 记录继续可见，但不会再提交第二次写请求。替换 repository、credential 或 client 时立即清除旧投影，并忽略其迟到结果。
+- 当前 `dd2584bbf` 前端在 2026-10-20 定向运行 `AccountAccessRenderer.test.tsx`、`LiveAccessAnalysis.test.tsx`、`LiveSecurityReport.test.tsx` 与 `ConsoleShellRenderer.test.tsx`，4 个文件／454 条用例全部通过，用时 125.14 秒。它覆盖同 Session 重查、准确目标重读、重查期间写入冻结、UNKNOWN 保留、旧代次隔离及 `403`／`503` 分离。这是客户端行为证据，不替代真实 PostgreSQL/IAM/Audit/PaaS 组合：独立 `TestIAMPermissionAwareConsoleBrowser` 的最近一次夹具在初始观察阶段超时并已终止，尚无新的可操作夹具或终态通过证据，因此真实授权／撤权与安全交互门禁仍保持开放。
+
 ### Account 生命周期 LIVE 客户端的开发验收证据
 
 - 2026-10-07 已推送 [`249d43b74`](https://github.com/xiak/matrix/commit/249d43b74)，严格消费固定 IAM 源 `598b07543b6318c4dbb0caa4bd7d4c83e381d503`：新建、状态变更和 Root 凭证恢复均提交必需的 `requestId`，并按对应命令提交目标版本；写响应只能是裸 `Account`，详情与能力只能来自目标 `GET /v1/accounts/{accountId}`。客户端不接受结果包裹、完成回执或等价重放字段，也不把当前账号状态解释为原命令已完成。
