@@ -4009,6 +4009,14 @@ and is not inherited as a new backend acceptance result.
   background controls. Chinese/English and dark/light checks cover the new
   directory and logs workspace. The MOCK deep link returns to log search after
   sign-in; keyword search and expandable event fields work in the runtime.
+  A fresh `390 × 844px` directory sweep then entered all 11 registered service
+  homes through the same product launcher: Regions, Application hosting, four
+  managed products, DevOps, IAM, Monitoring, Logs and Audit. Every destination
+  committed its own route, exposed exactly one visible H1, transferred focus to
+  that H1, kept document/body/viewport at 390px, left no over-wide content
+  descendant or Dialog, and emitted no browser warning/error. This proves the
+  shared compact shell and launcher boundary across the current directory; it
+  does not promote the MOCK product data or pending IAM backend gate to LIVE.
   Product discovery and notifications now use independently
   tested `ProductLauncher` and `NotificationCenter` composites over one shared
   header-popover surface. Notifications restore focus on `Escape`; the service
