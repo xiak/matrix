@@ -30,6 +30,21 @@ describe("AccountReadBoundary", () => {
     expect(screen.getByRole("button", { name: "诊断信息已复制" })).toBeTruthy();
   });
 
+  it("never copies an unbounded problem code with an otherwise valid request ID", async () => {
+    const user = userEvent.setup();
+    const problem = new HttpProblem(403, "iam.authorization.denied\nAuthorization: Bearer private-upstream-secret", "request-safe-diagnostic");
+    render(<LocaleProvider><AccountReadBoundary status="forbidden" loading={null} problem={problem} /></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "复制诊断信息" }));
+
+    expect(await navigator.clipboard.readText()).toBe(JSON.stringify({
+      requestId: "request-safe-diagnostic",
+      status: 403,
+      code: "PLATFORM_REQUEST_REJECTED"
+    }, null, 2));
+    expect(await navigator.clipboard.readText()).not.toContain("private-upstream-secret");
+  });
+
   it("reports a copy failure when the browser does not expose the clipboard API", async () => {
     const user = userEvent.setup();
     const clipboard = navigator.clipboard;

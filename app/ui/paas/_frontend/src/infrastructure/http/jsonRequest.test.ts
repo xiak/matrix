@@ -29,4 +29,16 @@ describe("requestJSON", () => {
 
     expect(failure).toMatchObject({ status: 403, code: "iam.authorization.forbidden", requestId: null });
   });
+
+  it("replaces an unbounded response code without discarding a valid request ID", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      code: "iam.authorization.denied\nAuthorization: Bearer private-upstream-secret",
+      requestId: "request-safe-diagnostic"
+    }), { status: 403, headers: { "Content-Type": "application/json" } })));
+
+    const failure = await requestJSON("/api/iam/v1/example").catch((error: unknown) => error);
+
+    expect(failure).toMatchObject({ status: 403, code: "PLATFORM_REQUEST_REJECTED", requestId: "request-safe-diagnostic" });
+    expect(String(failure)).not.toContain("private-upstream-secret");
+  });
 });

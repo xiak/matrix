@@ -4,15 +4,24 @@ export class HttpProblem extends Error {
   readonly status: number;
 
   constructor(status: number, code: string, requestId: string | null = null) {
-    super(code);
+    const stableCode = stableProblemCode(code);
+    super(stableCode);
     this.name = "HttpProblem";
     this.status = status;
-    this.code = code;
+    this.code = stableCode;
     this.requestId = requestId;
   }
 }
 
+const genericProblemCode = "PLATFORM_REQUEST_REJECTED";
+const namespacedProblemCodePattern = /^[a-z][a-z0-9]*(?:[.-][a-z0-9]+){1,15}$/;
+const constantProblemCodePattern = /^[A-Z][A-Z0-9]*(?:_[A-Z0-9]+){0,15}$/;
 const requestIdPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function stableProblemCode(value: unknown): string {
+  if (typeof value !== "string" || value.length > 96) return genericProblemCode;
+  return namespacedProblemCodePattern.test(value) || constantProblemCodePattern.test(value) ? value : genericProblemCode;
+}
 
 function problemRequestId(body: unknown): string | null {
   if (typeof body !== "object" || body === null || !("requestId" in body) || typeof body.requestId !== "string") return null;
@@ -40,11 +49,7 @@ export async function requestJSONResponse<T>(
   }
 
   if (!response.ok) {
-    const code =
-      typeof body === "object" && body !== null && "code" in body &&
-      typeof body.code === "string"
-        ? body.code
-        : "PLATFORM_REQUEST_REJECTED";
+    const code = typeof body === "object" && body !== null && "code" in body ? stableProblemCode(body.code) : genericProblemCode;
     throw new HttpProblem(response.status, code, problemRequestId(body));
   }
 
