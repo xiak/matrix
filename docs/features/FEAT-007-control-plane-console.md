@@ -3235,10 +3235,12 @@ client cannot repopulate the new surface, and a forbidden replacement cannot
 recover the former data. Query and filter preferences remain local operator
 state rather than being treated as authorization evidence.
 
-Direct parsing keeps the Role navigation item selected, the shared content
-header supplies the Role parent/back route, and the DEV MOCK entry returns to
-the requested deep link after its memory-only session is re-entered. The page
-observes templates, Account authorization relations and exact binding history;
+Direct parsing keeps the independent Service authorization navigation item
+selected. Its collection heading has no synthetic Role parent/back control;
+only nested relation and template details return to the service-authorization
+directory. The DEV MOCK entry returns to the requested deep link after its
+memory-only session is re-entered. The page observes templates, Account
+authorization relations and exact binding history;
 it does not turn an ACTIVE template into consent or expose a generic IAM bind /
 unbind form. Those writes remain owned by the corresponding product-resource
 workflow. Seven focused renderer cases cover stable loading, client replacement,

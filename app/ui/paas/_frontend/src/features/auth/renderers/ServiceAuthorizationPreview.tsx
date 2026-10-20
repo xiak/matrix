@@ -590,9 +590,8 @@ export function ServiceAuthorizationUnbindReview({ accountId, targetResourceId, 
   </div>;
 }
 
-export function ServiceAuthorizationPreview({ workspace, onClose }: {
+export function ServiceAuthorizationPreview({ workspace }: {
   workspace: AccessWorkspace;
-  onClose(): void;
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
   const [view, setView] = useState<PreviewView>("directory");
@@ -618,16 +617,15 @@ export function ServiceAuthorizationPreview({ workspace, onClose }: {
   }, [view]);
 
   const back = () => {
-    if (view === "directory") onClose();
-    else if (view === "detail") setView("directory");
+    if (view === "detail") setView("directory");
     else if (view === "account-access") setView(accountAccessOrigin);
     else setView("detail");
   };
-  const backLabel = view === "directory" ? t("backToRoles") : view === "detail" ? t("backToDirectory") : view === "account-access" && accountAccessOrigin === "directory" ? t("backToDirectory") : t("backToTemplate");
+  const backLabel = view === "detail" ? t("backToDirectory") : view === "account-access" && accountAccessOrigin === "directory" ? t("backToDirectory") : t("backToTemplate");
   const title = view === "directory" ? t("title") : view === "detail" ? t("detail.title") : view === "account-access" ? t("observation.pageTitle") : t("review.title");
 
   return <>
-    <ContentPage.Heading key={view} title={title} scrollKey={`service-authorization:${view}`} back={{ label: backLabel, onClick: back }} focus />
+    <ContentPage.Heading key={view} title={title} scrollKey={`service-authorization:${view}`} back={view === "directory" ? undefined : { label: backLabel, onClick: back }} focus />
     <Card aria-label={title}>
       <Card.Body className={styles.root}>
         <div className={styles.summary}><p>{t("subtitle")}</p><div className={styles.badges}><Badge status="warning">MOCK</Badge><Badge>{t("previewOnly")}</Badge></div></div>

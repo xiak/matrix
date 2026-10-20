@@ -1,6 +1,6 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { initialAccessWorkspace } from "../repositories/previewAccessWorkspace";
 import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
@@ -10,7 +10,7 @@ afterEach(cleanup);
 describe("ServiceAuthorizationPreview", () => {
   it("moves focus through the current consent step without returning to the page title", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
 
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
@@ -37,8 +37,9 @@ describe("ServiceAuthorizationPreview", () => {
 
   it("opens the current account authorization directory before platform templates", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
 
+    expect(screen.queryByRole("button", { name: "返回角色列表" })).toBeNull();
     const directory = screen.getByRole("table", { name: "当前账号服务授权" });
     expect(within(directory).getByText("1 个有效 / 1 个全部")).toBeTruthy();
     expect(within(directory).getByText("ManagedServiceInstallationReader")).toBeTruthy();
@@ -72,7 +73,7 @@ describe("ServiceAuthorizationPreview", () => {
 
   it("keeps resource bindings and observed runtime metadata separate from execution", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
     await user.click(screen.getByRole("button", { name: "查看账号服务授权：托管服务安装访问" }));
 
     await user.click(screen.getByRole("tab", { name: "资源绑定 (1)" }));
@@ -120,7 +121,7 @@ describe("ServiceAuthorizationPreview", () => {
 
   it("searches and filters service-session metadata without changing the directory", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
     await user.click(screen.getByRole("button", { name: "查看账号服务授权：托管服务安装访问" }));
     await user.click(screen.getByRole("tab", { name: "运行边界" }));
 
@@ -149,7 +150,7 @@ describe("ServiceAuthorizationPreview", () => {
 
   it("previews revocation by session lifecycle and restores directory focus", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
     await user.click(screen.getByRole("button", { name: "查看账号服务授权：托管服务安装访问" }));
     await user.click(screen.getByRole("tab", { name: "运行边界" }));
     const sessions = screen.getByRole("table", { name: "服务会话目录样例" });
@@ -190,7 +191,7 @@ describe("ServiceAuthorizationPreview", () => {
 
   it("keeps the published template, account relation, and exact workload binding visibly separate", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
 
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
@@ -207,7 +208,7 @@ describe("ServiceAuthorizationPreview", () => {
   });
 
   it("explains product, IAM, and tenant ownership without exposing publisher controls", async () => {
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
 
     const responsibility = screen.getByRole("region", { name: "服务授权职责边界" });
     expect(within(responsibility).getByText("产品团队定义能力")).toBeTruthy();

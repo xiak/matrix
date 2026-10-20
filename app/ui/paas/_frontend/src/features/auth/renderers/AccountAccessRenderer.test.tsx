@@ -5030,6 +5030,7 @@ describe("account access", () => {
     expect(listServiceRoleTemplates).not.toHaveBeenCalled();
     await invokeMoreAction(user, "服务授权");
     expect(await screen.findByRole("table", { name: "当前账号服务授权关系" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "返回角色列表" })).toBeNull();
     expect(listServiceLinkedRoles).toHaveBeenCalledWith(expect.any(String), account.id, undefined);
     expect(listServiceRoleTemplates).not.toHaveBeenCalled();
 

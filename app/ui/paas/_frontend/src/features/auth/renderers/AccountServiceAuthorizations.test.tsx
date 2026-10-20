@@ -129,7 +129,7 @@ describe("AccountServiceAuthorizations", () => {
       read: vi.fn()
     };
     const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templates }) };
-    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={templateClient} /></LocaleProvider>);
 
     expect(screen.getByRole("heading", { name: "服务授权" })).toBeTruthy();
     const responsibility = screen.getByRole("region", { name: "服务授权职责边界" });
@@ -163,10 +163,10 @@ describe("AccountServiceAuthorizations", () => {
       list: vi.fn().mockImplementation(() => new Promise((done) => { resolveReplacement = done; })),
       read: vi.fn()
     };
-    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={first} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={first} templates={null} /></LocaleProvider>);
     expect(await screen.findByRole("button", { name: relation.role.name })).toBeTruthy();
 
-    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={replacement} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={replacement} templates={null} /></LocaleProvider>);
     expect(screen.getByRole("heading", { name: "服务授权" })).toBeTruthy();
     expect(screen.getByText("正在读取当前账号的服务授权")).toBeTruthy();
     expect(screen.queryByRole("button", { name: relation.role.name })).toBeNull();
@@ -189,12 +189,12 @@ describe("AccountServiceAuthorizations", () => {
       load: vi.fn().mockImplementation(() => new Promise((done) => { resolveReplacement = done; }))
     };
     const user = userEvent.setup();
-    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={first} onBack={vi.fn()} /></LocaleProvider>);
+    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={first} /></LocaleProvider>);
     expect(await screen.findByRole("button", { name: templateReference.id })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: templateReference.id }));
     expect(screen.getByRole("heading", { name: `服务授权模板 · ${templateReference.id}` })).toBeTruthy();
 
-    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={replacement} onBack={vi.fn()} /></LocaleProvider>);
+    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={replacement} /></LocaleProvider>);
     expect(screen.queryByRole("heading", { name: `服务授权模板 · ${templateReference.id}` })).toBeNull();
     expect(screen.getByRole("heading", { name: "服务授权" })).toBeTruthy();
     expect(screen.getAllByText("正在读取服务授权模板").length).toBeGreaterThan(0);
@@ -213,7 +213,7 @@ describe("AccountServiceAuthorizations", () => {
       read: vi.fn().mockResolvedValue({ status: "ready", access } satisfies ServiceLinkedRoleAccessLoad)
     };
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} /></LocaleProvider>);
 
     await user.click(await screen.findByRole("button", { name: relation.role.name }));
     expect(await screen.findByRole("heading", { name: relation.role.name })).toBeTruthy();
@@ -237,7 +237,7 @@ describe("AccountServiceAuthorizations", () => {
       read: vi.fn().mockResolvedValue({ status: "notFound" } satisfies ServiceLinkedRoleAccessLoad)
     };
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} /></LocaleProvider>);
 
     await user.click(await screen.findByRole("button", { name: relation.role.name }));
     expect(await screen.findByText("无法确认指定服务授权")).toBeTruthy();
@@ -254,7 +254,7 @@ describe("AccountServiceAuthorizations", () => {
     };
     const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templatesWithRetired }) };
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={templateClient} /></LocaleProvider>);
     await screen.findByRole("table", { name: "当前账号服务授权关系" });
     expect(templateClient.load).not.toHaveBeenCalled();
 
@@ -308,7 +308,7 @@ describe("AccountServiceAuthorizations", () => {
   it("searches a complete template snapshot and resets an empty result without reloading it", async () => {
     const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templatesWithRetired }) };
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} /></LocaleProvider>);
     await screen.findByRole("table", { name: "服务授权模板目录" });
     const search = screen.getByRole("searchbox", { name: "搜索模板、产品、角色或工作负载类型" });
     await user.type(search, "AuditExportReviewer");
@@ -326,7 +326,7 @@ describe("AccountServiceAuthorizations", () => {
   it("filters retired templates independently of account consent and restores the snapshot when cleared", async () => {
     const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templatesWithRetired }) };
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} /></LocaleProvider>);
     await screen.findByRole("table", { name: "服务授权模板目录" });
     await user.click(screen.getByRole("button", { name: "筛选" }));
     await user.click(screen.getByRole("combobox", { name: "模板状态" }));
@@ -342,7 +342,7 @@ describe("AccountServiceAuthorizations", () => {
   it("opens a read-only template chain without treating it as account consent, binding or runtime use", async () => {
     const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templatesWithRetired }) };
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} /></LocaleProvider>);
     await screen.findByRole("table", { name: "服务授权模板目录" });
     await user.click(screen.getByRole("button", { name: templateReference.id }));
     const chain = screen.getByRole("heading", { name: "服务授权链" }).closest("section")!;
@@ -368,7 +368,7 @@ describe("AccountServiceAuthorizations", () => {
     const manyTemplates = pagedTemplateSnapshot();
     const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: manyTemplates }) };
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} /></LocaleProvider>);
 
     let table = await screen.findByRole("table", { name: "服务授权模板目录" });
     expect(within(table).getAllByRole("row")).toHaveLength(11);
@@ -385,7 +385,7 @@ describe("AccountServiceAuthorizations", () => {
   it("returns template search from a later snapshot page to the first filtered page", async () => {
     const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: pagedTemplateSnapshot() }) };
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} /></LocaleProvider>);
     await screen.findByRole("table", { name: "服务授权模板目录" });
     await user.click(screen.getByRole("button", { name: "下一页" }));
     await user.type(screen.getByRole("searchbox", { name: "搜索模板、产品、角色或工作负载类型" }), "template-24");
@@ -402,7 +402,7 @@ describe("AccountServiceAuthorizations", () => {
       list: vi.fn().mockResolvedValue({ status: "forbidden" }),
       read: vi.fn()
     };
-    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} /></LocaleProvider>);
 
     expect(await screen.findByText("无权查看当前账号服务授权")).toBeTruthy();
     expect(screen.queryByText(/MOCK/)).toBeNull();
@@ -420,7 +420,7 @@ describe("AccountServiceAuthorizations", () => {
       read: vi.fn()
     };
     const user = userEvent.setup();
-    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} /></LocaleProvider>);
 
     expect(await screen.findByText("暂时无法读取服务授权")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "重试读取" }));

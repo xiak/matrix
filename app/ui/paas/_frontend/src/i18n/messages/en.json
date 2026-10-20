@@ -2838,7 +2838,6 @@
     "finish": "Finish preview"
   },
   "ServiceAuthorizationPreview": {
-    "backToRoles": "Back to roles",
     "backToDirectory": "Back to service authorization",
     "backToTemplate": "Back to authorization template",
     "title": "Service authorization",
@@ -3129,7 +3128,6 @@
     "title": "Service authorization",
     "hint": "Inspect this account's consented service-linked roles and resource-binding history, plus platform templates available to future consent flows.",
     "boundary": "Platform templates, account consent, and resource binding are separate boundaries. An available template is not account authorization, and account authorization does not bind every resource.",
-    "backToRoles": "Back to roles",
     "sectionsLabel": "Service authorization views",
     "sections": { "authorizations": "Current account", "templates": "Platform templates" },
     "readOnly": "Read only",
@@ -3211,7 +3209,6 @@
   },
   "ServiceRoleTemplateDirectory": {
     "title": "Service authorization templates",
-    "backToRoles": "Back to roles",
     "directoryHint": "Inspect service-role templates published through a controlled cloud-product and IAM platform release. A template fixes the permission ceiling and workload kinds available to a future consent flow.",
     "boundary": "This directory describes platform capability only; it is not the current account's authorization list. Customer consent, the service-linked role relation, and exact resource bindings are separate state.",
     "loading": "Loading service authorization templates",
