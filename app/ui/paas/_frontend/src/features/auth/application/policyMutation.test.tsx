@@ -17,7 +17,8 @@ const retired = () => ({ ...detail.policy, status: "RETIRED" as const, resourceV
 const owner = { accountId: "account-a", actorPrincipalId: "user-a" };
 const options = () => ({ enabled: true, ...owner, credential: "old-bearer", sessionRevision: 1,
   repository: { updatePolicy: vi.fn().mockResolvedValue(renamed()), deletePolicy: vi.fn().mockResolvedValue(retired()) },
-  protect: <T,>(run: () => Promise<T>) => run(), onExpired: vi.fn(), versionPolicyId: undefined as string | undefined });
+  protect: <T,>(run: () => Promise<T>) => run(), onExpired: vi.fn(), versionPolicyId: undefined as string | undefined,
+  authorityPending: false, authorizeBegin: vi.fn().mockReturnValue(true), authorizeRetry: vi.fn().mockReturnValue(true) });
 const locksDescriptor = Object.getOwnPropertyDescriptor(navigator, "locks");
 beforeEach(() => {
   const held = new Set<string>();
@@ -38,6 +39,35 @@ async function open(props = options()) {
 }
 
 describe("LIVE Policy original-command lifecycle", () => {
+  it("freezes new writes during authority refresh and requires the current exact target before dispatch", async () => {
+    const props = options(); props.authorityPending = true;
+    const hook = renderHook((current) => useLivePolicyMutation(current), { initialProps: props });
+    await waitFor(() => expect(hook.result.current).not.toBeNull());
+    expect(hook.result.current!.ready).toBe(false);
+    await act(async () => { expect(await hook.result.current!.begin(detail, rename)).toEqual({ status: "blocked" }); });
+    expect(props.repository.updatePolicy).not.toHaveBeenCalled();
+    hook.rerender({ ...props, authorityPending: false });
+    await waitFor(() => expect(hook.result.current!.ready).toBe(true));
+    props.authorizeBegin.mockReturnValue(false);
+    hook.rerender({ ...props, authorityPending: false });
+    await act(async () => { expect(await hook.result.current!.begin(detail, rename)).toEqual({ status: "blocked" }); });
+    expect(props.repository.updatePolicy).not.toHaveBeenCalled();
+  });
+
+  it("retains an UNKNOWN original request while fresh exact authority blocks its retry", async () => {
+    const props = options(); props.repository.updatePolicy.mockRejectedValueOnce(new Error("lost"));
+    const hook = await open(props);
+    await act(async () => { expect(await hook.result.current!.begin(detail, rename)).toEqual({ status: "unknown" }); });
+    const requestId = hook.result.current!.pending?.requestId;
+    const authorizeRetry = vi.fn().mockReturnValue(false);
+    hook.rerender({ ...props, authorizeRetry });
+    await waitFor(() => expect(hook.result.current!.ready).toBe(false));
+    expect(hook.result.current!.pending?.requestId).toBe(requestId);
+    await act(async () => { expect(await hook.result.current!.retry()).toEqual({ status: "blocked" }); });
+    expect(props.repository.updatePolicy).toHaveBeenCalledTimes(1);
+    expect(readPolicyMutationIntent(localStorage, owner)?.requestId).toBe(requestId);
+  });
+
   it("journals metadata before sending one frozen rename, then accepts only the matching result", async () => {
     const props = options();
     props.repository.updatePolicy.mockImplementation(async () => {

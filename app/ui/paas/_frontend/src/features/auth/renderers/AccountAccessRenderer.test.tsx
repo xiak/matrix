@@ -987,6 +987,62 @@ describe("account access", () => {
     expect(readPolicy).toHaveBeenLastCalledWith(credential, account.id, tenantPolicy.id);
   });
 
+  it("keeps a reviewed Policy rename frozen through identity and exact-target reauthorization, then enables only the current exact capability", async () => {
+    enablePolicyLocks();
+    const fixture = livePolicyMetadata();
+    const initial = await fixture.readPolicy(credential, account.id, "customer.logs");
+    fixture.readPolicy.mockReset();
+    let finishIdentity!: (value: AccountIdentity) => void;
+    const pendingIdentity = new Promise<AccountIdentity>((resolve) => { finishIdentity = resolve; });
+    fixture.repository.currentIdentity = vi.fn().mockResolvedValueOnce(structuredClone(identity)).mockReturnValueOnce(pendingIdentity);
+    let finishExact!: (value: AccountPolicyAccess) => void;
+    const pendingExact = new Promise<AccountPolicyAccess>((resolve) => { finishExact = resolve; });
+    fixture.readPolicy.mockResolvedValueOnce(initial).mockReturnValueOnce(pendingExact);
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await invokeMoreAction(user, "修改显示名");
+    fireEvent.change(screen.getByRole("textbox", { name: "新显示名" }), { target: { value: "Refresh-safe name" } });
+    await user.click(screen.getByRole("button", { name: "审阅修改" }));
+    const confirm = screen.getByRole("button", { name: "确认修改显示名" });
+    expect(confirm).toHaveProperty("disabled", false);
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(fixture.repository.currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("group", { name: "审阅显示名修改 · LogBoundary" })).toBeTruthy();
+    expect(screen.getByText("Refresh-safe name")).toBeTruthy();
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishIdentity(structuredClone(identity)); await pendingIdentity; });
+    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledTimes(2));
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishExact(initial); await pendingExact; });
+    await waitFor(() => expect(confirm).toHaveProperty("disabled", false));
+    await user.click(confirm);
+    await waitFor(() => expect(fixture.updatePolicy).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(["revoked", "failed"] as const)("preserves a reviewed Policy rename but blocks it when the fresh exact read is %s", async (outcome) => {
+    enablePolicyLocks();
+    const fixture = livePolicyMetadata();
+    const initial = await fixture.readPolicy(credential, account.id, "customer.logs");
+    fixture.readPolicy.mockReset();
+    fixture.repository.currentIdentity = vi.fn().mockResolvedValue(structuredClone(identity));
+    fixture.readPolicy.mockResolvedValueOnce(initial);
+    if (outcome === "revoked") fixture.readPolicy.mockResolvedValueOnce({ detail: initial.detail, capabilities: initial.capabilities.map((item) =>
+      item.action === "iam.policy.update" ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item) });
+    else fixture.readPolicy.mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await invokeMoreAction(user, "修改显示名");
+    fireEvent.change(screen.getByRole("textbox", { name: "新显示名" }), { target: { value: "Still local" } });
+    await user.click(screen.getByRole("button", { name: "审阅修改" }));
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledTimes(2));
+    const group = screen.getByRole("group", { name: "审阅显示名修改 · LogBoundary" });
+    expect(within(group).getByText("Still local")).toBeTruthy();
+    expect(within(group).getByRole("button", { name: "确认修改显示名" })).toHaveProperty("disabled", true);
+    expect(fixture.updatePolicy).not.toHaveBeenCalled();
+  });
+
   it("keeps a reviewed policy draft visible but blocks creation until permission recheck completes", async () => {
     let finishRefresh!: (value: AccountIdentity) => void;
     const pendingRefresh = new Promise<AccountIdentity>((resolve) => { finishRefresh = resolve; });
@@ -4057,10 +4113,53 @@ describe("account access", () => {
     const second = await openAccess(fixture.repository, authentication, "policies", "new-verified-bearer");
     const recovery = await screen.findByRole("region", { name: "策略操作结果未确认" });
     expect(fixture.updatePolicy).toHaveBeenCalledTimes(1);
+    expect(within(recovery).getByRole("button", { name: "重试完全相同的原命令" })).toHaveProperty("disabled", true);
+    await second.user.click(within(recovery).getByRole("button", { name: "查看策略当前状态" }));
+    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledWith("new-verified-bearer", account.id, "customer.logs"));
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "重试完全相同的原命令" })).toHaveProperty("disabled", false));
     await second.user.click(within(recovery).getByRole("button", { name: "重试完全相同的原命令" }));
     await waitFor(() => expect(fixture.updatePolicy).toHaveBeenCalledTimes(2));
     expect(fixture.updatePolicy.mock.calls[1]).toEqual(["new-verified-bearer", ...original.slice(1)]);
-    expect(await screen.findByRole("button", { name: "Recovered name" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "Recovered name" })).toBeTruthy();
+  });
+
+  it("keeps a version review frozen until both the current exact Policy and version directory are reauthorized", async () => {
+    const fixture = livePolicyVersions();
+    const initialAccess = await fixture.readPolicy();
+    const initialDirectory = await fixture.listPolicyVersions();
+    fixture.readPolicy.mockReset(); fixture.listPolicyVersions.mockReset();
+    let finishIdentity!: (value: AccountIdentity) => void;
+    const pendingIdentity = new Promise<AccountIdentity>((resolve) => { finishIdentity = resolve; });
+    fixture.repository.currentIdentity = vi.fn().mockResolvedValueOnce(structuredClone(identity)).mockReturnValueOnce(pendingIdentity);
+    let finishExact!: (value: AccountPolicyAccess) => void;
+    const pendingExact = new Promise<AccountPolicyAccess>((resolve) => { finishExact = resolve; });
+    let finishDirectory!: (value: typeof initialDirectory) => void;
+    const pendingDirectory = new Promise<typeof initialDirectory>((resolve) => { finishDirectory = resolve; });
+    fixture.readPolicy.mockResolvedValueOnce(initialAccess).mockReturnValueOnce(pendingExact);
+    fixture.listPolicyVersions.mockResolvedValueOnce(initialDirectory).mockReturnValueOnce(pendingDirectory);
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "版本 version-a 的操作" }));
+    await user.click(await screen.findByRole("menuitem", { name: "切换默认版本" }));
+    const confirm = screen.getByRole("button", { name: "确认切换" });
+    expect(confirm).toHaveProperty("disabled", false);
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(fixture.repository.currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: "将 version-a 设为默认版本" })).toBeTruthy();
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishIdentity(structuredClone(identity)); await pendingIdentity; });
+    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fixture.listPolicyVersions).toHaveBeenCalledTimes(2));
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishExact(initialAccess); await pendingExact; });
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishDirectory(initialDirectory); await pendingDirectory; });
+    await waitFor(() => expect(confirm).toHaveProperty("disabled", false));
+    await user.click(confirm);
+    await waitFor(() => expect(fixture.setDefaultPolicyVersion).toHaveBeenCalledTimes(1));
   });
 
   it("reviews a live default switch and retirement inline against the exact resource revision", async () => {
