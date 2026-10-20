@@ -33,10 +33,13 @@ describe("LogServiceRenderer", () => {
 
   it("keeps topic and collection pages inside the selected region", () => {
     const view = render(<LocaleProvider><LogServiceRenderer regionId="shanghai-b" scene={{ kind: "logs", view: "topics", data }} /></LocaleProvider>);
+    expect(screen.getByRole("table", { name: "日志主题" }).getAttribute("data-mobile-layout")).toBe("stack");
+    expect(screen.getByText("host-system").closest("td")?.getAttribute("data-label")).toBe("日志主题");
     expect(screen.getByText("host-system")).toBeTruthy();
     expect(screen.getByText("14 天")).toBeTruthy();
     expect(screen.queryByText("application-production")).toBeNull();
     view.rerender(<LocaleProvider><LogServiceRenderer regionId="shanghai-b" scene={{ kind: "logs", view: "collection", data }} /></LocaleProvider>);
+    expect(screen.getByRole("table", { name: "采集配置" }).getAttribute("data-mobile-layout")).toBe("stack");
     expect(screen.getByText("/var/log/syslog")).toBeTruthy();
     expect(screen.getByText("已暂停")).toBeTruthy();
   });
