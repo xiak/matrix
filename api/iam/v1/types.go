@@ -820,6 +820,9 @@ type ActionCapability struct {
 	RestrictionReason CapabilityRestriction `json:"restrictionReason,omitempty"`
 }
 
+// CurrentIdentity contains the complete bounded entry-capability projection.
+// Missing capabilities are an invalid response, not implicit denial. Entry
+// capabilities never stand in for a different owner or concrete-resource read.
 type CurrentIdentity struct {
 	APIVersion         string                 `json:"apiVersion"`
 	Kind               string                 `json:"kind"`

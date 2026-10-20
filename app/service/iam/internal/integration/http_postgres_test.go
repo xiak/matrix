@@ -23585,6 +23585,72 @@ func TestIAMAccessKeyPostgres(t *testing.T) {
 	}
 	manager, managerBearer := newUser("key-manager")
 	user, userBearer := newUser("key-user")
+	t.Run("entry-capabilities-follow-current-exact-authority", func(t *testing.T) {
+		reader, bearer := newUser("entry-capability-reader")
+		check := func(endpoint http.Handler, ownKeys, templates bool) {
+			t.Helper()
+			var identity iamv1.CurrentIdentity
+			call(endpoint, http.MethodGet, "/v1/auth/me", bearer, nil, http.StatusOK, &identity)
+			if iamv1.ValidateCurrentIdentity(identity) != nil || identity.User.ID != reader.ID {
+				t.Fatal("entry projection is not a complete current identity")
+			}
+			for _, capability := range identity.Capabilities {
+				want := capability.Action == iamv1.ActionIAMAccessKeyList && ownKeys ||
+					capability.Action == iamv1.ActionIAMServiceRoleTemplateList && templates
+				if capability.Available != want {
+					t.Fatalf("entry action %s available=%t want=%t", capability.Action, capability.Available, want)
+				}
+			}
+		}
+		grant := func(id string, target iamv1.PrincipalID, templates bool) iamv1.PolicyAttachment {
+			t.Helper()
+			statements := []iamv1.PolicyStatement{{SID: "keys", Effect: iamv1.PolicyAllow,
+				Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceExact, ID: string(target)}}}}
+			if templates {
+				statements = append(statements, iamv1.PolicyStatement{SID: "templates", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMServiceRoleTemplateList},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact, ID: string(reader.AccountID)}}})
+			}
+			var policy iamv1.PolicyDetail
+			call(handler, http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: id, RequestID: id,
+				Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: statements}}, http.StatusCreated, &policy)
+			var attachment iamv1.PolicyAttachment
+			call(handler, http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+				Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(reader.ID)}, PolicyID: policy.Policy.ID,
+				PolicyResourceVersion: policy.Policy.ResourceVersion, RequestID: id + "-grant"}, http.StatusOK, &attachment)
+			return attachment
+		}
+		revoke := func(attachment iamv1.PolicyAttachment, requestID string) {
+			t.Helper()
+			call(handler, http.MethodPost, "/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
+				iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: requestID}, http.StatusOK, nil)
+		}
+		ownPath := "/v1/users/" + string(reader.ID) + "/access-keys"
+		otherPath := "/v1/users/" + string(user.ID) + "/access-keys"
+		check(handler, false, false)
+		call(handler, http.MethodGet, ownPath, bearer, nil, http.StatusForbidden, nil)
+		other := grant("entry-other-target", user.ID, true)
+		check(second, false, true)
+		call(second, http.MethodGet, ownPath, bearer, nil, http.StatusForbidden, nil)
+		call(second, http.MethodGet, otherPath, bearer, nil, http.StatusOK, nil)
+		call(second, http.MethodGet, "/v1/service-role-templates", bearer, nil, http.StatusOK, nil)
+		call(second, http.MethodGet, "/v1/service-linked-roles", bearer, nil, http.StatusForbidden, nil)
+		revoke(other, "entry-other-revoke")
+		check(second, false, false)
+		self := grant("entry-own-target", reader.ID, false)
+		check(second, true, false)
+		var own iamv1.AccessKeyList
+		call(second, http.MethodGet, ownPath, bearer, nil, http.StatusOK, &own)
+		if iamv1.ValidateAccessKeyList(own) != nil || len(own.Items) != 0 || own.Capabilities[0].Available {
+			t.Fatal("self list authority became create authority or lost its real empty directory")
+		}
+		call(second, http.MethodGet, "/v1/users", bearer, nil, http.StatusForbidden, nil)
+		call(second, http.MethodGet, otherPath, bearer, nil, http.StatusForbidden, nil)
+		revoke(self, "entry-own-revoke")
+		check(second, false, false)
+		call(second, http.MethodGet, ownPath, bearer, nil, http.StatusForbidden, nil)
+	})
 	path := "/v1/users/" + string(user.ID) + "/access-keys"
 	call(handler, http.MethodGet, path, userBearer, nil, http.StatusForbidden, nil)
 	call(handler, http.MethodGet, path, managerBearer, nil, http.StatusForbidden, nil)

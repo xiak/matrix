@@ -129,6 +129,14 @@ func currentIdentityCapabilities(subject SessionCredential, root bool, now time.
 		{iamv1.ActionIAMGroupCreate, account, iamv1.AuthorizationResourceInstance, ""},
 		{iamv1.ActionIAMRoleList, account, iamv1.AuthorizationResourceInstance, ""},
 		{iamv1.ActionIAMRoleCreate, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMAccessKeyList, iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(subject.Subject.Principal.ID)}, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMAccessAnalyzerList, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMAccessAnalyzerCreate, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMSecurityReportCreate, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMServiceRoleTemplateList, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMServiceLinkedRoleList, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMSecuritySettingsRead, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMSecuritySettingsUpdate, account, iamv1.AuthorizationResourceInstance, ""},
 	}
 	result := make([]iamv1.ActionCapability, 0, len(requests))
 	for _, request := range requests {
@@ -138,6 +146,9 @@ func currentIdentityCapabilities(subject SessionCredential, root bool, now time.
 		}
 		if request.action == iamv1.ActionIAMRoleCreate && !root {
 			restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
+		}
+		if request.action == iamv1.ActionIAMAccessKeyList && root {
+			restrictCapability(&capability, iamv1.CapabilityRootIdentityProtected)
 		}
 		result = append(result, capability)
 	}

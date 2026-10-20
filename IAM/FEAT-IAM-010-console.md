@@ -79,7 +79,7 @@ CurrentIdentity 的固定入口集合沿既有十项增加八项：当前 USER �
 
 ### 权限感知增量需求与切片
 
-状态均为待实现/验收；本表不重开或扩大此前已接受页面路径。
+P0 正由 UX/UI 实现；P1 后端投影已有下述本地证据，客户端及组合验收仍未完成；P2/P3 待实现/验收。本表不重开或扩大此前已接受页面路径。
 
 | 切片 | 需求和实现 owner | 必须通过的结果 |
 | --- | --- | --- |
@@ -87,6 +87,8 @@ CurrentIdentity 的固定入口集合沿既有十项增加八项：当前 USER �
 | UX-P1 入口投影 | IAM-UI-09/11；IAM 用例/API/生成 owner 提供固定能力，UX/UI 严格解析并接入现有导航 | 普通User、只读委派、显式Deny、边界限制和受保护Root结果准确；本人Key无需User目录；模板和关系可局部访问；不能凭Read推断Write |
 | UX-P2 精确操作与身份刷新 | IAM-UI-09/11/12；各既有资源读取及对应UI owner | 已知ID不依赖目录；Analyzer/Finding/Report准确能力不污染持久对象和历史digest；撤权后新请求拒绝；切换身份丢弃迟到响应，UNKNOWN原意图与完成回执保持 |
 | UX-P3 组合验收 | 测试负责人复用既有 unit/contract、HTTP/PG、authorityprocess 与浏览器 owner | 最小权限普通用户、只读/可写、服务局部授权、直接URL、授权/撤权、503和真实空态逐条闭合；记录固定SHA/精确CI与可见页面证据，清理不再使用的自有临时资源 |
+
+当前 P1 后端候选将 `/v1/auth/me` 的完整集合从十项替换为上述十八项，并同步严格 Go/OpenAPI 校验；旧十项响应、重复项、错误本人/账号目标及虚构报告读取目标均拒绝。现有 `service_test.go` 逐项证明无授权拒绝、准确 Allow、显式 Deny、边界限制、强制改密、他人目标不扩权、Root 密钥保护以及投影不持久化额外决定。API/usecase/authority/HTTP/architecture 本地测试及相关 vet 已通过。既有 `TestIAMAccessKeyPostgres` 在专属受限 PostgreSQL18 上真实通过 83.86s，其中新增跨副本入口矩阵 1.28s：SELF 无 Allow 拒绝，只有他人目标时本人入口仍拒绝，模板读取不授予关系目录读取，本人仅 list 能读取真实空目录而没有 create/User.list，撤权后另一副本的 me 与实际请求同时关闭。该证据只覆盖后端候选；原十项客户端必须同步替换，尚未通过新组合 CI/浏览器，不可作为独立可发布控制台。
 
 先跑受影响的 API/usecase、客户端解析和真实组件测试；固定提交后运行必要独立 CI，同时推进无契约冲突的下一片。真实 PostgreSQL 与浏览器使用独立命名、受限资源；不为纯文案变更重复完整离线生命周期，不以组件全绿替代最终真实页面。当前设计不改变授权规则、SQL/readiness、ServiceIdentity、Audit编码或数据库发布profile；若精确操作投影发现必须改变这些边界，先在本owner写明实际变化和相应门禁，再实施，不能仅为字段展示增加schema版本。
 

@@ -2036,6 +2036,38 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 			Action   Action
 			Resource ResourceReference
 		}{ActionIAMRoleCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccessKeyList, ResourceReference{Kind: ResourceUser, ID: string(value.User.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccessAnalyzerList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMAccessAnalyzerCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMSecurityReportCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMServiceRoleTemplateList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMServiceLinkedRoleList, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMSecuritySettingsRead, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMSecuritySettingsUpdate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
 	)
 	if validateCapabilities(value.Capabilities, expected) != nil {
 		return errors.New("current identity capabilities are invalid")

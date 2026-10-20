@@ -27868,7 +27868,8 @@
             "items": {
               "$ref": "#/components/schemas/ActionCapability"
             },
-            "maxItems": 10,
+            "maxItems": 18,
+            "minItems": 18,
             "type": "array"
           },
           "identityKind": {

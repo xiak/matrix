@@ -8264,6 +8264,14 @@ func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 			blocked(ActionIAMGroupCreate, ResourceAccount, "account-a"),
 			blocked(ActionIAMRoleList, ResourceAccount, "account-a"),
 			blocked(ActionIAMRoleCreate, ResourceAccount, "account-a"),
+			blocked(ActionIAMAccessKeyList, ResourceUser, "user-a"),
+			blocked(ActionIAMAccessAnalyzerList, ResourceAccount, "account-a"),
+			blocked(ActionIAMAccessAnalyzerCreate, ResourceAccount, "account-a"),
+			blocked(ActionIAMSecurityReportCreate, ResourceAccount, "account-a"),
+			blocked(ActionIAMServiceRoleTemplateList, ResourceAccount, "account-a"),
+			blocked(ActionIAMServiceLinkedRoleList, ResourceAccount, "account-a"),
+			blocked(ActionIAMSecuritySettingsRead, ResourceAccount, "account-a"),
+			blocked(ActionIAMSecuritySettingsUpdate, ResourceAccount, "account-a"),
 		}}
 	if ValidateCurrentIdentity(identity) != nil {
 		t.Fatal("current policy identity rejected")
@@ -8281,7 +8289,14 @@ func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 			v.PolicySources[0].Attachment.RevokedAt = &now
 			v.PolicySources[0].Attachment.ResourceVersion = 2
 		},
-		"missing capability": func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[1:] },
+		"missing capability":   func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[1:] },
+		"old entry projection": func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[:10] },
+		"duplicate capability": func(v *CurrentIdentity) { v.Capabilities[10] = v.Capabilities[0] },
+		"another key owner":    func(v *CurrentIdentity) { v.Capabilities[10].Resource.ID = "another-user" },
+		"global key authority": func(v *CurrentIdentity) {
+			v.Capabilities[10].Resource = ResourceReference{Kind: ResourceAccount, ID: "account-a"}
+		},
+		"invented report read scope": func(v *CurrentIdentity) { v.Capabilities[13].Action = ActionIAMSecurityReportRead },
 		"wrong capability target": func(v *CurrentIdentity) {
 			v.Capabilities[0].Resource.ID = "account-a"
 		},

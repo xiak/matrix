@@ -39,6 +39,135 @@ func newCoreAuthority(repository Repository, config Config) (*Authority, error) 
 	return NewAuthority(repository, config)
 }
 
+func TestCurrentIdentityEntryCapabilitiesUseExactAuthority(t *testing.T) {
+	tx := newCoreTransaction()
+	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootstrap := coreBootstrap(t)
+	if _, err := service.Bootstrap(t.Context(), bootstrap); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the pure projection with a valid authority snapshot. This does
+	// not substitute for the HTTP/real-database authentication gates.
+	subject := SessionCredential{Subject: authority.SubjectContext{
+		Organization: tx.organization, Principal: tx.principal, InstallationID: tx.status.InstallationID,
+		Session: iamv1.Session{APIVersion: iamv1.APIVersion, Kind: "Session", ID: "capability-session",
+			AccountID: tx.organization.ID, PrincipalID: tx.principal.ID, Status: iamv1.SessionActive,
+			IssuedAt: tx.now.Add(-time.Minute), ExpiresAt: tx.now.Add(time.Hour)},
+		Boundary: &authority.ResolvedUserBoundary{State: "NONE", AccountID: tx.organization.ID,
+			UserID: tx.principal.ID, UserResourceVersion: tx.principal.ResourceVersion},
+	}}
+	subject.Subject.Principal.MustChangePassword = false
+	account := iamv1.ResourceReference{Kind: iamv1.ResourceAccount, ID: string(tx.organization.ID)}
+	user := iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(tx.principal.ID)}
+	expected := map[iamv1.Action]iamv1.ResourceReference{
+		iamv1.ActionIAMAccessKeyList:      user,
+		iamv1.ActionIAMAccessAnalyzerList: account, iamv1.ActionIAMAccessAnalyzerCreate: account,
+		iamv1.ActionIAMSecurityReportCreate: account, iamv1.ActionIAMServiceRoleTemplateList: account,
+		iamv1.ActionIAMServiceLinkedRoleList: account, iamv1.ActionIAMSecuritySettingsRead: account,
+		iamv1.ActionIAMSecuritySettingsUpdate: account,
+	}
+	project := func(value SessionCredential, root bool) map[iamv1.Action]iamv1.ActionCapability {
+		t.Helper()
+		capabilities, err := currentIdentityCapabilities(value, root, tx.now)
+		if err != nil {
+			t.Fatal("project current authority", err)
+		}
+		result := map[iamv1.Action]iamv1.ActionCapability{}
+		for _, capability := range capabilities {
+			if _, duplicate := result[capability.Action]; duplicate {
+				t.Fatal("duplicate entry capability", capability.Action)
+			}
+			result[capability.Action] = capability
+		}
+		for action, resource := range expected {
+			if result[action].Resource != resource {
+				t.Fatalf("missing or wrongly scoped entry %s: %+v", action, result[action])
+			}
+		}
+		return result
+	}
+	for _, capability := range project(subject, false) {
+		if capability.Available || capability.RestrictionReason != iamv1.CapabilityAuthorityRequired {
+			t.Fatal("ungranted subject acquired an entry", capability)
+		}
+	}
+	policy := func(id string, action iamv1.Action, resource iamv1.ResourceReference, effect iamv1.PolicyEffect) authority.AttachedPolicy {
+		t.Helper()
+		document := iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "exact", Effect: effect, Actions: []iamv1.Action{action},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: resource.Kind, Match: iamv1.PolicyResourceExact, ID: resource.ID}}}}}
+		profiles := iamv1.AllAuthorizationProfiles()
+		compilation, err := iamv1.CompilePolicyDocument(document, profiles)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, digest, err := iamv1.CanonicalizePolicyCompilation(document, compilation, profiles)
+		if err != nil {
+			t.Fatal(err)
+		}
+		version := iamv1.PolicyVersion{ID: iamv1.PolicyVersionID(id + "-v1"),
+			PolicyID: iamv1.PolicyID(id), ContractVersion: iamv1.PolicyVersionCompiledContract,
+			Document: document, Compilation: &compilation, ContentDigest: digest}
+		return authority.AttachedPolicy{Version: version, Profiles: profiles,
+			Policy: iamv1.Policy{APIVersion: iamv1.APIVersion, Kind: "Policy", ID: version.PolicyID, AccountID: tx.organization.ID,
+				Management: iamv1.PolicyCustomerManaged, DisplayName: id, Scope: iamv1.AuthorityScopeTenant,
+				Status: iamv1.PolicyActive, DefaultVersionID: version.ID, ResourceVersion: 1, CreatedAt: tx.now, UpdatedAt: tx.now},
+			Attachment: iamv1.PolicyAttachment{APIVersion: iamv1.APIVersion, Kind: "PolicyAttachment", ID: iamv1.PolicyAttachmentID(id + "-attachment"),
+				AccountID: tx.organization.ID, Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: user.ID},
+				PolicyID: version.PolicyID, Scope: iamv1.AuthorityScopeTenant, ResourceVersion: 1, CreatedAt: tx.now, UpdatedAt: tx.now}}
+	}
+	for action, resource := range expected {
+		t.Run(string(action), func(t *testing.T) {
+			value := subject
+			grant := policy("entry-policy", action, resource, iamv1.PolicyAllow)
+			value.Subject.Policies = []authority.AttachedPolicy{grant}
+			for projectedAction, capability := range project(value, false) {
+				if capability.Available != (projectedAction == action) {
+					t.Fatalf("exact grant widened or lost: %s %+v", action, capability)
+				}
+			}
+			value.Subject.Policies = append(value.Subject.Policies, policy("entry-deny", action, resource, iamv1.PolicyDeny))
+			if project(value, false)[action].Available {
+				t.Fatal("explicit deny ignored")
+			}
+			value.Subject.Policies = []authority.AttachedPolicy{grant}
+			value.Subject.Principal.MustChangePassword = true
+			if result := project(value, false)[action]; result.Available || result.RestrictionReason != iamv1.CapabilityCurrentCredentialChangeRequired {
+				t.Fatal("forced password session acquired entry", result)
+			}
+			value.Subject.Principal.MustChangePassword = false
+			foreign := resource
+			foreign.ID = "other-target"
+			value.Subject.Policies = []authority.AttachedPolicy{policy("other-target", action, foreign, iamv1.PolicyAllow)}
+			if project(value, false)[action].Available {
+				t.Fatal("grant for another exact target widened")
+			}
+			boundary := policy("entry-boundary", iamv1.ActionIAMUserList, account, iamv1.PolicyAllow)
+			value.Subject.Policies = []authority.AttachedPolicy{grant}
+			value.Subject.Boundary = &authority.ResolvedUserBoundary{State: "BOUND", AccountID: tx.organization.ID,
+				UserID: tx.principal.ID, UserResourceVersion: tx.principal.ResourceVersion, BoundaryID: "entry-boundary", ResourceVersion: 1,
+				Policy: &boundary.Policy, Version: &boundary.Version, Profiles: boundary.Profiles}
+			if project(value, false)[action].Available {
+				t.Fatal("entry ignored current boundary")
+			}
+		})
+	}
+	subject.Subject.Policies = []authority.AttachedPolicy{policy("own-key-list", iamv1.ActionIAMAccessKeyList, user, iamv1.PolicyAllow)}
+	if result := project(subject, true)[iamv1.ActionIAMAccessKeyList]; result.Available || result.RestrictionReason != iamv1.CapabilityRootIdentityProtected {
+		t.Fatal("root acquired a forbidden key directory", result)
+	}
+	subject.Subject.Policies = nil // A later current snapshot after revocation.
+	if project(subject, false)[iamv1.ActionIAMAccessKeyList].Available {
+		t.Fatal("entry reused prior permission")
+	}
+	if len(tx.authorizations) != 0 {
+		t.Fatal("UI projection persisted an authorization decision")
+	}
+}
+
 func TestLoginChallengeIssuerRequiresExactLockedCeremony(t *testing.T) {
 	tx := newCoreTransaction()
 	service, err := newCoreAuthority(&coreRepository{transaction: tx}, Config{NewID: func(string) (string, error) { return "challenge-issued", nil }})

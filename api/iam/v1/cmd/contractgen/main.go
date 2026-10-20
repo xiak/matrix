@@ -1405,7 +1405,10 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		}}}}
 	}
 	if (owner == "CurrentIdentity" || owner == "UserAccess" || owner == "GroupAccess" || owner == "GroupMembershipAccess" || owner == "AccountAccess") && jsonName == "capabilities" {
-		base["maxItems"] = map[string]int{"CurrentIdentity": 10, "UserAccess": 265, "GroupAccess": 262, "GroupMembershipAccess": 1, "AccountAccess": 2}[owner]
+		base["maxItems"] = map[string]int{"CurrentIdentity": 18, "UserAccess": 265, "GroupAccess": 262, "GroupMembershipAccess": 1, "AccountAccess": 2}[owner]
+		if owner == "CurrentIdentity" {
+			base["minItems"] = 18
+		}
 	}
 	if field.Type.Name() == "Secret" {
 		base["writeOnly"] = true
