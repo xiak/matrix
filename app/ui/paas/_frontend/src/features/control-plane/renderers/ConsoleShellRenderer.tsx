@@ -50,7 +50,7 @@ import {
 import { useSession } from "@/features/auth/application/SessionProvider";
 import { useEffectiveCredential, useRoleSession } from "@/features/auth/application/RoleSessionProvider";
 import { LiveRoleSelfService } from "@/features/auth/renderers/LiveRoleSelfService";
-import { AccountAccessProvider, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
+import { AccountAccessProvider, useAccountAccess, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
 import { LoginRenderer } from "@/features/auth/renderers/LoginRenderer";
 import type { AccountRepository } from "@/features/auth/repositories/iamRepository";
 import {
@@ -242,6 +242,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const controlPlane = useControlPlane();
   const projectScene = controlPlane.projectScene;
   const prepareControlPlane = controlPlane.prepare;
+  const accountAccess = useAccountAccess();
   const accountCapabilities = useAccountCapabilities();
   const scene = controlPlane.scene;
   const pendingSelection = navigation.pendingSelection;
@@ -420,6 +421,17 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "policy-language": iamWorkspaceText("policyLanguagePreview"), "create-role": iamWorkspaceText("createRole"), "service-authorizations": roleWorkspaceText("serviceAuthorization"), "role-access": accountText("roleAccessTitle"), "authorization-profiles": profilePublishingText("workspaceTitle"), tenants: accountText("tenantAccounts") };
   const accessView = frame.section === "access" ? pendingSelection?.view ?? navigation.selection.view : undefined;
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
+  const headerCommands = frame.section === "access" && !frame.preview && roleSession.mode === "USER" && accessView !== "sessions" && accessView !== "role-access"
+    ? <ContentPage.Commands label={collection("pageActions")} secondary={[{
+        id: "refresh-iam-permissions",
+        label: accountText(accountAccess.loading ? "refreshingPermissions" : "refreshPermissions"),
+        icon: <RefreshCcw aria-hidden="true" />,
+        disabled: Boolean(pendingSelection) || accountAccess.loading,
+        onSelect: accountAccess.reload
+      }]} />
+    : workspaceAction && WorkspaceActionIcon
+      ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={{ id: "workspace", label: t(`workspaceActions.${scene!.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`), icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />, disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible, onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary" }} />
+      : undefined;
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
   const pageContent = content ? <ConsoleContentRenderer accountId={activationAccountId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={pendingSelection ?? navigation.selection} /> : null;
   const resourceContent = <Fragment key={dataOwnerKey}>
@@ -556,7 +568,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
               <ContentPage parentLabel={pageTitle} pending={Boolean(pendingSelection)} data-navigating={pendingSelection ? "true" : undefined}>
                 <Suspense fallback={<ContentPage.Header title={pageTitle} />}><ConsolePageHeader title={pageTitle} selection={pendingSelection ?? navigation.selection} pendingHref={navigation.pendingHref} navigationFocusKey={navigation.navigationFocusKey} className={styles.pageHeader}
                   leading={<Button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label={t("openNavigation")} className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} iconOnly size="small" variant="ghost"><Menu aria-hidden="true" /></Button>}
-                  trailing={workspaceAction && WorkspaceActionIcon ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={{ id: "workspace", label: t(`workspaceActions.${scene!.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`), icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />, disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible, onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary" }} /> : undefined}
+                  trailing={headerCommands}
                   progress={!pendingSelection && controlPlane.loading && frame.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
                 <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><ConsoleContentLoadingRenderer experience={Boolean(experience)} key={navigation.pendingHref} label={loadingLabel} selection={pendingSelection} /></div> : undefined}>
                   <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>

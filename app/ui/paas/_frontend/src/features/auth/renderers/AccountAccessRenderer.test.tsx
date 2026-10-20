@@ -511,8 +511,10 @@ function SecuritySettingsIntentProbe({ proposed = { expectedResourceVersion: acc
   const intent = update?.intent;
   return <>
     <button onClick={() => void session.login("admin", "password")}>login-settings-probe</button>
+    <button onClick={access.reload}>reload-settings-access</button>
     <output aria-label="settings-probe-session">{session.phase}</output>
     <output aria-label="settings-sign-in-notice">{session.signInNotice ? `${session.signInNotice.kind}:${session.signInNotice.requestId}` : "none"}</output>
+    <output aria-label="settings-can-update">{String(access.accountSecuritySettings?.canUpdate ?? false)}</output>
     <button disabled={!update || Boolean(intent)} onClick={() => { if (update) void update.begin(accountSecuritySettings, proposed, 7).catch(() => {}); }}>begin-settings</button>
     <button disabled={!update || intent?.state !== "STEP_UP_UNKNOWN"} onClick={() => { if (update) void update.retryStepUp().catch(() => {}); }}>retry-settings-step-up</button>
     <button disabled={!update || intent?.state !== "PENDING"} onClick={() => { if (update) void update.verifyStepUp({ requestId: `ui-account-security-settings-verify-${"b".repeat(32)}`, password: "test-password", code: "123456" }).catch(() => {}); }}>verify-settings-step-up</button>
@@ -1266,6 +1268,67 @@ describe("account access", () => {
     expect(screen.getByLabelText("settings-probe-session").textContent).toBe("authenticated");
     expect(screen.getByLabelText("settings-sign-in-notice").textContent).toBe("none");
     expect(sessionStorage.getItem(sessionStorage.key(0)!)).toContain('"state":"COMPLETED"');
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains account-rule recovery evidence after update authority is revoked and closes new writes", async () => {
+    const revokedIdentity = structuredClone(identity);
+    revokedIdentity.capabilities = revokedIdentity.capabilities.map((item) => item.action === "iam.security-settings.update"
+      ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const }
+      : item);
+    const currentIdentity = vi.fn()
+      .mockResolvedValueOnce(structuredClone(identity))
+      .mockResolvedValue(structuredClone(revokedIdentity));
+    const startStepUp = vi.fn(async (_credential: string, command: { requestId: string; expectedFactorRevision: number; intent: SecuritySettingsUpdateIntent }) => ({
+      id: "step-up-settings-revoked", requestId: command.requestId, operation: "SECURITY_SETTINGS_UPDATE" as const,
+      expectedFactorRevision: command.expectedFactorRevision, securitySettings: structuredClone(command.intent), state: "PENDING" as const,
+      createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", provedAt: null, consumedAt: null
+    }));
+    const verifyStepUp = vi.fn(async () => {
+      const original = startStepUp.mock.calls[0]![1];
+      return {
+        id: "step-up-settings-revoked", requestId: original.requestId, operation: "SECURITY_SETTINGS_UPDATE" as const,
+        expectedFactorRevision: original.expectedFactorRevision, securitySettings: structuredClone(original.intent), state: "PROVED" as const,
+        createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", provedAt: "2026-09-11T08:01:00Z", consumedAt: null
+      };
+    });
+    const apply = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const changeByRequest = vi.fn(async (_credential: string, _accountId: string, requestId: string, settings: SecuritySettingsUpdateIntent) => ({
+      requestId,
+      expectedResourceVersion: settings.expectedResourceVersion,
+      settings: { ...structuredClone(accountSecuritySettings), resourceVersion: 5, accessKeyNetwork: structuredClone(settings.accessKeyNetwork) },
+      callerSessionEnded: true as const
+    }));
+    const repository = accounts({
+      currentIdentity,
+      accountSecuritySettings: {
+        read: vi.fn().mockResolvedValue(structuredClone(accountSecuritySettings)),
+        update: { startStepUp, stepUpByRequest: vi.fn(), verifyStepUp, apply, changeByRequest }
+      }
+    });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><SecuritySettingsIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "begin-settings" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "begin-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("PENDING"));
+    await user.click(screen.getByRole("button", { name: "verify-settings-step-up" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("PROVED"));
+    await user.click(screen.getByRole("button", { name: "apply-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("APPLY_UNKNOWN"));
+
+    await user.click(screen.getByRole("button", { name: "reload-settings-access" }));
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByLabelText("settings-can-update").textContent).toBe("false"));
+    expect(screen.getByLabelText("settings-intent").textContent).toContain("APPLY_UNKNOWN");
+    expect(screen.getByRole("button", { name: "inspect-settings" }).hasAttribute("disabled")).toBe(false);
+    expect(apply).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "inspect-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("COMPLETED"));
+    await user.click(screen.getByRole("button", { name: "clear-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toBe("none"));
+    expect(screen.getByRole("button", { name: "begin-settings" }).hasAttribute("disabled")).toBe(true);
     expect(apply).toHaveBeenCalledTimes(1);
   });
 
@@ -4234,6 +4297,38 @@ describe("account access", () => {
     await user.click(screen.getByRole("checkbox", { name: /我理解结果仍未知/ }));
     await user.click(screen.getByRole("button", { name: "结束旧意图" }));
     expect(screen.getByRole("button", { name: "新建自定义策略" })).toHaveProperty("disabled", false);
+  });
+
+  it("keeps an unknown policy creation recoverable after create authority is revoked", async () => {
+    const revokedIdentity = structuredClone(identity);
+    revokedIdentity.capabilities = revokedIdentity.capabilities.map((item) => item.action === "iam.policy.create"
+      ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const }
+      : item);
+    const createPolicy = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"));
+    const initial = accounts({ createPolicy });
+    const replacement = accounts({ createPolicy, currentIdentity: vi.fn().mockResolvedValue(revokedIdentity) });
+    const { user, replaceRepository } = await openAccess(initial, iam(), "policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Recovery survives revoke" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "策略声明 JSON" }), { target: { value: JSON.stringify(tenantPolicyDetail.version.document) } });
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    expect(await screen.findByRole("heading", { name: "策略创建结果未确认" })).toBeTruthy();
+    const original = createPolicy.mock.calls[0];
+
+    replaceRepository(replacement);
+    await waitFor(() => expect(replacement.currentIdentity).toHaveBeenCalledWith(credential));
+    expect(screen.getByRole("heading", { name: "策略创建结果未确认" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "按原请求重试" }));
+    await waitFor(() => expect(createPolicy).toHaveBeenCalledTimes(2));
+    expect(createPolicy.mock.calls[1]).toEqual(original);
+    expect(screen.getByRole("heading", { name: "策略创建结果未确认" })).toBeTruthy();
+
+    await user.click(screen.getByRole("checkbox", { name: /我理解结果仍未知/ }));
+    await user.click(screen.getByRole("button", { name: "结束旧意图" }));
+    expect(screen.queryByRole("button", { name: "新建自定义策略" })).toBeNull();
   });
 
   it("keeps JSON available when the live catalog is forbidden", async () => {

@@ -1256,6 +1256,27 @@ describe("ConsoleShellRenderer", () => {
     expect(within(menu).queryByRole("link", { name: "产品权限接入" })).toBeNull();
   });
 
+  it("rechecks LIVE IAM permissions in the existing Session without reloading the page or logging in again", async () => {
+    const currentIdentity = vi.fn(previewAccountRepository.currentIdentity);
+    const login = vi.fn(previewIamRepository.login);
+    const liveRepository: AccountRepository = { ...previewAccountRepository, workspace: undefined, currentIdentity };
+    const { user } = await renderConsole({
+      accountRepository: liveRepository,
+      iamRepository: { ...previewIamRepository, login },
+      section: "access",
+      view: "users"
+    });
+    await screen.findByRole("table", { name: "租户用户列表" });
+    expect(currentIdentity).toHaveBeenCalledTimes(1);
+    expect(login).toHaveBeenCalledTimes(1);
+
+    await user.click(await screen.findByRole("button", { name: "重新检查权限" }));
+
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledTimes(2));
+    expect(login).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("table", { name: "租户用户列表" })).toBeTruthy();
+  });
+
   it("exposes implemented LIVE security workspaces without exposing preview-only IAM pages", async () => {
     const liveRepository: AccountRepository = {
       ...previewAccountRepository,

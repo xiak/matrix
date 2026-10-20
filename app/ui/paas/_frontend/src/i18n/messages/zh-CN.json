@@ -1995,6 +1995,8 @@
     "title": "账号与权限",
     "refreshLabel": "刷新账号信息",
     "refresh": "刷新",
+    "refreshPermissions": "重新检查权限",
+    "refreshingPermissions": "正在检查权限",
     "loading": "正在读取 IAM 账号信息…",
     "loadingUser": "正在读取用户详情…",
     "retryUser": "重试读取",

@@ -1767,8 +1767,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   }, [active, credential, expireSession, repository, resourceAccessOwner, policyReadAccountId, sessionRevision, tenantId]);
 
   const policyCreate = useMemo<PolicyCreateClient | null>(() => {
-    if (!active || !credential || !scene || scene.accountId !== tenantId || !scene.canCreatePolicies || repository.workspace || !repository.createPolicy) return null;
+    if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace || !repository.createPolicy) return null;
     const accountId = scene.accountId;
+    const pending = policyCreateIntent?.accountId === accountId ? policyCreateIntent : null;
+    if (!scene.canCreatePolicies && !pending) return null;
     const expire = () => {
       if (expireSession(credential, sessionRevision)) {
         setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
@@ -1799,9 +1801,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
     };
     return {
-      pending: policyCreateIntent,
+      pending,
       begin(input) {
-        if (!input.displayName.trim() || input.document.scope !== "TENANT") return Promise.resolve({ status: "blocked" });
+        if (!scene.canCreatePolicies || !input.displayName.trim() || input.document.scope !== "TENANT") return Promise.resolve({ status: "blocked" });
         const intent: PolicyCreateIntent = { accountId, displayName: input.displayName.trim(),
           documentJSON: JSON.stringify(input.document), requestId: requestToken("ui-policy-create-"), phase: "submitting" };
         if (!rememberPolicyCreate(null, intent)) return Promise.resolve({ status: "blocked" });
@@ -1990,10 +1992,10 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     };
     return {
       identity: settingsOwner.identity, accountId, principalId, sessionId, sessionRevision, canRead, canUpdate,
-      update: updater && canRead && canUpdate ? {
+      update: updater && (canRead && canUpdate || Boolean(mutationIntent)) ? {
         intent: mutationIntent,
         async begin(current, proposed, expectedFactorRevision) {
-          if (securitySettingsIntentRef.current || currentViewSession.current !== viewSession || current.accountId !== accountId ||
+          if (!canRead || !canUpdate || securitySettingsIntentRef.current || currentViewSession.current !== viewSession || current.accountId !== accountId ||
               currentSettingsOwner.current !== settingsOwner || !Number.isSafeInteger(expectedFactorRevision) || expectedFactorRevision < 2 ||
               !validSecuritySettingsIntent(proposed) || proposed.expectedResourceVersion !== current.resourceVersion) throw new AccountSecuritySettingsReviewRejected();
           const before = { expectedResourceVersion: current.resourceVersion, mfa: current.mfa, password: current.password,
@@ -2085,6 +2087,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         async apply() {
           const current = requireMutation();
           if (securitySettingsMutationPending.current || current.state !== "PROVED" || !current.stepUp) throw new Error("INVALID_IAM_STATE");
+          if (!canUpdate) throw new HttpProblem(403, "IAM_FORBIDDEN");
           const unknown = { ...current, state: "APPLY_UNKNOWN" as const };
           replaceMutation(current, unknown);
           securitySettingsMutationPending.current = current.requestId;

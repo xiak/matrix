@@ -226,7 +226,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
     (view === "tenants" && !scene.canReadAccounts) ||
     (view === "policies" && !(workspace ? scene.canListUsers : entityId || scene.canViewPolicies)) ||
-    (view === "create-policy" && !workspace && !scene.canCreatePolicies) ||
+    (view === "create-policy" && !workspace && !scene.canCreatePolicies && !access.policyCreate?.pending) ||
     (view === "keys" && !workspace && !scene.canListOwnAccessKeys) ||
     (view === "service-authorizations" && !workspace && !access.serviceRoleTemplates && !access.serviceLinkedRoles) ||
     (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)

@@ -255,6 +255,7 @@ function AccountSecuritySettingsWorkspace({ client }: { client: AccountSecurityS
       const expiresAt = mutation.stepUp?.expiresAt;
       return <div aria-live="polite" className={accessStyles.networkBody}>
         <div><h4 className={accessStyles.focusHeading} ref={flowHeading} tabIndex={-1}>{security("flowTitle")}</h4><Typography.Text tone="muted">{network("live.flowHint")}</Typography.Text></div>
+        {!client?.canUpdate ? <Alert status="warning">{t("accountUpdateDenied")}</Alert> : null}
         {flowErrorMessage ? <Alert status="danger">{flowErrorMessage}</Alert> : null}
         <dl className={accessStyles.networkFacts}>
           <div><dt>{network("live.requestId")}</dt><dd><code>{mutation.requestId}</code></dd></div>
@@ -275,7 +276,7 @@ function AccountSecuritySettingsWorkspace({ client }: { client: AccountSecurityS
 
         {mutation.state === "VERIFICATION_UNKNOWN" ? <>{!busy ? <Alert status="warning">{network("live.verificationUnknown")}</Alert> : null}<div className={accessStyles.actions}><Button disabled={busy} onClick={() => void inspectStepUp()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{network("live.inspectStepUp")}</Button></div></> : null}
 
-        {mutation.state === "PROVED" ? <><Alert status="warning">{security("applyWarning")}</Alert><div className={accessStyles.actions}><Button disabled={busy} onClick={() => void apply()} type="button">{busy ? network("live.applying") : security("apply")}</Button></div></> : null}
+        {mutation.state === "PROVED" ? <><Alert status="warning">{security("applyWarning")}</Alert><div className={accessStyles.actions}><Button disabled={busy || !client?.canUpdate} onClick={() => void apply()} type="button">{busy ? network("live.applying") : security("apply")}</Button></div></> : null}
 
         {mutation.state === "APPLY_UNKNOWN" ? <>{!busy ? <Alert status="warning">{network("live.applyUnknown")}</Alert> : null}<div className={accessStyles.actions}><Button disabled={busy} onClick={() => void inspectChange()} type="button" variant="secondary"><RefreshCcw aria-hidden="true" />{network("live.inspectChange")}</Button></div></> : null}
 

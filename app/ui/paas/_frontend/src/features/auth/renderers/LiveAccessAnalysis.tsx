@@ -267,9 +267,10 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
   const executeMutation = async (intent: AccessAnalysisMutationIntent) => {
     const findingMutation = intent.operation === "archive" || intent.operation === "unarchive";
     setBusy(true); setNotice(null);
-    if (findingMutation) setDetailError(null); else setError(null);
+    if (findingMutation) { setDetailError(null); setDetailProblem(null); }
+    else { setError(null); setReadProblem(null); }
+    let result: AccessAnalyzer | AccessFinding;
     try {
-      let result: AccessAnalyzer | AccessFinding;
       if (intent.operation === "create") {
         result = await client.createAnalyzer({ ...intent.command, requestId: intent.requestId });
       } else if (intent.operation === "update") {
@@ -281,31 +282,6 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
         result = intent.operation === "archive"
           ? await client.archiveFinding(intent.analyzerId, intent.findingId, command)
           : await client.unarchiveFinding(intent.analyzerId, intent.findingId, command);
-      }
-      onResolved(client, intent.requestId);
-      if (!ownsClient()) return;
-      if (intent.operation === "create") {
-        const latest = await client.readAnalyzer((result as AccessAnalyzer).id);
-        if (!ownsClient()) return;
-        setAnalyzerAccess(latest); setAnalyzers([latest.analyzer]);
-        setFindingsLoading(findActionCapability(latest.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", latest.analyzer.id)?.available === true);
-        setNotice("created"); setSection("rule");
-      } else if (intent.operation === "update") {
-        const latest = await client.readAnalyzer((result as AccessAnalyzer).id);
-        if (!ownsClient()) return;
-        setAnalyzerAccess(latest); setAnalyzers([latest.analyzer]); setNotice("updated");
-        setCursorStack([undefined]); setPageIndex(0); setFindings(null);
-        setFindingsLoading(findActionCapability(latest.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", latest.analyzer.id)?.available === true);
-      } else if (intent.operation === "setDisposition") {
-        const latest = await client.readAnalyzer((result as AccessAnalyzer).id);
-        if (!ownsClient()) return;
-        setAnalyzerAccess(latest); setAnalyzers([latest.analyzer]); setNotice("dispositionUpdated");
-      } else {
-        const updated = result as AccessFinding;
-        const latest = await client.readFinding(updated.analyzerId, updated.id);
-        if (!ownsClient()) return;
-        replaceFinding(latest.finding, latest);
-        setNotice(latest.finding.status === "ARCHIVED" ? "archived" : "unarchived");
       }
     } catch (failure) {
       const code = failureCode(failure);
@@ -324,6 +300,49 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
             if (findingMutation) setDetailError(readCode); else setError(readCode);
           }
         }
+      }
+      if (ownsClient()) setBusy(false);
+      return;
+    }
+
+    // A successful command and its authoritative follow-up read are separate
+    // outcomes. Never turn an applied mutation into an outcome-unknown write
+    // merely because the detail refresh failed.
+    onResolved(client, intent.requestId);
+    if (!ownsClient()) return;
+    if (intent.operation === "create") { setNotice("created"); setSection("rule"); }
+    else if (intent.operation === "update") setNotice("updated");
+    else if (intent.operation === "setDisposition") setNotice("dispositionUpdated");
+    else setNotice((result as AccessFinding).status === "ARCHIVED" ? "archived" : "unarchived");
+
+    try {
+      if (intent.operation === "create" || intent.operation === "update" || intent.operation === "setDisposition") {
+        const analyzerId = (result as AccessAnalyzer).id;
+        setKnownAnalyzerId(analyzerId);
+        const latest = await client.readAnalyzer(analyzerId);
+        if (!ownsClient()) return;
+        setAnalyzerAccess(latest); setAnalyzers([latest.analyzer]);
+        setReadProblem(null); setError(null);
+        if (intent.operation === "update") {
+          setCursorStack([undefined]); setPageIndex(0); setFindings(null);
+        }
+        setFindingsLoading(findActionCapability(latest.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", latest.analyzer.id)?.available === true);
+      } else {
+        const updated = result as AccessFinding;
+        const latest = await client.readFinding(updated.analyzerId, updated.id);
+        if (!ownsClient()) return;
+        setDetailProblem(null); setDetailError(null);
+        replaceFinding(latest.finding, latest);
+      }
+    } catch (failure) {
+      if (!ownsClient()) return;
+      const code = failureCode(failure);
+      const problem = failure instanceof HttpProblem ? failure : null;
+      if (findingMutation) {
+        setSelected(null); setDetailProblem(problem); setDetailError(code);
+      } else {
+        setAnalyzerAccess(null); setAnalyzers(null); setFindings(null); setFindingsLoading(false);
+        setReadProblem(problem); setError(code);
       }
     } finally { if (ownsClient()) setBusy(false); }
   };
@@ -358,7 +377,7 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
       setFindingsLoading(findActionCapability(access.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", access.analyzer.id)?.available === true);
     } catch (failure) {
       if (!ownsClient()) return;
-      setAnalyzerAccess(null); setAnalyzers([]);
+      setAnalyzerAccess(null); setAnalyzers(null); setFindingsLoading(false);
       setReadProblem(failure instanceof HttpProblem ? failure : null); setError(failureCode(failure));
     } finally { if (ownsClient()) setAnalyzersLoading(false); }
   };
@@ -459,7 +478,7 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
         loading={<Tabs.Content value={section}><Card><TableSkeleton header label={t("live.loading")} labelVisible={false} rows={4} /></Card></Tabs.Content>}
         empty={{ title: t(client.canList ? "live.noAnalyzerTitle" : "live.listDeniedTitle"), description: t(client.canList ? "live.noAnalyzerHint" : "live.listDeniedHint"), action: client.canCreate ? <Button disabled={writeBlocked} onClick={() => void createAnalyzer()}>{t("live.createAnalyzer")}</Button> : undefined }}
         failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${error ?? "unavailable"}`) }}
-        onRetry={client.canList ? reload : undefined} problem={readProblem}>
+        onRetry={knownAnalyzerId.trim() ? () => void openKnownAnalyzer() : client.canList ? reload : undefined} problem={readProblem}>
       {analyzer ? <>
         <Tabs.Content className={styles.stack} value="coverage">
           <AccountReadBoundary status={presentedFindingsLoading ? "loading" : presentedFindings ? "ready" : !canListFindings ? "forbidden" : readStatus(error)}

@@ -253,6 +253,42 @@ describe("AccountServiceAuthorizations", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("moves to platform templates when the active relation source is revoked", async () => {
+    const relations: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockResolvedValue({ status: "ready", directory }),
+      read: vi.fn()
+    };
+    const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templates }) };
+    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={templateClient} /></LocaleProvider>);
+    await screen.findByRole("table", { name: "当前账号服务授权关系" });
+
+    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} /></LocaleProvider>);
+
+    expect(screen.getByRole("tab", { name: "平台模板", selected: true })).toBeTruthy();
+    expect(await screen.findByRole("table", { name: "服务授权模板目录" })).toBeTruthy();
+    expect(templateClient.load).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves to current-account authorizations when the active template source is revoked", async () => {
+    const relations: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockResolvedValue({ status: "ready", directory }),
+      read: vi.fn()
+    };
+    const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templates }) };
+    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} /></LocaleProvider>);
+    await screen.findByRole("table", { name: "服务授权模板目录" });
+
+    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} /></LocaleProvider>);
+
+    expect(screen.getByRole("tab", { name: "当前账号授权", selected: true })).toBeTruthy();
+    expect(await screen.findByRole("table", { name: "当前账号服务授权关系" })).toBeTruthy();
+    expect(relations.list).toHaveBeenCalledTimes(1);
+  });
+
   it("searches a complete template snapshot and resets an empty result without reloading it", async () => {
     const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templatesWithRetired }) };
     const user = userEvent.setup();

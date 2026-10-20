@@ -1995,6 +1995,8 @@
     "title": "Identity and access",
     "refreshLabel": "Refresh account details",
     "refresh": "Refresh",
+    "refreshPermissions": "Recheck permissions",
+    "refreshingPermissions": "Checking permissions",
     "loading": "Loading IAM account details…",
     "loadingUser": "Loading user details…",
     "retryUser": "Retry read",

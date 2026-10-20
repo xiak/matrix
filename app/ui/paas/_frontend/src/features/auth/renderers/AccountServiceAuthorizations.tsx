@@ -395,6 +395,9 @@ export function AccountServiceAuthorizations({ relations, templates, onBack }: {
 }) {
   const t = useTranslations("ServiceAuthorizationDirectory");
   const [section, setSection] = useState(relations ? "authorizations" : "templates");
+  const activeSection = section === "authorizations" && relations ? "authorizations"
+    : section === "templates" && templates ? "templates"
+      : relations ? "authorizations" : "templates";
   const [selection, setSelection] = useState<Selection | null>(null);
   const visibleSelection = selection?.kind === "relation"
     ? selection.client === relations ? selection : null
@@ -417,16 +420,16 @@ export function AccountServiceAuthorizations({ relations, templates, onBack }: {
     <ContentPage.Heading title={t("title")} scrollKey="service-authorization-directory" back={onBack ? { label: t("backToRoles"), onClick: onBack } : undefined} focus />
     <div className={styles.policyDirectoryIntro}><p>{t("hint")}</p><p>{t("boundary")}</p></div>
     <ServiceAuthorizationResponsibility />
-    <Tabs.Root value={section} onValueChange={setSection}>
+    <Tabs.Root value={activeSection} onValueChange={setSection}>
       <Tabs.List aria-label={t("sectionsLabel")}>
         {relations ? <Tabs.Trigger value="authorizations">{t("sections.authorizations")}</Tabs.Trigger> : null}
         {templates ? <Tabs.Trigger value="templates">{t("sections.templates")}</Tabs.Trigger> : null}
       </Tabs.List>
-      {relations ? <Tabs.Content className={styles.stack} value="authorizations">{section === "authorizations" ? <RelationDirectory client={relations} onOpen={(listing, trigger) => {
+      {relations ? <Tabs.Content className={styles.stack} value="authorizations">{activeSection === "authorizations" ? <RelationDirectory client={relations} onOpen={(listing, trigger) => {
         returnFocus.current = { client: relations, element: trigger };
         setSelection({ kind: "relation", client: relations, roleId: listing.relation.role.id, roleName: listing.relation.role.name });
       }} /> : null}</Tabs.Content> : null}
-      {templates ? <Tabs.Content className={styles.stack} value="templates">{section === "templates" ? <TemplateDirectory client={templates} onOpen={(template, trigger) => {
+      {templates ? <Tabs.Content className={styles.stack} value="templates">{activeSection === "templates" ? <TemplateDirectory client={templates} onOpen={(template, trigger) => {
         returnFocus.current = { client: templates, element: trigger };
         setSelection({ kind: "template", client: templates, template });
       }} /> : null}</Tabs.Content> : null}

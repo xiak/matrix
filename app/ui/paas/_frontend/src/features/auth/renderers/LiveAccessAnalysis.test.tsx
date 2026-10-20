@@ -108,6 +108,29 @@ describe("live access analysis", () => {
     expect(value.createAnalyzer).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [403, "当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。", false],
+    [404, "当前运行环境无法提供兼容的访问分析功能；这不代表服务尚未开通。", false],
+    [503, "访问分析暂时不可用；失败不代表当前账号没有 Analyzer 或 Finding。", true]
+  ] as const)("keeps an exact known-Analyzer %i failure distinct from an empty directory", async (status, message, retryable) => {
+    const user = userEvent.setup();
+    const readAnalyzer = vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE_ANALYZER_DIAGNOSTIC"));
+    view(client({ canList: false, canCreate: false, readAnalyzer }));
+    await user.type(await screen.findByLabelText("分析器 ID"), analyzer.id);
+    await user.click(screen.getByRole("button", { name: "查看分析器" }));
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.queryByText("未授权浏览分析器目录")).toBeNull();
+    expect(screen.queryByText("尚未创建访问分析器")).toBeNull();
+    if (retryable) {
+      await user.click(screen.getByRole("button", { name: "重试读取" }));
+      await waitFor(() => expect(readAnalyzer).toHaveBeenCalledTimes(2));
+      expect(readAnalyzer).toHaveBeenLastCalledWith(analyzer.id);
+    } else {
+      expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+    }
+  });
+
   it("keeps the detail shell stable while reauthorizing and rereading the selected Finding", async () => {
     const user = userEvent.setup();
     let resolveFinding!: (value: AccessFindingAccess) => void;
@@ -231,6 +254,26 @@ describe("live access analysis", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("keeps an applied Finding archive successful when its authoritative reread is temporarily unavailable", async () => {
+    const user = userEvent.setup();
+    const archived = { ...finding, status: "ARCHIVED" as const, resourceVersion: 2, updatedAt: timestamp };
+    const archiveFinding = vi.fn().mockResolvedValue(archived);
+    const readFinding = vi.fn()
+      .mockResolvedValueOnce(findingAccess())
+      .mockRejectedValueOnce(new HttpProblem(503, "PRIVATE_FINDING_DIAGNOSTIC"))
+      .mockResolvedValueOnce(findingAccess(archived));
+    view(client({ archiveFinding, readFinding }));
+    await user.click(await screen.findByRole("button", { name: "user-alex" }));
+    await user.click(await screen.findByRole("button", { name: "归档 Finding" }));
+
+    expect(await screen.findByText("Finding 已归档；目标对象和权限均未改变。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试原命令" })).toBeNull();
+    await user.click(await screen.findByRole("button", { name: "重试读取" }));
+    await waitFor(() => expect(readFinding).toHaveBeenCalledTimes(3));
+    expect(archiveFinding).toHaveBeenCalledTimes(1);
+    expect((await screen.findAllByText("已归档")).length).toBeGreaterThan(0);
+  });
+
   it("keeps a forbidden live response local and never substitutes MOCK samples", async () => {
     view(client({ listAnalyzers: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) }));
     expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。")).toBeTruthy();
@@ -275,6 +318,31 @@ describe("live access analysis", () => {
     await waitFor(() => expect(updateAnalyzer).toHaveBeenCalledTimes(2));
     expect(updateAnalyzer.mock.calls[1]?.[1]).toEqual(original);
     expect(await screen.findByText("分析规则已更新；这不会立即重算 Finding 或处置任何对象。")).toBeTruthy();
+  });
+
+  it("keeps an applied Analyzer update successful when only its authoritative reread fails", async () => {
+    const user = userEvent.setup();
+    const updated = { ...analyzer, unusedAccessAgeDays: 30, resourceVersion: 2, updatedAt: timestamp };
+    const updateAnalyzer = vi.fn().mockResolvedValue(updated);
+    const readAnalyzer = vi.fn()
+      .mockResolvedValueOnce(analyzerAccess())
+      .mockRejectedValueOnce(new HttpProblem(503, "PRIVATE_ANALYZER_DIAGNOSTIC"))
+      .mockResolvedValueOnce(analyzerAccess(updated));
+    view(client({ updateAnalyzer, readAnalyzer }));
+    await user.click(screen.getByRole("tab", { name: "分析规则" }));
+    const window = await screen.findByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window);
+    await user.type(window, "30");
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+
+    expect(await screen.findByText("分析规则已更新；这不会立即重算 Finding 或处置任何对象。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试原命令" })).toBeNull();
+    await user.click(await screen.findByRole("button", { name: "重试读取" }));
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledTimes(3));
+    expect(readAnalyzer).toHaveBeenLastCalledWith(analyzer.id);
+    expect(updateAnalyzer).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("tab", { name: "分析规则" }));
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
   });
 
   it("keeps the Analyzer draft after a stale-version conflict and requires a new explicit command", async () => {
