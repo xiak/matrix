@@ -137,6 +137,7 @@ func currentIdentityCapabilities(subject SessionCredential, root bool, now time.
 		{iamv1.ActionIAMServiceLinkedRoleList, account, iamv1.AuthorizationResourceInstance, ""},
 		{iamv1.ActionIAMSecuritySettingsRead, account, iamv1.AuthorizationResourceInstance, ""},
 		{iamv1.ActionIAMSecuritySettingsUpdate, account, iamv1.AuthorizationResourceInstance, ""},
+		{iamv1.ActionIAMPolicyCreate, account, iamv1.AuthorizationResourceInstance, ""},
 	}
 	result := make([]iamv1.ActionCapability, 0, len(requests))
 	for _, request := range requests {
@@ -150,9 +151,29 @@ func currentIdentityCapabilities(subject SessionCredential, root bool, now time.
 		if request.action == iamv1.ActionIAMAccessKeyList && root {
 			restrictCapability(&capability, iamv1.CapabilityRootIdentityProtected)
 		}
+		if request.action == iamv1.ActionIAMPolicyCreate && !hasPolicyPublicationPrerequisites(subject, root) {
+			restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
+		}
 		result = append(result, capability)
 	}
 	return result, nil
+}
+
+// These are the current actor prerequisites, not a proof that proposed Policy
+// content, attachments or concurrent target state satisfy the locked workflow.
+func hasPolicyPublicationPrerequisites(subject SessionCredential, root bool) bool {
+	if root {
+		return true
+	}
+	if subject.Subject.Boundary == nil || subject.Subject.Boundary.State != "BOUND" {
+		return false
+	}
+	for _, source := range subject.Subject.Policies {
+		if source.Attachment.Scope == iamv1.AuthorityScopeInstallation && source.Attachment.RevokedAt == nil {
+			return false
+		}
+	}
+	return true
 }
 
 // This boundary keeps authenticated tenant derivation, denied-decision Audit,
@@ -544,15 +565,51 @@ func (service *Authority) ListPolicies(ctx context.Context, credential iamv1.Sec
 	return result, nil
 }
 
-func (service *Authority) GetPolicy(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, requestID string) (iamv1.PolicyDetail, error) {
+func (service *Authority) GetPolicy(ctx context.Context, credential iamv1.Secret, id iamv1.PolicyID, requestID string) (iamv1.PolicyAccess, error) {
 	if iamv1.ValidateID("policyId", string(id)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
-		return iamv1.PolicyDetail{}, ErrInvalidArgument
+		return iamv1.PolicyAccess{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMPolicyRead, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(id)}, requestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyDetail, error) {
-			return tx.ReadPolicy(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.PolicyAccess, error) {
+			detail, err := tx.ReadPolicy(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
 				ActorPrincipalID: subject.Subject.Principal.ID, DecisionID: decision.ID}, id)
+			if err != nil {
+				return iamv1.PolicyAccess{}, err
+			}
+			if iamv1.ValidatePolicyDetail(detail) != nil || detail.Policy.ID != id ||
+				(detail.Policy.Management == iamv1.PolicyCustomerManaged && detail.Policy.AccountID != subject.Subject.Organization.ID) {
+				return iamv1.PolicyAccess{}, ErrUnavailable
+			}
+			account, err := tx.ReadAccount(ctx, subject.Subject.Organization.ID, subject.Subject.Principal.ID)
+			if err != nil {
+				return iamv1.PolicyAccess{}, err
+			}
+			if iamv1.ValidateAccount(account) != nil || account.ID != subject.Subject.Organization.ID {
+				return iamv1.PolicyAccess{}, ErrUnavailable
+			}
+			root := account.RootIdentity.PrincipalID == subject.Subject.Principal.ID
+			writable := detail.Policy.Management == iamv1.PolicyCustomerManaged && detail.Policy.AccountID == account.ID &&
+				hasPolicyPublicationPrerequisites(subject, root)
+			if !root && subject.Subject.Boundary != nil && subject.Subject.Boundary.Policy != nil && subject.Subject.Boundary.Policy.ID == id {
+				writable = false
+			}
+			result := iamv1.PolicyAccess{APIVersion: iamv1.APIVersion, Kind: "PolicyAccess", Detail: detail}
+			for _, action := range []iamv1.Action{iamv1.ActionIAMPolicyUpdate, iamv1.ActionIAMPolicyDelete, iamv1.ActionIAMPolicyVersionList,
+				iamv1.ActionIAMPolicyVersionRead, iamv1.ActionIAMPolicyVersionCreate, iamv1.ActionIAMPolicyVersionDelete, iamv1.ActionIAMPolicySetDefaultVersion} {
+				capability, err := projectCapability(subject, action, decision.Resource, iamv1.AuthorizationResourceInstance, "", now)
+				if err != nil {
+					return iamv1.PolicyAccess{}, err
+				}
+				if !writable && action != iamv1.ActionIAMPolicyVersionList && action != iamv1.ActionIAMPolicyVersionRead {
+					restrictCapability(&capability, iamv1.CapabilityAuthorityRequired)
+				}
+				result.Capabilities = append(result.Capabilities, capability)
+			}
+			if iamv1.ValidatePolicyAccess(result) != nil {
+				return iamv1.PolicyAccess{}, ErrUnavailable
+			}
+			return result, nil
 		})
 }
 

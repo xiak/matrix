@@ -70,6 +70,92 @@
         ],
         "type": "object"
       },
+      "AccessAnalyzerDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "analyzer": {
+            "$ref": "#/components/schemas/AccessAnalyzer"
+          },
+          "apiVersion": {
+            "type": "string"
+          },
+          "capabilities": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-analyzer.update"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCESS_ANALYZER"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-analyzer.set-disposition"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCESS_ANALYZER"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-finding.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCESS_ANALYZER"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ActionCapability"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "analyzer",
+          "apiVersion",
+          "capabilities",
+          "kind"
+        ],
+        "type": "object"
+      },
       "AccessAnalyzerID": {
         "allOf": [
           {
@@ -541,6 +627,74 @@
           "type",
           "updatedAt",
           "windowStartedAt"
+        ],
+        "type": "object"
+      },
+      "AccessFindingDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "capabilities": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-finding.archive"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCESS_FINDING"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-finding.unarchive"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCESS_FINDING"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ActionCapability"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "finding": {
+            "$ref": "#/components/schemas/AccessFinding"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "capabilities",
+          "finding",
+          "kind"
         ],
         "type": "object"
       },
@@ -1979,6 +2133,56 @@
           "coverage",
           "metadata",
           "users"
+        ],
+        "type": "object"
+      },
+      "AccountSecurityReportDetail": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "capabilities": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.security-report.download"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "SECURITY_REPORT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ActionCapability"
+            },
+            "maxItems": 1,
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "report": {
+            "$ref": "#/components/schemas/AccountSecurityReport"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "capabilities",
+          "kind",
+          "report"
         ],
         "type": "object"
       },
@@ -27865,12 +28069,363 @@
             "const": "iam.matrix.xiak.com/v1"
           },
           "capabilities": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.account.create"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        },
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.account.read"
+                    },
+                    "resource": {
+                      "properties": {
+                        "id": {
+                          "const": "collection"
+                        },
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.account.alias-set"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.user.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.user.create"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.group.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.group.create"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.role.create"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-key.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "USER"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-analyzer.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.access-analyzer.create"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.security-report.create"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.service-role-template.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.service-linked-role.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.security-settings.read"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.security-settings.update"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy.create"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "ACCOUNT"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
             "items": {
               "$ref": "#/components/schemas/ActionCapability"
             },
-            "maxItems": 18,
-            "minItems": 18,
-            "type": "array"
+            "maxItems": 19,
+            "minItems": 19,
+            "type": "array",
+            "uniqueItems": true
           },
           "identityKind": {
             "$ref": "#/components/schemas/IdentityKind"
@@ -29563,6 +30118,164 @@
           "scope",
           "status",
           "updatedAt"
+        ],
+        "type": "object"
+      },
+      "PolicyAccess": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "capabilities": {
+            "allOf": [
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy.update"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "POLICY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy.delete"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "POLICY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy-version.list"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "POLICY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy-version.read"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "POLICY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy-version.create"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "POLICY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy-version.delete"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "POLICY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              },
+              {
+                "contains": {
+                  "properties": {
+                    "action": {
+                      "const": "iam.policy.set-default-version"
+                    },
+                    "resource": {
+                      "properties": {
+                        "kind": {
+                          "const": "POLICY"
+                        }
+                      }
+                    }
+                  }
+                },
+                "maxContains": 1,
+                "minContains": 1
+              }
+            ],
+            "items": {
+              "$ref": "#/components/schemas/ActionCapability"
+            },
+            "maxItems": 7,
+            "minItems": 7,
+            "type": "array",
+            "uniqueItems": true
+          },
+          "detail": {
+            "$ref": "#/components/schemas/PolicyDetail"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "capabilities",
+          "detail",
+          "kind"
         ],
         "type": "object"
       },
@@ -42379,7 +43092,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccessAnalyzer"
+                  "$ref": "#/components/schemas/AccessAnalyzerDetail"
                 }
               }
             },
@@ -42398,7 +43111,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Read one current-account access analyzer"
+        "summary": "Read one current-account access analyzer with current-reader capabilities"
       }
     },
     "/v1/account/access-analyzers/{analyzerId}/findings": {
@@ -42507,7 +43220,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccessFinding"
+                  "$ref": "#/components/schemas/AccessFindingDetail"
                 }
               }
             },
@@ -42526,7 +43239,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Read one evidence-bound finding under current account permission"
+        "summary": "Read one evidence-bound finding with review capabilities, never authority over its target"
       }
     },
     "/v1/account/access-analyzers/{analyzerId}/findings/{findingId}:archive": {
@@ -42909,7 +43622,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AccountSecurityReport"
+                  "$ref": "#/components/schemas/AccountSecurityReportDetail"
                 }
               }
             },
@@ -42932,7 +43645,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Read one immutable nonsecret current-account IAM security report under current permission"
+        "summary": "Read one immutable report with separate current-reader download capability"
       }
     },
     "/v1/account/security-reports/{reportId}/content": {
@@ -47707,7 +48420,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/PolicyDetail"
+                  "$ref": "#/components/schemas/PolicyAccess"
                 }
               }
             },
@@ -47726,7 +48439,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Read the current tenant policy and default content"
+        "summary": "Read the current tenant policy and default content with exact current-reader capabilities"
       },
       "patch": {
         "operationId": "updatePolicy",

@@ -93,24 +93,33 @@ func (service *Authority) CreateAccountSecurityReport(ctx context.Context, crede
 		})
 }
 
-func (service *Authority) AccountSecurityReport(ctx context.Context, credential iamv1.Secret, reportID iamv1.SecurityReportID, requestID string) (iamv1.AccountSecurityReport, error) {
+func (service *Authority) AccountSecurityReport(ctx context.Context, credential iamv1.Secret, reportID iamv1.SecurityReportID, requestID string) (iamv1.AccountSecurityReportDetail, error) {
 	if iamv1.ValidateID("securityReportId", string(reportID)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
-		return iamv1.AccountSecurityReport{}, ErrInvalidArgument
+		return iamv1.AccountSecurityReportDetail{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMSecurityReportRead, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceSecurityReport, ID: string(reportID)}, requestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccountSecurityReport, error) {
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccountSecurityReportDetail, error) {
 			result, err := tx.ReadSecurityReport(ctx, AccountRead{AccountID: subject.Subject.Organization.ID,
 				ActorPrincipalID: subject.Subject.Principal.ID, ActorSessionID: subject.Subject.Session.ID, DecisionID: decision.ID}, reportID)
 			if err != nil {
-				return iamv1.AccountSecurityReport{}, err
+				return iamv1.AccountSecurityReportDetail{}, err
 			}
 			if iamv1.ValidateAccountSecurityReport(result) != nil || result.Metadata.ID != reportID ||
 				result.Metadata.AccountID != subject.Subject.Organization.ID || !result.Metadata.ObservedAt.Before(result.Metadata.ExpiresAt) ||
 				!now.Before(result.Metadata.ExpiresAt) {
-				return iamv1.AccountSecurityReport{}, ErrUnavailable
+				return iamv1.AccountSecurityReportDetail{}, ErrUnavailable
 			}
-			return result, nil
+			capability, err := projectCapability(subject, iamv1.ActionIAMSecurityReportDownload, decision.Resource, iamv1.AuthorizationResourceInstance, "", now)
+			if err != nil {
+				return iamv1.AccountSecurityReportDetail{}, err
+			}
+			detail := iamv1.AccountSecurityReportDetail{APIVersion: iamv1.APIVersion, Kind: "AccountSecurityReportDetail", Report: result,
+				Capabilities: []iamv1.ActionCapability{capability}}
+			if iamv1.ValidateAccountSecurityReportDetail(detail) != nil {
+				return iamv1.AccountSecurityReportDetail{}, ErrUnavailable
+			}
+			return detail, nil
 		})
 }
 

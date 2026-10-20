@@ -2068,6 +2068,10 @@ func ValidateCurrentIdentity(value CurrentIdentity) error {
 			Action   Action
 			Resource ResourceReference
 		}{ActionIAMSecuritySettingsUpdate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
+		struct {
+			Action   Action
+			Resource ResourceReference
+		}{ActionIAMPolicyCreate, ResourceReference{Kind: ResourceAccount, ID: string(value.Account.ID)}},
 	)
 	if validateCapabilities(value.Capabilities, expected) != nil {
 		return errors.New("current identity capabilities are invalid")

@@ -31,15 +31,15 @@ type Workflow interface {
 	UpdateAccountSecuritySettings(context.Context, iamv1.Secret, iamv1.UpdateAccountSecuritySettingsRequest) (iamv1.UpdateAccountSecuritySettingsResponse, error)
 	SecuritySettingsChange(context.Context, iamv1.Secret, string, string) (iamv1.AccountSecuritySettingsChange, error)
 	CreateAccountSecurityReport(context.Context, iamv1.Secret, iamv1.CreateAccountSecurityReportRequest) (iamv1.CreateAccountSecurityReportResponse, error)
-	AccountSecurityReport(context.Context, iamv1.Secret, iamv1.SecurityReportID, string) (iamv1.AccountSecurityReport, error)
+	AccountSecurityReport(context.Context, iamv1.Secret, iamv1.SecurityReportID, string) (iamv1.AccountSecurityReportDetail, error)
 	DownloadAccountSecurityReport(context.Context, iamv1.Secret, iamv1.SecurityReportID, string) ([]byte, error)
 	CreateAccessAnalyzer(context.Context, iamv1.Secret, iamv1.CreateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error)
 	ListAccessAnalyzers(context.Context, iamv1.Secret, string, string) (iamv1.AccessAnalyzerList, error)
-	AccessAnalyzer(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, string) (iamv1.AccessAnalyzer, error)
+	AccessAnalyzer(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, string) (iamv1.AccessAnalyzerDetail, error)
 	UpdateAccessAnalyzer(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.UpdateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error)
 	SetAccessDisposition(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.SetAccessDispositionRequest) (iamv1.AccessAnalyzer, error)
 	ListAccessFindings(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingFilter, string, string) (iamv1.AccessFindingList, error)
-	AccessFinding(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingID, string) (iamv1.AccessFinding, error)
+	AccessFinding(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingID, string) (iamv1.AccessFindingDetail, error)
 	ArchiveAccessFinding(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingID, iamv1.AccessFindingDispositionRequest) (iamv1.AccessFinding, error)
 	UnarchiveAccessFinding(context.Context, iamv1.Secret, iamv1.AccessAnalyzerID, iamv1.AccessFindingID, iamv1.AccessFindingDispositionRequest) (iamv1.AccessFinding, error)
 	ListUsers(context.Context, iamv1.Secret, string, string) (iamv1.UserList, error)
@@ -86,7 +86,7 @@ type Workflow interface {
 	ListWorkloadRoleCommandResults(context.Context, iamv1.Secret, iamv1.Secret, iamv1.WorkloadRoleCommandType) (iamv1.WorkloadRoleCommandResultList, error)
 	AssumeServiceRole(context.Context, iamv1.Secret, iamv1.AssumeServiceRoleRequest) (iamv1.AssumeRoleResponse, error)
 	GetServiceRoleSessionByRequest(context.Context, iamv1.Secret, string) (iamv1.RoleSession, bool, error)
-	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyDetail, error)
+	GetPolicy(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyAccess, error)
 	CreatePolicy(context.Context, iamv1.Secret, iamv1.CreatePolicyRequest) (iamv1.PolicyDetail, error)
 	ListPolicyVersions(context.Context, iamv1.Secret, iamv1.PolicyID, string) (iamv1.PolicyVersionList, error)
 	GetPolicyVersion(context.Context, iamv1.Secret, iamv1.PolicyID, iamv1.PolicyVersionID, string) (iamv1.PolicyVersionDetail, error)
@@ -399,6 +399,9 @@ func (value *handler) policy(response http.ResponseWriter, request *http.Request
 		return
 	}
 	result, err := value.workflow.GetPolicy(request.Context(), credential, iamv1.PolicyID(id), requestID(request))
+	if err == nil {
+		err = iamv1.ValidatePolicyAccess(result)
+	}
 	if err != nil {
 		value.writeError(response, request, err)
 		return
@@ -1527,7 +1530,7 @@ func (value *handler) securityReport(response http.ResponseWriter, request *http
 	}
 	result, err := value.workflow.AccountSecurityReport(request.Context(), credential, iamv1.SecurityReportID(id), requestID(request))
 	if err == nil {
-		err = iamv1.ValidateAccountSecurityReport(result)
+		err = iamv1.ValidateAccountSecurityReportDetail(result)
 	}
 	if err != nil {
 		value.writeError(response, request, err)
@@ -1663,7 +1666,7 @@ func (value *handler) accessAnalyzer(response http.ResponseWriter, request *http
 		}
 		result, err := value.workflow.AccessAnalyzer(request.Context(), credential, iamv1.AccessAnalyzerID(id), requestID(request))
 		if err == nil {
-			err = iamv1.ValidateAccessAnalyzer(result)
+			err = iamv1.ValidateAccessAnalyzerDetail(result)
 		}
 		if err != nil {
 			value.writeError(response, request, err)
@@ -1704,7 +1707,7 @@ func (value *handler) accessFinding(response http.ResponseWriter, request *http.
 		}
 		result, err := value.workflow.AccessFinding(request.Context(), credential, analyzerID, findingID, requestID(request))
 		if err == nil {
-			err = iamv1.ValidateAccessFinding(result)
+			err = iamv1.ValidateAccessFindingDetail(result)
 		}
 		if err != nil {
 			value.writeError(response, request, err)

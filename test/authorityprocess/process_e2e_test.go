@@ -3644,11 +3644,11 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 	assertUnreferenced()
 	if wantStatus == iamv1.PolicyActive {
 		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID), ownerBearer, nil)
-		var current iamv1.PolicyDetail
+		var current iamv1.PolicyAccess
 		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &current) != nil ||
-			iamv1.ValidatePolicyDetail(current) != nil || current.Policy.DisplayName != wantDisplayName ||
-			current.Policy.ResourceVersion != preparedPolicy.ResourceVersion+1 || current.Version.ID != selectedVersion.ID ||
-			current.Version.ContentDigest != selectedVersion.ContentDigest {
+			iamv1.ValidatePolicyAccess(current) != nil || current.Detail.Policy.DisplayName != wantDisplayName ||
+			current.Detail.Policy.ResourceVersion != preparedPolicy.ResourceVersion+1 || current.Detail.Version.ID != selectedVersion.ID ||
+			current.Detail.Version.ContentDigest != selectedVersion.ContentDigest {
 			t.Fatalf("read replayed Policy update status=%d body=%s", response.Status, response.Body)
 		}
 	}
@@ -12184,11 +12184,11 @@ func proveSecurityReportProcesses(t *testing.T, ctx context.Context, admin *pgx.
 			replay.Outcome != "EQUAL_REPLAY" || replay.Metadata != item.result.Metadata {
 			t.Fatal("replica changed the completed security report snapshot")
 		}
-		var report iamv1.AccountSecurityReport
+		var report iamv1.AccountSecurityReportDetail
 		read := performJSON(t, http.MethodGet, replicaEndpoint+"/v1/account/security-reports/"+string(item.result.Metadata.ID), item.owner, nil)
 		if read.Status != http.StatusOK || read.Header.Get("Cache-Control") != "no-store" ||
-			iamv1.DecodeRequest(bytes.NewReader(read.Body), &report) != nil || iamv1.ValidateAccountSecurityReport(report) != nil ||
-			report.Metadata != item.result.Metadata || report.Metadata.AccountID != item.account {
+			iamv1.DecodeRequest(bytes.NewReader(read.Body), &report) != nil || iamv1.ValidateAccountSecurityReportDetail(report) != nil ||
+			report.Report.Metadata != item.result.Metadata || report.Report.Metadata.AccountID != item.account {
 			t.Fatalf("read process security report account=%s status=%d", item.account, read.Status)
 		}
 	}
@@ -12211,10 +12211,10 @@ func proveSecurityReportProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	}
 	restartIAM()
 	for _, item := range fixtures {
-		var report iamv1.AccountSecurityReport
+		var report iamv1.AccountSecurityReportDetail
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/account/security-reports/"+string(item.result.Metadata.ID), item.owner, nil)
 		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &report) != nil ||
-			iamv1.ValidateAccountSecurityReport(report) != nil || report.Metadata != item.result.Metadata {
+			iamv1.ValidateAccountSecurityReportDetail(report) != nil || report.Report.Metadata != item.result.Metadata {
 			t.Fatalf("IAM restart lost security report account=%s status=%d", item.account, response.Status)
 		}
 	}
@@ -12476,9 +12476,10 @@ func proveAccessAnalyzerProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	}
 	restartIAM()
 	for _, item := range fixtures {
-		var analyzer iamv1.AccessAnalyzer
+		var analyzer iamv1.AccessAnalyzerDetail
 		response := performJSON(t, http.MethodGet, endpoint+"/v1/account/access-analyzers/"+string(item.result.ID), item.owner, nil)
-		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &analyzer) != nil || analyzer != item.result {
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &analyzer) != nil ||
+			iamv1.ValidateAccessAnalyzerDetail(analyzer) != nil || analyzer.Analyzer != item.result {
 			t.Fatalf("IAM restart lost access analyzer account=%s status=%d", item.account, response.Status)
 		}
 	}

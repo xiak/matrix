@@ -15603,8 +15603,12 @@ func TestIAMPolicyAttachmentChangePostgres(t *testing.T) {
 	var differentTarget iamv1.User
 	call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "attachment-change-different", "displayName": "Different boundary target",
 		"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "attachment-change-different"}, http.StatusCreated, &differentTarget)
-	var systemPolicy iamv1.PolicyDetail
-	call(http.MethodGet, "/v1/policies/"+string(iamv1.SystemPolicyPaaSViewer), root, nil, http.StatusOK, &systemPolicy)
+	var systemAccess iamv1.PolicyAccess
+	call(http.MethodGet, "/v1/policies/"+string(iamv1.SystemPolicyPaaSViewer), root, nil, http.StatusOK, &systemAccess)
+	if iamv1.ValidatePolicyAccess(systemAccess) != nil {
+		t.Fatal("invalid current system Policy projection")
+	}
+	systemPolicy := systemAccess.Detail
 	setBoundary(differentTarget, "attachment-change-different-boundary", systemPolicy)
 	var closedGroup iamv1.Group
 	call(http.MethodPost, "/v1/groups", root, iamv1.CreateGroupRequest{Name: "Closed delegated group", RequestID: "attachment-change-group"},
@@ -17033,8 +17037,12 @@ func proveUserBoundaryPolicyRaces(t *testing.T, ctx context.Context, handler htt
 				if peerStatus != http.StatusOK || (setStatus != http.StatusOK && setStatus != http.StatusConflict) {
 					t.Fatalf("set/default outcomes=%d/%d", setStatus, peerStatus)
 				}
-				var current iamv1.PolicyDetail
-				call(http.MethodGet, policyPath, nil, http.StatusOK, &current)
+				var currentAccess iamv1.PolicyAccess
+				call(http.MethodGet, policyPath, nil, http.StatusOK, &currentAccess)
+				if iamv1.ValidatePolicyAccess(currentAccess) != nil {
+					t.Fatal("invalid current Policy projection")
+				}
+				current := currentAccess.Detail
 				if current.Version.Document.Statements[0].Effect != iamv1.PolicyDeny ||
 					(setStatus == http.StatusOK && (view.Policy == nil || view.Policy.VersionID != current.Version.ID)) ||
 					(setStatus != http.StatusOK && view.Policy != nil) {
@@ -17118,12 +17126,13 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 			Statements: []iamv1.PolicyStatement{{SID: "selected", Effect: iamv1.PolicyAllow,
 				Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
 				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "customer-selected-app"}}}}}}
-	var policy, replay, fetched iamv1.PolicyDetail
+	var policy, replay iamv1.PolicyDetail
+	var fetched iamv1.PolicyAccess
 	post("/v1/policies", root, create, http.StatusCreated, &policy)
 	post("/v1/policies", root, create, http.StatusCreated, &replay)
 	get("/v1/policies/"+string(policy.Policy.ID), root, http.StatusOK, &fetched)
-	if iamv1.ValidatePolicyDetail(policy) != nil || policy.Policy.Management != iamv1.PolicyCustomerManaged ||
-		!bytes.Equal(mustIAMJSON(t, policy), mustIAMJSON(t, replay)) || !bytes.Equal(mustIAMJSON(t, policy), mustIAMJSON(t, fetched)) {
+	if iamv1.ValidatePolicyDetail(policy) != nil || iamv1.ValidatePolicyAccess(fetched) != nil || policy.Policy.Management != iamv1.PolicyCustomerManaged ||
+		!bytes.Equal(mustIAMJSON(t, policy), mustIAMJSON(t, replay)) || !bytes.Equal(mustIAMJSON(t, policy), mustIAMJSON(t, fetched.Detail)) {
 		t.Fatal("creation replay/read changed immutable policy identity or content")
 	}
 	var factCount, versionCount, attachmentCount int
@@ -17170,12 +17179,43 @@ func proveCustomerPolicyPublication(t *testing.T, ctx context.Context, handler h
 	post("/v1/policy-attachments/"+string(attachment.ID)+":revoke", root,
 		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: attachment.ResourceVersion, RequestID: "customer-policy-revoke"}, http.StatusOK, nil)
 	authorize(bearer, "customer-selected-app", "customer-policy-read-revoked", false)
+	var readerPolicy iamv1.PolicyDetail
+	post("/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Exact Policy reader", RequestID: "policy-exact-reader-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "read", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMPolicyRead},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourcePolicy, Match: iamv1.PolicyResourceExact, ID: string(policy.Policy.ID)}}}}}},
+		http.StatusCreated, &readerPolicy)
+	var readerGrant iamv1.PolicyAttachment
+	post("/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{Target: grant.Target,
+		PolicyID: readerPolicy.Policy.ID, PolicyResourceVersion: 1, RequestID: "policy-exact-reader-attach"}, http.StatusOK, &readerGrant)
+	get("/v1/policies", bearer, http.StatusForbidden, nil)
+	get("/v1/policies/"+string(policy.Policy.ID), bearer, http.StatusOK, &fetched)
+	if iamv1.ValidatePolicyAccess(fetched) != nil || !bytes.Equal(mustIAMJSON(t, fetched.Detail), mustIAMJSON(t, policy)) {
+		t.Fatal("known-ID read depended on Policy list or changed immutable content")
+	}
+	for _, capability := range fetched.Capabilities {
+		if capability.Available {
+			t.Fatal("Policy read implied a management or version grant", capability)
+		}
+	}
+	get("/v1/policies/"+string(policy.Policy.ID)+"/versions", bearer, http.StatusForbidden, nil)
+	request(http.MethodPatch, "/v1/policies/"+string(policy.Policy.ID), bearer, iamv1.UpdatePolicyRequest{
+		DisplayName: "Unpermitted rename", ResourceVersion: policy.Policy.ResourceVersion, RequestID: "policy-reader-cannot-update"}, http.StatusForbidden, nil)
+	post("/v1/policy-attachments/"+string(readerGrant.ID)+":revoke", root,
+		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: readerGrant.ResourceVersion, RequestID: "policy-exact-reader-revoke"}, http.StatusOK, nil)
+	get("/v1/policies/"+string(policy.Policy.ID), bearer, http.StatusForbidden, nil)
 	// An administrator grant is necessary for ordinary PDP authorization, but
 	// it never makes this USER an implicit Root. Storage still requires the
 	// current immutable delegation ceiling from the same authorization decision.
 	grant.PolicyID, grant.RequestID = iamv1.SystemPolicyAccountAdministrator, "customer-policy-admin"
 	post("/v1/policy-attachments", root, grant, http.StatusOK, nil)
-	get("/v1/policies/"+string(policy.Policy.ID), bearer, http.StatusOK, nil)
+	get("/v1/policies/"+string(policy.Policy.ID), bearer, http.StatusOK, &fetched)
+	for _, capability := range fetched.Capabilities {
+		want := capability.Action == iamv1.ActionIAMPolicyVersionRead || capability.Action == iamv1.ActionIAMPolicyVersionList
+		if capability.Available != want {
+			t.Fatal("unbounded administrator acquired delegated publication", capability)
+		}
+	}
 	variant.RequestID, variant.DisplayName = "customer-delegate-create", "Delegate policy"
 	post("/v1/policies", bearer, variant, http.StatusForbidden, nil)
 
@@ -20445,8 +20485,9 @@ func proveCustomerPolicyMetadata(t *testing.T, ctx context.Context, handler http
 		!bytes.Equal(mustIAMJSON(t, renamed.Version), mustIAMJSON(t, initial.Version)) || !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, replay)) {
 		t.Fatal("rename changed content, identity or replay result")
 	}
-	call(http.MethodGet, path, root, nil, http.StatusOK, &replay)
-	if !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, replay)) {
+	var current iamv1.PolicyAccess
+	call(http.MethodGet, path, root, nil, http.StatusOK, &current)
+	if iamv1.ValidatePolicyAccess(current) != nil || !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, current.Detail)) {
 		t.Fatal("rename was not visible to current read")
 	}
 	variant := update
@@ -20486,8 +20527,8 @@ func proveCustomerPolicyMetadata(t *testing.T, ctx context.Context, handler http
 	variant.DisplayName = "Rollback metadata"
 	variant.RequestID = "metadata-injected-failure"
 	call(http.MethodPatch, path, root, variant, http.StatusServiceUnavailable, nil)
-	call(http.MethodGet, path, root, nil, http.StatusOK, &replay)
-	if !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, replay)) {
+	call(http.MethodGet, path, root, nil, http.StatusOK, &current)
+	if iamv1.ValidatePolicyAccess(current) != nil || !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, current.Detail)) {
 		t.Fatal("outbox failure left partial metadata")
 	}
 	var count int
@@ -20550,8 +20591,8 @@ func proveCustomerPolicyMetadata(t *testing.T, ctx context.Context, handler http
 	other := localRecoveryLogin(t, handler, "metadata-other-root", initialDeveloperPassword, true)
 	other = localRecoveryChangePassword(t, handler, other, initialDeveloperPassword, changedDeveloperPassword)
 	call(http.MethodPatch, path, other, variant, http.StatusForbidden, nil)
-	call(http.MethodGet, path, root, nil, http.StatusOK, &replay)
-	if !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, replay)) {
+	call(http.MethodGet, path, root, nil, http.StatusOK, &current)
+	if iamv1.ValidatePolicyAccess(current) != nil || !bytes.Equal(mustIAMJSON(t, renamed), mustIAMJSON(t, current.Detail)) {
 		t.Fatal("rejected caller changed metadata")
 	}
 	var foreign iamv1.PolicyDetail
@@ -20706,9 +20747,9 @@ func proveCustomerPolicyDeletion(t *testing.T, ctx context.Context, handler http
 		}
 	}()
 	call(http.MethodDelete, path, root, deletion, http.StatusServiceUnavailable, nil)
-	var before iamv1.PolicyDetail
+	var before iamv1.PolicyAccess
 	call(http.MethodGet, path, root, nil, http.StatusOK, &before)
-	if !bytes.Equal(mustIAMJSON(t, before), mustIAMJSON(t, policy)) {
+	if iamv1.ValidatePolicyAccess(before) != nil || !bytes.Equal(mustIAMJSON(t, before.Detail), mustIAMJSON(t, policy)) {
 		t.Fatal("failed deletion left metadata changes")
 	}
 	var count int
@@ -22244,9 +22285,10 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 		t.Fatal("security report exact replay changed its snapshot")
 	}
 	reportPath := "/v1/account/security-reports/" + string(applied.Metadata.ID)
-	var report iamv1.AccountSecurityReport
-	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &report)
-	if iamv1.ValidateAccountSecurityReport(report) != nil || len(report.AccessKeys) != 1 || report.AccessKeys[0].ID != createdKey.Key.ID ||
+	var reportDetail iamv1.AccountSecurityReportDetail
+	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &reportDetail)
+	report := reportDetail.Report
+	if iamv1.ValidateAccountSecurityReportDetail(reportDetail) != nil || len(report.AccessKeys) != 1 || report.AccessKeys[0].ID != createdKey.Key.ID ||
 		report.AccessKeys[0].NetworkRestrictions.AllowedSourceCIDRs[0] != "192.0.2.0/24" {
 		t.Fatal("security report did not preserve the bounded IAM snapshot")
 	}
@@ -22315,9 +22357,10 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 	call(http.MethodPost, "/v1/account/security-reports", managerBearer,
 		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "security-report-after-change"},
 		http.StatusCreated, &changed)
-	var originalAfterChange, changedReport iamv1.AccountSecurityReport
-	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &originalAfterChange)
-	call(http.MethodGet, "/v1/account/security-reports/"+string(changed.Metadata.ID), managerBearer, nil, http.StatusOK, &changedReport)
+	var originalDetail, changedDetail iamv1.AccountSecurityReportDetail
+	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &originalDetail)
+	call(http.MethodGet, "/v1/account/security-reports/"+string(changed.Metadata.ID), managerBearer, nil, http.StatusOK, &changedDetail)
+	originalAfterChange, changedReport := originalDetail.Report, changedDetail.Report
 	userEntry := func(value iamv1.AccountSecurityReport) iamv1.SecurityReportUser {
 		t.Helper()
 		for _, user := range value.Users {
@@ -22383,7 +22426,7 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 		iamv1.SetAccountStatusRequest{Status: iamv1.AccountActive, ResourceVersion: disabledAccount.ResourceVersion, RequestID: "security-report-other-enable"},
 		http.StatusOK, nil)
 	otherRoot = localRecoveryLogin(t, handler, "security-report-other-root", changedDeveloperPassword, false)
-	call(http.MethodGet, "/v1/account/security-reports/"+string(otherReport.Metadata.ID), otherRoot, nil, http.StatusOK, &report)
+	call(http.MethodGet, "/v1/account/security-reports/"+string(otherReport.Metadata.ID), otherRoot, nil, http.StatusOK, &reportDetail)
 
 	var managerAccess iamv1.UserAccess
 	call(http.MethodGet, "/v1/users/"+string(manager.ID), root, nil, http.StatusOK, &managerAccess)
@@ -22396,7 +22439,7 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 		iamv1.SetUserStatusRequest{Status: iamv1.PrincipalActive, ResourceVersion: disabledManager.ResourceVersion, RequestID: "security-report-manager-enable"},
 		http.StatusOK, nil)
 	managerBearer = localRecoveryLogin(t, handler, manager.LoginName+"@"+string(manager.AccountID), changedDeveloperPassword, false)
-	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &report)
+	call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &reportDetail)
 
 	call(http.MethodPost, "/v1/policy-attachments/"+string(grant.ID)+":revoke", root,
 		iamv1.RevokePolicyAttachmentRequest{ResourceVersion: grant.ResourceVersion, RequestID: "security-report-manager-revoke"}, http.StatusOK, nil)
@@ -22407,7 +22450,55 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 	call(http.MethodPost, "/v1/account/security-reports", managerBearer,
 		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "security-report-after-revoke"},
 		http.StatusForbidden, nil)
-	call(http.MethodGet, reportPath, root, nil, http.StatusOK, &report)
+	t.Run("exact report read is independent from generation and download", func(t *testing.T) {
+		grantAction := func(action iamv1.Action, label string) iamv1.PolicyAttachment {
+			t.Helper()
+			var selected iamv1.PolicyDetail
+			call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: label, RequestID: label,
+				Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant,
+					Statements: []iamv1.PolicyStatement{{SID: "selected", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{action},
+						Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceSecurityReport, Match: iamv1.PolicyResourceExact, ID: string(applied.Metadata.ID)}}}}}},
+				http.StatusCreated, &selected)
+			var attachment iamv1.PolicyAttachment
+			call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+				Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(manager.ID)}, PolicyID: selected.Policy.ID,
+				PolicyResourceVersion: selected.Policy.ResourceVersion, RequestID: label + "-attach"}, http.StatusOK, &attachment)
+			return attachment
+		}
+		readGrant := grantAction(iamv1.ActionIAMSecurityReportRead, "report-exact-read")
+		assertRead := func(download bool) {
+			t.Helper()
+			var current iamv1.AccountSecurityReportDetail
+			call(http.MethodGet, reportPath, managerBearer, nil, http.StatusOK, &current)
+			if iamv1.ValidateAccountSecurityReportDetail(current) != nil || current.Capabilities[0].Available != download ||
+				!bytes.Equal(mustIAMJSON(t, current.Report), reportJSON) {
+				t.Fatal("report current capability or immutable content differs")
+			}
+		}
+		assertRead(false)
+		call(http.MethodGet, reportPath+"/content", managerBearer, nil, http.StatusForbidden, nil)
+		call(http.MethodGet, "/v1/account/security-reports/"+string(changed.Metadata.ID), managerBearer, nil, http.StatusForbidden, nil)
+		var identity iamv1.CurrentIdentity
+		call(http.MethodGet, "/v1/auth/me", managerBearer, nil, http.StatusOK, &identity)
+		if iamv1.ValidateCurrentIdentity(identity) != nil {
+			t.Fatal("invalid read-only report identity")
+		}
+		for _, capability := range identity.Capabilities {
+			if capability.Action == iamv1.ActionIAMSecurityReportCreate && capability.Available {
+				t.Fatal("exact report read granted report generation")
+			}
+		}
+		downloadGrant := grantAction(iamv1.ActionIAMSecurityReportDownload, "report-exact-download")
+		assertRead(true)
+		call(http.MethodPost, "/v1/policy-attachments/"+string(downloadGrant.ID)+":revoke", root,
+			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: downloadGrant.ResourceVersion, RequestID: "report-exact-download-revoke"}, http.StatusOK, nil)
+		assertRead(false)
+		call(http.MethodGet, reportPath+"/content", managerBearer, nil, http.StatusForbidden, nil)
+		call(http.MethodPost, "/v1/policy-attachments/"+string(readGrant.ID)+":revoke", root,
+			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: readGrant.ResourceVersion, RequestID: "report-exact-read-revoke"}, http.StatusOK, nil)
+		call(http.MethodGet, reportPath, managerBearer, nil, http.StatusForbidden, nil)
+	})
+	call(http.MethodGet, reportPath, root, nil, http.StatusOK, &reportDetail)
 
 	var receipts, contents, downloads, createdFacts, downloadFacts int
 	if err := database.QueryRow(ctx, `SELECT
@@ -22503,7 +22594,7 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 			t.Fatal("post-retention report changed the fixed seven-day contract")
 		}
 		call(http.MethodGet, reportPath, currentRoot, nil, http.StatusNotFound, nil)
-		call(http.MethodGet, "/v1/account/security-reports/"+string(afterRetention.Metadata.ID), currentRoot, nil, http.StatusOK, &report)
+		call(http.MethodGet, "/v1/account/security-reports/"+string(afterRetention.Metadata.ID), currentRoot, nil, http.StatusOK, &reportDetail)
 
 		var otherReceipts, otherContents int
 		if err := database.QueryRow(ctx, `SELECT
@@ -22605,9 +22696,9 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 		t.Fatal("access analyzer directory differs from Account-owned state")
 	}
 	path := "/v1/account/access-analyzers/" + string(analyzer.ID)
-	var read iamv1.AccessAnalyzer
+	var read iamv1.AccessAnalyzerDetail
 	call(http.MethodGet, path, root, nil, http.StatusOK, &read)
-	if read != analyzer {
+	if iamv1.ValidateAccessAnalyzerDetail(read) != nil || read.Analyzer != analyzer {
 		t.Fatal("access analyzer read differs from its created state")
 	}
 	assertCoverage := func(result iamv1.AccessFindingList, active bool) []time.Time {
@@ -22766,11 +22857,63 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 		t.Fatal("access finding directory differs from the committed detection")
 	}
 	findingPath := path + "/findings/" + string(detectedPage.Items[0].ID)
-	var detectedFinding iamv1.AccessFinding
-	call(http.MethodGet, findingPath, root, nil, http.StatusOK, &detectedFinding)
-	if detectedFinding != detectedPage.Items[0] {
+	var detectedDetail iamv1.AccessFindingDetail
+	call(http.MethodGet, findingPath, root, nil, http.StatusOK, &detectedDetail)
+	detectedFinding := detectedDetail.Finding
+	if iamv1.ValidateAccessFindingDetail(detectedDetail) != nil || detectedFinding != detectedPage.Items[0] {
 		t.Fatal("access finding detail differs from its directory evidence")
 	}
+	t.Run("exact analysis reads do not grant directories or review mutations", func(t *testing.T) {
+		var viewer iamv1.User
+		call(http.MethodPost, "/v1/users", root, map[string]any{"loginName": "analysis-exact-viewer", "displayName": "Exact analysis viewer",
+			"initialPassword": initialDeveloperPassword, "permissionBoundary": nil, "requestId": "analysis-exact-viewer-create"}, http.StatusCreated, &viewer)
+		viewerBearer := localRecoveryLogin(t, handler, viewer.LoginName+"@"+string(viewer.AccountID), initialDeveloperPassword, true)
+		viewerBearer = localRecoveryChangePassword(t, handler, viewerBearer, initialDeveloperPassword, changedDeveloperPassword)
+		var viewPolicy iamv1.PolicyDetail
+		call(http.MethodPost, "/v1/policies", root, iamv1.CreatePolicyRequest{DisplayName: "Exact analysis viewer", RequestID: "analysis-exact-policy-create",
+			Document: iamv1.PolicyDocument{LanguageVersion: "1", Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{
+				{SID: "analyzer", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMAccessAnalyzerRead},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccessAnalyzer, Match: iamv1.PolicyResourceExact, ID: string(analyzer.ID)}}},
+				{SID: "finding", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMAccessFindingRead},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccessFinding, Match: iamv1.PolicyResourceExact, ID: string(detectedFinding.ID)}}},
+			}}}, http.StatusCreated, &viewPolicy)
+		var viewGrant iamv1.PolicyAttachment
+		call(http.MethodPost, "/v1/policy-attachments", root, iamv1.CreatePolicyAttachmentRequest{
+			Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetUser, ID: string(viewer.ID)}, PolicyID: viewPolicy.Policy.ID,
+			PolicyResourceVersion: viewPolicy.Policy.ResourceVersion, RequestID: "analysis-exact-viewer-attach"}, http.StatusOK, &viewGrant)
+		var analyzerView iamv1.AccessAnalyzerDetail
+		var findingView iamv1.AccessFindingDetail
+		call(http.MethodGet, "/v1/account/access-analyzers", viewerBearer, nil, http.StatusForbidden, nil)
+		call(http.MethodGet, path, viewerBearer, nil, http.StatusOK, &analyzerView)
+		call(http.MethodGet, path+"/findings", viewerBearer, nil, http.StatusForbidden, nil)
+		call(http.MethodGet, findingPath, viewerBearer, nil, http.StatusOK, &findingView)
+		if iamv1.ValidateAccessAnalyzerDetail(analyzerView) != nil || analyzerView.Analyzer != enabled ||
+			iamv1.ValidateAccessFindingDetail(findingView) != nil || findingView.Finding != detectedFinding {
+			t.Fatal("exact read failed or changed analyzer/finding evidence")
+		}
+		for _, capability := range append(analyzerView.Capabilities, findingView.Capabilities...) {
+			if capability.Available {
+				t.Fatal("exact analysis read granted a mutation or directory", capability)
+			}
+		}
+		call(http.MethodPost, path+":update", viewerBearer, iamv1.UpdateAccessAnalyzerRequest{Status: iamv1.AccessAnalyzerDisabled,
+			UnusedAccessAgeDays: enabled.UnusedAccessAgeDays, ResourceVersion: enabled.ResourceVersion, RequestID: "analysis-viewer-update-denied"}, http.StatusForbidden, nil)
+		call(http.MethodPost, findingPath+":archive", viewerBearer, iamv1.AccessFindingDispositionRequest{
+			ResourceVersion: detectedFinding.ResourceVersion, RequestID: "analysis-viewer-archive-denied"}, http.StatusForbidden, nil)
+		call(http.MethodPost, "/v1/policy-attachments/"+string(viewGrant.ID)+":revoke", root,
+			iamv1.RevokePolicyAttachmentRequest{ResourceVersion: viewGrant.ResourceVersion, RequestID: "analysis-exact-viewer-revoke"}, http.StatusOK, nil)
+		call(http.MethodGet, path, viewerBearer, nil, http.StatusForbidden, nil)
+		call(http.MethodGet, findingPath, viewerBearer, nil, http.StatusForbidden, nil)
+		call(http.MethodGet, findingPath, root, nil, http.StatusOK, &findingView)
+		if findingView.Finding != detectedFinding {
+			t.Fatal("viewer authority change altered persistent finding")
+		}
+		for _, capability := range findingView.Capabilities {
+			if !capability.Available {
+				t.Fatal("Root lost permitted review action", capability)
+			}
+		}
+	})
 	archive := iamv1.AccessFindingDispositionRequest{ResourceVersion: detectedFinding.ResourceVersion, RequestID: "access-finding-archive"}
 	var archivedFinding iamv1.AccessFinding
 	call(http.MethodPost, findingPath+":archive", root, archive, http.StatusOK, &archivedFinding)
@@ -23497,9 +23640,9 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	}
 
 	applyIAMSchema(t, ctx, database)
-	var afterReplay iamv1.AccessAnalyzer
+	var afterReplay iamv1.AccessAnalyzerDetail
 	call(http.MethodGet, path, root, nil, http.StatusOK, &afterReplay)
-	if afterReplay != paginatedAnalyzer {
+	if iamv1.ValidateAccessAnalyzerDetail(afterReplay) != nil || afterReplay.Analyzer != paginatedAnalyzer {
 		t.Fatal("equivalent schema replay changed the access analyzer")
 	}
 }

@@ -67,9 +67,13 @@
 
 导航保留产品发现与本人入口。账号级管理菜单只消费准确入口能力；已知精确目标的详情读取不得依赖目录可见性，目录拒绝也不能证明该类型所有实例都不可读。AccessKey 的本人入口查询准确当前 USER；其他 USER 从已授权目录或已知目标进入，不能要求全局 User.list、扫描所有用户来推断权限，或把本人拒绝放大为对所有用户的拒绝。安全报告的生成是 ACCOUNT 动作，读取/下载是准确 SECURITY_REPORT 动作；分析器的创建/列表是 ACCOUNT 动作，读取/更新是准确 ACCESS_ANALYZER 动作，不能伪造一个 account-global read 能力。服务角色模板目录和当前账号关系目录分别授权，任何一块可用时保留该块，不以 AND 依赖整页关闭。
 
-CurrentIdentity 的固定入口集合沿既有十项增加八项：当前 USER 的 `iam.access-key.list`；当前 ACCOUNT 的 `iam.access-analyzer.list/create`、`iam.security-report.create`、`iam.service-role-template.list`、`iam.service-linked-role.list`、`iam.security-settings.read/update`（斜线表示两个既有独立动作）。wire 名称与现有 action catalog 完全一致，不能为 UI 添加业务权限。服务端与客户端同时严格校验完整集合、重复项、目标归属和拒绝原因；缺失旧字段或非法响应使投影不可用，不填充 false 或 Allow。新集合只进行有界纯 PDP 求值，复用一次已认证权威快照，不逐菜单调用接口、不读取业务资源、不生成新的授权决定或成功审计事实。
+CurrentIdentity 的固定入口集合沿既有十项增加九项，最终共十九项：当前 USER 的 `iam.access-key.list`；当前 ACCOUNT 的 `iam.access-analyzer.list/create`、`iam.security-report.create`、`iam.service-role-template.list`、`iam.service-linked-role.list`、`iam.security-settings.read/update`、`iam.policy.create`（斜线表示两个既有独立动作）。wire 名称与现有 action catalog 完全一致，不能为 UI 添加业务权限。服务端与客户端同时严格校验完整集合、重复项、目标归属和拒绝原因；缺失字段或非法响应使投影不可用，不填充 false 或 Allow。新集合只进行有界纯 PDP 求值，复用一次已认证权威快照，不逐菜单调用接口、不读取业务资源、不生成新的授权决定或成功审计事实。
 
-具体资源上的写操作须由现有资源读取 owner 提供独立准确能力；缺少能力时不得从 read 成功、系统策略名、资源状态或“创建过该对象”猜测。后续对 Analyzer、Finding、SecurityReport 的精确能力投影必须与持久业务对象、不可变报告正文/digest 和原完成回执分离；不将短暂 UI 权限写入历史快照、数据库或 Audit canonical。没有真实目标 ID 时不构造任意或通配目标来试探。
+具体资源上的写操作由现有资源读取 owner 提供独立准确能力；缺少能力时不得从 read 成功、系统策略名、资源状态或“创建过该对象”猜测。Analyzer、Finding、SecurityReport 的精确能力投影与持久业务对象、不可变报告正文/digest 和原完成回执分离；不将短暂 UI 权限写入历史快照、数据库或 Audit canonical。没有真实目标 ID 时不构造任意或通配目标来试探。
+
+P2 的只读响应边界沿现有 GET 详情扩展：`AccessAnalyzerDetail` 包含 analyzer 与固定的 update、set-disposition、access-finding.list 能力；`AccessFindingDetail` 包含 finding 与 archive/unarchive 能力；`AccountSecurityReportDetail` 包含 report 与 download 能力。每项使用内层真实对象 ID，仍先执行该详情原有 read 授权。列表、持久对象、所有变更响应和原完成回执保持原业务事实；只在选中对象后读取对应详情，不逐行请求能力。详情成功不授予其关联目标的修复权限，归档也不等于处置底层资源。业务状态、资源版本及发布内容检查继续独立执行，能力只是不绕过这些条件的当前权限提示。
+
+策略页面同样不能从已接入客户端方法推断发布或编辑权。当前 ACCOUNT 的 `iam.policy.create` 保留现有受限发布的主体前置条件；已授权 POLICY 的 GET 返回 `PolicyAccess {apiVersion,kind,detail,capabilities}`，提供更新、删除、版本列表/读取/创建/删除及默认版本切换的七项准确能力。版本操作的授权目标仍是 POLICY，不发明 POLICY_VERSION 权限。系统策略、非本账号对象、不可变版本和委派发布约束继续适用；普通委派主体须有当前有效权限上限且无活动安装级附件，不能编辑自己的上限策略。正向授权仍独立必需；实际发布内容、目标被引用状态及并发修订由原写事务重新检查，当前能力不保证这些业务条件全部满足。不扩张现有业务授权，不将动态能力写入 PolicyDetail 原完成事实或版本正文。User/Group/Role/AccessKey 已有的具体能力继续复用。客户端只接受最终十九项和四类完整详情，不保留十项或十八项兼容路径；后端候选不能单独作为可发布控制台。
 
 主视图和标签保持稳定标题，加载仅作用于数据区域；每个失败区域最多一个主状态和一个适用恢复动作。403 提供返回、已知安全上下文、授权后显式重新检查，不持续自动 Retry；临时故障提供唯一读取 Retry；unsupported 明确功能当前不可用，不宣称未开通。只有权威开通或委派结果才能显示对应引导。真正空目录才使用空状态和准确创建能力。当前有效 bearer 的401交给已有Session/RoleSession owner；密码/OTP错误不自行触发全局退出。隐藏入口不替代直接URL的友好拒绝，拒绝页不得泄露未经授权的目标名称、其他账号数据或确认对象存在。
 
@@ -79,7 +83,7 @@ CurrentIdentity 的固定入口集合沿既有十项增加八项：当前 USER �
 
 ### 权限感知增量需求与切片
 
-P0 正由 UX/UI 实现；P1 后端投影已有下述本地证据，客户端及组合验收仍未完成；P2/P3 待实现/验收。本表不重开或扩大此前已接受页面路径。
+P0 已有 UX/UI 固定候选，尚待本分支集成；P1/P2 后端投影已有下述证据，最终十九项客户端及组合验收仍未完成；P3 待验收。本表不重开或扩大此前已接受页面路径。
 
 | 切片 | 需求和实现 owner | 必须通过的结果 |
 | --- | --- | --- |
@@ -88,7 +92,13 @@ P0 正由 UX/UI 实现；P1 后端投影已有下述本地证据，客户端及�
 | UX-P2 精确操作与身份刷新 | IAM-UI-09/11/12；各既有资源读取及对应UI owner | 已知ID不依赖目录；Analyzer/Finding/Report准确能力不污染持久对象和历史digest；撤权后新请求拒绝；切换身份丢弃迟到响应，UNKNOWN原意图与完成回执保持 |
 | UX-P3 组合验收 | 测试负责人复用既有 unit/contract、HTTP/PG、authorityprocess 与浏览器 owner | 最小权限普通用户、只读/可写、服务局部授权、直接URL、授权/撤权、503和真实空态逐条闭合；记录固定SHA/精确CI与可见页面证据，清理不再使用的自有临时资源 |
 
-当前 P1 后端候选将 `/v1/auth/me` 的完整集合从十项替换为上述十八项，并同步严格 Go/OpenAPI 校验；旧十项响应、重复项、错误本人/账号目标及虚构报告读取目标均拒绝。现有 `service_test.go` 逐项证明无授权拒绝、准确 Allow、显式 Deny、边界限制、强制改密、他人目标不扩权、Root 密钥保护以及投影不持久化额外决定。API/usecase/authority/HTTP/architecture 本地测试及相关 vet 已通过。既有 `TestIAMAccessKeyPostgres` 在专属受限 PostgreSQL18 上真实通过 83.86s，其中新增跨副本入口矩阵 1.28s：SELF 无 Allow 拒绝，只有他人目标时本人入口仍拒绝，模板读取不授予关系目录读取，本人仅 list 能读取真实空目录而没有 create/User.list，撤权后另一副本的 me 与实际请求同时关闭。该证据只覆盖后端候选；原十项客户端必须同步替换，尚未通过新组合 CI/浏览器，不可作为独立可发布控制台。
+P1 固定 `3826eaf4b5628945dd210419fb96f743a5e13da1` 的十八项入口前置通过[独立 Verification39364150243](https://github.com/xiak/matrix/actions/runs/39364150243) attempt1，当前终态为 `completed/success`。现有 `service_test.go` 逐项证明无授权拒绝、准确 Allow、显式 Deny、边界限制、强制改密、他人目标不扩权、Root 密钥保护以及投影不持久化额外决定。API/usecase/authority/HTTP/architecture 本地测试及相关 vet 已通过。既有 `TestIAMAccessKeyPostgres` 在专属受限 PostgreSQL18 上真实通过 83.86s，其中新增跨副本入口矩阵 1.28s：SELF 无 Allow 拒绝，只有他人目标时本人入口仍拒绝，模板读取不授予关系目录读取，本人仅 list 能读取真实空目录而没有 create/User.list，撤权后另一副本的 me 与实际请求同时关闭。该证据只覆盖前置后端候选；最终客户端必须一次性消费十九项，不能继承未执行的新组合浏览器验收，也不能单独发布十八项后端。
+
+P2 在原 API/OpenAPI、用例和 GET owner 完成最终十九项以及四类具体资源投影；完整数组、重复/替换动作、错误目标类别和矛盾拒绝原因均由 Go 与发布 schema 检查，跨字段真实 ID 绑定仍由严格运行时校验负责。Policy 创建/管理能力另证明正向 Allow、委派权限上限和安装身份保护互相独立；策略正文、报告 canonical/digest/CSV 与原变更回执不含当前 UI 权限。相关 API/usecase/HTTP/architecture、全仓编译、vet 和聚焦 race 均通过；数据库/readiness/发布 profile 未变。
+
+专属 PostgreSQL18 的完整 `TestIAMSecurityReportPostgres` 通过7.90s，新增精确读取路径0.25s：仅 read 可读取已知报告但没有生成或下载能力，精确 download 授予/撤销改变当前能力而正文逐字不变，实际下载及跨报告请求继续拒绝。`TestIAMPolicyAuthorityStoragePostgres` 的发布、元数据更新和终态删除三条受影响流程在新库定向通过56.49s，证明已知 Policy ID 的读取不依赖目录、read 不授予版本/修改权、撤权即时生效及既有并发/回滚边界。首轮全量探针中两个旧 GET 测试消费者未适配新包装而失败；修复后上述定向复验通过，不将首轮记为全量成功。该证据不是新 UI、完整 P2 独立 CI 或签名发布组合的验收。
+
+`TestIAMAccessAnalyzerPostgres` 使用同一专属 PostgreSQL18、Windows 真实后台 worker 和任务专属 SSH 转发；新增精确 Analyzer/Finding 读取子用例通过21.73s，证明没有目录权限仍能读取准确对象，读取不授予更新/归档或底层目标操作，撤权后的下一请求关闭且持久 finding 不变。但父门禁在末尾持久状态核对触及原有三分钟期限，180.02s失败，不能登记为整项通过。未提高期限、缩减原断言或将其当作已定位的生产缺陷；完整原生 Linux 独立门禁仍待当前固定源码 CI 证明。后台进程和任务专属连接必须先结束，再清理不再使用的临时数据库、容器及转发。
 
 先跑受影响的 API/usecase、客户端解析和真实组件测试；固定提交后运行必要独立 CI，同时推进无契约冲突的下一片。真实 PostgreSQL 与浏览器使用独立命名、受限资源；不为纯文案变更重复完整离线生命周期，不以组件全绿替代最终真实页面。当前设计不改变授权规则、SQL/readiness、ServiceIdentity、Audit编码或数据库发布profile；若精确操作投影发现必须改变这些边界，先在本owner写明实际变化和相应门禁，再实施，不能仅为字段展示增加schema版本。
 

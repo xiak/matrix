@@ -91,21 +91,32 @@ func (service *Authority) ListAccessAnalyzers(ctx context.Context, credential ia
 		})
 }
 
-func (service *Authority) AccessAnalyzer(ctx context.Context, credential iamv1.Secret, analyzerID iamv1.AccessAnalyzerID, requestID string) (iamv1.AccessAnalyzer, error) {
+func (service *Authority) AccessAnalyzer(ctx context.Context, credential iamv1.Secret, analyzerID iamv1.AccessAnalyzerID, requestID string) (iamv1.AccessAnalyzerDetail, error) {
 	if iamv1.ValidateID("accessAnalyzerId", string(analyzerID)) != nil || iamv1.ValidateID("requestId", requestID) != nil {
-		return iamv1.AccessAnalyzer{}, ErrInvalidArgument
+		return iamv1.AccessAnalyzerDetail{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccessAnalyzerRead, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccessAnalyzer, ID: string(analyzerID)}, requestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.AccessAnalyzer, error) {
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccessAnalyzerDetail, error) {
 			result, err := tx.ReadAccessAnalyzer(ctx, AccessAnalyzerRead{AccountRead: accountRead(subject, decision), AnalyzerID: analyzerID})
 			if err != nil {
-				return iamv1.AccessAnalyzer{}, err
+				return iamv1.AccessAnalyzerDetail{}, err
 			}
 			if iamv1.ValidateAccessAnalyzer(result) != nil || result.ID != analyzerID || result.AccountID != subject.Subject.Organization.ID {
-				return iamv1.AccessAnalyzer{}, ErrUnavailable
+				return iamv1.AccessAnalyzerDetail{}, ErrUnavailable
 			}
-			return result, nil
+			detail := iamv1.AccessAnalyzerDetail{APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzerDetail", Analyzer: result}
+			for _, action := range []iamv1.Action{iamv1.ActionIAMAccessAnalyzerUpdate, iamv1.ActionIAMAccessAnalyzerSetDisposition, iamv1.ActionIAMAccessFindingList} {
+				capability, err := projectCapability(subject, action, decision.Resource, iamv1.AuthorizationResourceInstance, "", now)
+				if err != nil {
+					return iamv1.AccessAnalyzerDetail{}, err
+				}
+				detail.Capabilities = append(detail.Capabilities, capability)
+			}
+			if iamv1.ValidateAccessAnalyzerDetail(detail) != nil {
+				return iamv1.AccessAnalyzerDetail{}, ErrUnavailable
+			}
+			return detail, nil
 		})
 }
 
@@ -220,23 +231,34 @@ func (service *Authority) ListAccessFindings(ctx context.Context, credential iam
 }
 
 func (service *Authority) AccessFinding(ctx context.Context, credential iamv1.Secret, analyzerID iamv1.AccessAnalyzerID,
-	findingID iamv1.AccessFindingID, requestID string) (iamv1.AccessFinding, error) {
+	findingID iamv1.AccessFindingID, requestID string) (iamv1.AccessFindingDetail, error) {
 	if iamv1.ValidateID("accessAnalyzerId", string(analyzerID)) != nil || iamv1.ValidateID("accessFindingId", string(findingID)) != nil ||
 		iamv1.ValidateID("requestId", requestID) != nil {
-		return iamv1.AccessFinding{}, ErrInvalidArgument
+		return iamv1.AccessFindingDetail{}, ErrInvalidArgument
 	}
 	return withAccountAuthorization(service, ctx, credential, iamv1.ActionIAMAccessFindingRead, iamv1.AuthorizationResourceInstance, "",
 		iamv1.ResourceReference{Kind: iamv1.ResourceAccessFinding, ID: string(findingID)}, requestID,
-		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, _ time.Time) (iamv1.AccessFinding, error) {
+		func(ctx context.Context, tx Transaction, subject SessionCredential, decision iamv1.AuthorizationDecision, now time.Time) (iamv1.AccessFindingDetail, error) {
 			result, err := tx.ReadAccessFinding(ctx, AccessFindingRead{AccountRead: accountRead(subject, decision), AnalyzerID: analyzerID, FindingID: findingID})
 			if err != nil {
-				return iamv1.AccessFinding{}, err
+				return iamv1.AccessFindingDetail{}, err
 			}
 			if iamv1.ValidateAccessFinding(result) != nil || result.AccountID != subject.Subject.Organization.ID ||
 				result.AnalyzerID != analyzerID || result.ID != findingID {
-				return iamv1.AccessFinding{}, ErrUnavailable
+				return iamv1.AccessFindingDetail{}, ErrUnavailable
 			}
-			return result, nil
+			detail := iamv1.AccessFindingDetail{APIVersion: iamv1.APIVersion, Kind: "AccessFindingDetail", Finding: result}
+			for _, action := range []iamv1.Action{iamv1.ActionIAMAccessFindingArchive, iamv1.ActionIAMAccessFindingUnarchive} {
+				capability, err := projectCapability(subject, action, decision.Resource, iamv1.AuthorizationResourceInstance, "", now)
+				if err != nil {
+					return iamv1.AccessFindingDetail{}, err
+				}
+				detail.Capabilities = append(detail.Capabilities, capability)
+			}
+			if iamv1.ValidateAccessFindingDetail(detail) != nil {
+				return iamv1.AccessFindingDetail{}, ErrUnavailable
+			}
+			return detail, nil
 		})
 }
 

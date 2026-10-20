@@ -1364,7 +1364,7 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	assertAuthenticationAuthorityOpen(t, ctx, restoredAPI, restoredCredential)
 	restoredBeforeRecovery, err := restoredAPI.AccessFinding(ctx, restoredCredential, sourceAnalyzer.ID, sourceFinding.ID,
 		"auth-recovery-restored-finding-before-close")
-	if err != nil || restoredBeforeRecovery != sourceFinding {
+	if err != nil || restoredBeforeRecovery.Finding != sourceFinding {
 		t.Fatal("restored backup did not preserve the original epoch-0 finding", err)
 	}
 	assertAuthenticationRecoveryDatabaseBoundary(t, ctx, sourceAdmin, sourceConfig)
@@ -2604,9 +2604,9 @@ func assertAuthenticationRecoveryAccessKeyCredentialState(t *testing.T, ctx cont
 		t.Fatal("create post-recovery security report", err)
 	}
 	report, err := service.AccountSecurityReport(ctx, administrator, created.Metadata.ID, "auth-recovery-fenced-key-report-read")
-	if err != nil || len(report.AccessKeys) != 1 || report.AccessKeys[0].ID != fixture.accessKey.ID ||
-		report.AccessKeys[0].Status != iamv1.AccessKeyEnabled ||
-		report.AccessKeys[0].CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
+	if err != nil || len(report.Report.AccessKeys) != 1 || report.Report.AccessKeys[0].ID != fixture.accessKey.ID ||
+		report.Report.AccessKeys[0].Status != iamv1.AccessKeyEnabled ||
+		report.Report.AccessKeys[0].CredentialState != iamv1.AccessKeyCredentialRecoveryFenced {
 		t.Fatal("post-recovery security report did not preserve status and credential state as independent dimensions", err)
 	}
 }

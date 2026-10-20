@@ -213,6 +213,49 @@ func TestSecurityReportSchemasMatchClosedRuntimeContract(t *testing.T) {
 	}
 }
 
+// Cross-field target identity is checked by the Go validator; the published
+// schema must independently close each projection's action and resource kinds.
+func assertCurrentCapabilitySchema(t *testing.T, name string, value any) {
+	t.Helper()
+	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), name)
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+	if err != nil || schema.Validate(instance) != nil {
+		t.Fatalf("valid %s rejected by published schema: %v", name, schema.Validate(instance))
+	}
+	for _, mutation := range []string{"missing", "duplicate", "foreign-action", "foreign-resource", "contradiction"} {
+		t.Run(name+" schema/"+mutation, func(t *testing.T) {
+			instance, _ := jsonschema.UnmarshalJSON(bytes.NewReader(encoded))
+			object := instance.(map[string]any)
+			capabilities := object["capabilities"].([]any)
+			first := capabilities[0].(map[string]any)
+			switch mutation {
+			case "missing":
+				object["capabilities"] = capabilities[1:]
+			case "duplicate":
+				object["capabilities"] = append(capabilities, first)
+			case "foreign-action":
+				first["action"] = string(ActionIAMUserCreate)
+			case "foreign-resource":
+				resource := first["resource"].(map[string]any)
+				if resource["kind"] == string(ResourceAccount) {
+					resource["kind"] = string(ResourceUser)
+				} else {
+					resource["kind"] = string(ResourceAccount)
+				}
+			case "contradiction":
+				first["available"], first["restrictionReason"] = true, string(CapabilityAuthorityRequired)
+			}
+			if schema.Validate(instance) == nil {
+				t.Fatal("published schema accepted an invalid current capability")
+			}
+		})
+	}
+}
+
 func TestPasswordRequirementsSchemasAndCodecExposeOnlyEffectiveRules(t *testing.T) {
 	api := loadIAMOpenAPI(t)
 	schema := compileIAMOpenAPISchema(t, api, "PasswordRequirements")

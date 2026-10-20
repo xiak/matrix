@@ -2543,8 +2543,8 @@ func TestIAMHTTPSecurityReportRoutesAreCredentialBoundAndNoStore(t *testing.T) {
 				t.Fatalf("security report content headers=%#v body=%q", result.Header(), result.Body.String())
 			}
 		} else {
-			var actual iamv1.AccountSecurityReport
-			if json.Unmarshal(result.Body.Bytes(), &actual) != nil || !reflect.DeepEqual(actual, report) {
+			var actual iamv1.AccountSecurityReportDetail
+			if json.Unmarshal(result.Body.Bytes(), &actual) != nil || iamv1.ValidateAccountSecurityReportDetail(actual) != nil || !reflect.DeepEqual(actual.Report, report) {
 				t.Fatalf("security report body=%s", result.Body.String())
 			}
 		}
@@ -2884,10 +2884,12 @@ func (value *httpWorkflow) CreateAccountSecurityReport(_ context.Context, creden
 	return iamv1.CreateAccountSecurityReportResponse{Outcome: value.securityReportOutcome, Metadata: value.securityReport.Metadata}, value.securityReportErr
 }
 
-func (value *httpWorkflow) AccountSecurityReport(_ context.Context, credential iamv1.Secret, id iamv1.SecurityReportID, _ string) (iamv1.AccountSecurityReport, error) {
+func (value *httpWorkflow) AccountSecurityReport(_ context.Context, credential iamv1.Secret, id iamv1.SecurityReportID, _ string) (iamv1.AccountSecurityReportDetail, error) {
 	value.securityReportReadCalls++
 	value.securityReportCredential, value.securityReportID = credential, id
-	return value.securityReport, value.securityReportErr
+	return iamv1.AccountSecurityReportDetail{APIVersion: iamv1.APIVersion, Kind: "AccountSecurityReportDetail", Report: value.securityReport,
+		Capabilities: []iamv1.ActionCapability{{Action: iamv1.ActionIAMSecurityReportDownload,
+			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceSecurityReport, ID: string(id)}, Available: true}}}, value.securityReportErr
 }
 
 func (value *httpWorkflow) DownloadAccountSecurityReport(_ context.Context, credential iamv1.Secret, id iamv1.SecurityReportID, _ string) ([]byte, error) {
@@ -2908,10 +2910,15 @@ func (value *httpWorkflow) ListAccessAnalyzers(_ context.Context, credential iam
 	return value.accessAnalyzerList, value.accessAnalyzerErr
 }
 
-func (value *httpWorkflow) AccessAnalyzer(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID, _ string) (iamv1.AccessAnalyzer, error) {
+func (value *httpWorkflow) AccessAnalyzer(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID, _ string) (iamv1.AccessAnalyzerDetail, error) {
 	value.accessAnalyzerReadCalls++
 	value.accessAnalyzerCredential, value.accessAnalyzerID = credential, id
-	return value.accessAnalyzer, value.accessAnalyzerErr
+	detail := iamv1.AccessAnalyzerDetail{APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzerDetail", Analyzer: value.accessAnalyzer}
+	for _, action := range []iamv1.Action{iamv1.ActionIAMAccessAnalyzerUpdate, iamv1.ActionIAMAccessAnalyzerSetDisposition, iamv1.ActionIAMAccessFindingList} {
+		detail.Capabilities = append(detail.Capabilities, iamv1.ActionCapability{Action: action,
+			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccessAnalyzer, ID: string(id)}, Available: true})
+	}
+	return detail, value.accessAnalyzerErr
 }
 
 func (value *httpWorkflow) UpdateAccessAnalyzer(_ context.Context, credential iamv1.Secret, id iamv1.AccessAnalyzerID, request iamv1.UpdateAccessAnalyzerRequest) (iamv1.AccessAnalyzer, error) {
@@ -2935,10 +2942,15 @@ func (value *httpWorkflow) ListAccessFindings(_ context.Context, credential iamv
 }
 
 func (value *httpWorkflow) AccessFinding(_ context.Context, credential iamv1.Secret, analyzerID iamv1.AccessAnalyzerID,
-	findingID iamv1.AccessFindingID, _ string) (iamv1.AccessFinding, error) {
+	findingID iamv1.AccessFindingID, _ string) (iamv1.AccessFindingDetail, error) {
 	value.accessFindingReadCalls++
 	value.accessAnalyzerCredential, value.accessAnalyzerID, value.accessFindingID = credential, analyzerID, findingID
-	return value.accessFinding, value.accessAnalyzerErr
+	detail := iamv1.AccessFindingDetail{APIVersion: iamv1.APIVersion, Kind: "AccessFindingDetail", Finding: value.accessFinding}
+	for _, action := range []iamv1.Action{iamv1.ActionIAMAccessFindingArchive, iamv1.ActionIAMAccessFindingUnarchive} {
+		detail.Capabilities = append(detail.Capabilities, iamv1.ActionCapability{Action: action,
+			Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccessFinding, ID: string(findingID)}, Available: true})
+	}
+	return detail, value.accessAnalyzerErr
 }
 
 func (value *httpWorkflow) ArchiveAccessFinding(_ context.Context, credential iamv1.Secret, analyzerID iamv1.AccessAnalyzerID,

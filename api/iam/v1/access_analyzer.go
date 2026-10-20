@@ -90,6 +90,15 @@ type AccessAnalyzer struct {
 	UpdatedAt           time.Time             `json:"updatedAt"`
 }
 
+// AccessAnalyzerDetail adds current-reader capabilities to an authorized read.
+// The analyzer itself remains a persistent fact without transient authority.
+type AccessAnalyzerDetail struct {
+	APIVersion   string             `json:"apiVersion"`
+	Kind         string             `json:"kind"`
+	Analyzer     AccessAnalyzer     `json:"analyzer"`
+	Capabilities []ActionCapability `json:"capabilities"`
+}
+
 // AccessDispositionRule is an Account-owned opt-in rule. It is not authority,
 // a cached IAM decision or permission for a finding to mutate its target.
 // REVIEW_ONLY is the default and has no delay because it has no write effect.
@@ -133,6 +142,14 @@ type AccessFinding struct {
 	UpdatedAt             time.Time                     `json:"updatedAt"`
 	ResolvedAt            *time.Time                    `json:"resolvedAt,omitempty"`
 	ResolutionReason      AccessFindingResolutionReason `json:"resolutionReason,omitempty"`
+}
+
+// AccessFindingDetail never grants authority over the finding's target.
+type AccessFindingDetail struct {
+	APIVersion   string             `json:"apiVersion"`
+	Kind         string             `json:"kind"`
+	Finding      AccessFinding      `json:"finding"`
+	Capabilities []ActionCapability `json:"capabilities"`
 }
 
 type AccessAnalyzerList struct {
@@ -202,6 +219,30 @@ func ValidateAccessAnalyzer(value AccessAnalyzer) error {
 		return errors.New("access analyzer is invalid")
 	}
 	return nil
+}
+
+func ValidateAccessAnalyzerDetail(value AccessAnalyzerDetail) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessAnalyzerDetail" || ValidateAccessAnalyzer(value.Analyzer) != nil {
+		return errors.New("access analyzer detail is invalid")
+	}
+	resource := ResourceReference{Kind: ResourceAccessAnalyzer, ID: string(value.Analyzer.ID)}
+	expected := map[string]struct{}{}
+	for _, action := range []Action{ActionIAMAccessAnalyzerUpdate, ActionIAMAccessAnalyzerSetDisposition, ActionIAMAccessFindingList} {
+		expected[capabilityKey(action, resource)] = struct{}{}
+	}
+	return validateCapabilities(value.Capabilities, expected)
+}
+
+func ValidateAccessFindingDetail(value AccessFindingDetail) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccessFindingDetail" || ValidateAccessFinding(value.Finding) != nil {
+		return errors.New("access finding detail is invalid")
+	}
+	resource := ResourceReference{Kind: ResourceAccessFinding, ID: string(value.Finding.ID)}
+	expected := map[string]struct{}{}
+	for _, action := range []Action{ActionIAMAccessFindingArchive, ActionIAMAccessFindingUnarchive} {
+		expected[capabilityKey(action, resource)] = struct{}{}
+	}
+	return validateCapabilities(value.Capabilities, expected)
 }
 
 func ValidateAccessAnalyzerList(value AccessAnalyzerList) error {

@@ -155,6 +155,38 @@ func TestCurrentIdentityEntryCapabilitiesUseExactAuthority(t *testing.T) {
 			}
 		})
 	}
+	t.Run("policy publication needs authority and current delegation prerequisites", func(t *testing.T) {
+		value := subject
+		grant := policy("policy-create-entry", iamv1.ActionIAMPolicyCreate, account, iamv1.PolicyAllow)
+		value.Subject.Policies = []authority.AttachedPolicy{grant}
+		if capability := project(value, true)[iamv1.ActionIAMPolicyCreate]; !capability.Available || capability.Resource != account {
+			t.Fatal("Root lost exact Policy publication grant", capability)
+		}
+		if project(value, false)[iamv1.ActionIAMPolicyCreate].Available {
+			t.Fatal("unbounded delegate acquired Policy publication")
+		}
+		boundary := policy("policy-publication-boundary", iamv1.ActionIAMPolicyCreate, account, iamv1.PolicyAllow)
+		value.Subject.Boundary = &authority.ResolvedUserBoundary{State: "BOUND", AccountID: tx.organization.ID,
+			UserID: tx.principal.ID, UserResourceVersion: tx.principal.ResourceVersion, BoundaryID: "publication-boundary", ResourceVersion: 1,
+			Policy: &boundary.Policy, Version: &boundary.Version, Profiles: boundary.Profiles}
+		if !project(value, false)[iamv1.ActionIAMPolicyCreate].Available {
+			t.Fatal("bounded delegate lost explicit Policy publication grant")
+		}
+		value.Subject.Policies = append(value.Subject.Policies, policy("policy-create-deny", iamv1.ActionIAMPolicyCreate, account, iamv1.PolicyDeny))
+		if project(value, false)[iamv1.ActionIAMPolicyCreate].Available {
+			t.Fatal("publication ignored explicit Deny")
+		}
+		value.Subject.Policies = nil
+		if project(value, false)[iamv1.ActionIAMPolicyCreate].Available || project(value, true)[iamv1.ActionIAMPolicyCreate].Available {
+			t.Fatal("boundary or Root label became a positive grant")
+		}
+		// Platform binding is a separate protected-identity prerequisite, not
+		// a tenant permission. Check the predicate without inventing a policy.
+		value.Subject.Policies = []authority.AttachedPolicy{{Attachment: iamv1.PolicyAttachment{Scope: iamv1.AuthorityScopeInstallation}}}
+		if hasPolicyPublicationPrerequisites(value, false) {
+			t.Fatal("platform-bound delegate acquired tenant publication")
+		}
+	})
 	subject.Subject.Policies = []authority.AttachedPolicy{policy("own-key-list", iamv1.ActionIAMAccessKeyList, user, iamv1.PolicyAllow)}
 	if result := project(subject, true)[iamv1.ActionIAMAccessKeyList]; result.Available || result.RestrictionReason != iamv1.CapabilityRootIdentityProtected {
 		t.Fatal("root acquired a forbidden key directory", result)
@@ -2024,7 +2056,7 @@ func TestAccountSecurityReportUsesCurrentAuthorityAndImmutableSnapshot(t *testin
 		t.Fatal("security report exact replay changed the frozen result", replayed, err)
 	}
 	read, err := service.AccountSecurityReport(t.Context(), login.Credential, created.Metadata.ID, "report-read")
-	if err != nil || read.Metadata != created.Metadata || len(read.Users) != 1 {
+	if err != nil || iamv1.ValidateAccountSecurityReportDetail(read) != nil || read.Report.Metadata != created.Metadata || len(read.Report.Users) != 1 {
 		t.Fatal("read security report", err)
 	}
 	downloaded, err := service.DownloadAccountSecurityReport(t.Context(), login.Credential, created.Metadata.ID, "report-download")
@@ -2103,7 +2135,7 @@ func TestAccessAnalyzerUsesCurrentAuthorityAndNeverInventsFindings(t *testing.T)
 		t.Fatal("list access analyzers", listed, err)
 	}
 	read, err := service.AccessAnalyzer(t.Context(), login.Credential, created.ID, "analyzer-read")
-	if err != nil || read != created {
+	if err != nil || iamv1.ValidateAccessAnalyzerDetail(read) != nil || read.Analyzer != created {
 		t.Fatal("read access analyzer", read, err)
 	}
 	updated, err := service.UpdateAccessAnalyzer(t.Context(), login.Credential, created.ID, iamv1.UpdateAccessAnalyzerRequest{
@@ -2154,7 +2186,7 @@ func TestAccessAnalyzerUsesCurrentAuthorityAndNeverInventsFindings(t *testing.T)
 		ObservedAt: tx.now, ResourceVersion: 1, CreatedAt: tx.now, UpdatedAt: tx.now}
 	tx.accessFindings[finding.ID] = finding
 	readFinding, err := service.AccessFinding(t.Context(), login.Credential, created.ID, finding.ID, "finding-read")
-	if err != nil || readFinding != finding {
+	if err != nil || iamv1.ValidateAccessFindingDetail(readFinding) != nil || readFinding.Finding != finding {
 		t.Fatal("read access finding", readFinding, err)
 	}
 	archiveRequest := iamv1.AccessFindingDispositionRequest{ResourceVersion: 1, RequestID: "finding-archive"}

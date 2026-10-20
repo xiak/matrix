@@ -114,6 +114,23 @@ type AccountSecurityReport struct {
 	AccessKeys                     []SecurityReportAccessKey     `json:"accessKeys"`
 }
 
+// AccountSecurityReportDetail separates current-reader capabilities from the
+// immutable report document, its canonical digest and its CSV representation.
+type AccountSecurityReportDetail struct {
+	APIVersion   string                `json:"apiVersion"`
+	Kind         string                `json:"kind"`
+	Report       AccountSecurityReport `json:"report"`
+	Capabilities []ActionCapability    `json:"capabilities"`
+}
+
+func ValidateAccountSecurityReportDetail(value AccountSecurityReportDetail) error {
+	if value.APIVersion != APIVersion || value.Kind != "AccountSecurityReportDetail" || ValidateAccountSecurityReport(value.Report) != nil {
+		return errors.New("security report detail is invalid")
+	}
+	resource := ResourceReference{Kind: ResourceSecurityReport, ID: string(value.Report.Metadata.ID)}
+	return validateCapabilities(value.Capabilities, map[string]struct{}{capabilityKey(ActionIAMSecurityReportDownload, resource): {}})
+}
+
 type CreateAccountSecurityReportRequest struct {
 	FormatVersion uint32 `json:"formatVersion"`
 	RequestID     string `json:"requestId"`

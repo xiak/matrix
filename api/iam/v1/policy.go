@@ -88,6 +88,28 @@ type PolicyDetail struct {
 	Version    PolicyVersion `json:"version"`
 }
 
+// PolicyAccess is a current-reader projection, not a Policy publication or
+// immutable command completion. Version actions remain scoped to the Policy.
+type PolicyAccess struct {
+	APIVersion   string             `json:"apiVersion"`
+	Kind         string             `json:"kind"`
+	Detail       PolicyDetail       `json:"detail"`
+	Capabilities []ActionCapability `json:"capabilities"`
+}
+
+func ValidatePolicyAccess(value PolicyAccess) error {
+	if value.APIVersion != APIVersion || value.Kind != "PolicyAccess" || ValidatePolicyDetail(value.Detail) != nil {
+		return ErrInvalidPolicy
+	}
+	resource := ResourceReference{Kind: ResourcePolicy, ID: string(value.Detail.Policy.ID)}
+	expected := map[string]struct{}{}
+	for _, action := range []Action{ActionIAMPolicyUpdate, ActionIAMPolicyDelete, ActionIAMPolicyVersionList,
+		ActionIAMPolicyVersionRead, ActionIAMPolicyVersionCreate, ActionIAMPolicyVersionDelete, ActionIAMPolicySetDefaultVersion} {
+		expected[capabilityKey(action, resource)] = struct{}{}
+	}
+	return validateCapabilities(value.Capabilities, expected)
+}
+
 type CreatePolicyRequest struct {
 	DisplayName string         `json:"displayName"`
 	Document    PolicyDocument `json:"document"`

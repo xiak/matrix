@@ -8054,6 +8054,40 @@ func TestPolicyMetadataAndAttachmentOwnershipContracts(t *testing.T) {
 	if ValidatePolicyDetail(detail) != nil {
 		t.Fatal("valid policy detail rejected")
 	}
+	access := PolicyAccess{APIVersion: APIVersion, Kind: "PolicyAccess", Detail: detail}
+	for _, action := range []Action{ActionIAMPolicyUpdate, ActionIAMPolicyDelete, ActionIAMPolicyVersionList,
+		ActionIAMPolicyVersionRead, ActionIAMPolicyVersionCreate, ActionIAMPolicyVersionDelete, ActionIAMPolicySetDefaultVersion} {
+		access.Capabilities = append(access.Capabilities, ActionCapability{Action: action,
+			Resource: ResourceReference{Kind: ResourcePolicy, ID: string(policy.ID)}, RestrictionReason: CapabilityAuthorityRequired})
+	}
+	if ValidatePolicyAccess(access) != nil {
+		t.Fatal("readable Policy with no management authority rejected")
+	}
+	assertCurrentCapabilitySchema(t, "PolicyAccess", access)
+	for name, mutate := range map[string]func(*PolicyAccess){
+		"missing capability":              func(v *PolicyAccess) { v.Capabilities = v.Capabilities[1:] },
+		"duplicate capability":            func(v *PolicyAccess) { v.Capabilities[1] = v.Capabilities[0] },
+		"foreign Policy":                  func(v *PolicyAccess) { v.Capabilities[0].Resource.ID = "another-policy" },
+		"version is not authority target": func(v *PolicyAccess) { v.Capabilities[0].Resource.ID = string(detail.Version.ID) },
+		"read is not a write grant":       func(v *PolicyAccess) { v.Capabilities[0].Action = ActionIAMPolicyRead },
+		"contradictory permission":        func(v *PolicyAccess) { v.Capabilities[0].Available = true },
+		"wrong access kind":               func(v *PolicyAccess) { v.Kind = "PolicyPermit" },
+	} {
+		t.Run("current access/"+name, func(t *testing.T) {
+			value := access
+			value.Capabilities = append([]ActionCapability(nil), access.Capabilities...)
+			mutate(&value)
+			if ValidatePolicyAccess(value) == nil {
+				t.Fatal("invalid current Policy authority accepted")
+			}
+		})
+	}
+	before, _ := json.Marshal(access.Detail)
+	access.Capabilities[0].Available, access.Capabilities[0].RestrictionReason = true, ""
+	after, _ := json.Marshal(access.Detail)
+	if ValidatePolicyAccess(access) != nil || !bytes.Equal(before, after) {
+		t.Fatal("current-reader permission altered stored Policy content")
+	}
 	for name, mutate := range map[string]func(*PolicyDetail){
 		"wrong version owner": func(v *PolicyDetail) { v.Version.PolicyID = "another-policy" },
 		"wrong default":       func(v *PolicyDetail) { v.Policy.DefaultVersionID = "another-version" },
@@ -8272,10 +8306,12 @@ func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 			blocked(ActionIAMServiceLinkedRoleList, ResourceAccount, "account-a"),
 			blocked(ActionIAMSecuritySettingsRead, ResourceAccount, "account-a"),
 			blocked(ActionIAMSecuritySettingsUpdate, ResourceAccount, "account-a"),
+			blocked(ActionIAMPolicyCreate, ResourceAccount, "account-a"),
 		}}
 	if ValidateCurrentIdentity(identity) != nil {
 		t.Fatal("current policy identity rejected")
 	}
+	assertCurrentCapabilitySchema(t, "CurrentIdentity", identity)
 	for name, mutate := range map[string]func(*CurrentIdentity){
 		"missing snapshot":        func(v *CurrentIdentity) { v.PolicySources = nil },
 		"missing boundary":        func(v *CurrentIdentity) { v.PermissionBoundary = UserPermissionBoundary{} },
@@ -8289,10 +8325,11 @@ func TestCurrentIdentityUsesOnlyItsLivePolicyGrantSources(t *testing.T) {
 			v.PolicySources[0].Attachment.RevokedAt = &now
 			v.PolicySources[0].Attachment.ResourceVersion = 2
 		},
-		"missing capability":   func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[1:] },
-		"old entry projection": func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[:10] },
-		"duplicate capability": func(v *CurrentIdentity) { v.Capabilities[10] = v.Capabilities[0] },
-		"another key owner":    func(v *CurrentIdentity) { v.Capabilities[10].Resource.ID = "another-user" },
+		"missing capability":          func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[1:] },
+		"old entry projection":        func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[:10] },
+		"incomplete entry projection": func(v *CurrentIdentity) { v.Capabilities = v.Capabilities[:18] },
+		"duplicate capability":        func(v *CurrentIdentity) { v.Capabilities[10] = v.Capabilities[0] },
+		"another key owner":           func(v *CurrentIdentity) { v.Capabilities[10].Resource.ID = "another-user" },
 		"global key authority": func(v *CurrentIdentity) {
 			v.Capabilities[10].Resource = ResourceReference{Kind: ResourceAccount, ID: "account-a"}
 		},
@@ -9334,6 +9371,52 @@ func TestAccountSecurityReportContractIsBoundedAndExplicit(t *testing.T) {
 	if ValidateCreateAccountSecurityReportRequest(CreateAccountSecurityReportRequest{FormatVersion: 3, RequestID: "report-request-one"}) == nil ||
 		ValidateCreateAccountSecurityReportResponse(CreateAccountSecurityReportResponse{Outcome: "PENDING", Metadata: report.Metadata}) == nil {
 		t.Fatal("open-ended report format or async state was accepted")
+	}
+}
+
+func TestSecurityReportDetailKeepsCurrentAuthorityOutsideImmutableContent(t *testing.T) {
+	report := accountSecurityReportFixture()
+	before, digest, err := CanonicalizeAccountSecurityReportDocument(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csvBefore, csvDigest, err := EncodeAccountSecurityReportCSV(report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	detail := AccountSecurityReportDetail{APIVersion: APIVersion, Kind: "AccountSecurityReportDetail", Report: report,
+		Capabilities: []ActionCapability{{Action: ActionIAMSecurityReportDownload,
+			Resource: ResourceReference{Kind: ResourceSecurityReport, ID: string(report.Metadata.ID)}, Available: true}}}
+	assertCurrentCapabilitySchema(t, "AccountSecurityReportDetail", detail)
+	for _, allowed := range []bool{true, false} {
+		detail.Capabilities[0].Available = allowed
+		detail.Capabilities[0].RestrictionReason = ""
+		if !allowed {
+			detail.Capabilities[0].RestrictionReason = CapabilityAuthorityRequired
+		}
+		after, afterDigest, err := CanonicalizeAccountSecurityReportDocument(detail.Report)
+		csvAfter, afterCSVDigest, csvErr := EncodeAccountSecurityReportCSV(detail.Report)
+		if ValidateAccountSecurityReportDetail(detail) != nil || err != nil || csvErr != nil || after != before || afterDigest != digest ||
+			!bytes.Equal(csvAfter, csvBefore) || afterCSVDigest != csvDigest {
+			t.Fatal("current-reader permission changed immutable report content")
+		}
+	}
+	for _, mutate := range []func(*AccountSecurityReportDetail){
+		func(v *AccountSecurityReportDetail) { v.Capabilities = nil },
+		func(v *AccountSecurityReportDetail) { v.Capabilities = append(v.Capabilities, v.Capabilities[0]) },
+		func(v *AccountSecurityReportDetail) { v.Capabilities[0].Resource.ID = "another-report" },
+		func(v *AccountSecurityReportDetail) {
+			v.Capabilities[0].Action = ActionIAMSecurityReportCreate
+			v.Capabilities[0].Resource = ResourceReference{Kind: ResourceAccount, ID: string(report.Metadata.AccountID)}
+		},
+		func(v *AccountSecurityReportDetail) { v.Capabilities[0].Available = true },
+	} {
+		candidate := detail
+		candidate.Capabilities = append([]ActionCapability(nil), detail.Capabilities...)
+		mutate(&candidate)
+		if ValidateAccountSecurityReportDetail(candidate) == nil {
+			t.Fatal("invalid or wrongly scoped report capability was accepted")
+		}
 	}
 }
 

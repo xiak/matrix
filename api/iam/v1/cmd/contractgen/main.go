@@ -75,7 +75,7 @@ func buildPaths() object {
 			"post": mutationOperation("createAccessAnalyzer", "Create the current-account unused-access analyzer and begin its real observation window", "CreateAccessAnalyzerRequest", "AccessAnalyzer", "201", nil, nil),
 		},
 		"/v1/account/access-analyzers/{analyzerId}": object{
-			"get": readOperation("getAccessAnalyzer", "Read one current-account access analyzer", "AccessAnalyzer", nil, []any{openapi31.PathIDParameter("analyzerId")}),
+			"get": readOperation("getAccessAnalyzer", "Read one current-account access analyzer with current-reader capabilities", "AccessAnalyzerDetail", nil, []any{openapi31.PathIDParameter("analyzerId")}),
 		},
 		"/v1/account/access-analyzers/{analyzerId}:update": object{
 			"post": mutationOperation("updateAccessAnalyzer", "Update status or unused-access age at the expected analyzer revision", "UpdateAccessAnalyzerRequest", "AccessAnalyzer", "200", nil, []any{openapi31.PathIDParameter("analyzerId")}),
@@ -88,7 +88,7 @@ func buildPaths() object {
 				append(append([]any{openapi31.PathIDParameter("analyzerId")}, accountPageParameters()...), accessFindingStatusParameter())),
 		},
 		"/v1/account/access-analyzers/{analyzerId}/findings/{findingId}": object{
-			"get": readOperation("getAccessFinding", "Read one evidence-bound finding under current account permission", "AccessFinding", nil,
+			"get": readOperation("getAccessFinding", "Read one evidence-bound finding with review capabilities, never authority over its target", "AccessFindingDetail", nil,
 				[]any{openapi31.PathIDParameter("analyzerId"), openapi31.PathIDParameter("findingId")}),
 		},
 		"/v1/account/access-analyzers/{analyzerId}/findings/{findingId}:archive": object{
@@ -103,7 +103,7 @@ func buildPaths() object {
 			"post": mutationOperation("createAccountSecurityReport", "Generate one immutable current-account IAM security report without cross-product inference", "CreateAccountSecurityReportRequest", "CreateAccountSecurityReportResponse", "201", nil, nil),
 		},
 		"/v1/account/security-reports/{reportId}": object{
-			"get": readOperation("getAccountSecurityReport", "Read one immutable nonsecret current-account IAM security report under current permission", "AccountSecurityReport", nil, []any{openapi31.PathIDParameter("reportId")}),
+			"get": readOperation("getAccountSecurityReport", "Read one immutable report with separate current-reader download capability", "AccountSecurityReportDetail", nil, []any{openapi31.PathIDParameter("reportId")}),
 		},
 		"/v1/account/security-reports/{reportId}/content": object{
 			"get": securityReportContentOperation([]any{openapi31.PathIDParameter("reportId")}),
@@ -273,7 +273,7 @@ func buildPaths() object {
 			"post": mutationOperation("createPolicy", "Create an account-owned policy and its initial immutable version without attaching it", "CreatePolicyRequest", "PolicyDetail", "201", nil, nil),
 		},
 		"/v1/policies/{policyId}": object{
-			"get":    readOperation("getPolicy", "Read the current tenant policy and default content", "PolicyDetail", nil, []any{openapi31.PathIDParameter("policyId")}),
+			"get":    readOperation("getPolicy", "Read the current tenant policy and default content with exact current-reader capabilities", "PolicyAccess", nil, []any{openapi31.PathIDParameter("policyId")}),
 			"patch":  mutationOperation("updatePolicy", "Rename a customer policy without changing its content or authority", "UpdatePolicyRequest", "PolicyDetail", "200", nil, []any{openapi31.PathIDParameter("policyId")}),
 			"delete": mutationOperation("deletePolicy", "Retire an unreferenced customer policy while preserving immutable history", "DeletePolicyRequest", "Policy", "200", nil, []any{openapi31.PathIDParameter("policyId")}),
 		},
@@ -708,6 +708,7 @@ func structContracts() map[string]reflect.Type {
 		"SetUserPermissionBoundaryRequest":              openapi31.StructType[iamv1.SetUserPermissionBoundaryRequest](),
 		"RemoveUserPermissionBoundaryRequest":           openapi31.StructType[iamv1.RemoveUserPermissionBoundaryRequest](),
 		"PolicyDetail":                                  openapi31.StructType[iamv1.PolicyDetail](),
+		"PolicyAccess":                                  openapi31.StructType[iamv1.PolicyAccess](),
 		"CreatePolicyRequest":                           openapi31.StructType[iamv1.CreatePolicyRequest](),
 		"PolicyVersionDetail":                           openapi31.StructType[iamv1.PolicyVersionDetail](),
 		"PolicyVersionList":                             openapi31.StructType[iamv1.PolicyVersionList](),
@@ -809,12 +810,15 @@ func structContracts() map[string]reflect.Type {
 		"SecurityReportAccessKey":                       openapi31.StructType[iamv1.SecurityReportAccessKey](),
 		"AccountSecurityReportMetadata":                 openapi31.StructType[iamv1.AccountSecurityReportMetadata](),
 		"AccountSecurityReport":                         openapi31.StructType[iamv1.AccountSecurityReport](),
+		"AccountSecurityReportDetail":                   openapi31.StructType[iamv1.AccountSecurityReportDetail](),
 		"CreateAccountSecurityReportRequest":            openapi31.StructType[iamv1.CreateAccountSecurityReportRequest](),
 		"CreateAccountSecurityReportResponse":           openapi31.StructType[iamv1.CreateAccountSecurityReportResponse](),
 		"AccessAnalyzer":                                openapi31.StructType[iamv1.AccessAnalyzer](),
+		"AccessAnalyzerDetail":                          openapi31.StructType[iamv1.AccessAnalyzerDetail](),
 		"AccessDispositionRule":                         openapi31.StructType[iamv1.AccessDispositionRule](),
 		"AccessObservationCoverage":                     openapi31.StructType[iamv1.AccessObservationCoverage](),
 		"AccessFinding":                                 openapi31.StructType[iamv1.AccessFinding](),
+		"AccessFindingDetail":                           openapi31.StructType[iamv1.AccessFindingDetail](),
 		"AccessAnalyzerList":                            openapi31.StructType[iamv1.AccessAnalyzerList](),
 		"AccessFindingList":                             openapi31.StructType[iamv1.AccessFindingList](),
 		"CreateAccessAnalyzerRequest":                   openapi31.StructType[iamv1.CreateAccessAnalyzerRequest](),
@@ -1133,6 +1137,29 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	if owner == "CreateAccountSecurityReportResponse" && jsonName == "outcome" {
 		return object{"type": "string", "enum": []string{"APPLIED", "EQUAL_REPLAY"}}
 	}
+	if (owner == "AccessAnalyzerDetail" || owner == "AccessFindingDetail" || owner == "AccountSecurityReportDetail" || owner == "PolicyAccess") && jsonName == "capabilities" {
+		var actions []iamv1.Action
+		var resource iamv1.ResourceKind
+		switch owner {
+		case "AccessAnalyzerDetail":
+			actions, resource = []iamv1.Action{iamv1.ActionIAMAccessAnalyzerUpdate, iamv1.ActionIAMAccessAnalyzerSetDisposition, iamv1.ActionIAMAccessFindingList}, iamv1.ResourceAccessAnalyzer
+		case "AccessFindingDetail":
+			actions, resource = []iamv1.Action{iamv1.ActionIAMAccessFindingArchive, iamv1.ActionIAMAccessFindingUnarchive}, iamv1.ResourceAccessFinding
+		case "AccountSecurityReportDetail":
+			actions, resource = []iamv1.Action{iamv1.ActionIAMSecurityReportDownload}, iamv1.ResourceSecurityReport
+		case "PolicyAccess":
+			actions, resource = []iamv1.Action{iamv1.ActionIAMPolicyUpdate, iamv1.ActionIAMPolicyDelete, iamv1.ActionIAMPolicyVersionList,
+				iamv1.ActionIAMPolicyVersionRead, iamv1.ActionIAMPolicyVersionCreate, iamv1.ActionIAMPolicyVersionDelete, iamv1.ActionIAMPolicySetDefaultVersion}, iamv1.ResourcePolicy
+		}
+		base["minItems"], base["maxItems"], base["uniqueItems"] = len(actions), len(actions), true
+		var required []any
+		for _, action := range actions {
+			required = append(required, object{"contains": object{"properties": object{
+				"action": object{"const": string(action)}, "resource": object{"properties": object{"kind": object{"const": string(resource)}}},
+			}}, "minContains": 1, "maxContains": 1})
+		}
+		base["allOf"] = required
+	}
 	if (owner == "AccessKeyList" || owner == "AccessKeyAccess") && jsonName == "capabilities" {
 		base["minItems"], base["maxItems"] = 4, 4
 		base["uniqueItems"] = true
@@ -1405,9 +1432,28 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 		}}}}
 	}
 	if (owner == "CurrentIdentity" || owner == "UserAccess" || owner == "GroupAccess" || owner == "GroupMembershipAccess" || owner == "AccountAccess") && jsonName == "capabilities" {
-		base["maxItems"] = map[string]int{"CurrentIdentity": 18, "UserAccess": 265, "GroupAccess": 262, "GroupMembershipAccess": 1, "AccountAccess": 2}[owner]
+		base["maxItems"] = map[string]int{"CurrentIdentity": 19, "UserAccess": 265, "GroupAccess": 262, "GroupMembershipAccess": 1, "AccountAccess": 2}[owner]
 		if owner == "CurrentIdentity" {
-			base["minItems"] = 18
+			base["minItems"] = 19
+			base["uniqueItems"] = true
+			var entries []any
+			for _, action := range []iamv1.Action{iamv1.ActionIAMAccountCreate, iamv1.ActionIAMAccountRead, iamv1.ActionIAMAccountAliasSet,
+				iamv1.ActionIAMUserList, iamv1.ActionIAMUserCreate, iamv1.ActionIAMPolicyList, iamv1.ActionIAMGroupList, iamv1.ActionIAMGroupCreate,
+				iamv1.ActionIAMRoleList, iamv1.ActionIAMRoleCreate, iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessAnalyzerList,
+				iamv1.ActionIAMAccessAnalyzerCreate, iamv1.ActionIAMSecurityReportCreate, iamv1.ActionIAMServiceRoleTemplateList,
+				iamv1.ActionIAMServiceLinkedRoleList, iamv1.ActionIAMSecuritySettingsRead, iamv1.ActionIAMSecuritySettingsUpdate, iamv1.ActionIAMPolicyCreate} {
+				resource := object{"kind": object{"const": string(iamv1.ResourceAccount)}}
+				if action == iamv1.ActionIAMAccessKeyList {
+					resource["kind"] = object{"const": string(iamv1.ResourceUser)}
+				}
+				if action == iamv1.ActionIAMAccountCreate || action == iamv1.ActionIAMAccountRead {
+					resource["id"] = object{"const": "collection"}
+				}
+				entries = append(entries, object{"contains": object{"properties": object{
+					"action": object{"const": string(action)}, "resource": object{"properties": resource},
+				}}, "minContains": 1, "maxContains": 1})
+			}
+			base["allOf"] = entries
 		}
 	}
 	if field.Type.Name() == "Secret" {

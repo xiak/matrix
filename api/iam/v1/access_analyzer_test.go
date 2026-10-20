@@ -23,6 +23,46 @@ func TestAccessAnalyzerAndFindingContractsRejectInventedAuthority(t *testing.T) 
 	if err := ValidateAccessFinding(finding); err != nil {
 		t.Fatal("validate access finding", err)
 	}
+	analyzerDetail := AccessAnalyzerDetail{APIVersion: APIVersion, Kind: "AccessAnalyzerDetail", Analyzer: analyzer}
+	for _, action := range []Action{ActionIAMAccessAnalyzerUpdate, ActionIAMAccessAnalyzerSetDisposition, ActionIAMAccessFindingList} {
+		analyzerDetail.Capabilities = append(analyzerDetail.Capabilities, ActionCapability{Action: action,
+			Resource: ResourceReference{Kind: ResourceAccessAnalyzer, ID: string(analyzer.ID)}, Available: false, RestrictionReason: CapabilityAuthorityRequired})
+	}
+	findingDetail := AccessFindingDetail{APIVersion: APIVersion, Kind: "AccessFindingDetail", Finding: finding}
+	for _, action := range []Action{ActionIAMAccessFindingArchive, ActionIAMAccessFindingUnarchive} {
+		findingDetail.Capabilities = append(findingDetail.Capabilities, ActionCapability{Action: action,
+			Resource: ResourceReference{Kind: ResourceAccessFinding, ID: string(finding.ID)}, Available: true})
+	}
+	if ValidateAccessAnalyzerDetail(analyzerDetail) != nil || ValidateAccessFindingDetail(findingDetail) != nil {
+		t.Fatal("valid exact read projections were rejected")
+	}
+	assertCurrentCapabilitySchema(t, "AccessAnalyzerDetail", analyzerDetail)
+	assertCurrentCapabilitySchema(t, "AccessFindingDetail", findingDetail)
+	for _, mutation := range []string{"missing", "duplicate", "other-target", "target-authority", "contradiction"} {
+		t.Run("detail-"+mutation, func(t *testing.T) {
+			a, f := analyzerDetail, findingDetail
+			a.Capabilities = append([]ActionCapability(nil), a.Capabilities...)
+			f.Capabilities = append([]ActionCapability(nil), f.Capabilities...)
+			switch mutation {
+			case "missing":
+				a.Capabilities, f.Capabilities = a.Capabilities[:2], f.Capabilities[:1]
+			case "duplicate":
+				a.Capabilities[1], f.Capabilities[1] = a.Capabilities[0], f.Capabilities[0]
+			case "other-target":
+				a.Capabilities[0].Resource.ID, f.Capabilities[0].Resource.ID = "another-analyzer", "another-finding"
+			case "target-authority":
+				a.Capabilities[0] = ActionCapability{Action: ActionIAMAccessAnalyzerCreate,
+					Resource: ResourceReference{Kind: ResourceAccount, ID: string(analyzer.AccountID)}, Available: true}
+				f.Capabilities[0] = ActionCapability{Action: ActionIAMAccessKeyDelete, Resource: finding.Target, Available: true}
+			case "contradiction":
+				a.Capabilities[0].Available = true
+				f.Capabilities[0].RestrictionReason = CapabilityAuthorityRequired
+			}
+			if ValidateAccessAnalyzerDetail(a) == nil || ValidateAccessFindingDetail(f) == nil {
+				t.Fatal("invalid or widened projection was accepted")
+			}
+		})
+	}
 	for name, mutate := range map[string]func(*AccessFinding){
 		"wrong target":        func(value *AccessFinding) { value.Target.Kind = ResourceUser },
 		"activity in window":  func(value *AccessFinding) { at := value.WindowStartedAt; value.LastActivityAt = &at },
