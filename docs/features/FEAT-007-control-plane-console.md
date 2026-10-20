@@ -3243,13 +3243,27 @@ memory-only session is re-entered. The page observes templates, Account
 authorization relations and exact binding history;
 it does not turn an ACTIVE template into consent or expose a generic IAM bind /
 unbind form. Those writes remain owned by the corresponding product-resource
-workflow. Seven focused renderer cases cover stable loading, client replacement,
-late-result isolation, detail ownership, paging and denial. The browser observed
-the exact route from Role actions at 1280 px with document/body widths equal to
-the viewport, no Dialog and no warning/error log. The complete 63-file/1,131-case
-frontend suite plus three export-normalization cases, typecheck, lint,
-architecture, 228-pair style gates, 47-page static build, 45 normalized segment
-files, 259-file embedded equivalence and repository Go test/vet all passed.
+workflow. The shared header now treats an accepted route change and an internal
+content-area return as different focus events: a changed navigation key focuses
+the destination H1 once, while a nested return restores the control that opened
+the detail and is not overwritten by the unchanged route key. The service-
+authorization renderer records the same intent atomically with its local view,
+so forward transitions focus the new title and reverse transitions restore the
+template, observation, review or Account-relation trigger without timers.
+
+Source `4fe5c2be3` and synchronized embedded assets `dfb99958c` fix this
+boundary. The real DEV browser at `4319` exercised User → Service authorization
+route changes, directory → template → directory, template → observation →
+template, template → review → template and Account relation → observation →
+directory. Route changes ended on the destination H1; every reverse transition
+ended on its original trigger after a settling interval, with no stale nested
+heading or Dialog. The shared-header and service-authorization focused suites
+pass **27 cases**. The complete frontend gate passes **79 files / 2,065 cases**
+plus all eight Node export-boundary cases; typecheck, lint, architecture and
+234-pair theme-style gates pass. The production build exports 59 pages,
+normalizes 57 segment files and matches all 324 synchronized embedded files
+byte-for-byte. PaaS UI Go test/vet pass. This changes no IAM API, permission
+model, data contract or real Account/resource.
 
 These gates do not establish a universal click-latency budget, a new whole-repository
 or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
