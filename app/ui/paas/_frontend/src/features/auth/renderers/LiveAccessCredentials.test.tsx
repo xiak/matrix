@@ -151,6 +151,20 @@ describe("LiveAccessCredentials", () => {
     expect(screen.getByRole("button", { name: "新建访问密钥" }).hasAttribute("disabled")).toBe(true);
   });
 
+  it.each([
+    ["iam.route.notfound", "当前运行环境无法提供兼容的访问密钥功能；这不代表账号或用户尚未开通服务。"],
+    ["PRIVATE_ACCESS_KEY_TARGET", "IAM 未确认指定用户或访问密钥可读取；它可能不存在，或当前身份无法确认。这不代表访问密钥功能未接入。"]
+  ])("distinguishes a missing access-key route from an unconfirmed target for %s", async (code, message) => {
+    const list = vi.fn().mockRejectedValue(new HttpProblem(404, code));
+    const api = client({ list });
+    render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "访问密钥" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+    expect(list).toHaveBeenCalledExactlyOnceWith(owner.id);
+  });
+
   it("keeps known key evidence visible when the account network rule is unavailable", async () => {
     const evidenceUnknown = { ...directory, items: [{ ...directory.items[0]!, usage: { observedAt: "2026-09-21T08:10:00Z" } }] };
     const api = client({ list: vi.fn().mockResolvedValue(evidenceUnknown) });

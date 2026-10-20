@@ -15,6 +15,14 @@ describe("AccountReadBoundary", () => {
     expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
   });
 
+  it("does not turn an unconfirmed exact object into an empty state or blind retry", () => {
+    render(<LocaleProvider><AccountReadBoundary status="notFound" loading={null} onRetry={vi.fn()} /></LocaleProvider>);
+
+    expect(screen.getByRole("heading", { name: "无法确认指定对象" })).toBeTruthy();
+    expect(screen.getByText(/本状态不代表服务未开通/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+  });
+
   it("copies only the safe problem reference when one is available", async () => {
     const user = userEvent.setup();
     const problem = new HttpProblem(403, "iam.authorization.forbidden", "request-safe-diagnostic");

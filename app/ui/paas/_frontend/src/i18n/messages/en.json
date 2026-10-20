@@ -2278,6 +2278,7 @@
     "retry": "Retry read",
     "errors": {
       "forbidden": "This identity cannot read this policy's detail. The policy directory remains available.",
+      "notFound": "IAM did not confirm that the requested policy can be read. It may not exist, or this identity may be unable to confirm it. No MOCK content was substituted.",
       "routeUnavailable": "The policy detail route is unavailable or the backend version does not match. No MOCK content was substituted.",
       "unavailable": "Policy detail is unavailable or returned invalid content. No MOCK content was substituted.",
       "expired": "The login session expired, so policy content is no longer shown."
@@ -2382,6 +2383,7 @@
       },
       "versionErrors": {
       "forbidden": "This identity cannot read these versions. The default version detail may remain separately available.",
+      "notFound": "IAM did not confirm that the requested policy or version can be read. It may not exist, or this identity may be unable to confirm it. No MOCK content was substituted.",
       "routeUnavailable": "The version read route is unavailable. No MOCK content was substituted.",
       "unavailable": "The version directory or detail is unavailable or returned invalid content. No MOCK content was substituted.",
       "expired": "The login session expired, so version content is no longer shown."
@@ -3109,12 +3111,14 @@
     "copyFailed": "Could not copy; try again later",
     "titles": {
       "forbidden": "This identity cannot read this content",
+      "notFound": "The requested object cannot be confirmed",
       "routeUnavailable": "This feature is unavailable",
       "unavailable": "This content is temporarily unavailable",
       "expired": "Your session has expired"
     },
     "descriptions": {
       "forbidden": "This identity does not have read access to this region. Other authorized pages remain available.",
+      "notFound": "IAM did not confirm that the requested object can be read. It may not exist, or this identity may be unable to confirm it; this does not mean the service is inactive.",
       "routeUnavailable": "The current runtime cannot provide this feature. This does not prove that the service is inactive or the identity was denied.",
       "unavailable": "The service did not return a trustworthy result. Failure does not mean the data is empty; try again later.",
       "expired": "Sign in again before reading this content."
@@ -3190,12 +3194,14 @@
     "errors": {
       "relations": {
         "forbidden": { "title": "Current-account service authorization is restricted", "description": "This identity cannot read service-linked roles. Other authorized IAM pages remain available." },
+        "notFound": { "title": "The requested service authorization cannot be confirmed", "description": "IAM did not confirm that the requested service-linked role can be read. It may not exist, or this identity may be unable to confirm it; this does not mean the account has not activated the service." },
         "routeUnavailable": { "title": "Service authorization cannot be read here", "description": "This runtime does not provide a compatible service-linked-role read capability. This does not mean that the account has not activated the service." },
         "unavailable": { "title": "Service authorization is temporarily unavailable", "description": "IAM did not return verifiable relation or binding data. Try again later." },
         "expired": { "title": "Your session has expired", "description": "Sign in again before reading this account's service authorization." }
       },
       "templates": {
         "forbidden": { "title": "Service authorization templates are restricted", "description": "This identity cannot read the service-role template directory. Current-account authorizations remain independently available." },
+        "notFound": { "title": "The requested service authorization template cannot be confirmed", "description": "IAM did not confirm that the requested template can be read. It may not exist, or this identity may be unable to confirm it; current-account authorizations remain independently available." },
         "routeUnavailable": { "title": "Service authorization templates cannot be read here", "description": "This runtime does not provide a compatible read-only template directory. This does not mean that the account has not activated the service." },
         "unavailable": { "title": "The template directory is temporarily unavailable", "description": "IAM did not return a verifiable template directory. Try again later." },
         "expired": { "title": "Your session has expired", "description": "Sign in again before reading service authorization templates." }
@@ -5200,6 +5206,7 @@
     "keyLiveErrors": {
       "expired": "The login session expired. Sign in again before reading access keys.",
       "forbidden": "Your current identity cannot manage access keys for this user.",
+      "notFound": "IAM did not confirm that the requested user or access key can be read. It may not exist, or this identity may be unable to confirm it. This does not mean the access-key feature is unavailable.",
       "routeUnavailable": "This runtime cannot provide a compatible access-key feature. This does not mean that the account or user has not activated the service.",
       "conflict": "The user or key state changed. Reload before acting; if this result is uncertain, keep the original operation reference and confirm it first.",
       "recoveryUnavailable": "The browser could not safely save or clear the original request record, so no new access-key write was sent. Restore session storage for this site and reopen this page.",
@@ -5352,6 +5359,7 @@
         "errors": {
           "expired": "The login session expired. The page cleared its Analyzer, Finding, and pending-command projections. Sign in again and review from current authority.",
           "forbidden": "The current identity cannot read or manage access analysis. Other IAM workspaces remain available.",
+          "notFound": "IAM did not confirm that the requested Analyzer or Finding can be read. It may not exist, or this identity may be unable to confirm it. This does not mean that access analysis is inactive.",
           "routeUnavailable": "This runtime cannot provide a compatible access-analysis feature. This does not mean that the service is inactive.",
           "conflict": "The resource version changed. The page has reloaded authoritative state; review the latest result before retrying.",
           "invalid": "The server rejected this configuration or lifecycle transition.",

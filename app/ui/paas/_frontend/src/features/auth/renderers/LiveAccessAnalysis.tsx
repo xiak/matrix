@@ -13,7 +13,7 @@ import { AccessFindingRecoveryBoundary, AccessRecoveryGapBoundary } from "./Acce
 import { AccountReadBoundary, type AccountReadStatus } from "./AccountReadBoundary";
 import styles from "./AccountAccessRenderer.module.css";
 
-type Failure = "expired" | "forbidden" | "routeUnavailable" | "conflict" | "invalid" | "unavailable";
+type Failure = "expired" | "forbidden" | "notFound" | "routeUnavailable" | "conflict" | "invalid" | "unavailable";
 type FindingSelection = { analyzerId: string; findingId: string; targetId: string };
 type AccessAnalysisMutation =
   | { operation: "create"; command: { type: "UNUSED_ACCESS" } }
@@ -42,7 +42,7 @@ function failureCode(error: unknown): Failure {
   if (error instanceof HttpProblem) {
     if (error.status === 401) return "expired";
     if (error.status === 403) return "forbidden";
-    if (error.status === 404) return "routeUnavailable";
+    if (error.status === 404) return error.code === "iam.route.notfound" ? "routeUnavailable" : "notFound";
     if (error.status === 409) return "conflict";
     if (error.status === 400 || error.status === 422) return "invalid";
   }
@@ -50,7 +50,7 @@ function failureCode(error: unknown): Failure {
 }
 
 function readStatus(error: Failure | null): Exclude<AccountReadStatus, "loading" | "ready" | "empty"> {
-  if (error === "forbidden" || error === "routeUnavailable" || error === "expired" || error === "unavailable") return error;
+  if (error === "forbidden" || error === "notFound" || error === "routeUnavailable" || error === "expired" || error === "unavailable") return error;
   return "unavailable";
 }
 

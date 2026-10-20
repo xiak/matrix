@@ -18,7 +18,7 @@ import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
 import { ServiceAuthorizationResponsibility } from "./AuthorizationOwnershipFlow";
 import styles from "./AccountAccessRenderer.module.css";
 
-type FailureStatus = "forbidden" | "routeUnavailable" | "unavailable" | "expired";
+type FailureStatus = "forbidden" | "notFound" | "routeUnavailable" | "unavailable" | "expired";
 type RelationState = { status: "loading" } | ServiceLinkedRoleDirectoryLoad;
 type TemplateState = { status: "loading" } | ServiceRoleTemplateLoad;
 type RelationDirectoryResult = {

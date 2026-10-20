@@ -229,6 +229,22 @@ describe("AccountServiceAuthorizations", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("keeps an unconfirmed exact service authorization distinct from a missing route", async () => {
+    const relations: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockResolvedValue({ status: "ready", directory }),
+      read: vi.fn().mockResolvedValue({ status: "notFound" } satisfies ServiceLinkedRoleAccessLoad)
+    };
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: relation.role.name }));
+    expect(await screen.findByText("无法确认指定服务授权")).toBeTruthy();
+    expect(screen.getByText(/这不代表账号尚未开通服务/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+  });
+
   it("loads the platform template directory only after the user changes section", async () => {
     const relations: ServiceLinkedRoleClient = {
       accountId: "account-xiak",

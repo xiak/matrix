@@ -466,7 +466,7 @@ function AccountPolicyVersions({ policy, capabilities, listVersions, readVersion
     <h2 ref={title} tabIndex={-1} className={styles.stepTitle}>{t("versionInspection", { version: selectedId })}</h2>
     {selected.status === "loading" ? <TableSkeleton label={t("loadingVersion")} rows={3} header={false} /> :
       selected.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={selected.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${selected.status}`)}</Alert>
-        {selected.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setSelected({ status: "loading" }); setSelectedRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> :
+        {selected.status !== "expired" && selected.status !== "notFound" ? <div><Button variant="secondary" onClick={() => { setSelected({ status: "loading" }); setSelectedRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> :
       <PolicyVersionDocument version={selected.detail.version} title={t("versionDocument", { version: selectedId })} />}
   </div>;
   return <div ref={list} tabIndex={-1} className={styles.catalogNotice}>
@@ -475,7 +475,7 @@ function AccountPolicyVersions({ policy, capabilities, listVersions, readVersion
     {mutationError ? <Alert status="danger">{mutationError}</Alert> : null}
     {state.status === "loading" ? <TableSkeleton label={t("loadingVersions")} rows={3} header={false} /> :
       state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${state.status}`)}</Alert>
-        {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> : <>
+        {state.status !== "expired" && state.status !== "notFound" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> : <>
         <div className={styles.catalogDetailHeading}><p>{t("versionCount", { count: state.directory.items.length })}</p>
           {mutation?.canPublish && canPublish && state.directory.items.length < 5 ? <Button ref={publishButton} variant="secondary" disabled={Boolean(mutation.pending) || mutation.blockedByMetadata} onClick={() => { setPublished(null); setMutationError(null); setPublisherOpen(true); }}>{t("publishVersion")}</Button> : null}
         </div>
@@ -536,7 +536,7 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
     !client ? <Alert status="danger">{t("errors.unavailable")}</Alert> :
     state.status === "loading" ? <TableSkeleton label={t("loadingDetail")} rows={3} header={false} /> :
     state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`errors.${state.status}`)}</Alert>
-      {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => setRevision((value) => value + 1)}>{t("retry")}</Button></div> : null}</div> :
+      {state.status !== "expired" && state.status !== "notFound" ? <div><Button variant="secondary" onClick={() => setRevision((value) => value + 1)}>{t("retry")}</Button></div> : null}</div> :
     detail ? <PolicyVersionDocument version={detail.version} title={t("defaultDocument")} /> : null;
   const metadataActions = metadataMutation ? { secondary: [
     { id: "rename-policy", label: t("metadata.renameAction"),

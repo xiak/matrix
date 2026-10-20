@@ -7,7 +7,7 @@ import type { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountDirectoryKind } from "../scenes/accountAccessScene";
 
-export type AccountReadStatus = "loading" | "ready" | "empty" | "forbidden" | "routeUnavailable" | "unavailable" | "expired";
+export type AccountReadStatus = "loading" | "ready" | "empty" | "forbidden" | "notFound" | "routeUnavailable" | "unavailable" | "expired";
 
 type StateCopy = { title: string; description: string; action?: ReactNode };
 
@@ -38,7 +38,7 @@ export function AccountReadBoundary({ children, empty, failure, loading, onRetry
   if (status === "empty") return empty ? <EmptyState title={empty.title} description={empty.description} action={empty.action} /> : null;
 
   const canRetry = status === "unavailable" && onRetry;
-  const canCopy = (status === "forbidden" || status === "routeUnavailable" || status === "unavailable") && problem?.requestId;
+  const canCopy = (status === "forbidden" || status === "notFound" || status === "routeUnavailable" || status === "unavailable") && problem?.requestId;
   const copyDiagnostic = async () => {
     if (!problem || !navigator.clipboard?.writeText) {
       setCopyView({ key: copyKey, state: "failed" });

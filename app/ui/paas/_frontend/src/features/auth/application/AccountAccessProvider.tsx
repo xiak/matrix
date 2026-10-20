@@ -145,7 +145,7 @@ export type ServiceLinkedRoleDirectoryLoad =
 
 export type ServiceLinkedRoleAccessLoad =
   | { status: "ready"; access: ServiceLinkedRoleAccess }
-  | { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
+  | { status: "forbidden" | "notFound" | "routeUnavailable" | "unavailable" | "expired" };
 
 export type ServiceLinkedRoleClient = {
   accountId: string;
@@ -154,7 +154,7 @@ export type ServiceLinkedRoleClient = {
   read(roleId: string, after?: string): Promise<ServiceLinkedRoleAccessLoad>;
 };
 
-type AccountPolicyReadFailure = { status: "forbidden" | "routeUnavailable" | "unavailable" | "expired" };
+type AccountPolicyReadFailure = { status: "forbidden" | "notFound" | "routeUnavailable" | "unavailable" | "expired" };
 export type AccountPolicyReadLoad = { status: "ready"; access: AccountPolicyAccess } | AccountPolicyReadFailure;
 export type AccountPolicyVersionReadLoad = { status: "ready"; detail: AccountPolicyDetail } | AccountPolicyReadFailure;
 export type AccountPolicyVersionDirectoryLoad = { status: "ready"; directory: AccountPolicyVersionDirectory } | AccountPolicyReadFailure;
@@ -1643,7 +1643,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
               return { status: "expired" };
             }
             if (failure.status === 403) return { status: "forbidden" };
-            if (failure.status === 404) return { status: "routeUnavailable" };
+            if (failure.status === 404 && failure.code === "iam.route.notfound") return { status: "routeUnavailable" };
           }
           return { status: "unavailable" };
         }
@@ -1668,7 +1668,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
               return { status: "expired" };
             }
             if (failure.status === 403) return { status: "forbidden" };
-            if (failure.status === 404) return { status: "routeUnavailable" };
+            if (failure.status === 404 && failure.code === "iam.route.notfound") return { status: "routeUnavailable" };
           }
           return { status: "unavailable" };
         }
@@ -1690,9 +1690,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           return { status: "expired" };
         }
         if (failure.status === 403) return { status: "forbidden" };
-        if (failure.status === 404) return { status: "routeUnavailable" };
+        if (failure.status === 404 && failure.code === "iam.route.notfound") return { status: "routeUnavailable" };
       }
       return { status: "unavailable" };
+    };
+    const accessFailed = (failure: unknown): Exclude<ServiceLinkedRoleAccessLoad, { status: "ready" }> => {
+      if (failure instanceof HttpProblem && failure.status === 404 && failure.code !== "iam.route.notfound") return { status: "notFound" };
+      return failed(failure);
     };
     return {
       accountId,
@@ -1703,7 +1707,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       },
       async read(roleId, after) {
         try { return { status: "ready", access: await read(credential, accountId, roleId, after) }; }
-        catch (failure) { return failed(failure); }
+        catch (failure) { return accessFailed(failure); }
       }
     };
   }, [active, credential, expireSession, repository, scene, sessionRevision, tenantId]);
@@ -1722,7 +1726,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           return { status: "expired" };
         }
         if (failure.status === 403) return { status: "forbidden" };
-        if (failure.status === 404) return { status: "routeUnavailable" };
+        if (failure.status === 404) return { status: failure.code === "iam.route.notfound" ? "routeUnavailable" : "notFound" };
       }
       return { status: "unavailable" };
     };
@@ -2148,7 +2152,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
               return { status: "expired" };
             }
             if (failure.status === 403) return { status: "forbidden" };
-            if (failure.status === 404) return { status: "routeUnavailable" };
+            if (failure.status === 404 && failure.code === "iam.route.notfound") return { status: "routeUnavailable" };
           }
           return { status: "unavailable" };
         }

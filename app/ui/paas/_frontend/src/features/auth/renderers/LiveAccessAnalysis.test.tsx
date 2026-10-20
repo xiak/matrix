@@ -109,12 +109,14 @@ describe("live access analysis", () => {
   });
 
   it.each([
-    [403, "当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。", false],
-    [404, "当前运行环境无法提供兼容的访问分析功能；这不代表服务尚未开通。", false],
-    [503, "访问分析暂时不可用；失败不代表当前账号没有 Analyzer 或 Finding。", true]
-  ] as const)("keeps an exact known-Analyzer %i failure distinct from an empty directory", async (status, message, retryable) => {
+    [403, "PRIVATE_ANALYZER_DIAGNOSTIC", "当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。", false],
+    [404, "iam.route.notfound", "当前运行环境无法提供兼容的访问分析功能；这不代表服务尚未开通。", false],
+    [404, "iam.access-analyzer.not-found", "IAM 未确认指定 Analyzer 或 Finding 可读取；它可能不存在，或当前身份无法确认。这不代表访问分析服务未开通。", false],
+    [404, "PRIVATE_ANALYZER_DIAGNOSTIC", "IAM 未确认指定 Analyzer 或 Finding 可读取；它可能不存在，或当前身份无法确认。这不代表访问分析服务未开通。", false],
+    [503, "PRIVATE_ANALYZER_DIAGNOSTIC", "访问分析暂时不可用；失败不代表当前账号没有 Analyzer 或 Finding。", true]
+  ] as const)("keeps an exact known-Analyzer %i %s failure distinct from an empty directory", async (status, code, message, retryable) => {
     const user = userEvent.setup();
-    const readAnalyzer = vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE_ANALYZER_DIAGNOSTIC"));
+    const readAnalyzer = vi.fn().mockRejectedValue(new HttpProblem(status, code));
     view(client({ canList: false, canCreate: false, readAnalyzer }));
     await user.type(await screen.findByLabelText("分析器 ID"), analyzer.id);
     await user.click(screen.getByRole("button", { name: "查看分析器" }));

@@ -525,6 +525,29 @@ function SecuritySettingsIntentProbe({ proposed = { expectedResourceVersion: acc
   </>;
 }
 
+function ReadClassificationProbe() {
+  const session = useSession();
+  const access = useAccountAccess();
+  const [serviceRole, setServiceRole] = useState("idle");
+  const [policy, setPolicy] = useState("idle");
+  const [profiles, setProfiles] = useState("idle");
+  const [templates, setTemplates] = useState("idle");
+  const [settings, setSettings] = useState("idle");
+  return <>
+    <button onClick={() => void session.login("admin", "password")}>login-read-classification</button>
+    <button disabled={!access.serviceLinkedRoles} onClick={() => void access.serviceLinkedRoles?.read("missing-role").then((result) => setServiceRole(result.status))}>read-service-role</button>
+    <button disabled={!access.policyRead} onClick={() => void access.policyRead?.read("missing-policy").then((result) => setPolicy(result.status))}>read-policy</button>
+    <button disabled={!access.authorizationProfiles} onClick={() => void access.authorizationProfiles?.load().then((result) => setProfiles(result.status))}>read-profiles</button>
+    <button disabled={!access.serviceRoleTemplates} onClick={() => void access.serviceRoleTemplates?.load().then((result) => setTemplates(result.status))}>read-templates</button>
+    <button disabled={!access.accountSecuritySettings} onClick={() => void access.accountSecuritySettings?.load().then((result) => setSettings(result.status))}>read-settings</button>
+    <output aria-label="service-role-read-status">{serviceRole}</output>
+    <output aria-label="policy-read-status">{policy}</output>
+    <output aria-label="profile-read-status">{profiles}</output>
+    <output aria-label="template-read-status">{templates}</output>
+    <output aria-label="settings-read-status">{settings}</output>
+  </>;
+}
+
 function AuthenticatedAccess({ repository, initialView, initialEntityId, initialUserTab, active = true }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string; initialUserTab?: AccountUserDetailTab; active?: boolean }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
@@ -4689,17 +4712,51 @@ describe("account access", () => {
   });
 
   it.each([
-    [403, "当前身份无权读取权限能力目录"],
-    [404, "后端版本或路由可能未匹配"],
-    [503, "权限能力目录暂时不可用"]
-  ])("localizes catalog HTTP %s without replacing the policy directory or falling back to MOCK", async (status, message) => {
-    const { user } = await openAccess(accounts({ listAuthorizationProfiles: vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE")) }), iam(), "policies");
+    [403, "PRIVATE", "当前身份无权读取权限能力目录"],
+    [404, "iam.route.notfound", "后端版本或路由可能未匹配"],
+    [404, "PRIVATE", "权限能力目录暂时不可用"],
+    [503, "PRIVATE", "权限能力目录暂时不可用"]
+  ])("localizes catalog HTTP %s %s without replacing the policy directory or falling back to MOCK", async (status, code, message) => {
+    const { user } = await openAccess(accounts({ listAuthorizationProfiles: vi.fn().mockRejectedValue(new HttpProblem(status, code)) }), iam(), "policies");
     await screen.findByRole("table", { name: "策略元数据目录" });
     await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
     expect(await screen.findByText(new RegExp(message))).toBeTruthy();
     expect(screen.queryByText(/隔离 MOCK 的权限能力目录/)).toBeNull();
     await user.click(screen.getByRole("tab", { name: "策略目录" }));
     expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
+  });
+
+  it.each([
+    ["iam.route.notfound", "routeUnavailable", "routeUnavailable", "routeUnavailable", "routeUnavailable", "routeUnavailable"],
+    ["PRIVATE_TARGET_404", "notFound", "notFound", "unavailable", "unavailable", "unavailable"]
+  ])("classifies stable route and target 404s without inferring empty state for %s", async (code, serviceRole, policy, profiles, templates, settings) => {
+    const missing = () => Promise.reject(new HttpProblem(404, code));
+    const repository = accounts({
+      listServiceLinkedRoles: vi.fn(),
+      getServiceLinkedRole: vi.fn(missing),
+      readPolicy: vi.fn(missing),
+      listAuthorizationProfiles: vi.fn(missing),
+      listServiceRoleTemplates: vi.fn(missing),
+      accountSecuritySettings: { read: vi.fn(missing) }
+    });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><ReadClassificationProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "login-read-classification" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "read-service-role" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "read-service-role" }));
+    await user.click(screen.getByRole("button", { name: "read-policy" }));
+    await user.click(screen.getByRole("button", { name: "read-profiles" }));
+    await user.click(screen.getByRole("button", { name: "read-templates" }));
+    await user.click(screen.getByRole("button", { name: "read-settings" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("service-role-read-status").textContent).toBe(serviceRole);
+      expect(screen.getByLabelText("policy-read-status").textContent).toBe(policy);
+      expect(screen.getByLabelText("profile-read-status").textContent).toBe(profiles);
+      expect(screen.getByLabelText("template-read-status").textContent).toBe(templates);
+      expect(screen.getByLabelText("settings-read-status").textContent).toBe(settings);
+    });
   });
 
   it("rejects a catalog bound to another account without clearing the policy scene", async () => {

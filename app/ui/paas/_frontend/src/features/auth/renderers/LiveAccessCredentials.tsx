@@ -18,7 +18,7 @@ import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccountReadBoundary, type AccountReadStatus } from "./AccountReadBoundary";
 import styles from "./AccessCredentials.module.css";
 
-type LiveKeyError = "expired" | "forbidden" | "routeUnavailable" | "conflict" | "recoveryUnavailable" | "unavailable";
+type LiveKeyError = "expired" | "forbidden" | "notFound" | "routeUnavailable" | "conflict" | "recoveryUnavailable" | "unavailable";
 type WithoutMutationOwner<T> = T extends AccessKeyMutationIntent ? Omit<T, "accountId" | "actorId"> : never;
 type LiveAccessKeyMutation = WithoutMutationOwner<AccessKeyMutationIntent>;
 type LiveKeyFlow =
@@ -49,14 +49,14 @@ function keyError(error: unknown): LiveKeyError {
     if (error.code === "ACCESS_KEY_RECOVERY_STORAGE_UNAVAILABLE") return "recoveryUnavailable";
     if (error.status === 401) return "expired";
     if (error.status === 403) return "forbidden";
-    if (error.status === 404) return "routeUnavailable";
+    if (error.status === 404) return error.code === "iam.route.notfound" ? "routeUnavailable" : "notFound";
     if (error.status === 409) return "conflict";
   }
   return "unavailable";
 }
 
 function keyReadStatus(error: LiveKeyError): Exclude<AccountReadStatus, "loading" | "ready" | "empty"> {
-  if (error === "expired" || error === "forbidden" || error === "routeUnavailable" || error === "unavailable") return error;
+  if (error === "expired" || error === "forbidden" || error === "notFound" || error === "routeUnavailable" || error === "unavailable") return error;
   return "unavailable";
 }
 

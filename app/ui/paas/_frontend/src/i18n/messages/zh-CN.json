@@ -2278,6 +2278,7 @@
     "retry": "重试读取",
     "errors": {
       "forbidden": "当前身份无权读取该策略的详情；策略目录仍可使用。",
+      "notFound": "IAM 未确认指定策略可读取；它可能不存在，或当前身份无法确认。未使用 MOCK 内容替代。",
       "routeUnavailable": "策略详情接口不可用，可能与后端版本不匹配；未使用 MOCK 内容替代。",
       "unavailable": "策略详情暂时不可用或返回了无效内容；未使用 MOCK 内容替代。",
       "expired": "当前登录会话已失效，策略内容不会继续显示。"
@@ -2382,6 +2383,7 @@
       },
       "versionErrors": {
       "forbidden": "当前身份无权读取这些版本；默认版本详情仍可单独查看。",
+      "notFound": "IAM 未确认指定策略或版本可读取；它可能不存在，或当前身份无法确认。未使用 MOCK 内容替代。",
       "routeUnavailable": "版本读取接口不可用；未使用 MOCK 内容替代。",
       "unavailable": "版本目录或详情暂时不可用，或返回了无效内容；未使用 MOCK 内容替代。",
       "expired": "当前登录会话已失效，版本内容不会继续显示。"
@@ -3109,12 +3111,14 @@
     "copyFailed": "无法复制，请稍后重试",
     "titles": {
       "forbidden": "当前身份无权读取",
+      "notFound": "无法确认指定对象",
       "routeUnavailable": "当前功能不可用",
       "unavailable": "暂时无法读取",
       "expired": "登录会话已失效"
     },
     "descriptions": {
       "forbidden": "当前身份缺少此区域的读取权限。其他已授权页面不受影响。",
+      "notFound": "IAM 未确认指定对象可读取。它可能不存在，或当前身份无法确认；本状态不代表服务未开通。",
       "routeUnavailable": "当前运行环境无法提供此功能。它不代表服务未开通或当前身份被拒绝。",
       "unavailable": "服务暂时没有返回可信结果。失败不代表数据为空，请稍后重试。",
       "expired": "请重新登录后再读取当前内容。"
@@ -3190,12 +3194,14 @@
     "errors": {
       "relations": {
         "forbidden": { "title": "无权查看当前账号服务授权", "description": "当前身份缺少服务关联角色读取权限。其他已授权的 IAM 页面不受影响。" },
+        "notFound": { "title": "无法确认指定服务授权", "description": "IAM 未确认指定服务关联角色可读取。它可能不存在，或当前身份无法确认；这不代表账号尚未开通服务。" },
         "routeUnavailable": { "title": "当前无法读取服务授权", "description": "当前运行环境没有提供兼容的服务关联角色读取能力；这不代表账号尚未开通服务。" },
         "unavailable": { "title": "暂时无法读取服务授权", "description": "IAM 没有返回可验证的关系或绑定数据，请稍后重试。" },
         "expired": { "title": "会话已过期", "description": "请重新登录后再读取当前账号服务授权。" }
       },
       "templates": {
         "forbidden": { "title": "无权查看服务授权模板", "description": "当前身份缺少服务角色模板目录读取权限。当前账号授权仍可独立查看。" },
+        "notFound": { "title": "无法确认指定服务授权模板", "description": "IAM 未确认指定模板可读取。它可能不存在，或当前身份无法确认；当前账号授权仍可独立查看。" },
         "routeUnavailable": { "title": "当前无法读取服务授权模板", "description": "当前运行环境没有提供兼容的只读模板目录；这不代表账号尚未开通服务。" },
         "unavailable": { "title": "暂时无法读取模板目录", "description": "IAM 没有返回可验证的模板目录。请稍后重试。" },
         "expired": { "title": "会话已过期", "description": "请重新登录后再读取服务授权模板。" }
@@ -5200,6 +5206,7 @@
     "keyLiveErrors": {
       "expired": "当前登录会话已失效。请重新登录后再读取访问密钥。",
       "forbidden": "当前身份没有管理该用户访问密钥的权限。",
+      "notFound": "IAM 未确认指定用户或访问密钥可读取；它可能不存在，或当前身份无法确认。这不代表访问密钥功能未接入。",
       "routeUnavailable": "当前运行环境无法提供兼容的访问密钥功能；这不代表账号或用户尚未开通服务。",
       "conflict": "用户或密钥状态已变化。请重新读取后再操作；如果本次结果不确定，请保留原操作标识并先确认结果。",
       "recoveryUnavailable": "浏览器无法安全保存或清理原请求记录，因此没有发送新的访问密钥写入。请恢复当前站点的会话存储后重新打开本页。",
@@ -5352,6 +5359,7 @@
         "errors": {
           "expired": "当前登录会话已失效；页面已清除 Analyzer、Finding 与待处理命令投影。请重新登录后重新审阅。",
           "forbidden": "当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。",
+          "notFound": "IAM 未确认指定 Analyzer 或 Finding 可读取；它可能不存在，或当前身份无法确认。这不代表访问分析服务未开通。",
           "routeUnavailable": "当前运行环境无法提供兼容的访问分析功能；这不代表服务尚未开通。",
           "conflict": "资源版本已变化，页面已重新读取权威状态；请基于最新结果再次审阅。",
           "invalid": "服务端拒绝了当前配置或状态转换请求。",
