@@ -49,6 +49,7 @@ function client(overrides: Partial<AccessAnalysisClient> = {}): AccessAnalysisCl
   return {
     accountId: analyzer.accountId,
     sessionRevision: 1,
+    continuityIdentity: {},
     canList: true,
     canCreate: true,
     listAnalyzers: vi.fn().mockResolvedValue({ accountId: analyzer.accountId, items: [analyzer], nextAfter: null }),
@@ -109,7 +110,7 @@ describe("live access analysis", () => {
   });
 
   it.each([
-    [403, "PRIVATE_ANALYZER_DIAGNOSTIC", "当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。", false],
+    [403, "PRIVATE_ANALYZER_DIAGNOSTIC", "当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。 请联系账号管理员核对授权，授权后重新检查权限。", false],
     [404, "iam.route.notfound", "当前运行环境无法提供兼容的访问分析功能；这不代表服务尚未开通。", false],
     [404, "iam.access-analyzer.not-found", "IAM 未确认指定 Analyzer 或 Finding 可读取；它可能不存在，或当前身份无法确认。这不代表访问分析服务未开通。", false],
     [404, "PRIVATE_ANALYZER_DIAGNOSTIC", "IAM 未确认指定 Analyzer 或 Finding 可读取；它可能不存在，或当前身份无法确认。这不代表访问分析服务未开通。", false],
@@ -177,6 +178,71 @@ describe("live access analysis", () => {
     expect(screen.queryByRole("button", { name: "user-alex" })).toBeNull();
   });
 
+  it("keeps the same-session workspace stable, freezes writes, and refreshes exact Analyzer authority", async () => {
+    const user = userEvent.setup();
+    const continuityIdentity = {};
+    const updateAnalyzer = vi.fn().mockResolvedValue({ ...analyzer, unusedAccessAgeDays: 30, resourceVersion: 2 });
+    const first = client({ continuityIdentity, updateAnalyzer });
+    const rendered = view(first);
+    await user.click(await screen.findByRole("tab", { name: "分析规则" }));
+    const window = screen.getByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window);
+    await user.type(window, "30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", false);
+
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis authorizationPending client={first} onNavigate={vi.fn()} /></LocaleProvider>);
+
+    expect(screen.getByRole("tab", { name: "分析规则" }).getAttribute("data-state")).toBe("active");
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+
+    const readAnalyzer = vi.fn().mockResolvedValue({
+      analyzer,
+      capabilities: [capability("iam.access-finding.list", "ACCESS_ANALYZER", analyzer.id)]
+    });
+    const otherAnalyzer = { ...analyzer, id: "analyzer-directory-first", resourceVersion: 4 };
+    const refreshed = client({ continuityIdentity, readAnalyzer, updateAnalyzer,
+      listAnalyzers: vi.fn().mockResolvedValue({ accountId: analyzer.accountId, items: [otherAnalyzer, analyzer], nextAfter: null }) });
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
+
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    expect(screen.getByRole("tab", { name: "分析规则" }).getAttribute("data-state")).toBe("active");
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late exact Analyzer response from an older authority snapshot in the same Session", async () => {
+    let resolveOldAnalyzer!: (value: AccessAnalyzerAccess) => void;
+    const oldAnalyzer = new Promise<AccessAnalyzerAccess>((resolve) => { resolveOldAnalyzer = resolve; });
+    const continuityIdentity = {};
+    const first = client({ continuityIdentity, readAnalyzer: vi.fn().mockReturnValue(oldAnalyzer) });
+    const rendered = view(first);
+    await waitFor(() => expect(first.readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+
+    const readAnalyzer = vi.fn().mockResolvedValue({
+      analyzer,
+      capabilities: [capability("iam.access-finding.list", "ACCESS_ANALYZER", analyzer.id)]
+    });
+    const refreshed = client({ continuityIdentity, readAnalyzer });
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("tab", { name: "分析规则" }));
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    const window = screen.getByRole("spinbutton", { name: "完整观测窗口" });
+    expect(window).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await act(async () => {
+      resolveOldAnalyzer(analyzerAccess());
+      await oldAnalyzer;
+    });
+    expect(screen.getByRole("spinbutton", { name: "完整观测窗口" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+  });
+
   it("removes an old pending Finding detail on exact client replacement and never restores it", async () => {
     const user = userEvent.setup();
     let resolveOldFinding!: (value: AccessFindingAccess) => void;
@@ -235,7 +301,7 @@ describe("live access analysis", () => {
     const user = userEvent.setup();
     view(client({ readFinding: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) }));
     await user.click(await screen.findByRole("button", { name: "user-alex" }));
-    expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。")).toBeTruthy();
+    expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。 请联系账号管理员核对授权，授权后重新检查权限。")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "归档 Finding" })).toBeNull();
     expect(screen.queryByRole("button", { name: "重新加载" })).toBeNull();
   });
@@ -278,7 +344,7 @@ describe("live access analysis", () => {
 
   it("keeps a forbidden live response local and never substitutes MOCK samples", async () => {
     view(client({ listAnalyzers: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) }));
-    expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。")).toBeTruthy();
+    expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。 请联系账号管理员核对授权，授权后重新检查权限。")).toBeTruthy();
     expect(screen.queryByText(/123 条样例/)).toBeNull();
     expect(screen.queryByText(/LIVE · NOT_CONNECTED/)).toBeNull();
   });

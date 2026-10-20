@@ -12,6 +12,7 @@ describe("AccountReadBoundary", () => {
     render(<LocaleProvider><AccountReadBoundary status="forbidden" loading={null} onRetry={vi.fn()} /></LocaleProvider>);
 
     expect(screen.getByRole("heading", { name: "当前身份无权读取" })).toBeTruthy();
+    expect(screen.getByText(/联系账号管理员核对授权，授权后重新检查权限/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
   });
 

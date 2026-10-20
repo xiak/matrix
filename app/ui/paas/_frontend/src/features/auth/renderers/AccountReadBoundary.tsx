@@ -55,9 +55,11 @@ export function AccountReadBoundary({ children, empty, failure, loading, onRetry
     {canRetry ? <Button disabled={retryDisabled} variant="secondary" onClick={onRetry}>{retryLabel ?? t("retry")}</Button> : null}
     {canCopy ? <Button variant="secondary" onClick={() => void copyDiagnostic()}>{t(copyState === "copied" ? "copied" : copyState === "failed" ? "copyFailed" : "copyDiagnostic")}</Button> : null}
   </> : undefined;
+  const description = failure?.description ?? t(`descriptions.${status}`);
 
   return <section aria-label={failure?.title} role="alert">
-    <EmptyState title={failure?.title ?? t(`titles.${status}`)} description={failure?.description ?? t(`descriptions.${status}`)} action={actions} />
+    <EmptyState title={failure?.title ?? t(`titles.${status}`)}
+      description={status === "forbidden" ? `${description} ${t("forbiddenRecovery")}` : description} action={actions} />
   </section>;
 }
 

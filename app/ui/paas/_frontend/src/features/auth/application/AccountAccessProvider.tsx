@@ -290,6 +290,7 @@ export type AccessKeyClient = {
 export type AccessAnalysisClient = {
   accountId: string;
   sessionRevision: number;
+  continuityIdentity: object;
   canList: boolean;
   canCreate: boolean;
   listAnalyzers(after?: string): Promise<AccessAnalyzerDirectory>;
@@ -860,6 +861,12 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const [error, setError] = useState<AccountError | null>(null);
   const [success, setSuccess] = useState<"completed" | null>(null);
   const [revision, setRevision] = useState(0);
+  const authorityRefreshPending = useRef(true);
+  const requestAuthorityRefresh = useCallback(() => {
+    authorityRefreshPending.current = true;
+    setLoading(true);
+    setRevision((current) => current + 1);
+  }, []);
   const mutationPending = useRef(false);
   const directoryRequest = useRef({ users: 0, accounts: 0, tenantPolicies: 0, platformPolicies: 0 });
   // View context survives list/detail navigation, not account/session changes.
@@ -889,6 +896,11 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const currentAccessKeyOwner = useRef<typeof accessKeyOwner | null>(accessKeyOwner);
   const resourceAccessOwner = useMemo(() => ({ repository, viewSession, active }), [active, repository, viewSession]);
   const currentResourceAccessOwner = useRef<typeof resourceAccessOwner | null>(resourceAccessOwner);
+  const verifiedAuthority = verifiedIdentityOwner?.session === viewSession && verifiedIdentityOwner.repository === repository
+    ? verifiedIdentityOwner : null;
+  const accessAnalysisOwner = useMemo(() => ({ continuity: resourceAccessOwner, authority: verifiedAuthority }),
+    [resourceAccessOwner, verifiedAuthority]);
+  const currentAccessAnalysisOwner = useRef<typeof accessAnalysisOwner | null>(accessAnalysisOwner);
   const accessKeyStorageObservationRef = useRef<{ owner: typeof accessKeyOwner; status: "ready" | "blocked" } | null>(null);
   const [accessKeyStorageObservation, setAccessKeyStorageObservation] = useState<typeof accessKeyStorageObservationRef.current>(null);
   const markAccessKeyStorage = useCallback((owner: typeof accessKeyOwner, status: "ready" | "blocked") => {
@@ -906,6 +918,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       if (currentResourceAccessOwner.current === resourceAccessOwner) currentResourceAccessOwner.current = null;
     };
   }, [resourceAccessOwner]);
+  useLayoutEffect(() => {
+    currentAccessAnalysisOwner.current = accessAnalysisOwner;
+    authorityRefreshPending.current = accessAnalysisOwner.authority === null;
+    return () => {
+      if (currentAccessAnalysisOwner.current === accessAnalysisOwner) currentAccessAnalysisOwner.current = null;
+    };
+  }, [accessAnalysisOwner]);
   useLayoutEffect(() => { currentExactUsers.current = exactUsers; }, [exactUsers]);
   useLayoutEffect(() => { currentScene.current = scene; }, [scene]);
   useLayoutEffect(() => {
@@ -1282,7 +1301,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       setScene(loaded.scene); setWorkspace(loaded.extension); setError(null);
     } },
       (failure: unknown) => { if (mounted && currentViewSession.current === viewSession) {
-        verifiedIdentitySession.current = null; setScene(null); setWorkspace(null); setError(accountError(failure));
+        verifiedIdentitySession.current = null; setVerifiedIdentityOwner(null); setScene(null); setWorkspace(null); setError(accountError(failure));
         if (failure instanceof HttpProblem && failure.status === 401) expireSession(credential!, sessionRevision);
       } })
       .finally(() => { if (mounted) setLoading(false); });
@@ -1807,13 +1826,14 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       pending,
       begin(input) {
-        if (!scene.canCreatePolicies || !input.displayName.trim() || input.document.scope !== "TENANT") return Promise.resolve({ status: "blocked" });
+        if (authorityRefreshPending.current || !scene.canCreatePolicies || !input.displayName.trim() || input.document.scope !== "TENANT") return Promise.resolve({ status: "blocked" });
         const intent: PolicyCreateIntent = { accountId, displayName: input.displayName.trim(),
           documentJSON: JSON.stringify(input.document), requestId: requestToken("ui-policy-create-"), phase: "submitting" };
         if (!rememberPolicyCreate(null, intent)) return Promise.resolve({ status: "blocked" });
         return attempt(intent, false);
       },
       retry() {
+        if (authorityRefreshPending.current) return Promise.resolve({ status: "blocked" });
         const current = policyCreateRef.current;
         if (current?.session !== viewSession || current.intent.phase !== "unknown") return Promise.resolve({ status: "blocked" });
         const intent = { ...current.intent, phase: "submitting" as const };
@@ -2164,12 +2184,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const observedAccountId = scene && scene.accountId === tenantId ? scene.accountId : null;
   const accessAnalysis = useMemo<AccessAnalysisClient | null>(() => {
     const analysisRepository = repository.accessAnalysis;
-    if (!active || !credential || !observedAccountId || !analysisRepository || repository.workspace) return null;
+    if (!active || !credential || !observedAccountId || !analysisRepository || repository.workspace || !accessAnalysisOwner.authority) return null;
     const accountId = observedAccountId;
-    const owns = () => currentResourceAccessOwner.current === resourceAccessOwner;
-    const scoped = async <T,>(request: Promise<T>): Promise<T> => {
+    const owns = () => currentAccessAnalysisOwner.current === accessAnalysisOwner && !authorityRefreshPending.current;
+    const scoped = async <T,>(request: () => Promise<T>): Promise<T> => {
+      if (!owns()) throw new HttpProblem(409, "IAM_AUTHORITY_REFRESH_IN_PROGRESS");
       try {
-        const value = await request;
+        const value = await request();
         if (!owns()) throw new Error("STALE_IAM_STATE");
         return value;
       }
@@ -2183,19 +2204,20 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       accountId,
       sessionRevision,
+      continuityIdentity: accessAnalysisOwner.continuity,
       canList: scene?.canListAccessAnalyzers ?? false,
       canCreate: scene?.canCreateAccessAnalyzers ?? false,
-      listAnalyzers: (after) => scoped(analysisRepository.listAnalyzers(credential, accountId, after)),
-      readAnalyzer: (analyzerId) => scoped(analysisRepository.readAnalyzer(credential, accountId, analyzerId)),
-      createAnalyzer: (command) => scoped(analysisRepository.createAnalyzer(credential, accountId, command)),
-      updateAnalyzer: (analyzerId, command) => scoped(analysisRepository.updateAnalyzer(credential, accountId, analyzerId, command)),
-      setDisposition: (analyzerId, command) => scoped(analysisRepository.setDisposition(credential, accountId, analyzerId, command)),
-      listFindings: (analyzerId, status, after) => scoped(analysisRepository.listFindings(credential, accountId, analyzerId, status, after)),
-      readFinding: (analyzerId, findingId) => scoped(analysisRepository.readFinding(credential, accountId, analyzerId, findingId)),
-      archiveFinding: (analyzerId, findingId, command) => scoped(analysisRepository.archiveFinding(credential, accountId, analyzerId, findingId, command)),
-      unarchiveFinding: (analyzerId, findingId, command) => scoped(analysisRepository.unarchiveFinding(credential, accountId, analyzerId, findingId, command))
+      listAnalyzers: (after) => scoped(() => analysisRepository.listAnalyzers(credential, accountId, after)),
+      readAnalyzer: (analyzerId) => scoped(() => analysisRepository.readAnalyzer(credential, accountId, analyzerId)),
+      createAnalyzer: (command) => scoped(() => analysisRepository.createAnalyzer(credential, accountId, command)),
+      updateAnalyzer: (analyzerId, command) => scoped(() => analysisRepository.updateAnalyzer(credential, accountId, analyzerId, command)),
+      setDisposition: (analyzerId, command) => scoped(() => analysisRepository.setDisposition(credential, accountId, analyzerId, command)),
+      listFindings: (analyzerId, status, after) => scoped(() => analysisRepository.listFindings(credential, accountId, analyzerId, status, after)),
+      readFinding: (analyzerId, findingId) => scoped(() => analysisRepository.readFinding(credential, accountId, analyzerId, findingId)),
+      archiveFinding: (analyzerId, findingId, command) => scoped(() => analysisRepository.archiveFinding(credential, accountId, analyzerId, findingId, command)),
+      unarchiveFinding: (analyzerId, findingId, command) => scoped(() => analysisRepository.unarchiveFinding(credential, accountId, analyzerId, findingId, command))
     };
-  }, [active, credential, expireSession, observedAccountId, repository, resourceAccessOwner, scene?.canCreateAccessAnalyzers, scene?.canListAccessAnalyzers, sessionRevision]);
+  }, [accessAnalysisOwner, active, credential, expireSession, observedAccountId, repository, scene?.canCreateAccessAnalyzers, scene?.canListAccessAnalyzers, sessionRevision]);
 
   const securityReports = useMemo<SecurityReportClient | null>(() => {
     const reportRepository = repository.securityReports;
@@ -2628,7 +2650,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       });
       if (currentViewSession.current !== viewSession || currentUserPolicyChangeOwner.current !== owner) return false;
       rememberUserPolicyChange(requestId, null);
-      setSuccess("completed"); setLoading(true); setRevision((current) => current + 1);
+      setSuccess("completed"); requestAuthorityRefresh();
       return true;
     } catch (failure) {
       if (currentViewSession.current !== viewSession || currentUserPolicyChangeOwner.current !== owner) return false;
@@ -2648,7 +2670,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         setBusy(false);
       }
     }
-  }, [active, credential, expireSession, loading, ownsVerifiedUserPolicyChange, rememberUserPolicyChange, repository, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
+  }, [active, credential, expireSession, loading, ownsVerifiedUserPolicyChange, rememberUserPolicyChange, repository, requestAuthorityRefresh, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
 
   const inspectUserPolicyChange = useCallback(async (requestId: string): Promise<boolean> => {
     const owner = userPolicyChangeOwner;
@@ -2677,7 +2699,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       const completion = await read(credential, expectation);
       if (currentViewSession.current !== viewSession || currentUserPolicyChangeOwner.current !== owner) return false;
       rememberUserPolicyChange(requestId, { ...intent, phase: "confirmed", lookupStatus: "confirmed", completion, error: null });
-      setLoading(true); setRevision((current) => current + 1);
+      requestAuthorityRefresh();
       return true;
     } catch (failure) {
       if (currentViewSession.current !== viewSession || currentUserPolicyChangeOwner.current !== owner) return false;
@@ -2697,7 +2719,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         setBusy(false);
       }
     }
-  }, [active, credential, expireSession, loading, ownsVerifiedUserPolicyChange, principalId, rememberUserPolicyChange, repository, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
+  }, [active, credential, expireSession, loading, ownsVerifiedUserPolicyChange, principalId, rememberUserPolicyChange, repository, requestAuthorityRefresh, scene, sessionRevision, tenantId, userPolicyChangeOwner, viewSession]);
 
   const endUserPolicyChange = useCallback((requestId: string): boolean => {
     const stored = userPolicyChangeRef.current;
@@ -2707,18 +2729,17 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     if (intent.phase !== "review") {
       directoryRequest.current.users += 1;
       directoryRequest.current.accounts += 1;
-      setLoading(true);
-      setRevision((current) => current + 1);
+      requestAuthorityRefresh();
     }
     return true;
-  }, [rememberUserPolicyChange, userPolicyChangeOwner]);
+  }, [rememberUserPolicyChange, requestAuthorityRefresh, userPolicyChangeOwner]);
 
   const expireUserCreationOwner = useCallback((expectedCredential: string, expectedRevision: number) => {
     if (expireSession(expectedCredential, expectedRevision)) {
       setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
     }
   }, [expireSession]);
-  const refreshCreatedUserDirectory = useCallback(() => { setLoading(true); setRevision((value) => value + 1); }, []);
+  const refreshCreatedUserDirectory = requestAuthorityRefresh;
   // Route activation pauses reads, not the originating Session's frozen command.
   // Keep that command while another service is visible; expose actions only in IAM.
   const retainedUserCreation = useLiveUserCreation({
@@ -2754,7 +2775,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         const result = await repository.executeUserBatch(credential, command);
         if (result.workspace.accountId !== tenantId || result.workspace.mode !== "preview") throw new Error("INVALID_IAM_TENANT");
         setWorkspace(result.workspace); setSuccess("completed");
-        setLoading(true); setRevision((current) => current + 1);
+        requestAuthorityRefresh();
         return true;
       } catch (failure) { setWorkspaceError(failure instanceof AccessWorkspaceError ? failure.code : accountError(failure)); return false; }
       finally { mutationPending.current = false; setBusy(false); }
@@ -2796,7 +2817,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         const result = await repository.workspace.execute(credential, command);
         if (result.workspace.accountId !== tenantId || result.workspace.mode !== "preview") throw new Error("INVALID_IAM_TENANT");
         setWorkspace(result.workspace);
-        if (command.kind === "create-subuser" || command.kind === "delete-user" || command.kind === "update-user") { setLoading(true); setRevision((current) => current + 1); }
+        if (command.kind === "create-subuser" || command.kind === "delete-user" || command.kind === "update-user") requestAuthorityRefresh();
         if (workspaceCommandHasConfirmedCompletion(command)) setSuccess("completed");
         return { issuedKey: result.issuedKey, recoveryCodes: result.recoveryCodes };
       } catch (failure) {
@@ -2834,7 +2855,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       } finally { mutationPending.current = false; setBusy(false); }
     },
     accountSecuritySettings, scene, loading, busy, error, success,
-    reload() { directoryRequest.current.users += 1; directoryRequest.current.accounts += 1; setLoading(true); setRevision((current) => current + 1); },
+    reload() { directoryRequest.current.users += 1; directoryRequest.current.accounts += 1; requestAuthorityRefresh(); },
     usersPage(after) { void loadUsersPage(after); },
     accountsPage(after) { void loadAccountsPage(after); },
     retryDirectory,
@@ -2858,7 +2879,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         await repository.execute(credential, command);
         if (currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return "rejected";
         setSuccess("completed");
-        setLoading(true); setRevision((current) => current + 1);
+        requestAuthorityRefresh();
         return "applied";
       } catch (failure) {
         if (currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return "rejected";
@@ -2919,7 +2940,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         await repository.execute(credential, command);
         if (currentViewSession.current !== viewSession || currentExactUsers.current !== exactUsers) return false;
         setSuccess("completed");
-        setLoading(true); setRevision((current) => current + 1);
+        requestAuthorityRefresh();
         return true;
       } catch (failure) {
         if (currentViewSession.current === viewSession && currentExactUsers.current === exactUsers) setError(accountError(failure));
@@ -2927,7 +2948,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, busy, credential, error, exactUsers, loading, repository, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, userManagement, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, userPolicyChangeReady, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyRecoveryError, accessKeyCreateIntent, accessKeyMutationIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, busy, credential, error, exactUsers, loading, repository, requestAuthorityRefresh, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, userManagement, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, userPolicyChangeReady, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyRecoveryError, accessKeyCreateIntent, accessKeyMutationIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

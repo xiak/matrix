@@ -399,6 +399,11 @@ function CapabilityProbe() {
   </Profiler>;
 }
 
+function AuthorityRefreshProbe() {
+  const access = useAccountAccess();
+  return <button disabled={access.loading} onClick={access.reload}>recheck-test-authority</button>;
+}
+
 const accountSwitchIntent: RoleSessionRevokeIntent = {
   accountId: account.id,
   roleId: managedRole.id,
@@ -554,7 +559,7 @@ function AuthenticatedAccess({ repository, initialView, initialEntityId, initial
   const [view, setView] = useState(initialView);
   const [entityId, setEntityId] = useState<string | undefined>(initialEntityId);
   const [userTab, setUserTab] = useState<AccountUserDetailTab | undefined>(initialUserTab);
-  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} userTab={userTab} onNavigate={(next, id, _method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setUserTab(nextUserTab); })} /></AccountAccessProvider> : <LoginRenderer />;
+  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><AuthorityRefreshProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} userTab={userTab} onNavigate={(next, id, _method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setUserTab(nextUserTab); })} /></AccountAccessProvider> : <LoginRenderer />;
 }
 
 async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential, initialEntityId?: string, initialUserTab?: AccountUserDetailTab) {
@@ -903,6 +908,84 @@ describe("account access", () => {
     expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
     expect(repository.listPolicies).toHaveBeenCalledTimes(2);
     expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it("freezes Analyzer writes while rechecking the same Session and rereads exact authority after success", async () => {
+    const liveAnalyzer = {
+      id: "analyzer-unused", accountId: account.id, type: "UNUSED_ACCESS" as const, status: "ACTIVE" as const,
+      unusedAccessAgeDays: 90, disposition: { mode: "REVIEW_ONLY" as const, findingDelayDays: 0 },
+      resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp
+    };
+    const writable = { analyzer: liveAnalyzer, capabilities: [
+      capability("iam.access-analyzer.update", "ACCESS_ANALYZER", liveAnalyzer.id)
+    ] };
+    const revoked = { analyzer: liveAnalyzer, capabilities: [{
+      ...capability("iam.access-analyzer.update", "ACCESS_ANALYZER", liveAnalyzer.id),
+      available: false, restrictionReason: "AUTHORITY_REQUIRED" as const
+    }] };
+    let finishRefresh!: (value: AccountIdentity) => void;
+    const pendingRefresh = new Promise<AccountIdentity>((resolve) => { finishRefresh = resolve; });
+    const currentIdentity = vi.fn()
+      .mockResolvedValueOnce(structuredClone(identity))
+      .mockReturnValueOnce(pendingRefresh);
+    const updateAnalyzer = vi.fn();
+    const analysis = liveAnalysis();
+    analysis.listAnalyzers = vi.fn().mockResolvedValue({ accountId: account.id, items: [liveAnalyzer], nextAfter: null });
+    analysis.readAnalyzer = vi.fn().mockResolvedValueOnce(writable).mockResolvedValue(revoked);
+    analysis.updateAnalyzer = updateAnalyzer;
+    const repository = accounts({ currentIdentity, accessAnalysis: analysis });
+    const { user } = await openAccess(repository, iam(), "access-analysis");
+
+    await user.click(await screen.findByRole("tab", { name: "分析规则" }));
+    const window = screen.getByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window);
+    await user.type(window, "30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", false);
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+
+    await act(async () => { finishRefresh(structuredClone(identity)); await pendingRefresh; });
+    await waitFor(() => expect(analysis.readAnalyzer).toHaveBeenCalledTimes(2));
+    expect(analysis.listAnalyzers).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("tab", { name: "分析规则" }).getAttribute("data-state")).toBe("active");
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reviewed policy draft visible but blocks creation until permission recheck completes", async () => {
+    let finishRefresh!: (value: AccountIdentity) => void;
+    const pendingRefresh = new Promise<AccountIdentity>((resolve) => { finishRefresh = resolve; });
+    const currentIdentity = vi.fn()
+      .mockResolvedValueOnce(structuredClone(identity))
+      .mockReturnValueOnce(pendingRefresh);
+    const createPolicy = vi.fn().mockResolvedValue(tenantPolicyDetail);
+    const repository = accounts({ currentIdentity, createPolicy });
+    const { user } = await openAccess(repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "新建自定义策略" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Refresh-safe policy" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "策略声明 JSON" }), { target: { value: JSON.stringify(tenantPolicyDetail.version.document) } });
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认创建" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    expect(createPolicy).not.toHaveBeenCalled();
+
+    await act(async () => { finishRefresh(structuredClone(identity)); await pendingRefresh; });
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认创建" })).toHaveProperty("disabled", false));
+    expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    await waitFor(() => expect(createPolicy).toHaveBeenCalledTimes(1));
   });
 
   it.each(["503", "protocol"])("clears old User rows and exact-target command snapshots after a fresh %s directory failure", async (failure) => {

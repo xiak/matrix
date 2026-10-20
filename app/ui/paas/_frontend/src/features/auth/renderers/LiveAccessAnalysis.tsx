@@ -68,6 +68,7 @@ function targetView(finding: AccessFinding): { view: AccountAccessView; id?: str
 
 type LiveAccessAnalysisProps = {
   client: AccessAnalysisClient;
+  authorizationPending?: boolean;
   onNavigate(view: AccountAccessView, id?: string): void;
 };
 
@@ -84,7 +85,8 @@ export function LiveAccessAnalysis(props: LiveAccessAnalysisProps) {
   const [intent, setIntent] = useState<AccessAnalysisMutationIntent | null>(null);
   let current = binding;
   if (binding.client !== props.client) {
-    current = { client: props.client, generation: binding.generation + 1 };
+    current = { client: props.client, generation: binding.client.continuityIdentity === props.client.continuityIdentity
+      ? binding.generation : binding.generation + 1 };
     setBinding(current);
   }
   const currentIntent = intent?.client === props.client ? intent : null;
@@ -107,7 +109,7 @@ export function LiveAccessAnalysis(props: LiveAccessAnalysisProps) {
     onBegin={begin} onResolved={resolve} onUnknown={markUnknown} />;
 }
 
-function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, onBegin, onNavigate, onResolved, onUnknown }: LiveAccessAnalysisGenerationProps) {
+function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedIntent, client, currentIntent, onBegin, onNavigate, onResolved, onUnknown }: LiveAccessAnalysisGenerationProps) {
   const t = useTranslations("IamWorkspace.accessAnalysis");
   const mounted = useRef(true);
   const [section, setSection] = useState<"coverage" | "unused" | "rule">("unused");
@@ -132,6 +134,7 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
   const [busy, setBusy] = useState(false);
   const [reloadRevision, setReloadRevision] = useState(0);
   const currentClient = useRef<AccessAnalysisClient | null>(client);
+  const currentAnalyzerId = useRef<string | null>(null);
   const analyzer = analyzerAccess?.analyzer ?? null;
   const selectedFinding = selected?.finding ?? null;
   const currentCursor = cursorStack[pageIndex];
@@ -151,22 +154,33 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
     currentClient.current = client;
     return () => { if (currentClient.current === client) currentClient.current = null; };
   }, [client]);
+  useLayoutEffect(() => {
+    const known = knownAnalyzerId.trim();
+    currentAnalyzerId.current = analyzerAccess?.analyzer.id ?? (/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(known) ? known : null);
+  }, [analyzerAccess, knownAnalyzerId]);
   const ownsClient = () => mounted.current && currentClient.current === client;
 
   useEffect(() => {
-    if (!client.canList) return;
     let active = true;
-    void client.listAnalyzers().then(async (directory) => {
+    const retainedAnalyzerId = currentAnalyzerId.current;
+    void (async () => {
+      let analyzerId = retainedAnalyzerId;
+      if (client.canList) {
+        const directory = await client.listAnalyzers();
+        if (!active) return;
+        setReadProblem(null);
+        setAnalyzers(directory.items);
+        analyzerId ??= directory.items[0]?.id ?? null;
+      } else {
+        setAnalyzers([]);
+      }
+      if (!analyzerId) { setAnalyzerAccess(null); return; }
+      const access = await client.readAnalyzer(analyzerId);
       if (!active) return;
-      setReadProblem(null);
-      setAnalyzers(directory.items);
-      const first = directory.items[0];
-      if (!first) { setAnalyzerAccess(null); return; }
-      const access = await client.readAnalyzer(first.id);
-      if (!active) return;
+      setKnownAnalyzerId(access.analyzer.id);
       setAnalyzerAccess(access);
       setFindingsLoading(findActionCapability(access.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", access.analyzer.id)?.available === true);
-    }).catch((failure) => {
+    })().catch((failure) => {
       if (!active) return;
       setAnalyzers(null);
       setReadProblem(failure instanceof HttpProblem ? failure : null);
@@ -348,7 +362,7 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
   };
 
   const startMutation = async (mutation: AccessAnalysisMutation) => {
-    if (currentIntent || blockedIntent || busy) return;
+    if (authorizationPending || currentIntent || blockedIntent || busy) return;
     const prefix = mutation.operation === "create" ? "ui-access-analyzer-create-"
       : mutation.operation === "update" ? "ui-access-analyzer-update-"
         : mutation.operation === "setDisposition" ? "ui-access-analyzer-set-disposition-"
@@ -359,7 +373,7 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
   };
 
   const retryMutation = async () => {
-    if (!currentIntent || busy) return;
+    if (authorizationPending || !currentIntent || busy) return;
     const started = onBegin(currentIntent);
     if (started) await executeMutation(started);
   };
@@ -405,7 +419,7 @@ function LiveAccessAnalysisGeneration({ blockedIntent, client, currentIntent, on
   };
 
   const retryingOriginal = Boolean(currentIntent && !busy);
-  const writeBlocked = Boolean(busy || currentIntent || blockedIntent);
+  const writeBlocked = Boolean(authorizationPending || busy || currentIntent || blockedIntent);
   const findingTransitionAction = selectedFinding?.status === "ACTIVE" ? "iam.access-finding.archive" : "iam.access-finding.unarchive";
   const canTransitionFinding = Boolean(selected && selectedFinding && selectedFinding.status !== "RESOLVED" &&
     findActionCapability(selected.capabilities, findingTransitionAction, "ACCESS_FINDING", selectedFinding.id)?.available);

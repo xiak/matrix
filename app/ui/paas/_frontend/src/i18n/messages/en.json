@@ -2278,7 +2278,7 @@
     "retry": "Retry read",
     "errors": {
       "forbidden": "This identity cannot read this policy's detail. The policy directory remains available.",
-      "notFound": "IAM did not confirm that the requested policy can be read. It may not exist, or this identity may be unable to confirm it. No MOCK content was substituted.",
+      "notFound": "IAM did not confirm that the requested policy can be read. It may not exist, or this identity may be unable to confirm it.",
       "routeUnavailable": "The policy detail route is unavailable or the backend version does not match. No MOCK content was substituted.",
       "unavailable": "Policy detail is unavailable or returned invalid content. No MOCK content was substituted.",
       "expired": "The login session expired, so policy content is no longer shown."
@@ -2383,7 +2383,7 @@
       },
       "versionErrors": {
       "forbidden": "This identity cannot read these versions. The default version detail may remain separately available.",
-      "notFound": "IAM did not confirm that the requested policy or version can be read. It may not exist, or this identity may be unable to confirm it. No MOCK content was substituted.",
+      "notFound": "IAM did not confirm that the requested policy or version can be read. It may not exist, or this identity may be unable to confirm it.",
       "routeUnavailable": "The version read route is unavailable. No MOCK content was substituted.",
       "unavailable": "The version directory or detail is unavailable or returned invalid content. No MOCK content was substituted.",
       "expired": "The login session expired, so version content is no longer shown."
@@ -3109,6 +3109,7 @@
     "copyDiagnostic": "Copy diagnostic info",
     "copied": "Diagnostic info copied",
     "copyFailed": "Could not copy; try again later",
+    "forbiddenRecovery": "Contact your account administrator to verify the grant, then recheck permissions after access is updated.",
     "titles": {
       "forbidden": "This identity cannot read this content",
       "notFound": "The requested object cannot be confirmed",
