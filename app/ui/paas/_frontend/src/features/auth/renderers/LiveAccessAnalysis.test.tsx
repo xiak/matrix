@@ -109,6 +109,18 @@ describe("live access analysis", () => {
     expect(value.createAnalyzer).not.toHaveBeenCalled();
   });
 
+  it("keeps a denied Finding directory distinct from a temporary outage", async () => {
+    const value = client({
+      readAnalyzer: vi.fn().mockResolvedValue({ analyzer, capabilities: [] })
+    });
+    view(value);
+
+    expect(await screen.findByText(/当前身份没有读取或管理访问分析的权限/)).toBeTruthy();
+    expect(screen.queryByText(/访问分析暂时不可用/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+    expect(value.listFindings).not.toHaveBeenCalled();
+  });
+
   it("opens an exact known Finding without analyzer-list, analyzer-read, or finding-list authority", async () => {
     const user = userEvent.setup();
     const readFinding = vi.fn().mockResolvedValue(findingAccess());
