@@ -6,7 +6,7 @@
 - Updated: 2026-10-20
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed candidate: `3daf8575a38a5e1ef066f80f954e5afa0cc00d95`
+- Pushed candidate: `3f626b8bd183b88399fb6b19ebfb50b46b625864`
 - Source commit: `892cf0439fba342765305cad3e0dfcdd563618d8`
 
 ## Authoritative route
@@ -28,6 +28,13 @@ content-area policy review and one isolated MOCK commit; the directory returned
 with a completion notice, exact 390px geometry, one H1, no Dialog and no browser
 warning/error. Exact evidence and limitations belong to FEAT-007; IAM semantics
 remain with FEAT-IAM-010.
+
+The current permission-refresh client also passed 454 focused cases across
+Account access, Access Analysis, Security Reports and the console shell. These
+prove same-Session CurrentIdentity refresh, exact-target rereads, write freezes,
+UNKNOWN preservation, stale-generation isolation and 403/503 separation. The
+new FEAT-IAM-010 evidence records those guarantees without promoting them to a
+real-process browser result.
 
 ## Continuation boundary
 
