@@ -16,6 +16,10 @@
 | IAM-UI-06 | AccessKey 一次性展示、状态/删除/轮换、登录安全/TOTP/session 下线 |
 | IAM-UI-07 | 正常成员看到允许的真实业务资源；拒绝和过期可恢复，不泄露其他账号 |
 | IAM-UI-08 | 未交付 SSO/微信等显示明确未启用信息，不展示可成功提交的假表单 |
+| IAM-UI-09 | 按当前身份与精确资源能力展示导航、页面和操作；产品发现、读取、写入及业务前置条件分离 |
+| IAM-UI-10 | 无权限、功能不可用、临时读取故障、真正空目录与结果未知有不同的说明和恢复动作 |
+| IAM-UI-11 | 个人安全入口不依赖全账号管理权限；仅有精确资源读取权时仍能通过已知目标进入 |
+| IAM-UI-12 | 权限变化、切换身份和迟到响应不保留旧 Allow，不丢失既有原命令和完成回执 |
 
 ### 当前交付矩阵
 
@@ -35,6 +39,56 @@
 复用当前组件和客户端契约生成。页面可见性是上下文绑定的保守提示，服务端每个请求仍真实鉴权。删除全局 roles → allowActions 的本地权威判断，以 resource/profile/version 绑定的能力或实际请求响应驱动。
 
 编辑保留输入但在版本冲突时明确刷新，不静默选另一个账号、角色或资源。敏感创建流程说明一次性材料，普通提示和错误不持久存储秘密。角色会话的 Account/有效身份/原始身份显示分开。
+
+### 权限感知控制台架构
+
+本增量的最小目标是：当前普通成员、只读管理员及精确资源操作者看到可用而准确的控制台；没有权限不会被表现为系统故障，未知状态不会被表现为拒绝或空目录。沿既有 IAM 权威、客户端 provider/scene/renderer 与 `@ui/xiak` 交付，不新增菜单权限、前端 PDP、通用 permission endpoint、审批系统或第二套控制台。
+
+参考原则来自 [Tencent CAM 概览](https://cloud.tencent.com/document/product/598/17848)的模块级展示、[Google Console 权限查询](https://docs.cloud.google.com/iam/docs/testing-permissions)的当前主体/具体资源判断，以及 [Cloudscape 禁用与只读](https://cloudscape.design/patterns/general/disabled-and-read-only-states/)的状态区分；这些是设计依据，不是本产品运行证据，也不要求复制云厂商的角色名或整套产品。
+
+```text
+当前有效 Session / repository owner
+    └─ IAM 当前权威快照 + 单一 PDP
+         ├─ CurrentIdentity.capabilities：固定且有界的入口/账号动作
+         └─ 已授权具体资源读取：该资源当前 ActionCapability
+                  ↓ 严格解析、准确 Account/actor/resource、丢弃迟到响应
+控制台 provider → scene → 现有导航/页面/组件
+                  ↓ 用户显式发起真实请求
+产品/IAM 用例重新鉴权 + 状态校验 + 原子事务/既有审计
+```
+
+三个轴必须分开：
+
+| 轴 | 真值与消费者 | 禁止推断 |
+| --- | --- | --- |
+| 功能及产品可用性 | 客户端是否有已接入适配器；真正的服务开通/委派状态由现有产品接口提供 | `supportsLive*` 不是当前用户权限，也不证明后端健康；404/未知路由不等于产品未开通 |
+| 当前操作能力 | IAM 对准确 action/resource 的 `available` 与封闭 `restrictionReason`；服务端仍是最终权威 | 读允许不推出写允许，SELF 不推出 AccessKey 权限，角色名不推出菜单；能力不是可缓存的操作许可 |
+| 当前读取结果 | loading、ready、成功且为空、forbidden、unsupported、unavailable；凭据失效仍归现有身份 owner | 权限查询失败不是 DENY，目录失败不是零行，旧成功结果不是当前授权；UNKNOWN 写入不是可重新提交的读取错误 |
+
+导航保留产品发现与本人入口。账号级管理菜单只消费准确入口能力；已知精确目标的详情读取不得依赖目录可见性，目录拒绝也不能证明该类型所有实例都不可读。AccessKey 的本人入口查询准确当前 USER；其他 USER 从已授权目录或已知目标进入，不能要求全局 User.list、扫描所有用户来推断权限，或把本人拒绝放大为对所有用户的拒绝。安全报告的生成是 ACCOUNT 动作，读取/下载是准确 SECURITY_REPORT 动作；分析器的创建/列表是 ACCOUNT 动作，读取/更新是准确 ACCESS_ANALYZER 动作，不能伪造一个 account-global read 能力。服务角色模板目录和当前账号关系目录分别授权，任何一块可用时保留该块，不以 AND 依赖整页关闭。
+
+CurrentIdentity 的固定入口集合沿既有十项增加八项：当前 USER 的 `iam.access-key.list`；当前 ACCOUNT 的 `iam.access-analyzer.list/create`、`iam.security-report.create`、`iam.service-role-template.list`、`iam.service-linked-role.list`、`iam.security-settings.read/update`（斜线表示两个既有独立动作）。wire 名称与现有 action catalog 完全一致，不能为 UI 添加业务权限。服务端与客户端同时严格校验完整集合、重复项、目标归属和拒绝原因；缺失旧字段或非法响应使投影不可用，不填充 false 或 Allow。新集合只进行有界纯 PDP 求值，复用一次已认证权威快照，不逐菜单调用接口、不读取业务资源、不生成新的授权决定或成功审计事实。
+
+具体资源上的写操作须由现有资源读取 owner 提供独立准确能力；缺少能力时不得从 read 成功、系统策略名、资源状态或“创建过该对象”猜测。后续对 Analyzer、Finding、SecurityReport 的精确能力投影必须与持久业务对象、不可变报告正文/digest 和原完成回执分离；不将短暂 UI 权限写入历史快照、数据库或 Audit canonical。没有真实目标 ID 时不构造任意或通配目标来试探。
+
+主视图和标签保持稳定标题，加载仅作用于数据区域；每个失败区域最多一个主状态和一个适用恢复动作。403 提供返回、已知安全上下文、授权后显式重新检查，不持续自动 Retry；临时故障提供唯一读取 Retry；unsupported 明确功能当前不可用，不宣称未开通。只有权威开通或委派结果才能显示对应引导。真正空目录才使用空状态和准确创建能力。当前有效 bearer 的401交给已有Session/RoleSession owner；密码/OTP错误不自行触发全局退出。隐藏入口不替代直接URL的友好拒绝，拒绝页不得泄露未经授权的目标名称、其他账号数据或确认对象存在。
+
+诊断复用现有 Problem 的稳定 code、status 和经过语法/长度校验的 requestId，以及客户端已经拥有的当前身份、当前账号与实际请求 action/resource；不展示任意 detail、原始响应、Bearer、Secret、OTP、cursor 或策略正文。没有真实权限申请渠道时只提供联系管理员和复制诊断，不生成假审批。正常 LIVE 页面移除“未回退 MOCK”等工程验收文案；显式预览标识、一次性秘密提示、危险操作说明及 UNKNOWN 结果警告继续保留。
+
+授权或身份变化后重新读取能力；不同 Account、User、RoleSession、Session 修订及 repository 之间不得共享旧结果。能力未知时禁用写入并显示正在确认/读取失败，不先显示可操作再闪退。既有非秘密原意图、UNKNOWN 围栏和完成回执独立保留；菜单改变、401/403、详情失败及重新登录不能清掉它们，更不能把“重新检查”实现成重放写请求。已完成操作的回执不因为后续资源读取失败而改写为失败。
+
+### 权限感知增量需求与切片
+
+状态均为待实现/验收；本表不重开或扩大此前已接受页面路径。
+
+| 切片 | 需求和实现 owner | 必须通过的结果 |
+| --- | --- | --- |
+| UX-P0 语义状态 | IAM-UI-10；UX/UI 在现有 HTTP、读取边界、Analysis/AccessKey/服务授权 renderer 和消息 owner 替换重复实现 | 403 不再显示临时故障或双 Retry；局部失败不遮蔽可用内容；安全 requestId 可复制，恶意/缺失值不透传；空数据、未知路由、503、过期严格区分 |
+| UX-P1 入口投影 | IAM-UI-09/11；IAM 用例/API/生成 owner 提供固定能力，UX/UI 严格解析并接入现有导航 | 普通User、只读委派、显式Deny、边界限制和受保护Root结果准确；本人Key无需User目录；模板和关系可局部访问；不能凭Read推断Write |
+| UX-P2 精确操作与身份刷新 | IAM-UI-09/11/12；各既有资源读取及对应UI owner | 已知ID不依赖目录；Analyzer/Finding/Report准确能力不污染持久对象和历史digest；撤权后新请求拒绝；切换身份丢弃迟到响应，UNKNOWN原意图与完成回执保持 |
+| UX-P3 组合验收 | 测试负责人复用既有 unit/contract、HTTP/PG、authorityprocess 与浏览器 owner | 最小权限普通用户、只读/可写、服务局部授权、直接URL、授权/撤权、503和真实空态逐条闭合；记录固定SHA/精确CI与可见页面证据，清理不再使用的自有临时资源 |
+
+先跑受影响的 API/usecase、客户端解析和真实组件测试；固定提交后运行必要独立 CI，同时推进无契约冲突的下一片。真实 PostgreSQL 与浏览器使用独立命名、受限资源；不为纯文案变更重复完整离线生命周期，不以组件全绿替代最终真实页面。当前设计不改变授权规则、SQL/readiness、ServiceIdentity、Audit编码或数据库发布profile；若精确操作投影发现必须改变这些边界，先在本owner写明实际变化和相应门禁，再实施，不能仅为字段展示增加schema版本。
 
 ### 有效凭据失效与角色返回
 

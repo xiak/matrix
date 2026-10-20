@@ -22,6 +22,22 @@ The independent authority target, closed Phase 1 roles and actions, bootstrap
 contract, opaque credentials, Audit event union, indefinite retention, and
 acceptance gates were committed before any of these slices was opened.
 
+## Permission-aware console increment
+
+The bounded architecture and requirements are owned by
+[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md#权限感知控制台架构).
+This slice uses existing Matrix owners, not another IAM or UI donor. The
+historical legacy rejection below remains unchanged; no legacy tree or runtime
+is imported, and unavailable historical Git objects are not represented as a
+fresh source review.
+
+| Fixed source / slice | Decision | Boundary |
+| --- | --- | --- |
+| Matrix `4bf0037e28d22b16a347ed24ba663a627fac12a7`: `api/iam/v1` ActionCapability, CurrentIdentity, and IAM `accounts.go` projection | `REUSE` the exact action/resource model and single PDP; `ADAPT` the bounded entry projection and strict validation | Capability is a current actor-relative UI hint, never a new grant, persisted permit or substitute for command authorization. |
+| Same fixed Matrix source: existing auth provider, resource renderers and control-plane navigation; UX fixed `14dccb1df71952fed5f6eb5581114a82c3da6ad1` target blobs confirmed equal by the UI owner | `ADAPT` existing read states and capability consumers | Preserve precise target reads, current request ownership, UNKNOWN intents and completed receipts; replace duplicated failure UI rather than adding parallel renderers. The owner report is not browser acceptance. |
+| Same fixed Matrix source: runtime `supportsLive*` predicates and HttpProblem status/code | `REUSE` client-support detection; `ADAPT` safe requestId propagation; `REJECT` treating support as authority | Never infer permission, activation, object existence or request completion from client availability, HTTP404 or a failed read. No raw detail or credentials enter diagnostic output. |
+| Historical local role-to-menu maps, a second frontend policy evaluator, and mock-as-LIVE fallback | `REJECT` | Current backend permissions and exact resources remain authoritative; no legacy build/runtime dependency or compatibility alias is introduced. |
+
 ## Legacy PaaS comparison
 
 | Slice at fixed commit | Size | Decision | Rationale |
