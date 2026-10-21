@@ -6,7 +6,7 @@
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   Repository-local identity is `Xiak <Jellal@aliyun.com>`.
-- Active, incomplete bounded goal: AccessKey and same-account Role real-console closure,
+- Blocked, incomplete bounded goal: AccessKey and same-account Role real-console closure,
   necessary fixes, independent verification and cleanup of unused own resources.
   `IAM/FEAT-IAM-010-console.md` owns K1/K2 and R1/R2;007/006 retain credential
   and Role contracts. Do not reopen accepted permission-aware work or mark
@@ -16,8 +16,13 @@
   application detail reads and response-time RoleSession expiry checks. Seven
   new negative/positive cases first failed;41 transition scenarios and bounded
   response tests then passed, with default process/architecture race and vet.
-  Its Verification39646488455 attempt1 is running, not accepted. The original
-  Test Expert owns the single existing monitor; do not create another.
+  Its Verification39646488455 attempt1 is completed/failure:17jobs succeeded,
+  managed-products and the derived aggregate failed. The complete provider
+  log identifies worker exit1 before ready200, with the closed Docker Engine
+  probe timeout code;root40.24s/package40.308s and zero four-product completion
+  summaries. It does not identify the underlying cause.011 owns the exact
+  evidence; Issue6 stays open. Do not blindly rerun or change timeout budgets.
+  The original Test Expert continues the remaining log audit, not a new run.
 - Latest fully audited CI source: `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`.
   Verification39604675084 attempt1 is independently CLOSED SUCCESS,
   exactSHA/all19jobs at2026-10-21 13:33:26UTC. The Test Expert completed all19
@@ -134,8 +139,13 @@
   observer did not cover that detail route, so the exact HTTP transitions were
   not recorded. The original RoleSession was still unexpired. Never backfill
   that run as passed or infer missing HTTP evidence from DOM screenshots.
-  958 fixes the observer; its new-database real-page gate is still unaccepted.
-  Transient URLs and pending browser requests are not portable checkpoints.
+  958 fixes the observer; fresh R2e reached actual Role application detail but
+  did not receive action-time confirmation and submitted no revocation. It
+  timed out1800.05s/race1802.487s without a marker; exact attachment stayedv1,
+  unrevoked, and original request had zero outbox facts. Processes/listener/DB
+  clients ended; own no-volume PG container and empty network were removed.
+  No active browser fixture is retained. Its URL,request and confirmation are
+  expired; do not reuse them or start another heavy fixture merely to idle.
 - R1 plus distinct exact admin RoleSession revocation fixture exists, unrun:
   page-created CUSTOMER Role/trust/boundary/positive attachment, actual assume,
   App200/Audit403 intersection; revoke only that Session, Role401/BLOCKED→

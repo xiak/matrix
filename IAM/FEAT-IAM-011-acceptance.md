@@ -42,10 +42,15 @@
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
 | 最近独立CI通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
+| 最新代码候选 | `958d5b46649abc3dac2936892bb323005af97bde`；准确attempt的CI失败，managed-products worker在就绪前报Docker Engine探测超时，派生汇总失败。其余job成功不能覆盖该缺口；当前不接受为整轮通过 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
+
+固定`958d5b46649abc3dac2936892bb323005af97bde`的[Verification 39646488455](https://github.com/xiak/matrix/actions/runs/39646488455) attempt1于2026-10-22 02:11:55+08:00由测试owner核对为`completed/failure`，十九项job为十七成功、managed-products及派生汇总两项失败。[实际失败job](https://github.com/xiak/matrix/actions/runs/39646488455/job/119385961758)的完整provider日志已核验：`TestManagedProductProviderProcesses`运行40.24秒、package40.308秒后失败，worker在预期HTTP200就绪前exit1，封闭码为`PAAS_WORKER_EXECUTION_PROFILE_DOCKER_ENGINE_TIMEOUT`；另两条产品存储根通过0.44/0.40秒，但四产品完整效果摘要为零次，不能接受真实四产品旅程。汇总的`AUTHORITY_RESULT=failure`与`POSTGRES_HA_RESULT=success`属于不同边界；其余日志仍由原测试owner完成核验，不提前声明全量取证闭合。
+
+该码只定位现有`docker info --format {{json .}}`探测路径，不能区分CLI启动/调度、Docker daemon响应或资源原因。生产worker、localmachine adapter、execution-profile用例和workflow与已通过的e22逐文件无差异；这也不能证明其一定是环境抖动。现有三秒CLI/五秒Observe预算和失败关闭行为不变；不盲目重跑、扩大超时或将新失败冒充[Issue #6](https://github.com/xiak/matrix/issues/6)旧Observe失败的唯一根因。后续修复或受控复现需要新的准确证据，旧失败终态不回填。
 
 固定`e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`的[Verification 39604675084](https://github.com/xiak/matrix/actions/runs/39604675084) attempt1已由测试owner独立封存为`completed/success`，精确SHA及十九项job全部成功，2026-10-21 13:33:26UTC终态。370个step为175成功、195项矩阵设计跳过，没有其他跳过、失败或取消。十九份必要日志共74,585,478字节、156段，连续Range、长度、严格UTF-8及保留BOM重编码均核验一致；十四条authority lane的57个必跑根均实际RUN/PASS一次。1164个Test身份的JSON/plain终态及Test耗时一致：1157通过、7个真实邮件子例因缺少专用Postfix明确跳过，不能据此接受真实邮件投递。33次JSON包调用全通过；包级两种显示口径有10处1毫秒、2处2毫秒差异，分别保留，不混同于Test终态差异。
 
