@@ -5467,9 +5467,10 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	}
 
 	const (
-		groupName   = "Browser attachment recovery operators"
-		loginName   = "browser.attachment.recovery"
-		displayName = "Browser attachment recovery User"
+		groupName     = "Browser attachment recovery operators"
+		loginName     = "browser.attachment.recovery"
+		displayName   = "Browser attachment recovery User"
+		applicationID = "browser-attachment-application"
 	)
 	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, displayName,
 		initialDeveloperPassword, "browser-attachment-recovery-user")
@@ -5587,7 +5588,9 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	}
 	var roleJourney *browserRoleRevocationProbe
 	if targetKind == iamv1.PolicyTargetRole && operation == "REVOKE" {
-		roleJourney = &browserRoleRevocationProbe{account: user.AccountID, user: user.ID, role: role.ID, mutationPath: mutationPath}
+		createPaaSApplication(t, paasEndpoint, ownerBearer, applicationID, applicationID, applicationID, http.StatusCreated)
+		roleJourney = &browserRoleRevocationProbe{account: user.AccountID, user: user.ID, role: role.ID,
+			mutationPath: mutationPath, applicationPath: "/api/paas/v1/applications/" + applicationID}
 	}
 	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(
 		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, func(mux http.Handler) http.Handler {
@@ -5607,8 +5610,8 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	t.Logf("POLICY_ATTACHMENT_RECOVERY_BROWSER_FIXTURE operation=%s target_kind=%s url=%s%s finish=%s target=%s login=%s realm=admin; %s, observe the committed-response-loss state, inspect only the original request, and create the completion marker after the visible immutable receipt and authoritative target view agree; use the existing changed admin password",
 		operation, target.Kind, server.URL, browserPath, finish, target.ID, loginName, intent)
 	if roleJourney != nil {
-		t.Logf("ROLE_REVOCATION_BROWSER_JOURNEY member_url=%s/console/access/role-access/ member_login=%s@%s role=%s; before administrator revocation, explicitly assume this Role in the member tab and read /console/applications/ with it; after revocation, navigate again and observe the first protected Role GET401/BLOCKED, then explicitly validate and return to the same source USER and observe application403; do not send an extra request with a credential the UI already blocked; use the existing changed developer password; API-issued credentials do not satisfy this journey",
-			server.URL, loginName, user.AccountID, role.ID)
+		t.Logf("ROLE_REVOCATION_BROWSER_JOURNEY member_url=%s/console/access/role-access/ member_login=%s@%s role=%s application=%s; before administrator revocation, explicitly assume this Role in the member tab and use actual SPA links to read this application; after revocation, navigate again and observe the first protected Role GET401/BLOCKED, then explicitly validate and return to the same source USER and observe application403; do not send an extra request with a credential the UI already blocked; use the existing changed developer password; API-issued credentials do not satisfy this journey",
+			server.URL, loginName, user.AccountID, role.ID, applicationID)
 	}
 	waitForBrowserMarker(t, ctx, ui, finish, "same-origin policy-attachment recovery completion")
 	if roleJourney != nil {
@@ -5847,7 +5850,8 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 		t.Fatal("normal Role browser fixture did not start without Roles")
 	}
 	journey := &browserRoleRevocationProbe{account: user.AccountID, user: user.ID, sessionRevoke: true,
-		denyPath: "/api/audit/v1/records:query", denyMethod: http.MethodPost}
+		denyPath: "/api/audit/v1/records:query", denyMethod: http.MethodPost,
+		applicationPath: "/api/paas/v1/applications/browser-role-application"}
 	var setupMu sync.Mutex
 	setupWrites := make(map[string]int)
 	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
@@ -6037,30 +6041,32 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 // counts and private in-memory credential digests; never retain or log bearer
 // material, request bodies or successful response documents.
 type browserRoleRevocationProbe struct {
-	mu             sync.Mutex
-	account        iamv1.AccountID
-	user           iamv1.PrincipalID
-	role           iamv1.RoleID
-	mutationPath   string
-	sourceDigest   [sha256.Size]byte
-	roleDigest     [sha256.Size]byte
-	assumptions    int
-	issued         bool
-	invalid        bool
-	revoking       bool
-	allowed        bool
-	roleRejected   bool
-	rejectionRoute string
-	sourceRead     bool
-	sourceDenied   bool
-	allowPath      string
-	denyPath       string
-	denyMethod     string
-	denied         bool
-	sessionRevoke  bool
-	session        iamv1.RoleSession
-	revokeCount    int
-	revokeRequest  string
+	mu              sync.Mutex
+	now             func() time.Time
+	account         iamv1.AccountID
+	user            iamv1.PrincipalID
+	role            iamv1.RoleID
+	mutationPath    string
+	sourceDigest    [sha256.Size]byte
+	roleDigest      [sha256.Size]byte
+	assumptions     int
+	issued          bool
+	invalid         bool
+	revoking        bool
+	allowed         bool
+	roleRejected    bool
+	rejectionRoute  string
+	sourceRead      bool
+	sourceDenied    bool
+	allowPath       string
+	applicationPath string
+	denyPath        string
+	denyMethod      string
+	denied          bool
+	sessionRevoke   bool
+	session         iamv1.RoleSession
+	revokeCount     int
+	revokeRequest   string
 }
 
 func (probe *browserRoleRevocationProbe) wrap(upstream http.Handler) http.Handler {
@@ -6109,13 +6115,24 @@ func (probe *browserRoleRevocationProbe) wrap(upstream http.Handler) http.Handle
 			probe.mu.Lock()
 		}
 		defer probe.mu.Unlock()
+		observedAt := time.Now().UTC()
+		if probe.now != nil {
+			observedAt = probe.now()
+		}
+		// Observe expiry when the response finishes, not when the later human
+		// completion marker arrives. Natural expiry during an approval wait or
+		// a protected request cannot prove immediate administrative revocation.
+		if probe.issued && (revoke || digest == probe.roleDigest) && !probe.session.ExpiresAt.After(observedAt) {
+			probe.invalid = true
+		}
 		if assume {
 			var result iamv1.AssumeRoleResponse
 			if response.status != http.StatusOK || response.overflow ||
 				iamv1.DecodeRequest(bytes.NewReader(response.document), &result) != nil ||
 				iamv1.ValidateAssumeRoleResponse(result) != nil || result.Outcome != "APPLIED" ||
 				result.Session.AccountID != probe.account || result.Session.RoleID != probe.role ||
-				result.Session.SourceUserID != probe.user || result.Session.SourceServicePrincipalID != "" {
+				result.Session.SourceUserID != probe.user || result.Session.SourceServicePrincipalID != "" ||
+				!result.Session.ExpiresAt.After(observedAt) {
 				probe.invalid = true
 				return
 			}
@@ -6173,23 +6190,24 @@ func (probe *browserRoleRevocationProbe) wrap(upstream http.Handler) http.Handle
 		if allowPath == "" {
 			allowPath = "/api/paas/v1/applications"
 		}
+		applicationRead := r.URL.Path == allowPath || probe.applicationPath != "" && r.URL.Path == probe.applicationPath
 		// The console stops using a rejected Role immediately. Opening its product
 		// launcher or current-Role view can discover revocation before an application
 		// request; requiring another request with that rejected credential would
 		// test an incidental navigation order instead of the security boundary.
 		// Admit only these actual GET consumers, the exact issued bearer and a 401
 		// after the observed administrative revocation. 403/503 and other routes
-		// cannot establish credential expiry.
+		// cannot establish administrative credential invalidation. The only
+		// accepted detail path belongs to the real application this fixture creates.
 		if digest == probe.roleDigest && probe.revoking && response.status == http.StatusUnauthorized {
-			switch r.URL.Path {
-			case allowPath, "/api/managed-services/v1/services", "/api/iam/v1/auth/role-session":
+			if applicationRead || r.URL.Path == "/api/managed-services/v1/services" || r.URL.Path == "/api/iam/v1/auth/role-session" {
 				probe.roleRejected = true
 				if probe.rejectionRoute == "" {
 					probe.rejectionRoute = r.URL.Path
 				}
 			}
 		}
-		if r.URL.Path != allowPath {
+		if !applicationRead {
 			return
 		}
 		if digest == probe.roleDigest {
@@ -6247,10 +6265,17 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 		"returned different source", "source before validation", "source still privileged", "automatic reassumption",
 		"wrong account", "malformed issuance", "oversize issuance", "complete session", "complete session Audit", "session wrong target", "session replay", "session missing deny", "session wrong deny method",
 		"complete directory rejection", "complete current Role rejection", "directory wrong bearer", "directory forbidden", "directory unavailable",
-		"unowned rejection route", "directory wrong method", "directory rejection before revocation"} {
+		"unowned rejection route", "directory wrong method", "directory rejection before revocation",
+		"expired before revoke", "expired at rejection", "expired during rejection", "expired session before revoke", "expired session at rejection",
+		"complete near expiry", "complete after delayed final check",
+		"complete detail rejection", "complete detail before revoke", "detail wrong target", "detail wrong bearer", "detail wrong method", "detail forbidden", "detail unavailable"} {
 		t.Run(scenario, func(t *testing.T) {
+			observedAt := time.Date(2026, time.October, 22, 0, 0, 0, 0, time.UTC)
 			probe := &browserRoleRevocationProbe{account: "browser-account", user: "browser-member", role: "browser-role",
-				mutationPath: "/api/iam/v1/policy-attachments/browser-attachment:revoke"}
+				mutationPath: "/api/iam/v1/policy-attachments/browser-attachment:revoke", now: func() time.Time { return observedAt }}
+			if strings.Contains(scenario, "detail") {
+				probe.applicationPath = "/api/paas/v1/applications/browser-owned-application"
+			}
 			if strings.Contains(scenario, "session") {
 				probe.sessionRevoke = true
 				probe.allowPath, probe.denyPath = "/api/paas/v1/applications/allowed", "/api/paas/v1/applications/denied"
@@ -6275,7 +6300,7 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 						_, _ = w.Write(bytes.Repeat([]byte("x"), int(iamv1.MaxRequestBytes)+1))
 						return
 					}
-					now := time.Now().UTC().Truncate(time.Microsecond)
+					now := observedAt
 					session := iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "browser-role-session",
 						AccountID: probe.account, RoleID: probe.role, SourceUserID: probe.user, Status: iamv1.SessionActive,
 						IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
@@ -6312,7 +6337,7 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 					}
 				case r.URL.Path == "/api/iam/v1/auth/me":
 					w.WriteHeader(http.StatusOK)
-				case r.URL.Path == "/api/managed-services/v1/services" || r.URL.Path == "/api/iam/v1/auth/role-session" || r.URL.Path == "/api/unowned/status":
+				case r.URL.Path == "/api/managed-services/v1/services" || r.URL.Path == "/api/iam/v1/auth/role-session" || r.URL.Path == "/api/unowned/status" || r.URL.Path == "/api/paas/v1/applications/another-application":
 					status := http.StatusUnauthorized
 					if scenario == "directory forbidden" {
 						status = http.StatusForbidden
@@ -6322,12 +6347,20 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 					w.WriteHeader(status)
 				case r.URL.Path == probe.denyPath && probe.denyPath != "":
 					w.WriteHeader(http.StatusForbidden)
-				case r.URL.Path == allowPath:
+				case r.URL.Path == allowPath || probe.applicationPath != "" && r.URL.Path == probe.applicationPath:
 					status := http.StatusForbidden
-					if r.Header.Get("Authorization") == "Bearer "+roleBearer {
+					if r.Header.Get("Authorization") == "Bearer "+roleBearer || scenario == "detail wrong bearer" && r.Header.Get("Authorization") == "Bearer another-role-bearer" {
 						status = http.StatusOK
 						if revoked {
 							status = http.StatusUnauthorized
+							if scenario == "detail forbidden" {
+								status = http.StatusForbidden
+							} else if scenario == "detail unavailable" {
+								status = http.StatusServiceUnavailable
+							}
+							if scenario == "expired during rejection" {
+								observedAt = probe.session.ExpiresAt
+							}
 						} else if scenario == "Role denied before revocation" {
 							status = http.StatusForbidden
 						}
@@ -6355,7 +6388,11 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 			if scenario != "API-only setup" {
 				invoke(http.MethodPost, "/api/iam/v1/roles/browser-role:assume", source)
 			}
-			invoke(http.MethodGet, allowPath, roleBearer)
+			initialPath := allowPath
+			if scenario == "complete detail before revoke" {
+				initialPath = probe.applicationPath
+			}
+			invoke(http.MethodGet, initialPath, roleBearer)
 			if probe.denyPath != "" && scenario != "session missing deny" {
 				method := http.MethodGet
 				if scenario == "complete session Audit" {
@@ -6366,9 +6403,17 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 			if scenario == "directory rejection before revocation" {
 				invoke(http.MethodGet, "/api/managed-services/v1/services", roleBearer)
 			}
+			if scenario == "expired before revoke" || scenario == "expired session before revoke" {
+				observedAt = probe.session.ExpiresAt
+			} else if scenario == "complete near expiry" {
+				observedAt = probe.session.ExpiresAt.Add(-time.Nanosecond)
+			}
 			invoke(http.MethodPost, probe.mutationPath, "synthetic-admin-browser-probe")
+			if scenario == "expired at rejection" || scenario == "expired session at rejection" {
+				observedAt = probe.session.ExpiresAt
+			}
 			currentRole := roleBearer
-			if scenario == "another Role bearer" || scenario == "directory wrong bearer" {
+			if scenario == "another Role bearer" || scenario == "directory wrong bearer" || scenario == "detail wrong bearer" {
 				currentRole = "another-role-bearer"
 			}
 			rejectionPath, rejectionMethod := allowPath, http.MethodGet
@@ -6378,8 +6423,13 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 				rejectionPath = "/api/iam/v1/auth/role-session"
 			} else if scenario == "unowned rejection route" {
 				rejectionPath = "/api/unowned/status"
+			} else if strings.Contains(scenario, "detail") {
+				rejectionPath = probe.applicationPath
+				if scenario == "detail wrong target" {
+					rejectionPath = "/api/paas/v1/applications/another-application"
+				}
 			}
-			if scenario == "directory wrong method" {
+			if scenario == "directory wrong method" || scenario == "detail wrong method" {
 				rejectionMethod = http.MethodPost
 			}
 			if scenario != "directory rejection before revocation" {
@@ -6396,9 +6446,18 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 				currentSource = "another-source-bearer"
 			}
 			invoke(http.MethodGet, "/api/iam/v1/auth/me", currentSource)
-			invoke(http.MethodGet, allowPath, currentSource)
+			sourceReadPath := allowPath
+			if strings.Contains(scenario, "detail") {
+				sourceReadPath = probe.applicationPath
+			}
+			invoke(http.MethodGet, sourceReadPath, currentSource)
+			if scenario == "complete after delayed final check" {
+				observedAt = probe.session.ExpiresAt.Add(time.Hour)
+			}
 			wantComplete := scenario == "complete" || scenario == "complete session" || scenario == "complete session Audit" ||
-				scenario == "complete directory rejection" || scenario == "complete current Role rejection"
+				scenario == "complete directory rejection" || scenario == "complete current Role rejection" ||
+				scenario == "complete near expiry" || scenario == "complete after delayed final check" ||
+				scenario == "complete detail rejection" || scenario == "complete detail before revoke"
 			if err := probe.check(); (err == nil) != wantComplete {
 				t.Fatalf("browser credential boundary result=%v", err)
 			}
