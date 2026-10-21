@@ -3269,19 +3269,34 @@ authorization renderer records the same intent atomically with its local view,
 so forward transitions focus the new title and reverse transitions restore the
 template, observation, review or Account-relation trigger without timers.
 
-Source `4fe5c2be3` and synchronized embedded assets `dfb99958c` fix this
-boundary. The real DEV browser at `4319` exercised User → Service authorization
-route changes, directory → template → directory, template → observation →
-template, template → review → template and Account relation → observation →
-directory. Route changes ended on the destination H1; every reverse transition
-ended on its original trigger after a settling interval, with no stale nested
-heading or Dialog. The shared-header and service-authorization focused suites
-pass **27 cases**. The complete frontend gate passes **79 files / 2,065 cases**
-plus all eight Node export-boundary cases; typecheck, lint, architecture and
-234-pair theme-style gates pass. The production build exports 59 pages,
-normalizes 57 segment files and matches all 324 synchronized embedded files
-byte-for-byte. PaaS UI Go test/vet pass. This changes no IAM API, permission
-model, data contract or real Account/resource.
+Source `4fe5c2be3` and synchronized embedded assets `dfb99958c` originally fixed
+the service-authorization boundary. The real DEV browser at `4319` exercised
+User → Service authorization route changes, directory → template → directory,
+template → observation → template, template → review → template and Account
+relation → observation → directory. Route changes ended on the destination H1;
+every reverse transition ended on its original trigger after a settling
+interval, with no stale nested heading or Dialog.
+
+Current shared-navigation source and synchronized embedded assets are fixed at
+`ceb38eab2cb3075573dcea640d9ca5d38e097a3e`. LIVE product discovery now keeps
+the code-owned Application hosting, IAM and Audit workspaces immediately
+navigable while the backend-managed product directory is pending or locally
+failed. Only backend-published managed products are added to LIVE; preview-only
+workspaces remain absent, and an unknown published product has no invented
+route. Navigation from an assumed Role reuses the same memory-only Role
+credential for the destination Application read and does not silently assume
+again. Application hosting now owns its product context and local navigation
+instead of appearing under the managed-database context. The focused scene,
+launcher and shell suites pass **3 files / 174 cases**. The complete frontend
+gate passes **79 files / 2,072 cases** plus all eight Node export-boundary
+cases; typecheck, lint, architecture and 234-pair theme-style gates pass. The
+production build exports 59 pages, normalizes 57 segment files and matches all
+324 synchronized embedded files byte-for-byte. PaaS UI Go test/vet pass. The
+maintained `4317` preview exercised IAM User → Products and services →
+Application hosting: the directory closed, the SPA route committed, focus
+landed on the single localized `应用服务` H1 and no Dialog remained. This
+changes no IAM API, permission model, data contract or real Account/resource;
+the preview observation is not LIVE Role-session acceptance.
 
 These gates do not establish a universal click-latency budget, a new whole-repository
 or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
