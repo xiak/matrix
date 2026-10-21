@@ -472,6 +472,153 @@ describe("LiveAccessCredentials", () => {
     expect(api.acknowledgeIssued).toHaveBeenCalledOnce();
   });
 
+  it("completes a two-key rotation, releases quota after exact deletion, and creates a replacement key", async () => {
+    const user = userEvent.setup();
+    const createdIds = ["mak1.alex-first", "mak1.alex-second", "mak1.alex-third"];
+    let nextCreated = 0;
+    let keys: AccessKeyAccess["key"][] = [];
+    const issuedRequests = new Map<string, string>();
+    const mutationRequests = new Set<string>();
+    const observedDirectories: string[][] = [];
+    const usage = directory.items[0]!.usage;
+    const accessFor = (managedKey: AccessKeyAccess["key"]): AccessKeyAccess => ({
+      key: { ...managedKey },
+      usage,
+      capabilities: [
+        { action: "iam.access-key.read", resource: { kind: "ACCESS_KEY", id: managedKey.id }, available: true, restrictionReason: null },
+        { action: "iam.access-key.set-status", resource: { kind: "ACCESS_KEY", id: managedKey.id }, available: true, restrictionReason: null },
+        { action: "iam.access-key.set-network-restrictions", resource: { kind: "ACCESS_KEY", id: managedKey.id }, available: true, restrictionReason: null },
+        { action: "iam.access-key.delete", resource: { kind: "ACCESS_KEY", id: managedKey.id }, available: managedKey.status === "DISABLED", restrictionReason: managedKey.status === "DISABLED" ? null : "TARGET_MUST_BE_DISABLED" }
+      ]
+    });
+    const currentDirectory = (): AccessKeyDirectory => ({
+      accountId: scene.accountId,
+      userId: owner.id,
+      userResourceVersion: owner.resourceVersion,
+      capabilities: [{
+        action: "iam.access-key.create",
+        resource: { kind: "USER", id: owner.id },
+        available: keys.length < 2,
+        restrictionReason: keys.length < 2 ? null : "ACCESS_KEY_LIMIT_REACHED"
+      }],
+      items: keys.map(accessFor)
+    });
+    const list = vi.fn(async (userId: string) => {
+      if (userId !== owner.id) throw new Error("unexpected access-key owner");
+      const result = currentDirectory();
+      observedDirectories.push(result.items.map((item) => `${item.key.id}:${item.key.status}:v${item.key.resourceVersion}`));
+      return result;
+    });
+    const read = vi.fn(async (userId: string, accessKeyId: string) => {
+      if (userId !== owner.id) throw new Error("unexpected access-key owner");
+      const found = keys.find((candidate) => candidate.id === accessKeyId);
+      if (!found) throw new Error("unknown access key");
+      return accessFor(found);
+    });
+    const create = vi.fn(async (userId: string, command: Parameters<AccessKeyClient["create"]>[1]) => {
+      if (userId !== owner.id || command.userResourceVersion !== owner.resourceVersion || keys.length >= 2) throw new Error("invalid create transition");
+      if (!/^ui-access-key-create-[0-9a-f]{32}$/.test(command.requestId) || issuedRequests.has(command.requestId)) throw new Error("invalid create request");
+      const id = createdIds[nextCreated++];
+      if (!id) throw new Error("unexpected fourth key");
+      const created = { ...key, id, status: "ENABLED" as const, resourceVersion: 1, networkRestrictions: command.networkRestrictions };
+      keys = [...keys, created];
+      issuedRequests.set(command.requestId, id);
+      return { outcome: "APPLIED" as const, key: created, secret: `secret-${id}` };
+    });
+    const setStatus = vi.fn(async (userId: string, accessKeyId: string, command: Parameters<AccessKeyClient["setStatus"]>[2]) => {
+      const index = keys.findIndex((candidate) => candidate.id === accessKeyId);
+      const current = keys[index];
+      if (userId !== owner.id || !current || current.resourceVersion !== command.accessKeyResourceVersion || mutationRequests.has(command.requestId)) throw new Error("invalid status transition");
+      mutationRequests.add(command.requestId);
+      const changed = { ...current, status: command.status, resourceVersion: current.resourceVersion + 1, updatedAt: `2026-09-21T09:0${current.resourceVersion}:00Z` };
+      keys = keys.map((candidate, candidateIndex) => candidateIndex === index ? changed : candidate);
+      return { outcome: "APPLIED" as const, key: changed };
+    });
+    const remove = vi.fn(async (userId: string, accessKeyId: string, command: Parameters<AccessKeyClient["delete"]>[2]) => {
+      const current = keys.find((candidate) => candidate.id === accessKeyId);
+      if (userId !== owner.id || !current || current.status !== "DISABLED" || current.resourceVersion !== command.accessKeyResourceVersion || mutationRequests.has(command.requestId)) throw new Error("invalid delete transition");
+      mutationRequests.add(command.requestId);
+      keys = keys.filter((candidate) => candidate.id !== accessKeyId);
+      return { outcome: "APPLIED" as const, deletion: { id: accessKeyId, accountId: scene.accountId, userId, resourceVersion: current.resourceVersion + 1, deletedAt: "2026-09-21T09:10:00Z" } };
+    });
+    const acknowledgeIssued = vi.fn((requestId: string, accessKeyId: string) => issuedRequests.get(requestId) === accessKeyId);
+    const acknowledgeMutation = vi.fn((requestId: string) => mutationRequests.has(requestId));
+    const api = client({ list, read, create, setStatus, delete: remove, acknowledgeIssued, acknowledgeMutation });
+    const page = () => <LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>;
+    let view = render(page());
+
+    const createAndFinish = async (accessKeyId: string) => {
+      const createButton = await screen.findByRole("button", { name: "新建访问密钥" }) as HTMLButtonElement;
+      expect(createButton.disabled).toBe(false);
+      await user.click(createButton);
+      await user.click(screen.getByRole("button", { name: "确认创建" }));
+      expect(await screen.findByText(`secret-${accessKeyId}`)).toBeTruthy();
+      await user.click(screen.getByRole("checkbox", { name: "我已将 Secret 保存到受保护的位置，并理解它无法再次显示" }));
+      await user.click(screen.getByRole("button", { name: "已完成" }));
+      expect(await screen.findByRole("button", { name: accessKeyId })).toBeTruthy();
+      expect(screen.queryByText(`secret-${accessKeyId}`)).toBeNull();
+    };
+    const changeStatus = async (action: "禁用" | "启用", nextAction: "禁用" | "启用") => {
+      await user.click(screen.getByRole("button", { name: action }));
+      await user.click(screen.getByRole("button", { name: action }));
+      expect(await screen.findByRole("button", { name: nextAction })).toBeTruthy();
+    };
+
+    await createAndFinish(createdIds[0]!);
+    view.unmount();
+    view = render(page());
+    expect(await screen.findByRole("button", { name: createdIds[0]! })).toBeTruthy();
+    expect(screen.queryByText(`secret-${createdIds[0]}`)).toBeNull();
+
+    await createAndFinish(createdIds[1]!);
+    expect((screen.getByRole("button", { name: "新建访问密钥" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(screen.getByRole("button", { name: createdIds[0]! }));
+    await changeStatus("禁用", "启用");
+    await changeStatus("启用", "禁用");
+    await changeStatus("禁用", "启用");
+
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除" }));
+    await user.click(screen.getByRole("checkbox", { name: "我已确认工作负载不再使用这把密钥，并理解删除后无法恢复" }));
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    expect(await screen.findByRole("button", { name: createdIds[1]! })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: createdIds[0]! })).toBeNull();
+
+    await createAndFinish(createdIds[2]!);
+    expect((screen.getByRole("button", { name: "新建访问密钥" }) as HTMLButtonElement).disabled).toBe(true);
+
+    const createCommands = create.mock.calls.map(([, command]) => command);
+    expect(createCommands).toHaveLength(3);
+    expect(createCommands.every((command) => command.userResourceVersion === owner.resourceVersion && /^ui-access-key-create-[0-9a-f]{32}$/.test(command.requestId))).toBe(true);
+    expect(new Set(createCommands.map((command) => command.requestId)).size).toBe(3);
+    expect(acknowledgeIssued.mock.calls).toEqual(createCommands.map((command, index) => [command.requestId, createdIds[index]]));
+    expect(setStatus.mock.calls.map(([, accessKeyId, command]) => ({ accessKeyId, resourceVersion: command.accessKeyResourceVersion, status: command.status, requestId: command.requestId }))).toEqual([
+      { accessKeyId: createdIds[0], resourceVersion: 1, status: "DISABLED", requestId: expect.stringMatching(/^ui-access-key-status-[0-9a-f]{32}$/) },
+      { accessKeyId: createdIds[0], resourceVersion: 2, status: "ENABLED", requestId: expect.stringMatching(/^ui-access-key-status-[0-9a-f]{32}$/) },
+      { accessKeyId: createdIds[0], resourceVersion: 3, status: "DISABLED", requestId: expect.stringMatching(/^ui-access-key-status-[0-9a-f]{32}$/) }
+    ]);
+    expect(remove).toHaveBeenCalledWith(owner.id, createdIds[0], {
+      accessKeyResourceVersion: 4,
+      requestId: expect.stringMatching(/^ui-access-key-delete-[0-9a-f]{32}$/)
+    });
+    const mutationCommandIds = [
+      ...setStatus.mock.calls.map(([, , command]) => command.requestId),
+      remove.mock.calls[0]![2].requestId
+    ];
+    expect(acknowledgeMutation.mock.calls.map(([requestId]) => requestId)).toEqual(mutationCommandIds);
+    const distinctObservations = observedDirectories.filter((items, index) => index === 0 || items.join("|") !== observedDirectories[index - 1]!.join("|"));
+    expect(distinctObservations).toEqual([
+      [],
+      [`${createdIds[0]}:ENABLED:v1`],
+      [`${createdIds[0]}:ENABLED:v1`, `${createdIds[1]}:ENABLED:v1`],
+      [`${createdIds[0]}:DISABLED:v2`, `${createdIds[1]}:ENABLED:v1`],
+      [`${createdIds[0]}:ENABLED:v3`, `${createdIds[1]}:ENABLED:v1`],
+      [`${createdIds[0]}:DISABLED:v4`, `${createdIds[1]}:ENABLED:v1`],
+      [`${createdIds[1]}:ENABLED:v1`],
+      [`${createdIds[1]}:ENABLED:v1`, `${createdIds[2]}:ENABLED:v1`]
+    ]);
+  });
+
   it("guards an applied one-time Secret until an explicit leave clears the mounted workflow", async () => {
     const user = userEvent.setup();
     const api = client();

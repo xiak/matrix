@@ -620,11 +620,11 @@ describe("AccountLiveRoles", () => {
     expect(read).toHaveBeenCalledTimes(3);
   });
 
-  it("loads live sessions only on demand and preserves one revoke request through an unknown outcome", async () => {
+  it("loads live sessions only on demand, preserves one revoke request, and leaves its sibling session untouched", async () => {
     const user = userEvent.setup();
     const revoked = { ...liveSession, status: "REVOKED" as const, revokedAt: "2026-09-21T08:31:00Z" };
     const api = client({
-      listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: "2026-09-21T08:30:00Z", items: [liveSessionItem], nextAfter: null }),
+      listSessions: vi.fn().mockResolvedValue({ accountId: role.accountId, roleId: role.id, observedAt: "2026-09-21T08:30:00Z", items: [liveSessionItem, serviceSessionItem], nextAfter: null }),
       readSession: vi.fn().mockResolvedValue({ observedAt: "2026-09-21T08:30:10Z", item: liveSessionItem }),
       revokeSession: vi.fn().mockRejectedValueOnce(new Error("connection lost")).mockResolvedValue({ outcome: "APPLIED", session: revoked })
     });
@@ -655,9 +655,19 @@ describe("AccountLiveRoles", () => {
     await user.click(await screen.findByRole("button", { name: "继续处理未知结果" }));
     resumed = screen.getByRole("group", { name: "撤销会话" });
     await user.click(within(resumed).getByRole("button", { name: "重试原请求" }));
-    expect(await screen.findByRole("heading", { name: "没有匹配的角色会话" })).toBeTruthy();
+    const remaining = await screen.findByRole("table", { name: "角色会话" });
+    expect(within(remaining).queryByText(liveSession.id)).toBeNull();
+    expect(within(remaining).getByText(serviceSession.id)).toBeTruthy();
+    expect(within(remaining).getByText("service-paas-runtime")).toBeTruthy();
+    expect(within(remaining).getByText("未撤销且未到期")).toBeTruthy();
     const revoke = vi.mocked(api.revokeSession);
     expect(revoke.mock.calls[1]?.[2]).toBe(revoke.mock.calls[0]?.[2]);
+    expect(revoke.mock.calls[0]?.[1]).toBe(liveSession.id);
+    expect(api.update).not.toHaveBeenCalled();
+    expect(api.createPolicyAttachment).not.toHaveBeenCalled();
+    expect(api.revokePolicyAttachment).not.toHaveBeenCalled();
+    expect(api.setPermissionBoundary).not.toHaveBeenCalled();
+    expect(api.removePermissionBoundary).not.toHaveBeenCalled();
     expect(api.readSession).toHaveBeenCalledWith(role.id, liveSession.id);
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "角色会话" }));
   });
