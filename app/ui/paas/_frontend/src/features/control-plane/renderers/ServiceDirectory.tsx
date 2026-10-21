@@ -4,7 +4,7 @@ import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowUpRight, Boxes, ChartNoAxesCombined, Clock3, Database, Grid2X2, Layers3, MapPin, PackageSearch, Settings2, ShieldCheck, Star, Workflow, X } from "lucide-react";
-import { Button, CardGridSkeleton, EmptyState, SearchInput } from "@ui/xiak";
+import { Alert, Button, EmptyState, Progress, SearchInput } from "@ui/xiak";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import { useLiveServiceDefinitionDirectory } from "../application/liveServiceActivation";
 import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
@@ -71,13 +71,20 @@ export function ServiceDirectory({ onClose, onNavigate, preview = true, readServ
   const t = useTranslations("ServiceDirectory");
   const presentation = useServiceDirectory();
   const live = useLiveServiceDefinitionDirectory(!preview, readServiceDefinitions);
-  const services = useMemo(() => preview ? presentation : live.directory?.services.flatMap((definition) => {
+  const services = useMemo(() => preview ? presentation : [
+    ...presentation.filter((service) => service.discovery === "platform"),
+    ...(live.directory?.services.flatMap((definition) => {
+      const destination = presentation.find((item) => item.id === definition.id);
+      return destination?.discovery === "managed" ? [{ ...destination, label: definition.displayName, description: definition.description,
+        keywords: [definition.id, definition.displayName, ...destination.keywords] }] : [];
+    }) ?? [])
+  ], [live.directory, presentation, preview]);
+  const unsupported = preview ? [] : live.directory?.services.filter((definition) => {
     const destination = presentation.find((item) => item.id === definition.id);
-    return destination ? [{ ...destination, label: definition.displayName, description: definition.description,
-      keywords: [definition.id, definition.displayName, ...destination.keywords] }] : [];
-  }) ?? [], [live.directory, presentation, preview]);
-  const unsupported = preview ? [] : live.directory?.services.filter((definition) => !presentation.some((item) => item.id === definition.id)) ?? [];
-  const ready = preview || live.status === "ready";
+    return !destination || destination.discovery === "preview";
+  }) ?? [];
+  const managedDirectoryPending = !preview && live.status === "checking";
+  const managedDirectoryFailed = !preview && live.status !== "checking" && live.status !== "ready";
   const liveFailure = live.status === "forbidden" || live.status === "expired" ? live.status : "unavailable";
   const favorites = useConsoleUiStore((state) => state.favoriteServices);
   const recent = useConsoleUiStore((state) => state.recentServices);
@@ -156,14 +163,15 @@ export function ServiceDirectory({ onClose, onNavigate, preview = true, readServ
       <nav aria-label={t("categoriesLabel")} className={styles.navigation} onKeyDown={navigateCategories} ref={navigation}>
         {views.map(({ id, label, icon: Icon, count }, index) => <div key={id}>
           {index === 3 ? <p className={styles.navigationLabel}>{t("categoriesLabel")}</p> : null}
-          <button aria-controls={resultId} aria-pressed={selectedView === id} className={styles.categoryButton} onClick={() => changeView(id as DirectoryView)} tabIndex={selectedView === id ? 0 : -1} type="button"><Icon aria-hidden="true" /><span>{label}</span>{ready ? <small>{count}</small> : null}</button>
+          <button aria-controls={resultId} aria-pressed={selectedView === id} className={styles.categoryButton} onClick={() => changeView(id as DirectoryView)} tabIndex={selectedView === id ? 0 : -1} type="button"><Icon aria-hidden="true" /><span>{label}</span><small>{count}</small></button>
         </div>)}
       </nav>
       <div className={styles.results} id={resultId} onKeyDown={navigateResults} ref={results}>
-        <div className={styles.resultHeading}><div><h2>{searching ? t("searchTitle") : views.find((item) => item.id === view)?.label}</h2><p>{searching ? t("searchScope") : t(preview ? "browseHint" : "live.browseHint")}</p></div>{ready ? <span aria-live="polite" role="status">{t("count", { count: visible.length + unsupportedVisible.length })}</span> : null}</div>
-        {!ready ? live.status === "checking" ? <CardGridSkeleton label={t("live.loading")} labelVisible={false} />
-          : <EmptyState title={t(`live.${liveFailure}Title`)} description={t(`live.${liveFailure}Hint`)} icon={<PackageSearch />} action={<Button onClick={live.retry} variant="secondary">{t("live.retry")}</Button>} />
-          : !visible.length && !unsupportedVisible.length ? <EmptyState title={t(!preview && !searching && view === "all" ? "live.emptyTitle" : emptyTitle)} description={t(!preview && !searching && view === "all" ? "live.emptyHint" : emptyHint)} icon={<PackageSearch />} action={<Button onClick={() => { changeView("all"); search.current?.focus(); }} variant="secondary">{t("reset")}</Button>} />
+        {managedDirectoryPending ? <Progress aria-label={t("live.loading")} className={styles.liveProgress} /> : null}
+        <div className={styles.resultHeading}><div><h2>{searching ? t("searchTitle") : views.find((item) => item.id === view)?.label}</h2><p>{searching ? t("searchScope") : t(preview ? "browseHint" : "live.browseHint")}</p></div><span aria-live="polite" role="status">{t("count", { count: visible.length + unsupportedVisible.length })}</span></div>
+        {managedDirectoryFailed ? <Alert className={styles.liveFailure} status="warning"><div><strong>{t(`live.${liveFailure}Title`)}</strong><span>{t(`live.${liveFailure}Hint`)}</span></div><Button onClick={live.retry} size="small" variant="secondary">{t("live.retry")}</Button></Alert> : null}
+        {!visible.length && !unsupportedVisible.length ? managedDirectoryPending ? <p className={styles.loadingHint} role="status">{t("live.loading")}</p>
+          : <EmptyState title={t(!preview && !searching && view === "all" ? "live.emptyTitle" : emptyTitle)} description={t(!preview && !searching && view === "all" ? "live.emptyHint" : emptyHint)} icon={<PackageSearch />} action={<Button onClick={() => { changeView("all"); search.current?.focus(); }} variant="secondary">{t("reset")}</Button>} />
           : !searching && (view === "favorites" || view === "recent") ? <ul className={styles.savedServices}>{visible.map((service) => <ServiceEntry key={service.id} onNavigate={onNavigate} onRemoveFavorite={view === "favorites" ? () => search.current?.focus() : undefined} service={service} />)}</ul>
             : <div className={styles.groups}>{serviceCategories.map((category) => {
               const entries = visible.filter((service) => service.category === category);

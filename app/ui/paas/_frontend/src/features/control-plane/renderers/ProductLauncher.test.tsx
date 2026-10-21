@@ -46,7 +46,7 @@ async function openDirectory(props: DirectoryProps = {}) {
 afterEach(() => { cleanup(); localStorage.clear(); useConsoleUiStore.getState().resetSessionUi(); vi.clearAllMocks(); });
 
 describe("ProductLauncher", () => {
-  it("reads LIVE services only on opening and navigates backend entries without inferring activation authority", async () => {
+  it("keeps LIVE platform workspaces navigable while lazily adding backend managed products", async () => {
     const readServiceDefinitions = vi.fn().mockResolvedValue(liveDirectory());
     useConsoleUiStore.getState().toggleFavoriteService("postgresql");
     useConsoleUiStore.getState().visitService("postgresql");
@@ -57,8 +57,11 @@ describe("ProductLauncher", () => {
     await user.click(screen.getByRole("button", { name: "打开产品与服务" }));
     const service = await screen.findByRole("link", { name: /后端 mysql/ });
     expect(service.getAttribute("href")).toBe("/console/products/mysql/");
-    expect(screen.getByRole("status").textContent).toBe("1 项服务");
-    expect(screen.queryByRole("link", { name: /PostgreSQL|访问管理|DevOps/ })).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("4 项服务");
+    expect(screen.getByRole("link", { name: /应用托管/ }).getAttribute("href")).toBe("/console/applications/");
+    expect(screen.getByRole("link", { name: /访问管理/ }).getAttribute("href")).toBe("/console/access/");
+    expect(screen.getByRole("link", { name: /审计服务/ }).getAttribute("href")).toBe("/console/audit/");
+    expect(screen.queryByRole("link", { name: /PostgreSQL|DevOps/ })).toBeNull();
     const categories = within(screen.getByRole("navigation", { name: "服务分类" }));
     expect(categories.getByRole("button", { name: /^我的收藏/ }).textContent).toBe("我的收藏0");
     expect(categories.getByRole("button", { name: /^最近访问/ }).textContent).toBe("最近访问0");
@@ -73,29 +76,45 @@ describe("ProductLauncher", () => {
     await openDirectory({ preview: false, readServiceDefinitions: vi.fn().mockResolvedValue(liveDirectory(["redis"])) });
     expect(await screen.findByText("后端 redis")).toBeTruthy();
     expect(screen.getByText("当前控制台尚未接入此服务页面。")).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toBe("1 项服务");
-    expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(0);
+    expect(screen.getByRole("status").textContent).toBe("4 项服务");
+    expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(3);
   });
 
   it.each([
-    [403, "无法读取服务目录"],
-    [401, "请重新登录后读取服务目录"],
-    [503, "服务目录暂不可用"]
-  ])("keeps LIVE %s local with no MOCK fallback and retries the same directory source", async (status, title) => {
+    [403, "无法读取受管产品目录"],
+    [401, "请重新登录后读取受管产品目录"],
+    [503, "受管产品目录暂不可用"]
+  ])("keeps LIVE %s local to managed products while platform workspaces stay usable", async (status, title) => {
     const readServiceDefinitions = vi.fn().mockRejectedValueOnce(new HttpProblem(status, "unavailable")).mockResolvedValueOnce(liveDirectory());
     const { user } = await openDirectory({ preview: false, readServiceDefinitions });
-    expect(await screen.findByRole("heading", { name: title })).toBeTruthy();
-    expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(0);
+    expect(await screen.findByText(title)).toBeTruthy();
+    expect(screen.getByRole("link", { name: /应用托管/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /访问管理/ })).toBeTruthy();
+    expect(screen.getByRole("link", { name: /审计服务/ })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "重试读取" }));
     expect(await screen.findByRole("link", { name: /后端 mysql/ })).toBeTruthy();
     expect(readServiceDefinitions).toHaveBeenCalledTimes(2);
   });
 
-  it("distinguishes an empty LIVE directory from static preview entries", async () => {
+  it("keeps only integrated platform workspaces when the managed-product directory is empty", async () => {
     await openDirectory({ preview: false, readServiceDefinitions: vi.fn().mockResolvedValue(liveDirectory([])) });
-    expect(await screen.findByRole("heading", { name: "暂无可见服务" })).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toBe("0 项服务");
-    expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(0);
+    expect(await screen.findByRole("link", { name: /应用托管/ })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("3 项服务");
+    expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(3);
+    expect(screen.queryByRole("link", { name: /DevOps|云监控|日志服务|区域与节点/ })).toBeNull();
+  });
+
+  it("navigates to a platform workspace before the managed-product read settles", async () => {
+    const readServiceDefinitions = vi.fn(() => new Promise<ServiceDefinitionDirectory>(() => {}));
+    const { user } = await openDirectory({ preview: false, readServiceDefinitions });
+
+    const applications = screen.getByRole("link", { name: /应用托管/ });
+    expect(applications.getAttribute("href")).toBe("/console/applications/");
+    expect(screen.getByRole("progressbar", { name: "正在同步需要开通的受管产品" })).toBeTruthy();
+    await user.click(applications);
+
+    expect(navigation.navigate).toHaveBeenCalledExactlyOnceWith("/console/applications/");
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("opens a categorized modal directory with search focus and restores its trigger on explicit close", async () => {

@@ -557,18 +557,27 @@ Malformed, extra-field, route-mismatched or stale commitment evidence fails
 closed. Activation creates neither a human policy nor a service Role, and quota,
 resource access and service-role consent remain separate workflows.
 
-The LIVE Header's shared product launcher lazily reads the backend service
-directory only while open. Its fixed search/category shell mounts immediately;
-only the remote entry region receives delayed loading feedback. Backend entries
-provide membership, names and descriptions; the presentation registry supplies
-only implemented destination/category/icon metadata. Missing permission, expired
-authentication, transport failure and an empty result are distinct local states,
-never a fallback to the static MOCK directory. Unknown service IDs are shown as
-not yet supported without inventing a link. Changing effective credentials hides
-the old entries immediately and discards late reads. Saved navigation preferences
-cannot make an absent backend service visible. Catalog cards enter the exact
+The LIVE Header's shared product launcher distinguishes two owned discovery
+sources instead of treating the managed-service activation directory as the
+entire console catalog. Code-owned platform workspaces with an implemented LIVE
+adapter and route (currently Application hosting, IAM and Audit) mount as stable
+SPA links immediately. They are navigation facts only: visibility does not claim
+resource permission, health or enablement, and the owning resource API still
+authorizes every request. Preview-only workspaces remain absent from LIVE.
+
+Managed products are added only from the backend service-definition directory,
+which is read lazily while the launcher is open. Its loading or failure feedback
+is local to that remote region and cannot remove the stable platform links.
+Backend entries provide managed-product membership, names and descriptions; the
+presentation registry supplies only implemented destination/category/icon
+metadata. Missing permission, expired authentication, transport failure and an
+empty result are distinct managed-directory states, never a fallback to the
+static MOCK managed-product list. Unknown service IDs are shown as not yet
+supported without inventing a link. Changing effective credentials hides old
+managed entries immediately and discards late reads. Saved navigation preferences
+cannot make an absent managed product visible. Catalog cards enter the exact
 product route named by their backend service-definition reference rather than
-skipping first use into generic quota management. Neither entry point grants
+skipping first use into generic quota management. Neither source grants
 activation or resource authority; the existing product gate remains authoritative
 for presentation admission and every request retains its server-side checks.
 

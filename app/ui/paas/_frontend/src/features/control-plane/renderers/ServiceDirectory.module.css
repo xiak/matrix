@@ -24,7 +24,14 @@
 .categoryButton small { font-size: var(--xiak-font-size-caption); font-variant-numeric: tabular-nums; }
 .categoryButton:hover { background: var(--xiak-color-bg-panel-hover); color: var(--xiak-color-text-strong); }
 .categoryButton[aria-pressed="true"] { background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); font-weight: var(--xiak-font-weight-semibold); }
-.results { min-width: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: var(--xiak-spacing-generous); }
+.results { position: relative; min-width: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; padding: var(--xiak-spacing-generous); }
+.liveProgress { position: absolute; inset: 0 0 auto; border-radius: 0; }
+.liveFailure { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); margin-bottom: var(--xiak-spacing-comfortable); }
+.liveFailure > div { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.liveFailure > div > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
+.liveFailure strong { color: var(--xiak-color-text-strong); }
+.liveFailure span, .loadingHint { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); }
+.loadingHint { margin: var(--xiak-spacing-roomy) 0; }
 .resultHeading { display: flex; align-items: baseline; justify-content: space-between; gap: var(--xiak-spacing-default); margin-bottom: var(--xiak-spacing-roomy); }
 .resultHeading h2 { margin: 0; font-size: var(--xiak-font-size-body); font-weight: var(--xiak-font-weight-semibold); }
 .resultHeading p { margin: var(--xiak-spacing-micro) 0 0; color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); }
@@ -78,6 +85,7 @@
   .categoryButton { grid-template-columns: minmax(0, 1fr) auto; }
   .results { flex: 1; }
   .resultHeading { margin-bottom: var(--xiak-spacing-comfortable); }
+  .liveFailure > div { align-items: stretch; flex-direction: column; }
   .groups { gap: var(--xiak-spacing-comfortable); }
   .favorite { width: 40px; height: 40px; }
   .serviceDescription { white-space: normal; }

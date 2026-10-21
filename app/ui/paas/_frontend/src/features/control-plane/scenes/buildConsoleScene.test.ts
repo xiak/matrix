@@ -145,6 +145,10 @@ describe("buildConsoleScene", () => {
     }
     expect(scene.navigation.find((item) => item.id === "applications")?.selected).toBe(true);
     const live = buildConsoleScene("applications", snapshot);
+    expect(live.productId).toBe("applications");
+    expect(live.navigation.map((item) => item.id)).toEqual(["applications"]);
+    expect(live.navigation[0]?.selected).toBe(true);
+    expect(live.rail.some((item) => item.selected)).toBe(false);
     expect(live.content).toEqual({ kind: "resources", directory: "applications", listing: "unavailable", resources: [], readSnapshots: [], tagSnapshots: [], deploymentSnapshots: [] });
   });
 

@@ -173,7 +173,7 @@ function navigation(
   experience?: ExperienceSnapshot
 ): ConsoleNavigationItemScene[] {
   const { section, view, product } = selection;
-  if (!experience && !product && section !== "access" && section !== "audit") {
+  if (!experience && !product && section !== "access" && section !== "audit" && section !== "applications") {
     return [
       { id: "catalog", messageKey: "catalog", href: "/console/catalog/", icon: "catalog", selected: section === "catalog" },
       { id: "quotas", messageKey: "quotas", href: "/console/quotas/", icon: "quota", selected: section === "quotas" },
@@ -218,7 +218,7 @@ function productRail(section: ConsoleSection, experience?: ExperienceSnapshot): 
   if (!experience) {
     return [
       { id: "overview", href: "/console/", icon: "overview", selected: section === "overview" },
-      { id: "managed-database", href: "/console/catalog/", icon: "database", selected: section !== "overview" && section !== "audit" && section !== "access" },
+      { id: "managed-database", href: "/console/catalog/", icon: "database", selected: ["catalog", "quotas", "installations", "regions"].includes(section) },
       { id: "audit", href: "/console/audit/", icon: "audit", selected: section === "audit" },
       { id: "access", href: "/console/access/", icon: "access", selected: section === "access" }
     ];
@@ -230,9 +230,10 @@ function productContext(selection: ControlPlaneRouteSelection, experience?: Expe
   const { section, product } = selection;
   if (product) return { productId: product, productIcon: "database" };
   if (!experience) {
-    return section === "access"
-      ? { productId: "iam", productIcon: "access" }
-      : { productId: "postgresql", productIcon: "database" };
+    if (section === "applications") return { productId: "applications", productIcon: "overview" };
+    if (section === "audit") return { productId: "audit", productIcon: "audit" };
+    if (section === "access") return { productId: "iam", productIcon: "access" };
+    return { productId: "postgresql", productIcon: "database" };
   }
   if (isHomeSection(section)) return { productId: "console", productIcon: "overview" };
   if (section === "regions") return { productId: "regions", productIcon: "overview" };
