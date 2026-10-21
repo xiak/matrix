@@ -30,7 +30,12 @@
   are not actual PG/browser evidence.
 - 476/Verification39599299467 attempt1 is completed/success, exact SHA and
   all19 jobs confirmed by GitHub API at2026-10-21 12:55:34UTC terminal. The
-  Test Expert is closing full-log details; do not invent root/package counts.
+  Test Expert has closed all19 complete logs74,580,732bytes.14lanes/57required
+  roots and33JSONpackages passed;1164Test identities agree in JSON/plain:
+  1157PASS and7real-Postfix-absent childSKIP, not real mail acceptance.
+  370steps=175success+195expected matrix skips; all14Stop/36Post succeeded.
+  Storage's full56,009,188bytes/11roots passed. Do not fetch this closed
+  tuple's jobs/logs again;011 owns the accepted scope, not browser/signing.
   https://github.com/xiak/matrix/actions/runs/39599299467 .
 - 9a2bd7086d57c56f6d006ca4a01eaaeba8c32a18 fixes only K1's Audit observer:
   the same original request may have a valid IAM authorization decision and

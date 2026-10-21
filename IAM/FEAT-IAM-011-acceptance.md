@@ -41,13 +41,15 @@
 | 边界 | 固定对象与当前结论 |
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
-| 最近独立CI通过源码 | `4760581e035ec299003ef8f777b777feda38a218`，完整Profile不变；GitHub API已核实十九项job全部成功，完整日志的细项核对仍由测试owner收口。后继`2888c9c0812eb84abb755239e1d8938d41829b91`须独立验证，不继承这轮CI或5935的签名发布结论 |
+| 最近独立CI通过源码 | `4760581e035ec299003ef8f777b777feda38a218`，完整Profile不变；十九项job与完整日志已独立核验，十四条lane的57个必跑根均实际通过。后继`e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`仍须独立验证，不继承这轮CI或5935的签名发布结论 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
 
-固定`4760581e035ec299003ef8f777b777feda38a218`的[Verification 39599299467](https://github.com/xiak/matrix/actions/runs/39599299467) attempt1已由GitHub API核实为`completed/success`，2026-10-21 12:55:34UTC终态、十九项job全部成功，包含storage及最终汇总；测试owner继续核对完整日志，不先填入未封存的根/包数量。该修正仅把storage编排上限20→25分钟，保留全部测试、单项deadline、数据库限额、串行执行和失败关闭汇总；完整YAML语义比较及24个Bash步骤通过，默认process/architecture race3.948/2.591秒及vet通过。原固定`da9426f608a99d564d573d3d4153714ba1198ada`的[Verification 39593652955](https://github.com/xiak/matrix/actions/runs/39593652955)仍为`completed/cancelled`：check119204314631明确超过20分钟job期限，19分07秒测试步骤虽成功，清理时跨过总期限。没有人工/并发取消证据，原部分storage日志不算完整验收；新run成功不改写旧run结论。
+固定`4760581e035ec299003ef8f777b777feda38a218`的[Verification 39599299467](https://github.com/xiak/matrix/actions/runs/39599299467) attempt1已独立封存为`completed/success`，2026-10-21 12:55:34UTC终态，十九项job全部成功。370个step中175成功、195项为矩阵设计跳过，没有其他跳过、失败或取消；十四条lane的57个必跑根均实际通过。十九份必要日志共74,580,732字节完成连续Range、长度、严格UTF-8及BOM重编码校验，其中storage的56,009,188字节全文及11根通过结果完整核对。1164个Test身份的JSON/plain一致：1157通过、7个真实邮件子例因缺少专用Postfix明确跳过，不能据此声称真实邮件投递已验收；33个JSON包全通过。容量31指标、3100样本、零失败，三个OOM计数均零；这是受限夹具结果而非生产SLO。全部14个Stop及36个Post步骤成功，job/step计时独立复算无差异。本tuple取证闭合，不重复读取同attempt日志。
+
+476只把storage编排上限20→25分钟，保留全部测试、单项deadline、数据库限额、串行执行和失败关闭汇总；完整YAML语义比较及24个Bash步骤通过，默认process/architecture race3.948/2.591秒及vet通过。原固定`da9426f608a99d564d573d3d4153714ba1198ada`的[Verification 39593652955](https://github.com/xiak/matrix/actions/runs/39593652955)仍为`completed/cancelled`：check119204314631明确超过20分钟job期限，19分07秒测试步骤虽成功，清理时跨过总期限。没有人工/并发取消证据，原部分storage日志不算完整验收；新run成功不改写旧run结论。
 
 后继固定`2888c9c0812eb84abb755239e1d8938d41829b91`的[Verification 39603659401](https://github.com/xiak/matrix/actions/runs/39603659401) attempt1为`completed/failure`，不得算通过。console job119234220810在完整导出一致性检查拒绝旧嵌入：test-only源码仍参与现有build fingerprint，此提交遗漏重新导出。该失败发生在Vitest步骤之前，不能称组件断言失败或CI组件通过；Go、node-process及安装PG夹具成功，authority matrix因前置失败跳过，最终汇总失败。010拥有本分支重新生成及精确比较的修正证据；后继准确源码仍需新独立CI，不改写此终态，也不从476推导浏览器或新调度验收。
 
