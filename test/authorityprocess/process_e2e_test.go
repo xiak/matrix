@@ -191,6 +191,8 @@ const (
 	authorityProcessDailyPasswordChangeBrowser
 	authorityProcessAccountSecuritySettingsBrowser
 	authorityProcessAccessKeyRecoveryBrowser
+	authorityProcessAccessKeyLifecycleBrowser
+	authorityProcessRoleLifecycleBrowser
 	authorityProcessPermissionAwareBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
@@ -424,6 +426,29 @@ func TestIAMAccessKeyRecoveryConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessAccessKeyRecoveryBrowser)
 }
 
+// The API prepares a User and its explicit policies, but never creates a key.
+// The browser must issue every lifecycle command. One-time response material
+// stays in this test process only, to exercise real signed PaaS requests.
+func TestIAMAccessKeyLifecycleConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_ACCESS_KEY_LIFECYCLE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_ACCESS_KEY_LIFECYCLE_BROWSER=1 for the bounded LIVE AccessKey lifecycle fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("AccessKey lifecycle fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessAccessKeyLifecycleBrowser)
+}
+
+func TestIAMRoleLifecycleConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_ROLE_LIFECYCLE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_ROLE_LIFECYCLE_BROWSER=1 for the bounded LIVE Role lifecycle fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("Role lifecycle fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessRoleLifecycleBrowser)
+}
+
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
 // and RabbitMQ 4.1 product resources through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
@@ -471,7 +496,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		mode == authorityProcessPolicyAttachmentRecoveryBrowser ||
 		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
 		mode == authorityProcessDailyPasswordChangeBrowser || mode == authorityProcessAccountSecuritySettingsBrowser ||
-		mode == authorityProcessAccessKeyRecoveryBrowser || mode == authorityProcessPermissionAwareBrowser {
+		mode == authorityProcessAccessKeyRecoveryBrowser || mode == authorityProcessAccessKeyLifecycleBrowser || mode == authorityProcessRoleLifecycleBrowser || mode == authorityProcessPermissionAwareBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -966,8 +991,22 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		)...)
 		return
 	}
+	if mode == authorityProcessAccessKeyLifecycleBrowser {
+		sensitive = append(sensitive, runIAMAccessKeyLifecycleConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, paasEdgeAssertion, start,
+		)...)
+		return
+	}
 	if mode == authorityProcessPermissionAwareBrowser {
 		sensitive = append(sensitive, runIAMPermissionAwareConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
+		return
+	}
+	if mode == authorityProcessRoleLifecycleBrowser {
+		sensitive = append(sensitive, runIAMRoleLifecycleConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)...)
@@ -4350,52 +4389,10 @@ func runIAMAccessKeyRecoveryConsoleBrowser(
 	if operation != "SET_STATUS" && operation != "NETWORK" && operation != "DELETE" {
 		t.Fatal("MATRIX_IAM_ACCESS_KEY_RECOVERY_OPERATION must be SET_STATUS, NETWORK or DELETE")
 	}
-	const loginName = "browser.key.recovery"
-	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser AccessKey recovery User",
-		initialDeveloperPassword, "browser-key-recovery-user")
-	initial := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), initialDeveloperPassword,
-		"browser-key-recovery-initial-login")
-	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
-		changedDeveloperPassword, "browser-key-recovery-password")
+	user, directory, initialCredential := prepareAccessKeyBrowserUser(t, iamEndpoint, ownerBearer, "browser.key.recovery", "browser-key-recovery")
 	collectionPath := "/v1/users/" + string(user.ID) + "/access-keys"
-	// Bootstrap's frozen IAM policy is not automatically expanded when a
-	// product adds credential actions. Prove denial, then use the real policy
-	// APIs to grant this browser operator the explicit fixture permissions.
-	if response := performJSON(t, http.MethodGet, iamEndpoint+collectionPath, ownerBearer, nil); response.Status != http.StatusForbidden {
-		t.Fatalf("ungranted browser key directory status=%d", response.Status)
-	}
-	policyResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
-		DisplayName: "Browser AccessKey recovery operator", RequestID: "browser-key-recovery-policy",
-		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
-			Statements: []iamv1.PolicyStatement{
-				{SID: "target-user", Effect: iamv1.PolicyAllow,
-					Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate},
-					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceExact, ID: string(user.ID)}}},
-				{SID: "keys", Effect: iamv1.PolicyAllow,
-					Actions: []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus,
-						iamv1.ActionIAMAccessKeySetNetworkRestrictions, iamv1.ActionIAMAccessKeyDelete},
-					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccessKey, Match: iamv1.PolicyResourceAnyInAuthority}}},
-			}},
-	})
-	var policy iamv1.PolicyDetail
-	if policyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(policyResponse.Body), &policy) != nil ||
-		iamv1.ValidatePolicyDetail(policy) != nil {
-		t.Fatalf("prepare explicit browser key policy status=%d", policyResponse.Status)
-	}
-	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, "principal-admin", policy.Policy.ID, "browser-key-recovery-grant")
 	readDirectory := func() iamv1.AccessKeyList {
-		t.Helper()
-		response := performJSON(t, http.MethodGet, iamEndpoint+collectionPath, ownerBearer, nil)
-		var value iamv1.AccessKeyList
-		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &value) != nil ||
-			iamv1.ValidateAccessKeyList(value) != nil || value.AccountID != user.AccountID || value.UserID != user.ID {
-			t.Fatalf("read browser key directory status=%d", response.Status)
-		}
-		return value
-	}
-	directory := readDirectory()
-	if len(directory.Items) != 0 {
-		t.Fatal("browser key recovery target already has keys")
+		return readAccessKeyBrowserDirectory(t, iamEndpoint, ownerBearer, user)
 	}
 	response := performJSON(t, http.MethodPost, iamEndpoint+collectionPath, ownerBearer, iamv1.CreateAccessKeyRequest{
 		UserResourceVersion: directory.UserResourceVersion, RequestID: "browser-key-recovery-prepare",
@@ -4409,7 +4406,7 @@ func runIAMAccessKeyRecoveryConsoleBrowser(
 		t.Fatalf("prepare browser key status=%d", response.Status)
 	}
 	secret := created.Secret.CopyBytes()
-	sensitive := []string{initial.Credential, string(secret)}
+	sensitive := []string{initialCredential, string(secret)}
 	clear(secret)
 	key := created.Key
 	keyPath := collectionPath + "/" + string(key.ID)
@@ -4548,6 +4545,577 @@ func runIAMAccessKeyRecoveryConsoleBrowser(
 	}
 	t.Logf("AccessKey %s browser recovery retained one original effect/completion/outbox/Audit after one explicit exact replay and a separate authorized directory read; this fixture does not prove UI creation, Secret saving or programmatic business use", operation)
 	return sensitive
+}
+
+// Shared setup is deliberately key-free: normal lifecycle acceptance cannot
+// accidentally inherit the recovery fixture's API-created credential.
+func prepareAccessKeyBrowserUser(t *testing.T, iamEndpoint, ownerBearer, loginName, requestPrefix string) (iamv1.User, iamv1.AccessKeyList, string) {
+	t.Helper()
+	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser AccessKey User",
+		initialDeveloperPassword, requestPrefix+"-user")
+	initial := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), initialDeveloperPassword,
+		requestPrefix+"-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, requestPrefix+"-password")
+	collectionPath := "/v1/users/" + string(user.ID) + "/access-keys"
+	// Bootstrap's frozen IAM policy is not automatically expanded when a
+	// product adds credential actions. Prove denial, then use the real policy
+	// APIs to grant this browser operator the explicit fixture permissions.
+	if response := performJSON(t, http.MethodGet, iamEndpoint+collectionPath, ownerBearer, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("ungranted browser key directory status=%d", response.Status)
+	}
+	policyResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser AccessKey operator", RequestID: requestPrefix + "-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{
+				{SID: "target-user", Effect: iamv1.PolicyAllow,
+					Actions:   []iamv1.Action{iamv1.ActionIAMAccessKeyList, iamv1.ActionIAMAccessKeyCreate},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceUser, Match: iamv1.PolicyResourceExact, ID: string(user.ID)}}},
+				{SID: "keys", Effect: iamv1.PolicyAllow,
+					Actions: []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus,
+						iamv1.ActionIAMAccessKeySetNetworkRestrictions, iamv1.ActionIAMAccessKeyDelete},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccessKey, Match: iamv1.PolicyResourceAnyInAuthority}}},
+			}},
+	})
+	var policy iamv1.PolicyDetail
+	if policyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(policyResponse.Body), &policy) != nil ||
+		iamv1.ValidatePolicyDetail(policy) != nil {
+		t.Fatalf("prepare explicit browser key policy status=%d", policyResponse.Status)
+	}
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, "principal-admin", policy.Policy.ID, requestPrefix+"-grant")
+	directory := readAccessKeyBrowserDirectory(t, iamEndpoint, ownerBearer, user)
+	if len(directory.Items) != 0 {
+		t.Fatal("browser key target already has keys")
+	}
+	return user, directory, initial.Credential
+}
+
+func readAccessKeyBrowserDirectory(t *testing.T, endpoint, bearer string, user iamv1.User) iamv1.AccessKeyList {
+	t.Helper()
+	response := performJSON(t, http.MethodGet, endpoint+"/v1/users/"+string(user.ID)+"/access-keys", bearer, nil)
+	var value iamv1.AccessKeyList
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &value) != nil ||
+		iamv1.ValidateAccessKeyList(value) != nil || value.AccountID != user.AccountID || value.UserID != user.ID {
+		t.Fatalf("read browser key directory status=%d", response.Status)
+	}
+	return value
+}
+
+func runIAMAccessKeyLifecycleConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn,
+	root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, edgeAssertion string,
+	start func(string, []string) *childProcess) []string {
+	t.Helper()
+	user, _, initialCredential := prepareAccessKeyBrowserUser(t, iamEndpoint, ownerBearer, "browser.key.lifecycle", "browser-key-lifecycle")
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, user.ID, iamv1.SystemPolicyPaaSViewer, "browser-key-lifecycle-viewer")
+	const applicationID paasv1.ResourceID = "browser-key-lifecycle-application"
+	createPaaSApplication(t, paasEndpoint, ownerBearer, applicationID, "browser-key-lifecycle-application", "browser-key-lifecycle-application", http.StatusCreated)
+	probe := &browserAccessKeyLifecycleProbe{account: user.AccountID, user: user.ID}
+	defer probe.clear()
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, probe.wrap)
+	defer closeBrowser()
+	t.Logf("ACCESS_KEY_LIFECYCLE_BROWSER_FIXTURE url=%s/console/access/users/?id=%s&tab=keys user=%s markers=%s login=admin; use the existing changed admin password; no Key has been API-created; create/finish one-time Secret/leave-return, create second, disable first, enable first, disable-delete first, create replacement; each visible phase needs its own marker before continuing; never report or persist Secret material",
+		server.URL, user.ID, user.ID, temporary)
+	stages := []struct {
+		name     string
+		writes   int
+		status   []int
+		versions []uint64 // Zero means the key is absent from the active directory.
+	}{
+		{"first", 1, []int{http.StatusOK}, []uint64{1}},
+		{"overlap", 2, []int{http.StatusOK, http.StatusOK}, []uint64{1, 1}},
+		{"disabled", 3, []int{http.StatusForbidden, http.StatusOK}, []uint64{2, 1}},
+		{"enabled", 4, []int{http.StatusOK, http.StatusOK}, []uint64{3, 1}},
+		{"deleted", 6, []int{http.StatusUnauthorized, http.StatusOK}, []uint64{0, 1}},
+		{"replacement", 7, []int{http.StatusUnauthorized, http.StatusOK, http.StatusOK}, []uint64{0, 1, 1}},
+	}
+	for _, stage := range stages {
+		marker := filepath.Join(temporary, "browser-access-key-lifecycle-"+stage.name)
+		t.Logf("ACCESS_KEY_LIFECYCLE_STAGE stage=%s marker=%s; wait for this stage's real browser observation before marking", stage.name, marker)
+		waitForBrowserMarker(t, ctx, ui, marker, "AccessKey lifecycle "+stage.name)
+		if err := probe.check(stage.writes); err != nil {
+			t.Fatal(err)
+		}
+		directory := readAccessKeyBrowserDirectory(t, iamEndpoint, ownerBearer, user)
+		probe.mu.Lock()
+		keys := append([]browserIssuedAccessKey(nil), probe.keys...)
+		probe.mu.Unlock()
+		for index, want := range stage.status {
+			assertBrowserKeyApplicationRead(t, ctx, database, paasEndpoint, edgeAssertion, applicationID, user.AccountID, keys[index], want)
+		}
+		wantCount := 2
+		if stage.name == "first" || stage.name == "deleted" {
+			wantCount = 1
+		}
+		if len(directory.Items) != wantCount {
+			t.Fatal("browser key directory did not preserve the undeleted-key limit")
+		}
+		for index, version := range stage.versions {
+			found := false
+			for _, item := range directory.Items {
+				if item.Key.ID != keys[index].key.ID {
+					continue
+				}
+				found = true
+				wantStatus := iamv1.AccessKeyEnabled
+				if index == 0 && stage.name == "disabled" {
+					wantStatus = iamv1.AccessKeyDisabled
+				}
+				if version == 0 || item.Key.ResourceVersion != version || item.Key.Status != wantStatus || item.Key.CredentialState != iamv1.AccessKeyCredentialCurrent {
+					t.Fatal("browser key directory changed an identity, version or credential state")
+				}
+			}
+			if found != (version != 0) {
+				t.Fatal("browser key directory lost a current key or retained a deleted identity")
+			}
+		}
+		if stage.name == "deleted" {
+			var removed bool
+			if err := database.QueryRow(ctx, `SELECT deleted_at IS NOT NULL AND nonce IS NULL AND ciphertext IS NULL
+				FROM iam.access_keys WHERE tenant_id=$1 AND user_id=$2 AND id=$3`, user.AccountID, user.ID, keys[0].key.ID).Scan(&removed); err != nil || !removed {
+				t.Fatal("deleted browser key retained usable material")
+			}
+		}
+		if stage.name == "overlap" {
+			response := performJSON(t, http.MethodPost, iamEndpoint+probe.collection(), ownerBearer,
+				iamv1.CreateAccessKeyRequest{UserResourceVersion: directory.UserResourceVersion,
+					NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "browser-key-lifecycle-over-limit"})
+			defer clear(response.Body)
+			if response.Status != http.StatusConflict || len(readAccessKeyBrowserDirectory(t, iamEndpoint, ownerBearer, user).Items) != 2 {
+				t.Fatal("two real browser keys did not exhaust the current authoritative limit")
+			}
+		}
+		t.Logf("ACCESS_KEY_LIFECYCLE_STAGE_PASS stage=%s signed_application_statuses=%v key_count=%d", stage.name, stage.status, len(directory.Items))
+	}
+	probe.mu.Lock()
+	writes := append([]browserAccessKeyMutation(nil), probe.writes...)
+	sensitive := []string{initialCredential}
+	for _, key := range probe.keys {
+		sensitive = append(sensitive, string(key.secret))
+	}
+	probe.mu.Unlock()
+	for _, write := range writes {
+		var intents, facts int
+		if err := database.QueryRow(ctx, `SELECT count(*),count(o.event_id)
+			FROM iam.access_key_intents i LEFT JOIN iam.audit_outbox o ON o.tenant_id=i.tenant_id AND o.event_id=i.event_id
+			AND o.event_document->>'action'=$5 AND o.event_document#>>'{target,id}'=$4
+			AND o.event_document->>'iamDecisionId'=i.decision_id
+			WHERE i.tenant_id=$1 AND i.actor_id='principal-admin' AND i.user_id=$2 AND i.request_id=$3 AND i.key_id=$4`,
+			user.AccountID, user.ID, write.requestID, write.key, write.action).Scan(&intents, &facts); err != nil || intents != 1 || facts != 1 {
+			t.Fatal("browser key lifecycle lacks exactly one linked intent and success fact per command")
+		}
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	remaining := make(map[string]browserAccessKeyMutation, len(writes))
+	for _, write := range writes {
+		remaining[write.requestID] = write
+	}
+	query := auditv1.QueryRecordsRequest{PageSize: 100}
+	seen := make(map[string]bool, len(writes))
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			want, ok := remaining[record.Event.RequestID]
+			if !ok {
+				continue
+			}
+			if seen[record.Event.RequestID] || record.Source != auditv1.SourceIAM || record.Event.Action != want.action ||
+				record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != "principal-admin" ||
+				record.Event.TenantID != auditv1.TenantID(user.AccountID) || record.Event.InstallationID != "" ||
+				record.Event.Target.Kind != auditv1.TargetAccessKey || record.Event.Target.ID != string(want.key) || record.Event.Result != auditv1.ResultSucceeded {
+				t.Fatal("browser key lifecycle Audit differs from its original command")
+			}
+			seen[record.Event.RequestID] = true
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		query.Cursor = page.NextCursor
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if len(seen) != len(writes) || chain.State != auditv1.VerificationVerified || !chain.Complete {
+		t.Fatal("browser key lifecycle lacks its complete unique Audit chain")
+	}
+	assertAuthorityPlaintextAbsent(t, ctx, database, sensitive...)
+	return sensitive
+}
+
+type browserIssuedAccessKey struct {
+	key    iamv1.AccessKey
+	secret []byte // Test-process memory only, copied from the real browser response.
+}
+
+type browserAccessKeyMutation struct {
+	key       iamv1.AccessKeyID
+	requestID string
+	action    auditv1.Action
+}
+
+type browserAccessKeyLifecycleProbe struct {
+	mu      sync.Mutex
+	account iamv1.AccountID
+	user    iamv1.PrincipalID
+	keys    []browserIssuedAccessKey
+	writes  []browserAccessKeyMutation
+	reads   [8]int
+	invalid bool
+}
+
+func (probe *browserAccessKeyLifecycleProbe) collection() string {
+	return "/v1/users/" + string(probe.user) + "/access-keys"
+}
+
+func (probe *browserAccessKeyLifecycleProbe) clear() {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	for index := range probe.keys {
+		clear(probe.keys[index].secret)
+	}
+	probe.keys = nil
+}
+
+func (probe *browserAccessKeyLifecycleProbe) wrap(upstream http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		collection := "/api/iam" + probe.collection()
+		if r.URL.Path != collection && !strings.HasPrefix(r.URL.Path, collection+"/") {
+			upstream.ServeHTTP(w, r)
+			return
+		}
+		probe.mu.Lock()
+		defer probe.mu.Unlock()
+		var input []byte
+		if r.Body != nil {
+			var err error
+			input, err = io.ReadAll(io.LimitReader(r.Body, iamv1.MaxRequestBytes+1))
+			_ = r.Body.Close()
+			if err != nil || int64(len(input)) > iamv1.MaxRequestBytes {
+				clear(input)
+				probe.invalid = true
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(input))
+			defer clear(input)
+		}
+		response := &browserCredentialResponse{browserPermissionResponse: browserPermissionResponse{ResponseWriter: w}, capture: true}
+		upstream.ServeHTTP(response, r)
+		defer clear(response.document)
+		if response.overflow || len(probe.writes) > 7 {
+			probe.invalid = true
+			return
+		}
+		if r.Method == http.MethodGet {
+			if r.URL.Path == collection {
+				var result iamv1.AccessKeyList
+				if response.status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.document), &result) != nil ||
+					iamv1.ValidateAccessKeyList(result) != nil || result.AccountID != probe.account || result.UserID != probe.user {
+					probe.invalid = true
+					return
+				}
+				probe.reads[len(probe.writes)]++
+			} else {
+				var result iamv1.AccessKeyAccess
+				if response.status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.document), &result) != nil ||
+					iamv1.ValidateAccessKeyAccess(result) != nil || result.Key.AccountID != probe.account || result.Key.UserID != probe.user ||
+					r.URL.Path != collection+"/"+string(result.Key.ID) {
+					probe.invalid = true
+				}
+			}
+			return
+		}
+		if r.Method != http.MethodPost || len(probe.writes) == 7 {
+			probe.invalid = true
+			return
+		}
+		mutation := browserAccessKeyMutation{}
+		if r.URL.Path == collection {
+			var request iamv1.CreateAccessKeyRequest
+			var result iamv1.CreateAccessKeyResponse
+			if iamv1.DecodeRequest(bytes.NewReader(input), &request) != nil || iamv1.ValidateCreateAccessKeyRequest(request) != nil ||
+				response.status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.document), &result) != nil ||
+				iamv1.ValidateCreateAccessKeyResponse(result) != nil || result.Outcome != "APPLIED" ||
+				result.Key.AccountID != probe.account || result.Key.UserID != probe.user || len(probe.keys) >= 3 ||
+				result.Key.CredentialState != iamv1.AccessKeyCredentialCurrent || !reflect.DeepEqual(result.Key.NetworkRestrictions, request.NetworkRestrictions) {
+				probe.invalid = true
+				return
+			}
+			probe.keys = append(probe.keys, browserIssuedAccessKey{key: result.Key, secret: result.Secret.CopyBytes()})
+			mutation = browserAccessKeyMutation{result.Key.ID, request.RequestID, auditv1.ActionIAMAccessKeyCreated}
+		} else if strings.HasSuffix(r.URL.Path, ":set-status") {
+			var request iamv1.SetAccessKeyStatusRequest
+			var result iamv1.SetAccessKeyStatusResponse
+			if iamv1.DecodeRequest(bytes.NewReader(input), &request) != nil || iamv1.ValidateSetAccessKeyStatusRequest(request) != nil ||
+				response.status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.document), &result) != nil ||
+				iamv1.ValidateSetAccessKeyStatusResponse(result) != nil || result.Outcome != "APPLIED" || result.Key.AccountID != probe.account ||
+				result.Key.UserID != probe.user || r.URL.Path != collection+"/"+string(result.Key.ID)+":set-status" ||
+				result.Key.ResourceVersion != request.AccessKeyResourceVersion+1 || result.Key.Status != request.Status {
+				probe.invalid = true
+				return
+			}
+			mutation = browserAccessKeyMutation{result.Key.ID, request.RequestID, auditv1.ActionIAMAccessKeyDisabled}
+			if request.Status == iamv1.AccessKeyEnabled {
+				mutation.action = auditv1.ActionIAMAccessKeyEnabled
+			}
+		} else if strings.HasSuffix(r.URL.Path, ":delete") {
+			var request iamv1.DeleteAccessKeyRequest
+			var result iamv1.DeleteAccessKeyResponse
+			if iamv1.DecodeRequest(bytes.NewReader(input), &request) != nil || iamv1.ValidateDeleteAccessKeyRequest(request) != nil ||
+				response.status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.document), &result) != nil ||
+				iamv1.ValidateDeleteAccessKeyResponse(result) != nil || result.Outcome != "APPLIED" || result.Deletion.AccountID != probe.account ||
+				result.Deletion.UserID != probe.user || r.URL.Path != collection+"/"+string(result.Deletion.ID)+":delete" ||
+				result.Deletion.ResourceVersion != request.AccessKeyResourceVersion+1 {
+				probe.invalid = true
+				return
+			}
+			mutation = browserAccessKeyMutation{result.Deletion.ID, request.RequestID, auditv1.ActionIAMAccessKeyDeleted}
+		} else {
+			probe.invalid = true
+			return
+		}
+		probe.writes = append(probe.writes, mutation)
+	})
+}
+
+func (probe *browserAccessKeyLifecycleProbe) check(count int) error {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	actions := []auditv1.Action{auditv1.ActionIAMAccessKeyCreated, auditv1.ActionIAMAccessKeyCreated,
+		auditv1.ActionIAMAccessKeyDisabled, auditv1.ActionIAMAccessKeyEnabled, auditv1.ActionIAMAccessKeyDisabled,
+		auditv1.ActionIAMAccessKeyDeleted, auditv1.ActionIAMAccessKeyCreated}
+	if probe.invalid || count < 1 || count > len(actions) || len(probe.writes) != count || probe.reads[count] == 0 || len(probe.keys) == 0 {
+		return errors.New("browser key lifecycle lacks its exact commands and separate current read")
+	}
+	seen := make(map[string]bool, count)
+	for index, write := range probe.writes {
+		wantKey := probe.keys[0].key.ID
+		if index == 1 || index == 6 {
+			keyIndex := 1
+			if index == 6 {
+				keyIndex = 2
+			}
+			if len(probe.keys) <= keyIndex || probe.keys[keyIndex].key.ID == wantKey || keyIndex == 2 && probe.keys[2].key.ID == probe.keys[1].key.ID {
+				return errors.New("browser key rotation reused an identity")
+			}
+			wantKey = probe.keys[keyIndex].key.ID
+		}
+		if write.key != wantKey || write.action != actions[index] || seen[write.requestID] || !strings.HasPrefix(write.requestID, "ui-access-key-") {
+			return errors.New("browser key lifecycle changed target, original command or rotation order")
+		}
+		seen[write.requestID] = true
+	}
+	return nil
+}
+
+func TestAccessKeyBrowserLifecycleRequiresPageCommandsAndNonsecretReads(t *testing.T) {
+	for _, scenario := range []string{"complete", "API-only setup", "missing read", "wrong owner", "replayed create",
+		"wrong mutation target", "wrong version", "reused key identity", "reused request", "wrong order", "extra write",
+		"Secret in directory", "Secret in detail", "oversize response", "oversize request"} {
+		t.Run(scenario, func(t *testing.T) {
+			probe := &browserAccessKeyLifecycleProbe{account: "browser-account", user: "browser-member"}
+			defer probe.clear()
+			now := time.Now().UTC().Truncate(time.Microsecond)
+			keys := make(map[iamv1.AccessKeyID]iamv1.AccessKey)
+			sequence := 0
+			access := func(key iamv1.AccessKey) iamv1.AccessKeyAccess {
+				value := iamv1.AccessKeyAccess{Key: key, Usage: iamv1.AccessKeyUsageSummary{ObservedAt: now}}
+				for _, action := range []iamv1.Action{iamv1.ActionIAMAccessKeyRead, iamv1.ActionIAMAccessKeySetStatus,
+					iamv1.ActionIAMAccessKeySetNetworkRestrictions, iamv1.ActionIAMAccessKeyDelete} {
+					value.Capabilities = append(value.Capabilities, iamv1.ActionCapability{Action: action,
+						Resource: iamv1.ResourceReference{Kind: iamv1.ResourceAccessKey, ID: string(key.ID)}, Available: true})
+				}
+				return value
+			}
+			upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var value any
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/iam"+probe.collection():
+					value = iamv1.AccessKeyList{APIVersion: iamv1.APIVersion, Kind: "AccessKeyList", AccountID: probe.account,
+						UserID: probe.user, UserResourceVersion: 2, Items: []iamv1.AccessKeyAccess{},
+						Capabilities: []iamv1.ActionCapability{{Action: iamv1.ActionIAMAccessKeyCreate,
+							Resource: iamv1.ResourceReference{Kind: iamv1.ResourceUser, ID: string(probe.user)}, Available: true}}}
+				case r.Method == http.MethodGet:
+					value = access(keys["browser-key-1"])
+				case r.URL.Path == "/api/iam"+probe.collection():
+					sequence++
+					key := iamv1.AccessKey{APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: iamv1.AccessKeyID(fmt.Sprintf("browser-key-%d", sequence)),
+						AccountID: probe.account, UserID: probe.user, Status: iamv1.AccessKeyEnabled, CredentialState: iamv1.AccessKeyCredentialCurrent,
+						NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, ResourceVersion: 1, CreatedAt: now, UpdatedAt: now}
+					if scenario == "wrong owner" {
+						key.UserID = "another-member"
+					} else if scenario == "reused key identity" && sequence == 2 {
+						key.ID = "browser-key-1"
+					}
+					keys[key.ID] = key
+					created := iamv1.CreateAccessKeyResponse{Outcome: "APPLIED", Key: key, Secret: processSecret(t, "synthetic-browser-secret")}
+					if scenario == "replayed create" {
+						created.Outcome, created.Secret = "EQUAL_REPLAY", iamv1.Secret{}
+					}
+					encoded, err := iamv1.EncodeCreateAccessKeyResponse(created)
+					if err != nil {
+						t.Fatal("encode synthetic browser creation")
+					}
+					defer clear(encoded)
+					w.WriteHeader(http.StatusCreated)
+					if scenario == "oversize response" {
+						_, _ = w.Write(bytes.Repeat([]byte("x"), int(iamv1.MaxRequestBytes)+1))
+					} else {
+						_, _ = w.Write(encoded)
+					}
+					return
+				case strings.HasSuffix(r.URL.Path, ":set-status"):
+					var input iamv1.SetAccessKeyStatusRequest
+					if json.NewDecoder(r.Body).Decode(&input) != nil {
+						t.Fatal("decode synthetic status input")
+					}
+					key := keys["browser-key-1"]
+					key.Status, key.ResourceVersion, key.UpdatedAt = input.Status, input.AccessKeyResourceVersion+1, now.Add(time.Second)
+					keys[key.ID] = key
+					if scenario == "wrong mutation target" {
+						key.ID = "another-key"
+					} else if scenario == "wrong version" {
+						key.ResourceVersion++
+					}
+					value = iamv1.SetAccessKeyStatusResponse{Outcome: "APPLIED", Key: key}
+				default:
+					value = iamv1.DeleteAccessKeyResponse{Outcome: "APPLIED", Deletion: iamv1.AccessKeyDeletion{APIVersion: iamv1.APIVersion,
+						Kind: "AccessKeyDeletion", ID: "browser-key-1", AccountID: probe.account, UserID: probe.user, ResourceVersion: 5, DeletedAt: now}}
+				}
+				encoded, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal("encode synthetic browser metadata")
+				}
+				defer clear(encoded)
+				if r.Method == http.MethodGet && (scenario == "Secret in directory" && r.URL.Path == "/api/iam"+probe.collection() ||
+					scenario == "Secret in detail" && r.URL.Path != "/api/iam"+probe.collection()) {
+					encoded = append(encoded[:len(encoded)-1], []byte(",\"secret\":\"synthetic-browser-secret\"}")...)
+				}
+				_, _ = w.Write(encoded)
+			})
+			handler := probe.wrap(upstream)
+			invoke := func(method, suffix string, value any) {
+				t.Helper()
+				encoded, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal("encode synthetic browser command")
+				}
+				defer clear(encoded)
+				if scenario == "oversize request" && method == http.MethodPost {
+					encoded = bytes.Repeat([]byte("x"), int(iamv1.MaxRequestBytes)+1)
+				}
+				request := httptest.NewRequest(method, "http://browser.test/api/iam"+probe.collection()+suffix, bytes.NewReader(encoded))
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, request)
+				clear(recorder.Body.Bytes())
+			}
+			if scenario != "API-only setup" {
+				for _, index := range []int{1, 2} {
+					invoke(http.MethodPost, "", iamv1.CreateAccessKeyRequest{UserResourceVersion: 2,
+						NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: fmt.Sprintf("ui-access-key-create-%d", index)})
+				}
+				for index, status := range []iamv1.AccessKeyStatus{iamv1.AccessKeyDisabled, iamv1.AccessKeyEnabled, iamv1.AccessKeyDisabled} {
+					if scenario == "wrong order" {
+						status = iamv1.AccessKeyEnabled
+					}
+					requestID := fmt.Sprintf("ui-access-key-status-%d", index)
+					if scenario == "reused request" {
+						requestID = "ui-access-key-create-1"
+					}
+					invoke(http.MethodPost, "/browser-key-1:set-status", iamv1.SetAccessKeyStatusRequest{
+						AccessKeyResourceVersion: uint64(index + 1), Status: status, RequestID: requestID})
+				}
+				invoke(http.MethodPost, "/browser-key-1:delete", iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 4, RequestID: "ui-access-key-delete-1"})
+				invoke(http.MethodPost, "", iamv1.CreateAccessKeyRequest{UserResourceVersion: 2,
+					NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}}, RequestID: "ui-access-key-create-3"})
+				if scenario == "extra write" {
+					invoke(http.MethodPost, "/browser-key-1:delete", iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: 4, RequestID: "ui-access-key-delete-extra"})
+				}
+				if scenario == "Secret in detail" {
+					invoke(http.MethodGet, "/browser-key-1", nil)
+				}
+			}
+			if scenario != "missing read" {
+				invoke(http.MethodGet, "", nil)
+			}
+			if err := probe.check(7); (err == nil) != (scenario == "complete") {
+				t.Fatalf("browser lifecycle boundary result=%v", err)
+			}
+			var materials [][]byte
+			for _, key := range probe.keys {
+				materials = append(materials, key.secret)
+			}
+			probe.clear()
+			for _, material := range materials {
+				if !bytes.Equal(material, make([]byte, len(material))) {
+					t.Fatal("browser observation retained Secret bytes after cleanup")
+				}
+			}
+		})
+	}
+}
+
+func assertBrowserKeyApplicationRead(t *testing.T, ctx context.Context, database *pgx.Conn, endpoint, edgeAssertion string,
+	applicationID paasv1.ResourceID, account iamv1.AccountID, key browserIssuedAccessKey, want int) {
+	t.Helper()
+	var now time.Time
+	if err := database.QueryRow(ctx, "SELECT clock_timestamp()").Scan(&now); err != nil {
+		t.Fatal("read signed-request clock")
+	}
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		t.Fatal("generate signed-request nonce")
+	}
+	defer clear(nonce)
+	route := "/v1/applications/" + string(applicationID)
+	digest := sha256.Sum256(nil)
+	parameters := iamv1.AccessKeySignatureParameters{AccessKeyID: key.key.ID, InstallationID: "installation-process", Audience: iamv1.ProductPaaS,
+		SignedAt: now.Unix(), Nonce: processSecret(t, base64.RawURLEncoding.EncodeToString(nonce))}
+	canonical, err := iamv1.AccessKeySigningBytes(parameters, iamv1.AccessKeyHTTPRequest{Method: http.MethodGet,
+		Scheme: "https", Authority: "api.matrix.test:443", EscapedPath: "/api/paas" + route, BodyDigest: "sha256:" + hex.EncodeToString(digest[:])})
+	if err != nil {
+		t.Fatal("build typed signed-request input")
+	}
+	defer clear(canonical)
+	material, err := base64.RawURLEncoding.DecodeString(string(bytes.TrimPrefix(key.secret, []byte("mak1."))))
+	if err != nil || len(material) != 32 {
+		t.Fatal("invalid one-time browser key material")
+	}
+	defer clear(material)
+	mac := hmac.New(sha256.New, material)
+	_, _ = mac.Write(canonical)
+	authorization, err := iamv1.EncodeAccessKeyAuthorization(parameters, processSecret(t, base64.RawURLEncoding.EncodeToString(mac.Sum(nil))))
+	if err != nil {
+		t.Fatal("encode signed-request header")
+	}
+	header := authorization.CopyBytes()
+	defer clear(header)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+route, nil)
+	if err != nil {
+		t.Fatal("create signed application read")
+	}
+	request.Header.Set("Authorization", string(header))
+	request.Header.Set("X-Matrix-External-Origin", "https://api.matrix.test:443")
+	request.Header.Set("X-Matrix-External-Request-Target", "/api/paas"+route)
+	request.Header.Set("X-Matrix-External-Source-IP", "192.0.2.10")
+	request.Header.Set("X-Matrix-Edge-Assertion", edgeAssertion)
+	request.Header.Set("X-Real-IP", "192.0.2.10")
+	request.Header.Set("X-Forwarded-For", "192.0.2.10")
+	response, err := processHTTPClient().Do(request)
+	if err != nil {
+		t.Fatal("signed application read unavailable")
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, iamv1.MaxRequestBytes+1))
+	defer clear(body)
+	if err != nil || int64(len(body)) > iamv1.MaxRequestBytes || response.StatusCode != want {
+		t.Fatalf("browser-issued key application status=%d want=%d", response.StatusCode, want)
+	}
+	if want == http.StatusOK {
+		var application paasv1.Application
+		if json.Unmarshal(body, &application) != nil || paasv1.ValidateApplication(application) != nil ||
+			application.Metadata.ID != applicationID || string(application.Metadata.Scope.TenantID) != string(account) {
+			t.Fatal("browser-issued key read the wrong application or tenant")
+		}
+	}
 }
 
 func checkAccessKeyBrowserRecovery(value browserResponseLossObservation, method, mutationPath, readPath string) error {
@@ -5162,41 +5730,282 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	return protected
 }
 
+// Unlike attachment recovery, this journey starts with no Role. The browser
+// creates its trust, sets a ceiling and attaches a positive policy before a
+// member assumes it. A separate API-issued sibling proves exact revocation
+// does not revoke another session or alter the Role's authority.
+func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn,
+	root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer string,
+	start func(string, []string) *childProcess) []string {
+	t.Helper()
+	const loginName, roleName = "browser.role.lifecycle", "Browser lifecycle role"
+	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser Role member", initialDeveloperPassword, "browser-role-member")
+	initial := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), initialDeveloperPassword, "browser-role-first-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword, changedDeveloperPassword, "browser-role-first-password")
+	member := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), changedDeveloperPassword, "browser-role-source")
+	createPaaSApplication(t, paasEndpoint, ownerBearer, "browser-role-application", "browser-role-application", "browser-role-application", http.StatusCreated)
+	// The positive attachment includes Audit, while the selected PaaSViewer
+	// boundary does not. The visible Audit denial therefore proves a real
+	// boundary intersection, not just the absence of any positive grant.
+	policyResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser Role positive reads", RequestID: "browser-role-positive-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{
+				{SID: "applications", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}}},
+				{SID: "audit", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionAuditRecordRead},
+					Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAuditRecord, Match: iamv1.PolicyResourceAnyInAuthority}}},
+			}},
+	})
+	var positive iamv1.PolicyDetail
+	if policyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(policyResponse.Body), &positive) != nil || iamv1.ValidatePolicyDetail(positive) != nil {
+		t.Fatalf("prepare browser Role positive policy status=%d", policyResponse.Status)
+	}
+	var initialRoles int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.roles WHERE tenant_id=$1`, user.AccountID).Scan(&initialRoles); err != nil || initialRoles != 0 {
+		t.Fatal("normal Role browser fixture did not start without Roles")
+	}
+	journey := &browserRoleRevocationProbe{account: user.AccountID, user: user.ID, sessionRevoke: true,
+		denyPath: "/api/audit/v1/records:query", denyMethod: http.MethodPost}
+	var setupMu sync.Mutex
+	setupWrites := make(map[string]int)
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, func(upstream http.Handler) http.Handler {
+			handler := journey.wrap(upstream)
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				key := ""
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/api/iam/v1/roles":
+					key = "create"
+				case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/iam/v1/roles/") && strings.HasSuffix(r.URL.Path, "/permission-boundary"):
+					key = "boundary"
+				case r.Method == http.MethodPost && r.URL.Path == "/api/iam/v1/policy-attachments":
+					key = "attachment"
+				}
+				if key != "" {
+					setupMu.Lock()
+					setupWrites[key]++
+					setupMu.Unlock()
+				}
+				handler.ServeHTTP(w, r)
+			})
+		})
+	defer closeBrowser()
+	configured := filepath.Join(temporary, "browser-role-lifecycle-configured")
+	t.Logf("ROLE_LIFECYCLE_BROWSER_FIXTURE url=%s/console/access/roles/ marker=%s; admin creates CUSTOMER Role name=%q trusting only USER=%s, explicitly sets boundary=%s and attaches policy=%s (%q); no Role has been API-created; use the existing changed admin password",
+		server.URL, configured, roleName, user.ID, iamv1.SystemPolicyPaaSViewer, positive.Policy.ID, positive.Policy.DisplayName)
+	waitForBrowserMarker(t, ctx, ui, configured, "page-created Role, trust, boundary and attachment")
+	setupMu.Lock()
+	configuredExactly := len(setupWrites) == 3 && setupWrites["create"] == 1 && setupWrites["boundary"] == 1 && setupWrites["attachment"] == 1
+	setupMu.Unlock()
+	if !configuredExactly {
+		t.Fatal("Role setup did not come from its three exact browser commands")
+	}
+	var roleID iamv1.RoleID
+	if err := database.QueryRow(ctx, `SELECT id FROM iam.roles WHERE tenant_id=$1 AND name=$2`, user.AccountID, roleName).Scan(&roleID); err != nil {
+		t.Fatal("read page-created Role identity")
+	}
+	rolePath := "/v1/roles/" + string(roleID)
+	var access iamv1.RoleAccess
+	response := performJSON(t, http.MethodGet, iamEndpoint+rolePath, ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &access) != nil || iamv1.ValidateRoleAccess(access) != nil ||
+		access.Role.ID != roleID || access.Role.AccountID != user.AccountID || access.Role.Name != roleName || access.Role.ResourceVersion != 2 ||
+		access.Role.Management != iamv1.RoleCustomerManaged || access.Role.Status != iamv1.RoleActive || len(access.PolicyAttachments) != 1 ||
+		access.PolicyAttachments[0].PolicyID != positive.Policy.ID {
+		t.Fatal("page-created Role does not have the exact identity, revision and positive policy")
+	}
+	trust := access.TrustVersion.Document
+	if len(trust.Statements) != 1 || trust.Statements[0].Effect != iamv1.PolicyAllow ||
+		len(trust.Statements[0].Principals) != 1 || trust.Statements[0].Principals[0] != (iamv1.TrustPrincipal{Type: iamv1.PrincipalUser, ID: user.ID}) {
+		t.Fatal("page-created Role trust is not limited to the original member")
+	}
+	var boundary iamv1.RolePermissionBoundary
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath+"/permission-boundary", ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &boundary) != nil || iamv1.ValidateRolePermissionBoundary(boundary) != nil ||
+		boundary.RoleID != roleID || boundary.AccountID != user.AccountID || boundary.ResourceVersion != 2 || boundary.Policy == nil ||
+		boundary.Policy.PolicyID != iamv1.SystemPolicyPaaSViewer {
+		t.Fatal("page-created Role lacks its independently selected ceiling")
+	}
+	assumePolicyResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Assume browser-created Role", RequestID: "browser-role-assume-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "assume", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRoleAssume},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceExact, ID: string(roleID)}}}}}})
+	var assumePolicy iamv1.PolicyDetail
+	if assumePolicyResponse.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(assumePolicyResponse.Body), &assumePolicy) != nil || iamv1.ValidatePolicyDetail(assumePolicy) != nil {
+		t.Fatal("prepare exact assumption authority for the page-created Role")
+	}
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, user.ID, assumePolicy.Policy.ID, "browser-role-assume-grant")
+	journey.mu.Lock()
+	journey.role = roleID
+	journey.mu.Unlock()
+	assumedMarker := filepath.Join(temporary, "browser-role-lifecycle-assumed")
+	t.Logf("ROLE_LIFECYCLE_MEMBER url=%s/console/access/role-access/ login=%s@%s role=%s marker=%s; assume once with the existing changed developer password, observe Role/source/expiry, navigate through real SPA links to applications200 and Audit403, then pause",
+		server.URL, loginName, user.AccountID, roleID, assumedMarker)
+	waitForBrowserMarker(t, ctx, ui, assumedMarker, "actual Role assumption and independently scoped business reads")
+	journey.mu.Lock()
+	issued := journey.session
+	assumedExactly := !journey.invalid && journey.assumptions == 1 && journey.issued && journey.allowed && journey.denied && !journey.revoking
+	journey.mu.Unlock()
+	if !assumedExactly {
+		t.Fatal("Role lifecycle lacks actual browser issuance and allow/deny reads")
+	}
+	// A sibling is deliberately not the browser's credential. Its continuing
+	// access after the exact administrative command proves the revocation scope.
+	response = performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+		iamv1.AssumeRoleRequest{ResourceVersion: 2, RequestID: "browser-role-sibling-session"})
+	var sibling iamv1.AssumeRoleResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &sibling) != nil ||
+		iamv1.ValidateAssumeRoleResponse(sibling) != nil || sibling.Outcome != "APPLIED" || sibling.Session.ID == issued.ID ||
+		sibling.Session.RoleID != roleID || sibling.Session.SourceUserID != user.ID {
+		t.Fatal("prepare independent sibling RoleSession")
+	}
+	material := sibling.Credential.CopyBytes()
+	siblingBearer := string(material)
+	clear(material)
+	defer clear(response.Body)
+	for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session", paasEndpoint + "/v1/applications"} {
+		if response := performJSON(t, http.MethodGet, endpoint, siblingBearer, nil); response.Status != http.StatusOK {
+			t.Fatal("sibling RoleSession is not currently usable before exact revocation")
+		}
+	}
+	queryAudit(t, auditEndpoint, siblingBearer, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusForbidden)
+	finished := filepath.Join(temporary, "browser-role-lifecycle-finished")
+	t.Logf("ROLE_LIFECYCLE_REVOKE url=%s/console/access/roles/?id=%s role_session=%s sibling=%s marker=%s; administrator revokes only the exact browser Session through its existing session workspace; member then observes Role401/BLOCKED, explicitly validates/returns to original USER and sees applications403",
+		server.URL, roleID, issued.ID, sibling.Session.ID, finished)
+	waitForBrowserMarker(t, ctx, ui, finished, "exact administrative RoleSession revocation")
+	if err := journey.check(); err != nil {
+		t.Fatal(err)
+	}
+	var terminal iamv1.RoleSessionAccess
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath+"/sessions/"+string(issued.ID), ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &terminal) != nil ||
+		iamv1.ValidateRoleSessionAccess(terminal) != nil || terminal.Item.Session.ID != issued.ID || terminal.Item.Lifecycle != iamv1.RoleSessionRevoked ||
+		terminal.Item.RevokeCapability.Available {
+		t.Fatal("exact browser RoleSession is not terminally revoked")
+	}
+	for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session", paasEndpoint + "/v1/applications"} {
+		if response := performJSON(t, http.MethodGet, endpoint, siblingBearer, nil); response.Status != http.StatusOK {
+			t.Fatal("exact browser Session revocation affected its sibling")
+		}
+	}
+	var unchanged iamv1.RoleAccess
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath, ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &unchanged) != nil ||
+		!reflect.DeepEqual(access.Role, unchanged.Role) || !reflect.DeepEqual(access.TrustVersion, unchanged.TrustVersion) ||
+		!reflect.DeepEqual(access.PolicyAttachments, unchanged.PolicyAttachments) {
+		t.Fatal("exact Session revocation altered Role, trust or attachments")
+	}
+	targets := []struct {
+		action    auditv1.Action
+		kind      auditv1.TargetKind
+		id, actor string
+	}{
+		{auditv1.ActionIAMRoleCreated, auditv1.TargetRole, string(roleID), "principal-admin"},
+		{auditv1.ActionIAMRolePermissionBoundarySet, auditv1.TargetRole, string(roleID), "principal-admin"},
+		{auditv1.ActionIAMPolicyAttachmentCreated, auditv1.TargetPolicyAttachment, string(access.PolicyAttachments[0].ID), "principal-admin"},
+		{auditv1.ActionIAMRoleSessionIssued, auditv1.TargetRoleSession, string(issued.ID), string(user.ID)},
+		{auditv1.ActionIAMRoleSessionAdminRevoked, auditv1.TargetRoleSession, string(issued.ID), "principal-admin"},
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	for _, target := range targets {
+		var count int
+		var requestID string
+		if err := database.QueryRow(ctx, `SELECT count(*),COALESCE(min(event_document->>'requestId'),'') FROM iam.audit_outbox
+			WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document#>>'{target,id}'=$3`, user.AccountID, target.action, target.id).
+			Scan(&count, &requestID); err != nil || count != 1 || requestID == "" {
+			t.Fatal("browser Role command lacks one authoritative success fact")
+		}
+		matches := 0
+		query := auditv1.QueryRecordsRequest{PageSize: 100, Action: target.action}
+		for {
+			page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+			for _, record := range page.Records {
+				if record.Event.Target.ID != target.id {
+					continue
+				}
+				matches++
+				if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(user.AccountID) || record.Event.InstallationID != "" ||
+					record.Event.Actor.Type != auditv1.ActorUser || string(record.Event.Actor.ID) != target.actor || record.Event.Target.Kind != target.kind ||
+					record.Event.RequestID != requestID || record.Event.IAMDecisionID == "" || record.Event.Result != auditv1.ResultSucceeded {
+					t.Fatal("browser Role Audit attribution changed")
+				}
+			}
+			if page.NextCursor == "" {
+				break
+			}
+			query.Cursor = page.NextCursor
+		}
+		if matches != 1 {
+			t.Fatal("browser Role command has missing or duplicate Audit records")
+		}
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete || chain.TenantID != auditv1.TenantID(user.AccountID) {
+		t.Fatal("browser Role lifecycle lacks a complete tenant Audit chain")
+	}
+	t.Log("page-created Role/trust/boundary/positive attachment, real member assumption, allow/deny and exact administrative Session revocation retained the sibling and complete Audit chain")
+	return []string{initial.Credential, member.Credential, siblingBearer}
+}
+
 // This observer sees only requests through the actual browser relay. Setup and
 // the independent API postconditions do not pass through it. Keep only bounded
 // counts and private in-memory credential digests; never retain or log bearer
 // material, request bodies or successful response documents.
 type browserRoleRevocationProbe struct {
-	mu           sync.Mutex
-	account      iamv1.AccountID
-	user         iamv1.PrincipalID
-	role         iamv1.RoleID
-	mutationPath string
-	sourceDigest [sha256.Size]byte
-	roleDigest   [sha256.Size]byte
-	assumptions  int
-	issued       bool
-	invalid      bool
-	revoking     bool
-	allowed      bool
-	roleRejected bool
-	sourceRead   bool
-	sourceDenied bool
+	mu            sync.Mutex
+	account       iamv1.AccountID
+	user          iamv1.PrincipalID
+	role          iamv1.RoleID
+	mutationPath  string
+	sourceDigest  [sha256.Size]byte
+	roleDigest    [sha256.Size]byte
+	assumptions   int
+	issued        bool
+	invalid       bool
+	revoking      bool
+	allowed       bool
+	roleRejected  bool
+	sourceRead    bool
+	sourceDenied  bool
+	allowPath     string
+	denyPath      string
+	denyMethod    string
+	denied        bool
+	sessionRevoke bool
+	session       iamv1.RoleSession
+	revokeCount   int
+	revokeRequest string
 }
 
 func (probe *browserRoleRevocationProbe) wrap(upstream http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		assume := r.Method == http.MethodPost && r.URL.Path == "/api/iam/v1/roles/"+string(probe.role)+":assume"
 		digest := sha256.Sum256([]byte(r.Header.Get("Authorization")))
 		probe.mu.Lock()
+		assume := r.Method == http.MethodPost && r.URL.Path == "/api/iam/v1/roles/"+string(probe.role)+":assume"
+		revoke := r.Method == http.MethodPost && r.URL.Path == probe.mutationPath
+		var revokeInput []byte
+		if revoke && probe.sessionRevoke {
+			var err error
+			revokeInput, err = io.ReadAll(io.LimitReader(r.Body, iamv1.MaxRequestBytes+1))
+			_ = r.Body.Close()
+			defer clear(revokeInput)
+			if err != nil || int64(len(revokeInput)) > iamv1.MaxRequestBytes {
+				probe.invalid = true
+				probe.mu.Unlock()
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(revokeInput))
+		}
 		if assume {
 			probe.assumptions++
 			if probe.assumptions != 1 || probe.revoking || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
 				probe.invalid = true
 			}
 		}
-		if r.Method == http.MethodPost && r.URL.Path == probe.mutationPath {
-			if !probe.issued || !probe.allowed {
+		if revoke {
+			if !probe.issued || !probe.allowed || probe.denyPath != "" && !probe.denied {
 				probe.invalid = true
 			}
 			probe.revoking = true
@@ -5208,7 +6017,7 @@ func (probe *browserRoleRevocationProbe) wrap(upstream http.Handler) http.Handle
 			probe.mu.Unlock()
 		}
 
-		response := &browserRoleAssumptionResponse{browserPermissionResponse: browserPermissionResponse{ResponseWriter: w}, capture: assume}
+		response := &browserCredentialResponse{browserPermissionResponse: browserPermissionResponse{ResponseWriter: w}, capture: assume || revoke && probe.sessionRevoke}
 		upstream.ServeHTTP(response, r)
 		defer clear(response.document)
 		if !assume {
@@ -5231,18 +6040,55 @@ func (probe *browserRoleRevocationProbe) wrap(upstream http.Handler) http.Handle
 			clear(credential)
 			clear(authorization)
 			probe.issued = true
+			probe.session = result.Session
+			if probe.sessionRevoke {
+				probe.mutationPath = "/api/iam/v1/roles/" + string(probe.role) + "/sessions/" + string(result.Session.ID) + ":revoke"
+			}
 			if probe.roleDigest == probe.sourceDigest {
 				probe.invalid = true
 			}
 			return
 		}
-		if !probe.issued || r.Method != http.MethodGet {
+		if revoke && probe.sessionRevoke {
+			var request iamv1.RevokeRoleSessionRequest
+			var result iamv1.RevokeRoleSessionResponse
+			probe.revokeCount++
+			if response.status != http.StatusOK || response.overflow || probe.revokeCount != 1 ||
+				iamv1.DecodeRequest(bytes.NewReader(revokeInput), &request) != nil || iamv1.ValidateID("requestId", request.RequestID) != nil ||
+				iamv1.DecodeRequest(bytes.NewReader(response.document), &result) != nil || iamv1.ValidateRevokeRoleSessionResponse(result) != nil ||
+				result.Outcome != "APPLIED" {
+				probe.invalid = true
+				return
+			}
+			expected := probe.session
+			expected.Status, expected.RevokedAt = iamv1.SessionRevoked, result.Session.RevokedAt
+			if !reflect.DeepEqual(expected, result.Session) || result.Session.RevokedAt == nil {
+				probe.invalid = true
+			}
+			probe.revokeRequest = request.RequestID
+			return
+		}
+		if !probe.issued {
+			return
+		}
+		denyMethod := probe.denyMethod
+		if denyMethod == "" {
+			denyMethod = http.MethodGet
+		}
+		if probe.denyPath != "" && r.Method == denyMethod && r.URL.Path == probe.denyPath && digest == probe.roleDigest && !probe.revoking && response.status == http.StatusForbidden {
+			probe.denied = true
+		}
+		if r.Method != http.MethodGet {
 			return
 		}
 		if r.URL.Path == "/api/iam/v1/auth/me" && digest == probe.sourceDigest && probe.roleRejected && response.status == http.StatusOK {
 			probe.sourceRead = true
 		}
-		if r.URL.Path != "/api/paas/v1/applications" {
+		allowPath := probe.allowPath
+		if allowPath == "" {
+			allowPath = "/api/paas/v1/applications"
+		}
+		if r.URL.Path != allowPath {
 			return
 		}
 		if digest == probe.roleDigest {
@@ -5268,22 +6114,23 @@ func (probe *browserRoleRevocationProbe) check() error {
 	probe.mu.Lock()
 	defer probe.mu.Unlock()
 	if probe.invalid || probe.assumptions != 1 || !probe.issued || !probe.allowed ||
-		!probe.revoking || !probe.roleRejected || !probe.sourceRead || !probe.sourceDenied {
+		!probe.revoking || !probe.roleRejected || !probe.sourceRead || !probe.sourceDenied ||
+		probe.denyPath != "" && !probe.denied || probe.sessionRevoke && (probe.revokeCount != 1 || probe.revokeRequest == "") {
 		return errors.New("browser Role journey requires its own exact assumption, Role business200, administrator revocation, original Role401, source revalidation and source business403")
 	}
 	return nil
 }
 
-// Only the one-time assume response is copied, bounded and cleared. It still
-// streams unchanged to the browser, including through the response-loss relay.
-type browserRoleAssumptionResponse struct {
+// Credential observers explicitly select their bounded response. The bytes
+// still stream unchanged to the browser and the caller clears its copy.
+type browserCredentialResponse struct {
 	browserPermissionResponse
 	capture  bool
 	overflow bool
 	document []byte
 }
 
-func (response *browserRoleAssumptionResponse) Write(body []byte) (int, error) {
+func (response *browserCredentialResponse) Write(body []byte) (int, error) {
 	if response.capture && !response.overflow {
 		if int64(len(response.document))+int64(len(body)) > iamv1.MaxRequestBytes {
 			clear(response.document)
@@ -5299,10 +6146,21 @@ func (response *browserRoleAssumptionResponse) Write(body []byte) (int, error) {
 func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 	for _, scenario := range []string{"complete", "API-only setup", "wrong Role", "wrong source", "Role denied before revocation", "another Role bearer",
 		"returned different source", "source before validation", "source still privileged", "automatic reassumption",
-		"wrong account", "malformed issuance", "oversize issuance"} {
+		"wrong account", "malformed issuance", "oversize issuance", "complete session", "complete session Audit", "session wrong target", "session replay", "session missing deny", "session wrong deny method"} {
 		t.Run(scenario, func(t *testing.T) {
 			probe := &browserRoleRevocationProbe{account: "browser-account", user: "browser-member", role: "browser-role",
 				mutationPath: "/api/iam/v1/policy-attachments/browser-attachment:revoke"}
+			if strings.Contains(scenario, "session") {
+				probe.sessionRevoke = true
+				probe.allowPath, probe.denyPath = "/api/paas/v1/applications/allowed", "/api/paas/v1/applications/denied"
+				if scenario == "complete session Audit" || scenario == "session wrong deny method" {
+					probe.denyPath, probe.denyMethod = "/api/audit/v1/records:query", http.MethodPost
+				}
+			}
+			allowPath := probe.allowPath
+			if allowPath == "" {
+				allowPath = "/api/paas/v1/applications"
+			}
 			const source, roleBearer = "synthetic-source-browser-probe", "synthetic-role-browser-probe"
 			revoked := false
 			upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -5336,9 +6194,26 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 				case r.URL.Path == probe.mutationPath:
 					revoked = true
 					w.WriteHeader(http.StatusOK)
+					if probe.sessionRevoke {
+						session := probe.session
+						now := session.IssuedAt.Add(time.Second)
+						session.Status, session.RevokedAt = iamv1.SessionRevoked, &now
+						if scenario == "session wrong target" {
+							session.ID = "another-session"
+						}
+						outcome := "APPLIED"
+						if scenario == "session replay" {
+							outcome = "EQUAL_REPLAY"
+						}
+						if err := json.NewEncoder(w).Encode(iamv1.RevokeRoleSessionResponse{Outcome: outcome, Session: session}); err != nil {
+							t.Fatal("encode synthetic exact Session revocation")
+						}
+					}
 				case r.URL.Path == "/api/iam/v1/auth/me":
 					w.WriteHeader(http.StatusOK)
-				case r.URL.Path == "/api/paas/v1/applications":
+				case r.URL.Path == probe.denyPath && probe.denyPath != "":
+					w.WriteHeader(http.StatusForbidden)
+				case r.URL.Path == allowPath:
 					status := http.StatusForbidden
 					if r.Header.Get("Authorization") == "Bearer "+roleBearer {
 						status = http.StatusOK
@@ -5358,7 +6233,11 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 			handler := probe.wrap(upstream)
 			invoke := func(method, path, bearer string) {
 				t.Helper()
-				request := httptest.NewRequest(method, "http://browser.test"+path, nil)
+				var input io.Reader
+				if method == http.MethodPost && path == probe.mutationPath && probe.sessionRevoke {
+					input = strings.NewReader(`{"requestId":"browser-revoke-session"}`)
+				}
+				request := httptest.NewRequest(method, "http://browser.test"+path, input)
 				request.Header.Set("Authorization", "Bearer "+bearer)
 				recorder := httptest.NewRecorder()
 				handler.ServeHTTP(recorder, request)
@@ -5367,26 +6246,33 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 			if scenario != "API-only setup" {
 				invoke(http.MethodPost, "/api/iam/v1/roles/browser-role:assume", source)
 			}
-			invoke(http.MethodGet, "/api/paas/v1/applications", roleBearer)
+			invoke(http.MethodGet, allowPath, roleBearer)
+			if probe.denyPath != "" && scenario != "session missing deny" {
+				method := http.MethodGet
+				if scenario == "complete session Audit" {
+					method = http.MethodPost
+				}
+				invoke(method, probe.denyPath, roleBearer)
+			}
 			invoke(http.MethodPost, probe.mutationPath, "synthetic-admin-browser-probe")
 			currentRole := roleBearer
 			if scenario == "another Role bearer" {
 				currentRole = "another-role-bearer"
 			}
-			invoke(http.MethodGet, "/api/paas/v1/applications", currentRole)
+			invoke(http.MethodGet, allowPath, currentRole)
 			if scenario == "automatic reassumption" {
 				invoke(http.MethodPost, "/api/iam/v1/roles/browser-role:assume", source)
 			}
 			if scenario == "source before validation" {
-				invoke(http.MethodGet, "/api/paas/v1/applications", source)
+				invoke(http.MethodGet, allowPath, source)
 			}
 			currentSource := source
 			if scenario == "returned different source" {
 				currentSource = "another-source-bearer"
 			}
 			invoke(http.MethodGet, "/api/iam/v1/auth/me", currentSource)
-			invoke(http.MethodGet, "/api/paas/v1/applications", currentSource)
-			if err := probe.check(); (err == nil) != (scenario == "complete") {
+			invoke(http.MethodGet, allowPath, currentSource)
+			if err := probe.check(); (err == nil) != (scenario == "complete" || scenario == "complete session" || scenario == "complete session Audit") {
 				t.Fatalf("browser credential boundary result=%v", err)
 			}
 		})
@@ -5396,7 +6282,7 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 func TestRoleBrowserResponseObservationPreservesTransportAndBoundsMaterial(t *testing.T) {
 	for _, capture := range []bool{false, true} {
 		recorder := httptest.NewRecorder()
-		response := &browserRoleAssumptionResponse{browserPermissionResponse: browserPermissionResponse{ResponseWriter: recorder}, capture: capture}
+		response := &browserCredentialResponse{browserPermissionResponse: browserPermissionResponse{ResponseWriter: recorder}, capture: capture}
 		response.Header().Set("Cache-Control", "no-store")
 		response.WriteHeader(http.StatusCreated)
 		first := []byte("synthetic-observation-material")
