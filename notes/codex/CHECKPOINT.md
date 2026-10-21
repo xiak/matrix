@@ -6,18 +6,22 @@
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   Repository-local identity is `Xiak <Jellal@aliyun.com>`.
-- Active bounded goal: AccessKey and same-account Role real-console closure,
+- Blocked, incomplete bounded goal: AccessKey and same-account Role real-console closure,
   necessary fixes, independent verification and cleanup of unused own resources.
   `IAM/FEAT-IAM-010-console.md` owns K1/K2 and R1/R2;007/006 retain credential
   and Role contracts. Do not reopen accepted permission-aware work or mark
   the overall IAM matrix complete.
 - Latest pushed code candidate: `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`.
-  Its Verification39604675084 attempt1 is API-confirmed completed/success,
-  exactSHA/all19jobs at2026-10-21 13:33:26UTC. Four precheck logs are independently
-  verified: console79files/2062tests+8Node and324export/embed match. Authority
-  per-root/package full-log closure remains with the existing Test Expert:
+  Its Verification39604675084 attempt1 is independently CLOSED SUCCESS,
+  exactSHA/all19jobs at2026-10-21 13:33:26UTC. The Test Expert completed all19
+  necessary logs74,585,478bytes/156segments;14lanes/57required roots and33JSON
+  packages passed.1164Test identities agree:1157PASS+7Postfix-absent childSKIP,
+  not real mail acceptance. Console79files/2062tests+8Node and324export/embed
+  match.011 owns the full evidence and limits; no new browser/signing acceptance:
   https://github.com/xiak/matrix/actions/runs/39604675084 .
-  Continue the existing Test Expert's single monitor; no new monitor or chats.
+  Do not refetch this closed tuple's jobs/logs. Retain the existing Test Expert's
+  single monitor; no new monitor or chats. Remaining real page actions are still
+  blocked by the original execution tool's action-time confirmation requirement.
 - 0884 changes only the existing Role browser observer and010: after real
   page-issued Role application200 and observed admin revocation, the first
   exact same-credential GET401 may come from Applications, the implemented

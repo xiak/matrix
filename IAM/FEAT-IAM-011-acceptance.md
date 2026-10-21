@@ -41,13 +41,17 @@
 | 边界 | 固定对象与当前结论 |
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
-| 最近独立CI通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job已由GitHub API核实全部成功，前端完整日志已独立核验，authority细项日志继续由测试owner收口。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
+| 最近独立CI通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
 
-固定`e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`的[Verification 39604675084](https://github.com/xiak/matrix/actions/runs/39604675084) attempt1已由GitHub API核实精确SHA及`completed/success`，十九项job全部成功，2026-10-21 13:33:26UTC终态。测试owner已独立核验四项前置job的完整日志；console为79文件2062项组件测试、8项Node检查、双production及嵌入324文件一致性通过。十四条authority lane均成功，但完整日志逐根/包统计尚在收口，不从476复制数量。此片修复test-only源码改变build fingerprint后遗漏重建交付的问题，保留旧失败终态；没有改变生产交互/API/SQL/profile。当前代码CI通过不等于010中尚未执行的Key/Role页面通过。
+固定`e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`的[Verification 39604675084](https://github.com/xiak/matrix/actions/runs/39604675084) attempt1已由测试owner独立封存为`completed/success`，精确SHA及十九项job全部成功，2026-10-21 13:33:26UTC终态。370个step为175成功、195项矩阵设计跳过，没有其他跳过、失败或取消。十九份必要日志共74,585,478字节、156段，连续Range、长度、严格UTF-8及保留BOM重编码均核验一致；十四条authority lane的57个必跑根均实际RUN/PASS一次。1164个Test身份的JSON/plain终态及Test耗时一致：1157通过、7个真实邮件子例因缺少专用Postfix明确跳过，不能据此接受真实邮件投递。33次JSON包调用全通过；包级两种显示口径有10处1毫秒、2处2毫秒差异，分别保留，不混同于Test终态差异。
+
+本准确源码的独立进程根234.29秒、Profile推进15.28秒、TOTP备份16.03秒、IAM HTTP163.36秒及三条Session52.72/52.16/37.71秒均通过。单前驱48.04秒，IAM86→87保留数据完整摘要精确出现一次；四产品provider100.24秒，真实协议、终止清理、授权撤销、隔离和Audit完整摘要精确出现一次。容量31条指标、3100样本、零失败，已记录的三个OOM计数均零；这仍只是受限夹具证据，不是生产SLO，也不证明Issue #6旧Observe超时的唯一根因已解决。
+
+前端79文件2062项组件测试、8项Node检查、234组对比度以及双production/嵌入324文件一致性通过；33条既有act警告保留。Go93包、node进程及安装PG夹具均通过，14个Stop和36个Post步骤全部成功；CI清理步骤不替代独立现场清点。此tuple全量取证闭合，不重复读取同attempt日志。该片只修复test-only源码改变build fingerprint后遗漏重建交付的问题，没有改变生产交互/API/SQL/profile；旧失败终态不回填。本CI未执行真实浏览器或签名opt-in门禁，不接受010中尚未完成的Key/Role及精确Session页面路径，也不继承5935的签名发布。
 
 固定`4760581e035ec299003ef8f777b777feda38a218`的[Verification 39599299467](https://github.com/xiak/matrix/actions/runs/39599299467) attempt1已独立封存为`completed/success`，2026-10-21 12:55:34UTC终态，十九项job全部成功。370个step中175成功、195项为矩阵设计跳过，没有其他跳过、失败或取消；十四条lane的57个必跑根均实际通过。十九份必要日志共74,580,732字节完成连续Range、长度、严格UTF-8及BOM重编码校验，其中storage的56,009,188字节全文及11根通过结果完整核对。1164个Test身份的JSON/plain一致：1157通过、7个真实邮件子例因缺少专用Postfix明确跳过，不能据此声称真实邮件投递已验收；33个JSON包全通过。容量31指标、3100样本、零失败，三个OOM计数均零；这是受限夹具结果而非生产SLO。全部14个Stop及36个Post步骤成功，job/step计时独立复算无差异。本tuple取证闭合，不重复读取同attempt日志。
 
