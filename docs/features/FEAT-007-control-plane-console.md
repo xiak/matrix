@@ -932,6 +932,15 @@ are not original-command completion evidence, and no completion route is
 invented. Every retry retains its target/version/request ID and is independently
 authorized by the server. Full reload or a different authentication owner must
 not reconstruct or silently replay a lost intent from current directory facts.
+Starting a new metadata or version write still requires the current exact
+Policy capability and revision. Equal retry is a different recovery boundary:
+after the current Session/Account/principal owner completes authority recheck,
+it replays only the frozen original request and does not require that the target
+remain readable or eligible for a new write. This is required when a committed
+whole-Policy retirement removes the target from ACTIVE detail reads. A current
+403 on the retried original request keeps UNKNOWN locked; it never authorizes a
+replacement request. Read-only observation of a PolicyVersion UNKNOWN likewise
+does not depend on version-write capability and never proves original completion.
 The same controlled browser profile retains one closed metadata-only recovery
 record per Account and principal: original Policy metadata, default-version
 digest, operation, proposed display name when applicable, resource revision,
