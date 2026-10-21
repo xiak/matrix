@@ -11,9 +11,9 @@
   `IAM/FEAT-IAM-010-console.md` owns K1/K2 and R1/R2;007/006 retain credential
   and Role contracts. Do not reopen accepted permission-aware work or mark
   the overall IAM matrix complete.
-- Latest pushed code candidate: `2888c9c0812eb84abb755239e1d8938d41829b91`.
-  Its Verification39603659401 attempt1 is running:
-  https://github.com/xiak/matrix/actions/runs/39603659401 .
+- Latest pushed code candidate: `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`.
+  Its Verification39604675084 attempt1 is running:
+  https://github.com/xiak/matrix/actions/runs/39604675084 .
   Continue the existing Test Expert's single monitor; no new monitor or chats.
 - 0884 changes only the existing Role browser observer and010: after real
   page-issued Role application200 and observed admin revocation, the first
@@ -48,8 +48,21 @@
   in two existing component test files. Preserve consumer owner/denial cases;
   stateful double-Key rotation/quota replacement and exact Session revocation
   with surviving sibling pass54tests21.42s, Node22 typecheck/target ESLint,
-  default process/architecture race3.980/2.510s and vet. No production UI or
-  assets changed; do not inherit donor or actual browser acceptance.
+  default process/architecture race3.980/2.510s and vet. No production UI logic
+  changed; do not inherit donor or actual browser acceptance.
+- 2888/Verification39603659401 attempt1 is CLOSED FAILURE. Console job
+  119234220810 rejected stale embedded bytes before Vitest, so there is no
+  CI component-test result. Go/node/installation-PG succeeded, the authority
+  matrix skipped and final summary failed. Do not rerun/backfill this object.
+- e22 corrects only the missed generated delivery and existing documentation.
+  The unchanged build fingerprint recursively includes test source; test-only
+  changes still require a full own-branch export. Node22/npm11.6.4,2GiB and
+  two workers produced324 byte-identical unset/0 exports, then original sync
+  and exact comparison passed.32 prior files are unchanged and292 differ
+  only by build ID; all324 map exactly. Eight Node checks, GoUI/architecture
+  race7.247/2.291s and vet passed. No hash algorithm, production interaction,
+  build gate, API/SQL/profile or runtime permission changed. Do not declare
+  e22 independent CI success until its exact run completes.
 - UI candidate `da9426f608a99d564d573d3d4153714ba1198ada` selectively consumes
   UX fixed `ceb38eab2cb3075573dcea640d9ca5d38e097a3e`, not donor assets or
   acceptance. Platform Applications/IAM/Audit use implemented SPA destinations;
