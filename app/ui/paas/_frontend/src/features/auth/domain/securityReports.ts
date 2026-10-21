@@ -1,5 +1,6 @@
 import type { AccessKeyAuthorizationObservation, AccessKeyNetworkRestrictions } from "./accessKeyNetwork";
 import type { AccessKeyCredentialState } from "./accessKeys";
+import type { ActionCapability } from "./accounts";
 
 export const accountSecurityReportLimits = {
   users: 1_000,
@@ -88,6 +89,11 @@ export type AccountSecurityReport = {
   coverage: SecurityReportCoverage[];
   users: SecurityReportUser[];
   accessKeys: SecurityReportAccessKey[];
+};
+
+export type AccountSecurityReportAccess = {
+  report: AccountSecurityReport;
+  capabilities: ActionCapability[];
 };
 
 export type AccountSecurityReportCreation = {

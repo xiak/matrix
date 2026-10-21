@@ -15,8 +15,8 @@ import styles from "./AccountAccessRenderer.module.css";
 const emptyDocument: AccountPolicyDocument = { languageVersion: "1", scope: "TENANT", statements: [] };
 const initialText = JSON.stringify(emptyDocument, null, 2);
 
-export function PolicyCreateRecovery({ client, pending, onDone, onInspect }: {
-  client: PolicyCreateClient; pending: PolicyCreateIntent; onDone(id: string): void; onInspect?(): void;
+export function PolicyCreateRecovery({ authorizationPending = false, client, pending, onDone, onInspect }: {
+  authorizationPending?: boolean; client: PolicyCreateClient; pending: PolicyCreateIntent; onDone(id: string): void; onInspect?(): void;
 }) {
   const t = useTranslations("LivePolicyCreate");
   const heading = useRef<HTMLHeadingElement>(null);
@@ -36,7 +36,7 @@ export function PolicyCreateRecovery({ client, pending, onDone, onInspect }: {
     <p className={styles.note}>{t("unknownExplanation")}</p>
     {feedback ? <Alert status="warning">{feedback}</Alert> : null}
     <div className={styles.actions}>
-      <Button variant="secondary" disabled={busy} onClick={() => void retry()}>{t("retryOriginal")}</Button>
+      <Button variant="secondary" disabled={busy || authorizationPending} onClick={() => void retry()}>{t("retryOriginal")}</Button>
       {onInspect ? <Button variant="ghost" onClick={onInspect}>{t("inspectDirectory")}</Button> : null}
     </div>
     {!busy ? <div className={styles.policyVersionAcknowledge}>
@@ -49,7 +49,7 @@ export function PolicyCreateRecovery({ client, pending, onDone, onInspect }: {
 export function LivePolicyCreationWizard(props: {
   preview: true; onBack(): void; client?: never; onDone?: never;
 } | {
-  preview?: false; client: PolicyCreateClient; onBack(): void; onDone(id: string): void;
+  authorizationPending?: boolean; preview?: false; client: PolicyCreateClient; onBack(): void; onDone(id: string): void;
 }) {
   const t = useTranslations("LivePolicyCreate");
   const { onBack } = props;
@@ -79,7 +79,7 @@ export function LivePolicyCreationWizard(props: {
   }, [review]);
   const inspect = () => onBack();
   if (client?.pending) return <WorkspaceDetail title={t("title")} onBack={inspect}>
-    <PolicyCreateRecovery client={client} pending={client.pending} onDone={setCreatedId} onInspect={inspect} />
+    <PolicyCreateRecovery authorizationPending={props.preview ? false : props.authorizationPending} client={client} pending={client.pending} onDone={setCreatedId} onInspect={inspect} />
   </WorkspaceDetail>;
   if (previewComplete) return <WorkspaceDetail title={t("previewTitle")} onBack={onBack}>
     <Card><Card.Body className={styles.catalogNotice}>
@@ -114,7 +114,7 @@ export function LivePolicyCreationWizard(props: {
     setReview({ name: displayName, document, directory: mode === "visual" ? visualDirectory! : undefined });
   };
   const create = async () => {
-    if (!review || busy) return;
+    if (!review || busy || !props.preview && props.authorizationPending) return;
     if (props.preview) { setPreviewComplete(true); return; }
     setBusy(true); setError(null);
     try {
@@ -146,7 +146,7 @@ export function LivePolicyCreationWizard(props: {
         </div>
         {error ? <Alert status="danger" tabIndex={-1}>{error}</Alert> : null}
         <div className={styles.actions}>
-          <Button type="submit" disabled={busy}>{review ? t(props.preview ? "finishPreview" : "confirmCreate") : t("review")}</Button>
+          <Button type="submit" disabled={busy || Boolean(review && !props.preview && props.authorizationPending)}>{review ? t(props.preview ? "finishPreview" : "confirmCreate") : t("review")}</Button>
           <Button type="button" variant="secondary" disabled={busy} onClick={() => { if (review) { returningFromReview.current = true; setReview(null); setError(null); } else requestLeave(onBack); }}>{review ? t("backToEdit") : t("cancel")}</Button>
         </div>
       </form>

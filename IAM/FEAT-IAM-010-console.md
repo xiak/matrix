@@ -46,6 +46,8 @@
 
 参考原则来自 [Tencent CAM 概览](https://cloud.tencent.com/document/product/598/17848)的模块级展示、[Google Console 权限查询](https://docs.cloud.google.com/iam/docs/testing-permissions)的当前主体/具体资源判断，以及 [Cloudscape 禁用与只读](https://cloudscape.design/patterns/general/disabled-and-read-only-states/)的状态区分；这些是设计依据，不是本产品运行证据，也不要求复制云厂商的角色名或整套产品。
 
+[Google Cloud 权限申请](https://docs.cloud.google.com/iam/docs/request-missing-permissions)在拒绝信息中提供申请入口：已配置联系人及通知时可发送请求，否则复制请求交给已有受理渠道；[Microsoft Entra](https://learn.microsoft.com/en-us/entra/id-governance/entitlement-management-request-access)则以管理员预先发布的访问包和相应申请规则承接请求。它们证明“拒绝后给出可执行的求助路径”，不代表任意403都能申请或自动获权。本片不新增审批系统；未接入真实受理渠道时明确联系管理员并提供安全诊断。
+
 ```text
 当前有效 Session / repository owner
     └─ IAM 当前权威快照 + 单一 PDP
@@ -65,7 +67,7 @@
 | 当前操作能力 | IAM 对准确 action/resource 的 `available` 与封闭 `restrictionReason`；服务端仍是最终权威 | 读允许不推出写允许，SELF 不推出 AccessKey 权限，角色名不推出菜单；能力不是可缓存的操作许可 |
 | 当前读取结果 | loading、ready、成功且为空、forbidden、unsupported、unavailable；凭据失效仍归现有身份 owner | 权限查询失败不是 DENY，目录失败不是零行，旧成功结果不是当前授权；UNKNOWN 写入不是可重新提交的读取错误 |
 
-导航保留产品发现与本人入口。账号级管理菜单只消费准确入口能力；已知精确目标的详情读取不得依赖目录可见性，目录拒绝也不能证明该类型所有实例都不可读。AccessKey 的本人入口查询准确当前 USER；其他 USER 从已授权目录或已知目标进入，不能要求全局 User.list、扫描所有用户来推断权限，或把本人拒绝放大为对所有用户的拒绝。安全报告的生成是 ACCOUNT 动作，读取/下载是准确 SECURITY_REPORT 动作；分析器的创建/列表是 ACCOUNT 动作，读取/更新是准确 ACCESS_ANALYZER 动作，不能伪造一个 account-global read 能力。服务角色模板目录和当前账号关系目录分别授权，任何一块可用时保留该块，不以 AND 依赖整页关闭。
+导航保留产品发现与本人入口。账号级管理菜单只消费准确入口能力；已知精确目标的详情读取不得依赖目录可见性，目录拒绝也不能证明该类型所有实例都不可读。AccessKey 的本人入口查询准确当前 USER；其他 USER 从已授权目录或已知目标进入，不能要求全局 User.list、扫描所有用户来推断权限，或把本人拒绝放大为对所有用户的拒绝。已知User的“查看密钥”只是读取入口：选择后调用实际目标的Key目录，分别处理loading、403和成功；User.read不证明Key.list。创建能力继续由成功的 `AccessKeyList.capabilities` 唯一提供，每把Key的操作由其 `AccessKeyAccess` 提供；不在 `UserAccess` 复制Key能力。安全报告的生成是 ACCOUNT 动作，读取/下载是准确 SECURITY_REPORT 动作；分析器的创建/列表是 ACCOUNT 动作，读取/更新是准确 ACCESS_ANALYZER 动作，不能伪造一个 account-global read 能力。服务角色模板目录和当前账号关系目录分别授权，任何一块可用时保留该块，不以 AND 依赖整页关闭。
 
 CurrentIdentity 的固定入口集合沿既有十项增加九项，最终共十九项：当前 USER 的 `iam.access-key.list`；当前 ACCOUNT 的 `iam.access-analyzer.list/create`、`iam.security-report.create`、`iam.service-role-template.list`、`iam.service-linked-role.list`、`iam.security-settings.read/update`、`iam.policy.create`（斜线表示两个既有独立动作）。wire 名称与现有 action catalog 完全一致，不能为 UI 添加业务权限。服务端与客户端同时严格校验完整集合、重复项、目标归属和拒绝原因；缺失字段或非法响应使投影不可用，不填充 false 或 Allow。新集合只进行有界纯 PDP 求值，复用一次已认证权威快照，不逐菜单调用接口、不读取业务资源、不生成新的授权决定或成功审计事实。
 
@@ -77,13 +79,19 @@ P2 的只读响应边界沿现有 GET 详情扩展：`AccessAnalyzerDetail` 包�
 
 主视图和标签保持稳定标题，加载仅作用于数据区域；每个失败区域最多一个主状态和一个适用恢复动作。403 提供返回、已知安全上下文、授权后显式重新检查，不持续自动 Retry；临时故障提供唯一读取 Retry；unsupported 明确功能当前不可用，不宣称未开通。只有权威开通或委派结果才能显示对应引导。真正空目录才使用空状态和准确创建能力。当前有效 bearer 的401交给已有Session/RoleSession owner；密码/OTP错误不自行触发全局退出。隐藏入口不替代直接URL的友好拒绝，拒绝页不得泄露未经授权的目标名称、其他账号数据或确认对象存在。
 
+404 不能仅按状态码全部归为功能未接入。现有 `iam.route.notfound` 与 `iam.access-analyzer.not-found`、`iam.access-finding.not-found`、`iam.security-report.not-found` 等封闭错误码已区分路由与目标：明确路由缺失才显示功能不可用；具体目标404只说明当前目标不可用，请核对标识或访问范围，不确认其存在、已删除或未开通，也不据此重发原UNKNOWN命令。前端不得读取任意错误detail来推断原因。
+
 诊断复用现有 Problem 的稳定 code、status 和经过语法/长度校验的 requestId，以及客户端已经拥有的当前身份、当前账号与实际请求 action/resource；不展示任意 detail、原始响应、Bearer、Secret、OTP、cursor 或策略正文。没有真实权限申请渠道时只提供联系管理员和复制诊断，不生成假审批。正常 LIVE 页面移除“未回退 MOCK”等工程验收文案；显式预览标识、一次性秘密提示、危险操作说明及 UNKNOWN 结果警告继续保留。
 
 授权或身份变化后重新读取能力；不同 Account、User、RoleSession、Session 修订及 repository 之间不得共享旧结果。能力未知时禁用写入并显示正在确认/读取失败，不先显示可操作再闪退。既有非秘密原意图、UNKNOWN 围栏和完成回执独立保留；菜单改变、401/403、详情失败及重新登录不能清掉它们，更不能把“重新检查”实现成重放写请求。已完成操作的回执不因为后续资源读取失败而改写为失败。
 
+显式权限重查也覆盖正在展示的精确资源：即使十九项入口能力逐项不变，资源的更新或下载权仍可能已撤销，不能仅比较入口布尔值而保留旧详情能力。重查待完成期间关闭新写入，成功后重新读取当前目标的准确能力；旧读取迟到不得覆盖新结果。该失效边界只属于显式权限重查或身份变化，不把无关目录的分页/重试升级为全局重置，不丢失原命令和已完成回执。
+
+Finding的已知目标读取使用现有analyzerId与findingId二元路径，不要求Analyzer目录、父Analyzer详情或Finding目录权限；仍由准确Finding read及返回的archive/unarchive能力决定可读可操作范围。原UNKNOWN命令的后续等值请求即使收到403/409，也不能据此判定首次未生效或清除原requestId；首次确定拒绝与未知后的拒绝须区分，不能恢复为可提交全新意图的状态。
+
 ### 权限感知增量需求与切片
 
-P0 已有 UX/UI 固定候选，尚待本分支集成；P1/P2 后端投影已有下述证据，最终十九项客户端及组合验收仍未完成；P3 待验收。本表不重开或扩大此前已接受页面路径。
+P0 已选择性接入 UX/UI 固定源码并通过下述本地检查；P1/P2 后端投影已有下述证据，十九项客户端候选已集成但尚未通过最终接受；P3 已在原进程 owner 执行部分观察，完整组合尚未通过。本表不重开或扩大此前已接受页面路径。
 
 | 切片 | 需求和实现 owner | 必须通过的结果 |
 | --- | --- | --- |
@@ -94,13 +102,45 @@ P0 已有 UX/UI 固定候选，尚待本分支集成；P1/P2 后端投影已有�
 
 P1 固定 `3826eaf4b5628945dd210419fb96f743a5e13da1` 的十八项入口前置通过[独立 Verification39364150243](https://github.com/xiak/matrix/actions/runs/39364150243) attempt1，当前终态为 `completed/success`。现有 `service_test.go` 逐项证明无授权拒绝、准确 Allow、显式 Deny、边界限制、强制改密、他人目标不扩权、Root 密钥保护以及投影不持久化额外决定。API/usecase/authority/HTTP/architecture 本地测试及相关 vet 已通过。既有 `TestIAMAccessKeyPostgres` 在专属受限 PostgreSQL18 上真实通过 83.86s，其中新增跨副本入口矩阵 1.28s：SELF 无 Allow 拒绝，只有他人目标时本人入口仍拒绝，模板读取不授予关系目录读取，本人仅 list 能读取真实空目录而没有 create/User.list，撤权后另一副本的 me 与实际请求同时关闭。该证据只覆盖前置后端候选；最终客户端必须一次性消费十九项，不能继承未执行的新组合浏览器验收，也不能单独发布十八项后端。
 
-P2 在原 API/OpenAPI、用例和 GET owner 完成最终十九项以及四类具体资源投影；完整数组、重复/替换动作、错误目标类别和矛盾拒绝原因均由 Go 与发布 schema 检查，跨字段真实 ID 绑定仍由严格运行时校验负责。Policy 创建/管理能力另证明正向 Allow、委派权限上限和安装身份保护互相独立；策略正文、报告 canonical/digest/CSV 与原变更回执不含当前 UI 权限。相关 API/usecase/HTTP/architecture、全仓编译、vet 和聚焦 race 均通过；数据库/readiness/发布 profile 未变。
+P2 固定 `12f706780a1400068e85cb9481e111d566c5ba31` 在原 API/OpenAPI、用例和 GET owner 完成最终十九项以及四类具体资源投影；完整数组、重复/替换动作、错误目标类别和矛盾拒绝原因均由 Go 与发布 schema 检查，跨字段真实 ID 绑定仍由严格运行时校验负责。Policy 创建/管理能力另证明正向 Allow、委派权限上限和安装身份保护互相独立；策略正文、报告 canonical/digest/CSV 与原变更回执不含当前 UI 权限。相关 API/usecase/HTTP/architecture、全仓编译、vet 和聚焦 race 均通过；数据库/readiness/发布 profile 未变。[Verification39367958497](https://github.com/xiak/matrix/actions/runs/39367958497) attempt1 已独立封存为 `completed/success`：精确SHA、十九项job、十四lane的57个实际根及33个JSON包均通过，1164个Test的JSON/plain终态一致。该固定源码的前端仍为77文件1999项，不混入后继本地2010项；Postfix缺失的七个邮件子例与默认关闭的十四个浏览器根不计真实运行。不得用本片CI代替最终十九项客户端、组合浏览器或5935之后的新签名验收。
 
 专属 PostgreSQL18 的完整 `TestIAMSecurityReportPostgres` 通过7.90s，新增精确读取路径0.25s：仅 read 可读取已知报告但没有生成或下载能力，精确 download 授予/撤销改变当前能力而正文逐字不变，实际下载及跨报告请求继续拒绝。`TestIAMPolicyAuthorityStoragePostgres` 的发布、元数据更新和终态删除三条受影响流程在新库定向通过56.49s，证明已知 Policy ID 的读取不依赖目录、read 不授予版本/修改权、撤权即时生效及既有并发/回滚边界。首轮全量探针中两个旧 GET 测试消费者未适配新包装而失败；修复后上述定向复验通过，不将首轮记为全量成功。该证据不是新 UI、完整 P2 独立 CI 或签名发布组合的验收。
 
-`TestIAMAccessAnalyzerPostgres` 使用同一专属 PostgreSQL18、Windows 真实后台 worker 和任务专属 SSH 转发；新增精确 Analyzer/Finding 读取子用例通过21.73s，证明没有目录权限仍能读取准确对象，读取不授予更新/归档或底层目标操作，撤权后的下一请求关闭且持久 finding 不变。但父门禁在末尾持久状态核对触及原有三分钟期限，180.02s失败，不能登记为整项通过。未提高期限、缩减原断言或将其当作已定位的生产缺陷；完整原生 Linux 独立门禁仍待当前固定源码 CI 证明。后台进程和任务专属连接必须先结束，再清理不再使用的临时数据库、容器及转发。
+`TestIAMAccessAnalyzerPostgres` 使用同一专属 PostgreSQL18、Windows 真实后台 worker 和任务专属 SSH 转发；新增精确 Analyzer/Finding 读取子用例通过21.73s，证明没有目录权限仍能读取准确对象，读取不授予更新/归档或底层目标操作，撤权后的下一请求关闭且持久 finding 不变。但父门禁在末尾持久状态核对触及原有三分钟期限，180.02s失败，不能登记为整项通过。未提高期限、缩减原断言或将其当作已定位的生产缺陷。固定12f的[原生Ubuntu门禁](https://github.com/xiak/matrix/actions/runs/39367958497/job/118451321647)另有独立完整证据：Policy全根367.22s及194个子例均通过；Analyzer全根55.33s、精确读取子例1.80s通过；Report全根11.05s、精确读取子例0.58s通过。JSON/plain已逐项核对，不回填Windows探针或旧消费者首轮结果。后台进程和任务专属连接必须先结束，再清理不再使用的临时数据库、容器及转发。
 
 先跑受影响的 API/usecase、客户端解析和真实组件测试；固定提交后运行必要独立 CI，同时推进无契约冲突的下一片。真实 PostgreSQL 与浏览器使用独立命名、受限资源；不为纯文案变更重复完整离线生命周期，不以组件全绿替代最终真实页面。当前设计不改变授权规则、SQL/readiness、ServiceIdentity、Audit编码或数据库发布profile；若精确操作投影发现必须改变这些边界，先在本owner写明实际变化和相应门禁，再实施，不能仅为字段展示增加schema版本。
+
+P0 选择性采用 UX/UI 固定 `6f2f2b720e55d1b8bd5d2ab156dcd4c48671233e` 与必要修正 `7386cbeb34827d27294229f6c3600d257303ed98` 的十六个源码、测试和消息路径；替换原目录失败组件，不保留双实现。通用读取边界区分真实空态、403、未知路由、临时故障和会话失效，服务授权的两个来源保持独立；仅临时读取失败提供一个 Retry，原 UNKNOWN 命令、一次性秘密离页保护及危险提示不变。诊断只保留安全 requestId、状态和有界错误码，不展示原始 detail。没有真实受理渠道时不制造权限申请按钮。
+
+本分支在 Node22.22.2/npm11.6.4、单 worker/2GiB 下通过五个相关文件64项测试21.52s，另四个认证、账号页面和HTTP客户端文件566项103.35s通过；完整前端79文件2010项测试452.74s通过，覆盖共享HTTP诊断收紧的现有消费者。typecheck、变更路径 ESLint、architecture、234项主题对比及8项Node边界通过。嵌入资产从消费分支完整源码生成；两 worker 的生产 unset/0 导出得到324个逐字一致文件。Go UI/architecture race 通过。该本地证据不继承 donor 的全量结果，不接受最终十九项客户端、真实页面或签名产品组合。
+
+P3 在现有 `test/authorityprocess/process_e2e_test.go` 增加一个显式 opt-in 的 `TestIAMPermissionAwareConsoleBrowser`，复用受限真实进程和同源 relay：API准备普通User的本人Key读取、已知Policy/Analyzer/Report精确读取和仅模板目录权限；本人Key没有额外User.read/User.list。浏览器先观察一次准确Key GET的503及正常重试后的真实空态，再观察同一身份真实授予、撤销后的重新读取。授权阶段须从页面成功保存一次更严格的14天分析窗口，保持ACTIVE与REVIEW_ONLY；紧随写入的第一次Analyzer详情GET再注入一次503，必须保留已确认写入结果并独立重试读取，不能再写。核对准确版本推进及当前User的唯一outbox/Audit事实；不启用自动处置或扩大权限。撤销后同一Session的实际更新请求必须403，另行准确授予的其他User Key读取仍须可达，不能被本人入口false或User.list拒绝遮蔽。计数只保留既定路径/状态/阶段，不保存凭据或payload；成功数据与鉴权全部由实际服务提供，只允许上述一次页面业务变更。最终还核对其余资源及报告未变、原Session有效、准确附件状态、每条grant/revoke的唯一关联事实及Audit链。marker仅协调观察步骤，不能单独证明页面内容。当前仅编译、relay行为/race和架构检查通过；两处精确只读故障及写入计数探针的定向race通过3.533s。完整真实浏览器尚未运行，不计入验收。
+
+最终十九项客户端及四类精确详情已按[固定来源与采纳边界](../docs/adoption/FEAT-007-control-plane-console.md)选择性接入当前消费分支。保留本分支已有测试差异，不复制donor生成资产或继承其验收。后继固定`dc85855de`已接入Analysis/Report精确详情待完成围栏、Policy/Report读客户端刷新、同Session原UNKNOWN意图连续性、已知Finding直达和Report路由404分类；本分支回归与真实页面尚待完成，不能标记客户端已接受。
+
+| 当前检查边界 | 本分支实际证据 | 结论限制 |
+| --- | --- | --- |
+| P0既有基线 | 完整79文件2010项、两次生产导出324文件一致及Go UI/architecture race；详情见上段 | 证明该P0源码，不替代后继十九项客户端 |
+| 十九项与精确详情的首轮接入 | 三文件259项19.43s；五文件546项181.28s；后续读取恢复四文件429项257.03s；404分类五文件339项202.66s | 各次聚焦回归通过，原范围保留；不是最终全量客户端结果 |
+| 显式重查的中间候选 | 三个完整页面/读取边界文件301项170.52s；类型、架构、变更ESLint和234项主题对比通过 | 仅证明该阶段源码；后继精确详情与原意图修正另验 |
+| 共用403求助文案消费者 | 四文件264项首次运行150.15s：263通过、一项AccessKey整段文案断言失败；将其改为验证命名拒绝区域、求助说明、无Retry和创建禁用后，完整AccessKey文件27项11.80s通过 | 保留首次失败结果，不回退生产文案；后继修复仍需受影响回归 |
+| `dc85855de`的本分支消费组合 | 四个完整renderer测试文件343项227.13s通过；类型、架构、变更ESLint和234项主题对比通过；Node22.22.2、两worker的生产unset/0导出324文件逐字一致，嵌入同步校验通过 | 不继承donor344项；已打开Policy写流程仍有下述缺口，不标记最终组合接受 |
+| Finding拒绝文案的固定修正 | `e70c2d659`的本分支Analysis文件32项14.64s通过；浏览器监听、探针和relay三项真实根race3.750s通过 | 不把组件通过记作浏览器通过；Policy原意图与新写围栏仍须独立收口 |
+| Policy写入与原意图的固定修正 | `a13e336f7`连同必要修正`a453890e9`及Finding修正的四文件353项221.39s通过；后继`dae784524`异步锁修正的hook32项5.45s通过。完整无数据库authorityprocess/race3.998s与vet、Go UI/architecture race12.549s/3.348s通过 | 数据库opt-in默认跳过不计真实运行；最终资产、独立CI与两条实际页面路径另验，不继承donor结果 |
+| 最终消费源码与嵌入边界 | Node22.22.2、2GiB下最终typecheck/full lint通过，架构及234组主题对比通过；8项Node边界通过3.58s。两worker生产unset/0各生成59页，324文件逐字一致，嵌入同步与核对通过 | 只证明本分支最终组合构建；独立CI、权限感知与退役UNKNOWN真实页面仍待完成，不冒充签名发布验收 |
+| 真实浏览器夹具与探针 | 探针race3.641s、authorityprocess vet与diff检查通过；`dc85855de`组合的Go UI/architecture race分别13.864s/3.777s通过 | 首次Windows进程经SSH连接远端PG的真实根74.94s失败，停在PaaS安装验证HTTP超时，尚未进入页面；不修改超时或计为通过，继续用独立同机Linux进程组合核对 |
+
+Policy写流程已选择性采用UX固定`a13e336f7`连同必要修正`a453890e9`、`dae784524`：保留已打开表单的草稿，身份重查及精确Policy重读待完成、失败或能力撤销时阻止新写；版本发布、默认切换与退役确认同样核对当前能力、版本及相应版本目录。异步Web Lock取得后再次检查当前围栏，不能使用重核前的闭包派发。原UNKNOWN和已完成回执继续独立保留，无关目录重试不重置表单。该源码收紧已有上表聚焦证据，最终消费组合和真实恢复页面尚待验收；不新增权限、通用授权接口或审批系统。
+
+权限刷新主流程从Analysis入口登录，通过已知ID读取准确Analyzer；无目录权限的Policy深链接另用独立标签验证后关闭，不要求产品暴露目录导航来满足测试。初始阶段恰好两次正常登录；随后授权、精确撤权及最终目录/报告撤权均不得退出或再次登录，只通过应用内导航或已有浏览历史保持原Analysis Session。relay计数实际`/auth/login`及退出请求，并用不输出、不持久化的内存摘要比对后续受保护请求是否仍来自初始Analyzer会话，不保留认证输入、Bearer或回包正文。整页重载或换用另一条已有Session不能代替权限刷新。原会话撤权观察完成后才允许第三次独立深链接登录，证明本人Key/User目录无权时仍可读取已授权的他人Key；该登录不计作权限刷新证据，不通过注入路由或凭据绕过内存Session边界。
+
+原生独立Linux进程与PG18首轮已进入页面，但原夹具要求无目录权限的所有深链接共用一次登录，不符合当前内存Session与实际导航边界，主动停止于630.09s，不计通过。修正后的第二轮370.00s在初始观察后失败：登录探针误用了不存在的`/auth/session`，无法计入实际`/auth/login`。修复只更正观察路径、独立深链接安排及原Session比对，不放宽产品鉴权或HTTP期限。两轮已见Policy精确读取、Key单次503后重试得到真实空态、模板only、已知Report只读以及Analyzer/Finding目标404；这些局部观察不等于整项通过。第三轮在工作中断后1800.03s超时，未完成初始观察标记和后续授权/撤权，不计通过。仅Analyzer.read而无Finding.list时混入“暂时不可用”的文案已选择性采用UX固定`e70c2d6595295b07a46d940a0f099ca0176aed35`修正，消费分支复验另行记录。
+
+Policy重核修复不得以新写资格阻断原意图恢复：整策略退役成功后，既有精确详情只读取ACTIVE对象；原DELETE则由当前有效身份、当前动作授权和严格原请求承诺核对既有完成事实。因此UNKNOWN原重试不能依赖再次取得该目标的PolicyAccess，也不能更换原requestId、目标或版本。新写仍必须当前精确能力与版本，权限重核期间暂停派发；重核完成后，原意图只可显式等值重试，由既有后端重新鉴权并判定原结果，不新增通用回执接口。版本命令的原重试、只读核对和新写同样分离。
+
+原浏览器门禁另有精确撤权阶段：将Analyzer写权限独立绑定，成功保存后仅撤销该绑定，真实`me`的十九项能力必须逐项保持，准确Analyzer读取仍200而update/set-disposition关闭，实际update请求403。保持当前Analyzer页面并显式重查，必须重新取得该详情、保留14天已完成结果且不再写入；之后才执行原目录/本人权限撤销及他人准确Key读取阶段。该夹具尚未实跑，不能用后台断言或完成标记替代上述可见页面证据。
+
+同一夹具的初始阶段还要求从已知双ID读取一个仅有精确Finding.read的不存在目标：实际父详情与Finding目录均403，精确GET由IAM返回`iam.access-finding.not-found`；浏览器必须发出该精确GET并展示不确认对象存在的状态。此项是可达性与目标404负向证据，不伪造Finding、模拟成功响应或声称新增真实分析worker的正向验收。
 
 ### 有效凭据失效与角色返回
 

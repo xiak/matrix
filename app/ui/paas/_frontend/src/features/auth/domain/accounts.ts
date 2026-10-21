@@ -25,6 +25,27 @@ export type IamAction =
   | "iam.group-policy-attachment.revoke"
   | "iam.role.list"
   | "iam.role.create"
+  | "iam.access-analyzer.list"
+  | "iam.access-analyzer.create"
+  | "iam.access-analyzer.update"
+  | "iam.access-analyzer.set-disposition"
+  | "iam.access-finding.list"
+  | "iam.access-finding.archive"
+  | "iam.access-finding.unarchive"
+  | "iam.security-report.create"
+  | "iam.security-report.download"
+  | "iam.service-role-template.list"
+  | "iam.service-linked-role.list"
+  | "iam.security-settings.read"
+  | "iam.security-settings.update"
+  | "iam.policy.create"
+  | "iam.policy.update"
+  | "iam.policy.delete"
+  | "iam.policy-version.list"
+  | "iam.policy-version.read"
+  | "iam.policy-version.create"
+  | "iam.policy-version.delete"
+  | "iam.policy.set-default-version"
   | "iam.user.read"
   | "iam.user.update"
   | "iam.user.delete"
@@ -60,7 +81,7 @@ export type CapabilityRestriction =
 
 export type ActionCapability = {
   action: IamAction;
-  resource: { kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY"; id: string };
+  resource: { kind: "ACCOUNT" | "USER" | "GROUP" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY" | "POLICY" | "ACCESS_ANALYZER" | "ACCESS_FINDING" | "SECURITY_REPORT"; id: string };
   available: boolean;
   restrictionReason: CapabilityRestriction | null;
 };
@@ -286,6 +307,7 @@ export type AccountPolicyVersion = {
 };
 
 export type AccountPolicyDetail = { policy: AccountPolicy; version: AccountPolicyVersion };
+export type AccountPolicyAccess = { detail: AccountPolicyDetail; capabilities: ActionCapability[] };
 export type AccountPolicyVersionDirectory = { policy: AccountPolicy; items: AccountPolicyVersion[] };
 
 /** Non-secret original command metadata, never a receipt or authorization permit. */

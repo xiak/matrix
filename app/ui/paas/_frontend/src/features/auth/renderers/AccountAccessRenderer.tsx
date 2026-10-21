@@ -49,7 +49,7 @@ import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
 import { AuthorizationProfilePublishingWorkspace } from "./AccountAuthorizationProfileCatalog";
 import type { AccountUserDetailTab } from "./AccountUserWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
-import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
+import { AccountDirectoryReadFailure } from "./AccountReadBoundary";
 
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
 const accountSignInSettingsId = "account-sign-in-settings";
@@ -225,7 +225,10 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     (view === "create-role" && !workspace && (!access.roles || !scene.canCreateRoles)) ||
     (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
     (view === "tenants" && !scene.canReadAccounts) ||
-    (view === "policies" && !(workspace ? scene.canListUsers : scene.canViewPolicies)) ||
+    (view === "policies" && !(workspace ? scene.canListUsers : entityId || scene.canViewPolicies)) ||
+    (view === "create-policy" && !workspace && !scene.canCreatePolicies && !access.policyCreate?.pending) ||
+    (view === "keys" && !workspace && !scene.canListOwnAccessKeys) ||
+    (view === "service-authorizations" && !workspace && !access.serviceRoleTemplates && !access.serviceLinkedRoles) ||
     (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)
   );
   return <section aria-label={t("title")} aria-busy={access.loading || access.busy} className={styles.stack}>
@@ -255,7 +258,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "settings" ? <><SettingsSectionNav preview={Boolean(workspace)} /><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : <><LivePersonalSecuritySettings /><LiveAccountSecuritySettings client={access.accountSecuritySettings} /></>}</> :
       view === "policies" && !workspace ? <AccountPolicyDirectory scene={scene} entityId={entityId} onOpen={(id) => onNavigate("policies", id)} onCreate={() => onNavigate("create-policy")} /> :
       view === "create-policy" && !workspace && access.policyCreate ? <LivePolicyCreationWizard client={access.policyCreate}
-        onBack={() => onNavigate("policies")} onDone={(id) => onNavigate("policies", id)} /> :
+        authorizationPending={access.loading} onBack={() => onNavigate("policies")} onDone={(id) => onNavigate("policies", id)} /> :
       view === "policy-language" && workspace ? <LivePolicyCreationWizard preview onBack={() => onNavigate("policies")} /> :
       view === "create-group" ? <GroupCreationWizard workspace={workspace ?? undefined} onBack={() => onNavigate("groups")} onDone={(id) => onNavigate("groups", id)} /> :
       view === "groups" && workspace ? <AccessGroups key={entityId ?? "groups"} entityId={entityId} workspace={workspace} scene={scene} onCreate={() => onNavigate("create-group")} onOpen={onNavigate} /> :
@@ -266,9 +269,9 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "keys" && !workspace && access.accessKeys ? <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={scene} createIntent={access.accessKeyCreateIntent} mutationIntent={access.accessKeyMutationIntent} recoveryError={access.accessKeyRecoveryError}
         loadOwner={access.loadUser} userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :
       view === "access-diagnosis" ? <CurrentAccessDiagnosisPreview workspace={workspace ?? undefined} scene={scene} onOpen={onNavigate} /> :
-      view === "access-analysis" && !workspace && access.accessAnalysis ? <LiveAccessAnalysis key={`${access.accessAnalysis.accountId}:${access.accessAnalysis.sessionRevision}`} client={access.accessAnalysis} onNavigate={onNavigate} /> :
+      view === "access-analysis" && !workspace && access.accessAnalysis ? <LiveAccessAnalysis key={`${access.accessAnalysis.accountId}:${access.accessAnalysis.sessionRevision}`} authorizationPending={access.loading} client={access.accessAnalysis} onNavigate={onNavigate} /> :
       view === "access-analysis" ? <AccessAnalysisPreview workspace={workspace ?? undefined} scene={scene} onNavigate={onNavigate} /> :
-      view === "security-reports" && !workspace && access.securityReports ? <LiveSecurityReport key={`${access.securityReports.accountId}:${access.securityReports.sessionRevision}`} client={access.securityReports} /> :
+      view === "security-reports" && !workspace && access.securityReports ? <LiveSecurityReport key={`${access.securityReports.accountId}:${access.securityReports.sessionRevision}`} authorizationPending={access.loading} client={access.securityReports} /> :
       view === "security-reports" ? <SecurityReportDirectoryPreview workspace={workspace ?? undefined} scene={scene} currentSession={session.current?.session} /> :
       !workspace ? <EmptyState title={w("notConnected")} description={w("notConnectedHint")} /> :
       view === "create-policy" ? <PolicyAuthoringWizard method={policyCreationMethod(policyMethod)} workspace={workspace} scene={scene} doneLabel={w("finishBack")} onBack={() => onNavigate("policies")} onDone={() => onNavigate("policies")} /> :

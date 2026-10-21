@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
@@ -13,11 +13,12 @@ import type {
 } from "../application/AccountAccessProvider";
 import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceLinkedRoleListing, ServiceLinkedRoleRelation, ServiceRoleTemplate } from "../domain/serviceAuthorization";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { AccountReadBoundary } from "./AccountReadBoundary";
 import { ServiceAuthorizationChain } from "./ServiceAuthorizationChain";
 import { ServiceAuthorizationResponsibility } from "./AuthorizationOwnershipFlow";
 import styles from "./AccountAccessRenderer.module.css";
 
-type FailureStatus = "forbidden" | "routeUnavailable" | "unavailable" | "expired";
+type FailureStatus = "forbidden" | "notFound" | "routeUnavailable" | "unavailable" | "expired";
 type RelationState = { status: "loading" } | ServiceLinkedRoleDirectoryLoad;
 type TemplateState = { status: "loading" } | ServiceRoleTemplateLoad;
 type RelationDirectoryResult = {
@@ -66,10 +67,18 @@ function CursorFooter({ page, previous, next, hasNext, busy, note }: {
     next={{ label: t("next"), disabled: !hasNext, onClick: next }} /></Table.Footer>;
 }
 
-function LoadFailure({ status, retry, scope }: { status: FailureStatus; retry(): void; scope: "relations" | "templates" }) {
+function ServiceAuthorizationReadBoundary({ children, loading, retry, scope, status }: {
+  children?: ReactNode;
+  loading: ReactNode;
+  retry(): void;
+  scope: "relations" | "templates";
+  status: "loading" | "ready" | FailureStatus;
+}) {
   const t = useTranslations("ServiceAuthorizationDirectory");
-  return <EmptyState title={t(`errors.${scope}.${status}.title`)} description={t(`errors.${scope}.${status}.description`)}
-    action={status === "expired" ? undefined : <Button variant="secondary" onClick={retry}>{t("retry")}</Button>} />;
+  return <AccountReadBoundary status={status} loading={loading} onRetry={retry}
+    failure={status !== "loading" && status !== "ready" ? {
+      title: t(`errors.${scope}.${status}.title`), description: t(`errors.${scope}.${status}.description`)
+    } : undefined}>{children}</AccountReadBoundary>;
 }
 
 function RelationDirectory({ client, onOpen }: {
@@ -136,8 +145,8 @@ function RelationDirectory({ client, onOpen }: {
       <Badge>{t("readOnly")}</Badge>
     </div>
     <Alert>{t("relations.boundary")}</Alert>
-    {state.status === "loading" ? <TableSkeleton label={t("relations.loading")} rows={4} /> : null}
-    {state.status !== "loading" && state.status !== "ready" ? <LoadFailure status={state.status} retry={load} scope="relations" /> : null}
+    <ServiceAuthorizationReadBoundary status={state.status} retry={load} scope="relations"
+      loading={<TableSkeleton label={t("relations.loading")} rows={4} />}>
     {current ? <>
       {current.items.length ? <Table aria-label={t("relations.tableLabel")} mobileLayout="stack">
         <thead><tr><th scope="col">{t("fields.service")}</th><th scope="col">{t("fields.role")}</th><th scope="col">{t("fields.bindings")}</th><th scope="col">{t("fields.stateAndTime")}</th></tr></thead>
@@ -155,6 +164,7 @@ function RelationDirectory({ client, onOpen }: {
         note={current.nextAfter ? t("relations.more") : t("relations.complete", { count: current.items.length })} />
       {pageFailure ? <Alert status="warning">{t(`errors.relations.${pageFailure}.description`)}</Alert> : null}
     </> : null}
+    </ServiceAuthorizationReadBoundary>
   </section>;
 }
 
@@ -256,8 +266,8 @@ function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClie
         { id: "status", label: t("stateFilter"), value: status, defaultValue: "all", onChange: (value) => { setStatus(value as typeof status); setPage(1); }, options: [{ value: "all", label: t("allStates") }, ...(["ACTIVE", "RETIRED"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] }
       ]}
       status={state.status === "ready" ? query !== deferredQuery ? t("filtering") : t("resultCount", { count: filtered.length, total: state.directory.items.length }) : state.status === "loading" ? t("loading") : undefined} />
-    {state.status === "loading" ? <TableSkeleton label={t("loading")} rows={4} /> : null}
-    {state.status !== "loading" && state.status !== "ready" ? <LoadFailure status={state.status} retry={retry} scope="templates" /> : null}
+    <ServiceAuthorizationReadBoundary status={state.status} retry={retry} scope="templates"
+      loading={<TableSkeleton label={t("loading")} rows={4} />}>
     {state.status === "ready" ? <>
       {filtered.length ? <Table aria-label={t("tableLabel")} aria-busy={query !== deferredQuery || undefined} mobileLayout="stack">
         <thead><tr><th scope="col">{t("fields.template")}</th><th scope="col">{t("fields.roleName")}</th><th scope="col">{t("fields.workloadKinds")}</th><th scope="col">{t("fields.policySnapshot")}</th><th scope="col">{t("fields.templateState")}</th></tr></thead>
@@ -274,6 +284,7 @@ function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClie
         onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
         labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer> : null}
     </> : null}
+    </ServiceAuthorizationReadBoundary>
   </section>;
 }
 
@@ -326,8 +337,8 @@ function RelationDetail({ client, roleId, initialName, onBack }: { client: Servi
   const relation = current?.relation;
   return <WorkspaceDetail title={relation?.role.name ?? initialName} onBack={onBack}>
     <Card>
-      {state.status === "loading" ? <TableSkeleton label={t("detail.loading")} rows={5} header={false} /> : null}
-      {state.status !== "loading" && state.status !== "ready" ? <LoadFailure status={state.status} retry={load} scope="relations" /> : null}
+      <ServiceAuthorizationReadBoundary status={state.status} retry={load} scope="relations"
+        loading={<TableSkeleton label={t("detail.loading")} rows={5} header={false} />}>
       {current && relation ? <div className={styles.stack}>
         <div className={styles.sectionHeading}><div><Badge status={relation.role.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${relation.role.status}`)}</Badge> <Badge>SERVICE_LINKED</Badge></div></div>
         <Alert>{t("detail.boundary")}</Alert>
@@ -372,6 +383,7 @@ function RelationDetail({ client, roleId, initialName, onBack }: { client: Servi
         <Alert>{t("detail.activeBindingIsNotSession")}</Alert>
         <Alert status="warning">{t("detail.noCommands")}</Alert>
       </div> : null}
+      </ServiceAuthorizationReadBoundary>
     </Card>
   </WorkspaceDetail>;
 }
@@ -383,6 +395,9 @@ export function AccountServiceAuthorizations({ relations, templates, onBack }: {
 }) {
   const t = useTranslations("ServiceAuthorizationDirectory");
   const [section, setSection] = useState(relations ? "authorizations" : "templates");
+  const activeSection = section === "authorizations" && relations ? "authorizations"
+    : section === "templates" && templates ? "templates"
+      : relations ? "authorizations" : "templates";
   const [selection, setSelection] = useState<Selection | null>(null);
   const visibleSelection = selection?.kind === "relation"
     ? selection.client === relations ? selection : null
@@ -405,16 +420,16 @@ export function AccountServiceAuthorizations({ relations, templates, onBack }: {
     <ContentPage.Heading title={t("title")} scrollKey="service-authorization-directory" back={onBack ? { label: t("backToRoles"), onClick: onBack } : undefined} focus />
     <div className={styles.policyDirectoryIntro}><p>{t("hint")}</p><p>{t("boundary")}</p></div>
     <ServiceAuthorizationResponsibility />
-    <Tabs.Root value={section} onValueChange={setSection}>
+    <Tabs.Root value={activeSection} onValueChange={setSection}>
       <Tabs.List aria-label={t("sectionsLabel")}>
         {relations ? <Tabs.Trigger value="authorizations">{t("sections.authorizations")}</Tabs.Trigger> : null}
         {templates ? <Tabs.Trigger value="templates">{t("sections.templates")}</Tabs.Trigger> : null}
       </Tabs.List>
-      {relations ? <Tabs.Content className={styles.stack} value="authorizations">{section === "authorizations" ? <RelationDirectory client={relations} onOpen={(listing, trigger) => {
+      {relations ? <Tabs.Content className={styles.stack} value="authorizations">{activeSection === "authorizations" ? <RelationDirectory client={relations} onOpen={(listing, trigger) => {
         returnFocus.current = { client: relations, element: trigger };
         setSelection({ kind: "relation", client: relations, roleId: listing.relation.role.id, roleName: listing.relation.role.name });
       }} /> : null}</Tabs.Content> : null}
-      {templates ? <Tabs.Content className={styles.stack} value="templates">{section === "templates" ? <TemplateDirectory client={templates} onOpen={(template, trigger) => {
+      {templates ? <Tabs.Content className={styles.stack} value="templates">{activeSection === "templates" ? <TemplateDirectory client={templates} onOpen={(template, trigger) => {
         returnFocus.current = { client: templates, element: trigger };
         setSelection({ kind: "template", client: templates, template });
       }} /> : null}</Tabs.Content> : null}

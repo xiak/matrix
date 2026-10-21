@@ -229,6 +229,22 @@ describe("AccountServiceAuthorizations", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("keeps an unconfirmed exact service authorization distinct from a missing route", async () => {
+    const relations: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockResolvedValue({ status: "ready", directory }),
+      read: vi.fn().mockResolvedValue({ status: "notFound" } satisfies ServiceLinkedRoleAccessLoad)
+    };
+    const user = userEvent.setup();
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+
+    await user.click(await screen.findByRole("button", { name: relation.role.name }));
+    expect(await screen.findByText("无法确认指定服务授权")).toBeTruthy();
+    expect(screen.getByText(/这不代表账号尚未开通服务/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+  });
+
   it("loads the platform template directory only after the user changes section", async () => {
     const relations: ServiceLinkedRoleClient = {
       accountId: "account-xiak",
@@ -251,6 +267,42 @@ describe("AccountServiceAuthorizations", () => {
     expect(screen.getByText("显示 2 / 2 个模板")).toBeTruthy();
 
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("moves to platform templates when the active relation source is revoked", async () => {
+    const relations: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockResolvedValue({ status: "ready", directory }),
+      read: vi.fn()
+    };
+    const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templates }) };
+    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={templateClient} /></LocaleProvider>);
+    await screen.findByRole("table", { name: "当前账号服务授权关系" });
+
+    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} /></LocaleProvider>);
+
+    expect(screen.getByRole("tab", { name: "平台模板", selected: true })).toBeTruthy();
+    expect(await screen.findByRole("table", { name: "服务授权模板目录" })).toBeTruthy();
+    expect(templateClient.load).toHaveBeenCalledTimes(1);
+  });
+
+  it("moves to current-account authorizations when the active template source is revoked", async () => {
+    const relations: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockResolvedValue({ status: "ready", directory }),
+      read: vi.fn()
+    };
+    const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templates }) };
+    const view = render(<LocaleProvider><AccountServiceAuthorizations relations={null} templates={templateClient} /></LocaleProvider>);
+    await screen.findByRole("table", { name: "服务授权模板目录" });
+
+    view.rerender(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} /></LocaleProvider>);
+
+    expect(screen.getByRole("tab", { name: "当前账号授权", selected: true })).toBeTruthy();
+    expect(await screen.findByRole("table", { name: "当前账号服务授权关系" })).toBeTruthy();
+    expect(relations.list).toHaveBeenCalledTimes(1);
   });
 
   it("searches a complete template snapshot and resets an empty result without reloading it", async () => {
@@ -343,21 +395,35 @@ describe("AccountServiceAuthorizations", () => {
     expect(templateClient.load).toHaveBeenCalledTimes(1);
   });
 
-  it("localizes relation authorization failure and retries without MOCK fallback", async () => {
+  it("localizes relation authorization failure without offering a blind retry", async () => {
+    const relations: ServiceLinkedRoleClient = {
+      accountId: "account-xiak",
+      sessionRevision: 1,
+      list: vi.fn().mockResolvedValue({ status: "forbidden" }),
+      read: vi.fn()
+    };
+    render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
+
+    expect(await screen.findByText("无权查看当前账号服务授权")).toBeTruthy();
+    expect(screen.queryByText(/MOCK/)).toBeNull();
+    expect(screen.queryByRole("button", { name: /重试/ })).toBeNull();
+    expect(relations.list).toHaveBeenCalledOnce();
+  });
+
+  it("retries only a temporary relation-directory failure", async () => {
     const relations: ServiceLinkedRoleClient = {
       accountId: "account-xiak",
       sessionRevision: 1,
       list: vi.fn()
-        .mockResolvedValueOnce({ status: "forbidden" })
+        .mockResolvedValueOnce({ status: "unavailable" })
         .mockResolvedValueOnce({ status: "ready", directory: { accountId: "account-xiak", items: [], nextAfter: null } }),
       read: vi.fn()
     };
     const user = userEvent.setup();
     render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={null} onBack={vi.fn()} /></LocaleProvider>);
 
-    expect(await screen.findByText("无权查看当前账号服务授权")).toBeTruthy();
-    expect(screen.getByText("不会回退到 MOCK", { exact: false })).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "重试" }));
+    expect(await screen.findByText("暂时无法读取服务授权")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试读取" }));
     expect(await screen.findByText("当前账号暂无服务授权")).toBeTruthy();
     expect(relations.list).toHaveBeenCalledTimes(2);
   });

@@ -262,11 +262,11 @@ function serviceRoleTemplate(id = "managedservice.installation-reader") {
   };
 }
 
-function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "ROLE" | "ROLE_SESSION" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
+function capability(action: string, kind: "ACCOUNT" | "USER" | "GROUP" | "ROLE" | "ROLE_SESSION" | "GROUP_MEMBERSHIP" | "POLICY_ATTACHMENT" | "ACCESS_KEY" | "POLICY" | "ACCESS_ANALYZER" | "ACCESS_FINDING" | "SECURITY_REPORT", id: string, available = true, restrictionReason = "AUTHORITY_REQUIRED") {
   return { action, resource: { kind, id }, available, ...(available ? {} : { restrictionReason }) };
 }
 
-function currentCapabilities(available = true) {
+function currentCapabilities(available = true, principalId = user.id) {
   return [
     capability("iam.account.create", "ACCOUNT", "collection", available),
     capability("iam.account.read", "ACCOUNT", "collection", available),
@@ -277,8 +277,37 @@ function currentCapabilities(available = true) {
     capability("iam.group.list", "ACCOUNT", account.id, available),
     capability("iam.group.create", "ACCOUNT", account.id, available),
     capability("iam.role.list", "ACCOUNT", account.id, available),
-    capability("iam.role.create", "ACCOUNT", account.id, available)
+    capability("iam.role.create", "ACCOUNT", account.id, available),
+    capability("iam.access-key.list", "USER", principalId, available),
+    capability("iam.access-analyzer.list", "ACCOUNT", account.id, available),
+    capability("iam.access-analyzer.create", "ACCOUNT", account.id, available),
+    capability("iam.security-report.create", "ACCOUNT", account.id, available),
+    capability("iam.service-role-template.list", "ACCOUNT", account.id, available),
+    capability("iam.service-linked-role.list", "ACCOUNT", account.id, available),
+    capability("iam.security-settings.read", "ACCOUNT", account.id, available),
+    capability("iam.security-settings.update", "ACCOUNT", account.id, available),
+    capability("iam.policy.create", "ACCOUNT", account.id, available)
   ];
+}
+
+function policyCapabilities(policyId: string, available = true) {
+  return ["iam.policy.update", "iam.policy.delete", "iam.policy-version.list", "iam.policy-version.read",
+    "iam.policy-version.create", "iam.policy-version.delete", "iam.policy.set-default-version"]
+    .map((action) => capability(action, "POLICY", policyId, available));
+}
+
+function policyAccess(detail: unknown, policyId: string) {
+  return { apiVersion, kind: "PolicyAccess", detail, capabilities: policyCapabilities(policyId) };
+}
+
+function analyzerCapabilities(analyzerId: string, available = true) {
+  return ["iam.access-analyzer.update", "iam.access-analyzer.set-disposition", "iam.access-finding.list"]
+    .map((action) => capability(action, "ACCESS_ANALYZER", analyzerId, available));
+}
+
+function findingCapabilities(findingId: string, available = true) {
+  return ["iam.access-finding.archive", "iam.access-finding.unarchive"]
+    .map((action) => capability(action, "ACCESS_FINDING", findingId, available));
 }
 
 function userCapabilities(attachments = [tenantAttachment]) {
@@ -903,6 +932,11 @@ async function securityReportFixture(csv = new TextEncoder().encode("resource_ty
   } };
 }
 
+function securityReportAccess(report: Awaited<ReturnType<typeof securityReportFixture>>["report"]) {
+  return { apiVersion, kind: "AccountSecurityReportDetail", report,
+    capabilities: [capability("iam.security-report.download", "SECURITY_REPORT", report.metadata.id)] };
+}
+
 describe("IAM HTTP account-security-report boundary", () => {
   it("creates and reads only the current-account report with the exact fixed request", async () => {
     const fixture = await securityReportFixture();
@@ -915,13 +949,27 @@ describe("IAM HTTP account-security-report boundary", () => {
     expect(requestBody(fetcher as ReturnType<typeof reply>)).toEqual({ formatVersion: 2, requestId: "report-request-one" });
     expect(creation).toMatchObject({ outcome: "APPLIED", metadata: { id: "report-one", accountId: account.id } });
 
-    fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(fixture.report), {
+    fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(securityReportAccess(fixture.report)), {
       status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
     }));
     vi.stubGlobal("fetch", fetcher);
     const report = await httpAccountRepository.securityReports!.read("bearer", account.id, "report-one");
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/security-reports/report-one");
-    expect(report).toMatchObject({ metadata: { id: "report-one", rowCount: 4 }, users: [{ root: true }, { id: user.id }], accessKeys: [{ id: "key-alex" }] });
+    expect(report.report).toMatchObject({ metadata: { id: "report-one", rowCount: 4 }, users: [{ root: true }, { id: user.id }], accessKeys: [{ id: "key-alex" }] });
+    expect(report.capabilities).toHaveLength(1);
+
+    const expected = capability("iam.security-report.download", "SECURITY_REPORT", fixture.report.metadata.id);
+    for (const capabilities of [
+      [],
+      [expected, expected],
+      [{ ...expected, action: "iam.security-report.read" }],
+      [{ ...expected, resource: { kind: "SECURITY_REPORT", id: "report-other" } }]
+    ]) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ ...securityReportAccess(fixture.report), capabilities }), {
+        status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
+      })));
+      await expect(httpAccountRepository.securityReports!.read("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("requires the protocol status that corresponds to APPLIED or EQUAL_REPLAY", async () => {
@@ -936,22 +984,22 @@ describe("IAM HTTP account-security-report boundary", () => {
 
   it("reads retained format-1 evidence as unrecorded while requiring credential state in format 2", async () => {
     const legacy = await securityReportFixture(undefined, 1);
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(legacy.report), {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(securityReportAccess(legacy.report)), {
       status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
     })));
     const retained = await httpAccountRepository.securityReports!.read("bearer", account.id, "report-one");
-    expect(retained).toMatchObject({ metadata: { formatVersion: 1 }, accessKeys: [{ id: "key-alex" }] });
-    expect(retained.accessKeys[0]?.credentialState).toBeUndefined();
+    expect(retained.report).toMatchObject({ metadata: { formatVersion: 1 }, accessKeys: [{ id: "key-alex" }] });
+    expect(retained.report.accessKeys[0]?.credentialState).toBeUndefined();
 
     const current = await securityReportFixture();
     const missingState = { ...current.report, accessKeys: current.report.accessKeys.map((key) => Object.fromEntries(Object.entries(key).filter(([name]) => name !== "credentialState"))) };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(missingState), {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(securityReportAccess(missingState as typeof current.report)), {
       status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
     })));
     await expect(httpAccountRepository.securityReports!.read("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
 
     const legacyWithInventedState = { ...legacy.report, accessKeys: legacy.report.accessKeys.map((key) => ({ ...key, credentialState: "CURRENT" })) };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(legacyWithInventedState), {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(securityReportAccess(legacyWithInventedState as typeof legacy.report)), {
       status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
     })));
     await expect(httpAccountRepository.securityReports!.read("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
@@ -960,7 +1008,7 @@ describe("IAM HTTP account-security-report boundary", () => {
   it("re-reads current metadata and verifies exact CSV bytes before returning a download", async () => {
     const fixture = await securityReportFixture();
     const fetcher = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(fixture.report), { status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(securityReportAccess(fixture.report)), { status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(fixture.csv, { status: 200, headers: {
         "Cache-Control": "no-store", "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": 'attachment; filename="matrix-iam-security-report-report-one.csv"'
@@ -983,13 +1031,13 @@ describe("IAM HTTP account-security-report boundary", () => {
       { ...fixture.report, leakedAuthority: true },
       { ...fixture.report, coverage: [securityReportCoverage[1], securityReportCoverage[0], ...securityReportCoverage.slice(2)] }
     ]) {
-      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(response), {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(securityReportAccess(response as typeof fixture.report)), {
         status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" }
       })));
       await expect(httpAccountRepository.securityReports!.read("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
 
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(fixture.report), {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(securityReportAccess(fixture.report)), {
       status: 200, headers: { "Content-Type": "application/json" }
     })));
     await expect(httpAccountRepository.securityReports!.read("bearer", account.id, "report-one")).rejects.toThrow("INVALID_IAM_RESPONSE");
@@ -997,7 +1045,7 @@ describe("IAM HTTP account-security-report boundary", () => {
     const corrupted = Uint8Array.from(fixture.csv);
     corrupted[corrupted.length - 2] = corrupted[corrupted.length - 2]! ^ 1;
     vi.stubGlobal("fetch", vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify(fixture.report), { status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(securityReportAccess(fixture.report)), { status: 200, headers: { "Cache-Control": "no-store", "Content-Type": "application/json" } }))
       .mockResolvedValueOnce(new Response(corrupted, { status: 200, headers: {
         "Cache-Control": "no-store", "Content-Type": "text/csv; charset=utf-8",
         "Content-Disposition": 'attachment; filename="matrix-iam-security-report-report-one.csv"'
@@ -1021,6 +1069,12 @@ const accessFinding = {
   lastActivityAt: "2026-06-01T08:00:00Z", resourceVersion: 1,
   createdAt: "2026-09-11T07:00:00Z", updatedAt: "2026-09-11T07:00:00Z"
 };
+function analyzerAccess(analyzer: Record<string, unknown> = accessAnalyzer) {
+  return { apiVersion, kind: "AccessAnalyzerDetail", analyzer, capabilities: analyzerCapabilities(String(analyzer.id)) };
+}
+function findingAccess(finding = accessFinding) {
+  return { apiVersion, kind: "AccessFindingDetail", finding, capabilities: findingCapabilities(finding.id) };
+}
 const accessCoverage = [
   { source: "IAM_PASSWORD_SESSIONS", state: "COMPLETE", observedFrom: "2026-06-11T08:00:00Z", observedThrough: "2026-09-11T08:00:00Z" },
   { source: "IAM_ACCESS_KEY_AUTHORIZATIONS", state: "INSUFFICIENT_COVERAGE", observedFrom: "2026-08-11T08:00:00Z", observedThrough: "2026-09-11T08:00:00Z", reason: "SOURCE_NOT_READY" },
@@ -1043,8 +1097,8 @@ describe("IAM HTTP access-analysis boundary", () => {
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/account/access-analyzers");
     expect(directory).toMatchObject({ accountId: account.id, nextAfter: null, items: [{ id: accessAnalyzer.id, unusedAccessAgeDays: 90 }] });
 
-    fetcher = reply(accessAnalyzer);
-    expect((await httpAccountRepository.accessAnalysis!.readAnalyzer("bearer", account.id, accessAnalyzer.id)).id).toBe(accessAnalyzer.id);
+    fetcher = reply(analyzerAccess());
+    expect((await httpAccountRepository.accessAnalysis!.readAnalyzer("bearer", account.id, accessAnalyzer.id)).analyzer.id).toBe(accessAnalyzer.id);
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}`);
 
     fetcher = reply(accessAnalyzer);
@@ -1068,6 +1122,36 @@ describe("IAM HTTP access-analysis boundary", () => {
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}:set-disposition`);
     expect(requestBody(fetcher)).toEqual({ disposition: { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: 7 }, resourceVersion: 2, requestId: "set-disposition-one" });
     expect(disposition).toMatchObject({ disposition: { mode: "DISABLE_UNUSED_ACCESS_KEYS", findingDelayDays: 7 }, resourceVersion: 3 });
+  });
+
+  it("requires exact per-resource capability envelopes for analyzer and Finding detail", async () => {
+    reply(analyzerAccess());
+    const analyzerDetail = await httpAccountRepository.accessAnalysis!.readAnalyzer("bearer", account.id, accessAnalyzer.id);
+    expect(analyzerDetail.capabilities).toHaveLength(3);
+    for (const capabilities of [
+      analyzerCapabilities(accessAnalyzer.id).slice(1),
+      [...analyzerCapabilities(accessAnalyzer.id), capability("iam.access-analyzer.update", "ACCESS_ANALYZER", accessAnalyzer.id)],
+      analyzerCapabilities(accessAnalyzer.id).map((item) => item.action === "iam.access-finding.list" ? { ...item, action: "iam.access-finding.read" } : item),
+      analyzerCapabilities(accessAnalyzer.id).map((item) => item.action === "iam.access-analyzer.update" ? { ...item, resource: { kind: "ACCESS_ANALYZER", id: "analyzer-other" } } : item)
+    ]) {
+      reply({ ...analyzerAccess(), capabilities });
+      await expect(httpAccountRepository.accessAnalysis!.readAnalyzer("bearer", account.id, accessAnalyzer.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+
+    const fetcher = reply(findingAccess());
+    const findingDetail = await httpAccountRepository.accessAnalysis!.readFinding("bearer", account.id, accessAnalyzer.id, accessFinding.id);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}/findings/${accessFinding.id}`);
+    expect(findingDetail.finding.id).toBe(accessFinding.id);
+    expect(findingDetail.capabilities).toHaveLength(2);
+    for (const capabilities of [
+      findingCapabilities(accessFinding.id).slice(1),
+      [...findingCapabilities(accessFinding.id), capability("iam.access-finding.archive", "ACCESS_FINDING", accessFinding.id)],
+      findingCapabilities(accessFinding.id).map((item) => item.action === "iam.access-finding.archive" ? { ...item, action: "iam.access-finding.resolve" } : item),
+      findingCapabilities(accessFinding.id).map((item) => item.action === "iam.access-finding.unarchive" ? { ...item, resource: { kind: "ACCESS_FINDING", id: "finding-other" } } : item)
+    ]) {
+      reply({ ...findingAccess(), capabilities });
+      await expect(httpAccountRepository.accessAnalysis!.readFinding("bearer", account.id, accessAnalyzer.id, accessFinding.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
   });
 
   it("binds the finding lifecycle filter and opaque cursor into the exact list request", async () => {
@@ -1112,7 +1196,7 @@ describe("IAM HTTP access-analysis boundary", () => {
   });
 
   it("rejects response expansion and invalid analyzer command values before they become UI state", async () => {
-    reply({ ...accessAnalyzer, leakedAuthority: true });
+    reply(analyzerAccess({ ...accessAnalyzer, leakedAuthority: true }));
     await expect(httpAccountRepository.accessAnalysis!.readAnalyzer("bearer", account.id, accessAnalyzer.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
 
     const fetcher = vi.fn();
@@ -1131,7 +1215,7 @@ describe("IAM HTTP access-analysis boundary", () => {
       { ...accessAnalyzer, disposition: { mode: "REVIEW_ONLY", findingDelayDays: 0, extra: true } }
     ];
     for (const response of invalidAnalyzers) {
-      reply(response);
+      reply(analyzerAccess(response as typeof accessAnalyzer));
       await expect(httpAccountRepository.accessAnalysis!.readAnalyzer("bearer", account.id, accessAnalyzer.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
 
@@ -1862,9 +1946,11 @@ describe("IAM HTTP account boundary", () => {
     }
     const root = { ...user, id: account.rootIdentity.principalId };
     const rootBoundary = { ...permissionBoundary, userId: root.id };
-    reply({ ...current, user: root, identityKind: "ROOT_IDENTITY", permissionBoundary: rootBoundary });
+    reply({ ...current, user: root, identityKind: "ROOT_IDENTITY", permissionBoundary: rootBoundary,
+      capabilities: currentCapabilities(true, root.id) });
     expect((await httpAccountRepository.currentIdentity("bearer")).permissionBoundary.policy).toBeNull();
-    reply({ ...current, user: root, identityKind: "ROOT_IDENTITY", permissionBoundary: { ...rootBoundary, policy: reference } });
+    reply({ ...current, user: root, identityKind: "ROOT_IDENTITY", permissionBoundary: { ...rootBoundary, policy: reference },
+      capabilities: currentCapabilities(true, root.id) });
     await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
     reply({ ...current, capabilities: currentCapabilities().map((item) => item.resource.id === "collection" ? { ...item, resource: { ...item.resource, id: "accounts" } } : item) });
     await expect(httpAccountRepository.currentIdentity("bearer")).rejects.toThrow("INVALID_IAM_RESPONSE");
@@ -2188,10 +2274,12 @@ describe("IAM HTTP account boundary", () => {
     reply({ apiVersion, kind: "CurrentIdentity", account, user, identityKind: "USER", policySources: directSources(tenantAttachment, platformAttachment), permissionBoundary, capabilities: currentCapabilities() });
     const identity = await httpAccountRepository.currentIdentity("bearer");
     expect(identity.policySources.map((item) => item.attachment.policyId)).toEqual(["system.platform-operator", "system.paas-viewer"]);
+    expect(identity.capabilities).toHaveLength(19);
     for (const patch of [
       { capabilities: currentCapabilities().slice(1) },
       { capabilities: [...currentCapabilities(), capability("iam.user.list", "ACCOUNT", account.id)] },
       { capabilities: currentCapabilities().map((item) => item.action === "iam.user.list" ? { ...item, action: "iam.principal.list" } : item) },
+      { capabilities: currentCapabilities().map((item) => item.action === "iam.security-report.create" ? { ...item, resource: { kind: "ACCOUNT", id: "another-account" } } : item) },
       { user: { ...user, accountId: "another-account" } },
       { policySources: directSources({ ...tenantAttachment, accountId: "another-account" }) },
       { policySources: directSources(tenantAttachment, tenantAttachment) },
@@ -2312,21 +2400,32 @@ describe("IAM HTTP account boundary", () => {
     const version = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, document,
       contentDigest: `sha256:${"a".repeat(64)}`, contractVersion: 1 };
     const body = { apiVersion, kind: "PolicyDetail", policy: customerPolicy, version };
-    const fetcher = reply(body);
+    const fetcher = reply(policyAccess(body, customerPolicy.id));
     const detail = await httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id);
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/policies/customer.build");
     expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
     expect(firstRequest(fetcher)[1].body).toBeUndefined();
-    expect(detail.version.document.statements[0]?.actions).toEqual(["paas.application.read"]);
-    expect(detail.version.document.statements[0]?.conditions).toEqual(document.statements[0]!.conditions);
+    expect(detail.detail.version.document.statements[0]?.actions).toEqual(["paas.application.read"]);
+    expect(detail.detail.version.document.statements[0]?.conditions).toEqual(document.statements[0]!.conditions);
+    expect(detail.capabilities).toHaveLength(7);
+
+    for (const capabilities of [
+      policyCapabilities(customerPolicy.id).slice(1),
+      [...policyCapabilities(customerPolicy.id), capability("iam.policy.update", "POLICY", customerPolicy.id)],
+      policyCapabilities(customerPolicy.id).map((item) => item.action === "iam.policy.update" ? { ...item, action: "iam.policy.rename" } : item),
+      policyCapabilities(customerPolicy.id).map((item) => item.action === "iam.policy.delete" ? { ...item, resource: { kind: "POLICY", id: "customer.other" } } : item)
+    ]) {
+      reply({ ...policyAccess(body, customerPolicy.id), capabilities });
+      await expect(httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
 
     const dynamicDocument = { languageVersion: "1", scope: "TENANT", statements: [{
       sid: "read-model-jobs", effect: "ALLOW", actions: ["ml.jobs.read"],
       resources: [{ kind: "MODEL_JOB", match: "ANY_IN_AUTHORITY" }]
     }] };
-    reply({ ...body, version: { ...version, document: dynamicDocument } });
+    reply(policyAccess({ ...body, version: { ...version, document: dynamicDocument } }, customerPolicy.id));
     const dynamicDetail = await httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id);
-    expect(dynamicDetail.version.document).toEqual(dynamicDocument);
+    expect(dynamicDetail.detail.version.document).toEqual(dynamicDocument);
 
     for (const invalid of [
       { ...body, policy: { ...customerPolicy, accountId: "another-account" } },
@@ -2343,7 +2442,7 @@ describe("IAM HTTP account boundary", () => {
       { ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0], conditions: [{ key: "resource.tag/team", operator: "STRING_EQUALS", values: ["platform"] }] }] } } },
       { ...body, version: { ...version, extra: true } }
     ]) {
-      reply(invalid);
+      reply(policyAccess(invalid, customerPolicy.id));
       await expect(httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
@@ -2359,11 +2458,11 @@ describe("IAM HTTP account boundary", () => {
     const version = { policyId: customerPolicy.id, versionId: customerPolicy.defaultVersionId, document,
       contentDigest: `sha256:${"a".repeat(64)}`, contractVersion: 2, compilation };
     const body = { apiVersion, kind: "PolicyDetail", policy: customerPolicy, version };
-    reply(body);
+    reply(policyAccess(body, customerPolicy.id));
     const detail = await httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id);
-    expect(detail.version.document.statements[0]?.actions).toEqual(["paas.application.*"]);
-    expect(detail.version.compilation?.resolvedStatements[0]?.actions).toEqual(["paas.application.list", "paas.application.read"]);
-    expect(detail.version.compilation?.profiles[0]?.revision).toBe(2);
+    expect(detail.detail.version.document.statements[0]?.actions).toEqual(["paas.application.*"]);
+    expect(detail.detail.version.compilation?.resolvedStatements[0]?.actions).toEqual(["paas.application.list", "paas.application.read"]);
+    expect(detail.detail.version.compilation?.profiles[0]?.revision).toBe(2);
 
     for (const invalid of [
       { ...compilation, profiles: [] },
@@ -2372,12 +2471,12 @@ describe("IAM HTTP account boundary", () => {
       { ...compilation, resolvedStatements: [{ sid: "read-applications", actions: ["paas.application.read", "paas.deployment.read"] }] },
       { ...compilation, resolvedStatements: [{ sid: "other", actions: ["paas.application.read"] }] }
     ]) {
-      reply({ ...body, version: { ...version, compilation: invalid } });
+      reply(policyAccess({ ...body, version: { ...version, compilation: invalid } }, customerPolicy.id));
       await expect(httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
-    reply({ ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0],
+    reply(policyAccess({ ...body, version: { ...version, document: { ...document, statements: [{ ...document.statements[0],
       actions: ["paas.application.*", "paas.application.read"] }] }, compilation: { ...compilation,
-      resolvedStatements: [{ sid: "read-applications", actions: ["paas.application.list"] }] } } });
+      resolvedStatements: [{ sid: "read-applications", actions: ["paas.application.list"] }] } } }, customerPolicy.id));
     await expect(httpAccountRepository.readPolicy!("bearer", account.id, customerPolicy.id)).rejects.toThrow("INVALID_IAM_RESPONSE");
   });
 

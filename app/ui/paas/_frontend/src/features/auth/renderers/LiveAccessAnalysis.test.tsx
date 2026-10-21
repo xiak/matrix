@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { AccessAnalysisClient } from "../application/AccountAccessProvider";
-import type { AccessFindingDirectory } from "../domain/accessAnalysis";
+import type { ActionCapability } from "../domain/accounts";
+import type { AccessAnalyzer, AccessAnalyzerAccess, AccessFinding, AccessFindingAccess, AccessFindingDirectory } from "../domain/accessAnalysis";
 import { LiveAccessAnalysis } from "./LiveAccessAnalysis";
 
 const timestamp = "2026-09-11T08:00:00Z";
@@ -32,20 +33,34 @@ const coverage: AccessFindingDirectory["coverage"] = [
 const directory: AccessFindingDirectory = {
   accountId: analyzer.accountId, analyzerId: analyzer.id, observedAt: timestamp, coverage, items: [finding], nextAfter: null
 };
+const capability = (action: ActionCapability["action"], kind: ActionCapability["resource"]["kind"], id: string): ActionCapability =>
+  ({ action, resource: { kind, id }, available: true, restrictionReason: null });
+const analyzerAccess = (value: AccessAnalyzer = analyzer): AccessAnalyzerAccess => ({ analyzer: value, capabilities: [
+  capability("iam.access-analyzer.update", "ACCESS_ANALYZER", value.id),
+  capability("iam.access-analyzer.set-disposition", "ACCESS_ANALYZER", value.id),
+  capability("iam.access-finding.list", "ACCESS_ANALYZER", value.id)
+] });
+const findingAccess = (value: AccessFinding = finding): AccessFindingAccess => ({ finding: value, capabilities: [
+  capability("iam.access-finding.archive", "ACCESS_FINDING", value.id),
+  capability("iam.access-finding.unarchive", "ACCESS_FINDING", value.id)
+] });
 
 function client(overrides: Partial<AccessAnalysisClient> = {}): AccessAnalysisClient {
   return {
     accountId: analyzer.accountId,
     sessionRevision: 1,
+    continuityIdentity: {},
+    canList: true,
+    canCreate: true,
     listAnalyzers: vi.fn().mockResolvedValue({ accountId: analyzer.accountId, items: [analyzer], nextAfter: null }),
-    readAnalyzer: vi.fn().mockResolvedValue(analyzer),
+    readAnalyzer: vi.fn().mockResolvedValue(analyzerAccess()),
     createAnalyzer: vi.fn().mockResolvedValue(analyzer),
     updateAnalyzer: vi.fn().mockResolvedValue({ ...analyzer, resourceVersion: 2 }),
     setDisposition: vi.fn().mockImplementation(async (_analyzerId, command) => ({
       ...analyzer, disposition: command.disposition, resourceVersion: command.resourceVersion + 1, updatedAt: timestamp
     })),
     listFindings: vi.fn().mockResolvedValue(directory),
-    readFinding: vi.fn().mockResolvedValue(finding),
+    readFinding: vi.fn().mockResolvedValue(findingAccess()),
     archiveFinding: vi.fn().mockResolvedValue({ ...finding, status: "ARCHIVED", resourceVersion: 2, updatedAt: timestamp }),
     unarchiveFinding: vi.fn().mockResolvedValue({ ...finding, status: "ACTIVE", resourceVersion: 3, updatedAt: timestamp }),
     ...overrides
@@ -66,7 +81,8 @@ describe("live access analysis", () => {
     expect(screen.getByRole("tab", { name: "来源覆盖" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "未使用访问" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "分析规则" })).toBeTruthy();
-    expect(screen.getByText(/LIVE · 本页直接读取/)).toBeTruthy();
+    expect(screen.getByText(/本页读取当前账号的 Analyzer/)).toBeTruthy();
+    expect(screen.queryByText(/LIVE|MOCK/)).toBeNull();
   });
 
   it("loads a server-filtered cursor directory without inventing a total", async () => {
@@ -78,10 +94,98 @@ describe("live access analysis", () => {
     expect(screen.queryByText(/共 .* 条/)).toBeNull();
   });
 
+  it("opens an exact known Analyzer without requiring directory-list authority", async () => {
+    const user = userEvent.setup();
+    const readAnalyzer = vi.fn().mockResolvedValue(analyzerAccess());
+    const value = client({ canList: false, canCreate: false, readAnalyzer });
+    view(value);
+    expect(await screen.findByRole("heading", { name: "按已知 ID 查看分析器" })).toBeTruthy();
+    expect(value.listAnalyzers).not.toHaveBeenCalled();
+    await user.type(screen.getByLabelText("分析器 ID", { selector: "input#known-access-analyzer-id" }), analyzer.id);
+    await user.click(screen.getByRole("button", { name: "查看分析器" }));
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    expect(await screen.findByRole("button", { name: "user-alex" })).toBeTruthy();
+    expect(value.listFindings).toHaveBeenCalledWith(analyzer.id, "ACTIVE", undefined);
+    expect(value.createAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("keeps a denied Finding directory distinct from a temporary outage", async () => {
+    const value = client({
+      readAnalyzer: vi.fn().mockResolvedValue({ analyzer, capabilities: [] })
+    });
+    view(value);
+
+    expect(await screen.findByText(/当前身份没有读取或管理访问分析的权限/)).toBeTruthy();
+    expect(screen.queryByText(/访问分析暂时不可用/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+    expect(value.listFindings).not.toHaveBeenCalled();
+  });
+
+  it("opens an exact known Finding without analyzer-list, analyzer-read, or finding-list authority", async () => {
+    const user = userEvent.setup();
+    const readFinding = vi.fn().mockResolvedValue(findingAccess());
+    const value = client({
+      canList: false,
+      canCreate: false,
+      readAnalyzer: vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED")),
+      listFindings: vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED")),
+      readFinding
+    });
+    view(value);
+
+    await user.type(screen.getByLabelText("分析器 ID", { selector: "input#known-access-finding-analyzer-id" }), analyzer.id);
+    await user.type(screen.getByLabelText("Finding ID"), finding.id);
+    await user.click(screen.getByRole("button", { name: "查看 Finding" }));
+
+    await waitFor(() => expect(readFinding).toHaveBeenCalledWith(analyzer.id, finding.id));
+    expect(await screen.findByRole("heading", { name: "复核 Finding · user-alex" })).toBeTruthy();
+    expect(value.listAnalyzers).not.toHaveBeenCalled();
+    expect(value.listFindings).not.toHaveBeenCalled();
+    expect(value.readAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("does not disclose a target when an exact known Finding read is denied", async () => {
+    const user = userEvent.setup();
+    const value = client({ canList: false, canCreate: false,
+      readFinding: vi.fn().mockRejectedValue(new HttpProblem(404, "iam.access-finding.not-found")) });
+    view(value);
+    await user.type(screen.getByLabelText("分析器 ID", { selector: "input#known-access-finding-analyzer-id" }), analyzer.id);
+    await user.type(screen.getByLabelText("Finding ID"), "finding-private");
+    await user.click(screen.getByRole("button", { name: "查看 Finding" }));
+
+    expect(await screen.findByText(/IAM 未确认指定 Analyzer 或 Finding 可读取/)).toBeTruthy();
+    expect(screen.queryByText("user-alex")).toBeNull();
+  });
+
+  it.each([
+    [403, "PRIVATE_ANALYZER_DIAGNOSTIC", "当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。 请联系账号管理员核对授权，授权后重新检查权限。", false],
+    [404, "iam.route.notfound", "当前运行环境无法提供兼容的访问分析功能；这不代表服务尚未开通。", false],
+    [404, "iam.access-analyzer.not-found", "IAM 未确认指定 Analyzer 或 Finding 可读取；它可能不存在，或当前身份无法确认。这不代表访问分析服务未开通。", false],
+    [404, "PRIVATE_ANALYZER_DIAGNOSTIC", "IAM 未确认指定 Analyzer 或 Finding 可读取；它可能不存在，或当前身份无法确认。这不代表访问分析服务未开通。", false],
+    [503, "PRIVATE_ANALYZER_DIAGNOSTIC", "访问分析暂时不可用；失败不代表当前账号没有 Analyzer 或 Finding。", true]
+  ] as const)("keeps an exact known-Analyzer %i %s failure distinct from an empty directory", async (status, code, message, retryable) => {
+    const user = userEvent.setup();
+    const readAnalyzer = vi.fn().mockRejectedValue(new HttpProblem(status, code));
+    view(client({ canList: false, canCreate: false, readAnalyzer }));
+    await user.type(await screen.findByLabelText("分析器 ID", { selector: "input#known-access-analyzer-id" }), analyzer.id);
+    await user.click(screen.getByRole("button", { name: "查看分析器" }));
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.queryByText("未授权浏览分析器目录")).toBeNull();
+    expect(screen.queryByText("尚未创建访问分析器")).toBeNull();
+    if (retryable) {
+      await user.click(screen.getByRole("button", { name: "重试读取" }));
+      await waitFor(() => expect(readAnalyzer).toHaveBeenCalledTimes(2));
+      expect(readAnalyzer).toHaveBeenLastCalledWith(analyzer.id);
+    } else {
+      expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+    }
+  });
+
   it("keeps the detail shell stable while reauthorizing and rereading the selected Finding", async () => {
     const user = userEvent.setup();
-    let resolveFinding!: (value: typeof finding) => void;
-    const detail = new Promise<typeof finding>((resolve) => { resolveFinding = resolve; });
+    let resolveFinding!: (value: AccessFindingAccess) => void;
+    const detail = new Promise<AccessFindingAccess>((resolve) => { resolveFinding = resolve; });
     const readFinding = vi.fn().mockReturnValue(detail);
     view(client({ readFinding }));
     await user.click(await screen.findByRole("button", { name: "user-alex" }));
@@ -89,7 +193,7 @@ describe("live access analysis", () => {
     expect(screen.getByText(/归档与取消归档只改变 Finding/)).toBeTruthy();
     expect(readFinding).toHaveBeenCalledWith(analyzer.id, finding.id);
     expect(screen.queryByRole("button", { name: "归档 Finding" })).toBeNull();
-    resolveFinding(finding);
+    resolveFinding(findingAccess());
     expect(await screen.findByRole("button", { name: "归档 Finding" })).toBeTruthy();
   });
 
@@ -122,10 +226,103 @@ describe("live access analysis", () => {
     expect(screen.queryByRole("button", { name: "user-alex" })).toBeNull();
   });
 
+  it("keeps the same-session workspace stable, freezes writes, and refreshes exact Analyzer authority", async () => {
+    const user = userEvent.setup();
+    const continuityIdentity = {};
+    const updateAnalyzer = vi.fn().mockResolvedValue({ ...analyzer, unusedAccessAgeDays: 30, resourceVersion: 2 });
+    const first = client({ continuityIdentity, updateAnalyzer });
+    const rendered = view(first);
+    await user.click(await screen.findByRole("tab", { name: "分析规则" }));
+    const window = screen.getByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window);
+    await user.type(window, "30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", false);
+
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis authorizationPending client={first} onNavigate={vi.fn()} /></LocaleProvider>);
+
+    expect(screen.getByRole("tab", { name: "分析规则" }).getAttribute("data-state")).toBe("active");
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+
+    let resolveRefreshedAnalyzer!: (value: AccessAnalyzerAccess) => void;
+    const refreshedAnalyzer = new Promise<AccessAnalyzerAccess>((resolve) => { resolveRefreshedAnalyzer = resolve; });
+    const readAnalyzer = vi.fn().mockReturnValue(refreshedAnalyzer);
+    const otherAnalyzer = { ...analyzer, id: "analyzer-directory-first", resourceVersion: 4 };
+    const refreshed = client({ continuityIdentity, readAnalyzer, updateAnalyzer,
+      listAnalyzers: vi.fn().mockResolvedValue({ accountId: analyzer.accountId, items: [otherAnalyzer, analyzer], nextAfter: null }) });
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
+
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    expect(screen.getByRole("tab", { name: "分析规则" }).getAttribute("data-state")).toBe("active");
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+    resolveRefreshedAnalyzer({ analyzer, capabilities: [capability("iam.access-finding.list", "ACCESS_ANALYZER", analyzer.id)] });
+    await refreshedAnalyzer;
+    await waitFor(() => expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true));
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("keeps exact Finding writes frozen until the same-session detail authority is reread", async () => {
+    const user = userEvent.setup();
+    const continuityIdentity = {};
+    const first = client({ continuityIdentity });
+    const rendered = view(first);
+    await user.click(await screen.findByRole("button", { name: "user-alex" }));
+    expect(await screen.findByRole("button", { name: "归档 Finding" })).toHaveProperty("disabled", false);
+
+    let resolveFinding!: (value: AccessFindingAccess) => void;
+    const refreshedFinding = new Promise<AccessFindingAccess>((resolve) => { resolveFinding = resolve; });
+    const archiveFinding = vi.fn();
+    const refreshed = client({ continuityIdentity, archiveFinding, readFinding: vi.fn().mockReturnValue(refreshedFinding) });
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
+
+    const archive = screen.getByRole("button", { name: "归档 Finding" });
+    expect(archive).toHaveProperty("disabled", true);
+    await user.click(archive);
+    expect(archiveFinding).not.toHaveBeenCalled();
+    resolveFinding({ finding, capabilities: [] });
+    await refreshedFinding;
+    await waitFor(() => expect(screen.queryByRole("button", { name: "归档 Finding" })).toBeNull());
+    expect(archiveFinding).not.toHaveBeenCalled();
+  });
+
+  it("ignores a late exact Analyzer response from an older authority snapshot in the same Session", async () => {
+    let resolveOldAnalyzer!: (value: AccessAnalyzerAccess) => void;
+    const oldAnalyzer = new Promise<AccessAnalyzerAccess>((resolve) => { resolveOldAnalyzer = resolve; });
+    const continuityIdentity = {};
+    const first = client({ continuityIdentity, readAnalyzer: vi.fn().mockReturnValue(oldAnalyzer) });
+    const rendered = view(first);
+    await waitFor(() => expect(first.readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+
+    const readAnalyzer = vi.fn().mockResolvedValue({
+      analyzer,
+      capabilities: [capability("iam.access-finding.list", "ACCESS_ANALYZER", analyzer.id)]
+    });
+    const refreshed = client({ continuityIdentity, readAnalyzer });
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
+
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("tab", { name: "分析规则" }));
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    const window = screen.getByRole("spinbutton", { name: "完整观测窗口" });
+    expect(window).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await act(async () => {
+      resolveOldAnalyzer(analyzerAccess());
+      await oldAnalyzer;
+    });
+    expect(screen.getByRole("spinbutton", { name: "完整观测窗口" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+  });
+
   it("removes an old pending Finding detail on exact client replacement and never restores it", async () => {
     const user = userEvent.setup();
-    let resolveOldFinding!: (value: typeof finding) => void;
-    const oldDetail = new Promise<typeof finding>((resolve) => { resolveOldFinding = resolve; });
+    let resolveOldFinding!: (value: AccessFindingAccess) => void;
+    const oldDetail = new Promise<AccessFindingAccess>((resolve) => { resolveOldFinding = resolve; });
     const first = client({ readFinding: vi.fn().mockReturnValue(oldDetail) });
     const replacementFinding = { ...finding, id: "finding-next", target: { kind: "USER" as const, id: "user-next" } };
     const replacement = client({ listFindings: vi.fn().mockResolvedValue({ ...directory, items: [replacementFinding] }) });
@@ -138,7 +335,7 @@ describe("live access analysis", () => {
     expect(screen.queryByRole("heading", { name: "复核 Finding · user-alex" })).toBeNull();
     expect(await screen.findByRole("button", { name: "user-next" })).toBeTruthy();
     await act(async () => {
-      resolveOldFinding(finding);
+      resolveOldFinding(findingAccess());
       await oldDetail;
     });
     expect(screen.queryByRole("heading", { name: "复核 Finding · user-alex" })).toBeNull();
@@ -153,6 +350,7 @@ describe("live access analysis", () => {
     const replacementAnalyzer = { ...analyzer, unusedAccessAgeDays: 120, resourceVersion: 7 };
     const replacement = client({
       listAnalyzers: vi.fn().mockResolvedValue({ accountId: analyzer.accountId, items: [replacementAnalyzer], nextAfter: null }),
+      readAnalyzer: vi.fn().mockResolvedValue(analyzerAccess(replacementAnalyzer)),
       listFindings: vi.fn().mockResolvedValue({ ...directory, analyzerId: replacementAnalyzer.id })
     });
     const rendered = view(first);
@@ -179,15 +377,18 @@ describe("live access analysis", () => {
     const user = userEvent.setup();
     view(client({ readFinding: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) }));
     await user.click(await screen.findByRole("button", { name: "user-alex" }));
-    expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。")).toBeTruthy();
+    expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。 请联系账号管理员核对授权，授权后重新检查权限。")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "归档 Finding" })).toBeNull();
-    expect(screen.getByRole("button", { name: "重新加载" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重新加载" })).toBeNull();
   });
 
   it("archives a Finding in the content area using its exact resource version", async () => {
     const user = userEvent.setup();
-    const archiveFinding = vi.fn().mockResolvedValue({ ...finding, status: "ARCHIVED", resourceVersion: 2, updatedAt: timestamp });
-    const value = client({ archiveFinding });
+    const archived = { ...finding, status: "ARCHIVED" as const, resourceVersion: 2, updatedAt: timestamp };
+    const archiveFinding = vi.fn().mockResolvedValue(archived);
+    const value = client({ archiveFinding, readFinding: vi.fn()
+      .mockResolvedValueOnce(findingAccess())
+      .mockResolvedValueOnce(findingAccess(archived)) });
     view(value);
     await user.click(await screen.findByRole("button", { name: "user-alex" }));
     expect(screen.getByRole("heading", { name: "复核 Finding · user-alex" })).toBeTruthy();
@@ -197,9 +398,29 @@ describe("live access analysis", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 
+  it("keeps an applied Finding archive successful when its authoritative reread is temporarily unavailable", async () => {
+    const user = userEvent.setup();
+    const archived = { ...finding, status: "ARCHIVED" as const, resourceVersion: 2, updatedAt: timestamp };
+    const archiveFinding = vi.fn().mockResolvedValue(archived);
+    const readFinding = vi.fn()
+      .mockResolvedValueOnce(findingAccess())
+      .mockRejectedValueOnce(new HttpProblem(503, "PRIVATE_FINDING_DIAGNOSTIC"))
+      .mockResolvedValueOnce(findingAccess(archived));
+    view(client({ archiveFinding, readFinding }));
+    await user.click(await screen.findByRole("button", { name: "user-alex" }));
+    await user.click(await screen.findByRole("button", { name: "归档 Finding" }));
+
+    expect(await screen.findByText("Finding 已归档；目标对象和权限均未改变。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试原命令" })).toBeNull();
+    await user.click(await screen.findByRole("button", { name: "重试读取" }));
+    await waitFor(() => expect(readFinding).toHaveBeenCalledTimes(3));
+    expect(archiveFinding).toHaveBeenCalledTimes(1);
+    expect((await screen.findAllByText("已归档")).length).toBeGreaterThan(0);
+  });
+
   it("keeps a forbidden live response local and never substitutes MOCK samples", async () => {
     view(client({ listAnalyzers: vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN")) }));
-    expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。")).toBeTruthy();
+    expect(await screen.findByText("当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。 请联系账号管理员核对授权，授权后重新检查权限。")).toBeTruthy();
     expect(screen.queryByText(/123 条样例/)).toBeNull();
     expect(screen.queryByText(/LIVE · NOT_CONNECTED/)).toBeNull();
   });
@@ -243,13 +464,64 @@ describe("live access analysis", () => {
     expect(await screen.findByText("分析规则已更新；这不会立即重算 Finding 或处置任何对象。")).toBeTruthy();
   });
 
+  it("retains an unknown Analyzer command across same-session reauthorization and a later denial", async () => {
+    const user = userEvent.setup();
+    const continuityIdentity = {};
+    const firstUpdate = vi.fn().mockRejectedValue(new HttpProblem(503, "UNAVAILABLE"));
+    const first = client({ continuityIdentity, updateAnalyzer: firstUpdate });
+    const rendered = view(first);
+    await user.click(screen.getByRole("tab", { name: "分析规则" }));
+    const window = await screen.findByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window); await user.type(window, "30");
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+    const original = firstUpdate.mock.calls[0]?.[1];
+    expect(await screen.findByRole("button", { name: "重试原命令" })).toBeTruthy();
+
+    const retryUpdate = vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED"));
+    const refreshed = client({ continuityIdentity, updateAnalyzer: retryUpdate });
+    rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
+    await waitFor(() => expect(refreshed.readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    expect(screen.queryByText(/原命令.*仍须由原连接核对/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "重试原命令" }));
+
+    await waitFor(() => expect(retryUpdate).toHaveBeenCalledTimes(1));
+    expect(retryUpdate.mock.calls[0]?.[1]).toEqual(original);
+    expect(screen.getByRole("button", { name: "重试原命令" })).toBeTruthy();
+    expect(screen.getByText(new RegExp(original.requestId))).toBeTruthy();
+  });
+
+  it("keeps an applied Analyzer update successful when only its authoritative reread fails", async () => {
+    const user = userEvent.setup();
+    const updated = { ...analyzer, unusedAccessAgeDays: 30, resourceVersion: 2, updatedAt: timestamp };
+    const updateAnalyzer = vi.fn().mockResolvedValue(updated);
+    const readAnalyzer = vi.fn()
+      .mockResolvedValueOnce(analyzerAccess())
+      .mockRejectedValueOnce(new HttpProblem(503, "PRIVATE_ANALYZER_DIAGNOSTIC"))
+      .mockResolvedValueOnce(analyzerAccess(updated));
+    view(client({ updateAnalyzer, readAnalyzer }));
+    await user.click(screen.getByRole("tab", { name: "分析规则" }));
+    const window = await screen.findByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window);
+    await user.type(window, "30");
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+
+    expect(await screen.findByText("分析规则已更新；这不会立即重算 Finding 或处置任何对象。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试原命令" })).toBeNull();
+    await user.click(await screen.findByRole("button", { name: "重试读取" }));
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledTimes(3));
+    expect(readAnalyzer).toHaveBeenLastCalledWith(analyzer.id);
+    expect(updateAnalyzer).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole("tab", { name: "分析规则" }));
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
+  });
+
   it("keeps the Analyzer draft after a stale-version conflict and requires a new explicit command", async () => {
     const user = userEvent.setup();
     const latest = { ...analyzer, unusedAccessAgeDays: 120, resourceVersion: 2, updatedAt: timestamp };
     const updateAnalyzer = vi.fn()
       .mockRejectedValueOnce(new HttpProblem(409, "RESOURCE_VERSION_CONFLICT"))
       .mockResolvedValueOnce({ ...latest, unusedAccessAgeDays: 30, resourceVersion: 3 });
-    const readAnalyzer = vi.fn().mockResolvedValue(latest);
+    const readAnalyzer = vi.fn().mockResolvedValue(analyzerAccess(latest));
     view(client({ readAnalyzer, updateAnalyzer }));
     await user.click(screen.getByRole("tab", { name: "分析规则" }));
     const window = await screen.findByRole("spinbutton", { name: "完整观测窗口" });
@@ -326,7 +598,7 @@ describe("live access analysis", () => {
     };
     view(client({
       listFindings: vi.fn().mockResolvedValue({ ...directory, items: [resolved] }),
-      readFinding: vi.fn().mockResolvedValue(resolved)
+      readFinding: vi.fn().mockResolvedValue(findingAccess(resolved))
     }));
     await user.click(await screen.findByRole("button", { name: "key-ci" }));
     expect(await screen.findByText("自动处置完成")).toBeTruthy();
@@ -343,7 +615,7 @@ describe("live access analysis", () => {
     };
     view(client({
       listFindings: vi.fn().mockResolvedValue({ ...directory, items: [recovered] }),
-      readFinding: vi.fn().mockResolvedValue(recovered)
+      readFinding: vi.fn().mockResolvedValue(findingAccess(recovered))
     }));
     await user.click(await screen.findByRole("button", { name: "user-alex" }));
     expect(screen.getByRole("region", { name: "恢复代次与观测可信度" })).toBeTruthy();

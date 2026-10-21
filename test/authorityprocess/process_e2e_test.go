@@ -191,12 +191,26 @@ const (
 	authorityProcessDailyPasswordChangeBrowser
 	authorityProcessAccountSecuritySettingsBrowser
 	authorityProcessAccessKeyRecoveryBrowser
+	authorityProcessPermissionAwareBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
 )
 
 const authorityProcessBrowserObservation = 30 * time.Minute
+
+// This single opt-in journey observes current permission projection, exact
+// reads, partial service access and grant/revoke through the real console.
+// Setup and authority changes use public IAM commands, never direct grants.
+func TestIAMPermissionAwareConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_PERMISSION_AWARE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_PERMISSION_AWARE_BROWSER=1 for the bounded permission-aware browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("permission-aware browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessPermissionAwareBrowser)
+}
 
 // This opt-in fixture proves the Account -> Root -> LIVE User identity path
 // without repeating the accepted managed-product provisioning gate.
@@ -457,7 +471,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		mode == authorityProcessPolicyAttachmentRecoveryBrowser ||
 		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
 		mode == authorityProcessDailyPasswordChangeBrowser || mode == authorityProcessAccountSecuritySettingsBrowser ||
-		mode == authorityProcessAccessKeyRecoveryBrowser {
+		mode == authorityProcessAccessKeyRecoveryBrowser || mode == authorityProcessPermissionAwareBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -947,6 +961,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	if mode == authorityProcessAccessKeyRecoveryBrowser {
 		sensitive = append(sensitive, runIAMAccessKeyRecoveryConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
+		return
+	}
+	if mode == authorityProcessPermissionAwareBrowser {
+		sensitive = append(sensitive, runIAMPermissionAwareConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)...)
@@ -2684,6 +2705,390 @@ func assertManagedProductTerminationProof(
 	if response.Status != http.StatusOK {
 		t.Fatalf("resolve %s termination Audit proof: status=%d body=%s", installationID, response.Status, response.Body)
 	}
+}
+
+func runIAMPermissionAwareConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, platformBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	const loginName = "browser.permission.reader"
+	member := createIAMUser(t, iamEndpoint, platformBearer, loginName, "Browser exact-resource reader",
+		initialReaderPassword, "permission-browser-user")
+	otherUser := createIAMUser(t, iamEndpoint, platformBearer, "browser.permission.other", "Browser explicitly permitted key owner",
+		initialReaderPassword, "permission-browser-other-user")
+	login := loginIAM(t, iamEndpoint, loginName+"@"+string(member.AccountID), initialReaderPassword, "permission-browser-login")
+	changePasswordIAM(t, iamEndpoint, login.Credential, initialReaderPassword, changedReaderPassword, "permission-browser-password")
+	call := func(method, path, bearer string, body any, status int, result any) {
+		t.Helper()
+		response := performJSON(t, method, iamEndpoint+path, bearer, body)
+		if response.Status != status {
+			t.Fatalf("permission browser authority %s %s status=%d want=%d", method, path, response.Status, status)
+		}
+		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil {
+			t.Fatalf("permission browser authority returned an invalid %s document", path)
+		}
+	}
+	exact := func(sid string, kind iamv1.ResourceKind, id string, actions ...iamv1.Action) iamv1.PolicyStatement {
+		return iamv1.PolicyStatement{SID: sid, Effect: iamv1.PolicyAllow, Actions: actions,
+			Resources: []iamv1.PolicyResourceSelector{{Kind: kind, Match: iamv1.PolicyResourceExact, ID: id}}}
+	}
+	publish := func(name, request string, statements ...iamv1.PolicyStatement) iamv1.PolicyDetail {
+		t.Helper()
+		var policy iamv1.PolicyDetail
+		call(http.MethodPost, "/v1/policies", platformBearer, iamv1.CreatePolicyRequest{
+			DisplayName: name, RequestID: request, Document: iamv1.PolicyDocument{
+				LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant, Statements: statements,
+			}}, http.StatusCreated, &policy)
+		if iamv1.ValidatePolicyDetail(policy) != nil {
+			t.Fatal("permission browser fixture could not publish its current policy")
+		}
+		return policy
+	}
+	target := publish("Browser inspected policy", "permission-browser-target-policy",
+		exact("one-application", iamv1.ResourceApplication, "permission-browser-application", iamv1.ActionPaaSApplicationRead))
+	var analyzer iamv1.AccessAnalyzer
+	call(http.MethodPost, "/v1/account/access-analyzers", platformBearer,
+		iamv1.CreateAccessAnalyzerRequest{Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "permission-browser-analyzer"}, http.StatusCreated, &analyzer)
+	if iamv1.ValidateAccessAnalyzer(analyzer) != nil {
+		t.Fatal("permission browser fixture has no valid Analyzer")
+	}
+	var createdReport iamv1.CreateAccountSecurityReportResponse
+	call(http.MethodPost, "/v1/account/security-reports", platformBearer,
+		iamv1.CreateAccountSecurityReportRequest{FormatVersion: iamv1.SecurityReportFormatVersion, RequestID: "permission-browser-report"}, http.StatusCreated, &createdReport)
+	if iamv1.ValidateCreateAccountSecurityReportResponse(createdReport) != nil {
+		t.Fatal("permission browser fixture has no valid report")
+	}
+	userPath := "/v1/users/" + string(member.ID)
+	keyPath := userPath + "/access-keys"
+	otherKeyPath := "/v1/users/" + string(otherUser.ID) + "/access-keys"
+	policyPath := "/v1/policies/" + string(target.Policy.ID)
+	analyzerPath := "/v1/account/access-analyzers/" + string(analyzer.ID)
+	const missingAnalyzerID = "access-analyzer-permission-browser-missing"
+	missingAnalyzerPath := "/v1/account/access-analyzers/" + missingAnalyzerID
+	const findingAnalyzerID = "access-analyzer-permission-browser-unread"
+	const missingFindingID = "access-finding-permission-browser-missing"
+	findingAnalyzerPath := "/v1/account/access-analyzers/" + findingAnalyzerID
+	missingFindingPath := findingAnalyzerPath + "/findings/" + missingFindingID
+	reportPath := "/v1/account/security-reports/" + string(createdReport.Metadata.ID)
+	base := publish("Browser exact reads", "permission-browser-base-policy",
+		exact("self-keys", iamv1.ResourceUser, string(member.ID), iamv1.ActionIAMAccessKeyList),
+		exact("policy", iamv1.ResourcePolicy, string(target.Policy.ID), iamv1.ActionIAMPolicyRead),
+		exact("analyzer", iamv1.ResourceAccessAnalyzer, string(analyzer.ID), iamv1.ActionIAMAccessAnalyzerRead),
+		exact("missing-analyzer", iamv1.ResourceAccessAnalyzer, missingAnalyzerID, iamv1.ActionIAMAccessAnalyzerRead),
+		exact("missing-finding", iamv1.ResourceAccessFinding, missingFindingID, iamv1.ActionIAMAccessFindingRead),
+		exact("report", iamv1.ResourceSecurityReport, string(createdReport.Metadata.ID), iamv1.ActionIAMSecurityReportRead),
+		exact("templates", iamv1.ResourceAccount, string(member.AccountID), iamv1.ActionIAMServiceRoleTemplateList))
+	baseAttachment := createIAMPolicyAttachment(t, iamEndpoint, platformBearer, member.ID, base.Policy.ID, "permission-browser-base-grant")
+	extra := publish("Browser additional read and action capabilities", "permission-browser-extra-policy",
+		exact("directories", iamv1.ResourceAccount, string(member.AccountID), iamv1.ActionIAMPolicyList,
+			iamv1.ActionIAMAccessAnalyzerList, iamv1.ActionIAMServiceLinkedRoleList, iamv1.ActionIAMSecuritySettingsRead),
+		exact("versions", iamv1.ResourcePolicy, string(target.Policy.ID), iamv1.ActionIAMPolicyVersionList, iamv1.ActionIAMPolicyVersionRead),
+		exact("findings", iamv1.ResourceAccessAnalyzer, string(analyzer.ID), iamv1.ActionIAMAccessFindingList),
+		exact("report-download", iamv1.ResourceSecurityReport, string(createdReport.Metadata.ID), iamv1.ActionIAMSecurityReportDownload))
+	analyzerWrites := publish("Browser exact Analyzer actions", "permission-browser-analyzer-write-policy",
+		exact("analyzer-actions", iamv1.ResourceAccessAnalyzer, string(analyzer.ID),
+			iamv1.ActionIAMAccessAnalyzerUpdate, iamv1.ActionIAMAccessAnalyzerSetDisposition))
+	otherKeys := publish("Browser exact other-user key read", "permission-browser-other-key-policy",
+		exact("other-user", iamv1.ResourceUser, string(otherUser.ID), iamv1.ActionIAMUserRead, iamv1.ActionIAMAccessKeyList))
+	var originalReport iamv1.AccountSecurityReportDetail
+	call(http.MethodGet, reportPath, platformBearer, nil, http.StatusOK, &originalReport)
+	if iamv1.ValidateAccountSecurityReportDetail(originalReport) != nil {
+		t.Fatal("permission browser report did not expose the current strict read contract")
+	}
+	assertCapabilities := func(granted, revoked, mayUpdateAnalyzer bool) {
+		t.Helper()
+		var identity iamv1.CurrentIdentity
+		call(http.MethodGet, "/v1/auth/me", login.Credential, nil, http.StatusOK, &identity)
+		if iamv1.ValidateCurrentIdentity(identity) != nil || identity.IdentityKind != iamv1.IdentityUser ||
+			identity.User.ID != member.ID || identity.Account.ID != member.AccountID {
+			t.Fatal("permission browser current identity lost its exact ordinary User")
+		}
+		want := map[iamv1.Action]bool{
+			iamv1.ActionIAMAccessKeyList: !revoked, iamv1.ActionIAMServiceRoleTemplateList: !revoked,
+			iamv1.ActionIAMPolicyList: granted, iamv1.ActionIAMAccessAnalyzerList: granted,
+			iamv1.ActionIAMServiceLinkedRoleList: granted, iamv1.ActionIAMSecuritySettingsRead: granted,
+		}
+		for _, capability := range identity.Capabilities {
+			if capability.Available != want[capability.Action] {
+				t.Fatalf("permission browser entry %s available=%v want=%v", capability.Action, capability.Available, want[capability.Action])
+			}
+		}
+		if revoked {
+			for _, path := range []string{keyPath, policyPath, analyzerPath, reportPath} {
+				call(http.MethodGet, path, login.Credential, nil, http.StatusForbidden, nil)
+			}
+			call(http.MethodPost, analyzerPath+":update", login.Credential, iamv1.UpdateAccessAnalyzerRequest{
+				Status: analyzer.Status, UnusedAccessAgeDays: 13, ResourceVersion: analyzer.ResourceVersion,
+				RequestID: "permission-browser-revoked-update",
+			}, http.StatusForbidden, nil)
+			return
+		}
+		var keys iamv1.AccessKeyList
+		call(http.MethodGet, keyPath, login.Credential, nil, http.StatusOK, &keys)
+		if iamv1.ValidateAccessKeyList(keys) != nil || len(keys.Items) != 0 {
+			t.Fatal("permission browser key directory is not an authoritative empty result")
+		}
+		var policy iamv1.PolicyAccess
+		call(http.MethodGet, policyPath, login.Credential, nil, http.StatusOK, &policy)
+		if iamv1.ValidatePolicyAccess(policy) != nil || !reflect.DeepEqual(policy.Detail, target) {
+			t.Fatal("permission browser exact Policy read changed its business document")
+		}
+		for _, capability := range policy.Capabilities {
+			want := granted && (capability.Action == iamv1.ActionIAMPolicyVersionList || capability.Action == iamv1.ActionIAMPolicyVersionRead)
+			if capability.Available != want {
+				t.Fatal("permission browser Policy read inferred edit or version authority")
+			}
+		}
+		var detail iamv1.AccessAnalyzerDetail
+		call(http.MethodGet, analyzerPath, login.Credential, nil, http.StatusOK, &detail)
+		if iamv1.ValidateAccessAnalyzerDetail(detail) != nil || detail.Analyzer != analyzer {
+			t.Fatal("permission browser Analyzer changed while projecting authority")
+		}
+		for _, capability := range detail.Capabilities {
+			want := mayUpdateAnalyzer
+			if capability.Action == iamv1.ActionIAMAccessFindingList {
+				want = granted
+			}
+			if capability.Available != want {
+				t.Fatal("permission browser Analyzer has incorrect exact action authority")
+			}
+		}
+		var report iamv1.AccountSecurityReportDetail
+		call(http.MethodGet, reportPath, login.Credential, nil, http.StatusOK, &report)
+		if iamv1.ValidateAccountSecurityReportDetail(report) != nil || !reflect.DeepEqual(report.Report, originalReport.Report) ||
+			report.Capabilities[0].Available != granted {
+			t.Fatal("permission browser report inferred download permission or changed the immutable snapshot")
+		}
+	}
+	assertCapabilities(false, false, false)
+	var missingAnalyzer iamv1.Problem
+	call(http.MethodGet, missingAnalyzerPath, login.Credential, nil, http.StatusNotFound, &missingAnalyzer)
+	if missingAnalyzer.Code != "iam.access-analyzer.not-found" {
+		t.Fatal("permission browser target404 was confused with an unavailable route")
+	}
+	var missingFinding iamv1.Problem
+	call(http.MethodGet, missingFindingPath, login.Credential, nil, http.StatusNotFound, &missingFinding)
+	if missingFinding.Code != "iam.access-finding.not-found" {
+		t.Fatal("permission browser exact Finding did not preserve its target404 contract")
+	}
+	for _, path := range []string{findingAnalyzerPath, findingAnalyzerPath + "/findings"} {
+		call(http.MethodGet, path, login.Credential, nil, http.StatusForbidden, nil)
+	}
+	var templates iamv1.ServiceRoleTemplateList
+	call(http.MethodGet, "/v1/service-role-templates", login.Credential, nil, http.StatusOK, &templates)
+	if iamv1.ValidateServiceRoleTemplateList(templates) != nil {
+		t.Fatal("permission browser template-only access returned an invalid directory")
+	}
+	for _, path := range []string{"/v1/users", userPath, "/v1/policies", "/v1/account/access-analyzers", "/v1/service-linked-roles", otherKeyPath} {
+		call(http.MethodGet, path, login.Credential, nil, http.StatusForbidden, nil)
+	}
+	probe := newBrowserPermissionProbe("/api/iam"+keyPath, "/api/iam"+analyzerPath+":update", []string{
+		"/api/iam" + policyPath, "/api/iam" + analyzerPath, "/api/iam" + reportPath, "/api/iam" + missingAnalyzerPath,
+		"/api/iam" + missingFindingPath,
+		"/api/iam" + otherKeyPath,
+		"/api/iam/v1/auth/me", "/api/iam/v1/service-role-templates", "/api/iam/v1/service-linked-roles",
+	})
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, probe.wrap)
+	defer closeBrowser()
+	initialObserved := filepath.Join(temporary, "browser-permission-initial-observed")
+	grantObserved := filepath.Join(temporary, "browser-permission-grant-observed")
+	exactRevokedObserved := filepath.Join(temporary, "browser-permission-exact-revoke-observed")
+	revokedObserved := filepath.Join(temporary, "browser-permission-revoke-observed")
+	finish := filepath.Join(temporary, "browser-permission-finished")
+	t.Logf("PERMISSION_BROWSER_FIXTURE url=%s/console/access/access-analysis/ user=%s@%s userID=%s otherUserID=%s policyID=%s analyzerID=%s missingAnalyzerID=%s findingAnalyzerID=%s missingFindingID=%s reportID=%s initialObserved=%s grantObserved=%s exactRevokedObserved=%s revokedObserved=%s finish=%s; use changedReaderPassword for one independent Policy deep-link login and one Analysis login; close the Policy tab after its read. Keep the Analysis Session for all grant/revoke observations, navigate only inside the app or back through its existing history. The first exact key GET returns one controlled 503, then real authority",
+		server.URL, loginName, member.AccountID, member.ID, otherUser.ID, target.Policy.ID, analyzer.ID, missingAnalyzerID, findingAnalyzerID, missingFindingID, createdReport.Metadata.ID,
+		initialObserved, grantObserved, exactRevokedObserved, revokedObserved, finish)
+	waitForBrowserMarker(t, ctx, ui, initialObserved, "initial exact-read and failure-state browser observation")
+	for _, path := range []string{keyPath, policyPath, analyzerPath, reportPath} {
+		if probe.count("initial", "/api/iam"+path, http.StatusOK) == 0 {
+			t.Fatalf("initial browser did not actually read %s", path)
+		}
+	}
+	if probe.count("initial", "/api/iam/v1/service-role-templates", http.StatusOK) == 0 {
+		t.Fatal("browser did not read the permitted template source independently")
+	}
+	if probe.count("initial", "/api/iam"+keyPath, http.StatusServiceUnavailable) != 1 {
+		t.Fatal("browser did not encounter exactly one controlled key read failure")
+	}
+	if probe.count("initial", "/api/iam"+missingAnalyzerPath, http.StatusNotFound) == 0 {
+		t.Fatal("browser did not observe the real known-target404 independently of route availability")
+	}
+	if probe.count("initial", "/api/iam"+missingFindingPath, http.StatusNotFound) == 0 {
+		t.Fatal("browser did not directly read a known Finding without parent-detail or directory permission")
+	}
+	if attempts, accepted, logouts := probe.sessionCounts(); attempts != 2 || accepted != 2 || logouts != 0 {
+		t.Fatalf("initial browser observations must use exactly the independent Policy and Analysis deep-link sessions: attempts=%d accepted=%d logouts=%d", attempts, accepted, logouts)
+	}
+	if !probe.sameRefreshSession() {
+		t.Fatal("browser did not establish its exact Analyzer refresh session")
+	}
+	extraAttachment := createIAMPolicyAttachment(t, iamEndpoint, platformBearer, member.ID, extra.Policy.ID, "permission-browser-extra-grant")
+	writeAttachment := createIAMPolicyAttachment(t, iamEndpoint, platformBearer, member.ID, analyzerWrites.Policy.ID, "permission-browser-analyzer-write-grant")
+	assertCapabilities(true, false, true)
+	probe.setStage("granted")
+	writeProtectedFile(t, temporary, "browser-permission-granted", []byte("granted\n"))
+	t.Log("PERMISSION_BROWSER_GRANTED: original User sessions remain valid; explicitly reread current identity/details, then save unusedAccessAgeDays=14 once while keeping ACTIVE and REVIEW_ONLY; the first post-write Analyzer GET returns one controlled 503, observe completed write separately and retry only the read")
+	waitForBrowserMarker(t, ctx, ui, grantObserved, "granted exact-action browser observation")
+	for _, path := range []string{"/v1/auth/me", analyzerPath, reportPath, "/v1/service-linked-roles"} {
+		if probe.count("granted", "/api/iam"+path, http.StatusOK) == 0 {
+			t.Fatalf("granted browser did not actually reread %s", path)
+		}
+	}
+	if attempts, accepted := probe.updateCounts(); attempts != 1 || accepted != 1 {
+		t.Fatal("authorized browser must perform exactly one successful Analyzer update")
+	}
+	if !probe.updatedReadRecovered() {
+		t.Fatal("browser did not recover the failed post-update read independently of its successful write")
+	}
+	var changedAnalyzer iamv1.AccessAnalyzerDetail
+	call(http.MethodGet, analyzerPath, platformBearer, nil, http.StatusOK, &changedAnalyzer)
+	expectedAnalyzer := analyzer
+	expectedAnalyzer.UnusedAccessAgeDays = 14
+	expectedAnalyzer.ResourceVersion++
+	expectedAnalyzer.UpdatedAt = changedAnalyzer.Analyzer.UpdatedAt
+	if iamv1.ValidateAccessAnalyzerDetail(changedAnalyzer) != nil || analyzer.UnusedAccessAgeDays <= 14 ||
+		!expectedAnalyzer.UpdatedAt.After(analyzer.UpdatedAt) || changedAnalyzer.Analyzer != expectedAnalyzer ||
+		changedAnalyzer.Analyzer.Status != iamv1.AccessAnalyzerActive || changedAnalyzer.Analyzer.Disposition.Mode != iamv1.AccessDispositionReviewOnly {
+		t.Fatal("authorized browser update did not preserve the exact Analyzer, ACTIVE status and review-only disposition")
+	}
+	analyzer = expectedAnalyzer
+	var beforeExactRevoke, afterExactRevoke iamv1.CurrentIdentity
+	call(http.MethodGet, "/v1/auth/me", login.Credential, nil, http.StatusOK, &beforeExactRevoke)
+	revokeIAMPolicyAttachment(t, iamEndpoint, platformBearer, writeAttachment.ID, writeAttachment.ResourceVersion,
+		"permission-browser-analyzer-write-revoke")
+	assertCapabilities(true, false, false)
+	call(http.MethodGet, "/v1/auth/me", login.Credential, nil, http.StatusOK, &afterExactRevoke)
+	if !reflect.DeepEqual(beforeExactRevoke.Capabilities, afterExactRevoke.Capabilities) {
+		t.Fatal("exact Analyzer revocation unexpectedly changed the nineteen entry capabilities")
+	}
+	call(http.MethodPost, analyzerPath+":update", login.Credential, iamv1.UpdateAccessAnalyzerRequest{
+		Status: analyzer.Status, UnusedAccessAgeDays: 13, ResourceVersion: analyzer.ResourceVersion,
+		RequestID: "permission-browser-exact-revoked-update",
+	}, http.StatusForbidden, nil)
+	probe.setStage("exact-revoked")
+	writeProtectedFile(t, temporary, "browser-permission-exact-revoked", []byte("exact-revoked\n"))
+	t.Log("PERMISSION_BROWSER_EXACT_REVOKED: all nineteen entry capabilities remain identical; use Recheck permissions on the current Analyzer page, observe a fresh exact detail with update/disposition unavailable and the saved 14-day result intact; do not navigate away, log in again or submit another write")
+	waitForBrowserMarker(t, ctx, ui, exactRevokedObserved, "exact resource revocation with unchanged entry capabilities")
+	if probe.count("exact-revoked", "/api/iam/v1/auth/me", http.StatusOK) == 0 ||
+		probe.count("exact-revoked", "/api/iam"+analyzerPath, http.StatusOK) == 0 || probe.unexpectedWrites() != 0 {
+		t.Fatal("permission recheck did not refresh exact Analyzer authority independently of unchanged entry capabilities")
+	}
+	for index, attachment := range []iamv1.PolicyAttachment{baseAttachment, extraAttachment} {
+		revokeIAMPolicyAttachment(t, iamEndpoint, platformBearer, attachment.ID, attachment.ResourceVersion,
+			fmt.Sprintf("permission-browser-revoke-%d", index))
+	}
+	otherAttachment := createIAMPolicyAttachment(t, iamEndpoint, platformBearer, member.ID, otherKeys.Policy.ID, "permission-browser-other-key-grant")
+	assertCapabilities(false, true, false)
+	var otherDirectory iamv1.AccessKeyList
+	call(http.MethodGet, otherKeyPath, login.Credential, nil, http.StatusOK, &otherDirectory)
+	if iamv1.ValidateAccessKeyList(otherDirectory) != nil || otherDirectory.UserID != otherUser.ID ||
+		otherDirectory.AccountID != member.AccountID || len(otherDirectory.Items) != 0 || otherDirectory.Capabilities[0].Available {
+		t.Fatal("exact other-user key read was confused with own-key authority or inferred creation permission")
+	}
+	probe.setStage("revoked")
+	writeProtectedFile(t, temporary, "browser-permission-revoked", []byte("revoked\n"))
+	t.Log("PERMISSION_BROWSER_REVOKED: keep the original tab and Session; recheck permissions, observe revoked own-key entry/report403 without signing out or signing in again")
+	waitForBrowserMarker(t, ctx, ui, revokedObserved, "same-Session revoked permission browser observation")
+	loginAttempts, acceptedLogins, logouts := probe.sessionCounts()
+	if loginAttempts != 2 || acceptedLogins != 2 || logouts != 0 || !probe.sameRefreshSession() {
+		t.Fatal("permission refresh replaced the original browser session instead of rereading its current authority")
+	}
+	if probe.count("revoked", "/api/iam/v1/auth/me", http.StatusOK) == 0 ||
+		probe.count("revoked", "/api/iam"+reportPath, http.StatusForbidden) == 0 || probe.unexpectedWrites() != 0 {
+		t.Fatal("browser did not preserve same-Session revocation or attempted an unexpected write")
+	}
+	probe.setStage("other-user")
+	writeProtectedFile(t, temporary, "browser-permission-other-user", []byte("other-user\n"))
+	t.Logf("PERMISSION_BROWSER_OTHER_USER: only after completing the original same-Session revocation observations, open a separate tab at %s/console/access/users/?id=%s&tab=keys and sign in as the same ordinary User; prove this exact other-user Key read without own-key/User.list permission. This independent deep-link login is not permission-refresh evidence.",
+		server.URL, otherUser.ID)
+	waitForBrowserMarker(t, ctx, ui, finish, "independent exact other-user deep-link browser observation")
+	loginAttempts, acceptedLogins, logouts = probe.sessionCounts()
+	if loginAttempts != 3 || acceptedLogins != 3 || logouts != 0 ||
+		probe.count("other-user", "/api/iam"+otherKeyPath, http.StatusOK) == 0 || probe.unexpectedWrites() != 0 {
+		t.Fatal("independent deep-link read lost exact-other-user isolation or attempted an unexpected write")
+	}
+	var finalPolicy iamv1.PolicyAccess
+	var finalAnalyzer iamv1.AccessAnalyzerDetail
+	var finalReport iamv1.AccountSecurityReportDetail
+	call(http.MethodGet, policyPath, platformBearer, nil, http.StatusOK, &finalPolicy)
+	call(http.MethodGet, analyzerPath, platformBearer, nil, http.StatusOK, &finalAnalyzer)
+	call(http.MethodGet, reportPath, platformBearer, nil, http.StatusOK, &finalReport)
+	if iamv1.ValidatePolicyAccess(finalPolicy) != nil || iamv1.ValidateAccessAnalyzerDetail(finalAnalyzer) != nil ||
+		iamv1.ValidateAccountSecurityReportDetail(finalReport) != nil || !reflect.DeepEqual(target, finalPolicy.Detail) ||
+		analyzer != finalAnalyzer.Analyzer || !reflect.DeepEqual(originalReport.Report, finalReport.Report) {
+		t.Fatal("permission journey changed a resource beyond its one exact Analyzer update or mutated an immutable report")
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	for _, change := range []struct {
+		attachment                  iamv1.PolicyAttachment
+		grantRequest, revokeRequest string
+	}{
+		{baseAttachment, "permission-browser-base-grant", "permission-browser-revoke-0"},
+		{extraAttachment, "permission-browser-extra-grant", "permission-browser-revoke-1"},
+		{writeAttachment, "permission-browser-analyzer-write-grant", "permission-browser-analyzer-write-revoke"},
+		{otherAttachment, "permission-browser-other-key-grant", ""},
+	} {
+		attachment := change.attachment
+		revoked := change.revokeRequest != ""
+		expectedVersion := attachment.ResourceVersion
+		if revoked {
+			expectedVersion++
+		}
+		var exact bool
+		if err := database.QueryRow(ctx, `SELECT count(*)=1 AND bool_and((revoked_at IS NOT NULL)=$5 AND resource_version=$4)
+			FROM iam.policy_attachments WHERE tenant_id=$1 AND id=$2 AND target_kind='USER' AND target_id=$3`,
+			member.AccountID, attachment.ID, member.ID, expectedVersion, revoked).Scan(&exact); err != nil || !exact {
+			t.Fatal("permission browser grant/revoke did not leave the exact terminal attachment", err)
+		}
+		facts := []struct {
+			request string
+			action  auditv1.Action
+		}{{change.grantRequest, auditv1.ActionIAMPolicyAttachmentCreated}}
+		if revoked {
+			facts = append(facts, struct {
+				request string
+				action  auditv1.Action
+			}{change.revokeRequest, auditv1.ActionIAMPolicyAttachmentRevoked})
+		}
+		for _, fact := range facts {
+			if err := database.QueryRow(ctx, `SELECT count(*)=1 AND count(record.event_id)=1
+				AND bool_and(outbox.event_document=record.event_document
+				AND outbox.event_document#>>'{target,kind}'='POLICY_ATTACHMENT'
+				AND outbox.event_document#>>'{target,id}'=$4
+				AND outbox.event_document#>>'{actor,type}'='USER'
+				AND outbox.event_document#>>'{actor,id}'='principal-admin')
+				FROM iam.audit_outbox outbox LEFT JOIN audit.records record
+				ON record.source='IAM' AND record.event_id=outbox.event_id
+				WHERE outbox.tenant_id=$1 AND outbox.event_document->>'requestId'=$2
+				AND outbox.event_document->>'action'=$3`, member.AccountID, fact.request, fact.action, attachment.ID).
+				Scan(&exact); err != nil || !exact {
+				t.Fatal("permission browser grant/revoke lost its unique original actor/target/Audit fact", err)
+			}
+		}
+	}
+	var exactUpdate bool
+	if err := database.QueryRow(ctx, `SELECT count(*)=1 AND count(record.event_id)=1
+		AND bool_and(outbox.event_document=record.event_document
+		AND outbox.event_document#>>'{actor,type}'='USER'
+		AND outbox.event_document#>>'{actor,id}'=$3
+		AND outbox.event_document#>>'{target,kind}'='ACCESS_ANALYZER')
+		FROM iam.audit_outbox outbox LEFT JOIN audit.records record
+		ON record.source='IAM' AND record.event_id=outbox.event_id
+		WHERE outbox.tenant_id=$1 AND outbox.event_document#>>'{target,id}'=$2
+		AND outbox.event_document->>'action'=$4`, member.AccountID, analyzer.ID, member.ID, auditv1.ActionIAMAccessAnalyzerUpdated).
+		Scan(&exactUpdate); err != nil || !exactUpdate {
+		t.Fatal("browser Analyzer update lost its one current-User outbox/Audit fact", err)
+	}
+	if chain := verifyAudit(t, auditEndpoint, platformBearer); chain.State != auditv1.VerificationVerified || !chain.Complete {
+		t.Fatal("permission browser setup/grant/revoke facts broke the Account Audit chain")
+	}
+	t.Log("permission-aware browser authority gate passed: exact reads without directories, one authorized Analyzer update with independent post-write read recovery, exact action revocation with unchanged entry capabilities, immutable reports, two read-only failure injections, real grant/revoke and own/other-user separation; visual assertions require the separate browser observations")
+	return []string{login.Credential}
 }
 
 func runIAMConsoleBrowser(
@@ -7056,21 +7461,49 @@ func startIAMConsoleBrowserWithResponseLoss(
 	start func(string, []string) *childProcess,
 	responseLoss *browserResponseLoss,
 ) (*httptest.Server, *childProcess, func()) {
+	return startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, func(mux http.Handler) http.Handler {
+			return iamConsoleBrowserFixtureHandler(mux, make(chan struct{}, 16), responseLoss)
+		})
+}
+
+// The wrapper is a test-only observation/failure boundary around the real
+// same-origin services. It does not inject authentication or successful data.
+func startIAMConsoleBrowserWithHandler(
+	t *testing.T,
+	ctx context.Context,
+	root, temporary, iamEndpoint, auditEndpoint, paasEndpoint string,
+	start func(string, []string) *childProcess,
+	wrap func(http.Handler) http.Handler,
+) (*httptest.Server, *childProcess, func()) {
 	t.Helper()
 	uiAddress := freeAddress(t)
 	uiBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-ui", "./app/ui/paas/cmd/matrix-paas-ui")
 	ui := start(uiBinary, []string{"MATRIX_PAAS_UI_LISTEN_ADDRESS=" + uiAddress})
 	waitHTTPStatus(t, ctx, ui, "http://"+uiAddress+"/ready", http.StatusOK)
 
-	// Same-origin loopback routing only. No credentials/selectors are injected;
-	// actual services enforce every request. This is not production APISIX.
+	// Same-origin routing only. A permission-browser fixture may explicitly
+	// bind its private container address for an isolated SSH-forwarded journey.
+	// No credentials/selectors are injected; this is not production APISIX.
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxConnsPerHost = 8
 	transport.MaxIdleConnsPerHost = 8
 	transport.ResponseHeaderTimeout = 15 * time.Second
 	mux := iamConsoleBrowserUpstreams(t, transport, iamEndpoint, auditEndpoint, paasEndpoint, "http://"+uiAddress)
-	requests := make(chan struct{}, 16)
-	server := httptest.NewUnstartedServer(iamConsoleBrowserFixtureHandler(mux, requests, responseLoss))
+	listenAddress, err := browserFixtureListenAddress(
+		os.Getenv("MATRIX_IAM_PERMISSION_BROWSER_BIND_IP"),
+		os.Getenv("MATRIX_IAM_PERMISSION_AWARE_BROWSER"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", listenAddress)
+	if err != nil {
+		t.Fatalf("listen for the isolated browser fixture: %v", err)
+	}
+	server := httptest.NewUnstartedServer(wrap(mux))
+	_ = server.Listener.Close()
+	server.Listener = listener
 	server.Config.ReadHeaderTimeout = 5 * time.Second
 	server.Config.ReadTimeout = 30 * time.Second
 	server.Config.WriteTimeout = 30 * time.Second
@@ -7079,6 +7512,319 @@ func startIAMConsoleBrowserWithResponseLoss(
 	return server, ui, func() {
 		server.Close()
 		transport.CloseIdleConnections()
+	}
+}
+
+func browserFixtureListenAddress(host, permissionOptIn string) (string, error) {
+	if host == "" {
+		return "127.0.0.1:0", nil
+	}
+	ip := net.ParseIP(host)
+	if permissionOptIn != "1" || ip == nil || ip.To4() == nil || !ip.IsPrivate() {
+		return "", errors.New("browser fixture binding requires permission-browser opt-in and an exact private IPv4 address")
+	}
+	return net.JoinHostPort(ip.String(), "0"), nil
+}
+
+func TestPermissionBrowserListenerBinding(t *testing.T) {
+	for _, input := range []struct {
+		name, host, optIn, address string
+	}{
+		{"default loopback", "", "", "127.0.0.1:0"},
+		{"opt-in alone remains loopback", "", "1", "127.0.0.1:0"},
+		{"exact private container", "172.19.0.3", "1", "172.19.0.3:0"},
+		{"private address without opt-in", "172.19.0.3", "", ""},
+		{"wildcard rejected", "0.0.0.0", "1", ""},
+		{"public address rejected", "8.8.8.8", "1", ""},
+		{"hostname rejected", "localhost", "1", ""},
+		{"ipv6 outside fixture scope", "fd00::1", "1", ""},
+	} {
+		t.Run(input.name, func(t *testing.T) {
+			address, err := browserFixtureListenAddress(input.host, input.optIn)
+			if input.address == "" {
+				if err == nil || address != "" {
+					t.Fatal("unsupported browser binding did not fail closed")
+				}
+			} else if err != nil || address != input.address {
+				t.Fatalf("browser binding=%q error=%v", address, err)
+			}
+		})
+	}
+}
+
+type browserPermissionReadObservation struct {
+	stage, path string
+	status      int
+}
+
+// Store only bounded, configured path/status counters, including the one
+// intended update. Every real request still reaches the original authority;
+// no credentials, bodies, arbitrary URLs or user diagnostics survive. A
+// non-exported in-memory credential digest binds grant/revoke reads to the
+// original Analyzer Session, independently of other deep-link observations.
+type browserPermissionProbe struct {
+	mu                       sync.Mutex
+	stage                    string
+	keyPath                  string
+	updatePath               string
+	failed                   bool
+	failedUpdatedRead        bool
+	refreshedUpdatedReads    int
+	paths                    map[string]bool
+	observed                 map[browserPermissionReadObservation]int
+	writes                   int
+	updates, acceptedUpdates int
+	logins, acceptedLogins   int
+	logouts                  int
+	refreshSession           [sha256.Size]byte
+	hasRefreshSession        bool
+	changedRefreshSession    bool
+}
+
+func newBrowserPermissionProbe(keyPath, updatePath string, paths []string) *browserPermissionProbe {
+	value := &browserPermissionProbe{stage: "initial", keyPath: keyPath, updatePath: updatePath,
+		paths: map[string]bool{keyPath: true}, observed: map[browserPermissionReadObservation]int{}}
+	for _, path := range paths {
+		value.paths[path] = true
+	}
+	return value
+}
+
+func (value *browserPermissionProbe) setStage(stage string) {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	value.stage = stage
+}
+
+func (value *browserPermissionProbe) count(stage, path string, status int) int {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return value.observed[browserPermissionReadObservation{stage, path, status}]
+}
+
+func (value *browserPermissionProbe) unexpectedWrites() int {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return value.writes
+}
+
+func (value *browserPermissionProbe) updateCounts() (attempts, accepted int) {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return value.updates, value.acceptedUpdates
+}
+
+func (value *browserPermissionProbe) sessionCounts() (attempts, accepted, logouts int) {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return value.logins, value.acceptedLogins, value.logouts
+}
+
+func (value *browserPermissionProbe) sameRefreshSession() bool {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return value.hasRefreshSession && !value.changedRefreshSession
+}
+
+func (value *browserPermissionProbe) updatedReadRecovered() bool {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return value.failedUpdatedRead && value.refreshedUpdatedReads > 0
+}
+
+func (value *browserPermissionProbe) wrap(upstream http.Handler) http.Handler {
+	observed := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		value.mu.Lock()
+		stage := value.stage
+		path := r.URL.Path
+		tracked := r.Method == http.MethodGet && value.paths[path]
+		update := r.Method == http.MethodPost && path == value.updatePath && stage == "granted"
+		login := r.Method == http.MethodPost && path == "/api/iam/v1/auth/login"
+		logout := r.Method == http.MethodPost && path == "/api/iam/v1/auth/logout"
+		if tracked || update {
+			authorization := r.Header.Get("Authorization")
+			digest := sha256.Sum256([]byte(authorization))
+			if stage == "initial" && path == strings.TrimSuffix(value.updatePath, ":update") && !value.hasRefreshSession &&
+				strings.HasPrefix(authorization, "Bearer ") && len(authorization) > len("Bearer ") {
+				value.refreshSession, value.hasRefreshSession = digest, true
+			}
+			if stage == "granted" || stage == "exact-revoked" || stage == "revoked" {
+				if !value.hasRefreshSession || digest != value.refreshSession {
+					value.changedRefreshSession = true
+				}
+			}
+		}
+		injectKey := tracked && path == value.keyPath && stage == "initial" && !value.failed
+		updatedRead := tracked && path == strings.TrimSuffix(value.updatePath, ":update") &&
+			stage == "granted" && value.acceptedUpdates > 0
+		injectUpdatedRead := updatedRead && !value.failedUpdatedRead
+		if injectKey {
+			value.failed = true
+		}
+		if injectUpdatedRead {
+			value.failedUpdatedRead = true
+		}
+		if injectKey || injectUpdatedRead {
+			value.observed[browserPermissionReadObservation{stage, path, http.StatusServiceUnavailable}]++
+		}
+		if update {
+			value.updates++
+		}
+		if login {
+			value.logins++
+		}
+		if logout {
+			value.logouts++
+		}
+		if strings.HasPrefix(path, "/api/iam/") && r.Method != http.MethodGet && !update &&
+			!login && !logout {
+			value.writes++
+		}
+		value.mu.Unlock()
+		if injectKey || injectUpdatedRead {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"status":503,"code":"iam.unavailable","requestId":"permission-browser-read-fault"}`)
+			return
+		}
+		if !tracked && !update && !login {
+			upstream.ServeHTTP(w, r)
+			return
+		}
+		response := &browserPermissionResponse{ResponseWriter: w, status: http.StatusOK}
+		upstream.ServeHTTP(response, r)
+		value.mu.Lock()
+		if login {
+			if response.status == http.StatusOK {
+				value.acceptedLogins++
+			}
+		} else if update {
+			if response.status == http.StatusOK {
+				value.acceptedUpdates++
+			}
+		} else {
+			value.observed[browserPermissionReadObservation{stage, path, response.status}]++
+			if updatedRead && value.failedUpdatedRead && response.status == http.StatusOK {
+				value.refreshedUpdatedReads++
+			}
+		}
+		value.mu.Unlock()
+	})
+	return iamConsoleBrowserFixtureHandler(observed, make(chan struct{}, 16), nil)
+}
+
+type browserPermissionResponse struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (response *browserPermissionResponse) Unwrap() http.ResponseWriter {
+	return response.ResponseWriter
+}
+
+func (response *browserPermissionResponse) WriteHeader(status int) {
+	if response.wroteHeader {
+		return
+	}
+	response.status, response.wroteHeader = status, true
+	response.ResponseWriter.WriteHeader(status)
+}
+
+func (response *browserPermissionResponse) Write(body []byte) (int, error) {
+	if !response.wroteHeader {
+		response.WriteHeader(http.StatusOK)
+	}
+	return response.ResponseWriter.Write(body)
+}
+
+func TestPermissionBrowserProbePreservesAuthority(t *testing.T) {
+	const keyPath = "/api/iam/v1/users/exact-user/access-keys"
+	const reportPath = "/api/iam/v1/account/security-reports/exact-report"
+	const analyzerPath = "/api/iam/v1/account/access-analyzers/exact-analyzer"
+	const updatePath = "/api/iam/v1/account/access-analyzers/exact-analyzer:update"
+	probe := newBrowserPermissionProbe(keyPath, updatePath, []string{reportPath, analyzerPath})
+	var calls int
+	upstreamStatus := http.StatusForbidden
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Header.Get("Authorization") != "Bearer synthetic-permission-test" {
+			t.Error("permission observation changed the current credential")
+		}
+		w.Header().Set("X-Authority-Response", "preserved")
+		w.WriteHeader(upstreamStatus)
+		_, _ = io.WriteString(w, `{"code":"iam.authorization.forbidden"}`)
+	})
+	handler := probe.wrap(upstream)
+	perform := func(method, path string, status int) *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(method, path, nil)
+		r.Header.Set("Authorization", "Bearer synthetic-permission-test")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != status {
+			t.Fatalf("permission probe %s %s status=%d want=%d", method, path, w.Code, status)
+		}
+		return w
+	}
+	perform(http.MethodPost, keyPath, http.StatusForbidden)
+	perform(http.MethodGet, keyPath+"/other", http.StatusForbidden)
+	fault := perform(http.MethodGet, keyPath, http.StatusServiceUnavailable)
+	if calls != 2 || fault.Header().Get("Cache-Control") != "no-store" {
+		t.Fatal("read fault forwarded the selected request or became cacheable")
+	}
+	actual := perform(http.MethodGet, keyPath, http.StatusForbidden)
+	if actual.Header().Get("X-Authority-Response") != "preserved" || actual.Body.String() != `{"code":"iam.authorization.forbidden"}` {
+		t.Fatal("read observer substituted or rewrote an authority response")
+	}
+	perform(http.MethodPost, updatePath, http.StatusForbidden)
+	perform(http.MethodGet, analyzerPath, http.StatusForbidden)
+	probe.setStage("granted")
+	perform(http.MethodGet, reportPath, http.StatusForbidden)
+	perform(http.MethodPost, updatePath, http.StatusForbidden)
+	perform(http.MethodGet, analyzerPath, http.StatusForbidden)
+	upstreamStatus = http.StatusOK
+	perform(http.MethodPost, updatePath, http.StatusOK)
+	perform(http.MethodGet, analyzerPath, http.StatusServiceUnavailable)
+	if probe.updatedReadRecovered() {
+		t.Fatal("a failed post-write read was mistaken for an authoritative refresh")
+	}
+	upstreamStatus = http.StatusForbidden
+	perform(http.MethodGet, analyzerPath, http.StatusForbidden)
+	if probe.updatedReadRecovered() {
+		t.Fatal("a forbidden post-write read was mistaken for an authoritative refresh")
+	}
+	upstreamStatus = http.StatusOK
+	perform(http.MethodGet, analyzerPath, http.StatusOK)
+	perform(http.MethodPost, "/api/iam/v1/auth/login", http.StatusOK)
+	upstreamStatus = http.StatusForbidden
+	probe.setStage("revoked")
+	perform(http.MethodGet, reportPath, http.StatusForbidden)
+	perform(http.MethodPost, "/api/iam/v1/auth/login", http.StatusForbidden)
+	perform(http.MethodPost, "/api/iam/v1/auth/logout", http.StatusForbidden)
+	attempts, accepted := probe.updateCounts()
+	loginAttempts, acceptedLogins, logouts := probe.sessionCounts()
+	if calls != 15 || attempts != 2 || accepted != 1 || loginAttempts != 2 || acceptedLogins != 1 || logouts != 1 ||
+		probe.count("initial", keyPath, http.StatusServiceUnavailable) != 1 ||
+		probe.count("initial", keyPath, http.StatusForbidden) != 1 ||
+		probe.count("granted", reportPath, http.StatusForbidden) != 1 ||
+		probe.count("granted", analyzerPath, http.StatusServiceUnavailable) != 1 ||
+		probe.count("granted", analyzerPath, http.StatusForbidden) != 2 ||
+		!probe.updatedReadRecovered() ||
+		probe.count("revoked", reportPath, http.StatusForbidden) != 1 || probe.unexpectedWrites() != 2 {
+		t.Fatal("permission probe lost its bounded faults, exact-route, stage or write-attempt boundary")
+	}
+	if !probe.sameRefreshSession() {
+		t.Fatal("permission observation lost an unchanged authenticated Session")
+	}
+	differentSession := httptest.NewRequest(http.MethodGet, analyzerPath, nil)
+	differentSession.Header.Set("Authorization", "Bearer another-synthetic-permission-session")
+	probe.wrap(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})).ServeHTTP(httptest.NewRecorder(), differentSession)
+	if probe.sameRefreshSession() {
+		t.Fatal("a second existing Session was accepted as the original permission-refresh Session")
 	}
 }
 
@@ -7130,7 +7876,7 @@ func TestIAMConsoleBrowserRoutesPreserveAuthorityResponses(t *testing.T) {
 		path, upstream, uri string
 		status              int
 	}{
-		{"/api/iam/v1/auth/session", "iam", "/v1/auth/session", http.StatusUnauthorized},
+		{"/api/iam/v1/auth/login", "iam", "/v1/auth/login", http.StatusUnauthorized},
 		{"/api/audit/v1/records:query", "audit", "/v1/records:query", http.StatusForbidden},
 		{"/api/paas/v1/applications?after=opaque%2Bcursor", "paas", "/v1/applications?after=opaque%2Bcursor", http.StatusUnauthorized},
 		{"/api/managed-services/v1/service-definitions", "paas", "/managed-services/v1/service-definitions", http.StatusUnauthorized},

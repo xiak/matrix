@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent, type UserManagementClient } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyAccess, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AccountLifecycleCompletion, AccountLifecycleIntent, UserManagementIntent, UserManagementCompletion } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
@@ -55,7 +55,7 @@ const tenantPolicyDetail: AccountPolicyDetail = { policy: tenantPolicy, version:
     actions: ["paas.application.read"], resources: [{ kind: "APPLICATION", match: "ANY_IN_AUTHORITY" }] }] }
 } };
 const capability = (action: IamAction, kind: ActionCapability["resource"]["kind"], id: string, reason: CapabilityRestriction | null = null): ActionCapability => ({ action, resource: { kind, id }, available: reason === null, restrictionReason: reason });
-const currentCapabilities = (available = true): ActionCapability[] => [
+const currentCapabilities = (available = true, accessKeyUserId = rootUser.id, accessKeyAvailable = available): ActionCapability[] => [
   capability("iam.account.create", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.account.read", "ACCOUNT", "collection", available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.account.alias-set", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
@@ -63,8 +63,24 @@ const currentCapabilities = (available = true): ActionCapability[] => [
   capability("iam.user.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.policy.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
   capability("iam.group.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
-  capability("iam.group.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
+  capability("iam.group.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.role.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.role.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.access-key.list", "USER", accessKeyUserId, accessKeyAvailable ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.access-analyzer.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.access-analyzer.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.security-report.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.service-role-template.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.service-linked-role.list", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.security-settings.read", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.security-settings.update", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED"),
+  capability("iam.policy.create", "ACCOUNT", account.id, available ? null : "AUTHORITY_REQUIRED")
 ];
+const policyCapabilities = (policyId: string): ActionCapability[] => [
+  "iam.policy.update", "iam.policy.delete", "iam.policy-version.list", "iam.policy-version.read",
+  "iam.policy-version.create", "iam.policy-version.delete", "iam.policy.set-default-version"
+].map((action) => capability(action as IamAction, "POLICY", policyId));
+const policyAccess = (detail: AccountPolicyDetail) => ({ detail, capabilities: policyCapabilities(detail.policy.id) });
 const userCapabilities = (user: User, attachments: UserPolicyAttachment[] = [], reason: CapabilityRestriction | null = null): ActionCapability[] => [
   capability("iam.user.read", "USER", user.id, reason),
   capability("iam.user.update", "USER", user.id, reason),
@@ -258,7 +274,7 @@ function livePolicyVersions() {
   const earlier: AccountPolicyVersion = { ...current, versionId: "version-a", contentDigest: `sha256:${"b".repeat(64)}`,
     document: { ...current.document, statements: [{ ...current.document.statements[0]!, actions: ["paas.application.delete"] }] } };
   let versions = [earlier, current];
-  const readPolicy = vi.fn(async () => ({ policy: structuredClone(policy), version: structuredClone(versions.find((item) => item.versionId === policy.defaultVersionId)!) }));
+  const readPolicy = vi.fn(async () => policyAccess({ policy: structuredClone(policy), version: structuredClone(versions.find((item) => item.versionId === policy.defaultVersionId)!) }));
   const listPolicyVersions = vi.fn(async () => ({ policy: structuredClone(policy), items: structuredClone(versions) }));
   const createPolicyVersion = vi.fn(async (_credential: string, _accountId: string, _policyId: string,
     command: { document: AccountPolicyDocument; resourceVersion: number; expectedDefaultVersionId: string; requestId: string }) => {
@@ -293,8 +309,8 @@ function livePolicyMetadata() {
   let policy: AccountPolicy = { ...tenantPolicy, id: "customer.logs", management: "CUSTOMER", accountId: account.id,
     displayName: "LogBoundary", defaultVersionId: "version-logs", resourceVersion: 4 };
   const version = { ...tenantPolicyDetail.version, policyId: policy.id, versionId: policy.defaultVersionId };
-  const readPolicy = vi.fn(async (_credential: string, _accountId: string, id: string) => id === tenantPolicy.id
-    ? structuredClone(tenantPolicyDetail) : { policy: structuredClone(policy), version: structuredClone(version) });
+  const readPolicy = vi.fn(async (_credential: string, _accountId: string, id: string) => policyAccess(id === tenantPolicy.id
+    ? structuredClone(tenantPolicyDetail) : { policy: structuredClone(policy), version: structuredClone(version) }));
   const updatePolicy = vi.fn(async (_credential: string, _accountId: string, _source: { policy: AccountPolicy; contentDigest: string }, command: { displayName: string; resourceVersion: number; requestId: string }) => {
     if (command.resourceVersion !== policy.resourceVersion) throw new HttpProblem(409, "STALE");
     policy = { ...policy, displayName: command.displayName, resourceVersion: policy.resourceVersion + 1 };
@@ -381,6 +397,11 @@ function CapabilityProbe() {
     <output data-testid="can-manage">{String(capabilities.canListUsers)}</output>
     <output data-testid="can-read-accounts">{String(capabilities.canReadAccounts)}</output>
   </Profiler>;
+}
+
+function AuthorityRefreshProbe() {
+  const access = useAccountAccess();
+  return <button disabled={access.loading} onClick={access.reload}>recheck-test-authority</button>;
 }
 
 const accountSwitchIntent: RoleSessionRevokeIntent = {
@@ -495,8 +516,10 @@ function SecuritySettingsIntentProbe({ proposed = { expectedResourceVersion: acc
   const intent = update?.intent;
   return <>
     <button onClick={() => void session.login("admin", "password")}>login-settings-probe</button>
+    <button onClick={access.reload}>reload-settings-access</button>
     <output aria-label="settings-probe-session">{session.phase}</output>
     <output aria-label="settings-sign-in-notice">{session.signInNotice ? `${session.signInNotice.kind}:${session.signInNotice.requestId}` : "none"}</output>
+    <output aria-label="settings-can-update">{String(access.accountSecuritySettings?.canUpdate ?? false)}</output>
     <button disabled={!update || Boolean(intent)} onClick={() => { if (update) void update.begin(accountSecuritySettings, proposed, 7).catch(() => {}); }}>begin-settings</button>
     <button disabled={!update || intent?.state !== "STEP_UP_UNKNOWN"} onClick={() => { if (update) void update.retryStepUp().catch(() => {}); }}>retry-settings-step-up</button>
     <button disabled={!update || intent?.state !== "PENDING"} onClick={() => { if (update) void update.verifyStepUp({ requestId: `ui-account-security-settings-verify-${"b".repeat(32)}`, password: "test-password", code: "123456" }).catch(() => {}); }}>verify-settings-step-up</button>
@@ -507,13 +530,36 @@ function SecuritySettingsIntentProbe({ proposed = { expectedResourceVersion: acc
   </>;
 }
 
+function ReadClassificationProbe() {
+  const session = useSession();
+  const access = useAccountAccess();
+  const [serviceRole, setServiceRole] = useState("idle");
+  const [policy, setPolicy] = useState("idle");
+  const [profiles, setProfiles] = useState("idle");
+  const [templates, setTemplates] = useState("idle");
+  const [settings, setSettings] = useState("idle");
+  return <>
+    <button onClick={() => void session.login("admin", "password")}>login-read-classification</button>
+    <button disabled={!access.serviceLinkedRoles} onClick={() => void access.serviceLinkedRoles?.read("missing-role").then((result) => setServiceRole(result.status))}>read-service-role</button>
+    <button disabled={!access.policyRead} onClick={() => void access.policyRead?.read("missing-policy").then((result) => setPolicy(result.status))}>read-policy</button>
+    <button disabled={!access.authorizationProfiles} onClick={() => void access.authorizationProfiles?.load().then((result) => setProfiles(result.status))}>read-profiles</button>
+    <button disabled={!access.serviceRoleTemplates} onClick={() => void access.serviceRoleTemplates?.load().then((result) => setTemplates(result.status))}>read-templates</button>
+    <button disabled={!access.accountSecuritySettings} onClick={() => void access.accountSecuritySettings?.load().then((result) => setSettings(result.status))}>read-settings</button>
+    <output aria-label="service-role-read-status">{serviceRole}</output>
+    <output aria-label="policy-read-status">{policy}</output>
+    <output aria-label="profile-read-status">{profiles}</output>
+    <output aria-label="template-read-status">{templates}</output>
+    <output aria-label="settings-read-status">{settings}</output>
+  </>;
+}
+
 function AuthenticatedAccess({ repository, initialView, initialEntityId, initialUserTab, active = true }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string; initialUserTab?: AccountUserDetailTab; active?: boolean }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
   const [view, setView] = useState(initialView);
   const [entityId, setEntityId] = useState<string | undefined>(initialEntityId);
   const [userTab, setUserTab] = useState<AccountUserDetailTab | undefined>(initialUserTab);
-  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} userTab={userTab} onNavigate={(next, id, _method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setUserTab(nextUserTab); })} /></AccountAccessProvider> : <LoginRenderer />;
+  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><AuthorityRefreshProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} userTab={userTab} onNavigate={(next, id, _method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setUserTab(nextUserTab); })} /></AccountAccessProvider> : <LoginRenderer />;
 }
 
 async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential, initialEntityId?: string, initialUserTab?: AccountUserDetailTab) {
@@ -861,6 +907,168 @@ describe("account access", () => {
     expect(repository.execute).not.toHaveBeenCalled();
   });
 
+  it("freezes Analyzer writes while rechecking the same Session and rereads exact authority after success", async () => {
+    const liveAnalyzer = {
+      id: "analyzer-unused", accountId: account.id, type: "UNUSED_ACCESS" as const, status: "ACTIVE" as const,
+      unusedAccessAgeDays: 90, disposition: { mode: "REVIEW_ONLY" as const, findingDelayDays: 0 },
+      resourceVersion: 1, createdAt: timestamp, updatedAt: timestamp
+    };
+    const writable = { analyzer: liveAnalyzer, capabilities: [
+      capability("iam.access-analyzer.update", "ACCESS_ANALYZER", liveAnalyzer.id)
+    ] };
+    const revoked = { analyzer: liveAnalyzer, capabilities: [{
+      ...capability("iam.access-analyzer.update", "ACCESS_ANALYZER", liveAnalyzer.id),
+      available: false, restrictionReason: "AUTHORITY_REQUIRED" as const
+    }] };
+    let finishRefresh!: (value: AccountIdentity) => void;
+    const pendingRefresh = new Promise<AccountIdentity>((resolve) => { finishRefresh = resolve; });
+    const currentIdentity = vi.fn()
+      .mockResolvedValueOnce(structuredClone(identity))
+      .mockReturnValueOnce(pendingRefresh);
+    const updateAnalyzer = vi.fn();
+    const analysis = liveAnalysis();
+    let finishExactRefresh!: (value: typeof revoked) => void;
+    const pendingExactRefresh = new Promise<typeof revoked>((resolve) => { finishExactRefresh = resolve; });
+    analysis.listAnalyzers = vi.fn().mockResolvedValue({ accountId: account.id, items: [liveAnalyzer], nextAfter: null });
+    analysis.readAnalyzer = vi.fn().mockResolvedValueOnce(writable).mockReturnValueOnce(pendingExactRefresh);
+    analysis.updateAnalyzer = updateAnalyzer;
+    const repository = accounts({ currentIdentity, accessAnalysis: analysis });
+    const { user } = await openAccess(repository, iam(), "access-analysis");
+
+    await user.click(await screen.findByRole("tab", { name: "分析规则" }));
+    const window = screen.getByRole("spinbutton", { name: "完整观测窗口" });
+    await user.clear(window);
+    await user.type(window, "30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", false);
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+
+    await act(async () => { finishRefresh(structuredClone(identity)); await pendingRefresh; });
+    await waitFor(() => expect(analysis.readAnalyzer).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "保存分析规则" }));
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+    await act(async () => { finishExactRefresh(revoked); await pendingExactRefresh; });
+    expect(analysis.listAnalyzers).toHaveBeenCalledTimes(2);
+    expect(screen.getByRole("tab", { name: "分析规则" }).getAttribute("data-state")).toBe("active");
+    expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
+    expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
+    expect(updateAnalyzer).not.toHaveBeenCalled();
+  });
+
+  it("rereads the current exact Policy after an explicit same-session authority refresh", async () => {
+    let finishRefresh!: (value: AccountIdentity) => void;
+    const pendingRefresh = new Promise<AccountIdentity>((resolve) => { finishRefresh = resolve; });
+    const currentIdentity = vi.fn().mockResolvedValueOnce(structuredClone(identity)).mockReturnValueOnce(pendingRefresh);
+    let finishPolicy!: (value: AccountPolicyAccess) => void;
+    const pendingPolicy = new Promise<AccountPolicyAccess>((resolve) => { finishPolicy = resolve; });
+    const readPolicy = vi.fn().mockResolvedValueOnce(policyAccess(tenantPolicyDetail)).mockReturnValueOnce(pendingPolicy);
+    const repository = accounts({ currentIdentity, readPolicy });
+    const { user } = await openAccess(repository, iam(), "policies", credential, tenantPolicy.id);
+    await waitFor(() => expect(readPolicy).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("heading", { name: tenantPolicy.displayName })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: tenantPolicy.displayName })).toBeTruthy();
+    await act(async () => { finishRefresh(structuredClone(identity)); await pendingRefresh; });
+    await waitFor(() => expect(readPolicy).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: tenantPolicy.displayName })).toBeTruthy();
+    await act(async () => { finishPolicy({ detail: tenantPolicyDetail, capabilities: [] }); await pendingPolicy; });
+    expect(readPolicy).toHaveBeenLastCalledWith(credential, account.id, tenantPolicy.id);
+  });
+
+  it("keeps a reviewed Policy rename frozen through identity and exact-target reauthorization, then enables only the current exact capability", async () => {
+    enablePolicyLocks();
+    const fixture = livePolicyMetadata();
+    const initial = await fixture.readPolicy(credential, account.id, "customer.logs");
+    fixture.readPolicy.mockReset();
+    let finishIdentity!: (value: AccountIdentity) => void;
+    const pendingIdentity = new Promise<AccountIdentity>((resolve) => { finishIdentity = resolve; });
+    fixture.repository.currentIdentity = vi.fn().mockResolvedValueOnce(structuredClone(identity)).mockReturnValueOnce(pendingIdentity);
+    let finishExact!: (value: AccountPolicyAccess) => void;
+    const pendingExact = new Promise<AccountPolicyAccess>((resolve) => { finishExact = resolve; });
+    fixture.readPolicy.mockResolvedValueOnce(initial).mockReturnValueOnce(pendingExact);
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await invokeMoreAction(user, "修改显示名");
+    fireEvent.change(screen.getByRole("textbox", { name: "新显示名" }), { target: { value: "Refresh-safe name" } });
+    await user.click(screen.getByRole("button", { name: "审阅修改" }));
+    const confirm = screen.getByRole("button", { name: "确认修改显示名" });
+    expect(confirm).toHaveProperty("disabled", false);
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(fixture.repository.currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("group", { name: "审阅显示名修改 · LogBoundary" })).toBeTruthy();
+    expect(screen.getByText("Refresh-safe name")).toBeTruthy();
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishIdentity(structuredClone(identity)); await pendingIdentity; });
+    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledTimes(2));
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishExact(initial); await pendingExact; });
+    await waitFor(() => expect(confirm).toHaveProperty("disabled", false));
+    await user.click(confirm);
+    await waitFor(() => expect(fixture.updatePolicy).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(["revoked", "failed"] as const)("preserves a reviewed Policy rename but blocks it when the fresh exact read is %s", async (outcome) => {
+    enablePolicyLocks();
+    const fixture = livePolicyMetadata();
+    const initial = await fixture.readPolicy(credential, account.id, "customer.logs");
+    fixture.readPolicy.mockReset();
+    fixture.repository.currentIdentity = vi.fn().mockResolvedValue(structuredClone(identity));
+    fixture.readPolicy.mockResolvedValueOnce(initial);
+    if (outcome === "revoked") fixture.readPolicy.mockResolvedValueOnce({ detail: initial.detail, capabilities: initial.capabilities.map((item) =>
+      item.action === "iam.policy.update" ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item) });
+    else fixture.readPolicy.mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await invokeMoreAction(user, "修改显示名");
+    fireEvent.change(screen.getByRole("textbox", { name: "新显示名" }), { target: { value: "Still local" } });
+    await user.click(screen.getByRole("button", { name: "审阅修改" }));
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledTimes(2));
+    const group = screen.getByRole("group", { name: "审阅显示名修改 · LogBoundary" });
+    expect(within(group).getByText("Still local")).toBeTruthy();
+    expect(within(group).getByRole("button", { name: "确认修改显示名" })).toHaveProperty("disabled", true);
+    expect(fixture.updatePolicy).not.toHaveBeenCalled();
+  });
+
+  it("keeps a reviewed policy draft visible but blocks creation until permission recheck completes", async () => {
+    let finishRefresh!: (value: AccountIdentity) => void;
+    const pendingRefresh = new Promise<AccountIdentity>((resolve) => { finishRefresh = resolve; });
+    const currentIdentity = vi.fn()
+      .mockResolvedValueOnce(structuredClone(identity))
+      .mockReturnValueOnce(pendingRefresh);
+    const createPolicy = vi.fn().mockResolvedValue(tenantPolicyDetail);
+    const repository = accounts({ currentIdentity, createPolicy });
+    const { user } = await openAccess(repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "新建自定义策略" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Refresh-safe policy" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "策略声明 JSON" }), { target: { value: JSON.stringify(tenantPolicyDetail.version.document) } });
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "确认创建" })).toHaveProperty("disabled", true);
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    expect(createPolicy).not.toHaveBeenCalled();
+
+    await act(async () => { finishRefresh(structuredClone(identity)); await pendingRefresh; });
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认创建" })).toHaveProperty("disabled", false));
+    expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    await waitFor(() => expect(createPolicy).toHaveBeenCalledTimes(1));
+  });
+
   it.each(["503", "protocol"])("clears old User rows and exact-target command snapshots after a fresh %s directory failure", async (failure) => {
     const unavailable = failure === "503" ? new HttpProblem(503, "IAM_UNAVAILABLE") : new Error("INVALID_IAM_RESPONSE");
     const repository = accounts({ listUsers: vi.fn().mockResolvedValueOnce({ items: [child], nextAfter: "next-user-page" }).mockRejectedValue(unavailable) });
@@ -1001,6 +1209,31 @@ describe("account access", () => {
     expect(read).toHaveBeenCalledWith(credential, account.id);
     expect(screen.getByTestId("nav-settings").getAttribute("aria-current")).toBe("page");
     expect(screen.queryByText("用户可选")).toBeNull();
+  });
+
+  it("keeps security-settings read and update authority independent", async () => {
+    const update = { startStepUp: vi.fn(), stepUpByRequest: vi.fn(), verifyStepUp: vi.fn(), apply: vi.fn(), changeByRequest: vi.fn() };
+    const readDeniedIdentity = structuredClone(identity);
+    readDeniedIdentity.capabilities = readDeniedIdentity.capabilities.map((item) => item.action === "iam.security-settings.read"
+      ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item);
+    const deniedRead = vi.fn().mockResolvedValue(accountSecuritySettings);
+    await openAccess(accounts({ currentIdentity: vi.fn().mockResolvedValue(readDeniedIdentity),
+      accountSecuritySettings: { read: deniedRead, update } }), iam(), "settings");
+    expect(await screen.findByText(/没有查看账号安全规则的权限/)).toBeTruthy();
+    expect(deniedRead).not.toHaveBeenCalled();
+    expect(update.startStepUp).not.toHaveBeenCalled();
+    cleanup();
+
+    const updateDeniedIdentity = structuredClone(identity);
+    updateDeniedIdentity.capabilities = updateDeniedIdentity.capabilities.map((item) => item.action === "iam.security-settings.update"
+      ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item);
+    const readable = vi.fn().mockResolvedValue(accountSecuritySettings);
+    await openAccess(accounts({ currentIdentity: vi.fn().mockResolvedValue(updateDeniedIdentity),
+      accountSecuritySettings: { read: readable, update } }), iam(), "settings");
+    expect(await screen.findByText(/可以查看账号安全规则，但不能修改/)).toBeTruthy();
+    expect(readable).toHaveBeenCalledWith(credential, account.id);
+    expect(screen.queryByRole("button", { name: "编辑安全规则" })).toBeNull();
+    expect(update.startStepUp).not.toHaveBeenCalled();
   });
 
   it("expires the credential on a real account-rule 401 instead of treating it as read denial", async () => {
@@ -1222,6 +1455,67 @@ describe("account access", () => {
     expect(screen.getByLabelText("settings-probe-session").textContent).toBe("authenticated");
     expect(screen.getByLabelText("settings-sign-in-notice").textContent).toBe("none");
     expect(sessionStorage.getItem(sessionStorage.key(0)!)).toContain('"state":"COMPLETED"');
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains account-rule recovery evidence after update authority is revoked and closes new writes", async () => {
+    const revokedIdentity = structuredClone(identity);
+    revokedIdentity.capabilities = revokedIdentity.capabilities.map((item) => item.action === "iam.security-settings.update"
+      ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const }
+      : item);
+    const currentIdentity = vi.fn()
+      .mockResolvedValueOnce(structuredClone(identity))
+      .mockResolvedValue(structuredClone(revokedIdentity));
+    const startStepUp = vi.fn(async (_credential: string, command: { requestId: string; expectedFactorRevision: number; intent: SecuritySettingsUpdateIntent }) => ({
+      id: "step-up-settings-revoked", requestId: command.requestId, operation: "SECURITY_SETTINGS_UPDATE" as const,
+      expectedFactorRevision: command.expectedFactorRevision, securitySettings: structuredClone(command.intent), state: "PENDING" as const,
+      createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", provedAt: null, consumedAt: null
+    }));
+    const verifyStepUp = vi.fn(async () => {
+      const original = startStepUp.mock.calls[0]![1];
+      return {
+        id: "step-up-settings-revoked", requestId: original.requestId, operation: "SECURITY_SETTINGS_UPDATE" as const,
+        expectedFactorRevision: original.expectedFactorRevision, securitySettings: structuredClone(original.intent), state: "PROVED" as const,
+        createdAt: timestamp, expiresAt: "2026-09-11T08:05:00Z", provedAt: "2026-09-11T08:01:00Z", consumedAt: null
+      };
+    });
+    const apply = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const changeByRequest = vi.fn(async (_credential: string, _accountId: string, requestId: string, settings: SecuritySettingsUpdateIntent) => ({
+      requestId,
+      expectedResourceVersion: settings.expectedResourceVersion,
+      settings: { ...structuredClone(accountSecuritySettings), resourceVersion: 5, accessKeyNetwork: structuredClone(settings.accessKeyNetwork) },
+      callerSessionEnded: true as const
+    }));
+    const repository = accounts({
+      currentIdentity,
+      accountSecuritySettings: {
+        read: vi.fn().mockResolvedValue(structuredClone(accountSecuritySettings)),
+        update: { startStepUp, stepUpByRequest: vi.fn(), verifyStepUp, apply, changeByRequest }
+      }
+    });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><SecuritySettingsIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "login-settings-probe" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "begin-settings" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "begin-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("PENDING"));
+    await user.click(screen.getByRole("button", { name: "verify-settings-step-up" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("PROVED"));
+    await user.click(screen.getByRole("button", { name: "apply-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("APPLY_UNKNOWN"));
+
+    await user.click(screen.getByRole("button", { name: "reload-settings-access" }));
+    await waitFor(() => expect(currentIdentity).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(screen.getByLabelText("settings-can-update").textContent).toBe("false"));
+    expect(screen.getByLabelText("settings-intent").textContent).toContain("APPLY_UNKNOWN");
+    expect(screen.getByRole("button", { name: "inspect-settings" }).hasAttribute("disabled")).toBe(false);
+    expect(apply).toHaveBeenCalledTimes(1);
+
+    await user.click(screen.getByRole("button", { name: "inspect-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toContain("COMPLETED"));
+    await user.click(screen.getByRole("button", { name: "clear-settings" }));
+    await waitFor(() => expect(screen.getByLabelText("settings-intent").textContent).toBe("none"));
+    expect(screen.getByRole("button", { name: "begin-settings" }).hasAttribute("disabled")).toBe(true);
     expect(apply).toHaveBeenCalledTimes(1);
   });
 
@@ -1771,7 +2065,9 @@ describe("account access", () => {
   it("reads service consent independently without ordinary Role-list authority", async () => {
     const roleRepository = { list: vi.fn() } as unknown as NonNullable<AccountRepository["roles"]>;
     const listServiceLinkedRoles = vi.fn().mockResolvedValue({ accountId: account.id, items: [], nextAfter: null });
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }), roles: roleRepository,
+    const serviceCapabilities = currentCapabilities(false).map((item) => item.action === "iam.service-role-template.list" || item.action === "iam.service-linked-role.list"
+      ? { ...item, available: true, restrictionReason: null } : item);
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: serviceCapabilities }), roles: roleRepository,
       listServiceLinkedRoles, getServiceLinkedRole: vi.fn(), listServiceRoleTemplates: vi.fn().mockResolvedValue({ accountId: account.id, items: [] }) });
     await openAccess(repository, iam(), "service-authorizations");
     expect(await screen.findByText("当前账号暂无服务授权")).toBeTruthy();
@@ -1876,7 +2172,7 @@ describe("account access", () => {
 
   it("reads a member's own keys without any user-list or user-detail request", async () => {
     const list = vi.fn().mockResolvedValue({ accountId: account.id, userId: childUser.id, userResourceVersion: childUser.resourceVersion, capabilities: [], items: [] });
-    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: childUser.id, resourceVersion: childUser.resourceVersion, policy: null }, capabilities: currentCapabilities(false) }),
+    const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, user: childUser, identityKind: "USER", permissionBoundary: { accountId: account.id, userId: childUser.id, resourceVersion: childUser.resourceVersion, policy: null }, capabilities: currentCapabilities(false, childUser.id, true) }),
       accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
     await openAccess(repository, iam({}, childUser.id), "keys");
     expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
@@ -3536,7 +3832,7 @@ describe("account access", () => {
   });
 
   it("reads a tenant policy's default document only after opening its detail and keeps platform metadata separate", async () => {
-    const readPolicy = vi.fn().mockResolvedValue(tenantPolicyDetail);
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess(tenantPolicyDetail));
     const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");
     await screen.findByRole("table", { name: "策略元数据目录" });
     expect(readPolicy).not.toHaveBeenCalled();
@@ -3560,13 +3856,13 @@ describe("account access", () => {
   });
 
   it("separates authored family syntax from the frozen v2 action expansion", async () => {
-    const readPolicy = vi.fn().mockResolvedValue({ ...tenantPolicyDetail, version: {
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess({ ...tenantPolicyDetail, version: {
       ...tenantPolicyDetail.version, contractVersion: 2,
       document: { ...tenantPolicyDetail.version.document, statements: [{ ...tenantPolicyDetail.version.document.statements[0],
         actions: ["paas.application.*"] }] },
       compilation: { compilationVersion: "1", profiles: [{ product: "paas", revision: 2,
         contentDigest: `sha256:${"b".repeat(64)}` }], resolvedStatements: [{ sid: "read-applications", actions: ["paas.application.read"] }] }
-    } });
+    } } as AccountPolicyDetail));
     const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");
     await user.click(await screen.findByRole("button", { name: tenantPolicy.displayName }));
     const table = await screen.findByRole("table", { name: "策略声明" });
@@ -3586,7 +3882,7 @@ describe("account access", () => {
       displayName: "LogBoundary", defaultVersionId: "version-logs" };
     const current = { ...tenantPolicyDetail.version, policyId: customer.id, versionId: customer.defaultVersionId };
     const earlier = { ...current, versionId: "version-a", contentDigest: `sha256:${"b".repeat(64)}` };
-    const readPolicy = vi.fn().mockResolvedValue({ policy: customer, version: current });
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess({ policy: customer, version: current }));
     const listPolicyVersions = vi.fn().mockResolvedValue({ policy: customer, items: [earlier, current] });
     const readPolicyVersion = vi.fn().mockResolvedValue({ policy: customer, version: earlier });
     const repository = accounts({ readPolicy, listPolicyVersions, readPolicyVersion,
@@ -3714,12 +4010,44 @@ describe("account access", () => {
     expect(fixture.deletePolicy).toHaveBeenCalledTimes(2); expect(fixture.updatePolicy).not.toHaveBeenCalled();
   });
 
+  it("resolves a committed retirement with the original request after the retired Policy becomes unreadable", async () => {
+    enablePolicyLocks();
+    const fixture = livePolicyMetadata();
+    const commit = fixture.deletePolicy.getMockImplementation()!;
+    const read = fixture.readPolicy.getMockImplementation()!;
+    let committed: AccountPolicy | null = null;
+    fixture.deletePolicy.mockReset();
+    fixture.deletePolicy.mockImplementationOnce(async (...args) => {
+      committed = await commit(...args);
+      throw new HttpProblem(503, "RESPONSE_LOST_AFTER_COMMIT");
+    }).mockImplementationOnce(async () => structuredClone(committed!));
+    fixture.readPolicy.mockImplementation(async (...args) => {
+      if (committed && args[2] === "customer.logs") throw new HttpProblem(403, "RETIRED_POLICY_NOT_READABLE");
+      return read(...args);
+    });
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await invokeMoreAction(user, "退役整条策略");
+    fireEvent.change(screen.getByRole("textbox", { name: "输入策略显示名「LogBoundary」确认" }), { target: { value: "LogBoundary" } });
+    await user.click(screen.getByRole("button", { name: "确认退役整条策略" }));
+    const recovery = await screen.findByRole("region", { name: "策略操作结果未确认" });
+    const readsBeforeInspection = fixture.readPolicy.mock.calls.length;
+    await user.click(within(recovery).getByRole("button", { name: "查看策略当前状态" }));
+    await waitFor(() => expect(fixture.readPolicy.mock.calls.length).toBeGreaterThan(readsBeforeInspection));
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "重试完全相同的原命令" })).toHaveProperty("disabled", false));
+    await user.click(within(recovery).getByRole("button", { name: "重试完全相同的原命令" }));
+    await waitFor(() => expect(fixture.deletePolicy).toHaveBeenCalledTimes(2));
+    expect(fixture.deletePolicy.mock.calls[1]).toEqual(fixture.deletePolicy.mock.calls[0]);
+    await screen.findByRole("table", { name: "策略元数据目录" });
+    expect(screen.queryByRole("region", { name: "策略操作结果未确认" })).toBeNull();
+  });
+
   it("does not borrow an old Policy detail to enable writes after the repository changes", async () => {
     enablePolicyLocks(); const fixture = livePolicyMetadata();
     const { user, replaceRepository } = await openAccess(fixture.repository, iam(), "policies");
     await user.click(await screen.findByRole("button", { name: "LogBoundary" })); await screen.findByRole("table", { name: "策略声明" });
-    const next = livePolicyMetadata(); const fresh = await next.readPolicy(credential, account.id, "customer.logs"); let complete!: (value: AccountPolicyDetail) => void;
-    const read = vi.fn(() => new Promise<AccountPolicyDetail>((resolve) => { complete = resolve; }));
+    const next = livePolicyMetadata(); const fresh = await next.readPolicy(credential, account.id, "customer.logs"); let complete!: (value: AccountPolicyAccess) => void;
+    const read = vi.fn(() => new Promise<AccountPolicyAccess>((resolve) => { complete = resolve; }));
     const repository = { ...next.repository, readPolicy: read };
     replaceRepository(repository); await waitFor(() => expect(read).toHaveBeenCalled());
     await user.click(await screen.findByRole("button", { name: "更多操作" }));
@@ -3783,10 +4111,50 @@ describe("account access", () => {
     const second = await openAccess(fixture.repository, authentication, "policies", "new-verified-bearer");
     const recovery = await screen.findByRole("region", { name: "策略操作结果未确认" });
     expect(fixture.updatePolicy).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "重试完全相同的原命令" })).toHaveProperty("disabled", false));
     await second.user.click(within(recovery).getByRole("button", { name: "重试完全相同的原命令" }));
     await waitFor(() => expect(fixture.updatePolicy).toHaveBeenCalledTimes(2));
     expect(fixture.updatePolicy.mock.calls[1]).toEqual(["new-verified-bearer", ...original.slice(1)]);
     expect(await screen.findByRole("button", { name: "Recovered name" })).toBeTruthy();
+  });
+
+  it("keeps a version review frozen until both the current exact Policy and version directory are reauthorized", async () => {
+    const fixture = livePolicyVersions();
+    const initialAccess = await fixture.readPolicy();
+    const initialDirectory = await fixture.listPolicyVersions();
+    fixture.readPolicy.mockReset(); fixture.listPolicyVersions.mockReset();
+    let finishIdentity!: (value: AccountIdentity) => void;
+    const pendingIdentity = new Promise<AccountIdentity>((resolve) => { finishIdentity = resolve; });
+    fixture.repository.currentIdentity = vi.fn().mockResolvedValueOnce(structuredClone(identity)).mockReturnValueOnce(pendingIdentity);
+    let finishExact!: (value: AccountPolicyAccess) => void;
+    const pendingExact = new Promise<AccountPolicyAccess>((resolve) => { finishExact = resolve; });
+    let finishDirectory!: (value: typeof initialDirectory) => void;
+    const pendingDirectory = new Promise<typeof initialDirectory>((resolve) => { finishDirectory = resolve; });
+    fixture.readPolicy.mockResolvedValueOnce(initialAccess).mockReturnValueOnce(pendingExact);
+    fixture.listPolicyVersions.mockResolvedValueOnce(initialDirectory).mockReturnValueOnce(pendingDirectory);
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+    await user.click(screen.getByRole("button", { name: "版本 version-a 的操作" }));
+    await user.click(await screen.findByRole("menuitem", { name: "切换默认版本" }));
+    const confirm = screen.getByRole("button", { name: "确认切换" });
+    expect(confirm).toHaveProperty("disabled", false);
+
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(fixture.repository.currentIdentity).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: "将 version-a 设为默认版本" })).toBeTruthy();
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishIdentity(structuredClone(identity)); await pendingIdentity; });
+    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fixture.listPolicyVersions).toHaveBeenCalledTimes(2));
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishExact(initialAccess); await pendingExact; });
+    expect(confirm).toHaveProperty("disabled", true);
+    await act(async () => { finishDirectory(initialDirectory); await pendingDirectory; });
+    await waitFor(() => expect(confirm).toHaveProperty("disabled", false));
+    await user.click(confirm);
+    await waitFor(() => expect(fixture.setDefaultPolicyVersion).toHaveBeenCalledTimes(1));
   });
 
   it("reviews a live default switch and retirement inline against the exact resource revision", async () => {
@@ -3959,7 +4327,7 @@ describe("account access", () => {
     const readPolicy = vi.fn(async (_credential: string, _accountId: string, policyId: string) => {
       const call = createPolicy.mock.calls[0];
       if (policyId !== "customer.new" || !call) throw new Error("INVALID_TEST_TARGET");
-      return createPolicy.mock.results[0]!.value;
+      return policyAccess(await createPolicy.mock.results[0]!.value);
     });
     const { user } = await openAccess(accounts({ createPolicy, readPolicy, listAuthorizationProfiles }), iam(), "policies");
     await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
@@ -4118,6 +4486,38 @@ describe("account access", () => {
     expect(screen.getByRole("button", { name: "新建自定义策略" })).toHaveProperty("disabled", false);
   });
 
+  it("keeps an unknown policy creation recoverable after create authority is revoked", async () => {
+    const revokedIdentity = structuredClone(identity);
+    revokedIdentity.capabilities = revokedIdentity.capabilities.map((item) => item.action === "iam.policy.create"
+      ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const }
+      : item);
+    const createPolicy = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
+      .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"));
+    const initial = accounts({ createPolicy });
+    const replacement = accounts({ createPolicy, currentIdentity: vi.fn().mockResolvedValue(revokedIdentity) });
+    const { user, replaceRepository } = await openAccess(initial, iam(), "policies");
+    await user.click(screen.getByRole("button", { name: "新建自定义策略" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "策略名称" }), { target: { value: "Recovery survives revoke" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "策略声明 JSON" }), { target: { value: JSON.stringify(tenantPolicyDetail.version.document) } });
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    await user.click(screen.getByRole("button", { name: "确认创建" }));
+    expect(await screen.findByRole("heading", { name: "策略创建结果未确认" })).toBeTruthy();
+    const original = createPolicy.mock.calls[0];
+
+    replaceRepository(replacement);
+    await waitFor(() => expect(replacement.currentIdentity).toHaveBeenCalledWith(credential));
+    expect(screen.getByRole("heading", { name: "策略创建结果未确认" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "按原请求重试" }));
+    await waitFor(() => expect(createPolicy).toHaveBeenCalledTimes(2));
+    expect(createPolicy.mock.calls[1]).toEqual(original);
+    expect(screen.getByRole("heading", { name: "策略创建结果未确认" })).toBeTruthy();
+
+    await user.click(screen.getByRole("checkbox", { name: /我理解结果仍未知/ }));
+    await user.click(screen.getByRole("button", { name: "结束旧意图" }));
+    expect(screen.queryByRole("button", { name: "新建自定义策略" })).toBeNull();
+  });
+
   it("keeps JSON available when the live catalog is forbidden", async () => {
     const fixture = livePolicyVersions();
     const listAuthorizationProfiles = vi.fn().mockRejectedValue(new HttpProblem(403, "IAM_FORBIDDEN"));
@@ -4255,6 +4655,13 @@ describe("account access", () => {
 
   it("does not treat a retry conflict or current-state read as proof of the original version mutation", async () => {
     const fixture = livePolicyVersions();
+    const read = fixture.readPolicy.getMockImplementation()!;
+    let writeAuthorityRevoked = false;
+    fixture.readPolicy.mockImplementation(async (...args) => {
+      const access = await read(...args);
+      return writeAuthorityRevoked ? { ...access,
+        capabilities: access.capabilities.filter((item) => item.action !== "iam.policy.set-default-version") } : access;
+    });
     fixture.setDefaultPolicyVersion.mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
       .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"));
     const { user } = await openAccess(fixture.repository, iam(), "policies");
@@ -4264,11 +4671,17 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "版本 version-a 的操作" }));
     await user.click(await screen.findByRole("menuitem", { name: "切换默认版本" }));
     await user.click(screen.getByRole("button", { name: "确认切换" }));
-    await screen.findByRole("heading", { name: "版本变更结果未确认" });
-    await user.click(screen.getByRole("button", { name: "按原请求重试" }));
+    const recovery = (await screen.findByRole("heading", { name: "版本变更结果未确认" })).closest("section") as HTMLElement;
+    const readsBeforeRecheck = fixture.readPolicy.mock.calls.length;
+    writeAuthorityRevoked = true;
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(fixture.readPolicy.mock.calls.length).toBeGreaterThan(readsBeforeRecheck));
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "按原请求重试" })).toHaveProperty("disabled", false));
+    expect(within(recovery).getByRole("button", { name: "读取当前状态" })).toHaveProperty("disabled", false);
+    await user.click(within(recovery).getByRole("button", { name: "按原请求重试" }));
     await waitFor(() => expect(fixture.setDefaultPolicyVersion).toHaveBeenCalledTimes(2));
     expect(screen.getByText(/即使重试返回冲突/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "读取当前状态" }));
+    await user.click(within(recovery).getByRole("button", { name: "读取当前状态" }));
     expect(await screen.findByText(/当前读取：默认版本 version-logs/)).toBeTruthy();
     expect(screen.getByText(/不能证明原请求是否执行/)).toBeTruthy();
     const end = screen.getByRole("button", { name: "结束旧意图" });
@@ -4298,8 +4711,8 @@ describe("account access", () => {
   it("keeps a forbidden version directory local while the independently readable default remains visible", async () => {
     const customer = { ...tenantPolicy, id: "customer.logs", management: "CUSTOMER" as const, accountId: account.id,
       displayName: "LogBoundary", defaultVersionId: "version-logs" };
-    const readPolicy = vi.fn().mockResolvedValue({ policy: customer, version: { ...tenantPolicyDetail.version,
-      policyId: customer.id, versionId: customer.defaultVersionId } });
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess({ policy: customer, version: { ...tenantPolicyDetail.version,
+      policyId: customer.id, versionId: customer.defaultVersionId } }));
     const listPolicyVersions = vi.fn().mockRejectedValue(new HttpProblem(403, "FORBIDDEN"));
     const repository = accounts({ readPolicy, listPolicyVersions, readPolicyVersion: vi.fn(),
       listPolicies: vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) : { ...directory(false), items: [customer] }) });
@@ -4476,17 +4889,51 @@ describe("account access", () => {
   });
 
   it.each([
-    [403, "当前身份无权读取权限能力目录"],
-    [404, "后端版本或路由可能未匹配"],
-    [503, "权限能力目录暂时不可用"]
-  ])("localizes catalog HTTP %s without replacing the policy directory or falling back to MOCK", async (status, message) => {
-    const { user } = await openAccess(accounts({ listAuthorizationProfiles: vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE")) }), iam(), "policies");
+    [403, "PRIVATE", "当前身份无权读取权限能力目录"],
+    [404, "iam.route.notfound", "后端版本或路由可能未匹配"],
+    [404, "PRIVATE", "权限能力目录暂时不可用"],
+    [503, "PRIVATE", "权限能力目录暂时不可用"]
+  ])("localizes catalog HTTP %s %s without replacing the policy directory or falling back to MOCK", async (status, code, message) => {
+    const { user } = await openAccess(accounts({ listAuthorizationProfiles: vi.fn().mockRejectedValue(new HttpProblem(status, code)) }), iam(), "policies");
     await screen.findByRole("table", { name: "策略元数据目录" });
     await user.click(screen.getByRole("tab", { name: "权限能力目录" }));
     expect(await screen.findByText(new RegExp(message))).toBeTruthy();
     expect(screen.queryByText(/隔离 MOCK 的权限能力目录/)).toBeNull();
     await user.click(screen.getByRole("tab", { name: "策略目录" }));
     expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
+  });
+
+  it.each([
+    ["iam.route.notfound", "routeUnavailable", "routeUnavailable", "routeUnavailable", "routeUnavailable", "routeUnavailable"],
+    ["PRIVATE_TARGET_404", "notFound", "notFound", "unavailable", "unavailable", "unavailable"]
+  ])("classifies stable route and target 404s without inferring empty state for %s", async (code, serviceRole, policy, profiles, templates, settings) => {
+    const missing = () => Promise.reject(new HttpProblem(404, code));
+    const repository = accounts({
+      listServiceLinkedRoles: vi.fn(),
+      getServiceLinkedRole: vi.fn(missing),
+      readPolicy: vi.fn(missing),
+      listAuthorizationProfiles: vi.fn(missing),
+      listServiceRoleTemplates: vi.fn(missing),
+      accountSecuritySettings: { read: vi.fn(missing) }
+    });
+    const user = userEvent.setup();
+    render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><ReadClassificationProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+
+    await user.click(screen.getByRole("button", { name: "login-read-classification" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "read-service-role" }).hasAttribute("disabled")).toBe(false));
+    await user.click(screen.getByRole("button", { name: "read-service-role" }));
+    await user.click(screen.getByRole("button", { name: "read-policy" }));
+    await user.click(screen.getByRole("button", { name: "read-profiles" }));
+    await user.click(screen.getByRole("button", { name: "read-templates" }));
+    await user.click(screen.getByRole("button", { name: "read-settings" }));
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("service-role-read-status").textContent).toBe(serviceRole);
+      expect(screen.getByLabelText("policy-read-status").textContent).toBe(policy);
+      expect(screen.getByLabelText("profile-read-status").textContent).toBe(profiles);
+      expect(screen.getByLabelText("template-read-status").textContent).toBe(templates);
+      expect(screen.getByLabelText("settings-read-status").textContent).toBe(settings);
+    });
   });
 
   it("rejects a catalog bound to another account without clearing the policy scene", async () => {

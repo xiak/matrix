@@ -13,7 +13,7 @@ import { AccountLiveUserWorkspace, AccountPrimaryWorkspace, AccountUserAccessMet
 import { isUserBatchAssociationAction, UserBatchConfirmationDialog, UserBatchWorkflow, type DirectoryUser } from "./UserBatchOperation";
 import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
 import styles from "./AccountAccessRenderer.module.css";
-import { AccountDirectoryReadFailure } from "./AccountDirectoryReadFailure";
+import { AccountDirectoryReadFailure } from "./AccountReadBoundary";
 
 function AccountUserRow({ user, principalId, workspace, grants, checked, disabled, onSelect, onOpen }: {
   user: DirectoryUser; principalId: string; workspace: AccessWorkspace | null;

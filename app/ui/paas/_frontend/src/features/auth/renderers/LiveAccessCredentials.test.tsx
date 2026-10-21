@@ -61,7 +61,8 @@ function client(overrides: Partial<AccessKeyClient> = {}): AccessKeyClient {
 }
 
 function settings(): AccountSecuritySettingsClient {
-  return { identity: "settings-view-one", accountId: scene.accountId, principalId: "root-acme", sessionId: "session-one", sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", settings: {
+  return { identity: "settings-view-one", accountId: scene.accountId, principalId: "root-acme", sessionId: "session-one", sessionRevision: 1,
+    canRead: true, canUpdate: false, load: vi.fn().mockResolvedValue({ status: "ready", settings: {
     accountId: scene.accountId, resourceVersion: 4, mfa: { requiredForUsers: true },
     password: { minimumLength: 15, requireLowercase: true, requireUppercase: true, requireDigit: true, requireSymbol: true, historyCount: 3, maxAgeDays: 90, expiryMode: "CHANGE_PASSWORD" },
     session: { idleTimeoutMinutes: 30 }, accessKeyNetwork: { allowedSourceCidrs: ["2001:db8::/32"] }, updatedAt: "2026-09-21T08:00:00Z"
@@ -145,9 +146,26 @@ describe("LiveAccessCredentials", () => {
     const api = client({ list: vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED")) });
     render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
 
-    expect(await screen.findByText("当前身份没有管理该用户访问密钥的权限。")).toBeTruthy();
+    const failure = await screen.findByRole("alert", { name: "无法读取访问密钥" });
+    expect(within(failure).getByText(/当前身份没有管理该用户访问密钥的权限/)).toBeTruthy();
+    expect(within(failure).getByText(/联系账号管理员核对授权/)).toBeTruthy();
+    expect(within(failure).queryByRole("button", { name: "重试读取" })).toBeNull();
     expect(screen.queryByRole("table", { name: "访问密钥" })).toBeNull();
     expect(screen.getByRole("button", { name: "新建访问密钥" }).hasAttribute("disabled")).toBe(true);
+  });
+
+  it.each([
+    ["iam.route.notfound", "当前运行环境无法提供兼容的访问密钥功能；这不代表账号或用户尚未开通服务。"],
+    ["PRIVATE_ACCESS_KEY_TARGET", "IAM 未确认指定用户或访问密钥可读取；它可能不存在，或当前身份无法确认。这不代表访问密钥功能未接入。"]
+  ])("distinguishes a missing access-key route from an unconfirmed target for %s", async (code, message) => {
+    const list = vi.fn().mockRejectedValue(new HttpProblem(404, code));
+    const api = client({ list });
+    render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
+    expect(await screen.findByText(message)).toBeTruthy();
+    expect(screen.queryByRole("table", { name: "访问密钥" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+    expect(list).toHaveBeenCalledExactlyOnceWith(owner.id);
   });
 
   it("keeps known key evidence visible when the account network rule is unavailable", async () => {

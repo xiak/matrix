@@ -564,6 +564,7 @@
     "accountReadLoading": "Reading the current account rule…",
     "accountReadRefreshing": "Refreshing account rules; the verified read-only result below is still displayed.",
     "accountReadDenied": "This identity cannot read account security settings. An authorized administrator must grant the exact iam.security-settings.read permission.",
+    "accountUpdateDenied": "This identity can read account security settings but cannot change them. Ask an authorized administrator to grant the exact iam.security-settings.update permission if required.",
     "accountReadUnavailable": "The current account rule is temporarily unavailable. Preview data will never replace live state.",
     "accountReadRouteUnavailable": "This environment has not yet connected the read-only account security settings route. The separate MOCK still supports review of the editing flow.",
     "accountReadVersion": "Rule version",
@@ -1994,6 +1995,8 @@
     "title": "Identity and access",
     "refreshLabel": "Refresh account details",
     "refresh": "Refresh",
+    "refreshPermissions": "Recheck permissions",
+    "refreshingPermissions": "Checking permissions",
     "loading": "Loading IAM account details…",
     "loadingUser": "Loading user details…",
     "retryUser": "Retry read",
@@ -2212,6 +2215,7 @@
       "blocked": "A policy operation is unresolved, or this review is stale. Resolve the original command, then read and review current state.",
       "ineligible": "Only an active tenant-managed policy owned by the current account supports this action. System, installation, foreign-account and retired policies cannot be changed here.",
       "readRequired": "Successfully read this policy's current default version before reviewing a change.",
+      "noAuthority": "This identity cannot perform this operation. Contact an account administrator for access.",
       "recoveryUnavailable": "Recovery storage or the browser's cross-tab lock is unavailable. Policy writes are stopped. Use a secure browser context with Web Locks and preserve this browser profile and storage; malformed records are not discarded automatically.",
       "recoveryTitle": "Policy operation outcome unconfirmed",
       "submitting": "Submitting the original policy command. Do not submit a duplicate or close this page.",
@@ -2274,6 +2278,7 @@
     "retry": "Retry read",
     "errors": {
       "forbidden": "This identity cannot read this policy's detail. The policy directory remains available.",
+      "notFound": "IAM did not confirm that the requested policy can be read. It may not exist, or this identity may be unable to confirm it.",
       "routeUnavailable": "The policy detail route is unavailable or the backend version does not match. No MOCK content was substituted.",
       "unavailable": "Policy detail is unavailable or returned invalid content. No MOCK content was substituted.",
       "expired": "The login session expired, so policy content is no longer shown."
@@ -2378,6 +2383,7 @@
       },
       "versionErrors": {
       "forbidden": "This identity cannot read these versions. The default version detail may remain separately available.",
+      "notFound": "IAM did not confirm that the requested policy or version can be read. It may not exist, or this identity may be unable to confirm it.",
       "routeUnavailable": "The version read route is unavailable. No MOCK content was substituted.",
       "unavailable": "The version directory or detail is unavailable or returned invalid content. No MOCK content was substituted.",
       "expired": "The login session expired, so version content is no longer shown."
@@ -3098,6 +3104,27 @@
     "authorizePreview": "Simulate service authorization",
     "finish": "Finish review"
   },
+  "AccountReadBoundary": {
+    "retry": "Try again",
+    "copyDiagnostic": "Copy diagnostic info",
+    "copied": "Diagnostic info copied",
+    "copyFailed": "Could not copy; try again later",
+    "forbiddenRecovery": "Contact your account administrator to verify the grant, then recheck permissions after access is updated.",
+    "titles": {
+      "forbidden": "This identity cannot read this content",
+      "notFound": "The requested object cannot be confirmed",
+      "routeUnavailable": "This feature is unavailable",
+      "unavailable": "This content is temporarily unavailable",
+      "expired": "Your session has expired"
+    },
+    "descriptions": {
+      "forbidden": "This identity does not have read access to this region. Other authorized pages remain available.",
+      "notFound": "IAM did not confirm that the requested object can be read. It may not exist, or this identity may be unable to confirm it; this does not mean the service is inactive.",
+      "routeUnavailable": "The current runtime cannot provide this feature. This does not prove that the service is inactive or the identity was denied.",
+      "unavailable": "The service did not return a trustworthy result. Failure does not mean the data is empty; try again later.",
+      "expired": "Sign in again before reading this content."
+    }
+  },
   "ServiceAuthorizationDirectory": {
     "title": "Service authorization",
     "hint": "Inspect this account's consented service-linked roles and resource-binding history, plus platform templates available to future consent flows.",
@@ -3167,14 +3194,16 @@
     },
     "errors": {
       "relations": {
-        "forbidden": { "title": "Current-account service authorization is restricted", "description": "This identity cannot read service-linked roles. The console will not fall back to MOCK data or infer authorization relations." },
-        "routeUnavailable": { "title": "The service authorization read route is not connected", "description": "This environment has not published the current-account service-linked-role read route." },
+        "forbidden": { "title": "Current-account service authorization is restricted", "description": "This identity cannot read service-linked roles. Other authorized IAM pages remain available." },
+        "notFound": { "title": "The requested service authorization cannot be confirmed", "description": "IAM did not confirm that the requested service-linked role can be read. It may not exist, or this identity may be unable to confirm it; this does not mean the account has not activated the service." },
+        "routeUnavailable": { "title": "Service authorization cannot be read here", "description": "This runtime does not provide a compatible service-linked-role read capability. This does not mean that the account has not activated the service." },
         "unavailable": { "title": "Service authorization is temporarily unavailable", "description": "IAM did not return verifiable relation or binding data. Try again later." },
         "expired": { "title": "Your session has expired", "description": "Sign in again before reading this account's service authorization." }
       },
       "templates": {
-        "forbidden": { "title": "Service authorization templates are restricted", "description": "This identity cannot read the service-role template directory. The console will not fall back to MOCK data or infer its contents." },
-        "routeUnavailable": { "title": "The service authorization template route is not connected", "description": "This environment has not published the read-only template directory. The isolated MOCK remains independently available in preview mode." },
+        "forbidden": { "title": "Service authorization templates are restricted", "description": "This identity cannot read the service-role template directory. Current-account authorizations remain independently available." },
+        "notFound": { "title": "The requested service authorization template cannot be confirmed", "description": "IAM did not confirm that the requested template can be read. It may not exist, or this identity may be unable to confirm it; current-account authorizations remain independently available." },
+        "routeUnavailable": { "title": "Service authorization templates cannot be read here", "description": "This runtime does not provide a compatible read-only template directory. This does not mean that the account has not activated the service." },
         "unavailable": { "title": "The template directory is temporarily unavailable", "description": "IAM did not return a verifiable template directory. Try again later." },
         "expired": { "title": "Your session has expired", "description": "Sign in again before reading service authorization templates." }
       }
@@ -5176,12 +5205,15 @@
     "keyLiveReplayTitle": "Original creation already completed",
     "keyLiveReplay": "The original creation already produced key {id}. Follow-up queries return only the non-secret result, so the Secret cannot be shown again.",
     "keyLiveErrors": {
+      "expired": "The login session expired. Sign in again before reading access keys.",
       "forbidden": "Your current identity cannot manage access keys for this user.",
-      "routeUnavailable": "The running IAM process does not provide the access-key management route yet.",
+      "notFound": "IAM did not confirm that the requested user or access key can be read. It may not exist, or this identity may be unable to confirm it. This does not mean the access-key feature is unavailable.",
+      "routeUnavailable": "This runtime cannot provide a compatible access-key feature. This does not mean that the account or user has not activated the service.",
       "conflict": "The user or key state changed. Reload before acting; if this result is uncertain, keep the original operation reference and confirm it first.",
       "recoveryUnavailable": "The browser could not safely save or clear the original request record, so no new access-key write was sent. Restore session storage for this site and reopen this page.",
       "unavailable": "The result of this access-key operation cannot be confirmed right now. Stay in this flow and retry instead of starting another creation."
     },
+    "keyLiveLoadFailedTitle": "Access keys could not be loaded",
     "keyInlineWorkflow": "The operation stays in the content area and does not open a modal.",
     "keyCreateReview": "Review and create access key",
     "keyCreateNetworkTitle": "Freeze source networks at creation",
@@ -5316,22 +5348,23 @@
       "mockConfiguration": "MOCK configuration snapshot",
       "account": "Target account",
       "live": {
-        "connectedBoundary": "LIVE · This page reads the current account's Analyzer, source coverage, and Findings through the authenticated session. A Finding is review evidence, not remediation authority, and the page never falls back to MOCK data.",
+        "connectedBoundary": "This page reads the current account's Analyzer, source coverage, and Findings. A Finding is review evidence, not remediation authority.",
         "loading": "Loading access analysis",
         "loadingCoverage": "Loading source coverage",
         "loadingFindings": "Loading Findings",
         "loadingFindingDetail": "Reauthorizing and loading the Finding detail",
         "retry": "Reload",
         "loadFailedTitle": "Access analysis could not be loaded",
-        "loadFailedHint": "This response is not an authoritative empty directory. Retry or verify the identity's access-analysis authority and service status.",
+        "loadFailedHint": "This response is not an authoritative empty directory. Check access or try again later.",
         "tabs": { "coverage": "Source coverage" },
         "errors": {
           "expired": "The login session expired. The page cleared its Analyzer, Finding, and pending-command projections. Sign in again and review from current authority.",
           "forbidden": "The current identity cannot read or manage access analysis. Other IAM workspaces remain available.",
-          "routeUnavailable": "The access-analysis API is not published in this environment.",
+          "notFound": "IAM did not confirm that the requested Analyzer or Finding can be read. It may not exist, or this identity may be unable to confirm it. This does not mean that access analysis is inactive.",
+          "routeUnavailable": "This runtime cannot provide a compatible access-analysis feature. This does not mean that the service is inactive.",
           "conflict": "The resource version changed. The page has reloaded authoritative state; review the latest result before retrying.",
           "invalid": "The server rejected this configuration or lifecycle transition.",
-          "unavailable": "Access analysis is temporarily unavailable. The page does not replace failure with MOCK data or an empty list."
+          "unavailable": "Access analysis is temporarily unavailable. Failure does not mean that this account has no Analyzer or Findings."
         },
         "retryOriginalMutation": "Retry original command",
         "uncertainMutation": "The original command result is unknown. An explicit retry must use the same backend client, target, version, input, and request ID {id}; the page never creates a second command automatically.",
@@ -5345,6 +5378,17 @@
         },
         "noAnalyzerTitle": "No access analyzer exists",
         "noAnalyzerHint": "Create an account-level unused-access analyzer before IAM starts accumulating a real observation window. Creation grants no authority and performs no automatic remediation.",
+        "listDeniedTitle": "Analyzer directory access is not granted",
+        "listDeniedHint": "This identity cannot list analyzers in the account. If you know an exact analyzer ID, you can still request that detail independently above. Contact an account administrator for iam.access-analyzer.list when directory access is required.",
+        "knownAnalyzerTitle": "Open an analyzer by known ID",
+        "knownAnalyzerHint": "Detail reads are independent from directory permission. An exact ID reads only that object and does not infer or enumerate other analyzers.",
+        "knownAnalyzerLabel": "Analyzer ID",
+        "openKnownAnalyzer": "Open analyzer",
+        "knownFindingTitle": "Open a Finding by known IDs",
+        "knownFindingHint": "An exact Finding read uses only its Analyzer ID and Finding ID. It requires no analyzer directory, parent-detail, or Finding-list authority and never infers target existence from a failure.",
+        "knownFindingAnalyzerHint": "Enter the exact Analyzer ID that owns the Finding.",
+        "knownFindingIdHint": "Enter the exact Finding ID returned by IAM.",
+        "openKnownFinding": "Open Finding",
         "createAnalyzer": "Create 90-day analyzer",
         "coverageHint": "Six sources arrive in a fixed order. Only complete coverage can support an unused-access conclusion; insufficient and excluded sources remain explicit.",
         "coverageComplete": "Source coverage is complete",
@@ -5696,6 +5740,7 @@
       "generate": "Generate current-account report",
       "retryOriginal": "Retry original generation",
       "singleIntent": "This page has generated one report. Re-enter the page to start a new explicit intent.",
+      "createDenied": "This identity cannot generate an account security report. Contact an account administrator for iam.security-report.create.",
       "uncertainIntent": "The original generation result is still unknown. A retry uses the same operation ID {id}; it does not create a new generation intent.",
       "foreignIntent": "The backend client changed while generation {id} remains unresolved. This client neither replays that request nor starts a second generation intent.",
       "foreignIntentReason": "A generation request remains unresolved on the original client. Restore that client and inspect the same operation ID first.",
@@ -5720,6 +5765,7 @@
       "download": "Download verified CSV",
       "downloading": "Verifying download",
       "downloaded": "The CSV was downloaded only after re-reading current metadata and verifying its exact byte count and SHA-256 digest.",
+      "downloadDenied": "This report is readable, but the current identity cannot download its CSV. Contact an account administrator for iam.security-report.download.",
       "csvBytes": "CSV bytes",
       "verifiedSnapshot": "Verified by IAM",
       "integrityTitle": "Server integrity commitments",
@@ -5732,6 +5778,7 @@
         "expired": "The login session expired. The page cleared the report ID, creation result, and report content. Sign in again before authorizing another read.",
         "forbidden": "The current Session lacks the exact permission for this step. Knowing a reportId or creating a report never bypasses reauthorization.",
         "notFound": "The reportId is unknown, expired and cleaned up, or not visible to the current account. The page will not fall back to MOCK data.",
+        "routeUnavailable": "This runtime does not provide a compatible security-report endpoint. That does not prove the report is absent or the current identity was denied.",
         "conflict": "The account has reached its unexpired-report limit or server state changed. Existing reports are never overwritten or deleted automatically.",
         "invalid": "The IAM response failed the fixed report contract or download-integrity check. The client failed closed and saved no file.",
         "unavailable": "IAM is unavailable or the result cannot be confirmed. The page will not fabricate success, silently replace the requestId, or fall back to MOCK."

@@ -564,6 +564,7 @@
     "accountReadLoading": "正在读取当前账号规则…",
     "accountReadRefreshing": "正在更新当前账号规则；以下为上次已验证的只读结果。",
     "accountReadDenied": "当前身份没有查看账号安全规则的权限。请由有权管理员关联精确的 iam.security-settings.read 权限。",
+    "accountUpdateDenied": "当前身份可以查看账号安全规则，但不能修改；如确有需要，请由有权管理员关联精确的 iam.security-settings.update 权限。",
     "accountReadUnavailable": "暂时无法读取当前账号安全规则。不会用模拟数据代替真实状态。",
     "accountReadRouteUnavailable": "当前环境尚未接入账号安全规则的只读接口。模拟编辑流程仍可在独立 MOCK 中验收。",
     "accountReadVersion": "规则版本",
@@ -1994,6 +1995,8 @@
     "title": "账号与权限",
     "refreshLabel": "刷新账号信息",
     "refresh": "刷新",
+    "refreshPermissions": "重新检查权限",
+    "refreshingPermissions": "正在检查权限",
     "loading": "正在读取 IAM 账号信息…",
     "loadingUser": "正在读取用户详情…",
     "retryUser": "重试读取",
@@ -2212,6 +2215,7 @@
       "blocked": "存在尚未解决的策略操作，或当前审阅已失效。请先处理原命令，再读取并审阅最新状态。",
       "ineligible": "仅当前账户处于活动状态的租户自定义策略支持此操作；系统、平台、其他账户或已退役策略不可在此修改。",
       "readRequired": "请先成功读取该策略的当前默认版本，再审阅修改。",
+      "noAuthority": "当前身份无权执行此操作；请联系账号管理员授权。",
       "recoveryUnavailable": "无法安全读取恢复记录或获取浏览器跨标签页锁，已停止策略写入。请使用支持 Web Locks 的安全浏览器环境，并保留当前浏览器资料与存储；不会自动丢弃异常记录。",
       "recoveryTitle": "策略操作结果未确认",
       "submitting": "正在提交原策略命令，请勿重复提交或关闭当前页面。",
@@ -2274,6 +2278,7 @@
     "retry": "重试读取",
     "errors": {
       "forbidden": "当前身份无权读取该策略的详情；策略目录仍可使用。",
+      "notFound": "IAM 未确认指定策略可读取；它可能不存在，或当前身份无法确认。",
       "routeUnavailable": "策略详情接口不可用，可能与后端版本不匹配；未使用 MOCK 内容替代。",
       "unavailable": "策略详情暂时不可用或返回了无效内容；未使用 MOCK 内容替代。",
       "expired": "当前登录会话已失效，策略内容不会继续显示。"
@@ -2378,6 +2383,7 @@
       },
       "versionErrors": {
       "forbidden": "当前身份无权读取这些版本；默认版本详情仍可单独查看。",
+      "notFound": "IAM 未确认指定策略或版本可读取；它可能不存在，或当前身份无法确认。",
       "routeUnavailable": "版本读取接口不可用；未使用 MOCK 内容替代。",
       "unavailable": "版本目录或详情暂时不可用，或返回了无效内容；未使用 MOCK 内容替代。",
       "expired": "当前登录会话已失效，版本内容不会继续显示。"
@@ -3098,6 +3104,27 @@
     "authorizePreview": "模拟授权服务",
     "finish": "结束审阅"
   },
+  "AccountReadBoundary": {
+    "retry": "重试读取",
+    "copyDiagnostic": "复制诊断信息",
+    "copied": "诊断信息已复制",
+    "copyFailed": "无法复制，请稍后重试",
+    "forbiddenRecovery": "请联系账号管理员核对授权，授权后重新检查权限。",
+    "titles": {
+      "forbidden": "当前身份无权读取",
+      "notFound": "无法确认指定对象",
+      "routeUnavailable": "当前功能不可用",
+      "unavailable": "暂时无法读取",
+      "expired": "登录会话已失效"
+    },
+    "descriptions": {
+      "forbidden": "当前身份缺少此区域的读取权限。其他已授权页面不受影响。",
+      "notFound": "IAM 未确认指定对象可读取。它可能不存在，或当前身份无法确认；本状态不代表服务未开通。",
+      "routeUnavailable": "当前运行环境无法提供此功能。它不代表服务未开通或当前身份被拒绝。",
+      "unavailable": "服务暂时没有返回可信结果。失败不代表数据为空，请稍后重试。",
+      "expired": "请重新登录后再读取当前内容。"
+    }
+  },
   "ServiceAuthorizationDirectory": {
     "title": "服务授权",
     "hint": "查看当前账号已同意的服务关联角色、资源绑定历史，以及平台可用于后续同意流程的模板。",
@@ -3167,14 +3194,16 @@
     },
     "errors": {
       "relations": {
-        "forbidden": { "title": "无权查看当前账号服务授权", "description": "当前身份缺少服务关联角色读取权限；控制台不会回退到 MOCK 或推断授权关系。" },
-        "routeUnavailable": { "title": "服务授权读取接口尚未接入", "description": "当前环境没有发布当前账号服务关联角色的只读接口。" },
+        "forbidden": { "title": "无权查看当前账号服务授权", "description": "当前身份缺少服务关联角色读取权限。其他已授权的 IAM 页面不受影响。" },
+        "notFound": { "title": "无法确认指定服务授权", "description": "IAM 未确认指定服务关联角色可读取。它可能不存在，或当前身份无法确认；这不代表账号尚未开通服务。" },
+        "routeUnavailable": { "title": "当前无法读取服务授权", "description": "当前运行环境没有提供兼容的服务关联角色读取能力；这不代表账号尚未开通服务。" },
         "unavailable": { "title": "暂时无法读取服务授权", "description": "IAM 没有返回可验证的关系或绑定数据，请稍后重试。" },
         "expired": { "title": "会话已过期", "description": "请重新登录后再读取当前账号服务授权。" }
       },
       "templates": {
-        "forbidden": { "title": "无权查看服务授权模板", "description": "当前身份缺少服务角色模板目录读取权限；不会回退到 MOCK 或推断目录内容。" },
-        "routeUnavailable": { "title": "服务授权模板接口尚未接入", "description": "当前环境尚未发布只读模板目录。隔离 MOCK 仍可在体验环境中独立查看。" },
+        "forbidden": { "title": "无权查看服务授权模板", "description": "当前身份缺少服务角色模板目录读取权限。当前账号授权仍可独立查看。" },
+        "notFound": { "title": "无法确认指定服务授权模板", "description": "IAM 未确认指定模板可读取。它可能不存在，或当前身份无法确认；当前账号授权仍可独立查看。" },
+        "routeUnavailable": { "title": "当前无法读取服务授权模板", "description": "当前运行环境没有提供兼容的只读模板目录；这不代表账号尚未开通服务。" },
         "unavailable": { "title": "暂时无法读取模板目录", "description": "IAM 没有返回可验证的模板目录。请稍后重试。" },
         "expired": { "title": "会话已过期", "description": "请重新登录后再读取服务授权模板。" }
       }
@@ -5176,12 +5205,15 @@
     "keyLiveReplayTitle": "原创建请求已完成",
     "keyLiveReplay": "原创建操作已经生成密钥 {id}。为防止秘密泄露，后续查询只返回非秘密结果，Secret 无法再次显示。",
     "keyLiveErrors": {
+      "expired": "当前登录会话已失效。请重新登录后再读取访问密钥。",
       "forbidden": "当前身份没有管理该用户访问密钥的权限。",
-      "routeUnavailable": "当前运行的 IAM 进程尚未提供访问密钥管理接口。",
+      "notFound": "IAM 未确认指定用户或访问密钥可读取；它可能不存在，或当前身份无法确认。这不代表访问密钥功能未接入。",
+      "routeUnavailable": "当前运行环境无法提供兼容的访问密钥功能；这不代表账号或用户尚未开通服务。",
       "conflict": "用户或密钥状态已变化。请重新读取后再操作；如果本次结果不确定，请保留原操作标识并先确认结果。",
       "recoveryUnavailable": "浏览器无法安全保存或清理原请求记录，因此没有发送新的访问密钥写入。请恢复当前站点的会话存储后重新打开本页。",
       "unavailable": "暂时无法确认本次访问密钥操作的结果。请留在当前流程并重试，不要重复发起创建。"
     },
+    "keyLiveLoadFailedTitle": "无法读取访问密钥",
     "keyInlineWorkflow": "操作在当前内容区完成，不打开模态框。",
     "keyCreateReview": "核对并创建访问密钥",
     "keyCreateNetworkTitle": "创建时固定来源网络",
@@ -5316,22 +5348,23 @@
       "mockConfiguration": "MOCK 配置快照",
       "account": "目标账号",
       "live": {
-        "connectedBoundary": "LIVE · 本页直接读取当前登录会话所属账号的 Analyzer、来源覆盖和 Finding。Finding 是待复核证据，不是资源处置许可；页面不会回退到 MOCK 数据。",
+        "connectedBoundary": "本页读取当前账号的 Analyzer、来源覆盖和 Finding。Finding 是待复核证据，不是资源处置许可。",
         "loading": "正在加载访问分析",
         "loadingCoverage": "正在加载来源覆盖",
         "loadingFindings": "正在加载 Finding",
         "loadingFindingDetail": "正在重新授权并读取 Finding 详情",
         "retry": "重新加载",
         "loadFailedTitle": "无法读取访问分析",
-        "loadFailedHint": "当前响应不是权威空目录。请重试或检查该身份的访问分析权限与服务状态。",
+        "loadFailedHint": "当前响应不是权威空目录。请检查访问权限或稍后重试。",
         "tabs": { "coverage": "来源覆盖" },
         "errors": {
           "expired": "当前登录会话已失效；页面已清除 Analyzer、Finding 与待处理命令投影。请重新登录后重新审阅。",
           "forbidden": "当前身份没有读取或管理访问分析的权限。其他 IAM 页面不受影响。",
-          "routeUnavailable": "当前环境尚未发布访问分析接口。",
+          "notFound": "IAM 未确认指定 Analyzer 或 Finding 可读取；它可能不存在，或当前身份无法确认。这不代表访问分析服务未开通。",
+          "routeUnavailable": "当前运行环境无法提供兼容的访问分析功能；这不代表服务尚未开通。",
           "conflict": "资源版本已变化，页面已重新读取权威状态；请基于最新结果再次审阅。",
           "invalid": "服务端拒绝了当前配置或状态转换请求。",
-          "unavailable": "访问分析暂时不可用；页面不会用 MOCK 数据或空列表替代失败。"
+          "unavailable": "访问分析暂时不可用；失败不代表当前账号没有 Analyzer 或 Finding。"
         },
         "retryOriginalMutation": "重试原命令",
         "uncertainMutation": "原命令的结果尚无法确认。只能使用同一后端连接、同一目标、同一版本、同一输入和同一请求标识 {id} 显式重试；页面不会自动生成第二个命令。",
@@ -5345,6 +5378,17 @@
         },
         "noAnalyzerTitle": "尚未创建访问分析器",
         "noAnalyzerHint": "创建账号级未使用访问分析器后，IAM 才开始按真实来源累积观测窗口。创建本身不授予权限，也不会自动处置资源。",
+        "listDeniedTitle": "未授权浏览分析器目录",
+        "listDeniedHint": "当前身份不能列出账号内的分析器。若已知准确的分析器 ID，仍可在上方独立发起详情读取；需要浏览目录时请联系账号管理员授予 iam.access-analyzer.list。",
+        "knownAnalyzerTitle": "按已知 ID 查看分析器",
+        "knownAnalyzerHint": "详情读取与目录权限彼此独立。输入准确 ID 只读取该对象，不会推测或枚举其他分析器。",
+        "knownAnalyzerLabel": "分析器 ID",
+        "openKnownAnalyzer": "查看分析器",
+        "knownFindingTitle": "按已知 ID 查看 Finding",
+        "knownFindingHint": "精确 Finding 读取只使用 Analyzer ID 与 Finding ID，不依赖分析器目录、父详情或 Finding 列表权限，也不会据失败推断目标是否存在。",
+        "knownFindingAnalyzerHint": "输入该 Finding 所属的准确 Analyzer ID。",
+        "knownFindingIdHint": "输入 IAM 返回的准确 Finding ID。",
+        "openKnownFinding": "查看 Finding",
         "createAnalyzer": "创建 90 天分析器",
         "coverageHint": "六类来源按固定顺序返回。只有完整覆盖才能支撑未使用结论；证据不足和未纳入必须显式展示。",
         "coverageComplete": "来源覆盖完整",
@@ -5711,6 +5755,7 @@
       "generate": "生成当前账号安全报告",
       "retryOriginal": "重试原生成请求",
       "singleIntent": "本页已生成一份报告；重新进入页面可开始新的明确意图。",
+      "createDenied": "当前身份不能生成账号安全报告；如确有需要，请联系账号管理员授予 iam.security-report.create。",
       "uncertainIntent": "原生成请求的结果尚无法确认。重试只会使用同一操作标识 {id}，不会创建新的生成意图。",
       "foreignIntent": "后端连接已切换，原生成请求 {id} 仍须由原连接核对。当前连接不会重放该请求，也不会开始第二个生成意图。",
       "foreignIntentReason": "原连接仍有结果未知的生成请求；请先恢复原连接并按操作标识核对。",
@@ -5735,6 +5780,7 @@
       "download": "下载已校验 CSV",
       "downloading": "正在校验下载",
       "downloaded": "CSV 已在重新读取最新元数据并核对精确字节数与 SHA-256 后下载。",
+      "downloadDenied": "当前报告可以读取，但当前身份不能下载其 CSV；如确有需要，请联系账号管理员授予 iam.security-report.download。",
       "csvBytes": "CSV 字节数",
       "verifiedSnapshot": "IAM 已验证",
       "integrityTitle": "服务端完整性承诺",
@@ -5747,6 +5793,7 @@
         "expired": "当前登录会话已失效；页面已清除报告标识、生成结果和报告内容。请重新登录后重新授权读取。",
         "forbidden": "当前 Session 没有执行这一步的精确权限。已有 reportId 或生成成功都不能绕过重新鉴权。",
         "notFound": "该 reportId 不存在、已到期清理，或当前账号无权看到它。页面不会回退到 MOCK 数据。",
+        "routeUnavailable": "当前运行环境没有提供兼容的安全报告接口；这不代表报告不存在或当前身份被拒绝。",
         "conflict": "当前账号的未到期报告已达上限，或服务端状态已经变化。不会覆盖或删除旧报告。",
         "invalid": "IAM 响应未满足固定报告契约或下载完整性校验，已失败关闭且不会保存文件。",
         "unavailable": "IAM 暂时不可用或结果无法确认。页面不会伪造成功、自动更换 requestId 或回退 MOCK。"

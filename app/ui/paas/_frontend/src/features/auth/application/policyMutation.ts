@@ -37,9 +37,12 @@ function mutationError(failure: unknown): MutationError {
 
 // Own the original command outside route remounts. Persistence contains only
 // the closed metadata intent; the current verified Session supplies authority.
-export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, credential, sessionRevision, repository, protect, onExpired, versionPolicyId }: {
+export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, credential, sessionRevision, repository, protect, onExpired, versionPolicyId,
+  authorityPending, authorizeBegin }: {
   enabled: boolean; accountId?: string; actorPrincipalId?: string; credential?: string;
   sessionRevision: number; repository: PolicyMutationRepository; versionPolicyId?: string;
+  authorityPending: boolean;
+  authorizeBegin(detail: AccountPolicyDetail, input: { kind: "update"; displayName: string } | { kind: "retire" }): boolean;
   protect<T>(request: () => Promise<T>): Promise<T>;
   onExpired(credential: string, revision: number): void;
 }): PolicyMutationClient | null {
@@ -48,6 +51,8 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
   [enabled, accountId, actorPrincipalId, credential, sessionRevision, repository]);
   const currentOwner = useRef(owner);
   const versionPending = useRef(versionPolicyId);
+  const authorityPendingRef = useRef(authorityPending);
+  const authorizeBeginRef = useRef(authorizeBegin);
   const observation = useRef<Observation | null>(null);
   const inFlight = useRef<Owner | null>(null);
   const [view, setView] = useState<Observation | null>(null);
@@ -57,6 +62,10 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
     return () => { currentOwner.current = null; };
   }, [owner]);
   useLayoutEffect(() => { versionPending.current = versionPolicyId; }, [versionPolicyId]);
+  useLayoutEffect(() => {
+    authorityPendingRef.current = authorityPending;
+    authorizeBeginRef.current = authorizeBegin;
+  }, [authorityPending, authorizeBegin]);
 
   useEffect(() => {
     if (!owner) return;
@@ -150,11 +159,14 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
     };
     return {
       identity: owner.identity,
-      ready: snapshot?.ready ?? false, recoveryError: snapshot?.recoveryError ?? null, pending: snapshot?.pending ?? null,
+      ready: Boolean(snapshot?.ready && !authorityPending),
+      recoveryError: snapshot?.recoveryError ?? null, pending: snapshot?.pending ?? null,
       busy: busyOwner === owner, lastError: snapshot?.lastError ?? null,
       begin(detail, input) {
         const frozen = structuredClone({ detail, input });
+        if (authorityPendingRef.current || !authorizeBeginRef.current(frozen.detail, frozen.input)) return Promise.resolve({ status: "blocked" });
         return coordinate(async () => {
+          if (authorityPendingRef.current || !authorizeBeginRef.current(frozen.detail, frozen.input)) return { status: "blocked" };
           const existing = readPolicyMutationIntent(window.localStorage, owner);
           if (existing) { publish(existing); return { status: "blocked" }; }
           if (versionPending.current || frozen.detail.policy.accountId !== owner.accountId ||
@@ -170,8 +182,9 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
       },
       retry() {
         const expected = observation.current?.owner === owner ? observation.current.pending : null;
-        if (!expected) return Promise.resolve({ status: "blocked" });
+        if (authorityPendingRef.current || !expected) return Promise.resolve({ status: "blocked" });
         return coordinate(async () => {
+          if (authorityPendingRef.current) return { status: "blocked" };
           const stored = readPolicyMutationIntent(window.localStorage, owner);
           if (!stored || JSON.stringify(stored) !== JSON.stringify(expected)) { publish(stored); return { status: "blocked" }; }
           return dispatch(stored, true);
@@ -187,5 +200,5 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
         }, false);
       }
     };
-  }, [owner, view, busyOwner, protect, onExpired]);
+  }, [owner, view, busyOwner, protect, onExpired, authorityPending]);
 }
