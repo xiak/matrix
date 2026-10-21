@@ -91,7 +91,7 @@ Finding的已知目标读取使用现有analyzerId与findingId二元路径，不
 
 ### 权限感知增量需求与切片
 
-P0–P2 已选择性接入 UX/UI 固定源码，后端投影及最终十九项客户端完成下述本地检查；P3 的权限感知与受影响退役恢复真实页面均已通过。精确CI十九项job终态成功，独立必需日志仍待补齐后封存，不能提前把整个增量标为最终接受。本表不重开或扩大此前已接受页面路径。
+P0–P2 已选择性接入 UX/UI 固定源码，后端投影及最终十九项客户端完成下述本地检查；P3 的权限感知与受影响退役恢复真实页面均已通过。固定9062的独立CI已完成精确SHA、十九项job及全部必需日志核对并封存；本权限感知增量接受，不扩张为整个010、IAM-UI-01–08其余页面或新签名发布完成。本表不重开或扩大此前已接受页面路径。
 
 | 切片 | 需求和实现 owner | 必须通过的结果 |
 | --- | --- | --- |
@@ -117,7 +117,7 @@ Policy新写必须通过当前精确能力、目标版本及对应版本目录�
 | 聚焦源码 | 四文件353项221.39s；最终异步锁hook32项5.45s；typecheck/full lint、architecture及234组主题对比通过 | 历史中间候选的测试数量不累加为当前覆盖 |
 | 构建与嵌入 | Node22.22.2/2GiB、两worker生产unset/0各生成59页，324文件逐字一致；8项Node边界通过3.58s；嵌入同步核对通过 | 不导入donor资产，不等于重新验收签名发布 |
 | Go消费者与夹具 | 最终嵌入Go UI race13.945s；architecture race3.348s；完整无数据库authorityprocess race3.998s及vet通过；监听/探针/relay三根race3.750s通过 | 默认跳过的外部数据库/browser根不计真实运行 |
-| 独立CI | [Verification39559359986](https://github.com/xiak/matrix/actions/runs/39559359986) attempt1绑定准确9062，十九项job终态全部成功；前端2057 Vitest、8 Node及双导出/嵌入324一致 | 逐根日志收口归[011](FEAT-IAM-011-acceptance.md#当前独立ci)，不得把API终态冒充完整日志已核对 |
+| 独立CI | [Verification39559359986](https://github.com/xiak/matrix/actions/runs/39559359986) attempt1绑定准确9062，十九项job及全部必需日志已独立核对封存；前端2057 Vitest、8 Node及双导出/嵌入324一致 | 逐根证据及默认跳过边界归[011](FEAT-IAM-011-acceptance.md#当前独立ci)，不继承5935的签名发布验收 |
 | 权限感知真实页面 | 同一9062源码的`TestIAMPermissionAwareConsoleBrowser`376.61s、race包380.128s通过，UX/UI owner完成下述可见观察 | 不以marker、API准备或组件测试代替页面；不是额外Finding worker正向或签名APISIX验收 |
 | 受影响退役恢复页面 | 同一9062源码的`TestIAMPolicyMutationRecoveryConsoleBrowser` RETIRE模式719.44s、race包722.991s通过 | 只接受下述准确原意图恢复；不代替默认版本、其他Policy动作或签名APISIX门禁 |
 
@@ -198,6 +198,21 @@ relay只保存封闭路径/状态/阶段计数，并用不输出、不持久化�
 - 覆盖recovered-create→删除已提交丢包→目录无key→原删除重放→权威回读后解锁；回读失败保留完成状态且不再写。
 - User详情已消费`policies`/`keys`目标区块；原意图的User不在当前目录页或目录失败时，明确操作沿既有exact getUser/loadUser读取准确目标，失败保持锁定而非重放命令。一次性Secret使用既有内部离页保护，Session/client改变仍立即清除秘密，不受离页确认阻挡。这三项当前已有组件证据，仍须真实浏览器验证；Access Analysis只有keyId时不得猜测owner或伪造精确深链。
 - 分别证明一次性Secret清除、完成事实与当前状态分离、命令效果及Audit唯一性。组件红绿、独立CI与真实浏览器证据分开记录，任何一层都不能冒充其他层已通过。
+
+### AccessKey与Role本轮闭环
+
+本轮从已验证固定`9062f83bc114c1f79e829fb2018e0b94f6bd651b`继续，只完成IAM-UI-05/06中长期程序凭据与同账号用户角色的可操作路径。007拥有密钥生命周期和签名规则，006拥有Role/Trust/RoleSession规则；本文件只定义它们的控制台组合验收，不复制PDP、秘密托管或角色会话模型。UI仍由UX/UI owner实现，IAM owner提供真实服务、原测试夹具及权威后验。
+
+| 切片 | 真实可操作结果 | 不可替代的证据 |
+| --- | --- | --- |
+| UI-K1 正常密钥与轮换 | 已授权操作者进入准确普通User，页面创建第一把Key、观察一次性Secret并明确结束展示；离页/重进只能读非秘密元数据。创建第二把后，两把分别用于真实PaaS签名请求；明确禁用、启用、再禁用并删除旧Key，新Key保持可用 | 两把未删除Key的上限及删除释放名额、每次当前授权与立即失效；Secret不进入日志、持久浏览器状态或Audit。只在测试进程内存使用真实创建响应的材料，不从数据库解密或伪造用户凭据 |
+| UI-K2 原命令恢复 | 现有SET_STATUS、NETWORK、DELETE三种操作各在独立空库完成单写响应丢失、UNKNOWN、离页/同actor新登录、一次完全相同原命令恢复及独立当前读取 | 原request/actor/目标/版本/冻结输入、单次效果/完成/outbox/Audit；目录无行不能确认删除，历史完成不能清除恢复围栏，失败回读不能重发写。API预建Key不算UI创建或Secret验收 |
+| UI-R1 创建与显式承担 | 当前获授权的同账号管理员从已有Role工作区创建CUSTOMER Role、审阅准确Trust及权限上限、显式关联租户Policy；被信任普通User从自服务入口承担，并在真实业务页面验证Role范围内Allow/Deny及身份/来源/期限显示 | Trust命中、承担许可、Role正向授权与boundary分别成立；角色不继承来源User业务权限。准备User和可见Policy可用API，所宣称的Role创建/关联/承担必须实际从页面提交 |
+| UI-R2 撤权与退出 | 沿现有ROLE/REVOKE夹具完成管理员附件撤销UNKNOWN及只读原回执，原Role下一业务请求401进入BLOCKED；仅显式重新验证来源后返回USER，来源没有业务权时呈现403。已有精确Role会话工作区另验证单Session撤销 | 不自动重新承担、静默换用来源身份或重放业务写；原发行/历史事实保持，重新授予不能复活旧RoleSession，完成回执不等于当前权限 |
+
+先复用已具备的UI-K2和UI-R2夹具，再在原`test/authorityprocess` owner补UI-K1/UI-R1缺失的观察和效果断言，不另造浏览器框架或生产调试端点。默认单元/契约/组件门禁证明输入围栏和迟到响应，独立真实PG/HTTP门禁证明当前授权和事务；它们与真实浏览器分别登记。每条旅程必须有可见页面观察和准确数据库/Audit后验，完成marker只触发后验。测试日志不得保存Secret、Bearer、认证输入或完整敏感响应。
+
+本轮不引入SSO、WebAuthn、跨Account承担、角色链、服务身份信任或完整签名发布；也不将未执行的Role资料/Trust后续编辑/停复用/删除、密码/MFA与其他010矩阵路径自动标绿。现有错误或缺少消费者能力先在原owner修复并固定，再实跑相关路径；不得用新的权限绕过掩盖页面缺口。固定代码的必要CI与独立开发并行，涉及契约/安全失败先修正。每次重型运行串行且限额，结束后确认进程与连接归零，清理不再使用的自有容器、空网络、数据库及临时包；保留精简真实日志，不触碰其他任务或保留的安装现场。
 
 ## 验收
 

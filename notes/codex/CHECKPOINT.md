@@ -6,10 +6,12 @@
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   Repository-local identity is exactly `Xiak <Jellal@aliyun.com>`.
-- The active goal is the permission-aware console architecture, requirements,
-  implementation and real acceptance. Its single owner is
-  `IAM/FEAT-IAM-010-console.md`, especially IAM-UI-09 through12 and UX-P0
-  throughP3. Do not expand it into every historical IAM browser backlog.
+- The permission-aware console increment is accepted. The user authorized a
+  new bounded goal: AccessKey and same-account Role real-console closure,
+  necessary fixes, independent verification and cleanup of unused own test
+  resources. `IAM/FEAT-IAM-010-console.md` owns UI-K1/K2 and UI-R1/R2; 007 and006
+  retain the credential and Role contracts. This is not every historical IAM
+  browser backlog or another signed release acceptance.
 - Architecture/requirements are fixed at
   `11473477508423597af09b4c83c7614152443699`.
   Backend P1 is `3826eaf4b5628945dd210419fb96f743a5e13da1`;
@@ -40,15 +42,16 @@
   and check the current fence after asynchronous Web Lock acquisition.
   The adoption owner records the full fixed-source chain; no donor assets or
   acceptance state were imported. Assets were rebuilt from this branch.
-- Exact Verification39559359986 attempt1 has API terminal SUCCESS but its
-  independent evidence closure remains OPEN:
+- Exact Verification39559359986 attempt1 is independently CLOSED SUCCESS:
   https://github.com/xiak/matrix/actions/runs/39559359986 .
-  Nineteen jobs succeed;370 steps are175 success/195skip, terminal time
-  2026-10-21 07:31:56UTC. Frontend2057+8 and324assets, window1252.32s,
-  capacity129.24/269.75s and aggregate are checked. Tool reset lost part of
-  segmented log state; eleven lanes and predecessor-summary comparison remain
-  unverified. Test Expert owns this existing read-only closure; do not rerun
-  CI, revisit old closed attempts or treat evidence-tool failure as CI failure.
+  Nineteen jobs succeed;370 steps are175 success/195matrix-designed skips,
+  terminal time2026-10-21 07:31:56UTC. Full evidence closed08:29:09UTC:
+  all19 necessary logs,14lanes/57actual roots,33JSON packages and1164Test
+  identities match their terminal results. Seven real-mail cases skip without
+  Postfix; default opt-in browser declarations are not executions. The exact
+  predecessor summary is checked. Frontend2057+8 and324assets, window1252.32s,
+  capacity129.24/269.75s and aggregate are checked. Do not re-fetch the closed
+  logs or rerun CI merely to update documentation. Full evidence belongs to011.
 - The fixed9062 permission-aware browser passed376.61s/race380.128s:
   exact reads without directory rights, local403/503/real-empty states,
   same-Session grant/revoke and unchanged-entry/exact-write revocation.
@@ -67,8 +70,9 @@
 
 ## Remaining closure and subsequent boundaries
 
-- Read AGENTS, the current010 permission-aware sections, then their owning
-  code/tests. Read011 only for the directly relevant acceptance boundary.
+- Read AGENTS, the current010 AccessKey/Role closure, then relevant006/007
+  contract sections and existing code/tests. Read011 only for the directly
+  relevant acceptance boundary.
   Signed operations additionally require FEAT-005 and its verified runbook.
 - UX/UI owns frontend implementation. Only consume reviewed fixed Git objects,
   never its worktree/WIP, generated assets, checkpoint or acceptance status.
@@ -83,10 +87,15 @@
   explicit route404. A target404 does not prove the feature is absent or that
   the object exists. No raw detail/Secret in diagnostics or fake permission
   application without an actual receiving workflow.
-- Both required browser journeys and cleanup are complete. Only the remaining
-  independent CI log evidence and final goal closure remain. This milestone
-  records accepted browser evidence without claiming whole-goal acceptance.
-  Do not rerun the finished journeys or start a fixture merely to wait for CI.
+- Both permission-aware browser journeys, CI evidence and cleanup are complete.
+  Do not rerun them merely to start the next goal. The existing AccessKey
+  response-loss fixture supports SET_STATUS/NETWORK/DELETE but API-prepares its
+  key: it does not prove UI creation, one-time Secret handling or programmatic
+  use. Reuse it before adding the missing normal lifecycle in the same owner.
+- Existing ROLE/REVOKE attachment recovery supports the real assume/business
+  read/admin revoke/BLOCKED/explicit source-return journey. Actual Role creation,
+  attachment creation and administrator Session revocation need their own
+  visible observations; do not infer them from prepared rows or unit tests.
 - This bounded outcome does not close all010 IAM-UI-01 through08 or the
   overall011 delivery goal. Their matrices own remaining page journeys.
   Permission help currently provides safe diagnostics/contact-admin guidance;
