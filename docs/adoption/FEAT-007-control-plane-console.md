@@ -72,8 +72,10 @@ acknowledgement, directory-driven quota release and a third replacement Key.
 The existing RoleSession recovery case retains a sibling while revoking only
 the selected Session, without changing the Role or its policy attachments.
 `REFERENCE` donor results only; execute the tests in this consumer. `REJECT`
-component mocks as real signing, database or browser acceptance. No production
-source or embedded asset changes are required for this test-only delta.
+component mocks as real signing, database or browser acceptance. The delta
+changes no production interaction logic, but the existing deterministic build
+identity includes test source. Regenerate and verify this branch's complete
+embedded export; a test-only change is not an exemption from that contract.
 
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.

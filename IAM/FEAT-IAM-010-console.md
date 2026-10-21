@@ -234,7 +234,9 @@ UI-K2沿现有入口分别使用新鲜独立数据库，真实IAM/Audit/PaaS、�
 
 UI-K1在同一authorityprocess owner增加独立opt-in正常旅程：准备无Key普通User及准确管理/业务授权，七条写命令必须来自页面，依次为创建两把、禁用/启用/再禁用第一把、删除第一把、创建替代Key。各阶段可见观察后，独立真实PaaS签名读取验证两把重叠、禁用403、删除401与其他Key继续200；两把未删除上限由实际拒绝第三把及删除后真实新建证明。测试relay只在内存有界捕获创建响应材料以签名，最终清理，不从数据库解密、不记录Secret或Bearer；普通详情/目录严格拒绝秘密字段。各命令准确actor/target/request、单调版本、完成/outbox和Audit链独立核对。此设计和默认观察器回归不等于已完成实际页面验收。
 
-选择性接入UX固定`7a704f5f2f3deb25e7972015a495a503288f4733`的两个既有测试文件增量，保留本分支准确owner读取和拒绝分类回归。状态化Key组件测试从空目录连续创建两把、明确结束Secret展示、卸载重挂载后无Secret，使用第一把的准确版本1/2/3停启停、版本4删除，再由权威目录释放名额并创建替代Key；每条命令的requestId和确认绑定分别核对。原RoleSession UNKNOWN恢复测试增加另一条服务会话，证明只移除准确目标，Sibling仍未撤销且不调用Role/附件/上限变更。消费分支两文件54项以21.42秒通过，Node22.22.2、2GiB、单worker，typecheck及两文件ESLint通过；默认process/architecture race3.980/2.510秒及vet通过，默认opt-in跳过不计真实运行。未改生产代码或嵌入产物，不替代K1真实签名/浏览器及R1/R2实际会话撤销验收。
+选择性接入UX固定`7a704f5f2f3deb25e7972015a495a503288f4733`的两个既有测试文件增量，保留本分支准确owner读取和拒绝分类回归。状态化Key组件测试从空目录连续创建两把、明确结束Secret展示、卸载重挂载后无Secret，使用第一把的准确版本1/2/3停启停、版本4删除，再由权威目录释放名额并创建替代Key；每条命令的requestId和确认绑定分别核对。原RoleSession UNKNOWN恢复测试增加另一条服务会话，证明只移除准确目标，Sibling仍未撤销且不调用Role/附件/上限变更。消费分支两文件54项以21.42秒通过，Node22.22.2、2GiB、单worker，typecheck及两文件ESLint通过；默认process/architecture race3.980/2.510秒及vet通过，默认opt-in跳过不计真实运行。没有改变生产交互逻辑，不替代K1真实签名/浏览器及R1/R2实际会话撤销验收。
+
+现有`next.config.mjs`的构建指纹递归包含src/public/scripts完整字节，因此测试源码增量也必须重新生成嵌入交付，不能豁免。消费分支使用Node22.22.2/npm11.6.4、2GiB及两个构建worker，两次preview unset/0导出324文件逐字一致，并由原脚本同步和再次精确验证；八项既有Node检查通过。相对前一嵌入树，32文件字节不变，其余292文件仅构建ID由`matrix-b2c1e74f2bdfbcea33b9`变为`matrix-f0c6f4f1a804dcfebbf2`，完整树逐文件核对没有其他差异。新嵌入的Go UI/architecture race7.247/2.291秒及vet通过；没有修改指纹算法、生成器或一致性门禁。准确独立CI结论仍归011。
 
 K1后验区分同一原request的授权决定与密钥变更事实，不能把合法`iam.authorization.decided`误计为重复变更或当成变更已完成。只接受同Account、IAM来源、原USER管理者的ALLOWED决定，且target必须是其准确decisionId；密钥成功事实仍严格匹配原action/key/actor，跨分页重复成功、错误归属或其他action都失败。原判定在三条合法决定顺序/仅决定场景以race2.433秒确定失败，修正后19种Audit归因场景及15种页面命令/非秘密读取场景以race3.474秒通过，默认process/architecture race3.955/2.688秒和vet通过。没有修改生产权限、Audit契约、SQL或秘密处理；这不替代尚未完成的真实创建及双Key页面运行。
 

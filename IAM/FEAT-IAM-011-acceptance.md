@@ -49,7 +49,7 @@
 
 固定`4760581e035ec299003ef8f777b777feda38a218`的[Verification 39599299467](https://github.com/xiak/matrix/actions/runs/39599299467) attempt1已由GitHub API核实为`completed/success`，2026-10-21 12:55:34UTC终态、十九项job全部成功，包含storage及最终汇总；测试owner继续核对完整日志，不先填入未封存的根/包数量。该修正仅把storage编排上限20→25分钟，保留全部测试、单项deadline、数据库限额、串行执行和失败关闭汇总；完整YAML语义比较及24个Bash步骤通过，默认process/architecture race3.948/2.591秒及vet通过。原固定`da9426f608a99d564d573d3d4153714ba1198ada`的[Verification 39593652955](https://github.com/xiak/matrix/actions/runs/39593652955)仍为`completed/cancelled`：check119204314631明确超过20分钟job期限，19分07秒测试步骤虽成功，清理时跨过总期限。没有人工/并发取消证据，原部分storage日志不算完整验收；新run成功不改写旧run结论。
 
-后继固定`2888c9c0812eb84abb755239e1d8938d41829b91`的[Verification 39603659401](https://github.com/xiak/matrix/actions/runs/39603659401) attempt1已启动，仍待终态。它增加010拥有的Key审计归因及两个组件回归，并按本文件运行约束调整同一组lane的调度顺序；不改生产API/SQL/profile，不从476或组件测试推导尚未完成的真实浏览器验收。
+后继固定`2888c9c0812eb84abb755239e1d8938d41829b91`的[Verification 39603659401](https://github.com/xiak/matrix/actions/runs/39603659401) attempt1为`completed/failure`，不得算通过。console job119234220810在完整导出一致性检查拒绝旧嵌入：test-only源码仍参与现有build fingerprint，此提交遗漏重新导出。该失败发生在Vitest步骤之前，不能称组件断言失败或CI组件通过；Go、node-process及安装PG夹具成功，authority matrix因前置失败跳过，最终汇总失败。010拥有本分支重新生成及精确比较的修正证据；后继准确源码仍需新独立CI，不改写此终态，也不从476推导浏览器或新调度验收。
 
 固定`640f0f59045b194466807329a12f7bc6c6b58a08`的[Verification 39586936643](https://github.com/xiak/matrix/actions/runs/39586936643) attempt1已由测试owner独立封存为`completed/success`：终态时间2026-10-21 11:18:38 UTC。十九项job全部成功；370个step为175成功、195项矩阵预期跳过，十四条lane的57个实际根均恰好RUN/PASS一次、没有根跳过。33个JSON包全部通过，1164个Test身份的JSON/plain终态一致，其中1157通过、7个真实邮件子例因缺少Postfix明确跳过。十九份必需日志共74,598,595字节完成连续范围、长度及严格UTF-8校验；三处读取超时仅补缺失尾段，没有重跑CI或回填旧失败。
 
