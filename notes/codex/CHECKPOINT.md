@@ -6,13 +6,20 @@
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`.
   Repository-local identity is `Xiak <Jellal@aliyun.com>`.
-- Blocked, incomplete bounded goal: AccessKey and same-account Role real-console closure,
+- Active, incomplete bounded goal: AccessKey and same-account Role real-console closure,
   necessary fixes, independent verification and cleanup of unused own resources.
   `IAM/FEAT-IAM-010-console.md` owns K1/K2 and R1/R2;007/006 retain credential
   and Role contracts. Do not reopen accepted permission-aware work or mark
   the overall IAM matrix complete.
-- Latest pushed code candidate: `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`.
-  Its Verification39604675084 attempt1 is independently CLOSED SUCCESS,
+- Latest pushed code candidate: `958d5b46649abc3dac2936892bb323005af97bde`.
+  It changes only the existing browser test owner and010: exact fixture-created
+  application detail reads and response-time RoleSession expiry checks. Seven
+  new negative/positive cases first failed;41 transition scenarios and bounded
+  response tests then passed, with default process/architecture race and vet.
+  Its Verification39646488455 attempt1 is running, not accepted. The original
+  Test Expert owns the single existing monitor; do not create another.
+- Latest fully audited CI source: `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`.
+  Verification39604675084 attempt1 is independently CLOSED SUCCESS,
   exactSHA/all19jobs at2026-10-21 13:33:26UTC. The Test Expert completed all19
   necessary logs74,585,478bytes/156segments;14lanes/57required roots and33JSON
   packages passed.1164Test identities agree:1157PASS+7Postfix-absent childSKIP,
@@ -20,16 +27,16 @@
   match.011 owns the full evidence and limits; no new browser/signing acceptance:
   https://github.com/xiak/matrix/actions/runs/39604675084 .
   Do not refetch this closed tuple's jobs/logs. Retain the existing Test Expert's
-  single monitor; no new monitor or chats. Remaining real page actions are still
-  blocked by the original execution tool's action-time confirmation requirement.
-- 0884 changes only the existing Role browser observer and010: after real
-  page-issued Role application200 and observed admin revocation, the first
-  exact same-credential GET401 may come from Applications, the implemented
-  managed-service directory, or current Role identity. 403/503, another bearer,
-  unrelated route/method or pre-revoke401 do not qualify. Explicit source
-  validation200 and source application403 remain mandatory. No extra request
-  with an already blocked credential is required. Two new positives first
-  failed;27 scenarios then passed. No API/SQL/UI change.
+  single monitor; no new monitor or chats. Real page acceptance is separate;
+  the original UX executor must follow its own action-time confirmation rules.
+- Current Role observer accepts only the page-issued Role's exact GET401 after
+  a real pre-revocation application200 and observed administrator revocation.
+  Routes are the application collection, the exact fixture-created application
+  detail, managed-service directory and current Role identity. Wrong resource,
+  bearer, method,403/503, pre-revocation401 or natural expiry cannot qualify.
+  Explicit source validation200 and source application403 remain mandatory;
+  do not send another request with a credential already blocked by the UI.
+  No production API/SQL/UI/Profile changed.010 owns the detailed red/green proof.
 - 476 changes only storage's orchestration envelope20→25 minutes. Complete YAML
   semantic comparison proves unchanged tests, fixture deadlines, lanes,
   database limits, concurrency and fail-closed summary;24 Bash steps parse.
@@ -120,14 +127,15 @@
   da9426's next actual page run reached UNKNOWN/receipt/zero attachments/
   BLOCKED/explicit source403 but failed the old application-only401 observer
   (400.18s/race402.669s). Do not backfill it or invent missing network evidence.
-- Fresh0884 run assumed once and read the actual application; final revocation
-  was not submitted. UX's actual browser instructions required action-time
-  confirmation, unlike this chat's instructions. Stop rather than evade that
-  execution boundary. No marker; exact own UI was stopped and gate failed
-  `browser UI exited during observation`716.88s/race719.354s. Attachment
-  remainedv1/unrevoked. Tabs/processes/listeners/DB clients ended; disposable
-  database and own PG container removed, compact logs retained. No fresh
-  browser runtime retained. Do not restart heavy fixtures merely to idle.
+- Latest completed R2d run used e22 production/test source and actually reached
+  the confirmed single revocation,UNKNOWN,original receipt and zero attachments.
+  Member clicked an application detail, saw BLOCKED and explicitly returned to
+  an unprivileged source. It nevertheless FAILED568.23s/race570.835s: the old
+  observer did not cover that detail route, so the exact HTTP transitions were
+  not recorded. The original RoleSession was still unexpired. Never backfill
+  that run as passed or infer missing HTTP evidence from DOM screenshots.
+  958 fixes the observer; its new-database real-page gate is still unaccepted.
+  Transient URLs and pending browser requests are not portable checkpoints.
 - R1 plus distinct exact admin RoleSession revocation fixture exists, unrun:
   page-created CUSTOMER Role/trust/boundary/positive attachment, actual assume,
   App200/Audit403 intersection; revoke only that Session, Role401/BLOCKED→
