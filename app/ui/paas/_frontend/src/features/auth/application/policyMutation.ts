@@ -51,6 +51,8 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
   [enabled, accountId, actorPrincipalId, credential, sessionRevision, repository]);
   const currentOwner = useRef(owner);
   const versionPending = useRef(versionPolicyId);
+  const authorityPendingRef = useRef(authorityPending);
+  const authorizeBeginRef = useRef(authorizeBegin);
   const observation = useRef<Observation | null>(null);
   const inFlight = useRef<Owner | null>(null);
   const [view, setView] = useState<Observation | null>(null);
@@ -60,6 +62,10 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
     return () => { currentOwner.current = null; };
   }, [owner]);
   useLayoutEffect(() => { versionPending.current = versionPolicyId; }, [versionPolicyId]);
+  useLayoutEffect(() => {
+    authorityPendingRef.current = authorityPending;
+    authorizeBeginRef.current = authorizeBegin;
+  }, [authorityPending, authorizeBegin]);
 
   useEffect(() => {
     if (!owner) return;
@@ -158,9 +164,9 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
       busy: busyOwner === owner, lastError: snapshot?.lastError ?? null,
       begin(detail, input) {
         const frozen = structuredClone({ detail, input });
-        if (authorityPending || !authorizeBegin(frozen.detail, frozen.input)) return Promise.resolve({ status: "blocked" });
+        if (authorityPendingRef.current || !authorizeBeginRef.current(frozen.detail, frozen.input)) return Promise.resolve({ status: "blocked" });
         return coordinate(async () => {
-          if (!authorizeBegin(frozen.detail, frozen.input)) return { status: "blocked" };
+          if (authorityPendingRef.current || !authorizeBeginRef.current(frozen.detail, frozen.input)) return { status: "blocked" };
           const existing = readPolicyMutationIntent(window.localStorage, owner);
           if (existing) { publish(existing); return { status: "blocked" }; }
           if (versionPending.current || frozen.detail.policy.accountId !== owner.accountId ||
@@ -176,8 +182,9 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
       },
       retry() {
         const expected = observation.current?.owner === owner ? observation.current.pending : null;
-        if (authorityPending || !expected) return Promise.resolve({ status: "blocked" });
+        if (authorityPendingRef.current || !expected) return Promise.resolve({ status: "blocked" });
         return coordinate(async () => {
+          if (authorityPendingRef.current) return { status: "blocked" };
           const stored = readPolicyMutationIntent(window.localStorage, owner);
           if (!stored || JSON.stringify(stored) !== JSON.stringify(expected)) { publish(stored); return { status: "blocked" }; }
           return dispatch(stored, true);
@@ -193,5 +200,5 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
         }, false);
       }
     };
-  }, [owner, view, busyOwner, protect, onExpired, authorityPending, authorizeBegin]);
+  }, [owner, view, busyOwner, protect, onExpired, authorityPending]);
 }

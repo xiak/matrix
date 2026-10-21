@@ -71,6 +71,26 @@ describe("LIVE Policy original-command lifecycle", () => {
     expect(props.repository.updatePolicy.mock.calls[1]).toEqual(props.repository.updatePolicy.mock.calls[0]);
   });
 
+  it("rechecks the live authority fence after acquiring a delayed browser lock", async () => {
+    const props = options(); props.repository.updatePolicy.mockRejectedValueOnce(new Error("lost"));
+    const hook = await open(props);
+    await act(async () => { expect(await hook.result.current!.begin(detail, rename)).toEqual({ status: "unknown" }); });
+    const original = localStorage.getItem(policyMutationStorageKey(owner));
+    let releaseLock!: () => Promise<void>;
+    Object.defineProperty(navigator, "locks", { configurable: true, value: { request: (name: string, _options: LockOptions,
+      run: (lock: Lock | null) => unknown) => new Promise((resolve, reject) => {
+      releaseLock = async () => { try { resolve(await run({ name, mode: "exclusive" })); } catch (failure) { reject(failure); } };
+    }) } });
+    let retry!: Promise<PolicyMutationResult>;
+    await act(async () => { retry = hook.result.current!.retry(); await Promise.resolve(); });
+    hook.rerender({ ...props, authorityPending: true });
+    await waitFor(() => expect(hook.result.current!.ready).toBe(false));
+    await act(async () => { await releaseLock(); expect(await retry).toEqual({ status: "blocked" }); });
+    expect(props.repository.updatePolicy).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem(policyMutationStorageKey(owner))).toBe(original);
+    expect(hook.result.current!.pending?.state).toBe("UNKNOWN");
+  });
+
   it("journals metadata before sending one frozen rename, then accepts only the matching result", async () => {
     const props = options();
     props.repository.updatePolicy.mockImplementation(async () => {
