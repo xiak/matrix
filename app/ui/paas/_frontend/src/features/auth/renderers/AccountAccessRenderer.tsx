@@ -220,7 +220,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     (view === "users" && !entityId && !scene.canListUsers) ||
     (view === "create-user" && !scene.canCreateUsers) ||
     (view === "groups" && (workspace ? !scene.canListUsers : !entityId && !scene.canListGroups)) ||
-    (view === "roles" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !scene.canListRoles)) ||
+    (view === "roles" && (workspace ? !scene.canListUsers : capabilities.supportsLiveRoles && !entityId && !scene.canListRoles)) ||
     (view === "service-authorizations" && workspace && !scene.canListUsers) ||
     (view === "create-role" && !workspace && (!access.roles || !scene.canCreateRoles)) ||
     (view === "create-group" && !(workspace ? scene.canListUsers : scene.canCreateGroups)) ||
