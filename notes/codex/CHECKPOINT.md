@@ -3,11 +3,11 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-10-20
+- Updated: 2026-10-21
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed candidate: `3f626b8bd183b88399fb6b19ebfb50b46b625864`
-- Source commit: `892cf0439fba342765305cad3e0dfcdd563618d8`
+- Pushed candidate: `5b3a27e08cf4139b77bac401d64ccc13a11b9f03`
+- Source commit: `dae78452461ebdee461c2e07ac1fe96dfbb82ba3`
 
 ## Authoritative route
 
@@ -29,22 +29,26 @@ with a completion notice, exact 390px geometry, one H1, no Dialog and no browser
 warning/error. Exact evidence and limitations belong to FEAT-007; IAM semantics
 remain with FEAT-IAM-010.
 
-The current permission-refresh client also passed 454 focused cases across
-Account access, Access Analysis, Security Reports and the console shell. These
-prove same-Session CurrentIdentity refresh, exact-target rereads, write freezes,
-UNKNOWN preservation, stale-generation isolation and 403/503 separation. The
-new FEAT-IAM-010 evidence records those guarantees without promoting them to a
-real-process browser result.
+The permission-refresh client now separates authorization for a new Policy or
+PolicyVersion write from recovery of one already-frozen UNKNOWN request. New
+writes still require the current exact target and revision. Recovery stays
+frozen through authority refresh and rechecks its live fence after acquiring
+the browser lock; after recheck, only the original byte-equivalent request may
+be retried with the current verified owner. A retired Policy detail becoming
+unreadable no longer blocks that recovery, while a server 403 keeps the intent
+UNKNOWN. PolicyVersion observation is read-only and independent of write
+capability. Five focused files passed 487 cases together with typecheck, lint,
+architecture and style gates. FEAT-IAM-010 owns the exact evidence and limits.
 
 ## Continuation boundary
 
-Preserve the inspectable isolated MOCK and existing composition. Generated
-assets are synchronized in the pushed candidate. The IAM engineer's independent
-real PostgreSQL/browser permission-refresh process terminated at the initial
-observation timeout; its collaboration task has not yet produced a replacement
-fixture, fixed commit or terminal passing evidence. Those remain required before
-release acceptance; do not copy that task's uncommitted worktree. No
-backend/API/SQL/profile, real resource or mandatory authentication setting
-changed. Phase 1 keeps email only for
+Preserve the inspectable isolated MOCK and existing composition. Commits
+`a453890e9` and `dae784524` are pushed source handoff commits; this branch has
+not rebuilt embedded production assets for them, so `5b3a27e08` is not a
+release candidate. The IAM engineer has accepted the fixed chain and is
+assembling the independent PostgreSQL 18 permission-aware browser fixture; its
+new URL and terminal result are still pending. Do not copy that task's
+uncommitted worktree. No backend/API/SQL/profile, real resource or mandatory
+authentication setting changed. Phase 1 keeps email only for
 contact verification and security-notification receiving; email login/MFA,
 phone login, SMS, phone binding and physical-phone integration remain excluded.
