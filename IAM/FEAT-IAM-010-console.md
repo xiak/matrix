@@ -234,6 +234,8 @@ UI-K2沿现有入口分别使用新鲜独立数据库，真实IAM/Audit/PaaS、�
 
 UI-K1在同一authorityprocess owner增加独立opt-in正常旅程：准备无Key普通User及准确管理/业务授权，七条写命令必须来自页面，依次为创建两把、禁用/启用/再禁用第一把、删除第一把、创建替代Key。各阶段可见观察后，独立真实PaaS签名读取验证两把重叠、禁用403、删除401与其他Key继续200；两把未删除上限由实际拒绝第三把及删除后真实新建证明。测试relay只在内存有界捕获创建响应材料以签名，最终清理，不从数据库解密、不记录Secret或Bearer；普通详情/目录严格拒绝秘密字段。各命令准确actor/target/request、单调版本、完成/outbox和Audit链独立核对。此设计和默认观察器回归不等于已完成实际页面验收。
 
+K1后验区分同一原request的授权决定与密钥变更事实，不能把合法`iam.authorization.decided`误计为重复变更或当成变更已完成。只接受同Account、IAM来源、原USER管理者的ALLOWED决定，且target必须是其准确decisionId；密钥成功事实仍严格匹配原action/key/actor，跨分页重复成功、错误归属或其他action都失败。原判定在三条合法决定顺序/仅决定场景以race2.433秒确定失败，修正后19种Audit归因场景及15种页面命令/非秘密读取场景以race3.474秒通过，默认process/architecture race3.955/2.688秒和vet通过。没有修改生产权限、Audit契约、SQL或秘密处理；这不替代尚未完成的真实创建及双Key页面运行。
+
 固定640f消费者的首条ROLE/REVOKE页面旅程发现导航缺口：普通成员真实承担成功，但没有可见入口从当前IAM工作区进入应用；整页改地址会清除内存凭据，不能替代同Role的业务读取。未进行附件撤销，数据库核对原附件仍未撤销；既有观察器因缺少真实Role业务200及后继转换以361.16秒失败（race363.704秒），子进程随后正常清理。该失败不补填为验收，也不以注入链接、直接API调用或持久化Bearer绕过；由原UX/UI导航owner修复后再新库实跑。
 
 后继选择性采用UX固定`ceb38eab2cb3075573dcea640d9ca5d38e097a3e`的九个源码/测试路径，六个最终blob相同，保留消费分支Shell测试及两份消息文件的既有差异。平台工作区与受管产品发现的边界归FEAT-007，未向受管目录注册假的Applications/IAM/Audit。消费侧先只加入原样回归：目录pending时进入Applications及同Role跨工作区两项均在旧实现缺少链接，以10.01秒失败；接入修正后8.69秒通过。三文件174项49.90秒、type/lint/architecture、234组对比度及8项Node边界通过。Node22、2GiB/单测试worker、两个构建worker的双导出324文件逐字一致并从本分支重建嵌入，Go UI/architecture/default process race分别7.376/1.797/3.909秒及vet通过。这些是消费者组件/构建证据，新的真实Role旅程尚未完成，也不继承donor验收。

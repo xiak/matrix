@@ -4715,17 +4715,9 @@ func runIAMAccessKeyLifecycleConsoleBrowser(t *testing.T, ctx context.Context, d
 	for {
 		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
 		for _, record := range page.Records {
-			want, ok := remaining[record.Event.RequestID]
-			if !ok {
-				continue
+			if err := observeBrowserAccessKeyAudit(record, user.AccountID, remaining, seen); err != nil {
+				t.Fatal(err)
 			}
-			if seen[record.Event.RequestID] || record.Source != auditv1.SourceIAM || record.Event.Action != want.action ||
-				record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != "principal-admin" ||
-				record.Event.TenantID != auditv1.TenantID(user.AccountID) || record.Event.InstallationID != "" ||
-				record.Event.Target.Kind != auditv1.TargetAccessKey || record.Event.Target.ID != string(want.key) || record.Event.Result != auditv1.ResultSucceeded {
-				t.Fatal("browser key lifecycle Audit differs from its original command")
-			}
-			seen[record.Event.RequestID] = true
 		}
 		if page.NextCursor == "" {
 			break
@@ -4749,6 +4741,92 @@ type browserAccessKeyMutation struct {
 	key       iamv1.AccessKeyID
 	requestID string
 	action    auditv1.Action
+}
+
+func observeBrowserAccessKeyAudit(record auditv1.AuditRecord, account iamv1.AccountID,
+	commands map[string]browserAccessKeyMutation, seen map[string]bool) error {
+	want, tracked := commands[record.Event.RequestID]
+	if !tracked {
+		return nil
+	}
+	if record.Source != auditv1.SourceIAM || record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != "principal-admin" ||
+		record.Event.TenantID != auditv1.TenantID(account) || record.Event.InstallationID != "" {
+		return errors.New("browser key lifecycle Audit differs from its original command")
+	}
+	// The management authorization and the resulting Key mutation retain the
+	// same request ID. An attributed ALLOWED decision is not a second mutation
+	// and cannot satisfy the success-fact count, regardless of page order.
+	if record.Event.Action == auditv1.ActionIAMAuthorizationDecided {
+		if record.Event.Result != auditv1.ResultAllowed || record.Event.Target.Kind != auditv1.TargetAuthorizationDecision ||
+			record.Event.IAMDecisionID == "" || record.Event.Target.ID != string(record.Event.IAMDecisionID) {
+			return errors.New("browser key management decision has invalid attribution")
+		}
+		return nil
+	}
+	if seen[record.Event.RequestID] || record.Event.Action != want.action ||
+		record.Event.Target.Kind != auditv1.TargetAccessKey || record.Event.Target.ID != string(want.key) || record.Event.Result != auditv1.ResultSucceeded {
+		return errors.New("browser key lifecycle Audit differs from its original command")
+	}
+	seen[record.Event.RequestID] = true
+	return nil
+}
+
+func TestAccessKeyBrowserAuditSeparatesDecisionFromMutation(t *testing.T) {
+	const account iamv1.AccountID = "browser-account"
+	mutation := auditv1.AuditRecord{Source: auditv1.SourceIAM, Event: auditv1.Event{
+		TenantID: auditv1.TenantID(account), Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-admin"},
+		Action: auditv1.ActionIAMAccessKeyCreated, Target: auditv1.TargetReference{Kind: auditv1.TargetAccessKey, ID: "browser-key"},
+		IAMDecisionID: "browser-decision", Result: auditv1.ResultSucceeded, RequestID: "ui-access-key-create-one",
+	}}
+	decision := mutation
+	decision.Event.Action, decision.Event.Result = auditv1.ActionIAMAuthorizationDecided, auditv1.ResultAllowed
+	decision.Event.Target = auditv1.TargetReference{Kind: auditv1.TargetAuthorizationDecision, ID: "browser-decision"}
+	variant := func(record auditv1.AuditRecord, change func(*auditv1.AuditRecord)) auditv1.AuditRecord {
+		change(&record)
+		return record
+	}
+	for _, scenario := range []struct {
+		name    string
+		records []auditv1.AuditRecord
+		invalid bool
+		seen    int
+	}{
+		{"mutation only", []auditv1.AuditRecord{mutation}, false, 1},
+		{"decision before mutation", []auditv1.AuditRecord{decision, mutation}, false, 1},
+		{"decision after mutation", []auditv1.AuditRecord{mutation, decision}, false, 1},
+		{"decision cannot replace mutation", []auditv1.AuditRecord{decision}, false, 0},
+		{"duplicate mutation across pages", []auditv1.AuditRecord{mutation, mutation}, true, 1},
+		{"unrelated request", []auditv1.AuditRecord{variant(mutation, func(r *auditv1.AuditRecord) { r.Event.RequestID = "another-request" })}, false, 0},
+		{"different mutation action", []auditv1.AuditRecord{variant(mutation, func(r *auditv1.AuditRecord) { r.Event.Action = auditv1.ActionIAMAccessKeyDeleted })}, true, 0},
+		{"wrong key", []auditv1.AuditRecord{variant(mutation, func(r *auditv1.AuditRecord) { r.Event.Target.ID = "another-key" })}, true, 0},
+		{"wrong actor", []auditv1.AuditRecord{variant(mutation, func(r *auditv1.AuditRecord) { r.Event.Actor.ID = "another-user" })}, true, 0},
+		{"wrong source", []auditv1.AuditRecord{variant(mutation, func(r *auditv1.AuditRecord) { r.Source = auditv1.SourcePaaS })}, true, 0},
+		{"wrong tenant", []auditv1.AuditRecord{variant(mutation, func(r *auditv1.AuditRecord) { r.Event.TenantID = "another-account" })}, true, 0},
+		{"installation scope", []auditv1.AuditRecord{variant(mutation, func(r *auditv1.AuditRecord) { r.Event.InstallationID = "installation-one" })}, true, 0},
+		{"wrong result", []auditv1.AuditRecord{variant(mutation, func(r *auditv1.AuditRecord) { r.Event.Result = auditv1.ResultDenied })}, true, 0},
+		{"denied decision", []auditv1.AuditRecord{variant(decision, func(r *auditv1.AuditRecord) { r.Event.Result = auditv1.ResultDenied })}, true, 0},
+		{"decision wrong target", []auditv1.AuditRecord{variant(decision, func(r *auditv1.AuditRecord) { r.Event.Target.ID = "another-decision" })}, true, 0},
+		{"decision wrong target kind", []auditv1.AuditRecord{variant(decision, func(r *auditv1.AuditRecord) { r.Event.Target.Kind = auditv1.TargetAccessKey })}, true, 0},
+		{"decision missing identity", []auditv1.AuditRecord{variant(decision, func(r *auditv1.AuditRecord) { r.Event.IAMDecisionID = "" })}, true, 0},
+		{"decision wrong tenant", []auditv1.AuditRecord{variant(decision, func(r *auditv1.AuditRecord) { r.Event.TenantID = "another-account" })}, true, 0},
+		{"decision wrong actor", []auditv1.AuditRecord{variant(decision, func(r *auditv1.AuditRecord) { r.Event.Actor.ID = "another-user" })}, true, 0},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			commands := map[string]browserAccessKeyMutation{mutation.Event.RequestID: {
+				key: "browser-key", requestID: mutation.Event.RequestID, action: mutation.Event.Action,
+			}}
+			seen := make(map[string]bool)
+			var err error
+			for _, record := range scenario.records {
+				if err = observeBrowserAccessKeyAudit(record, account, commands, seen); err != nil {
+					break
+				}
+			}
+			if (err != nil) != scenario.invalid || len(seen) != scenario.seen {
+				t.Fatalf("mutation facts=%d, invalid=%t; want facts=%d, invalid=%t", len(seen), err != nil, scenario.seen, scenario.invalid)
+			}
+		})
+	}
 }
 
 type browserAccessKeyLifecycleProbe struct {
