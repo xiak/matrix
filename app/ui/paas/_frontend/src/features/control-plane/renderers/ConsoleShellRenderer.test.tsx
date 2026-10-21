@@ -1514,7 +1514,8 @@ describe("ConsoleShellRenderer", () => {
     const entry = await screen.findByRole("link", { name: /PostgreSQL.*由 Matrix/ });
     expect(entry.getAttribute("href")).toBe("/console/products/postgresql/");
     expect(listServiceDefinitions).toHaveBeenCalledExactlyOnceWith("renderer-test-memory-only-session");
-    expect(within(screen.getByRole("dialog")).queryByRole("link", { name: /云数据库 MySQL|访问管理 IAM/ })).toBeNull();
+    expect(within(screen.getByRole("dialog")).queryByRole("link", { name: /云数据库 MySQL/ })).toBeNull();
+    expect(within(screen.getByRole("dialog")).getByRole("link", { name: /访问管理 IAM/ })).toBeTruthy();
     await user.click(entry);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(await screen.findByText(/当前身份没有开通资格/)).toBeTruthy();
@@ -1670,7 +1671,7 @@ describe("ConsoleShellRenderer", () => {
     const listApplications = vi.fn(() => new Promise<ApplicationDirectoryPage>(() => {}));
     await renderConsole({ section: "applications", listApplications });
 
-    expect(screen.getByRole("heading", { level: 1, name: "应用托管" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "应用服务" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "应用目录" })).toBeTruthy();
     const table = screen.getByRole("table", { name: "当前身份可见的应用目录" });
     expect(table.getAttribute("aria-busy")).toBe("true");
@@ -1764,7 +1765,7 @@ describe("ConsoleShellRenderer", () => {
     const readApplication = vi.fn(() => new Promise<ApplicationReadSnapshot>((resolve) => { resolveRead = resolve; }));
     await renderConsole({ section: "applications", readApplication });
 
-    expect(screen.getByRole("heading", { level: 1, name: "应用托管" })).toBeTruthy();
+    expect(screen.getByRole("heading", { level: 1, name: "应用服务" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "应用详情" })).toBeTruthy();
     expect(screen.getByRole("link", { name: "返回应用" })).toBeTruthy();
     expect(screen.getByText("app-live-checkout")).toBeTruthy();
@@ -2424,6 +2425,39 @@ describe("ConsoleShellRenderer", () => {
       navigation.push.mockClear(); navigation.replace.mockClear();
       return { ...result, fetchAudit, sourceLogout };
     }
+
+    it("keeps the verified Role credential across product-directory navigation to Applications", async () => {
+      const service = selfService();
+      const listServiceDefinitions = vi.fn().mockResolvedValue(liveServiceDirectory(false));
+      const listApplications = vi.fn(async (credential: string) => {
+        expect(credential).toBe("synthetic-role-bearer");
+        return liveApplicationDirectoryPage;
+      });
+      const result = await renderConsole({
+        section: "access",
+        view: "role-access",
+        roleSelfService: service,
+        listServiceDefinitions,
+        listApplications
+      });
+      await result.user.click(await screen.findByRole("button", { name: "审阅并承担 Signed UI Support Reader" }));
+      await result.user.click(screen.getByRole("button", { name: "承担角色" }));
+      await screen.findByRole("heading", { name: "当前角色身份" });
+
+      await result.user.click(screen.getByRole("button", { name: "打开产品与服务" }));
+      const directory = screen.getByRole("dialog", { name: "云产品入口" });
+      const applications = within(directory).getByRole("link", { name: /应用托管/ });
+      expect(applications.getAttribute("href")).toBe("/console/applications/");
+      await result.user.click(applications);
+
+      expect(navigation.push).toHaveBeenCalledWith("/console/applications/", { scroll: false });
+      expect(screen.queryByRole("dialog", { name: "云产品入口" })).toBeNull();
+      await act(async () => result.commitRoute("/console/applications/"));
+      expect(await screen.findByRole("table", { name: "当前身份可见的应用目录" })).toBeTruthy();
+      expect(listApplications).toHaveBeenCalledWith("synthetic-role-bearer", undefined);
+      expect(listServiceDefinitions).toHaveBeenCalledWith("synthetic-role-bearer");
+      expect(service.assume).toHaveBeenCalledTimes(1);
+    });
 
     it("blocks a rejected Role bearer and restores the User only after explicit source validation", async () => {
       let restoreSource!: () => void;

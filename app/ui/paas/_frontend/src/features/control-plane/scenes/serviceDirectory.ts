@@ -8,18 +8,18 @@ export const serviceCategories = ["infrastructure", "applications", "databases",
 export type ServiceCategory = typeof serviceCategories[number];
 
 export const serviceDirectory = [
-  { id: "regions", category: "infrastructure", group: "foundation", icon: "foundation", href: "/console/regions/", sections: ["regions"] },
-  { id: "applications", category: "applications", group: "hosting", icon: "paas", href: "/console/applications/", sections: ["applications"] },
-  { id: "postgresql", category: "databases", group: "relational", icon: "paas", href: "/console/products/postgresql/", sections: ["catalog", "quotas", "installations"] },
-  { id: "mysql", category: "databases", group: "relational", icon: "paas", href: "/console/products/mysql/", sections: ["catalog", "quotas", "installations"] },
-  { id: "elasticsearch", category: "analytics", group: "searchAnalytics", icon: "observability", href: "/console/products/elasticsearch/", sections: ["catalog", "quotas", "installations"] },
-  { id: "rabbitmq", category: "middleware", group: "messageQueue", icon: "paas", href: "/console/products/rabbitmq/", sections: ["catalog", "quotas", "installations"] },
-  { id: "devops", category: "delivery", group: "delivery", icon: "devops", href: "/console/devops/", sections: ["devops"] },
-  { id: "monitoring", category: "management", group: "monitoring", icon: "observability", href: "/console/observability/", sections: ["observability"] },
-  { id: "logs", category: "management", group: "logData", icon: "observability", href: "/console/logs/", sections: ["logs"] },
-  { id: "audit", category: "management", group: "governance", icon: "security", href: "/console/audit/", sections: ["audit"] },
-  { id: "iam", category: "security", group: "identity", icon: "security", href: "/console/access/", sections: ["access"] }
-] as const satisfies ReadonlyArray<{ id: string; category: ServiceCategory; group: string; icon: ExperienceIconKind; href: string; sections: readonly ConsoleSection[] }>;
+  { id: "regions", discovery: "preview", category: "infrastructure", group: "foundation", icon: "foundation", href: "/console/regions/", sections: ["regions"] },
+  { id: "applications", discovery: "platform", category: "applications", group: "hosting", icon: "paas", href: "/console/applications/", sections: ["applications"] },
+  { id: "postgresql", discovery: "managed", category: "databases", group: "relational", icon: "paas", href: "/console/products/postgresql/", sections: ["catalog", "quotas", "installations"] },
+  { id: "mysql", discovery: "managed", category: "databases", group: "relational", icon: "paas", href: "/console/products/mysql/", sections: ["catalog", "quotas", "installations"] },
+  { id: "elasticsearch", discovery: "managed", category: "analytics", group: "searchAnalytics", icon: "observability", href: "/console/products/elasticsearch/", sections: ["catalog", "quotas", "installations"] },
+  { id: "rabbitmq", discovery: "managed", category: "middleware", group: "messageQueue", icon: "paas", href: "/console/products/rabbitmq/", sections: ["catalog", "quotas", "installations"] },
+  { id: "devops", discovery: "preview", category: "delivery", group: "delivery", icon: "devops", href: "/console/devops/", sections: ["devops"] },
+  { id: "monitoring", discovery: "preview", category: "management", group: "monitoring", icon: "observability", href: "/console/observability/", sections: ["observability"] },
+  { id: "logs", discovery: "preview", category: "management", group: "logData", icon: "observability", href: "/console/logs/", sections: ["logs"] },
+  { id: "audit", discovery: "platform", category: "management", group: "governance", icon: "security", href: "/console/audit/", sections: ["audit"] },
+  { id: "iam", discovery: "platform", category: "security", group: "identity", icon: "security", href: "/console/access/", sections: ["access"] }
+] as const satisfies ReadonlyArray<{ id: string; discovery: "platform" | "managed" | "preview"; category: ServiceCategory; group: string; icon: ExperienceIconKind; href: string; sections: readonly ConsoleSection[] }>;
 
 export type ServiceId = typeof serviceDirectory[number]["id"];
 export type ServiceDirectoryItem = typeof serviceDirectory[number] & {

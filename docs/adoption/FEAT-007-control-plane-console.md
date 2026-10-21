@@ -52,6 +52,17 @@ gated and the verified Session/repository owner fence remains mandatory.
 rebuild delivery in the consumer. `REJECT` donor assets, documentation/status,
 unrelated tests and treating UI visibility as server authorization.
 
+For platform-workspace navigation, `ADAPT` the nine existing frontend deltas
+from `ceb38eab2cb3075573dcea640d9ca5d38e097a3e`, parent
+`d11da0ce92617d677ec62077975eb15910be9a15`. Six resulting blobs match; retain
+this branch's ConsoleShellRenderer tests and both locale files outside the
+fixed changes. The explicit platform/managed/preview distinction protects
+navigation without inventing service definitions or authorization. `REFERENCE`
+the donor's focused tests and design wording; prove the original failures and
+subsequent fixes in this consumer. `REJECT` donor embedded assets, the
+`d3b0438` evidence/checkpoint, inherited verification and a static managed-product
+authorization allow-list. Rebuild delivery from this branch's complete source.
+
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
 The earlier FEAT-006 rejection of the legacy UI applied only to the IAM/Audit
@@ -144,7 +155,7 @@ No donor repository is a build or runtime dependency.
 
 | Fixed slice | Decision | Rationale |
 | --- | --- | --- |
-| Product routes, backend-projected service directory, exact activation capability, account-scoped activation state, deferred product-resource loading, and catalog-to-product navigation at `e14dec63...` | `ADAPT` | Use the UX owner's verified route/provider/repository/scene/renderer chain with the current FEAT-007 managed-service contract. Header and catalog entries come from the backend directory; the local registry supplies presentation and routes only for implemented products. The browser never infers activation authority from account type, role name, product ID, or a local service allow-list. |
+| Product routes, backend-projected service directory, exact activation capability, account-scoped activation state, deferred product-resource loading, and catalog-to-product navigation at `e14dec63...` | `ADAPT` | Use the UX owner's route/provider/repository/scene/renderer chain with the current FEAT-007 managed-service contract. Managed-product membership comes from the backend directory; the local registry supplies presentation and implemented routes. This directory does not own platform-workspace discovery. The browser never infers activation authority from account type, role name, product ID, or a local service allow-list. |
 | LIVE unknown-result recovery and credential/account scope isolation at `e14dec63...` | `ADAPT` | Preserve the original idempotency key, reconcile through the exact activation read, discard stale evidence immediately when the effective credential changes, and keep product-resource authorization authoritative on every request. Unknown services and unavailable directory results must not acquire invented links or mock fallbacks. |
 | Root-only LIVE User creation, frozen sensitive command ownership and strict first notification address wire at `b28ef9c...` | `ADAPT` | Replace the closed LIVE create route with the existing wizard backed by the current Account/root/capability, one frozen request and an exact POST/read-back result. Preserve explicit no-boundary selection, zero implicit grants, secret clearing, same-Session retry and isolated MOCK behavior. Accept `FIRST_ADDRESS` only with resource version zero while retaining the distinct replacement contract. |
 | Known stale Next.js chunk recovery at `7defb8fa...` | `ADAPT` | Recognize only a real `ChunkLoadError` with the pinned Turbopack/webpack message shape and a same-origin, query-free `/_next/static/chunks/*.js` target. Present one explicit warning and consent step, disclose loss of memory-only sessions, drafts and one-time material, and allow at most one document reload. Never auto-reload, replay a write, persist a secret, or turn an ordinary render/API error into an asset recovery. |

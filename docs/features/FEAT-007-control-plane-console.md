@@ -530,6 +530,23 @@ it. Conversely, a deliberately minimal custom resource Policy may operate an
 already active service without receiving activation-directory permission; its
 resource request still rechecks the Account activation server-side.
 
+The Header's product launcher has two separate discovery owners. Implemented
+LIVE platform workspaces (Applications, IAM and Audit) have stable console-owned
+SPA links; they are not managed-service definitions or Account activations.
+Their visibility proves only an implemented destination, never permission,
+health or enablement. Preview-only workspaces remain absent from LIVE, and
+every destination still authenticates and authorizes its resource requests.
+
+Managed-product entries come only from the backend service-definition directory,
+read lazily while the launcher is open. Loading, forbidden, expired and
+unavailable results stay local to that source and cannot remove the platform
+links. The presentation registry supplies implemented routes and categories,
+not managed-product membership or activation authority. Unknown definitions
+have no invented destination; preferences cannot restore unpublished entries.
+Changing the effective credential discards old managed-directory reads. SPA
+navigation preserves the same in-memory RoleSession; it must not re-assume,
+fall back to the source User or persist bearer material to cross workspaces.
+
 Catalog access projects the existing non-authoritative `ActionCapability` for
 the exact `managedservice.service-activation.activate` action and target so the
 console can decide whether to render an activation control. `canActivate` is
