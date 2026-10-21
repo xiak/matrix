@@ -41,11 +41,13 @@
 | 边界 | 固定对象与当前结论 |
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
-| 最近独立CI通过源码 | `4760581e035ec299003ef8f777b777feda38a218`，完整Profile不变；十九项job与完整日志已独立核验，十四条lane的57个必跑根均实际通过。后继`e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`仍须独立验证，不继承这轮CI或5935的签名发布结论 |
+| 最近独立CI通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job已由GitHub API核实全部成功，前端完整日志已独立核验，authority细项日志继续由测试owner收口。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
+
+固定`e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`的[Verification 39604675084](https://github.com/xiak/matrix/actions/runs/39604675084) attempt1已由GitHub API核实精确SHA及`completed/success`，十九项job全部成功，2026-10-21 13:33:26UTC终态。测试owner已独立核验四项前置job的完整日志；console为79文件2062项组件测试、8项Node检查、双production及嵌入324文件一致性通过。十四条authority lane均成功，但完整日志逐根/包统计尚在收口，不从476复制数量。此片修复test-only源码改变build fingerprint后遗漏重建交付的问题，保留旧失败终态；没有改变生产交互/API/SQL/profile。当前代码CI通过不等于010中尚未执行的Key/Role页面通过。
 
 固定`4760581e035ec299003ef8f777b777feda38a218`的[Verification 39599299467](https://github.com/xiak/matrix/actions/runs/39599299467) attempt1已独立封存为`completed/success`，2026-10-21 12:55:34UTC终态，十九项job全部成功。370个step中175成功、195项为矩阵设计跳过，没有其他跳过、失败或取消；十四条lane的57个必跑根均实际通过。十九份必要日志共74,580,732字节完成连续Range、长度、严格UTF-8及BOM重编码校验，其中storage的56,009,188字节全文及11根通过结果完整核对。1164个Test身份的JSON/plain一致：1157通过、7个真实邮件子例因缺少专用Postfix明确跳过，不能据此声称真实邮件投递已验收；33个JSON包全通过。容量31指标、3100样本、零失败，三个OOM计数均零；这是受限夹具结果而非生产SLO。全部14个Stop及36个Post步骤成功，job/step计时独立复算无差异。本tuple取证闭合，不重复读取同attempt日志。
 
@@ -372,6 +374,8 @@ Release D的配额恢复还证明命令回执与资源读取相互独立：既�
 只使用本工作区、任务标签和唯一命名的数据库/容器/网络/卷/端口。Go 默认 GOMAXPROCS=2、-p 2；PG/引擎 CPU/内存/PID 限额。每条重型数据库门禁内部保持`-race -p 1`串行、独立runner/PG、原期限和清理边界；CI允许最多八条彼此隔离的GitHub-hosted runner lane并行，十四条门禁按最近固定运行的job墙钟耗时优先安排较长任务，容量门禁进入首批。不增加任一runner内的数据库并发，不缩短真实时间窗口或跳过门禁。失败lane一旦给出明确证据即可在其现有owner聚焦修复，不等待无关lane完成；最终候选仍以全部lane及汇总成功为准。不得重启任何远端机器或共享服务，不使用其他 Phase 的运行实例。未运行命令不进入 runbook。
 
 排序以[Verification39593652955](https://github.com/xiak/matrix/actions/runs/39593652955)的job API耗时作有界调度估算：同样八个执行槽，matrix排队总长由25分28秒估算为22分04秒，减少3分24秒；这不包含前置Go/console或公共runner调度噪声，storage仍保留该run的取消结论，也不承诺新CI实际总耗时。修改前后完整YAML语义比较证明只改变十四项include的顺序，所有lane成员、期限、DSN、选择器、汇总及并发上限不变，24段Bash语法通过。独立CI必须在准确后继源码再次证明全部门禁成功，不能将这个排序推算作为运行验收。
+
+准确后继e22的上述独立CI已通过十九项job；job API确认容量检查与其余七条较长lane均于13:11:25UTC首批启动，十四lane末项于13:33:18UTC结束，实测矩阵跨度21分53秒。workflow从13:03:34UTC创建至13:33:26UTC终态为29分52秒。该单次观测验证了调度落实和当前整轮成功，不证明相对不同runner运行的全部差值均由排序导致，也不是固定时长或生产SLO承诺。
 
 固定`9a030943386d693276fcea53ac706e8cc4269f1f`的[Verification36588874836](https://github.com/xiak/matrix/actions/runs/36588874836)已明确失败：`authority-runtime`的保留数据及真实进程步骤返回exit 1，不能用同run中已通过的Go、node、storage和roles覆盖。当前源码在本任务独立PG18容器（2CPU/1536MiB/PIDs256、随机loopback端口）、Go GOMAXPROCS2/GOMEMLIMIT1024MiB下重现：真实IAM45前驱首次绑定因子时，测试夹具提交上一30秒窗口的OTP，恰好跨入下一窗口后服务按生产`±1`窗口正确返回401。修正仅在真实进程测试取码器中要求上一窗口至少保留10秒再返回，不扩大生产时钟偏差、防重放或尝试预算。修正后唯一前驱门禁单独通过127.094s；另三套全新数据库执行完整`go test -v -race -p 1 -count=1 ./test/authorityprocess`通过362.275s，其中前驱105.14s、双IAM/Audit/PaaS进程214.12s、真实备份/恢复程序39.50s。容量和浏览器因使用独立入口而明确SKIP，不计本次验收；精确修复SHA及独立CI仍待确认。
 

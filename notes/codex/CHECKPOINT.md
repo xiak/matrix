@@ -12,7 +12,10 @@
   and Role contracts. Do not reopen accepted permission-aware work or mark
   the overall IAM matrix complete.
 - Latest pushed code candidate: `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`.
-  Its Verification39604675084 attempt1 is running:
+  Its Verification39604675084 attempt1 is API-confirmed completed/success,
+  exactSHA/all19jobs at2026-10-21 13:33:26UTC. Four precheck logs are independently
+  verified: console79files/2062tests+8Node and324export/embed match. Authority
+  per-root/package full-log closure remains with the existing Test Expert:
   https://github.com/xiak/matrix/actions/runs/39604675084 .
   Continue the existing Test Expert's single monitor; no new monitor or chats.
 - 0884 changes only the existing Role browser observer and010: after real
@@ -66,8 +69,10 @@
   and exact comparison passed.32 prior files are unchanged and292 differ
   only by build ID; all324 map exactly. Eight Node checks, GoUI/architecture
   race7.247/2.291s and vet passed. No hash algorithm, production interaction,
-  build gate, API/SQL/profile or runtime permission changed. Do not declare
-  e22 independent CI success until its exact run completes.
+  build gate, API/SQL/profile or runtime permission changed. Do not inherit
+  full per-root statistics from another SHA. e22's exact job API is now green;
+  its14lane span is21m53 and created→terminal29m52, with capacity in first8.
+  This is one observed run, not a causal performance guarantee or SLO.
 - UI candidate `da9426f608a99d564d573d3d4153714ba1198ada` selectively consumes
   UX fixed `ceb38eab2cb3075573dcea640d9ca5d38e097a3e`, not donor assets or
   acceptance. Platform Applications/IAM/Audit use implemented SPA destinations;
