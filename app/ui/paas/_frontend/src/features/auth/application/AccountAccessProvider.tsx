@@ -42,8 +42,7 @@ import type {
   User,
   UserManagementIntent,
   UserManagementCompletion,
-  SecuritySettingsUpdateIntent,
-  PolicyMutationIntent
+  SecuritySettingsUpdateIntent
 } from "../domain/accounts";
 import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTemplateDirectory } from "../domain/serviceAuthorization";
 import { type AccessWorkspace, type AccessWorkspaceCommand, type PendingAccountRuleChange } from "../domain/accessWorkspace";
@@ -1899,33 +1898,23 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       current.detail.version.policyId === detail.version.policyId && current.detail.version.versionId === detail.version.versionId &&
       current.detail.version.contentDigest === detail.version.contentDigest);
   }, [currentExactPolicyAccess]);
-  const authorizePolicyMutationRetry = useCallback((intent: PolicyMutationIntent) => Boolean(currentExactPolicyAccess(
-    intent.policy.id, intent.kind === "update" ? "iam.policy.update" : "iam.policy.delete"
-  )), [currentExactPolicyAccess]);
   const policyMutation = useLivePolicyMutation({
     enabled: Boolean(active && !repository.workspace && scene?.accountId === tenantId &&
       verifiedIdentityOwner?.session === viewSession && verifiedIdentityOwner.repository === repository),
     accountId: tenantId, actorPrincipalId: principalId, credential: credential ?? undefined,
     sessionRevision, repository, protect: protectedMutation, onExpired: expirePolicyMutationOwner,
     versionPolicyId: versionMutationIntent?.policyId, authorityPending,
-    authorizeBegin: authorizePolicyMutationBegin, authorizeRetry: authorizePolicyMutationRetry
+    authorizeBegin: authorizePolicyMutationBegin
   });
 
   const policyVersionAction = useCallback((intent: Pick<PolicyVersionMutationInput, "kind">) => intent.kind === "publish"
     ? "iam.policy-version.create" as const : intent.kind === "set-default" ? "iam.policy.set-default-version" as const : "iam.policy-version.delete" as const, []);
-  const authorizePolicyVersionRetry = useCallback((intent: PolicyVersionMutationIntent) => Boolean(currentExactPolicyAccess(
-    intent.policyId, policyVersionAction(intent)
-  )), [currentExactPolicyAccess, policyVersionAction]);
   const authorizePolicyVersionBegin = useCallback((input: PolicyVersionMutationInput) => {
     const current = currentExactPolicyAccess(input.policyId, policyVersionAction(input));
     return Boolean(current && current.detail.policy.resourceVersion === input.resourceVersion &&
       current.detail.policy.defaultVersionId === input.expectedDefaultVersionId);
   }, [currentExactPolicyAccess, policyVersionAction]);
   void policyAuthorityRevision;
-  const pendingVersionAccess = versionMutationIntent ? exactPolicies.accesses.get(versionMutationIntent.policyId) : null;
-  const pendingVersionAuthorityAvailable = !versionMutationIntent || Boolean(!authorityPending && pendingVersionAccess &&
-    findActionCapability(pendingVersionAccess.capabilities, policyVersionAction(versionMutationIntent), "POLICY", versionMutationIntent.policyId)?.available);
-
   const policyVersionMutation = useMemo<PolicyVersionMutationClient | null>(() => {
     if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace ||
         !repository.setDefaultPolicyVersion || !repository.retirePolicyVersion || !repository.readPolicy || !repository.listPolicyVersions) return null;
@@ -1977,7 +1966,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     return {
       pending: versionMutationIntent,
       blockedByMetadata: Boolean(policyMutation && (!policyMutation.ready || policyMutation.pending)),
-      blockedByAuthority: !pendingVersionAuthorityAvailable,
+      blockedByAuthority: authorityPending,
       canPublish: Boolean(repository.createPolicyVersion),
       begin(input) {
         if (!authorizePolicyVersionBegin(input) || policyMutation && (!policyMutation.ready || policyMutation.pending) ||
@@ -1998,7 +1987,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       },
       retry() {
         const current = versionMutationRef.current;
-        if (authorityRefreshPending.current || !current || !authorizePolicyVersionRetry(current.intent) || policyMutation && (!policyMutation.ready || policyMutation.pending) ||
+        if (authorityRefreshPending.current || !current || policyMutation && (!policyMutation.ready || policyMutation.pending) ||
             current?.session !== viewSession || current.intent.phase !== "unknown") return Promise.resolve({ status: "blocked" });
         const intent = { ...current.intent, phase: "submitting" as const, observation: null, observationError: null };
         if (!rememberVersionMutation(intent.requestId, intent)) return Promise.resolve({ status: "blocked" });
@@ -2006,8 +1995,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       },
       async observe() {
         const current = versionMutationRef.current;
-        if (authorityRefreshPending.current || current?.session !== viewSession || current.intent.phase !== "unknown" ||
-            !exactPolicies.accesses.has(current.intent.policyId)) return false;
+        if (authorityRefreshPending.current || current?.session !== viewSession || current.intent.phase !== "unknown") return false;
         const intent = { ...current.intent, phase: "observing" as const, observation: null, observationError: null };
         if (!rememberVersionMutation(intent.requestId, intent)) return false;
         try {
@@ -2041,7 +2029,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         return rememberVersionMutation(current.intent.requestId, null);
       }
     };
-  }, [active, authorizePolicyVersionBegin, authorizePolicyVersionRetry, credential, exactPolicies, expireSession, pendingVersionAuthorityAvailable, policyMutation, rememberVersionMutation, repository, scene, sessionRevision, tenantId, versionMutationIntent, viewSession]);
+  }, [active, authorityPending, authorizePolicyVersionBegin, credential, exactPolicies, expireSession, policyMutation, rememberVersionMutation, repository, scene, sessionRevision, tenantId, versionMutationIntent, viewSession]);
 
   const accountSecuritySettings = useMemo<AccountSecuritySettingsClient | null>(() => {
     const reader = repository.accountSecuritySettings;

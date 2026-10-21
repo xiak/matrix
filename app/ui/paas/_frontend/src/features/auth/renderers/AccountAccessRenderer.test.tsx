@@ -4044,6 +4044,38 @@ describe("account access", () => {
     expect(fixture.deletePolicy).toHaveBeenCalledTimes(2); expect(fixture.updatePolicy).not.toHaveBeenCalled();
   });
 
+  it("resolves a committed retirement with the original request after the retired Policy becomes unreadable", async () => {
+    enablePolicyLocks();
+    const fixture = livePolicyMetadata();
+    const commit = fixture.deletePolicy.getMockImplementation()!;
+    const read = fixture.readPolicy.getMockImplementation()!;
+    let committed: AccountPolicy | null = null;
+    fixture.deletePolicy.mockReset();
+    fixture.deletePolicy.mockImplementationOnce(async (...args) => {
+      committed = await commit(...args);
+      throw new HttpProblem(503, "RESPONSE_LOST_AFTER_COMMIT");
+    }).mockImplementationOnce(async () => structuredClone(committed!));
+    fixture.readPolicy.mockImplementation(async (...args) => {
+      if (committed && args[2] === "customer.logs") throw new HttpProblem(403, "RETIRED_POLICY_NOT_READABLE");
+      return read(...args);
+    });
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await invokeMoreAction(user, "退役整条策略");
+    fireEvent.change(screen.getByRole("textbox", { name: "输入策略显示名「LogBoundary」确认" }), { target: { value: "LogBoundary" } });
+    await user.click(screen.getByRole("button", { name: "确认退役整条策略" }));
+    const recovery = await screen.findByRole("region", { name: "策略操作结果未确认" });
+    const readsBeforeInspection = fixture.readPolicy.mock.calls.length;
+    await user.click(within(recovery).getByRole("button", { name: "查看策略当前状态" }));
+    await waitFor(() => expect(fixture.readPolicy.mock.calls.length).toBeGreaterThan(readsBeforeInspection));
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "重试完全相同的原命令" })).toHaveProperty("disabled", false));
+    await user.click(within(recovery).getByRole("button", { name: "重试完全相同的原命令" }));
+    await waitFor(() => expect(fixture.deletePolicy).toHaveBeenCalledTimes(2));
+    expect(fixture.deletePolicy.mock.calls[1]).toEqual(fixture.deletePolicy.mock.calls[0]);
+    await screen.findByRole("table", { name: "策略元数据目录" });
+    expect(screen.queryByRole("region", { name: "策略操作结果未确认" })).toBeNull();
+  });
+
   it("does not borrow an old Policy detail to enable writes after the repository changes", async () => {
     enablePolicyLocks(); const fixture = livePolicyMetadata();
     const { user, replaceRepository } = await openAccess(fixture.repository, iam(), "policies");
@@ -4113,14 +4145,11 @@ describe("account access", () => {
     const second = await openAccess(fixture.repository, authentication, "policies", "new-verified-bearer");
     const recovery = await screen.findByRole("region", { name: "策略操作结果未确认" });
     expect(fixture.updatePolicy).toHaveBeenCalledTimes(1);
-    expect(within(recovery).getByRole("button", { name: "重试完全相同的原命令" })).toHaveProperty("disabled", true);
-    await second.user.click(within(recovery).getByRole("button", { name: "查看策略当前状态" }));
-    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledWith("new-verified-bearer", account.id, "customer.logs"));
     await waitFor(() => expect(within(recovery).getByRole("button", { name: "重试完全相同的原命令" })).toHaveProperty("disabled", false));
     await second.user.click(within(recovery).getByRole("button", { name: "重试完全相同的原命令" }));
     await waitFor(() => expect(fixture.updatePolicy).toHaveBeenCalledTimes(2));
     expect(fixture.updatePolicy.mock.calls[1]).toEqual(["new-verified-bearer", ...original.slice(1)]);
-    expect(await screen.findByRole("heading", { name: "Recovered name" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Recovered name" })).toBeTruthy();
   });
 
   it("keeps a version review frozen until both the current exact Policy and version directory are reauthorized", async () => {
@@ -4701,6 +4730,13 @@ describe("account access", () => {
 
   it("does not treat a retry conflict or current-state read as proof of the original version mutation", async () => {
     const fixture = livePolicyVersions();
+    const read = fixture.readPolicy.getMockImplementation()!;
+    let writeAuthorityRevoked = false;
+    fixture.readPolicy.mockImplementation(async (...args) => {
+      const access = await read(...args);
+      return writeAuthorityRevoked ? { ...access,
+        capabilities: access.capabilities.filter((item) => item.action !== "iam.policy.set-default-version") } : access;
+    });
     fixture.setDefaultPolicyVersion.mockRejectedValueOnce(new HttpProblem(503, "IAM_UNAVAILABLE"))
       .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"));
     const { user } = await openAccess(fixture.repository, iam(), "policies");
@@ -4710,11 +4746,17 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "版本 version-a 的操作" }));
     await user.click(await screen.findByRole("menuitem", { name: "切换默认版本" }));
     await user.click(screen.getByRole("button", { name: "确认切换" }));
-    await screen.findByRole("heading", { name: "版本变更结果未确认" });
-    await user.click(screen.getByRole("button", { name: "按原请求重试" }));
+    const recovery = (await screen.findByRole("heading", { name: "版本变更结果未确认" })).closest("section") as HTMLElement;
+    const readsBeforeRecheck = fixture.readPolicy.mock.calls.length;
+    writeAuthorityRevoked = true;
+    await user.click(screen.getByRole("button", { name: "recheck-test-authority" }));
+    await waitFor(() => expect(fixture.readPolicy.mock.calls.length).toBeGreaterThan(readsBeforeRecheck));
+    await waitFor(() => expect(within(recovery).getByRole("button", { name: "按原请求重试" })).toHaveProperty("disabled", false));
+    expect(within(recovery).getByRole("button", { name: "读取当前状态" })).toHaveProperty("disabled", false);
+    await user.click(within(recovery).getByRole("button", { name: "按原请求重试" }));
     await waitFor(() => expect(fixture.setDefaultPolicyVersion).toHaveBeenCalledTimes(2));
     expect(screen.getByText(/即使重试返回冲突/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "读取当前状态" }));
+    await user.click(within(recovery).getByRole("button", { name: "读取当前状态" }));
     expect(await screen.findByText(/当前读取：默认版本 version-logs/)).toBeTruthy();
     expect(screen.getByText(/不能证明原请求是否执行/)).toBeTruthy();
     const end = screen.getByRole("button", { name: "结束旧意图" });

@@ -38,12 +38,11 @@ function mutationError(failure: unknown): MutationError {
 // Own the original command outside route remounts. Persistence contains only
 // the closed metadata intent; the current verified Session supplies authority.
 export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, credential, sessionRevision, repository, protect, onExpired, versionPolicyId,
-  authorityPending, authorizeBegin, authorizeRetry }: {
+  authorityPending, authorizeBegin }: {
   enabled: boolean; accountId?: string; actorPrincipalId?: string; credential?: string;
   sessionRevision: number; repository: PolicyMutationRepository; versionPolicyId?: string;
   authorityPending: boolean;
   authorizeBegin(detail: AccountPolicyDetail, input: { kind: "update"; displayName: string } | { kind: "retire" }): boolean;
-  authorizeRetry(intent: PolicyMutationIntent): boolean;
   protect<T>(request: () => Promise<T>): Promise<T>;
   onExpired(credential: string, revision: number): void;
 }): PolicyMutationClient | null {
@@ -154,7 +153,7 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
     };
     return {
       identity: owner.identity,
-      ready: Boolean(snapshot?.ready && !authorityPending && (!snapshot.pending || authorizeRetry(snapshot.pending))),
+      ready: Boolean(snapshot?.ready && !authorityPending),
       recoveryError: snapshot?.recoveryError ?? null, pending: snapshot?.pending ?? null,
       busy: busyOwner === owner, lastError: snapshot?.lastError ?? null,
       begin(detail, input) {
@@ -177,10 +176,10 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
       },
       retry() {
         const expected = observation.current?.owner === owner ? observation.current.pending : null;
-        if (authorityPending || !expected || !authorizeRetry(expected)) return Promise.resolve({ status: "blocked" });
+        if (authorityPending || !expected) return Promise.resolve({ status: "blocked" });
         return coordinate(async () => {
           const stored = readPolicyMutationIntent(window.localStorage, owner);
-          if (!stored || JSON.stringify(stored) !== JSON.stringify(expected) || !authorizeRetry(stored)) { publish(stored); return { status: "blocked" }; }
+          if (!stored || JSON.stringify(stored) !== JSON.stringify(expected)) { publish(stored); return { status: "blocked" }; }
           return dispatch(stored, true);
         }, { status: "blocked" });
       },
@@ -194,5 +193,5 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
         }, false);
       }
     };
-  }, [owner, view, busyOwner, protect, onExpired, authorityPending, authorizeBegin, authorizeRetry]);
+  }, [owner, view, busyOwner, protect, onExpired, authorityPending, authorizeBegin]);
 }
