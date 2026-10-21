@@ -152,7 +152,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Every database lane stays internally serial with its own runner, bounded
     # PostgreSQL service, -race -p 1 execution, deadline, and cleanup. At most
-    # four isolated lanes may run concurrently so an unrelated long natural-time
+    # eight isolated lanes may run concurrently so an unrelated long natural-time
     # window does not queue the entire authority suite. Backup/authentication/
     # local recovery storage has a separate bounded lane; recovery exhaustion
     # separately observes two real ten-minute windows, and step-up owns OTP
@@ -170,7 +170,7 @@ jobs:
           # Schedule the longest natural-window and database lanes first.
           # This is longest-processing-time ordering only: every lane keeps
           # its own runner, tests, limits, timeout and fail-closed result, and
-          # the four-lane concurrency ceiling remains unchanged.
+          # the eight-lane concurrency ceiling remains unchanged.
           - lane: authority-recovery-window
             minutes: 30
           - lane: authority-runtime
@@ -179,12 +179,14 @@ jobs:
             # Keep every fixture deadline unchanged and reserve bounded cleanup.
             minutes: 25
           - lane: authority-predecessor
-            # Build only the fixed IAM85/runtime pair and current IAM86 pair
+            # Build only the fixed rolling predecessor and current authority
             # against one retained database. Keep it independent from the
             # already near-budget full runtime lane.
             minutes: 10
           - lane: authority-storage
-            minutes: 20
+            # Reserve setup and container-cleanup time outside the serial test
+            # step. Per-fixture deadlines and all required tests stay unchanged.
+            minutes: 25
           - lane: authority-step-up
             minutes: 20
           - lane: authority-replacement

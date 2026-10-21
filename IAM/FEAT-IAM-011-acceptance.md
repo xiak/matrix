@@ -47,6 +47,8 @@
 
 #### 当前独立CI
 
+后继固定`da9426f608a99d564d573d3d4153714ba1198ada`的[Verification 39593652955](https://github.com/xiak/matrix/actions/runs/39593652955) attempt1为`completed/cancelled`，不是通过。`authority-storage`的check-run119204314631明确注记超过20分钟job总期限；其测试步骤11:49:55–12:09:02UTC成功，但job11:49:19–12:09:27UTC在清理时触及总期限，最终汇总按设计失败。未发现人工或并发替代取消的证据，也不将部分storage日志当作完整测试验收。修正只为此lane设置25分钟编排上限，保留全部测试、单项deadline、数据库限额、串行执行和原失败关闭汇总；不通过删测试、重跑旧run或把步骤成功改写为整轮成功。解析修改前后YAML并比较完整语义，唯一行为变化为该lane的20→25分钟，24个Bash步骤语法通过；当前process/architecture默认race3.948/2.591秒及vet通过，opt-in跳过不计真库或浏览器验收。后继准确SHA仍需独立CI。
+
 固定`640f0f59045b194466807329a12f7bc6c6b58a08`的[Verification 39586936643](https://github.com/xiak/matrix/actions/runs/39586936643) attempt1已由测试owner独立封存为`completed/success`：终态时间2026-10-21 11:18:38 UTC。十九项job全部成功；370个step为175成功、195项矩阵预期跳过，十四条lane的57个实际根均恰好RUN/PASS一次、没有根跳过。33个JSON包全部通过，1164个Test身份的JSON/plain终态一致，其中1157通过、7个真实邮件子例因缺少Postfix明确跳过。十九份必需日志共74,598,595字节完成连续范围、长度及严格UTF-8校验；三处读取超时仅补缺失尾段，没有重跑CI或回填旧失败。
 
 前端79文件2059项Vitest以332.52秒通过，8项Node、234组对比度，以及双模式导出/嵌入324项逐字一致；33条既有React act警告仍如实保留。Go93包通过。组件测试不代替真实页面；权限感知、原Policy恢复及AccessKey/Role的准确版本和实际效果由[010](FEAT-IAM-010-console.md#本轮消费者与真实恢复证据)拥有，640f的Role导航失败不被绿色CI覆盖。
