@@ -2500,7 +2500,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   }, [rolesOwner]);
   const roles = useMemo<RoleAccessClient | null>(() => {
     const roleRepository = repository.roles;
-    if (!active || !credential || !scene || scene.accountId !== tenantId || !roleRepository || (!scene.canListRoles && !scene.canCreateRoles) ||
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !roleRepository ||
         verifiedIdentityOwner?.session !== viewSession || verifiedIdentityOwner.repository !== repository) return null;
     const accountId = scene.accountId;
     const owns = () => currentRolesOwner.current === rolesOwner && currentViewSession.current === viewSession;

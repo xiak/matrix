@@ -40,6 +40,18 @@
 | Matrix Finding-directory denial classification | `e70c2d6595295b07a46d940a0f099ca0176aed35` | `ADAPT` only the existing Analysis renderer and its regression test. An absent exact Finding-list capability renders forbidden, not transient outage, with no read retry. `REJECT` donor assets and inherited acceptance; rebuild here. |
 | Matrix Policy new-write fences and original-intent recovery | `a13e336f7176c4573c4be6be70f75e2952e8a171`, with required corrections `a453890e9c644b0e01c224e56ce41d7b1a7257d1` and `dae78452461ebdee461c2e07ac1fe96dfbb82ba3` | `ADAPT` the five existing source/test paths, preserving this branch's renderer tests. New writes require current exact capabilities and revisions; reauthorization freezes dispatch, including after an asynchronous Web Lock acquisition. Original UNKNOWN retries keep the exact frozen request and current verified actor/Session, without requiring an already-retired target to remain readable or newly writable. The original backend remains the authority for authorization and replay; version observation is a read, not completion proof. `REJECT` a13 alone: its fresh PolicyAccess prerequisite deadlocks committed retirement recovery. Do not add a receipt API, retain the superseded condition, import donor assets or inherit donor acceptance. |
 
+For the bounded AccessKey/Role console closure, `ADAPT` the four existing
+source/test deltas in fixed UX/UI commit
+`d11da0ce92617d677ec62077975eb15910be9a15` (parent
+`fad5114738d6344430f3b69325528b203417f904`). The provider and HTTP-test parent
+blobs match this branch; preserve its renderer's service-authorization return
+navigation and existing renderer-test differences. An exact Role read does
+not require list/create authority; directory and creation remain independently
+gated and the verified Session/repository owner fence remains mandatory.
+`REFERENCE` the donor's focused regression results, but prove red/green and
+rebuild delivery in the consumer. `REJECT` donor assets, documentation/status,
+unrelated tests and treating UI visibility as server authorization.
+
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
 The earlier FEAT-006 rejection of the legacy UI applied only to the IAM/Audit

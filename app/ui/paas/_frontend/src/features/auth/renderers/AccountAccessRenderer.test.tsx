@@ -4944,6 +4944,38 @@ describe("account access", () => {
     expect(screen.getByRole("table", { name: "策略元数据目录" })).toBeTruthy();
   });
 
+  it("opens one known Role without Role directory or creation authority", async () => {
+    const list = vi.fn().mockResolvedValue(managedRoleDirectory);
+    const read = vi.fn().mockResolvedValue(managedRoleAccess);
+    const repository = accounts({
+      currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }),
+      roles: {
+        ...unusedLiveRoleRepositoryMutations(),
+        list,
+        read,
+        readPermissionBoundary: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, resourceVersion: 1, policy: null }),
+        setPermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary set")),
+        removePermissionBoundary: vi.fn().mockRejectedValue(new Error("unused boundary removal")),
+        listTrustVersions: vi.fn(),
+        create: vi.fn().mockResolvedValue(managedRole),
+        listSessions: vi.fn().mockResolvedValue({ accountId: account.id, roleId: managedRole.id, observedAt: timestamp, items: [], nextAfter: null }),
+        readSession: vi.fn().mockRejectedValue(new Error("unused session read")),
+        revokeSession: vi.fn().mockRejectedValue(new Error("unused session revoke"))
+      }
+    });
+
+    const { user } = await openAccess(repository, iam(), "roles", credential, managedRole.id);
+
+    expect(await screen.findByRole("heading", { name: managedRole.name })).toBeTruthy();
+    expect(read).toHaveBeenCalledExactlyOnceWith(credential, account.id, managedRole.id);
+    expect(list).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "新建角色" })).toBeNull();
+
+    await user.click(screen.getByTestId("nav-roles"));
+    expect(await screen.findByRole("heading", { name: "没有此页面的管理权限" })).toBeTruthy();
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it("loads current-account service authorization before the optional platform template directory", async () => {
     const roleIdentity: AccountIdentity = { ...identity, capabilities: [
       ...identity.capabilities,

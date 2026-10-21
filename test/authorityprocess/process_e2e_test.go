@@ -4939,9 +4939,18 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 		method: http.MethodPost, path: mutationPath, recoveryPathPrefix: recoveryPrefix,
 		allowSameHostRecovery: true, postLossWritePrefix: "/api/iam/v1/policy-attachments",
 	}
-	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
-		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
-	)
+	var roleJourney *browserRoleRevocationProbe
+	if targetKind == iamv1.PolicyTargetRole && operation == "REVOKE" {
+		roleJourney = &browserRoleRevocationProbe{account: user.AccountID, user: user.ID, role: role.ID, mutationPath: mutationPath}
+	}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, func(mux http.Handler) http.Handler {
+			handler := iamConsoleBrowserFixtureHandler(mux, make(chan struct{}, 16), loss)
+			if roleJourney != nil {
+				return roleJourney.wrap(handler)
+			}
+			return handler
+		})
 	defer closeBrowser()
 	finish := filepath.Join(temporary, "browser-policy-attachment-recovery-finished")
 	browserPath := "/console/access/" + browserDirectory + "/?id=" + url.QueryEscape(target.ID)
@@ -4951,7 +4960,16 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	}
 	t.Logf("POLICY_ATTACHMENT_RECOVERY_BROWSER_FIXTURE operation=%s target_kind=%s url=%s%s finish=%s target=%s login=%s realm=admin; %s, observe the committed-response-loss state, inspect only the original request, and create the completion marker after the visible immutable receipt and authoritative target view agree; use the existing changed admin password",
 		operation, target.Kind, server.URL, browserPath, finish, target.ID, loginName, intent)
+	if roleJourney != nil {
+		t.Logf("ROLE_REVOCATION_BROWSER_JOURNEY member_url=%s/console/access/role-access/ member_login=%s@%s role=%s; before administrator revocation, explicitly assume this Role in the member tab and read /console/applications/ with it; after revocation, read again and observe 401/BLOCKED, then explicitly validate and return to the same source USER and observe business403; use the existing changed developer password; API-issued credentials do not satisfy this journey",
+			server.URL, loginName, user.AccountID, role.ID)
+	}
 	waitForBrowserMarker(t, ctx, ui, finish, "same-origin policy-attachment recovery completion")
+	if roleJourney != nil {
+		if err := roleJourney.check(); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	observation := loss.snapshot()
 	defer clear(observation.RequestBody)
@@ -5142,6 +5160,261 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	}
 	t.Logf("one committed %s policy attachment %s was recovered by one receipt read and zero post-loss writes; the permission change was effective on the next PaaS request and the unique outbox fact and verified tenant Audit chain matched", target.Kind, operation)
 	return protected
+}
+
+// This observer sees only requests through the actual browser relay. Setup and
+// the independent API postconditions do not pass through it. Keep only bounded
+// counts and private in-memory credential digests; never retain or log bearer
+// material, request bodies or successful response documents.
+type browserRoleRevocationProbe struct {
+	mu           sync.Mutex
+	account      iamv1.AccountID
+	user         iamv1.PrincipalID
+	role         iamv1.RoleID
+	mutationPath string
+	sourceDigest [sha256.Size]byte
+	roleDigest   [sha256.Size]byte
+	assumptions  int
+	issued       bool
+	invalid      bool
+	revoking     bool
+	allowed      bool
+	roleRejected bool
+	sourceRead   bool
+	sourceDenied bool
+}
+
+func (probe *browserRoleRevocationProbe) wrap(upstream http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assume := r.Method == http.MethodPost && r.URL.Path == "/api/iam/v1/roles/"+string(probe.role)+":assume"
+		digest := sha256.Sum256([]byte(r.Header.Get("Authorization")))
+		probe.mu.Lock()
+		if assume {
+			probe.assumptions++
+			if probe.assumptions != 1 || probe.revoking || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+				probe.invalid = true
+			}
+		}
+		if r.Method == http.MethodPost && r.URL.Path == probe.mutationPath {
+			if !probe.issued || !probe.allowed {
+				probe.invalid = true
+			}
+			probe.revoking = true
+		}
+		// The browser may dispatch its first Role request as soon as the last
+		// response byte arrives. Serialize only this bounded issuance observation
+		// so that such a request cannot race ahead of its credential digest.
+		if !assume {
+			probe.mu.Unlock()
+		}
+
+		response := &browserRoleAssumptionResponse{browserPermissionResponse: browserPermissionResponse{ResponseWriter: w}, capture: assume}
+		upstream.ServeHTTP(response, r)
+		defer clear(response.document)
+		if !assume {
+			probe.mu.Lock()
+		}
+		defer probe.mu.Unlock()
+		if assume {
+			var result iamv1.AssumeRoleResponse
+			if response.status != http.StatusOK || response.overflow ||
+				iamv1.DecodeRequest(bytes.NewReader(response.document), &result) != nil ||
+				iamv1.ValidateAssumeRoleResponse(result) != nil || result.Outcome != "APPLIED" ||
+				result.Session.AccountID != probe.account || result.Session.RoleID != probe.role ||
+				result.Session.SourceUserID != probe.user || result.Session.SourceServicePrincipalID != "" {
+				probe.invalid = true
+				return
+			}
+			credential := result.Credential.CopyBytes()
+			authorization := append([]byte("Bearer "), credential...)
+			probe.roleDigest, probe.sourceDigest = sha256.Sum256(authorization), digest
+			clear(credential)
+			clear(authorization)
+			probe.issued = true
+			if probe.roleDigest == probe.sourceDigest {
+				probe.invalid = true
+			}
+			return
+		}
+		if !probe.issued || r.Method != http.MethodGet {
+			return
+		}
+		if r.URL.Path == "/api/iam/v1/auth/me" && digest == probe.sourceDigest && probe.roleRejected && response.status == http.StatusOK {
+			probe.sourceRead = true
+		}
+		if r.URL.Path != "/api/paas/v1/applications" {
+			return
+		}
+		if digest == probe.roleDigest {
+			if !probe.revoking && response.status == http.StatusOK {
+				probe.allowed = true
+			}
+			if probe.revoking && response.status == http.StatusUnauthorized {
+				probe.roleRejected = true
+			}
+		}
+		if digest == probe.sourceDigest && probe.roleRejected {
+			if !probe.sourceRead {
+				probe.invalid = true
+			}
+			if response.status == http.StatusForbidden {
+				probe.sourceDenied = true
+			}
+		}
+	})
+}
+
+func (probe *browserRoleRevocationProbe) check() error {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	if probe.invalid || probe.assumptions != 1 || !probe.issued || !probe.allowed ||
+		!probe.revoking || !probe.roleRejected || !probe.sourceRead || !probe.sourceDenied {
+		return errors.New("browser Role journey requires its own exact assumption, Role business200, administrator revocation, original Role401, source revalidation and source business403")
+	}
+	return nil
+}
+
+// Only the one-time assume response is copied, bounded and cleared. It still
+// streams unchanged to the browser, including through the response-loss relay.
+type browserRoleAssumptionResponse struct {
+	browserPermissionResponse
+	capture  bool
+	overflow bool
+	document []byte
+}
+
+func (response *browserRoleAssumptionResponse) Write(body []byte) (int, error) {
+	if response.capture && !response.overflow {
+		if int64(len(response.document))+int64(len(body)) > iamv1.MaxRequestBytes {
+			clear(response.document)
+			response.document = nil
+			response.overflow = true
+		} else {
+			response.document = append(response.document, body...)
+		}
+	}
+	return response.browserPermissionResponse.Write(body)
+}
+
+func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
+	for _, scenario := range []string{"complete", "API-only setup", "wrong Role", "wrong source", "Role denied before revocation", "another Role bearer",
+		"returned different source", "source before validation", "source still privileged", "automatic reassumption",
+		"wrong account", "malformed issuance", "oversize issuance"} {
+		t.Run(scenario, func(t *testing.T) {
+			probe := &browserRoleRevocationProbe{account: "browser-account", user: "browser-member", role: "browser-role",
+				mutationPath: "/api/iam/v1/policy-attachments/browser-attachment:revoke"}
+			const source, roleBearer = "synthetic-source-browser-probe", "synthetic-role-browser-probe"
+			revoked := false
+			upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case strings.HasSuffix(r.URL.Path, ":assume"):
+					if scenario == "malformed issuance" {
+						_, _ = w.Write([]byte("{}"))
+						return
+					}
+					if scenario == "oversize issuance" {
+						_, _ = w.Write(bytes.Repeat([]byte("x"), int(iamv1.MaxRequestBytes)+1))
+						return
+					}
+					now := time.Now().UTC().Truncate(time.Microsecond)
+					session := iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "browser-role-session",
+						AccountID: probe.account, RoleID: probe.role, SourceUserID: probe.user, Status: iamv1.SessionActive,
+						IssuedAt: now, ExpiresAt: now.Add(time.Hour)}
+					if scenario == "wrong account" {
+						session.AccountID = "another-account"
+					} else if scenario == "wrong Role" {
+						session.RoleID = "another-role"
+					} else if scenario == "wrong source" {
+						session.SourceUserID = "another-user"
+					}
+					body, err := iamv1.EncodeAssumeRoleResponse(iamv1.AssumeRoleResponse{Outcome: "APPLIED", Session: session, Credential: processSecret(t, roleBearer)})
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer clear(body)
+					_, _ = w.Write(body)
+				case r.URL.Path == probe.mutationPath:
+					revoked = true
+					w.WriteHeader(http.StatusOK)
+				case r.URL.Path == "/api/iam/v1/auth/me":
+					w.WriteHeader(http.StatusOK)
+				case r.URL.Path == "/api/paas/v1/applications":
+					status := http.StatusForbidden
+					if r.Header.Get("Authorization") == "Bearer "+roleBearer {
+						status = http.StatusOK
+						if revoked {
+							status = http.StatusUnauthorized
+						} else if scenario == "Role denied before revocation" {
+							status = http.StatusForbidden
+						}
+					} else if scenario == "source still privileged" {
+						status = http.StatusOK
+					}
+					w.WriteHeader(status)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+			handler := probe.wrap(upstream)
+			invoke := func(method, path, bearer string) {
+				t.Helper()
+				request := httptest.NewRequest(method, "http://browser.test"+path, nil)
+				request.Header.Set("Authorization", "Bearer "+bearer)
+				recorder := httptest.NewRecorder()
+				handler.ServeHTTP(recorder, request)
+				clear(recorder.Body.Bytes())
+			}
+			if scenario != "API-only setup" {
+				invoke(http.MethodPost, "/api/iam/v1/roles/browser-role:assume", source)
+			}
+			invoke(http.MethodGet, "/api/paas/v1/applications", roleBearer)
+			invoke(http.MethodPost, probe.mutationPath, "synthetic-admin-browser-probe")
+			currentRole := roleBearer
+			if scenario == "another Role bearer" {
+				currentRole = "another-role-bearer"
+			}
+			invoke(http.MethodGet, "/api/paas/v1/applications", currentRole)
+			if scenario == "automatic reassumption" {
+				invoke(http.MethodPost, "/api/iam/v1/roles/browser-role:assume", source)
+			}
+			if scenario == "source before validation" {
+				invoke(http.MethodGet, "/api/paas/v1/applications", source)
+			}
+			currentSource := source
+			if scenario == "returned different source" {
+				currentSource = "another-source-bearer"
+			}
+			invoke(http.MethodGet, "/api/iam/v1/auth/me", currentSource)
+			invoke(http.MethodGet, "/api/paas/v1/applications", currentSource)
+			if err := probe.check(); (err == nil) != (scenario == "complete") {
+				t.Fatalf("browser credential boundary result=%v", err)
+			}
+		})
+	}
+}
+
+func TestRoleBrowserResponseObservationPreservesTransportAndBoundsMaterial(t *testing.T) {
+	for _, capture := range []bool{false, true} {
+		recorder := httptest.NewRecorder()
+		response := &browserRoleAssumptionResponse{browserPermissionResponse: browserPermissionResponse{ResponseWriter: recorder}, capture: capture}
+		response.Header().Set("Cache-Control", "no-store")
+		response.WriteHeader(http.StatusCreated)
+		first := []byte("synthetic-observation-material")
+		second := bytes.Repeat([]byte("x"), int(iamv1.MaxRequestBytes))
+		_, _ = response.Write(first)
+		if capture && !bytes.Equal(response.document, first) {
+			t.Fatal("bounded observation did not retain the original response bytes")
+		}
+		_, _ = response.Write(second)
+		if recorder.Code != http.StatusCreated || recorder.Header().Get("Cache-Control") != "no-store" ||
+			!bytes.Equal(recorder.Body.Bytes(), append(append([]byte(nil), first...), second...)) ||
+			len(response.document) != 0 || response.overflow != capture {
+			t.Fatal("observation modified transport or retained unbounded material")
+		}
+		if underlying := response.Unwrap(); underlying != recorder {
+			t.Fatal("observation changed the underlying response-controller boundary")
+		}
+	}
 }
 
 func runIAMGroupDeletionConsoleBrowser(

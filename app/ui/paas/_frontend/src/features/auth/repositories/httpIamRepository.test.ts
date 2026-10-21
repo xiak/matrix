@@ -816,6 +816,14 @@ describe("IAM HTTP access-key boundary", () => {
     expect(result.items[0]?.key).toMatchObject({ id: accessKey.id, status: "ENABLED", credentialState: "CURRENT", resourceVersion: 1 });
   });
 
+  it("reads one exact access key from its owning User path", async () => {
+    const fetcher = reply(accessKeyAccess());
+    const result = await httpAccountRepository.accessKeys!.read("bearer", account.id, user.id, accessKey.id);
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/users/${user.id}/access-keys/${accessKey.id}`);
+    expect(firstRequest(fetcher)[1]).toMatchObject({ cache: "no-store", headers: { Authorization: "Bearer bearer" } });
+    expect(result).toMatchObject({ key: { id: accessKey.id, accountId: account.id, userId: user.id } });
+  });
+
   it("accepts the one-time secret only on a first applied creation", async () => {
     const fetcher = reply({ outcome: "APPLIED", key: accessKey, secret: "mak1.secret-material" });
     const result = await httpAccountRepository.accessKeys!.create("bearer", account.id, user.id, { userResourceVersion: 2, networkRestrictions: { allowedSourceCidrs: [] }, requestId: "create-key-1" });
