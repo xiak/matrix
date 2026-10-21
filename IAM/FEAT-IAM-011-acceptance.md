@@ -30,7 +30,7 @@
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
 | 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态、Group Membership及Group附件恢复、Account安全设置正常完整替换已有真实证据。固定9621又完成Group删除与GROUP/USER附件撤销的可见回执、导航和权威后验。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；附件CREATE的新回执、Role附件、日常改密及010矩阵其余非Deferred路径仍须闭合 |
-| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`5935fa5005529b2c4e1da943b98f49300430ba10`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；固定640f代码的IAM-AC-09证据与限制归[当前独立CI](#当前独立ci)，不继承旧签名结论。权限感知及受影响原Policy恢复页面由010拥有。Issue #4仍按其原固定消费者关闭；Issue #5的页面验收与Issue #6的Observe超时根因保持打开。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。其余IAM-UI-01–08非Deferred页面效果尚未完成，生产账号公平性SLO和安装级数据库HA保持Deferred |
+| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`5935fa5005529b2c4e1da943b98f49300430ba10`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；各固定代码的IAM-AC-09证据与限制归[当前独立CI](#当前独立ci)，不继承旧签名结论。权限感知及受影响原Policy恢复页面由010拥有。Issue #4仍按其原固定消费者关闭；Issue #5的页面验收与Issue #6的Observe超时根因保持打开。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。其余IAM-UI-01–08非Deferred页面效果尚未完成，生产账号公平性SLO和安装级数据库HA保持Deferred |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
 
@@ -41,13 +41,15 @@
 | 边界 | 固定对象与当前结论 |
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
-| 最近独立CI通过源码 | `640f0f59045b194466807329a12f7bc6c6b58a08`，完整Profile不变；包括精确Role读取与AccessKey读取回归。精确CI十九项job及完整日志已收口；后继正常凭据夹具和导航修复不继承此CI，也不能继承5935的签名发布结论 |
+| 最近独立CI通过源码 | `4760581e035ec299003ef8f777b777feda38a218`，完整Profile不变；GitHub API已核实十九项job全部成功，完整日志的细项核对仍由测试owner收口。后继`2888c9c0812eb84abb755239e1d8938d41829b91`须独立验证，不继承这轮CI或5935的签名发布结论 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
 
-后继固定`da9426f608a99d564d573d3d4153714ba1198ada`的[Verification 39593652955](https://github.com/xiak/matrix/actions/runs/39593652955) attempt1为`completed/cancelled`，不是通过。`authority-storage`的check-run119204314631明确注记超过20分钟job总期限；其测试步骤11:49:55–12:09:02UTC成功，但job11:49:19–12:09:27UTC在清理时触及总期限，最终汇总按设计失败。未发现人工或并发替代取消的证据，也不将部分storage日志当作完整测试验收。修正只为此lane设置25分钟编排上限，保留全部测试、单项deadline、数据库限额、串行执行和原失败关闭汇总；不通过删测试、重跑旧run或把步骤成功改写为整轮成功。解析修改前后YAML并比较完整语义，唯一行为变化为该lane的20→25分钟，24个Bash步骤语法通过；当前process/architecture默认race3.948/2.591秒及vet通过，opt-in跳过不计真库或浏览器验收。后继准确SHA仍需独立CI。
+固定`4760581e035ec299003ef8f777b777feda38a218`的[Verification 39599299467](https://github.com/xiak/matrix/actions/runs/39599299467) attempt1已由GitHub API核实为`completed/success`，2026-10-21 12:55:34UTC终态、十九项job全部成功，包含storage及最终汇总；测试owner继续核对完整日志，不先填入未封存的根/包数量。该修正仅把storage编排上限20→25分钟，保留全部测试、单项deadline、数据库限额、串行执行和失败关闭汇总；完整YAML语义比较及24个Bash步骤通过，默认process/architecture race3.948/2.591秒及vet通过。原固定`da9426f608a99d564d573d3d4153714ba1198ada`的[Verification 39593652955](https://github.com/xiak/matrix/actions/runs/39593652955)仍为`completed/cancelled`：check119204314631明确超过20分钟job期限，19分07秒测试步骤虽成功，清理时跨过总期限。没有人工/并发取消证据，原部分storage日志不算完整验收；新run成功不改写旧run结论。
+
+后继固定`2888c9c0812eb84abb755239e1d8938d41829b91`的[Verification 39603659401](https://github.com/xiak/matrix/actions/runs/39603659401) attempt1已启动，仍待终态。它增加010拥有的Key审计归因及两个组件回归，并按本文件运行约束调整同一组lane的调度顺序；不改生产API/SQL/profile，不从476或组件测试推导尚未完成的真实浏览器验收。
 
 固定`640f0f59045b194466807329a12f7bc6c6b58a08`的[Verification 39586936643](https://github.com/xiak/matrix/actions/runs/39586936643) attempt1已由测试owner独立封存为`completed/success`：终态时间2026-10-21 11:18:38 UTC。十九项job全部成功；370个step为175成功、195项矩阵预期跳过，十四条lane的57个实际根均恰好RUN/PASS一次、没有根跳过。33个JSON包全部通过，1164个Test身份的JSON/plain终态一致，其中1157通过、7个真实邮件子例因缺少Postfix明确跳过。十九份必需日志共74,598,595字节完成连续范围、长度及严格UTF-8校验；三处读取超时仅补缺失尾段，没有重跑CI或回填旧失败。
 

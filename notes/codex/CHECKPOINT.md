@@ -11,9 +11,10 @@
   `IAM/FEAT-IAM-010-console.md` owns K1/K2 and R1/R2;007/006 retain credential
   and Role contracts. Do not reopen accepted permission-aware work or mark
   the overall IAM matrix complete.
-- Latest pushed code candidate: `4760581e035ec299003ef8f777b777feda38a218`,
-  parent `0884b4e8d3a144ba586dc1cd126a5b9fa8d44cd5`.
-  Its exact independent CI is pending the existing Test Expert's closure.
+- Latest pushed code candidate: `2888c9c0812eb84abb755239e1d8938d41829b91`.
+  Its Verification39603659401 attempt1 is running:
+  https://github.com/xiak/matrix/actions/runs/39603659401 .
+  Continue the existing Test Expert's single monitor; no new monitor or chats.
 - 0884 changes only the existing Role browser observer and010: after real
   page-issued Role application200 and observed admin revocation, the first
   exact same-credential GET401 may come from Applications, the implemented
@@ -27,6 +28,28 @@
   database limits, concurrency and fail-closed summary;24 Bash steps parse.
   Default process/architecture race3.948/2.591s and vet passed. Opt-in skips
   are not actual PG/browser evidence.
+- 476/Verification39599299467 attempt1 is completed/success, exact SHA and
+  all19 jobs confirmed by GitHub API at2026-10-21 12:55:34UTC terminal. The
+  Test Expert is closing full-log details; do not invent root/package counts.
+  https://github.com/xiak/matrix/actions/runs/39599299467 .
+- 9a2bd7086d57c56f6d006ca4a01eaaeba8c32a18 fixes only K1's Audit observer:
+  the same original request may have a valid IAM authorization decision and
+  a mutation success. Validate exact source/account/actor/decision target,
+  count only exact mutation facts, reject duplicates and never accept the
+  decision alone as completion. Three red cases preceded19Audit+15observer
+  green scenarios; default process/architecture race and vet passed. No
+  production/SQL/secret-handling change; actual K1 is still pending.
+- 9b74535799ec3bb786bae60e0cec5c83b4d4d722 orders the same14 authority lanes
+  longest-first from prior measured job durations; maxparallel8, tests,
+  deadlines and all other parsed YAML semantics are unchanged.24Bash steps
+  parse. Estimated matrix schedule25m28→22m04 is only an estimate, not a CI
+  result or revised cancelled-storage acceptance.011 owns the boundary.
+- 2888 selectively adopts UX fixed7a704f5f2f3deb25e7972015a495a503288f4733
+  in two existing component test files. Preserve consumer owner/denial cases;
+  stateful double-Key rotation/quota replacement and exact Session revocation
+  with surviving sibling pass54tests21.42s, Node22 typecheck/target ESLint,
+  default process/architecture race3.980/2.510s and vet. No production UI or
+  assets changed; do not inherit donor or actual browser acceptance.
 - UI candidate `da9426f608a99d564d573d3d4153714ba1198ada` selectively consumes
   UX fixed `ceb38eab2cb3075573dcea640d9ca5d38e097a3e`, not donor assets or
   acceptance. Platform Applications/IAM/Audit use implemented SPA destinations;
@@ -42,7 +65,7 @@
   logs are partial, not accepted as complete. No evidence of manual/concurrency
   cancellation. Do not redownload closed huge logs or rerun old CI. 011 owns
   the exact evidence and476 correction.
-- Last fully accepted CI: `640f0f59045b194466807329a12f7bc6c6b58a08` /
+- Prior fully log-audited CI: `640f0f59045b194466807329a12f7bc6c6b58a08` /
   Verification39586936643 attempt1,19jobs success. Older9062/P1/P2 remain closed
   under original evidence; no refetch. Browser default skips are not runs.
 - Last accepted signed source: `5935fa5005529b2c4e1da943b98f49300430ba10`,
