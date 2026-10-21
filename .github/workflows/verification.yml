@@ -173,19 +173,14 @@ jobs:
           # the eight-lane concurrency ceiling remains unchanged.
           - lane: authority-recovery-window
             minutes: 30
+          - lane: authority-storage
+            # Reserve setup and container-cleanup time outside the serial test
+            # step. Per-fixture deadlines and all required tests stay unchanged.
+            minutes: 25
           - lane: authority-runtime
             # The two runtime groups passed in 19m27s on run 37540304178, but
             # job setup/cleanup reached the old 20m orchestration ceiling.
             # Keep every fixture deadline unchanged and reserve bounded cleanup.
-            minutes: 25
-          - lane: authority-predecessor
-            # Build only the fixed rolling predecessor and current authority
-            # against one retained database. Keep it independent from the
-            # already near-budget full runtime lane.
-            minutes: 10
-          - lane: authority-storage
-            # Reserve setup and container-cleanup time outside the serial test
-            # step. Per-fixture deadlines and all required tests stay unchanged.
             minutes: 25
           - lane: authority-step-up
             minutes: 20
@@ -193,17 +188,17 @@ jobs:
             minutes: 20
           - lane: authority-removal-security
             minutes: 15
-          - lane: authority-roles
+          - lane: authority-capacity
             minutes: 15
-          - lane: authority-session-idle
+          - lane: authority-roles
             minutes: 15
           - lane: authority-recovery-storage
             minutes: 15
           - lane: authority-replacement-qualification
             minutes: 15
-          - lane: authority-removal
+          - lane: authority-session-idle
             minutes: 15
-          - lane: authority-capacity
+          - lane: authority-removal
             minutes: 15
           - lane: authority-managed-products
             # Four real provider resources: production worker, immutable PG18,
@@ -211,6 +206,11 @@ jobs:
             # round trips, exact IAM revoke, termination and the tenant Audit
             # chain. Keep the database-heavy lane serial.
             minutes: 20
+          - lane: authority-predecessor
+            # Build only the fixed rolling predecessor and current authority
+            # against one retained database. Keep it independent from the
+            # already near-budget full runtime lane.
+            minutes: 10
     timeout-minutes: ${{ matrix.minutes }}
     services:
       postgres:
