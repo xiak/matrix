@@ -10,18 +10,27 @@
   closure, necessary fixes, independent verification and cleanup of unused own
   resources. The host goal is authoritative. Do not reopen the accepted
   permission-aware work or mark the overall IAM matrix complete.
-- Latest code: `ef909e1f33ebc51af972c09ddafef3647710d77c`. Existing process
-  test/workflow owners now share the pinned Linux container worker on both
-  platforms, resolving the source manifest to the actual local image ID.
-  Linux retains host-network loopback connections; Desktop retains its gateway
-  translation. Only three private inputs are copied into the created container,
-  normalized and moved to private tmpfs before execution; no host secret mount,
-  native fallback, new daemon, retries or larger budgets. Runtime identity,
-  limits, exact publication, files and ownership checks remain real. Default
-  race/architecture/vet and workflow checks passed; independent CI is pending.
-  The local full-product attempt was refused by the existing Elasticsearch
-  kernel precondition (262144 below1048576); shared kernel settings were not
-  changed. Temporary diagnostics were completely removed. IAM/011 owns scope.
+- Latest code: `22591d3a52285c98ed269cd4a41643872d0b30c3`, Verification39736548709
+  attempt1 pending. The existing test/workflow owner streams exactly three
+  private inputs with explicit root tar ownership; no host chmod, CHOWN
+  capability, native fallback, new daemon, retries or larger budgets. Bootstrap
+  failures now expose only closed stage codes. The short real container gate
+  runs before the original full product gate in the same step; default tests,
+  race/architecture/vet and workflow checks passed. Windows and Linux UID1001
+  private-input gates passed, including rejection after inputs were consumed.
+  These do not accept the full products or browser journeys. IAM/011 owns scope.
+- Prior `ef909e1f33ebc51af972c09ddafef3647710d77c`, Verification39731447102
+  attempt1, is completed/failure: seventeen jobs succeeded, products and its
+  aggregate failed. The full products root exited before readiness, output
+  empty and without the old Engine timeout code. Its failure log is inspected;
+  the Test Expert's remaining whole-run detail audit is not yet sealed. A
+  bounded Linux UID1001 reproduction proved Docker retained source directory
+  ownership, so the old root ownership check failed before the worker. Do not
+  inherit Windows source ownership or rerun this failed candidate blindly.
+  This is separate from the older Engine/Observe timeout. The current fixed
+  input archive replaces that failed assumption; it does not prove the older
+  timeout's cause. The local full-product kernel prerequisite remains unmet
+  (262144 below1048576), and shared kernel settings remain unchanged.
 - Fixed `08e0d76bbea2d63c59b790e61c2870162d928c19` remains a CLOSED CI FAILURE:
   Verification39711834716 attempt1, nineteen jobs audited, seventeen successful,
   managed-products and its aggregate failed. Its Start/Wait observations improve
@@ -99,9 +108,10 @@
   seven operations are now fully consumed and its fresh URL is closed; that
   approval is not a Role or a later Key-fixture approval.
 - Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999. Keep the one existing monitor,
-  no new chat/agent/duplicate monitor. Follow exactef909 and prioritize its Linux
-  managed-product gate; native Linux runtime acceptance is not inherited from
-  default/Windows checks. Fixed08e0d76 is audited failure, not a passing source;
+  no new chat/agent/duplicate monitor. Follow exact22591d3 and prioritize the
+  new private-input gate and original Linux managed-product gate; full product
+  acceptance is not inherited from the short transfer/default checks.
+  Fixed08e0d76 is audited failure, not a passing source;
   its closed evidence is not a request to rerun958 or08.
   Prioritize exact-SHA required-job outcomes and affected roots; distinguish
   checked evidence from unreviewed detail instead of repeatedly fetching huge logs.
@@ -112,6 +122,8 @@
   nvm, prune, shared/remote restart, other Phase writes or retained install use.
 - Clean only verified own unused resources. A tool-blocked cleanup is not done;
   do not retry it through another executor, shell, rename or parent deletion.
+  The new diagnostic/transfer containers are removed; a generated Linux test
+  binary was blocked from deletion, in addition to older denied residues.
   Machine-local diagnostic residues are not portable runtime handles. Do not
   claim full cleanup while these restrictions remain unresolved.
 - Markdown and existing documentation owners only. This checkpoint carries

@@ -42,7 +42,7 @@
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
 | 最近独立CI通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
-| 最新代码候选 | 既有测试owner的私有输入归属修正：显式root归属的三文件流式archive、封闭bootstrap阶段码及同一步骤内的短容器门禁；本地通过，后继精确CI待确认。前一固定`ef909e1f33ebc51af972c09ddafef3647710d77c`已独立失败，不能继承旧CI或接受为四产品通过 |
+| 最新代码候选 | `22591d3a52285c98ed269cd4a41643872d0b30c3`：既有测试owner的私有输入归属修正，显式root归属的三文件流式archive、封闭bootstrap阶段码及同一步骤内的短容器门禁；本地通过，[Verification39736548709](https://github.com/xiak/matrix/actions/runs/39736548709) attempt1待确认。前一固定`ef909e1f33ebc51af972c09ddafef3647710d77c`已独立失败，不能继承旧CI或接受为四产品通过 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
