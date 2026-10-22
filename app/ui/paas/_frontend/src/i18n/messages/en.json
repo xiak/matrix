@@ -4786,7 +4786,16 @@
     "liveDeleteConfirmHint": "This is a live IAM delete command. Enter the role name to confirm; users and policies are not deleted.",
     "liveDeleteImpact": "Deletion closes the role, revokes its policy attachments and invalidates related role sessions while retaining audit history. Recreating the same name does not restore the original identity.",
     "retryDeleteOriginal": "The previous submission has an unknown outcome. Keeping this window open and confirming again uses the exact same resource version and request ID.",
-    "deleteRole": "Delete role"
+    "deleteRole": "Delete role",
+    "liveDeleteReceiptTitle": "Role deletion receipt",
+    "liveDeleteReceiptHint": "This is the server receipt for the deletion command. The role directory is read independently and is not used to infer the original command result.",
+    "liveDeleteReceiptName": "Role name",
+    "liveDeleteReceiptId": "Stable role ID",
+    "liveDeleteReceiptRequest": "Original request ID",
+    "liveDeleteReceiptRevision": "Result resource version",
+    "liveDeleteReceiptPolicies": "Direct policy attachments revoked",
+    "liveDeleteReceiptTime": "Deleted at",
+    "liveDeleteFinish": "Finish and return to roles"
   },
   "IamWorkspace": {
     "selectionEmpty": "No items selected",

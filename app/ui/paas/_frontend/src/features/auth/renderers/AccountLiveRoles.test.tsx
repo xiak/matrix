@@ -385,7 +385,7 @@ describe("AccountLiveRoles", () => {
     await user.type(screen.getByLabelText("输入名称以确认"), role.name);
     await user.click(screen.getByRole("button", { name: "确认删除" }));
     expect(await screen.findByText("删除结果未知", { exact: false })).toBeTruthy();
-    const original = remove.mock.calls[0];
+    const original = remove.mock.calls[0]!;
     await user.click(screen.getByRole("button", { name: "取消" }));
     expect(await screen.findByText("会失去用于安全重试的冻结请求 ID", { exact: false })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "继续编辑" }));
@@ -393,7 +393,64 @@ describe("AccountLiveRoles", () => {
 
     await waitFor(() => expect(remove).toHaveBeenCalledTimes(2));
     expect(remove.mock.calls[1]).toEqual(original);
+    const receipt = screen.getByRole("status", { name: "角色删除回执" });
+    expect(receipt.textContent).toContain(role.name);
+    expect(receipt.textContent).toContain(role.id);
+    expect(receipt.textContent).toContain(original[1].requestId);
+    expect(receipt.textContent).toContain("结果资源版本4");
+    expect(receipt.textContent).toContain("已撤销直接策略关联1");
+    expect(receipt.querySelector("time")?.dateTime).toBe(timestamp);
+    expect(screen.getByRole("heading", { name: `角色删除回执 · ${role.name}` })).toBeTruthy();
+    expect(onOpen).not.toHaveBeenCalledWith("roles");
+    await user.click(screen.getByRole("button", { name: "完成并返回角色列表" }));
     expect(onOpen).toHaveBeenCalledWith("roles");
+  });
+
+  it("rejects a mismatched Role deletion receipt without navigating or showing success", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const deletable: RoleAccess = { ...access, capabilities: access.capabilities.map((candidate) => candidate.action === "iam.role.delete" ? { ...candidate, available: true, restrictionReason: null } : candidate) };
+    const remove = vi.fn().mockResolvedValue({ id: role.id, accountId: "account-other", name: role.name,
+      resourceVersion: role.resourceVersion + 1, revokedPolicyAttachments: 1, deletedAt: timestamp });
+    render(<LocaleProvider><RolesHarness api={client({ read: vi.fn().mockResolvedValue(deletable), delete: remove })} entityId={role.id} onOpen={onOpen} /></LocaleProvider>);
+
+    await screen.findByRole("heading", { name: role.name });
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除" }));
+    await user.type(screen.getByLabelText("输入名称以确认"), role.name);
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText("删除结果未知", { exact: false })).toBeTruthy();
+    expect(screen.queryByRole("status", { name: "角色删除回执" })).toBeNull();
+    expect(onOpen).not.toHaveBeenCalledWith("roles");
+  });
+
+  it("discards a late Role deletion result after the authenticated client is replaced", async () => {
+    const user = userEvent.setup();
+    const onOpen = vi.fn();
+    const deletable: RoleAccess = { ...access, capabilities: access.capabilities.map((candidate) => candidate.action === "iam.role.delete" ? { ...candidate, available: true, restrictionReason: null } : candidate) };
+    let finish!: (result: Awaited<ReturnType<RoleAccessClient["delete"]>>) => void;
+    const remove = vi.fn(() => new Promise<Awaited<ReturnType<RoleAccessClient["delete"]>>>((resolve) => { finish = resolve; }));
+    const previous = client({ read: vi.fn().mockResolvedValue(deletable), delete: remove });
+    const replacement = client({ identity: "role-client-two", sessionRevision: 2, read: vi.fn().mockResolvedValue(deletable) });
+    const view = render(<LocaleProvider><RolesHarness api={previous} entityId={role.id} onOpen={onOpen} /></LocaleProvider>);
+
+    await screen.findByRole("heading", { name: role.name });
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    await user.click(screen.getByRole("menuitem", { name: "删除" }));
+    await user.type(screen.getByLabelText("输入名称以确认"), role.name);
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(remove).toHaveBeenCalledTimes(1));
+
+    view.rerender(<LocaleProvider><RolesHarness api={replacement} entityId={role.id} onOpen={onOpen} /></LocaleProvider>);
+    await screen.findByRole("heading", { name: role.name });
+    await act(async () => finish({ id: role.id, accountId: role.accountId, name: role.name,
+      resourceVersion: role.resourceVersion + 1, revokedPolicyAttachments: 1, deletedAt: timestamp }));
+
+    expect(screen.queryByRole("status", { name: "角色删除回执" })).toBeNull();
+    expect(onOpen).not.toHaveBeenCalledWith("roles");
+    expect(replacement.delete).not.toHaveBeenCalled();
   });
 
   it("opens exact current role relationships without extra directory requests", async () => {

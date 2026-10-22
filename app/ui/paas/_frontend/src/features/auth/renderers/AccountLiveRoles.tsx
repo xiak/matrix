@@ -11,7 +11,7 @@ import type { AccountAccessView, AccountPolicy } from "../domain/accounts";
 import type { RoleAccess, RoleCapability, RoleCapabilityAction, RoleListing, RolePermissionBoundary, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
 import { AuthorizationOverview, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
-import { LiveRoleDelete, LiveRoleMetadataEditor, LiveRolePolicyEditor, LiveRoleStatusEditor, LiveRoleTrustEditor } from "./LiveRoleManagement";
+import { LiveRoleDelete, LiveRoleMetadataEditor, LiveRolePolicyEditor, LiveRoleStatusEditor, LiveRoleTrustEditor, type LiveRoleDeletionReceipt } from "./LiveRoleManagement";
 import { readPendingPolicyAttachmentChange } from "./PolicyAttachmentChangeFlow";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
@@ -29,6 +29,22 @@ function capabilityState(capability: RoleCapability) {
 
 function trustPrincipalCount(version: RoleTrustVersion): number {
   return version.document.statements.reduce((count, statement) => count + statement.principals.length, 0);
+}
+
+function RoleDeletionReceipt({ receipt }: { receipt: LiveRoleDeletionReceipt }) {
+  const t = useTranslations("RoleWorkspace");
+  return <Alert status="success" role="status" aria-label={t("liveDeleteReceiptTitle")}>
+    <strong>{t("liveDeleteReceiptTitle")}</strong>
+    <p>{t("liveDeleteReceiptHint")}</p>
+    <dl className={styles.facts}>
+      <div><dt>{t("liveDeleteReceiptName")}</dt><dd>{receipt.result.name}</dd></div>
+      <div><dt>{t("liveDeleteReceiptId")}</dt><dd><code>{receipt.result.id}</code></dd></div>
+      <div><dt>{t("liveDeleteReceiptRequest")}</dt><dd><code>{receipt.requestId}</code></dd></div>
+      <div><dt>{t("liveDeleteReceiptRevision")}</dt><dd>{receipt.result.resourceVersion}</dd></div>
+      <div><dt>{t("liveDeleteReceiptPolicies")}</dt><dd>{receipt.result.revokedPolicyAttachments}</dd></div>
+      <div><dt>{t("liveDeleteReceiptTime")}</dt><dd><WorkspaceTime value={receipt.result.deletedAt} /></dd></div>
+    </dl>
+  </Alert>;
 }
 
 type RoleBoundaryIntent =
@@ -273,10 +289,11 @@ function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: Ro
   </div>;
 }
 
-function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange }: {
+function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeIntentChange }: {
   client: RoleAccessClient;
   roleId: string;
   onOpen: OpenRoleEntity;
+  onDeleted(receipt: LiveRoleDeletionReceipt): void;
   revokeIntent: RoleSessionRevokeIntent | null;
   onRevokeIntentChange(expectedRequestId: string | null, intent: RoleSessionRevokeIntent | null): void;
 }) {
@@ -289,6 +306,14 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
   const [section, setSection] = useState("permissions");
   const [workflow, setWorkflow] = useState<"metadata" | "status" | "trust" | "addPolicy" | "removePolicy" | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deleted, setDeleted] = useState<LiveRoleDeletionReceipt | null>(null);
+  const deletionNavigationStarted = useRef(false);
+  const finishDeletion = useCallback(() => {
+    if (!deleted || deleted.client !== client || deletionNavigationStarted.current) return;
+    deletionNavigationStarted.current = true;
+    onDeleted(deleted);
+    onOpen("roles");
+  }, [client, deleted, onDeleted, onOpen]);
 
   const restorePendingPolicyChange = useCallback(() => {
     const pending = readPendingPolicyAttachmentChange({ accountId: client.accountId, actorPrincipalId: client.actorPrincipalId,
@@ -351,6 +376,11 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
       onSelect: () => setDeleting(true)
     }]
   };
+
+  if (deleted?.client === client && !deleting) return <WorkspaceDetail title={`${t("liveDeleteReceiptTitle")} · ${deleted.result.name}`}
+    onBack={finishDeletion} backLabel={t("liveDeleteFinish")}>
+    <RoleDeletionReceipt receipt={deleted} />
+  </WorkspaceDetail>;
 
   return <><WorkspaceDetail title={access?.role.name ?? roleId} onBack={() => onOpen("roles")} actions={actions}>
     {phase === "loading" ? <TableSkeleton label={t("loadingRole")} rows={4} header={false} /> : null}
@@ -436,7 +466,7 @@ function RoleDetail({ client, roleId, onOpen, revokeIntent, onRevokeIntentChange
         </Tabs.Content>
       </Tabs.Root>
     </> : null}
-  </WorkspaceDetail>{deleting && access ? <LiveRoleDelete key={`${client.sessionRevision}:${access.role.id}:delete`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setDeleting(false)} onDeleted={() => onOpen("roles")} /> : null}</>;
+  </WorkspaceDetail>{deleting && access ? <LiveRoleDelete key={`${client.sessionRevision}:${access.role.id}:delete`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setDeleting(false)} onDeleted={setDeleted} /> : null}</>;
 }
 
 type AccountLiveRolesProps = {
@@ -465,6 +495,7 @@ function AccountLiveRolesWorkspace({ client, serviceRoleTemplates, serviceLinked
   const [state, setState] = useState("all");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [receipt, setReceipt] = useState<LiveRoleDeletionReceipt | null>(null);
   const deferredQuery = useDeferredValue(query);
 
   const retry = useCallback(() => {
@@ -503,9 +534,11 @@ function AccountLiveRolesWorkspace({ client, serviceRoleTemplates, serviceLinked
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
 
-  if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} />;
+  if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} onDeleted={setReceipt} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} />;
 
-  return <Card aria-description={t("liveDirectoryHint")}>
+  return <>
+    {receipt?.client === client ? <RoleDeletionReceipt receipt={receipt} /> : null}
+    <Card aria-description={t("liveDirectoryHint")}>
     <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" actions={<ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")}
       primary={{ id: "create", label: w("createRole"), icon: <Plus aria-hidden="true" />, disabled: !client.canCreate, disabledReason: client.createRestrictionReason ?? undefined, onSelect: onCreate }}
       secondary={serviceLinkedRoles || serviceRoleTemplates ? [{ id: "service-authorization", label: t("serviceAuthorization"), variant: "secondary", onSelect: () => onOpen("service-authorizations") }] : []} />} />
@@ -550,7 +583,8 @@ function AccountLiveRolesWorkspace({ client, serviceRoleTemplates, serviceLinked
       </Table.Footer>
       {error ? <Alert status="warning">{error}</Alert> : null}
     </> : null}
-  </Card>;
+    </Card>
+  </>;
 }
 
 export function AccountLiveRoles(props: AccountLiveRolesProps) {

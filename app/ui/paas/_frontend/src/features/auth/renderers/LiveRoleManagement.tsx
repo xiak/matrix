@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, FormField, Input, LoadingNotice, Select, TextArea } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
@@ -11,6 +11,7 @@ import {
   validateRoleMetadataInput,
   type DeleteRoleCommand,
   type RoleAccess,
+  type RoleDeletion,
   type RoleTrustDocument,
   type SetRoleStatusCommand,
   type SetRoleTrustPolicyCommand,
@@ -24,6 +25,12 @@ import styles from "./AccountAccessRenderer.module.css";
 type RoleCommandPhase = "idle" | "pending" | "uncertain" | "conflict" | "refreshFailed" | "rejected" | "completed";
 type RoleCommandState = { phase: RoleCommandPhase; error?: ReturnType<typeof accountError>; requestId?: string };
 const noop = () => {};
+
+export type LiveRoleDeletionReceipt = {
+  client: RoleAccessClient;
+  requestId: string;
+  result: RoleDeletion;
+};
 
 function needsLeaveGuard(state: RoleCommandState) {
   return state.phase === "uncertain" || state.phase === "conflict" || state.phase === "refreshFailed";
@@ -305,20 +312,29 @@ export function LiveRoleDelete({ access, client, onAccessChanged, onClose, onDel
   client: RoleAccessClient;
   onAccessChanged(access: RoleAccess): void;
   onClose(): void;
-  onDeleted(): void;
+  onDeleted(receipt: LiveRoleDeletionReceipt): void;
 }) {
   const t = useTranslations("RoleWorkspace"), a = useTranslations("AccountAccess");
   const intent = useRef<DeleteRoleCommand | null>(null);
+  const currentClient = useRef<RoleAccessClient | null>(client);
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | undefined>(), [uncertain, setUncertain] = useState(false);
   const clearError = useCallback(() => setError(undefined), []);
+  useLayoutEffect(() => { currentClient.current = client; return () => { currentClient.current = null; }; }, [client]);
   const confirm = async () => {
     if (busy) return false;
     const frozen = intent.current ?? { resourceVersion: access.role.resourceVersion, requestId: requestToken("role-delete-"), expectedName: access.role.name };
     intent.current = frozen; setBusy(true); setError(undefined);
     try {
-      await client.delete(access.role.id, frozen);
-      intent.current = null; onDeleted(); return true;
+      const result = await client.delete(access.role.id, frozen);
+      if (currentClient.current !== client) return false;
+      if (result.id !== access.role.id || result.accountId !== client.accountId || result.name !== access.role.name ||
+          result.resourceVersion !== access.role.resourceVersion + 1 || !Number.isSafeInteger(result.revokedPolicyAttachments) ||
+          result.revokedPolicyAttachments < 0 || !Number.isFinite(Date.parse(result.deletedAt))) throw new Error("INVALID_IAM_ROLE_DELETION");
+      intent.current = null;
+      onDeleted({ client, requestId: frozen.requestId, result: structuredClone(result) });
+      return true;
     } catch (failure) {
+      if (currentClient.current !== client) return false;
       const reason = accountError(failure);
       if (reason === "unavailable") { setUncertain(true); setError(`${t("deleteOutcomeUnknown")} ${frozen.requestId}`); }
       else if (reason === "conflict") {
