@@ -1656,6 +1656,13 @@ describe("CAM-style access workspace", () => {
     expect(after.roles).toEqual(before.roles.filter((role) => role.id !== "role-log-reviewer"));
     expect(after.policies).toEqual(before.policies);
     expect(after.userPolicies).toEqual(before.userPolicies);
+    const receipt = screen.getByRole("status", { name: "角色删除完成（MOCK）" });
+    expect(receipt.textContent).toContain("ProductionLogReviewRole");
+    expect(receipt.textContent).toContain("role-log-reviewer");
+    expect(receipt.textContent).toContain("不是 IAM 服务器回执");
+    expect(screen.queryByRole("heading", { name: "暂无记录" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "完成并返回角色列表" }));
+    expect(await screen.findByRole("heading", { name: "暂无记录" })).toBeTruthy();
   });
   it("keeps role-session administration separate from self-service assumption and preserves exact revoke intent", async () => {
     let activeSessionId = "", revokedSessionId = "";

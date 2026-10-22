@@ -4795,7 +4795,9 @@
     "liveDeleteReceiptRevision": "Result resource version",
     "liveDeleteReceiptPolicies": "Direct policy attachments revoked",
     "liveDeleteReceiptTime": "Deleted at",
-    "liveDeleteFinish": "Finish and return to roles"
+    "liveDeleteFinish": "Finish and return to roles",
+    "previewDeleteReceiptTitle": "Role deletion complete (MOCK)",
+    "previewDeleteReceiptHint": "The role was removed from this browser preview session. This is not an IAM server receipt and does not change a real account."
   },
   "IamWorkspace": {
     "selectionEmpty": "No items selected",

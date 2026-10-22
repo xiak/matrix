@@ -4795,7 +4795,9 @@
     "liveDeleteReceiptRevision": "结果资源版本",
     "liveDeleteReceiptPolicies": "已撤销直接策略关联",
     "liveDeleteReceiptTime": "删除时间",
-    "liveDeleteFinish": "完成并返回角色列表"
+    "liveDeleteFinish": "完成并返回角色列表",
+    "previewDeleteReceiptTitle": "角色删除完成（MOCK）",
+    "previewDeleteReceiptHint": "该角色已从当前浏览器体验会话中移除。这不是 IAM 服务器回执，也不会改变真实账号。"
   },
   "IamWorkspace": {
     "selectionEmpty": "尚未选择对象",

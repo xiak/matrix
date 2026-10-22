@@ -85,15 +85,29 @@ function RolePolicyEditor({ role, workspace, mode, onClose }: { role: AccessRole
   </WorkspaceInlineForm>;
 }
 
+function PreviewRoleDeletionReceipt({ role }: { role: AccessRole }) {
+  const t = useTranslations("RoleWorkspace");
+  return <Alert status="success" role="status" aria-label={t("previewDeleteReceiptTitle")}>
+    <strong>{t("previewDeleteReceiptTitle")}</strong>
+    <p>{t("previewDeleteReceiptHint")}</p>
+    <dl className={styles.facts}>
+      <div><dt>{t("liveDeleteReceiptName")}</dt><dd>{role.name}</dd></div>
+      <div><dt>{t("liveDeleteReceiptId")}</dt><dd><code>{role.id}</code></dd></div>
+    </dl>
+  </Alert>;
+}
+
 export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("IamWorkspace"), r = useTranslations("RoleWorkspace"), relationship = useTranslations("RelationshipDirectory"), access = useAccountAccess();
   const [workflow, setWorkflow] = useState<"metadata" | "trust" | "settings" | "add" | "remove" | null>(null);
   const [tab, setTab] = useState("policies");
   const [deleting, setDeleting] = useState<AccessRole | null>(null);
+  const [deleted, setDeleted] = useState<AccessRole | null>(null);
+  const deletionNavigationStarted = useRef(false);
   const metadataTrigger = useRef<HTMLButtonElement>(null), trustTrigger = useRef<HTMLButtonElement>(null), settingsTrigger = useRef<HTMLButtonElement>(null), addTrigger = useRef<HTMLButtonElement>(null), removeTrigger = useRef<HTMLButtonElement>(null);
   const collectionActionFocus = useRef<PageCommandsHandle>(null);
   const previousWorkflow = useRef<typeof workflow>(null);
-  const selected = workspace.roles.find((role) => role.id === entityId);
+  const selected = workspace.roles.find((role) => role.id === entityId) ?? (deleting?.id === entityId ? deleting : undefined);
   useLayoutEffect(() => {
     const closed = previousWorkflow.current;
     previousWorkflow.current = workflow;
@@ -102,6 +116,17 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
     const fallback = closed === "remove" && target?.disabled ? addTrigger.current : null;
     (fallback ?? target)?.focus({ preventScroll: true });
   }, [workflow]);
+  if (deleted && deleted.id === entityId) {
+    const finishDeletion = () => {
+      if (deletionNavigationStarted.current) return;
+      deletionNavigationStarted.current = true;
+      setDeleted(null);
+      onOpen("roles");
+    };
+    return <WorkspaceDetail title={`${r("previewDeleteReceiptTitle")} · ${deleted.name}`} onBack={finishDeletion} backLabel={r("liveDeleteFinish")}>
+      <PreviewRoleDeletionReceipt role={deleted} />
+    </WorkspaceDetail>;
+  }
   if (entityId && !selected) return <EmptyState title={t("entityUnavailable")} description={t("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("roles")}>{t("back")}</Button>} />;
   const trustSearchText = (role: AccessRole) => role.trustedUserIds.map((id) => scene.users.find((user) => user.id === id)?.loginName ?? id).join(" ");
   const selectedPolicies = selected?.policyIds.map((id) => workspace.policies.find((policy) => policy.id === id)).filter((policy) => policy !== undefined) ?? [];
@@ -145,6 +170,11 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
       <td className={styles.roleDirectorySession}><strong>{r("maximumSessionMinutes", { minutes: role.sessionMinutes })}</strong><small>{r("consoleEntry")} · {t(role.consoleAccess ? "enabled" : "disabled")}</small></td>
       <td><WorkspaceTime value={role.createdAt} /></td>
     </>} />}
-    {deleting ? <WorkspaceDelete name={deleting.name} impact={<Alert status="warning">{r("deleteImpact")}</Alert>} onClose={() => setDeleting(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-role", id: deleting.id }); if (result && entityId === deleting.id) onOpen("roles"); return result; }} /> : null}
+    {deleting ? <WorkspaceDelete name={deleting.name} impact={<Alert status="warning">{r("deleteImpact")}</Alert>} onClose={() => setDeleting(null)} onConfirm={async () => {
+      const target = deleting;
+      const result = await access.executeWorkspace({ kind: "delete-role", id: target.id });
+      if (result && entityId === target.id) setDeleted(target);
+      return Boolean(result);
+    }} /> : null}
   </>;
 }
