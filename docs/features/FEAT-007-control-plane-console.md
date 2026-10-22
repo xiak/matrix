@@ -2620,24 +2620,32 @@ to completion. Account or actor switches neither expose nor clear another
 owner's intent, and late replies from an obsolete Session/client cannot clear,
 navigate or replace current evidence. A strict success remains a success
 receipt even when local reminder cleanup fails; the remaining recovery error
-still closes further deletion. Only an explicit rejection before uncertainty
-may clear that exact intent.
+still closes further deletion. A pre-UNKNOWN rejection may clear that exact
+intent only when both the HTTP status and the stable IAM problem code match an
+authoritative contract. Malformed error JSON, a missing/invalid problem code
+and any unrecognized code remain UNKNOWN even at `400`, `401`, `403`, `409` or
+`422`; their recovery evidence remains stored, and a damaged `401` cannot
+expire the Session. If an authoritative rejection cannot clear its exact local
+intent, deletion fails closed instead of reopening the confirmation.
 
 The isolated MOCK continues to delete only its browser-memory User and simulated
 relations through the preview workspace; it does not write recovery storage or
-manufacture an IAM receipt. Source and synchronized embedded assets are pushed
-at `8c40091ec`. The complete frontend gate passed **80 files / 2,087 cases**
-plus all eight Node export-boundary cases; typecheck, lint, architecture and all
-234 theme contrast pairs passed. The production build exported 59 pages,
-normalized 57 segment paths and matched all 324 embedded files byte-for-byte;
-PaaS UI Go test/vet and the repository architecture test passed. A fresh
-in-app-browser MOCK pass opened `lin`, verified that confirmation stayed
-disabled until the exact login name was entered, observed the enabled red
-danger action, then cancelled without deleting the fixture. The browser log
-contained no warning/error. This proves the strict client, same-tab recovery
-boundary and isolated UX only; real-IAM deletion, Audit, authorization
-postconditions, cross-tab/device idempotency and signed-runtime acceptance stay
-with FEAT-IAM-010/011.
+manufacture an IAM receipt. Current source and synchronized embedded assets are
+pushed at `09640c6cefce7361574206753fdb0b2bd1133847`. The complete frontend
+gate passed **80 files / 2,104 cases**; the User-deletion-focused run passed
+**3 files / 537 cases**, including HTTP-adapter regressions for malformed and
+code-less error documents plus authoritative/non-authoritative closed loops at
+all five statuses above. All eight Node export-boundary cases, typecheck, lint,
+architecture and all 234 theme contrast pairs passed. The production build
+exported 59 pages, normalized 57 segment paths and matched all 324 embedded
+files byte-for-byte; PaaS UI Go test/vet and the repository architecture test
+passed. The unchanged visual flow was exercised in the in-app browser at its
+preceding source: it opened `lin`, kept confirmation disabled until the exact
+login name was entered, exposed the red danger action and cancelled without
+deleting the fixture; the browser log had no warning/error. This proves the
+strict client, same-tab recovery boundary and isolated UX only. Real-IAM
+deletion, Audit, authorization postconditions, cross-tab/device idempotency
+and signed-runtime acceptance stay with FEAT-IAM-010/011.
 
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
