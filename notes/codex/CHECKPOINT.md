@@ -10,18 +10,24 @@
   closure, necessary fixes, independent verification and cleanup of unused own
   resources. The host goal is authoritative. Do not reopen the accepted
   permission-aware work or mark the overall IAM matrix complete.
-- Latest code: `08e0d76bbea2d63c59b790e61c2870162d928c19`. Only the existing
-  authorityprocess test owner and IAM/011 changed. Child Start/Wait observation
-  times and reported CPU times improve a readiness-failure diagnosis; they are
-  not exact kernel/CLI timings or a fix. Default Windows race/architecture/vet
-  and the bounded Linux child-process test passed. The unchanged real Docker
-  probe also passed locally, which is non-reproduction, not CI acceptance.
-  Verification39711834716 attempt1 is CLOSED FAILURE: nineteen jobs audited,
-  seventeen successful, managed-products and its aggregate failed. The same
-  Engine probe timeout remains; the new Start/Wait observations span about
-  3.021 seconds but do not identify the underlying cause. IAM/011 owns details:
-  https://github.com/xiak/matrix/actions/runs/39711834716 . Do not refetch closed
-  logs or blindly rerun this attempt.
+- Latest code: `ef909e1f33ebc51af972c09ddafef3647710d77c`. Existing process
+  test/workflow owners now share the pinned Linux container worker on both
+  platforms, resolving the source manifest to the actual local image ID.
+  Linux retains host-network loopback connections; Desktop retains its gateway
+  translation. Only three private inputs are copied into the created container,
+  normalized and moved to private tmpfs before execution; no host secret mount,
+  native fallback, new daemon, retries or larger budgets. Runtime identity,
+  limits, exact publication, files and ownership checks remain real. Default
+  race/architecture/vet and workflow checks passed; independent CI is pending.
+  The local full-product attempt was refused by the existing Elasticsearch
+  kernel precondition (262144 below1048576); shared kernel settings were not
+  changed. Temporary diagnostics were completely removed. IAM/011 owns scope.
+- Fixed `08e0d76bbea2d63c59b790e61c2870162d928c19` remains a CLOSED CI FAILURE:
+  Verification39711834716 attempt1, nineteen jobs audited, seventeen successful,
+  managed-products and its aggregate failed. Its Start/Wait observations improve
+  diagnosis but did not identify/fix the original Engine probe timeout. The new
+  container candidate does not establish the old cause or change this outcome.
+  Do not refetch closed logs or blindly rerun this attempt.
 - Prior test candidate `958d5b46649abc3dac2936892bb323005af97bde` fixes the Role
   observer's exact application detail and natural-expiry boundary. Its complete
   Verification39646488455 attempt1 is CLOSED FAILURE: managed-products worker
@@ -61,8 +67,13 @@
   container/network and synthetic data were removed. Only empty task directories
   were blocked from deletion; older denied residues were not retried.
 - R1 creation/trust/boundary/attachment/assume plus exact RoleSession revocation
-  has a ready opt-in fixture but no actual page acceptance. Positive business
-  reads, boundary denial, surviving sibling, exact effects and Audit are required.
+  is not accepted. Its fresh clean6f24 fixture prepared only the exact review
+  page; the original executor received no direct human confirmation and wrote
+  nothing. It timed out1800.06 seconds, race1802.597/exit1. Independent checks
+  found zero Roles, zero Role facts and no remaining clients/processes/listeners;
+  the exact PG/network were removed and the expired page closed. Do not reuse
+  this fixture/confirmation. Positive business reads, boundary denial, surviving
+  sibling, exact effects and Audit remain required by010.
 - R2 attachment revocation is not accepted. R2d performed the actual UI write
   but its old observer missed exact detail requests; never backfill missing HTTP
   evidence from DOM. Fixed958's R2e performed its pre-read but submitted no
@@ -88,8 +99,10 @@
   seven operations are now fully consumed and its fresh URL is closed; that
   approval is not a Role or a later Key-fixture approval.
 - Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999. Keep the one existing monitor,
-  no new chat/agent/duplicate monitor. Fixed08e0d76 is audited failure, not a
-  passing candidate; its closed evidence is not a request to rerun958 or08.
+  no new chat/agent/duplicate monitor. Follow exactef909 and prioritize its Linux
+  managed-product gate; native Linux runtime acceptance is not inherited from
+  default/Windows checks. Fixed08e0d76 is audited failure, not a passing source;
+  its closed evidence is not a request to rerun958 or08.
   Prioritize exact-SHA required-job outcomes and affected roots; distinguish
   checked evidence from unreviewed detail instead of repeatedly fetching huge logs.
 - User authorizes autonomous MATRIX development/testing; this is not a missing
