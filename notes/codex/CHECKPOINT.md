@@ -71,15 +71,17 @@
   replacement; seven exact facts and the complete tenant chain matched.
   Secrets stayed in one-time UI/test memory. This does not accept R1/R2.
 - R1 creation/trust/boundary/attachment/assume plus exact RoleSession revocation
-  remains unaccepted. Prior clean6f24 prepared only the review page: no direct
-  action-time confirmation reached the original executor and no page writes
-  occurred. The fixture expired; zero Roles/facts and zero clients/listeners
-  were independently checked, and its PG/network/page were closed.
-  Do not reuse its URL/confirmation. Consume fixed b3c3 before the next run.
-  The user subsequently confirmed readiness for a new R1. The original UX
-  executor has restored its browser capability and explicitly requested a fresh
-  fixture. This milestone contains no new page-write acceptance: use new
-  resources and identifiers, then require the actual journey and effects.
+  remains unaccepted. Latest cleanb3e048a3 used codeb3c3 and actual PG18.4 with
+  restored original UX browser capability. No action-time confirmation reached
+  the executor for the fresh objects: it confirmed no login or page writes.
+  The exact UI child was stopped to end the idle fixture; normal cleanup gave
+  root642.13 seconds/race644.692, exit1, UI-exited-during-observation. Record this
+  as cancelled before browser actions, not product failure or acceptance.
+  Independent checks found zero Roles/ROLE attachments/RoleSessions/Role facts,
+  clients, child processes and listeners. Its exact PG, network, empty temporary
+  root and page are gone; no retained volume. No new runtime remains from this
+  attempt. Do not reuse any expired URL/object/confirmation or automatically
+  reopen the fixture. A fresh journey still needs actual page writes and effects.
 - R2 attachment revocation remains unaccepted. R2d made the actual UI write,
   but its old observer missed exact application-detail HTTP evidence. Never
   backfill that evidence from DOM. Fixed958's R2e made no revocation and expired
