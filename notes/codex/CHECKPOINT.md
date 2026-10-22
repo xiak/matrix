@@ -71,17 +71,21 @@
   replacement; seven exact facts and the complete tenant chain matched.
   Secrets stayed in one-time UI/test memory. This does not accept R1/R2.
 - R1 creation/trust/boundary/attachment/assume plus exact RoleSession revocation
-  remains unaccepted. Latest cleanb3e048a3 used codeb3c3 and actual PG18.4 with
-  restored original UX browser capability. No action-time confirmation reached
-  the executor for the fresh objects: it confirmed no login or page writes.
-  The exact UI child was stopped to end the idle fixture; normal cleanup gave
-  root642.13 seconds/race644.692, exit1, UI-exited-during-observation. Record this
-  as cancelled before browser actions, not product failure or acceptance.
-  Independent checks found zero Roles/ROLE attachments/RoleSessions/Role facts,
-  clients, child processes and listeners. Its exact PG, network, empty temporary
-  root and page are gone; no retained volume. No new runtime remains from this
-  attempt. Do not reuse any expired URL/object/confirmation or automatically
-  reopen the fixture. A fresh journey still needs actual page writes and effects.
+  is accepted on clean382243922, codeb3c3 and actual PG18.4. The original UX
+  executor obtained direct confirmation for the fresh destination/objects and
+  completed all five page actions. Root834.25 seconds/race837.760, exit0.
+  Actual single assumption and application200/Audit403 were observed; exact
+  revocation produced same-Role401 on managed-services, explicit original
+  source200 and source application403. Source Session remained valid; the
+  independent sibling retained IAM/application200 and Audit403. Role/trust/
+  attachment were unchanged, five exact facts and the complete chain matched.
+  The temporary product-menu overlay was dismissed before the successful return;
+  it is not a proven backend/session defect. No relogin or second assumption.
+  Postconditions found Role1/active attachment1/RoleSessions2 (one revoked,
+  one valid sibling), zero clients/processes/browser listener; tabs are closed.
+  This attempt's PG/network/empty-root cleanup was denied before execution.
+  Those resources remain; do not retry through another route or claim cleanup.
+  IAM/010 owns the precise acceptance; R2 attachment recovery remains separate.
 - R2 attachment revocation remains unaccepted. R2d made the actual UI write,
   but its old observer missed exact application-detail HTTP evidence. Never
   backfill that evidence from DOM. Fixed958's R2e made no revocation and expired
@@ -116,8 +120,9 @@
 - Clean only verified own unused resources. Tool-denied cleanup is not done and
   must not be retried through another executor, shell, rename or parent deletion.
   A generated Linux test binary, an older stopped diagnostic container, empty
-  task directories and the latest Analyzer PG/network remain denied residues.
-  The latter was last read-only checked running with zero fixture clients.
+  task directories, Analyzer PG/network and the successful R1 PG/network/root
+  remain denied residues. The PGs were last read-only checked running with zero
+  fixture clients.
   Do not ask another task to bypass the denial or claim complete cleanup.
   Machine-local handles are not portable runtime evidence.
 - Markdown and existing owners only. Keep this single checkpoint for pushed
