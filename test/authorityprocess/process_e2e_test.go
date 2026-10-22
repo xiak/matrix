@@ -48,7 +48,6 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
-	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 	localcontaineradapter "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
@@ -91,10 +90,10 @@ const (
 	managedMySQLImageIDEnv         = "MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID"
 	managedElasticsearchImageIDEnv = "MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID"
 	managedRabbitMQImageIDEnv      = "MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID"
-	// Windows development hosts run the production Linux worker through this
-	// fixed local Docker CLI image so its Linux-only host-storage observation is
-	// not replaced by a synthetic execution profile.
-	managedDockerCLIImageID = "sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
+	// Match the published PaaS client environment on every host. Resolve this
+	// manifest reference to the local image ID; classic and containerd stores
+	// need not expose the manifest digest as their runtime image ID.
+	managedDockerCLIReference = "docker:27.5.1-dind-alpine3.21@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
 	// The real managed-service worker shares the PaaS worker database role with
 	// the audit dispatcher but owns a separate bounded connection pool. Keep a
 	// distinct application identity so the process gate proves both pools
@@ -167,6 +166,75 @@ func TestReservedProcessAddressesStayDistinct(t *testing.T) {
 		t.Fatalf("released authority process address remained unavailable: %v", err)
 	}
 	_ = listener.Close()
+}
+
+func TestManagedProductWorkerConnectionPreservesRestrictedIdentity(t *testing.T) {
+	admin, err := pgx.ParseConfig("postgres://migration:admin-only@127.0.0.1:55432/matrix_authority_process_worker?sslmode=disable")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dsn := runtimeDSNWithApplication(t, admin, paasWorkerLogin, "runtime-&?#-password", managedProductWorkerApplicationName)
+	for _, platform := range []string{"linux", "windows"} {
+		t.Run(platform, func(t *testing.T) {
+			translated, listen, arguments, err := managedProductWorkerConnection(platform, dsn, "127.0.0.1:51421")
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, err := pgxpool.ParseConfig(translated)
+			if err != nil || config.ConnConfig.User != paasWorkerLogin || config.ConnConfig.Password != "runtime-&?#-password" ||
+				config.ConnConfig.Database != admin.Database || config.ConnConfig.Port != admin.Port || config.MaxConns != 2 ||
+				config.ConnConfig.RuntimeParams["application_name"] != managedProductWorkerApplicationName {
+				t.Fatal("worker translation changed its restricted identity or bounded pool")
+			}
+			options := make(map[string]string)
+			for i := 0; i < len(arguments); i += 2 {
+				options[arguments[i]] = arguments[i+1]
+			}
+			if platform == "linux" {
+				if translated != dsn || listen != "127.0.0.1:51421" || options["--network"] != "host" ||
+					options["--publish"] != "" || options["--add-host"] != "" {
+					t.Fatal("Linux worker lost the original loopback connection boundary")
+				}
+			} else if config.ConnConfig.Host != "host.docker.internal" || listen != "0.0.0.0:8080" ||
+				options["--publish"] != "127.0.0.1:51421:8080/tcp" || options["--add-host"] != "host.docker.internal:host-gateway" ||
+				options["--network"] != "" {
+				t.Fatal("Desktop worker lost the isolated gateway/loopback publication boundary")
+			}
+		})
+	}
+	for _, invalid := range []struct{ platform, dsn, listen string }{
+		{"darwin", dsn, "127.0.0.1:51421"},
+		{"linux", strings.Replace(dsn, "127.0.0.1", "192.0.2.1", 1), "127.0.0.1:51421"},
+		{"windows", dsn, "0.0.0.0:51421"},
+		{"linux", dsn, "127.0.0.1:0"},
+		{"linux", dsn, "127.0.0.1:65536"},
+		{"linux", "invalid", "127.0.0.1:51421"},
+	} {
+		if _, _, _, err := managedProductWorkerConnection(invalid.platform, invalid.dsn, invalid.listen); err == nil {
+			t.Fatal("invalid worker connection scope was accepted")
+		}
+	}
+}
+
+func TestManagedWorkerImageRequiresResolvedLinuxAMD64Identity(t *testing.T) {
+	// A classic store's config ID can differ from the pinned source manifest.
+	imageID := "sha256:" + strings.Repeat("b", 64)
+	content := []byte(`{"Id":"` + imageID + `","Os":"linux","Architecture":"amd64"}`)
+	if actual, err := managedWorkerImageID(content); err != nil || actual != imageID {
+		t.Fatal("resolved image identity was replaced by the source manifest digest")
+	}
+	for _, invalid := range []string{
+		strings.Replace(string(content), "linux", "windows", 1),
+		strings.Replace(string(content), "amd64", "arm64", 1),
+		strings.Replace(string(content), imageID, "docker:latest", 1),
+		strings.Replace(string(content), imageID, "sha256:"+strings.Repeat("g", 64), 1),
+		strings.Replace(string(content), imageID, "sha256:"+strings.Repeat("b", 63), 1),
+		`{}`, `[]`, string(content) + `{}`,
+	} {
+		if _, err := managedWorkerImageID([]byte(invalid)); err == nil {
+			t.Fatal("invalid worker image identity or platform was accepted")
+		}
+	}
 }
 
 func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
@@ -584,17 +652,6 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"paas-worker-dsn",
 		[]byte(runtimeDSN(t, adminConfig, paasWorkerLogin, processDBPassword)),
 	)
-	managedPaasWorkerDSNPath := ""
-	if mode == authorityProcessBrowser || mode == authorityProcessCommandRecoveryBrowser || mode == authorityProcessManagedProducts {
-		managedPaasWorkerDSNPath = writeProtectedFile(
-			t,
-			temporary,
-			"paas-managed-service-worker-dsn",
-			[]byte(runtimeDSNWithApplication(
-				t, adminConfig, paasWorkerLogin, processDBPassword, managedProductWorkerApplicationName,
-			)),
-		)
-	}
 	auditCredentialPath := writeProtectedFile(
 		t,
 		temporary,
@@ -826,7 +883,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	managedRuntime := managedProductRuntime{}
 	if mode == authorityProcessBrowser || mode == authorityProcessCommandRecoveryBrowser || mode == authorityProcessManagedProducts {
 		managedRuntime = startManagedProductWorker(
-			t, ctx, admin, adminConfig, root, temporary, managedPaasWorkerDSNPath, start, startWithArguments,
+			t, ctx, admin, adminConfig, root, temporary, startWithArguments,
 		)
 	}
 	// The source authorities now form the published release composition. Prove
@@ -2437,7 +2494,7 @@ func runManagedProductProviderProcesses(
 	projectsByID := make(map[string]string, len(products))
 	for index := range products {
 		product := &products[index]
-		defer cleanupManagedProduct(t, managedRuntime, *product)
+		defer cleanupManagedProduct(t, *product)
 		// Stop the reconciler before removing a failed product. Otherwise it can
 		// recreate the container between the product cleanup and the test-level
 		// worker cleanup, leaving an unowned runtime after the fixture exits.
@@ -3183,7 +3240,7 @@ func runIAMConsoleBrowser(
 	}
 	product := managedPostgresFixture(t, "browser", managedRuntime.images.postgres)
 	installationID := product.installationID
-	defer cleanupManagedProduct(t, managedRuntime, product)
+	defer cleanupManagedProduct(t, product)
 	defer cleanupManagedProductWorker(t, managedRuntime.workerContainer, managedRuntime.volumeName)
 	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
 	defer closeBrowser()
@@ -3295,7 +3352,7 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 		"browser-command-recovery-login")
 	base := paasEndpoint + "/managed-services/v1"
 	product := managedPostgresFixture(t, "command-recovery", managedRuntime.images.postgres)
-	defer cleanupManagedProduct(t, managedRuntime, product)
+	defer cleanupManagedProduct(t, product)
 	defer cleanupManagedProductWorker(t, managedRuntime.workerContainer, managedRuntime.volumeName)
 	definitionResponse := performJSON(t, http.MethodGet,
 		base+"/services/"+product.serviceID, ownerBearer, nil)
@@ -9596,9 +9653,9 @@ func waitForBrowserMarker(
 }
 
 type managedProductRuntime struct {
-	bindingRoot     string
 	volumeName      string
 	workerContainer string
+	workerImageID   string
 	images          managedProductImages
 }
 
@@ -9609,12 +9666,14 @@ func startManagedProductWorker(
 	adminConfig *pgx.ConnConfig,
 	root string,
 	temporary string,
-	paasWorkerDSNPath string,
-	start func(string, []string) *childProcess,
 	startWithArguments func(string, []string, ...string) *childProcess,
 ) managedProductRuntime {
 	t.Helper()
 	images := managedProductImagesFromEnvironment(t)
+	inputRoot := filepath.Join(temporary, "managed-worker-inputs")
+	if err := os.Mkdir(inputRoot, 0o700); err != nil {
+		t.Fatal("create private managed worker inputs")
+	}
 	catalogBytes, err := apphostingv1.EncodeArtifactCatalog(apphostingv1.ArtifactCatalog{
 		APIVersion: apphostingv1.ArtifactCatalogAPIVersion,
 		Kind:       apphostingv1.ArtifactCatalogKind,
@@ -9626,7 +9685,7 @@ func startManagedProductWorker(
 	if err != nil {
 		t.Fatalf("encode browser artifact catalog: %v", err)
 	}
-	catalogPath := writeProtectedFile(t, temporary, "browser-artifact-catalog.json", catalogBytes)
+	catalogPath := writeProtectedFile(t, inputRoot, "browser-artifact-catalog.json", catalogBytes)
 	clear(catalogBytes)
 	// Keep the worker port owned while its binary and runtime inputs are being
 	// prepared. The managed-products lane does enough build and Docker work
@@ -9636,54 +9695,23 @@ func startManagedProductWorker(
 	workerReservation := reserveProcessAddress(t)
 	defer workerReservation.close()
 	workerAddress := workerReservation.address
-	if runtime.GOOS == "linux" {
-		managedRoot := filepath.Join(temporary, "browser-managed-runtime")
-		bindingRoot := filepath.Join(managedRoot, "bindings")
-		secretRoot := filepath.Join(managedRoot, "secrets")
-		for _, directory := range []string{bindingRoot, secretRoot} {
-			if err := os.MkdirAll(directory, 0o700); err != nil {
-				t.Fatalf("prepare managed-service runtime: %v", err)
-			}
-		}
-		workerBinary := buildAuthorityBinary(t, ctx, root, temporary, "matrix-paas-worker", "./app/service/paas/cmd/matrix-paas-worker")
-		workerReservation.release(t)
-		worker := start(workerBinary, managedProductWorkerEnvironment(
-			paasWorkerDSNPath, bindingRoot, secretRoot, catalogPath, workerAddress, images,
-		))
-		waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
-		assertRuntimeProcessApplicationLogin(
-			t, ctx, database, paasWorkerLogin, managedProductWorkerApplicationName, 2,
-		)
-		return managedProductRuntime{bindingRoot: bindingRoot, images: images}
-	}
-	if runtime.GOOS != "windows" {
-		t.Fatal("real managed-service browser worker requires Linux or Docker Desktop on Windows")
-	}
-	if adminConfig.Host != "127.0.0.1" && adminConfig.Host != "localhost" {
-		t.Fatal("Docker-isolated browser worker requires a loopback PostgreSQL fixture")
-	}
-	assertExactLocalImage(t, ctx, managedDockerCLIImageID)
-	workerBinary := buildAuthorityLinuxBinary(t, ctx, root, temporary, "matrix-paas-worker-linux-amd64", "./app/service/paas/cmd/matrix-paas-worker")
-	containerDSNURL, parseErr := url.Parse(runtimeDSNWithApplication(
+	containerDSN, containerAddress, networkArguments, connectionErr := managedProductWorkerConnection(runtime.GOOS, runtimeDSNWithApplication(
 		t, adminConfig, paasWorkerLogin, processDBPassword, managedProductWorkerApplicationName,
-	))
-	if parseErr != nil {
-		t.Fatal("parse managed-service worker database URL")
+	), workerAddress)
+	if connectionErr != nil {
+		t.Fatal(connectionErr)
 	}
-	// Preserve the bounded pool and stable application_name used by the
-	// independent runtime-login gate. Only translate the loopback host across
-	// the Docker Desktop boundary; the role, database and remaining connection
-	// contract stay identical to the native process path.
-	containerDSNURL.Host = net.JoinHostPort("host.docker.internal", strconv.Itoa(int(adminConfig.Port)))
-	containerDSN := containerDSNURL.String()
-	containerDSNPath := writeProtectedFile(t, temporary, "browser-paas-worker-container-dsn", []byte(containerDSN))
+	workerImageID := resolveManagedWorkerImage(t, ctx)
+	workerBinary := buildAuthorityLinuxBinary(t, ctx, root, inputRoot, "matrix-paas-worker-linux-amd64", "./app/service/paas/cmd/matrix-paas-worker")
+	containerDSNPath := writeProtectedFile(t, inputRoot, "browser-paas-worker-container-dsn", []byte(containerDSN))
 	volumeName := "matrix-iam-managed-products-runtime-" + newManagedHexSuffix(t)
-	volume := exec.CommandContext(ctx, "docker", "volume", "create", "--label", "matrix.task=iam-managed-products-worker", volumeName)
+	workerContainer := "matrix-iam-managed-products-worker-" + newManagedHexSuffix(t)
+	volume := exec.CommandContext(ctx, "docker", "volume", "create", "--label", "matrix.task=iam-managed-products-worker",
+		"--label", "matrix.fixture="+workerContainer, volumeName)
 	createdVolume, volumeErr := volume.Output()
 	if volumeErr != nil || strings.TrimSpace(string(createdVolume)) != volumeName {
 		t.Fatal("create owned managed-service volume")
 	}
-	workerContainer := "matrix-iam-managed-products-worker-" + newManagedHexSuffix(t)
 	t.Cleanup(func() { cleanupManagedProductWorker(t, workerContainer, volumeName) })
 	mountpointCommand := exec.CommandContext(ctx, "docker", "volume", "inspect", "--format", "{{.Mountpoint}}", volumeName)
 	mountpointBytes, mountpointErr := mountpointCommand.Output()
@@ -9693,49 +9721,188 @@ func startManagedProductWorker(
 	}
 	bindingRoot := mountpoint + "/bindings"
 	secretRoot := mountpoint + "/secrets"
-	_, workerPort, splitErr := net.SplitHostPort(workerAddress)
-	if splitErr != nil {
-		t.Fatal("parse managed-service worker address")
-	}
 	containerDSNFile := "/run/matrix/paas-worker-dsn"
 	containerCatalogFile := "/run/matrix/artifact-catalog.json"
 	containerWorker := "/run/matrix/matrix-paas-worker"
 	workerEnvironment := managedProductWorkerEnvironment(
-		containerDSNFile, bindingRoot, secretRoot, containerCatalogFile, "0.0.0.0:8080", images,
+		containerDSNFile, bindingRoot, secretRoot, containerCatalogFile, containerAddress, images,
 	)
 	arguments := []string{
-		"run", "--rm", "--name", workerContainer,
+		"create", "--name", workerContainer,
 		"--label", "matrix.task=iam-managed-products-worker",
+		"--label", "matrix.fixture=" + workerContainer,
 		"--cpus", "2", "--memory", "512m", "--memory-swap", "512m", "--pids-limit", "128",
-		"--add-host", "host.docker.internal:host-gateway",
-		"--publish", "127.0.0.1:" + workerPort + ":8080/tcp",
 		"--mount", "type=bind,source=/var/run/docker.sock,target=/var/run/docker.sock",
-		"--mount", "type=bind,source=" + temporary + ",target=/fixture,readonly",
 		"--mount", "type=volume,source=" + volumeName + ",target=" + mountpoint,
 		"--tmpfs", "/run/matrix:rw,exec,nosuid,nodev,size=64m,mode=0700",
 		"--security-opt", "no-new-privileges:true", "--cap-drop", "ALL",
 	}
+	arguments = append(arguments, networkArguments...)
 	for _, entry := range workerEnvironment {
 		arguments = append(arguments, "--env", entry)
 	}
 	script := "set -eu; " +
+		"test \"$(stat -c %u:%g /tmp/fixture)\" = 0:0; chmod 700 /tmp/fixture; " +
 		"mkdir -p \"$MATRIX_PAAS_WORKER_BINDING_ROOT\" \"$MATRIX_PAAS_WORKER_SECRET_ROOT\"; " +
 		"chmod 700 \"$MATRIX_PAAS_WORKER_BINDING_ROOT\" \"$MATRIX_PAAS_WORKER_SECRET_ROOT\"; " +
-		"cp /fixture/" + filepath.Base(workerBinary) + " " + containerWorker + "; " +
-		"cp /fixture/" + filepath.Base(containerDSNPath) + " " + containerDSNFile + "; " +
-		"cp /fixture/" + filepath.Base(catalogPath) + " " + containerCatalogFile + "; " +
+		"cp /tmp/fixture/" + filepath.Base(workerBinary) + " " + containerWorker + "; " +
+		"cp /tmp/fixture/" + filepath.Base(containerDSNPath) + " " + containerDSNFile + "; " +
+		"cp /tmp/fixture/" + filepath.Base(catalogPath) + " " + containerCatalogFile + "; " +
 		"chmod 700 " + containerWorker + "; chmod 600 " + containerDSNFile + " " + containerCatalogFile + "; " +
+		"rm /tmp/fixture/" + filepath.Base(workerBinary) + " /tmp/fixture/" + filepath.Base(containerDSNPath) + " /tmp/fixture/" + filepath.Base(catalogPath) + "; rmdir /tmp/fixture; " +
 		"exec " + containerWorker
-	arguments = append(arguments, "--entrypoint", "sh", managedDockerCLIImageID, "-c", script)
+	arguments = append(arguments, "--entrypoint", "sh", workerImageID, "-c", script)
+	// docker cp deliberately uses its default root ownership, not archive mode.
+	// A cap-drop=ALL root cannot read the Linux runner's uid-owned 0600 bind
+	// mount. Stage only these three inputs, preserving private modes and never
+	// mounting the test's other authority secrets or changing host permissions.
+	if _, err := exec.CommandContext(ctx, "docker", arguments...).Output(); err != nil {
+		t.Fatal("create bounded managed worker container")
+	}
+	if err := exec.CommandContext(ctx, "docker", "cp", inputRoot, workerContainer+":/tmp/fixture").Run(); err != nil {
+		t.Fatal("copy private managed worker inputs")
+	}
 	workerReservation.release(t)
-	worker := startWithArguments("docker", nil, arguments...)
+	worker := startWithArguments("docker", nil, "start", "--attach", workerContainer)
 	waitHTTPStatus(t, ctx, worker, "http://"+workerAddress+"/ready", http.StatusOK)
+	assertManagedWorkerContainer(t, ctx, workerContainer, workerImageID, volumeName, mountpoint, workerAddress, containerAddress)
 	assertRuntimeProcessApplicationLogin(
 		t, ctx, database, paasWorkerLogin, managedProductWorkerApplicationName, 2,
 	)
+	t.Logf("managed-product worker verified pinned linux/amd64 client image=%s; bounded container, private inputs and restricted database identity", workerImageID)
 	return managedProductRuntime{
-		bindingRoot: bindingRoot, volumeName: volumeName,
-		workerContainer: workerContainer, images: images,
+		volumeName: volumeName, workerContainer: workerContainer,
+		workerImageID: workerImageID, images: images,
+	}
+}
+
+// The Linux container shares the fixture host's network, not a new Engine.
+// Desktop needs only the original gateway translation and loopback publication.
+// Neither path changes the database identity, bounded pool or application_name.
+func managedProductWorkerConnection(platform, dsn, workerAddress string) (string, string, []string, error) {
+	databaseURL, err := url.Parse(dsn)
+	if err != nil || databaseURL == nil || (databaseURL.Scheme != "postgres" && databaseURL.Scheme != "postgresql") ||
+		(databaseURL.Hostname() != "127.0.0.1" && databaseURL.Hostname() != "localhost") || databaseURL.Port() == "" {
+		return "", "", nil, errors.New("managed worker requires the loopback PostgreSQL fixture")
+	}
+	host, port, err := net.SplitHostPort(workerAddress)
+	portNumber, portErr := strconv.Atoi(port)
+	if err != nil || host != "127.0.0.1" || portErr != nil || portNumber < 1 || portNumber > 65535 {
+		return "", "", nil, errors.New("managed worker requires a reserved loopback endpoint")
+	}
+	switch platform {
+	case "linux":
+		return dsn, workerAddress, []string{"--network", "host"}, nil
+	case "windows":
+		databaseURL.Host = net.JoinHostPort("host.docker.internal", databaseURL.Port())
+		return databaseURL.String(), "0.0.0.0:8080", []string{
+			"--add-host", "host.docker.internal:host-gateway", "--publish", "127.0.0.1:" + port + ":8080/tcp",
+		}, nil
+	default:
+		return "", "", nil, errors.New("managed worker requires Linux or Docker Desktop on Windows")
+	}
+}
+
+func resolveManagedWorkerImage(t *testing.T, ctx context.Context) string {
+	t.Helper()
+	command := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{json .}}", managedDockerCLIReference)
+	content, err := command.Output()
+	if err != nil {
+		t.Fatal("fixed managed worker client image is not loaded")
+	}
+	imageID, err := managedWorkerImageID(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return imageID
+}
+
+func managedWorkerImageID(content []byte) (string, error) {
+	var image struct{ ID, OS, Architecture string }
+	if json.Unmarshal(content, &image) != nil || image.OS != "linux" || image.Architecture != "amd64" ||
+		!strings.HasPrefix(image.ID, "sha256:") {
+		return "", errors.New("managed worker image platform or identity is invalid")
+	}
+	digest, err := hex.DecodeString(strings.TrimPrefix(image.ID, "sha256:"))
+	if err != nil || len(digest) != sha256.Size || image.ID != strings.ToLower(image.ID) {
+		return "", errors.New("managed worker image identity is invalid")
+	}
+	return image.ID, nil
+}
+
+func assertManagedWorkerContainer(t *testing.T, ctx context.Context, name, imageID, volumeName, mountpoint, hostAddress, listen string) {
+	t.Helper()
+	var container struct {
+		Image  string
+		Config struct {
+			Entrypoint []string
+			Env        []string
+			Labels     map[string]string
+		}
+		HostConfig struct {
+			NanoCPUs, Memory, MemorySwap, PidsLimit int64
+			Privileged                              bool
+			NetworkMode                             string
+			CapDrop, SecurityOpt                    []string
+			PortBindings                            map[string][]struct{ HostIP, HostPort string }
+		}
+		Mounts []struct {
+			Type, Name, Source, Destination string
+			RW                              bool
+		}
+	}
+	content, err := exec.CommandContext(ctx, "docker", "container", "inspect", "--format", "{{json .}}", name).Output()
+	if err != nil || json.Unmarshal(content, &container) != nil || container.Image != imageID ||
+		container.Config.Labels["matrix.task"] != "iam-managed-products-worker" ||
+		container.Config.Labels["matrix.fixture"] != name ||
+		!slices.Equal(container.Config.Entrypoint, []string{"sh"}) ||
+		container.HostConfig.NanoCPUs != 2_000_000_000 || container.HostConfig.Memory != 512<<20 ||
+		container.HostConfig.MemorySwap != 512<<20 || container.HostConfig.PidsLimit != 128 ||
+		container.HostConfig.Privileged || !slices.Contains(container.HostConfig.CapDrop, "ALL") ||
+		!slices.Contains(container.HostConfig.SecurityOpt, "no-new-privileges:true") ||
+		!slices.Contains(container.Config.Env, "GOMAXPROCS=2") || !slices.Contains(container.Config.Env, "GOMEMLIMIT=512MiB") ||
+		!slices.Contains(container.Config.Env, "MATRIX_PAAS_WORKER_LISTEN_ADDRESS="+listen) {
+		t.Fatal("real managed worker image or runtime limits differ from the bounded fixture")
+	}
+	if (runtime.GOOS == "linux") != (container.HostConfig.NetworkMode == "host") {
+		t.Fatal("managed worker used the wrong host connection boundary")
+	}
+	if runtime.GOOS == "linux" {
+		if len(container.HostConfig.PortBindings) != 0 || listen != hostAddress {
+			t.Fatal("Linux worker did not retain its exact loopback listener")
+		}
+	} else {
+		bindings := container.HostConfig.PortBindings["8080/tcp"]
+		if len(container.HostConfig.PortBindings) != 1 || len(bindings) != 1 || bindings[0].HostIP != "127.0.0.1" ||
+			net.JoinHostPort(bindings[0].HostIP, bindings[0].HostPort) != hostAddress {
+			t.Fatal("Desktop worker did not retain its exact loopback publication")
+		}
+	}
+	var socketOK, volumeOK bool
+	for _, mount := range container.Mounts {
+		switch mount.Destination {
+		case "/var/run/docker.sock":
+			socketOK = mount.Type == "bind" && mount.Source == "/var/run/docker.sock"
+		case mountpoint:
+			volumeOK = mount.Type == "volume" && mount.Name == volumeName && mount.Source == mountpoint && mount.RW
+		default:
+			if mount.Type == "bind" || mount.Type == "volume" {
+				t.Fatal("managed worker exposes an unexpected host directory or volume")
+			}
+		}
+	}
+	if !socketOK || !volumeOK {
+		t.Fatal("managed worker did not retain the original Engine and physical volume boundary")
+	}
+	// Verify real protected copies, without returning their bytes or modes to logs.
+	check := `test ! -e /tmp/fixture && test "$(stat -c %a /run/matrix)" = 700 && ` +
+		`test "$(stat -c %a /run/matrix/matrix-paas-worker)" = 700 && ` +
+		`test "$(stat -c %a /run/matrix/paas-worker-dsn)" = 600 && ` +
+		`test "$(stat -c %a /run/matrix/artifact-catalog.json)" = 600 && ` +
+		`test "$(stat -c %a "$MATRIX_PAAS_WORKER_BINDING_ROOT")" = 700 && ` +
+		`test "$(stat -c %a "$MATRIX_PAAS_WORKER_SECRET_ROOT")" = 700`
+	if err := exec.CommandContext(ctx, "docker", "exec", name, "sh", "-c", check).Run(); err != nil {
+		t.Fatal("managed worker protected runtime files are not private")
 	}
 }
 
@@ -9748,6 +9915,8 @@ func managedProductWorkerEnvironment(
 	images managedProductImages,
 ) []string {
 	return []string{
+		"GOMAXPROCS=2",
+		"GOMEMLIMIT=512MiB",
 		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE=" + dsnPath,
 		"MATRIX_PAAS_WORKER_ID=paas-worker-browser-resource",
 		"MATRIX_PAAS_WORKER_BINDING_REF=compose-browser-v1",
@@ -9921,13 +10090,7 @@ func assertManagedProductRuntime(
 	if !strings.HasPrefix(project, "matrix-") || len(decodedProject) != 12 || decodeErr != nil || filepath.Base(project) != project {
 		t.Fatalf("%s runtime has an invalid owned project identity", product.name)
 	}
-	var password []byte
-	var readErr error
-	if managedRuntime.volumeName == "" {
-		password, readErr = os.ReadFile(filepath.Join(managedRuntime.bindingRoot, product.runtimeDirectory, project, product.credentialFile))
-	} else {
-		password, readErr = readManagedProductCredential(ctx, managedRuntime.volumeName, product, project)
-	}
+	password, readErr := readManagedProductCredential(ctx, managedRuntime, product, project)
 	if readErr != nil || len(password) < 32 || len(password) > 256 {
 		clear(password)
 		t.Fatalf("%s protected credential is unavailable", product.name)
@@ -9969,24 +10132,18 @@ func assertManagedProductDeleted(
 	if err != nil || len(strings.Fields(string(networkContent))) != 0 {
 		t.Fatalf("terminated %s still has an owned network", product.name)
 	}
-	if managedRuntime.volumeName == "" {
-		directory := filepath.Join(managedRuntime.bindingRoot, product.runtimeDirectory, project)
-		if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("terminated %s data or credentials remain", product.name)
-		}
-	} else {
-		path := "/runtime/bindings/" + product.runtimeDirectory + "/" + project
-		command := exec.CommandContext(ctx, "docker", "run", "--rm",
-			"--label", "matrix.task=iam-managed-product-deletion-check",
-			"--network", "none", "--read-only", "--cpus", "0.25",
-			"--memory", "64m", "--memory-swap", "64m", "--pids-limit", "32",
-			"--security-opt", "no-new-privileges:true", "--cap-drop", "ALL",
-			"--mount", "type=volume,source="+managedRuntime.volumeName+",target=/runtime,readonly",
-			"--entrypoint", "sh", managedDockerCLIImageID,
-			"-c", `test ! -e "$1"`, "sh", path)
-		if err := command.Run(); err != nil {
-			t.Fatalf("terminated %s data or credentials remain", product.name)
-		}
+	path := "/runtime/bindings/" + product.runtimeDirectory + "/" + project
+	command := exec.CommandContext(ctx, "docker", "run", "--rm",
+		"--label", "matrix.task=iam-managed-product-deletion-check",
+		"--label", "matrix.fixture="+managedRuntime.workerContainer,
+		"--network", "none", "--read-only", "--cpus", "0.25",
+		"--memory", "64m", "--memory-swap", "64m", "--pids-limit", "32",
+		"--security-opt", "no-new-privileges:true", "--cap-drop", "ALL",
+		"--mount", "type=volume,source="+managedRuntime.volumeName+",target=/runtime,readonly",
+		"--entrypoint", "sh", managedRuntime.workerImageID,
+		"-c", `test ! -e "$1"`, "sh", path)
+	if err := command.Run(); err != nil {
+		t.Fatalf("terminated %s data or credentials remain", product.name)
 	}
 	address := endpoint
 	if parsed, parseErr := url.Parse(endpoint); parseErr == nil && parsed.Host != "" {
@@ -10181,18 +10338,19 @@ func assertManagedRabbitMQAMQP(
 
 func readManagedProductCredential(
 	ctx context.Context,
-	volumeName string,
+	managedRuntime managedProductRuntime,
 	product managedProductFixture,
 	project string,
 ) ([]byte, error) {
 	path := "/runtime/bindings/" + product.runtimeDirectory + "/" + project + "/" + product.credentialFile
 	command := exec.CommandContext(ctx, "docker", "run", "--rm",
 		"--label", "matrix.task=iam-managed-product-credential-read",
+		"--label", "matrix.fixture="+managedRuntime.workerContainer,
 		"--network", "none", "--read-only", "--cpus", "0.25",
 		"--memory", "64m", "--memory-swap", "64m", "--pids-limit", "32",
 		"--security-opt", "no-new-privileges:true", "--cap-drop", "ALL",
-		"--mount", "type=volume,source="+volumeName+",target=/runtime,readonly",
-		"--entrypoint", "cat", managedDockerCLIImageID, path)
+		"--mount", "type=volume,source="+managedRuntime.volumeName+",target=/runtime,readonly",
+		"--entrypoint", "cat", managedRuntime.workerImageID, path)
 	content, err := command.Output()
 	if err != nil {
 		clear(content)
@@ -10306,7 +10464,7 @@ func assertManagedProductAudit(t *testing.T, auditEndpoint string, bearer string
 	}
 }
 
-func cleanupManagedProduct(t *testing.T, managedRuntime managedProductRuntime, product managedProductFixture) {
+func cleanupManagedProduct(t *testing.T, product managedProductFixture) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -10347,24 +10505,6 @@ func cleanupManagedProduct(t *testing.T, managedRuntime managedProductRuntime, p
 				t.Errorf("remove owned managed-product network")
 			}
 		}
-		if managedRuntime.volumeName == "" {
-			directory := filepath.Join(managedRuntime.bindingRoot, product.runtimeDirectory, project)
-			if info, statErr := os.Lstat(directory); statErr == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-				runtimeProject := composeadapter.RuntimeProject{
-					Name: project, Directory: directory,
-					EffectDocument:      filepath.Join(directory, "compose.json"),
-					ObservationDocument: filepath.Join(directory, "observe.json"),
-					TimeoutSeconds:      120,
-				}
-				if purgeErr := composeadapter.NewLocalRuntime().PurgeData(ctx, runtimeProject, product.imageID); purgeErr != nil {
-					t.Errorf("purge owned managed-product data")
-					continue
-				}
-				if removeErr := os.RemoveAll(directory); removeErr != nil {
-					t.Errorf("remove owned managed-product directory")
-				}
-			}
-		}
 	}
 }
 
@@ -10386,9 +10526,9 @@ func cleanupManagedProductWorker(t *testing.T, containerName string, volumeName 
 	}
 	if len(identities) == 1 {
 		inspect := exec.CommandContext(ctx, "docker", "container", "inspect", "--format",
-			`{{index .Config.Labels "matrix.task"}}`, identities[0])
+			`{{index .Config.Labels "matrix.task"}} {{index .Config.Labels "matrix.fixture"}}`, identities[0])
 		label, inspectErr := inspect.Output()
-		if inspectErr != nil || strings.TrimSpace(string(label)) != "iam-managed-products-worker" {
+		if inspectErr != nil || strings.TrimSpace(string(label)) != "iam-managed-products-worker "+containerName {
 			t.Errorf("managed-service worker ownership is invalid")
 			return
 		}
@@ -10397,13 +10537,28 @@ func cleanupManagedProductWorker(t *testing.T, containerName string, volumeName 
 			return
 		}
 	}
-	inspectVolume := exec.CommandContext(ctx, "docker", "volume", "inspect", "--format",
-		`{{index .Labels "matrix.task"}}`, volumeName)
-	volumeLabel, volumeErr := inspectVolume.Output()
-	if volumeErr != nil {
+	listedVolumes, listErr := exec.CommandContext(ctx, "docker", "volume", "ls", "--filter", "name="+volumeName,
+		"--format", "{{.Name}}").Output()
+	if listErr != nil {
+		t.Errorf("list owned managed-service volume")
 		return
 	}
-	if strings.TrimSpace(string(volumeLabel)) != "iam-managed-products-worker" {
+	volumeNames := strings.Fields(string(listedVolumes))
+	if len(volumeNames) == 0 {
+		return // Idempotent cleanup, not a swallowed inspect/daemon failure.
+	}
+	if len(volumeNames) != 1 || volumeNames[0] != volumeName {
+		t.Errorf("managed-service volume identity is ambiguous")
+		return
+	}
+	inspectVolume := exec.CommandContext(ctx, "docker", "volume", "inspect", "--format",
+		`{{index .Labels "matrix.task"}} {{index .Labels "matrix.fixture"}}`, volumeName)
+	volumeLabel, volumeErr := inspectVolume.Output()
+	if volumeErr != nil {
+		t.Errorf("inspect owned managed-service volume")
+		return
+	}
+	if strings.TrimSpace(string(volumeLabel)) != "iam-managed-products-worker "+containerName {
 		t.Errorf("managed-service volume ownership is invalid")
 		return
 	}
@@ -12126,15 +12281,6 @@ func buildAuthorityLinuxBinary(t *testing.T, ctx context.Context, root, temporar
 		t.Fatalf("build Linux %s: %v\n%s", name, err, output)
 	}
 	return path
-}
-
-func assertExactLocalImage(t *testing.T, ctx context.Context, imageID string) {
-	t.Helper()
-	command := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", imageID)
-	content, err := command.Output()
-	if err != nil || strings.TrimSpace(string(content)) != imageID {
-		t.Fatalf("fixed local image %s is unavailable", imageID)
-	}
 }
 
 type childProcess struct {
