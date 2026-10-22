@@ -1684,7 +1684,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
         const user = exactUsers.users.get(userId);
         if (!owns() || !user || user.id === scene.accountOwner.id || user.id === principalId || !user.canDelete ||
             user.accountId !== tenantId || user.resourceVersion !== command.resourceVersion || user.loginName !== command.expectedLoginName) {
-          return Promise.reject(new HttpProblem(409, "STALE_USER_DELETION_OWNER"));
+          throw new UserDeletionRejected("conflict");
         }
         const recovery = userDeletionRecoveryRef.current;
         if (currentUserDeletionRecoveryOwner.current !== userDeletionRecoveryOwner || recovery?.owner !== userDeletionRecoveryOwner ||

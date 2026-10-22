@@ -6,7 +6,7 @@ import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
-import { AccountAccessProvider, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent, type UserManagementClient } from "../application/AccountAccessProvider";
+import { AccountAccessProvider, UserDeletionRejected, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent, type UserManagementClient } from "../application/AccountAccessProvider";
 import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyAccess, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserDeletion, UserDeletionIntent, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AccountLifecycleCompletion, AccountLifecycleIntent, UserManagementIntent, UserManagementCompletion } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
@@ -226,6 +226,38 @@ async function openDirectoryGuard(repository: AccountRepository, view: AccountAc
     <DirectoryGuardProbe view={view} />
   </AccountAccessProvider></SessionProvider></LocaleProvider>);
   await user.click(screen.getByRole("button", { name: "login-directory-probe" }));
+  return user;
+}
+
+function UserDeletionPreflightProbe({ target }: { target: User }) {
+  const session = useSession();
+  const access = useAccountAccess();
+  const [exactReady, setExactReady] = useState(false);
+  const [result, setResult] = useState("");
+  return <>
+    <button onClick={() => void session.login("admin", "password")}>login-deletion-preflight-probe</button>
+    <button disabled={!access.userDeletion} onClick={() => void access.loadUser(target.id).then(() => setExactReady(true), () => setExactReady(false))}>read-deletion-target</button>
+    <button disabled={!exactReady || !access.userDeletion} onClick={() => {
+      const client = access.userDeletion;
+      if (!client) { setResult("unavailable"); return; }
+      void client.delete(target.id, {
+        resourceVersion: target.resourceVersion + 1,
+        requestId: `ui-user-delete-${"b".repeat(32)}`,
+        expectedLoginName: target.loginName
+      }).then(() => setResult("applied"), (failure: unknown) => {
+        setResult(failure instanceof UserDeletionRejected ? failure.reason : "unknown");
+      });
+    }}>attempt-stale-deletion</button>
+    <output aria-label="stale-deletion-result">{result}</output>
+  </>;
+}
+
+async function openUserDeletionPreflight(repository: AccountRepository, target: User) {
+  const user = userEvent.setup({ delay: null });
+  render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}>
+    <UserDeletionPreflightProbe target={target} />
+  </AccountAccessProvider></SessionProvider></LocaleProvider>);
+  await user.click(screen.getByRole("button", { name: "login-deletion-preflight-probe" }));
   return user;
 }
 
@@ -2850,6 +2882,25 @@ describe("account access", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "查询原请求结果" }).hasAttribute("disabled")).toBe(false));
     expect(screen.queryByRole("button", { name: "登录控制台" })).toBeNull(); expect(next.userManagement!.submit).not.toHaveBeenCalled(); expect(next.userManagement!.readCompletion).not.toHaveBeenCalled();
     expect(readUserManagementIntent(sessionStorage, intent)).toEqual(intent);
+  });
+
+  it("rejects a stale local deletion target as conflict before persistence or dispatch", async () => {
+    const disabledUser: User = { ...childUser, status: "DISABLED", resourceVersion: 5 };
+    const disabled: UserAccess = { user: disabledUser, policyAttachments: [], capabilities: userCapabilities(disabledUser) };
+    const deleteUser = vi.fn();
+    const repository = accounts({
+      listUsers: vi.fn().mockResolvedValue({ items: [disabled], nextAfter: null }),
+      getUser: vi.fn().mockResolvedValue(structuredClone(disabled)),
+      deleteUser
+    });
+    const user = await openUserDeletionPreflight(repository, disabledUser);
+    await waitFor(() => expect(screen.getByRole("button", { name: "read-deletion-target" })).toHaveProperty("disabled", false));
+    await user.click(screen.getByRole("button", { name: "read-deletion-target" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "attempt-stale-deletion" })).toHaveProperty("disabled", false));
+    await user.click(screen.getByRole("button", { name: "attempt-stale-deletion" }));
+    await waitFor(() => expect(screen.getByLabelText("stale-deletion-result").textContent).toBe("conflict"));
+    expect(deleteUser).not.toHaveBeenCalled();
+    expect(readUserDeletionIntents(sessionStorage, { accountId: account.id, actorPrincipalId: rootUser.id })).toEqual([]);
   });
 
   it("requires disablement and typed confirmation before irreversible live deletion", async () => {
