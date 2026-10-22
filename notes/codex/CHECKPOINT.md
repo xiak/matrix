@@ -6,7 +6,7 @@
 
 - Repository https://github.com/xiak/matrix.git, branch `feat/iam`; repository-local
   identity `Xiak <Jellal@aliyun.com>`.
-- Active, incomplete bounded goal: AccessKey and same-account Role real-console
+- Incomplete bounded goal: AccessKey and same-account Role real-console
   closure, necessary fixes, independent verification and cleanup of unused own
   resources. The host goal is authoritative. Do not reopen the accepted
   permission-aware work or mark the overall IAM matrix complete.
@@ -16,9 +16,12 @@
   not exact kernel/CLI timings or a fix. Default Windows race/architecture/vet
   and the bounded Linux child-process test passed. The unchanged real Docker
   probe also passed locally, which is non-reproduction, not CI acceptance.
-  Verification39711834716 attempt1 was confirmed in_progress at the milestone:
-  https://github.com/xiak/matrix/actions/runs/39711834716 . Recheck its terminal
-  state through the existing Test Expert; do not infer success from this note.
+  Verification39711834716 attempt1 is CLOSED FAILURE: nineteen jobs audited,
+  seventeen successful, managed-products and its aggregate failed. The same
+  Engine probe timeout remains; the new Start/Wait observations span about
+  3.021 seconds but do not identify the underlying cause. IAM/011 owns details:
+  https://github.com/xiak/matrix/actions/runs/39711834716 . Do not refetch closed
+  logs or blindly rerun this attempt.
 - Prior test candidate `958d5b46649abc3dac2936892bb323005af97bde` fixes the Role
   observer's exact application detail and natural-expiry boundary. Its complete
   Verification39646488455 attempt1 is CLOSED FAILURE: managed-products worker
@@ -47,9 +50,16 @@
 - K2 SET_STATUS, NETWORK and DELETE have separate actual browser/process/PG18
   response-loss, exact replay, independent readback and Audit proof in010.
   API-prepared Keys do not prove normal UI creation or one-time Secret display.
-- K1 normal lifecycle is not accepted. The existing opt-in fixture starts from
-  no Keys; page writes and real signing prove overlap, disable/enable/delete,
-  quota release and replacement. Secrets stay in bounded process memory only.
+- K1 normal lifecycle is accepted on clean fixed113a2299, code08e0d76 and
+  embeddede22. The original UX executor completed all seven confirmed page
+  writes; fresh PG18, real IAM/Audit/PaaS and dispatchers passed727.31 seconds
+  (race package730.876, exit0). Real signing proves overlap, disable/enable,
+  deletion, quota release and replacement; seven exact facts and full chain
+  passed. IAM/010 owns the page observations and stage table. Secrets remained
+  one-time UI/test-memory material. This does not accept R1/R2 or the failed CI.
+  All new child processes, listeners and DB clients ended; the exact new PG
+  container/network and synthetic data were removed. Only empty task directories
+  were blocked from deletion; older denied residues were not retried.
 - R1 creation/trust/boundary/attachment/assume plus exact RoleSession revocation
   has a ready opt-in fixture but no actual page acceptance. Positive business
   reads, boundary denial, surviving sibling, exact effects and Audit are required.
@@ -74,9 +84,12 @@
   require action-time confirmation for Key/permission writes; a fully enumerated,
   continuous bounded flow can combine confirmation only within its actual rules.
   Do not substitute another executor/API to evade them, transfer old confirmation
-  to a new fixture or launch another heavy fixture merely to idle.
+  to a new fixture or launch another heavy fixture merely to idle. K1's approved
+  seven operations are now fully consumed and its fresh URL is closed; that
+  approval is not a Role or a later Key-fixture approval.
 - Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999. Keep the one existing monitor,
-  no new chat/agent/duplicate monitor. It is tracking fixed08e0d76, not rerunning958.
+  no new chat/agent/duplicate monitor. Fixed08e0d76 is audited failure, not a
+  passing candidate; its closed evidence is not a request to rerun958 or08.
   Prioritize exact-SHA required-job outcomes and affected roots; distinguish
   checked evidence from unreviewed detail instead of repeatedly fetching huge logs.
 - User authorizes autonomous MATRIX development/testing; this is not a missing
