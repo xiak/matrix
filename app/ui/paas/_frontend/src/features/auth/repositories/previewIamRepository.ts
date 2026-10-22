@@ -922,6 +922,11 @@ export const previewAccountRepository: AccountRepository = {
     async execute(credential, command) {
       requirePreviewCredential(credential);
       if (command.kind === "create-subuser" && (users.some((user) => user.loginName === command.loginName) || account.rootIdentity.loginName === command.loginName)) throw new AccessWorkspaceError("duplicate");
+      if (command.kind === "delete-user") {
+        const target = usersWithAttachments(await workspace.read(credential)).find((entry) => entry.user.id === command.principalId);
+        const deletion = target?.capabilities.find((item) => item.action === "iam.user.delete" && item.resource.kind === "USER" && item.resource.id === command.principalId);
+        if (!target || deletion?.available !== true) throw new AccessWorkspaceError("invalid");
+      }
       const result = await workspace.execute(credential, command);
       if (command.kind === "create-subuser") users.push({
         id: previewUserPrincipalId(command.loginName), accountId: account.id, loginName: command.loginName,

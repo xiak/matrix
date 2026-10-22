@@ -2992,6 +2992,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           enabled: target.id === scene.accountOwner.id ? null : user?.enabled ?? null,
           canSetStatus: user?.canSetStatus ?? false,
           canAttachPolicy: user?.canAttachTenantPolicy ?? false,
+          canDelete: user?.canDelete ?? false,
           protected: user?.protected ?? true
         };
       });

@@ -205,8 +205,16 @@ describe("selection-driven user directory", () => {
   });
 
   it("keeps a MOCK user deletion receipt until explicit completion without fabricating server evidence", async () => {
-    const { user, extension } = await open("users");
-    const target = users[0]!.user;
+    const active = users[0]!;
+    const disabledTarget: UserAccess = {
+      ...active,
+      user: { ...active.user, status: "DISABLED", resourceVersion: active.user.resourceVersion + 1 },
+      capabilities: active.capabilities.map((item) => item.action === "iam.user.delete"
+        ? { ...item, available: true, restrictionReason: null }
+        : item)
+    };
+    const { user, extension } = await open("users", { users: [disabledTarget, ...users.slice(1)] });
+    const target = disabledTarget.user;
     await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
     await invokePageAction(user, "删除");
     const dialog = screen.getByRole("dialog");
@@ -227,6 +235,19 @@ describe("selection-driven user directory", () => {
     expect((await extension.read("preview")).userProfiles[target.id]).toBeUndefined();
     await user.click(screen.getByRole("button", { name: "完成并返回用户列表" }));
     expect(await screen.findByRole("table", { name: "租户用户列表" })).toBeTruthy();
+  });
+
+  it("keeps MOCK user deletion unavailable until the exact target is disabled", async () => {
+    const { user, extension } = await open("users");
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await user.click(screen.getByRole("button", { name: "页面操作" }));
+    const menu = within(screen.getByRole("menu", { name: "页面操作" }));
+    const remove = menu.getByRole("menuitem", { name: "删除" });
+    expect(remove.getAttribute("aria-disabled")).toBe("true");
+    expect(menu.getByText("删除前必须先禁用该用户。")).toBeTruthy();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect((await extension.read("preview")).userProfiles[users[0]!.user.id]).toBeTruthy();
   });
 
   it("keeps a MOCK password-reset uncertainty in memory without browser storage", async () => {
@@ -353,7 +374,8 @@ describe("selection-driven user directory", () => {
     await user.click(screen.getByRole("button", { name: "更多操作" }));
     const menu = within(screen.getByRole("menu", { name: "更多操作" }));
     expect(menu.getByRole("menuitem", { name: "添加到用户组" }).getAttribute("aria-disabled")).not.toBe("true");
-    expect(menu.getByRole("menuitem", { name: /删除用户/ }).getAttribute("aria-disabled")).not.toBe("true");
+    expect(menu.getByRole("menuitem", { name: /删除用户/ }).getAttribute("aria-disabled")).toBe("true");
+    expect(menu.getByText("删除前必须先禁用所有所选用户。")).toBeTruthy();
     await user.keyboard("{Escape}");
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "更多操作" }));
     await user.type(screen.getByRole("searchbox", { name: "搜索用户" }), "lin");
@@ -431,6 +453,10 @@ describe("selection-driven user directory", () => {
     expect(after.filter((entry) => !["lin", "chen"].includes(entry.user.loginName)).every((entry) => entry.user.status === "ACTIVE")).toBe(true);
     expect(repository.executeUserBatch).toHaveBeenCalledTimes(2);
     expect(repository.execute).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("checkbox", { name: "选择用户 lin" }));
+    await user.click(screen.getByRole("checkbox", { name: "选择用户 chen" }));
+    await user.click(screen.getByRole("button", { name: "更多操作" }));
+    expect(within(screen.getByRole("menu", { name: "更多操作" })).getByRole("menuitem", { name: /删除用户/ }).getAttribute("aria-disabled")).not.toBe("true");
   });
   it("keeps live single-user management reachable without pretending to support bulk requests", async () => {
     const { user, repository } = await open("users", { live: true });

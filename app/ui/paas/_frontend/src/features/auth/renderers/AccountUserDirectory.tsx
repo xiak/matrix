@@ -154,7 +154,7 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
   const visibleCheckedUsers = visible.filter((user) => checkedIds.has(user.id));
   const allChecked = visible.length > 0 && visibleCheckedUsers.length === visible.length;
   const blocked = access.busy || access.loading || filtering || !access.supportsUserBatch;
-  const batchContext = { canListUsers: scene.canListUsers, supported: access.supportsUserBatch, rootId: scene.accountOwner.id, actorId: scene.currentUserId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled, canSetStatus: user.canSetStatus, canAttachPolicy: user.canAttachTenantPolicy, protected: user.protected })) };
+  const batchContext = { canListUsers: scene.canListUsers, supported: access.supportsUserBatch, rootId: scene.accountOwner.id, actorId: scene.currentUserId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled, canSetStatus: user.canSetStatus, canAttachPolicy: user.canAttachTenantPolicy, canDelete: user.canDelete, protected: user.protected })) };
   if (deleted && deleted.id === entityId) {
     const finishDeletion = () => {
       if (deletionNavigationStarted.current) return;

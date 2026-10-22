@@ -1659,6 +1659,7 @@
       "primary": "The selection includes the primary account, which does not support this action.",
       "self": "The selection includes you. You cannot change your own status or delete yourself.",
       "protected": "The selection contains a protected identity or a user without the required action capability.",
+      "mustDisable": "Disable every selected user before deleting them.",
       "notDisabled": "Enable applies only to disabled subusers.",
       "notEnabled": "Disable applies only to non-disabled subusers."
     },
