@@ -2634,24 +2634,24 @@ conflict. It writes no recovery record, sends no DELETE request and leaves the
 operator on the confirmation surface to reread and review the current target;
 it cannot create a recordless UNKNOWN state.
 
-The isolated MOCK continues to delete only its browser-memory User and simulated
-relations through the preview workspace; it does not write recovery storage or
-manufacture an IAM receipt. Current source is pushed at
-`3dec632876828d87a785319043881ff65f00ce5e`; its synchronized embedded assets
-are pushed at `09506e1c2e26d74bdabfd429e7e3b1d7c86b4b86`. The complete frontend
-gate passed **80 files / 2,105 cases**; the User-deletion-focused run passed
-**3 files / 538 cases**, including the zero-dispatch local-stale regression,
-HTTP-adapter regressions for malformed and
-code-less error documents plus authoritative/non-authoritative closed loops at
-all five statuses above. All eight Node export-boundary cases, typecheck, lint,
-architecture and all 234 theme contrast pairs passed. The production build
-exported 59 pages, normalized 57 segment paths and matched all 324 embedded
-files byte-for-byte; PaaS UI Go test/vet and the repository architecture test
-passed. The unchanged visual flow was exercised in the in-app browser at its
-preceding source: it opened `lin`, kept confirmation disabled until the exact
-login name was entered, exposed the red danger action and cancelled without
-deleting the fixture; the browser log had no warning/error. This proves the
-strict client, same-tab recovery boundary and isolated UX only. Real-IAM
+The isolated MOCK applies the same disabled-before-delete prerequisite at every
+owned boundary. The detail and batch menus consume the exact per-User delete
+capability, the batch domain rejects a mixed or still-active selection atomically,
+and the preview repository rejects a direct active-User delete even when the UI
+is bypassed. Once eligible, MOCK still deletes only its browser-memory User and
+simulated relations; it does not write recovery storage or manufacture an IAM
+receipt. Current source and synchronized embedded assets are pushed at
+`8b4cc05d16c4e51ed0dc92303a9d9a0e069cb7b3`. The complete frontend gate passed
+**80 files / 2,106 cases**; the five-file deletion regression passed **831 cases**,
+including strict LIVE client/storage/transport coverage and the isolated detail,
+batch-domain and preview-adapter gates. All eight Node export-boundary cases,
+typecheck, lint, architecture and all 234 theme contrast pairs passed. The
+production build exported 59 pages, normalized 57 segment paths and
+matched all 324 embedded files byte-for-byte; PaaS UI Go test/vet passed. The
+in-app browser opened active User `lin` and observed both detail and batch delete
+actions disabled with the exact prerequisite explanation; no confirmation dialog
+opened and no delete was submitted. This proves the strict client, same-tab
+recovery boundary and isolated UX only. Real-IAM
 deletion, Audit, authorization postconditions, cross-tab/device idempotency
 and signed-runtime acceptance stay with FEAT-IAM-010/011.
 

@@ -6,9 +6,9 @@
 - Updated: 2026-10-22
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Last pushed UX evidence: `09506e1c2`
-- Source commit: `3dec632876828d87a785319043881ff65f00ce5e`
-- Embedded-assets commit: `09506e1c2e26d74bdabfd429e7e3b1d7c86b4b86`
+- Last pushed UX evidence: `8b4cc05d1`
+- Source commit: `8b4cc05d16c4e51ed0dc92303a9d9a0e069cb7b3`
+- Embedded-assets commit: `8b4cc05d16c4e51ed0dc92303a9d9a0e069cb7b3`
 
 ## Authoritative route
 
@@ -34,12 +34,16 @@ unrecognized 4xx responses retain the intent and cannot expire the Session.
 An already-stale exact User target fails as a local conflict before storage or
 dispatch and therefore cannot create a recordless UNKNOWN state.
 MOCK deletion remains browser-memory-only and never pretends to be an IAM
-receipt. The final source passes 80 frontend files / 2,105 cases, a focused
-3-file / 538-case deletion run, all eight Node export-boundary cases,
-type/lint/architecture/theme gates, production/export/embed equality across 59
-pages and 324 files, and PaaS UI plus architecture Go gates. Exact evidence and
-limits are recorded once in FEAT-007; IAM semantics and real-process acceptance
-remain with FEAT-IAM-010/011.
+receipt. Its detail action, batch rule and preview repository now share the
+disabled-before-delete capability boundary, so an active User cannot reach a
+confirmation or bypass the UI to mutate preview state. The final source passes
+80 frontend files / 2,106 cases, a focused 5-file / 831-case deletion run, all
+eight Node export-boundary cases, type/lint/architecture/theme gates,
+production/export/embed equality across 59 pages and 324 files, and PaaS
+UI Go test/vet. The in-app browser verified the disabled detail and batch actions
+for active `lin` without submitting a delete. Exact evidence and limits are
+recorded once in FEAT-007; IAM semantics and real-process acceptance remain with
+FEAT-IAM-010/011.
 
 The same fixed UX source and embedded consumer were exercised through IAM
 consumer `b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f` for the existing Policy
