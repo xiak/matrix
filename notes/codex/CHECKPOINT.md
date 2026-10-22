@@ -10,15 +10,30 @@
   closure, necessary fixes, independent verification and cleanup of unused own
   resources. The host goal is authoritative. Do not reopen the accepted
   permission-aware work or mark the overall IAM matrix complete.
-- Latest code: `22591d3a52285c98ed269cd4a41643872d0b30c3`, Verification39736548709
-  attempt1 pending. The existing test/workflow owner streams exactly three
-  private inputs with explicit root tar ownership; no host chmod, CHOWN
-  capability, native fallback, new daemon, retries or larger budgets. Bootstrap
-  failures now expose only closed stage codes. The short real container gate
-  runs before the original full product gate in the same step; default tests,
-  race/architecture/vet and workflow checks passed. Windows and Linux UID1001
-  private-input gates passed, including rejection after inputs were consumed.
-  These do not accept the full products or browser journeys. IAM/011 owns scope.
+- Latest code: `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`, Verification39743005047
+  attempt1 pending. Only the existing test/workflow owners changed: the fixed
+  Docker27.5.1 CLI image has no declared volumes; resolution rejects declared
+  volumes/missing Config before creation, and the short real gate executes the
+  CLI and checks actual mounts. Original runtime mount, database identity,
+  three-file private archive and three-/five-second budgets remain unchanged.
+  The old DinD image failed the new actual mount assertion in1.90 seconds;
+  the final short root passed1.83 seconds, its three-root race package5.416.
+  Default process/architecture/IAM integration race and vet passed; workflow
+  semantics changed only that image and24Bash blocks parsed. The access analyzer
+  admin connection reuses existing SQLSTATE-only tracing for the exact final
+  schema replay; no SQL, arguments or database error details are logged.
+  Fresh PG18.4/workflow-digest runs passed40.760 seconds before and37.192 with
+  tracing. This does not identify/fix the CI storage failure or accept products,
+  browser journeys, Linux race or a release. IAM/011 owns exact evidence.
+- `22591d3a52285c98ed269cd4a41643872d0b30c3`, Verification39736548709 attempt1,
+  is completed/failure: sixteen jobs succeeded; storage, products and aggregate
+  failed. The short input root passed0.42 seconds. Full products failed46.09
+  seconds after HTTP readiness at the unexpected mount assertion; the exact
+  DinD image declares /var/lib/docker and the local short gate reproduced it.
+  Its full78,174-byte log is closed; do not refetch. Storage's access analyzer
+  failed50.07 seconds at final applyIAMSchema with only a normalized migration
+  error, no SQLSTATE. Do not infer deadlock or timeout from that message or from
+  a local pass. The Test Expert's whole-run audit remains independently scoped.
 - Prior `ef909e1f33ebc51af972c09ddafef3647710d77c`, Verification39731447102
   attempt1, is completed/failure: seventeen jobs succeeded, products and its
   aggregate failed. The full products root exited before readiness, output
@@ -108,9 +123,10 @@
   seven operations are now fully consumed and its fresh URL is closed; that
   approval is not a Role or a later Key-fixture approval.
 - Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999. Keep the one existing monitor,
-  no new chat/agent/duplicate monitor. Follow exact22591d3 and prioritize the
-  new private-input gate and original Linux managed-product gate; full product
-  acceptance is not inherited from the short transfer/default checks.
+  no new chat/agent/duplicate monitor. Follow exact7d6db51 and prioritize the
+  actual no-volume client/input gate, original Linux managed-product gate and
+  access analyzer replay diagnostics; full product acceptance is not inherited
+  from the short transfer/default checks.
   Fixed08e0d76 is audited failure, not a passing source;
   its closed evidence is not a request to rerun958 or08.
   Prioritize exact-SHA required-job outcomes and affected roots; distinguish
@@ -122,8 +138,11 @@
   nvm, prune, shared/remote restart, other Phase writes or retained install use.
 - Clean only verified own unused resources. A tool-blocked cleanup is not done;
   do not retry it through another executor, shell, rename or parent deletion.
-  The new diagnostic/transfer containers are removed; a generated Linux test
-  binary was blocked from deletion, in addition to older denied residues.
+  The earlier diagnostic/transfer containers are removed; a generated Linux
+  test binary was blocked from deletion. The latest analyzer PG/container and
+  its own network cleanup were also denied; read-only recheck found the PG
+  still running with zero fixture clients. Do not retry through another route.
+  Older denied residues remain separately unresolved.
   Machine-local diagnostic residues are not portable runtime handles. Do not
   claim full cleanup while these restrictions remain unresolved.
 - Markdown and existing documentation owners only. This checkpoint carries
