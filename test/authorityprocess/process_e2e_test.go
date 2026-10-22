@@ -6937,9 +6937,13 @@ func runIAMUserDeletionConsoleBrowser(t *testing.T, ctx context.Context, databas
 	if !capabilityFound {
 		t.Fatal("active User unexpectedly exposes deletion")
 	}
+	// Decode into a fresh value: false mustChangePassword is omitted on wire,
+	// so reusing the original forced-change creation result retains stale true.
+	var disabled iamv1.User
 	call(http.MethodPost, iamEndpoint, userPath+":set-status", ownerBearer, iamv1.SetUserStatusRequest{
 		ResourceVersion: access.User.ResourceVersion, Status: iamv1.PrincipalDisabled, RequestID: "browser-user-delete-disable",
-	}, http.StatusOK, &user)
+	}, http.StatusOK, &disabled)
+	user = disabled
 	call(http.MethodGet, iamEndpoint, userPath, ownerBearer, nil, http.StatusOK, &access)
 	if iamv1.ValidateUser(user) != nil || user.Status != iamv1.PrincipalDisabled || iamv1.ValidateUserAccess(access) != nil || access.User != user {
 		t.Fatal("User deletion target did not reach its precise disabled revision")
