@@ -104,6 +104,11 @@ export type UserDeletionClient = {
 export class UserDeletionRecoveryUnavailable extends Error {
   constructor() { super("USER_DELETION_RECOVERY_UNAVAILABLE"); }
 }
+export class UserDeletionRejected extends Error {
+  constructor(readonly reason: "expired" | "forbidden" | "conflict" | "invalid") {
+    super(`USER_DELETION_REJECTED:${reason}`);
+  }
+}
 export type UserBoundaryClient = {
   accountId: string;
   load(userId: string): Promise<UserBoundarySnapshot>;
@@ -820,6 +825,22 @@ export function accountError(error: unknown): AccountError {
     if (error.status === 422 || error.status === 400) return "invalid";
   }
   return "unavailable";
+}
+
+function userDeletionRejection(error: unknown): UserDeletionRejected["reason"] | null {
+  if (!(error instanceof HttpProblem)) return null;
+  if (error.status === 401 && error.code === "iam.authentication.failed") return "expired";
+  if (error.status === 403 && error.code === "iam.authorization.denied") return "forbidden";
+  if (error.status === 409 && error.code === "iam.state.conflict") return "conflict";
+  if (error.status === 422 && (error.code === "iam.argument.invalid" || error.code === "iam.verification.rejected")) return "invalid";
+  if (error.status === 400 && [
+    "iam.body.unexpected",
+    "iam.header.unsupported",
+    "iam.json.invalid",
+    "iam.query.unsupported",
+    "iam.request.invalid"
+  ].includes(error.code)) return "invalid";
+  return null;
 }
 
 function executeAccountLifecycleMutation(owner: AccountLifecycleOwner, mutation: AccountLifecycleMutation): Promise<Account> {
@@ -1707,14 +1728,17 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
           return result;
         } catch (failure) {
           if (!owns() || currentUserDeletionRecoveryOwner.current !== userDeletionRecoveryOwner || userDeletionSubmission.current !== submission) throw failure;
-          if (failure instanceof HttpProblem && [400, 401, 403, 409, 422].includes(failure.status)) {
+          const rejection = userDeletionRejection(failure);
+          if (rejection) {
             const remaining = pending.filter((known) => known.userId !== intent.userId);
             try {
               clearUserDeletionIntent(window.sessionStorage, intent);
               publishUserDeletionRecovery(userDeletionRecoveryOwner, remaining);
             } catch {
               publishUserDeletionRecovery(userDeletionRecoveryOwner, remaining, true);
+              throw new UserDeletionRecoveryUnavailable();
             }
+            throw new UserDeletionRejected(rejection);
           } else {
             publishUserDeletionRecovery(userDeletionRecoveryOwner, pending);
           }

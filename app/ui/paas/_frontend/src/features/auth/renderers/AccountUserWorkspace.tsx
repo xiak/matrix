@@ -3,7 +3,7 @@ import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useSta
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, FormField, Input, Table, TableSkeleton, Tabs } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
-import { accountError, UserDeletionRecoveryUnavailable, useAccountAccess, type UserBoundarySnapshot, type UserDeletionClient } from "../application/AccountAccessProvider";
+import { UserDeletionRecoveryUnavailable, UserDeletionRejected, useAccountAccess, type UserBoundarySnapshot, type UserDeletionClient } from "../application/AccountAccessProvider";
 import { useUserManagementMutation } from "../application/userManagementMutation";
 import { UserManagementEditor, UserManagementReceiptNotice } from "./UserManagementCommand";
 import type { AccountAccessView, UserDeletion, UserDeletionIntent } from "../domain/accounts";
@@ -118,22 +118,21 @@ function LiveUserDelete({ user, client, onClose, onDeleted, onUnknown }: {
       return true;
     } catch (failure) {
       if (currentClientIdentity.current !== client.identity) return false;
-      const reason = accountError(failure);
-      if (reason === "expired") {
-        client.expire();
-        return false;
-      }
       if (failure instanceof UserDeletionRecoveryUnavailable) {
         setError(t("userDeleteRecoveryUnavailable"));
         return false;
       }
-      if (reason === "unavailable") {
-        onUnknown();
-        return true;
+      if (failure instanceof UserDeletionRejected) {
+        if (failure.reason === "expired") {
+          client.expire();
+          return false;
+        }
+        intent.current = null;
+        setError(t(`errors.${failure.reason}`));
+        return false;
       }
-      intent.current = null;
-      setError(t(`errors.${reason}`));
-      return false;
+      onUnknown();
+      return true;
     } finally {
       setBusy(false);
     }

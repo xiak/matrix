@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { httpAccountRepository, httpIamRepository } from "./httpIamRepository";
 import type { AccountLifecycleIntent, AccountPolicyDetail, UserManagementIntent } from "../domain/accounts";
 
@@ -3243,6 +3244,24 @@ describe("IAM HTTP account boundary", () => {
       reply(body);
       await expect(httpAccountRepository.deleteUser!("bearer", account.id, user.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
+  });
+
+  it.each([
+    { name: "malformed error JSON", body: "not-json", code: "INVALID_PLATFORM_RESPONSE" },
+    { name: "an error document without a stable code", body: JSON.stringify({ message: "rejected without a contract code" }), code: "PLATFORM_REQUEST_REJECTED" }
+  ])("preserves $name as a non-authoritative HTTP problem", async ({ body, code }) => {
+    const fetcher = vi.fn().mockResolvedValue(new Response(body, {
+      status: 403,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
+    }));
+    vi.stubGlobal("fetch", fetcher);
+    const command = { resourceVersion: 2, requestId: "ui-user-delete-reviewed", expectedLoginName: user.loginName };
+    await expect(httpAccountRepository.deleteUser!("bearer", account.id, user.id, command)).rejects.toMatchObject({
+      name: "HttpProblem",
+      status: 403,
+      code
+    } satisfies Partial<HttpProblem>);
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 
   it("sends the reviewed reset request identity unchanged without creating a second token", async () => {

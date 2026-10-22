@@ -3058,10 +3058,65 @@ describe("account access", () => {
     storage.mockRestore();
   });
 
+  it.each([400, 401, 403, 409, 422].flatMap((status) => [
+    { status, code: "INVALID_PLATFORM_RESPONSE" },
+    { status, code: "PLATFORM_REQUEST_REJECTED" }
+  ]))("keeps an unrecognized $status/$code deletion UNKNOWN without expiring the session", async ({ status, code }) => {
+    const disabledUser: User = { ...childUser, status: "DISABLED", resourceVersion: 5 };
+    const disabled: UserAccess = { user: disabledUser, policyAttachments: [], capabilities: userCapabilities(disabledUser) };
+    const deleteUser = vi.fn().mockRejectedValue(new HttpProblem(status, code));
+    const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [disabled], nextAfter: null }),
+      getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "删除用户" }));
+    await user.type(screen.getByLabelText("输入名称以确认"), disabledUser.loginName);
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    const unknown = await screen.findByRole("alert", { name: "用户删除结果未确认" });
+    expect(unknown.textContent).toContain(deleteUser.mock.calls[0]![3].requestId);
+    expect(readUserDeletionIntents(sessionStorage, { accountId: account.id, actorPrincipalId: rootUser.id })).toEqual([
+      expect.objectContaining({ userId: disabledUser.id, commandRequestId: deleteUser.mock.calls[0]![3].requestId })
+    ]);
+    expect(screen.queryByRole("button", { name: "登录控制台" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "确认删除" })).toBeNull();
+    expect(screen.queryByRole("status", { name: "用户删除回执" })).toBeNull();
+    expect(deleteUser).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { status: 400, code: "iam.json.invalid", expires: false },
+    { status: 401, code: "iam.authentication.failed", expires: true },
+    { status: 403, code: "iam.authorization.denied", expires: false },
+    { status: 409, code: "iam.state.conflict", expires: false },
+    { status: 422, code: "iam.argument.invalid", expires: false }
+  ])("clears only the authoritative $status/$code pre-UNKNOWN rejection", async ({ status, code, expires }) => {
+    const disabledUser: User = { ...childUser, status: "DISABLED", resourceVersion: 5 };
+    const disabled: UserAccess = { user: disabledUser, policyAttachments: [], capabilities: userCapabilities(disabledUser) };
+    const deleteUser = vi.fn().mockRejectedValue(new HttpProblem(status, code));
+    const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [disabled], nextAfter: null }),
+      getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
+    const { user } = await openAccess(repository);
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "删除用户" }));
+    await user.type(screen.getByLabelText("输入名称以确认"), disabledUser.loginName);
+    await user.click(screen.getByRole("button", { name: "确认删除" }));
+    await waitFor(() => expect(readUserDeletionIntents(sessionStorage, {
+      accountId: account.id,
+      actorPrincipalId: rootUser.id
+    })).toEqual([]));
+    if (expires) {
+      expect(await screen.findByRole("button", { name: "登录控制台" })).toBeTruthy();
+    } else {
+      expect(await screen.findByRole("button", { name: "确认删除" })).toBeTruthy();
+      expect(screen.queryByRole("alert", { name: "用户删除结果未确认" })).toBeNull();
+    }
+    expect(deleteUser).toHaveBeenCalledTimes(1);
+  });
+
   it("clears a rejected pre-unknown deletion and permits a freshly reviewed request", async () => {
     const disabledUser: User = { ...childUser, status: "DISABLED", resourceVersion: 5 };
     const disabled: UserAccess = { user: disabledUser, policyAttachments: [], capabilities: userCapabilities(disabledUser) };
-    const deleteUser = vi.fn().mockRejectedValueOnce(new HttpProblem(409, "STALE_USER"))
+    const deleteUser = vi.fn().mockRejectedValueOnce(new HttpProblem(409, "iam.state.conflict"))
       .mockResolvedValue({ accountId: account.id, id: disabledUser.id, loginName: disabledUser.loginName,
         resourceVersion: disabledUser.resourceVersion + 1, deletedAt: timestamp });
     const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [disabled], nextAfter: null }),
