@@ -6,8 +6,8 @@
 - Updated: 2026-10-22
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Last pushed UX evidence: `d4425045f`
-- Source commit: `369482c2abcf7ae385727a2ded52f8c390c3bf30`
+- Last pushed UX evidence: `31675da0d`
+- Source commit: `31675da0d14ad95d0febc73c940bdbd9585a027b`
 
 ## Authoritative route
 
@@ -21,30 +21,26 @@
 
 ## Pushed milestone
 
-The current candidate preserves the shared product-navigation and exact-IAM-
-read source at `369482c2a`, including synchronized embedded assets. The
-maintained `4317` isolated preview has now exercised every Products and
-services destination plus the shared IAM directory footer, stable User-title
-actions and unified account-menu sections. The authoritative observations and
-their limits are recorded once in FEAT-007; IAM semantics and real-process
-acceptance remain with FEAT-IAM-010/011. The final source rerun passes the full
-frontend check, production/export/embed equality and PaaS UI Go test/vet.
+The current candidate preserves the shared product navigation and exact-IAM
+read composition, then adds strict LIVE Role-deletion receipt handling at
+`f0dbf742c` and a deliberately separate MOCK completion at `31675da0d`.
+The MOCK result names its browser-session scope and never pretends to be a
+server receipt. The maintained `4317` preview exercised confirmation,
+retained completion and explicit return to an independently rendered Role
+directory. The final source passes 79 frontend files / 2,075 cases, all eight
+Node export-boundary cases, production/export/embed equality across 59 pages
+and 324 files, and PaaS UI Go test/vet. Exact evidence and limits are recorded
+once in FEAT-007; IAM semantics and real-process acceptance remain with
+FEAT-IAM-010/011.
 
 ## Continuation boundary
 
-Preserve the inspectable `4317` isolated MOCK and existing composition. The
-first R2 Role-attachment recovery run at `65171` proved the real authorization
-transition but failed its response-loss observer and remains unaccepted. The
-IAM owner fixed that test-only composition at `b3bd03958`, after which the one
-fresh `54103` journey passed the exact partial-response, original-receipt,
-Role-blocking, source-restore, application-denial and tenant-Audit postconditions.
-Authoritative details and cleanup evidence are pushed once at IAM evidence
-commit `27ac1c11f`; do not replay either environment or copy its worktree. The
-fixed source's exact-SHA CI completed successfully with all nineteen jobs; the
-IAM owner records that terminal at evidence commit `ae284497b` and keeps the
-unfinished full-log audit and broader release gates explicit. No replay or
-broad release claim is needed. The UX branch has changed no backend/API/SQL/
-profile, real resource or mandatory authentication setting. Phase 1 still
-keeps email only for contact verification and security-notification receiving;
-email login/MFA, phone login, SMS, phone binding and physical-phone integration
-remain excluded.
+Preserve the inspectable `4317` isolated MOCK and existing composition. LIVE
+Role deletion still needs the IAM-owned real-browser write, Audit and
+authorization postconditions; this branch must not infer them from its strict
+client tests or MOCK journey. Continue from the smallest unaccepted FEAT-007
+slice instead of replaying accepted navigation, attachment or preview gates.
+The UX branch has changed no backend/API/SQL/profile, real resource or
+mandatory authentication setting. Phase 1 still keeps email only for contact
+verification and security-notification receiving; email login/MFA, phone
+login, SMS, phone binding and physical-phone integration remain excluded.

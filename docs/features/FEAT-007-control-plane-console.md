@@ -2572,6 +2572,37 @@ email-only contact-verification/security-notification receiving scope remain
 unchanged; phone login, SMS, phone-number binding and physical-phone
 integration remain excluded.
 
+LIVE Role deletion now follows the same explicit receipt boundary without
+sharing Group-specific state or inventing a generic deletion engine. The
+client accepts completion only when the returned Role ID, Account, name,
+request ID and exact next resource version match the frozen command; revoked
+attachment counts must be non-negative safe integers and the deletion time
+must be parseable. UNKNOWN retains that original command for query-only retry.
+A repository or Session replacement fences late replies. Confirmed completion
+keeps the immutable server receipt in content until the operator explicitly
+finishes, after which the Role directory performs its own read; neither a
+later `404` nor absence from that directory proves the original write.
+
+The isolated preview has a deliberately separate completion surface. It says
+that the Role was removed only from the current browser preview session,
+labels the result as **not** an IAM server receipt, and displays only the
+preview Role name and stable ID. It does not fabricate a request ID, revision,
+impact count or server timestamp. The detail remains mounted behind the
+pending confirmation, and one explicit **Finish and return to roles** action
+performs the eventual preview-directory transition.
+
+The strict LIVE Role source and synchronized embedded assets are pushed at
+`f0dbf742cb14bd5ff20d928c63798dd1b0e623f7`; the separate preview completion
+is pushed at `31675da0d14ad95d0febc73c940bdbd9585a027b`. The final source passes
+the complete frontend gate (**79 files / 2,075 cases**) plus all eight Node
+export-boundary cases, typecheck, lint, architecture and all 234 theme
+contrast pairs. The production export generates 59 pages and all 324 embedded
+files match byte-for-byte; fresh PaaS UI-host Go test and vet pass. The
+maintained in-app-browser preview exercised confirm -> retained completion ->
+explicit finish and then observed the independently rendered empty Role
+directory. This is MOCK browser evidence, not a real IAM deletion, Audit or
+authorization postcondition. Those runtime gates remain with FEAT-IAM-010/011.
+
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
 at fixed IAM source `89505567643ed1c8e71d80277d5a3527d7987605`, which consumed the exact
