@@ -2,14 +2,15 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, EmptyState, FormField, Input, Table, TableSkeleton, Tabs } from "@ui/xiak";
-import { useAccountAccess, type UserBoundarySnapshot } from "../application/AccountAccessProvider";
+import { requestToken } from "@/infrastructure/http/jsonRequest";
+import { UserDeletionRecoveryUnavailable, UserDeletionRejected, useAccountAccess, type UserBoundarySnapshot, type UserDeletionClient } from "../application/AccountAccessProvider";
 import { useUserManagementMutation } from "../application/userManagementMutation";
 import { UserManagementEditor, UserManagementReceiptNotice } from "./UserManagementCommand";
-import type { AccountAccessView } from "../domain/accounts";
+import type { AccountAccessView, UserDeletion, UserDeletionIntent } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import { containsDenyStatement } from "../domain/policyDocument";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
-import { AuthorizationOverview, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceRelationshipDirectory } from "./AccessWorkspaceUi";
+import { AuthorizationOverview, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessCredentials } from "./AccessCredentials";
 import { UserAccessManagement, UserAccessWorkspace } from "./AccountUserDialogs";
 import { LivePermissionBoundary, PermissionBoundary } from "./PermissionBoundary";
@@ -51,18 +52,114 @@ type LiveUserWorkspaceProps = {
   initialSection?: Extract<AccountUserDetailTab, "policies" | "keys">;
   onBack(): void;
 };
+
+type LiveUserDeletionReceipt = {
+  client: UserDeletionClient;
+  requestId: string;
+  result: UserDeletion;
+};
+
+function LiveUserDeletionReceiptView({ receipt }: { receipt: LiveUserDeletionReceipt }) {
+  const t = useTranslations("AccountAccess");
+  return <Alert status="success" role="status" aria-label={t("userDeleteReceiptTitle")}>
+    <strong>{t("userDeleteReceiptTitle")}</strong>
+    <p>{t("userDeleteReceiptHint")}</p>
+    <dl className={styles.facts}>
+      <div><dt>{t("userDeleteReceiptLoginName")}</dt><dd>{receipt.result.loginName}</dd></div>
+      <div><dt>{t("userDeleteReceiptId")}</dt><dd><code>{receipt.result.id}</code></dd></div>
+      <div><dt>{t("userDeleteReceiptRequest")}</dt><dd><code>{receipt.requestId}</code></dd></div>
+      <div><dt>{t("userDeleteReceiptRevision")}</dt><dd>{receipt.result.resourceVersion}</dd></div>
+      <div><dt>{t("userDeleteReceiptTime")}</dt><dd><WorkspaceTime value={receipt.result.deletedAt} /></dd></div>
+    </dl>
+  </Alert>;
+}
+
+export function LiveUserDeletionUnknownView({ intent }: { intent: UserDeletionIntent }) {
+  const t = useTranslations("AccountAccess");
+  return <Alert status="warning" role="alert" aria-label={t("userDeleteUnknownTitle")}>
+    <strong>{t("userDeleteUnknownTitle")}</strong>
+    <p>{t("userDeleteUnknownHint")}</p>
+    <dl className={styles.facts}>
+      <div><dt>{t("userDeleteReceiptLoginName")}</dt><dd>{intent.loginName}</dd></div>
+      <div><dt>{t("userDeleteReceiptId")}</dt><dd><code>{intent.userId}</code></dd></div>
+      <div><dt>{t("userDeleteReceiptRequest")}</dt><dd><code>{intent.commandRequestId}</code></dd></div>
+      <div><dt>{t("userDeleteSourceRevision")}</dt><dd>{intent.expectedResourceVersion}</dd></div>
+    </dl>
+  </Alert>;
+}
+
+function LiveUserDelete({ user, client, onClose, onDeleted, onUnknown }: {
+  user: AccountUserScene;
+  client: UserDeletionClient;
+  onClose(): void;
+  onDeleted(receipt: LiveUserDeletionReceipt): void;
+  onUnknown(): void;
+}) {
+  const t = useTranslations("AccountAccess");
+  const intent = useRef<{ resourceVersion: number; requestId: string; expectedLoginName: string } | null>(null);
+  const currentClientIdentity = useRef<string | null>(client.identity);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | undefined>();
+  useLayoutEffect(() => { currentClientIdentity.current = client.identity; return () => { currentClientIdentity.current = null; }; }, [client.identity]);
+  const confirm = async () => {
+    if (busy || intent.current) return false;
+    const frozen = { resourceVersion: user.resourceVersion, requestId: requestToken("ui-user-delete-"), expectedLoginName: user.loginName };
+    intent.current = frozen;
+    setBusy(true);
+    setError(undefined);
+    try {
+      const result = await client.delete(user.id, frozen);
+      if (currentClientIdentity.current !== client.identity) return false;
+      if (result.accountId !== client.accountId || result.id !== user.id || result.loginName !== user.loginName ||
+          result.resourceVersion !== user.resourceVersion + 1 || !Number.isFinite(Date.parse(result.deletedAt))) {
+        throw new Error("INVALID_IAM_USER_DELETION");
+      }
+      onDeleted({ client, requestId: frozen.requestId, result: structuredClone(result) });
+      return true;
+    } catch (failure) {
+      if (currentClientIdentity.current !== client.identity) return false;
+      if (failure instanceof UserDeletionRecoveryUnavailable) {
+        setError(t("userDeleteRecoveryUnavailable"));
+        return false;
+      }
+      if (failure instanceof UserDeletionRejected) {
+        if (failure.reason === "expired") {
+          client.expire();
+          return false;
+        }
+        intent.current = null;
+        setError(t(`errors.${failure.reason}`));
+        return false;
+      }
+      onUnknown();
+      return true;
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <WorkspaceDelete name={user.loginName} onClose={onClose} onConfirm={confirm}
+    hint={t("userDeleteLiveConfirmHint")}
+    impact={<Alert status="warning">{t("deleteUserImpact")}</Alert>}
+    operation={{ busy, error, clearError: () => setError(undefined) }} />;
+}
+
 export function AccountLiveUserWorkspace(props: LiveUserWorkspaceProps) {
-  const { userManagement } = useAccountAccess();
-  return <LiveUserWorkspace key={userManagement?.identity ?? props.userId} {...props} />;
+  const { userDeletion, userManagement } = useAccountAccess();
+  return <LiveUserWorkspace key={`${userManagement?.identity ?? "read"}:${userDeletion?.identity ?? "no-delete"}:${props.userId}`} {...props} />;
 }
 
 function LiveUserWorkspace({ userId, summary, initialSection, onBack }: LiveUserWorkspaceProps) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const management = useTranslations("UserManagementCommand");
-  const { loadUser, permissionBoundaries, userManagement } = useAccountAccess();
+  const access = useAccountAccess();
+  const { loadUser, permissionBoundaries, userDeletion, userManagement } = access;
   const command = useUserManagementMutation(userManagement, userId);
   const [workflow, setWorkflow] = useState<"rename" | "status" | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleted, setDeleted] = useState<LiveUserDeletionReceipt | null>(null);
+  const unknown = access.userDeletionUnknowns.find((intent) => intent.userId === userId) ?? null;
+  const deletionNavigationStarted = useRef(false);
   const renameRef = useRef<HTMLButtonElement>(null), statusRef = useRef<HTMLButtonElement>(null);
   const returnAction = useRef<"rename" | "status" | null>(null);
   const [loadVersion, setLoadVersion] = useState(0);
@@ -90,6 +187,18 @@ function LiveUserWorkspace({ userId, summary, initialSection, onBack }: LiveUser
     return () => { current = false; };
   }, [loadUser, owner, permissionBoundaries, userId]);
   const title = summary?.loginName ?? userId;
+  const finishDeletion = useCallback(() => {
+    if (deletionNavigationStarted.current) return;
+    deletionNavigationStarted.current = true;
+    access.reload();
+    onBack();
+  }, [access, onBack]);
+  if (deleted) return <WorkspaceDetail title={`${t("userDeleteReceiptTitle")} · ${deleted.result.loginName}`} onBack={finishDeletion} backLabel={t("userDeleteFinish")}>
+    <LiveUserDeletionReceiptView receipt={deleted} />
+  </WorkspaceDetail>;
+  if (unknown) return <WorkspaceDetail title={`${t("userDeleteUnknownTitle")} · ${unknown.loginName}`} onBack={finishDeletion} backLabel={t("userDeleteUnknownFinish")}>
+    <LiveUserDeletionUnknownView intent={unknown} />
+  </WorkspaceDetail>;
   const completed = () => { setWorkflow(null); setLoadVersion((current) => current + 1); };
   const commandFeedback = <>{loaded.state === "ready" && !userManagement ? <Alert>{management("readOnlyUnavailable")}</Alert> : null}
     {command.recoveryError ? <Alert status="danger">{management("storageUnavailable")}</Alert> : null}
@@ -112,10 +221,13 @@ function LiveUserWorkspace({ userId, summary, initialSection, onBack }: LiveUser
   </WorkspaceDetail>;
   return <WorkspaceDetail title={loaded.user.loginName} onBack={onBack}>
     {commandFeedback}
-    <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} deleteAction showLiveEvidenceBoundary initialSection={initialSection} user={loaded.user} onDeleted={onBack} renameActionRef={renameRef} statusActionRef={statusRef}
+    <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} showLiveEvidenceBoundary initialSection={initialSection} user={loaded.user}
+      onDelete={userDeletion && !access.userDeletionRecoveryError && !unknown ? () => setDeleting(true) : undefined} renameActionRef={renameRef} statusActionRef={statusRef}
       managementCommands={{ disabled: !command.ready || !userManagement,
         onRename() { returnAction.current = "rename"; setWorkflow("rename"); }, onStatus() { returnAction.current = "status"; setWorkflow("status"); } }} />
     {permissionBoundaries && loaded.boundary ? <LivePermissionBoundary key={`${permissionBoundaries.accountId}:${loaded.user.id}`} client={permissionBoundaries} snapshot={loaded.boundary} onChanged={boundaryChanged} /> : null}
+    {deleting && userDeletion ? <LiveUserDelete key={`${userDeletion.identity}:${loaded.user.id}`} user={loaded.user} client={userDeletion}
+      onClose={() => setDeleting(false)} onDeleted={setDeleted} onUnknown={() => setDeleting(false)} /> : null}
   </WorkspaceDetail>;
 }
 
@@ -149,13 +261,13 @@ function UserEditor({ user, onClose }: { user: AccountUserScene; onClose(): void
   return <WorkspaceInlineForm title={t("edit") + " · " + user.loginName} onClose={onClose} onSubmit={async () => Boolean(await access.executeWorkspace({ kind: "update-user", principalId: user.id, displayName: name }))}><FormField id={id} label={t("name")}><Input id={id} required maxLength={128} value={name} onChange={(event) => setName(event.target.value)} /></FormField></WorkspaceInlineForm>;
 }
 
-export function AccountUserWorkspace({ user, scene, workspace, initialTab = "identity", onBack, onOpen }: { user: AccountUserScene; scene: AccountAccessScene; workspace: AccessWorkspace; initialTab?: AccountUserDetailTab; onBack(): void; onOpen(view: AccountAccessView, id?: string): void }) {
+export function AccountUserWorkspace({ user, scene, workspace, initialTab = "identity", onBack, onOpen, onDelete }: { user: AccountUserScene; scene: AccountAccessScene; workspace: AccessWorkspace; initialTab?: AccountUserDetailTab; onBack(): void; onOpen(view: AccountAccessView, id?: string): void; onDelete(): void }) {
   const t = useTranslations("IamWorkspace");
   const a = useTranslations("AccountAccess");
   const wizard = useTranslations("UserWizard");
   const relationship = useTranslations("RelationshipDirectory");
   const access = useAccountAccess();
-  const [workflow, setWorkflow] = useState<"security" | "edit" | "delete" | null>(null);
+  const [workflow, setWorkflow] = useState<"security" | "edit" | null>(null);
   const [activeTab, setActiveTab] = useState<AccountUserDetailTab>(initialTab);
   const [focusDetailHeading, setFocusDetailHeading] = useState(true);
   const editActionFocus = useRef<{ focus(): void }>(null);
@@ -185,7 +297,7 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
   }, [workflow]);
   if (association) return <UserAssociationWorkflow user={user} workspace={workspace} kind={association} onBack={() => setAssociation(null)} />;
   if (workflow === "security") return <UserAccessWorkspace user={user} onClose={() => setWorkflow(null)} />;
-  return <><WorkspaceDetail title={user.loginName} onBack={onBack} focus={focusDetailHeading} actionFocusRef={editActionFocus} actions={workflow === "edit" ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setWorkflow("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: user.protected, disabledReason: user.protected ? a("protectedHint") : undefined, onSelect: () => setWorkflow("delete") }] }}>
+  return <WorkspaceDetail title={user.loginName} onBack={onBack} focus={focusDetailHeading} actionFocusRef={editActionFocus} actions={workflow === "edit" ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setWorkflow("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: user.protected, disabledReason: user.protected ? a("protectedHint") : undefined, onSelect: onDelete }] }}>
     {workflow === "edit" ? <UserEditor user={user} onClose={() => setWorkflow(null)} /> : <>
     <div className={styles.userSummary}><div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div><div className={styles.roleTags}><Badge>{a("child")}</Badge><Badge status={user.enabled ? "success" : "neutral"}>{a(`states.${user.state}`)}</Badge></div></div>
     <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as AccountUserDetailTab)}><Tabs.List aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></Tabs.List>
@@ -217,7 +329,5 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
       <Tabs.Content value="keys"><AccessCredentials embedded scene={{ ...scene, users: [user] }} workspace={{ ...workspace, keys: workspace.keys.filter((key) => key.ownerId === user.id) }} /></Tabs.Content>
     </Tabs.Root>
     </>}
-  </WorkspaceDetail>
-  {workflow === "delete" ? <WorkspaceDelete name={user.loginName} onClose={() => setWorkflow(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-user", principalId: user.id }); if (result) onBack(); return result; }} /> : null}
-  </>;
+  </WorkspaceDetail>;
 }

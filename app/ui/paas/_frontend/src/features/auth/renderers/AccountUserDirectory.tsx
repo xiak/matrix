@@ -3,7 +3,7 @@
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Table, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card, type PageCommandsHandle } from "@ui/xiak";
+import { Alert, Table, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
@@ -14,6 +14,7 @@ import { isUserBatchAssociationAction, UserBatchConfirmationDialog, UserBatchWor
 import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
 import styles from "./AccountAccessRenderer.module.css";
 import { AccountDirectoryReadFailure } from "./AccountReadBoundary";
+import { WorkspaceDelete, WorkspaceDetail } from "./AccessWorkspaceUi";
 
 function AccountUserRow({ user, principalId, workspace, grants, checked, disabled, onSelect, onOpen }: {
   user: DirectoryUser; principalId: string; workspace: AccessWorkspace | null;
@@ -61,6 +62,18 @@ function AccountOwnerSummary({ scene, onOpen }: { scene: AccountAccessScene; onO
   </section>;
 }
 
+function PreviewUserDeletionReceipt({ user }: { user: DirectoryUser }) {
+  const t = useTranslations("AccountAccess");
+  return <Alert status="success" role="status" aria-label={t("userDeletePreviewReceiptTitle")}>
+    <strong>{t("userDeletePreviewReceiptTitle")}</strong>
+    <p>{t("userDeletePreviewReceiptHint")}</p>
+    <dl className={styles.facts}>
+      <div><dt>{t("userDeleteReceiptLoginName")}</dt><dd>{user.loginName}</dd></div>
+      <div><dt>{t("userDeleteReceiptId")}</dt><dd><code>{user.id}</code></dd></div>
+    </dl>
+  </Alert>;
+}
+
 export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCreate, onOpen }: { scene: AccountAccessScene; entityId?: string; initialDetailTab?: AccountUserDetailTab; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
@@ -77,6 +90,9 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [cursorPage, setCursorPage] = useState(1);
+  const [deleting, setDeleting] = useState<DirectoryUser | null>(null);
+  const [deleted, setDeleted] = useState<DirectoryUser | null>(null);
+  const deletionNavigationStarted = useRef(false);
   const deferredQuery = useDeferredValue(query);
   const filtering = deferredQuery !== query;
   useEffect(() => { if (!entityId) userDirectoryView.remember({ query, state, role }); }, [userDirectoryView, query, state, role, entityId]);
@@ -105,7 +121,7 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
     return () => window.clearTimeout(timer);
   }, [access.busy, access.loading, batchOperation]);
   const changeFilter = (change: () => void) => { clearSelection(); setPage(1); change(); };
-  const detail = scene.users.find((user) => user.id === entityId);
+  const detail = scene.users.find((user) => user.id === entityId) ?? (deleting && deleting.id === entityId ? deleting : undefined);
   const words = useMemo(() => deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean), [deferredQuery]);
   const associations = useMemo(() => {
     const result = new Map(scene.users.map((user) => [user.id, { direct: new Set(workspace?.userPolicies[user.id] ?? []).size, inherited: 0 }]));
@@ -139,12 +155,30 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
   const allChecked = visible.length > 0 && visibleCheckedUsers.length === visible.length;
   const blocked = access.busy || access.loading || filtering || !access.supportsUserBatch;
   const batchContext = { canListUsers: scene.canListUsers, supported: access.supportsUserBatch, rootId: scene.accountOwner.id, actorId: scene.currentUserId, targets: checkedUsers.map((user) => ({ id: user.id, enabled: user.enabled, canSetStatus: user.canSetStatus, canAttachPolicy: user.canAttachTenantPolicy, protected: user.protected })) };
+  if (deleted && deleted.id === entityId) {
+    const finishDeletion = () => {
+      if (deletionNavigationStarted.current) return;
+      deletionNavigationStarted.current = true;
+      setDeleted(null);
+      onOpen("users");
+    };
+    return <WorkspaceDetail title={`${t("userDeletePreviewReceiptTitle")} · ${deleted.loginName}`} onBack={finishDeletion} backLabel={t("userDeletePreviewFinish")}>
+      <PreviewUserDeletionReceipt user={deleted} />
+    </WorkspaceDetail>;
+  }
   if (entityId === scene.accountOwner.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
   if (entityId && !workspace) return <AccountLiveUserWorkspace key={entityId} userId={entityId} summary={detail}
     initialSection={initialDetailTab === "policies" || initialDetailTab === "keys" ? initialDetailTab : undefined}
     onBack={() => onOpen("users")} />;
   if (entityId && !detail) return <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
-  if (detail && access.workspace) return <AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} initialTab={initialDetailTab} onBack={() => onOpen("users")} onOpen={onOpen} />;
+  if (detail && access.workspace) return <><AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} initialTab={initialDetailTab} onBack={() => onOpen("users")} onOpen={onOpen}
+    onDelete={() => { deletionNavigationStarted.current = false; setDeleting(detail); }} />
+    {deleting ? <WorkspaceDelete name={deleting.loginName} onClose={() => setDeleting(null)} onConfirm={async () => {
+      const result = await access.executeWorkspace({ kind: "delete-user", principalId: deleting.id });
+      if (result) setDeleted(deleting);
+      return result;
+    }} hint={t("userDeletePreviewConfirmHint")} impact={<Alert>{t("userDeletePreviewImpact")}</Alert>} /> : null}
+  </>;
   if (batchOperation && isUserBatchAssociationAction(batchOperation.action)) return <div className={styles.userDirectory}><Card><Card.Body>
     <UserBatchWorkflow action={batchOperation.action} users={batchOperation.users} onClose={closeBatch} onCompleted={completeBatch} />
   </Card.Body></Card></div>;

@@ -66,24 +66,20 @@ export function CreateTenantWorkspace({ onClose }: { onClose(): void }) {
   </WorkspaceDetail>;
 }
 
-export function UserAccessManagement({ user, onDeleted, managementCommands, renameActionRef, statusActionRef, deleteAction = false, showLiveEvidenceBoundary = false, initialSection }: {
+export function UserAccessManagement({ user, onDelete, managementCommands, renameActionRef, statusActionRef, showLiveEvidenceBoundary = false, initialSection }: {
   user: AccountUserScene;
-  onDeleted?(): void;
+  onDelete?(): void;
   managementCommands?: { disabled: boolean; onRename(): void; onStatus(): void };
   renameActionRef?: Ref<HTMLButtonElement>;
   statusActionRef?: Ref<HTMLButtonElement>;
-  deleteAction?: boolean;
   showLiveEvidenceBoundary?: boolean;
   initialSection?: "policies" | "keys";
 }) {
   const t = useTranslations("AccountAccess");
   const policyChange = useTranslations("PolicyAttachmentChange");
   const access = useAccountAccess();
-  const deleteId = useId();
   const [password, setPassword] = useState("");
   const [confirmStatus, setConfirmStatus] = useState(false);
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleteConfirmation, setDeleteConfirmation] = useState("");
   const [resettingPassword, setResettingPassword] = useState(false);
   const [reviewingReset, setReviewingReset] = useState(false);
   const [showKeys, setShowKeys] = useState(initialSection === "keys");
@@ -237,12 +233,12 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
       </section>
       <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("loginSecurity")}</strong></div>
       <div className={styles.actions}>
-          <Button ref={statusActionRef} disabled={disabled || managementCommands?.disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { if (managementCommands) managementCommands.onStatus(); else { setConfirmStatus(true); setConfirmDelete(false); setResettingPassword(false); setPassword(""); } }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
-          <Button disabled={disabled || !user.canResetPassword || Boolean(access.passwordResetUnknown)} title={access.passwordResetUnknown ? t("resetUnknownBlocked") : !user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setReviewingReset(false); setConfirmDelete(false); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
-          {deleteAction ? <Button disabled={disabled || !user.canDelete} title={!user.canDelete ? restriction(user.deleteRestrictionReason) : undefined} onClick={() => { setConfirmDelete(true); setConfirmStatus(false); setResettingPassword(false); }} variant="danger">{t("deleteUser")}</Button> : null}
+          <Button ref={statusActionRef} disabled={disabled || managementCommands?.disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { if (managementCommands) managementCommands.onStatus(); else { setConfirmStatus(true); setResettingPassword(false); setPassword(""); } }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
+          <Button disabled={disabled || !user.canResetPassword || Boolean(access.passwordResetUnknown)} title={access.passwordResetUnknown ? t("resetUnknownBlocked") : !user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setReviewingReset(false); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
+          {onDelete ? <Button disabled={disabled || !user.canDelete} title={!user.canDelete ? restriction(user.deleteRestrictionReason) : undefined} onClick={() => { setConfirmStatus(false); setResettingPassword(false); onDelete(); }} variant="danger">{t("deleteUser")}</Button> : null}
       </div>
       {!user.canSetStatus || !user.canResetPassword ? <p className={styles.note}>{restriction(user.statusRestrictionReason ?? user.passwordRestrictionReason)}</p> : null}
-      {deleteAction && !user.canDelete ? <p className={styles.note}>{t("deleteUnavailable", { reason: restriction(user.deleteRestrictionReason) })}</p> : null}
+      {onDelete && !user.canDelete ? <p className={styles.note}>{t("deleteUnavailable", { reason: restriction(user.deleteRestrictionReason) })}</p> : null}
         {confirmStatus ? <Alert status={user.enabled ? "warning" : "info"}><div className={styles.confirmation}>
           <p>{user.enabled ? t("disableHint") : t("enableHint")}</p>
           <div className={styles.actions}>
@@ -269,16 +265,6 @@ export function UserAccessManagement({ user, onDeleted, managementCommands, rena
             <Button disabled={disabled} onClick={() => { setResettingPassword(false); setReviewingReset(false); setPassword(""); }} variant="ghost">{t("cancel")}</Button>
           </div>
         </section> : null}
-        {confirmDelete ? <Alert status="warning"><form className={styles.confirmation} onSubmit={async (event) => {
-          event.preventDefault();
-          if (deleteConfirmation !== user.loginName || !user.canDelete) return;
-          if (await access.execute({ kind: "delete-user", userId: user.id, resourceVersion: user.resourceVersion })) onDeleted?.();
-        }}>
-          <strong>{t("deleteUserTitle", { name: user.loginName })}</strong>
-          <p>{t("deleteUserImpact")}</p>
-          <FormField id={deleteId} label={t("deleteUserConfirmLabel", { name: user.loginName })}><Input autoComplete="off" id={deleteId} disabled={disabled} required value={deleteConfirmation} onChange={(event) => setDeleteConfirmation(event.target.value)} /></FormField>
-          <div className={styles.actions}><Button disabled={disabled || deleteConfirmation !== user.loginName || !user.canDelete} type="submit" variant="danger">{t("confirmDeleteUser")}</Button><Button disabled={disabled} onClick={() => { setConfirmDelete(false); setDeleteConfirmation(""); }} type="button" variant="ghost">{t("cancel")}</Button></div>
-        </form></Alert> : null}
     </div>;
 }
 

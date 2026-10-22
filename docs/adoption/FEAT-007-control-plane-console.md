@@ -90,6 +90,31 @@ in this consumer. `REJECT` donor assets, the separate MOCK preview flow,
 documentation/checkpoint status and inherited browser or CI acceptance.
 Rebuild delivery here; FEAT-IAM-010 owns the remaining real deletion gate.
 
+For User deletion, `ADAPT` the seventeen frontend source/test/locale deltas
+from `8c40091ec1d48ecb81281c4ffa55d8bcd5b9ee9d`, parent
+`1aa3890ba53ae12b33b4027a4d3a22444f95d82c`, with required correction
+`09640c6cefce7361574206753fdb0b2bd1133847`, parent
+`92aee2aafcfdbe44b1bc3c6a6f4316c7f190e601`, and the local-preflight correction
+`3dec632876828d87a785319043881ff65f00ce5e`, parent
+`5bd288f4c08f70ef36a16384013c91466065bad5`. Ten existing parent blobs match;
+preserve this branch's two test files, AccountAccessRenderer and both locale
+files outside the fixed delta. The two new storage/test files protect the
+distinct non-replayable deletion side-effect boundary, not a new server
+completion model. Persist and verify a bounded Account/actor/target intent
+before dispatch; retain uncertain outcomes across same-tab navigation and
+sign-in, and validate the exact server receipt independently of directory
+reads. Keep the MOCK workspace explicit and isolated from LIVE storage.
+`REFERENCE` donor results only and verify the consuming branch. Preserve the
+two consumer regressions which prove that malformed or unrecognized 4xx
+responses must not clear the original intent. Only an exact IAM status/code
+pair can establish a pre-UNKNOWN rejection; damaged 401 cannot expire the
+current Session. A stale local target is an explicit conflict before any
+storage or HTTP effect, not an UNKNOWN command. `REJECT` either incomplete
+candidate without its corresponding correction,
+automatic or manual deletion replay, 403/404/absence as completion proof,
+donor-generated assets, evidence/checkpoint commits and inherited acceptance.
+Rebuild delivery here; FEAT-IAM-010 owns current evidence and the real gate.
+
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
 The earlier FEAT-006 rejection of the legacy UI applied only to the IAM/Audit

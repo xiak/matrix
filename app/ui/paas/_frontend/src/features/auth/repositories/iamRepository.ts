@@ -47,7 +47,8 @@ import type {
   User,
   UserManagementIntent,
   UserManagementCompletion,
-  UserPermissionBoundary
+  UserPermissionBoundary,
+  UserDeletion
 } from "../domain/accounts";
 import type { ServiceLinkedRoleAccess, ServiceLinkedRoleDirectory, ServiceRoleTemplateDirectory } from "../domain/serviceAuthorization";
 import type { AccessWorkspace, AccessWorkspaceCommand } from "../domain/accessWorkspace";
@@ -278,6 +279,12 @@ export interface AccountRepository {
   currentIdentity(credential: string): Promise<AccountIdentity>;
   listUsers(credential: string, after?: string): Promise<DirectoryPage<UserAccess>>;
   getUser(credential: string, userId: string): Promise<UserAccess>;
+  deleteUser?(credential: string, accountId: string, userId: string, command: {
+    resourceVersion: number;
+    requestId: string;
+    /** Local response binding only. It is never serialized to IAM. */
+    expectedLoginName: string;
+  }): Promise<UserDeletion>;
   readPasswordResetCompletion(credential: string, request: PasswordResetRequestIdentity): Promise<UserPasswordResetCompletion>;
   listPolicies(credential: string, platform: boolean): Promise<PolicyDirectory>;
   // TENANT default-version read only. A list permission is not a read grant;

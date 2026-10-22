@@ -218,6 +218,36 @@ export type User = {
   resourceVersion: number;
 };
 
+export type UserDeletion = {
+  accountId: string;
+  id: string;
+  loginName: string;
+  resourceVersion: number;
+  deletedAt: string;
+};
+
+/**
+ * Client-owned evidence for one non-replayable user deletion request.
+ *
+ * This record is intentionally not a server completion model. It keeps the
+ * original target and request identity stable while the backend exposes no
+ * by-request completion read for UserDeletion.
+ */
+export type UserDeletionIntent = Readonly<{
+  format: 1;
+  accountId: string;
+  actorPrincipalId: string;
+  userId: string;
+  loginName: string;
+  expectedResourceVersion: number;
+  commandRequestId: string;
+}>;
+
+export function userDeletionResultMatches(result: UserDeletion, intent: UserDeletionIntent): boolean {
+  return result.accountId === intent.accountId && result.id === intent.userId && result.loginName === intent.loginName &&
+    result.resourceVersion === intent.expectedResourceVersion + 1 && Number.isFinite(Date.parse(result.deletedAt));
+}
+
 export type UserManagementIntent = Readonly<{
   format: 1; accountId: string; actorPrincipalId: string; userId: string;
   commandRequestId: string; expectedResourceVersion: number;
@@ -600,7 +630,6 @@ export type AccountCommand =
   | { kind: "set-account-status"; accountId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
   | { kind: "recover-root-credentials"; accountId: string; initialPassword: string; resourceVersion: number }
   | { kind: "set-alias"; alias: string; resourceVersion: number }
-  | { kind: "delete-user"; userId: string; resourceVersion: number }
   | { kind: "set-status"; userId: string; status: "ACTIVE" | "DISABLED"; resourceVersion: number }
   | { kind: "reset-password"; userId: string; initialPassword: string; resourceVersion: number; requestId: string }
   | { kind: "create-policy-attachment"; userId: string; policyId: string; policyResourceVersion: number; requestId: string };
