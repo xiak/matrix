@@ -2627,13 +2627,21 @@ and any unrecognized code remain UNKNOWN even at `400`, `401`, `403`, `409` or
 `422`; their recovery evidence remains stored, and a damaged `401` cannot
 expire the Session. If an authoritative rejection cannot clear its exact local
 intent, deletion fails closed instead of reopening the confirmation.
+An exact-client preflight rejection is a separate, earlier state: if the
+retained User target, owner, capability, login name or resource version no
+longer matches before persistence, the client returns a purpose-specific
+conflict. It writes no recovery record, sends no DELETE request and leaves the
+operator on the confirmation surface to reread and review the current target;
+it cannot create a recordless UNKNOWN state.
 
 The isolated MOCK continues to delete only its browser-memory User and simulated
 relations through the preview workspace; it does not write recovery storage or
-manufacture an IAM receipt. Current source and synchronized embedded assets are
-pushed at `09640c6cefce7361574206753fdb0b2bd1133847`. The complete frontend
-gate passed **80 files / 2,104 cases**; the User-deletion-focused run passed
-**3 files / 537 cases**, including HTTP-adapter regressions for malformed and
+manufacture an IAM receipt. Current source is pushed at
+`3dec632876828d87a785319043881ff65f00ce5e`; its synchronized embedded assets
+are pushed at `09506e1c2e26d74bdabfd429e7e3b1d7c86b4b86`. The complete frontend
+gate passed **80 files / 2,105 cases**; the User-deletion-focused run passed
+**3 files / 538 cases**, including the zero-dispatch local-stale regression,
+HTTP-adapter regressions for malformed and
 code-less error documents plus authoritative/non-authoritative closed loops at
 all five statuses above. All eight Node export-boundary cases, typecheck, lint,
 architecture and all 234 theme contrast pairs passed. The production build
