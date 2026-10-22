@@ -29,8 +29,8 @@
 | 总体架构、高可用与容量边界 | [000总体架构](FEAT-IAM-000-product-contract.md#总体架构)及其可用性、容量与一致性段落，跨产品边界由ADR-0002拥有 | 设计已完成；当前多IAM副本、失败关闭、受限容量与数据库切换夹具已有证据，部署尚不支持的完整数据库HA继续明确列为缺口，不虚构SLO |
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
-| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态、Group Membership及Group附件恢复、Account安全设置正常完整替换已有真实证据。固定9621又完成Group删除与GROUP/USER附件撤销的可见回执、导航和权威后验。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；附件CREATE的新回执、Role附件、日常改密及010矩阵其余非Deferred路径仍须闭合 |
-| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`5935fa5005529b2c4e1da943b98f49300430ba10`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；各固定代码的IAM-AC-09证据与限制归[当前独立CI](#当前独立ci)，不继承旧签名结论。权限感知及受影响原Policy恢复页面由010拥有。Issue #4仍按其原固定消费者关闭；Issue #5的页面验收与Issue #6的Observe超时根因保持打开。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。其余IAM-UI-01–08非Deferred页面效果尚未完成，生产账号公平性SLO和安装级数据库HA保持Deferred |
+| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态、Group Membership及Group附件恢复、Account安全设置正常完整替换已有真实证据。固定9621又完成Group删除与GROUP/USER附件撤销的可见回执、导航和权威后验。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；AccessKey/Role本轮闭环已分别具备010的真实页面与后验，但附件CREATE的其余恢复组合、日常改密及010矩阵其余非Deferred路径仍须闭合 |
+| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`5935fa5005529b2c4e1da943b98f49300430ba10`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；各固定代码的IAM-AC-09证据与限制归[当前独立CI](#当前独立ci)，不继承旧签名结论。权限感知及受影响原Policy恢复页面由010拥有。Issue #4仍按其原固定消费者关闭；Issue #5的剩余范围复核与Issue #6的Observe超时根因保持打开。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。其余IAM-UI-01–08非Deferred页面效果尚未完成，生产账号公平性SLO和安装级数据库HA保持Deferred |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
 
@@ -42,13 +42,15 @@
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
 | 最近完整日志审计通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
-| 最近代码的CI终态 | `b3c3d157fd58af0743f4ef4721123b27de05abf8`只修正R1夹具按当前metadata定位准确Role；真实PG预检、默认race/vet及[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1十九项job均通过。完整日志审计尚未封存；其代码的R1及准确会话撤销已有010的独立真实页面证据，R2附件恢复仍未验收，不由绿色CI补证 |
-| 后继测试修正 | R2真实页面暴露Role观察器遮挡故障注入的连接能力；同一实际装配的真实HTTP红绿及默认race/vet通过，准确失败/修正证据归010。生产代码/嵌入/Profile不变；后继精确SHA的独立CI及新库R2仍待核验，不能继承上一行CI |
+| 最近代码的CI终态 | `b3c3d157fd58af0743f4ef4721123b27de05abf8`只修正R1夹具按当前metadata定位准确Role；真实PG预检、默认race/vet及[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1十九项job均通过。完整日志审计尚未封存；其代码的R1及准确会话撤销已有010的独立真实页面证据，该固定版本的R2附件恢复未通过，不由绿色CI补证 |
+| 最新测试修正 | `b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`修正Role观察器遮挡故障注入的连接能力；同一实际装配的真实HTTP红绿、默认race/vet及新库完整R2页面后验通过，准确证据归010。生产代码/嵌入/Profile不变；[Verification39761561748](https://github.com/xiak/matrix/actions/runs/39761561748) attempt1尚未终态，不能继承上一行CI |
 | 前一候选的实际产品证据 | `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1十九项job全部成功；测试owner核验短容器门禁1.45秒、完整四产品128.51秒和Analyzer41.08秒。十六份日志完整、三份仅局部，不冒充全量日志审计或其他版本通过 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
+
+固定`b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`的[Verification39761561748](https://github.com/xiak/matrix/actions/runs/39761561748) attempt1于2026-10-22 18:24:17+08已通过GitHub API核对精确SHA，Go、console、node-process与installation-postgres-ha四项成功；authority lanes继续排队或执行，整轮未完成。其新PG18.4角色附件恢复页面已独立通过，但不能代填CI终态或全部日志审计。
 
 固定`b3c3d157fd58af0743f4ef4721123b27de05abf8`的[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1已于2026-10-22 16:56:58+08通过GitHub API再次核实精确SHA、`completed/success`和十九项job全部成功。测试owner已完整读取并校验四份前置日志，共186,134字节；其中Go93包、前端79文件2062项Vitest及八项Node检查通过。authority日志尚未完成独立核验，不能由job状态或前一候选的详细结果补作全量日志审计。此片仅修正R1准备后的Role查询，实际浏览器证据仍由010分别判定，发布Profile不变。
 
@@ -98,7 +100,7 @@
 
 既有Session并发测试的固定修正`38a2cda69ec547c9e8d9d557bf61a3bcd992335c`保留原API、SQL、密码成本、期限和Profile。最终成功的Serializable重试可纳入并发期间已提交的新登录，断言必须核对精确Session集合、版本及终态，而非固定只撤销一个。专属PG18.4的真实40001先使旧断言以`APPLIED/revoked=2/want=1`失败，再证明B+C精确目标、caller保留、原回执重放及完成后新登录不受影响；聚焦52.48秒、三库串行race package267.261秒及默认integration/architecture race、vet通过。PG与Go runner各2CPU/2GiB、Go1.26.3、GOMAXPROCS2/GOMEMLIMIT1024MiB、`-p 1`。这不把原[39193669814](https://github.com/xiak/matrix/actions/runs/39193669814)失败回填为成功，也不将本地PG18.4等同于CI的PG18.6。
 
-User资料/状态、Group Membership及Group附件恢复、Account安全设置正常替换已有真实浏览器证据；当前9621另完成Group删除、GROUP/USER附件撤销的可见回执、导航、下一请求权限与唯一完成/outbox/Audit后验。准确请求、唯一性查询范围和代码采用归010，不扩大为跨action唯一性。CREATE的新回执、Role附件及身份返回、Policy默认切换/边界/冲突、日常改密、AccessKey恢复，以及010其余非Deferred路径仍未全部闭合；最终审阅、完成marker或后台后验不能替代页面最终提交。
+User资料/状态、Group Membership及Group附件恢复、Account安全设置正常替换已有真实浏览器证据；当前9621另完成Group删除、GROUP/USER附件撤销的可见回执、导航、下一请求权限与唯一完成/outbox/Audit后验。准确请求、唯一性查询范围和代码采用归010，不扩大为跨action唯一性。AccessKey正常生命周期与三类原命令恢复、Role创建/承担/准确Session撤销及附件REVOKE恢复已有010的逐条真实证据。CREATE回执的其余恢复组合、Policy默认切换/边界/冲突、日常改密及010其余非Deferred路径仍未全部闭合；最终审阅、完成marker或后台后验不能替代页面最终提交。
 
 [Issue #4](https://github.com/xiak/matrix/issues/4)仅按010所列固定消费者、原样红绿和独立CI关闭，不扩张为Role页面验收。[Issue #5](https://github.com/xiak/matrix/issues/5)仍按原范围审阅：010已记录SET_STATUS、NETWORK、DELETE三条独立真实页面响应丢失恢复与权威后验，不能再描述为均未执行；旧1800.02秒超时仍不回填。正常Key生命周期、Role页面及其剩余缺口统一由[010的本轮真实证据](FEAT-IAM-010-console.md#本轮消费者与真实恢复证据)维护；API预建密钥不证明recovered-create的页面路径。运行资源按确切身份清理，工具拒绝的清理不计完成。
 

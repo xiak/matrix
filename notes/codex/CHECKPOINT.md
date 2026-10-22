@@ -10,15 +10,17 @@
   necessary fixes, independent verification and cleanup of unused own resources.
   The host goal is authoritative. Do not reopen accepted permission-aware work
   or mark the overall IAM matrix complete.
-- Latest test-only milestone after `dea0af7fdcdb82533c20704015fafaa6ec3ff81c`:
+- Latest pushed code: `b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`,
   `fix(test): preserve role recovery response-loss transport`. It keeps the
   loss boundary on the actual connection and observes the upstream response
   inside it. The shared real-HTTP assembly failed on the old wiring with an
   empty200 (race2.553 seconds), then passed with actual partial-body/EOF,
   one receipt read and the exact credential journey. Related probes passed
   race3.795 seconds, default process/architecture5.541/2.772 and vet passed.
-  No production/API/SQL/UI/profile change. Its exact-SHA CI and fresh R2
-  remain pending; do not inherit earlier CI.
+  No production/API/SQL/UI/profile change. Its fresh R2 passed as below.
+  Exact-SHA Verification39761561748 attempt1 remains pending: Go, console,
+  node-process and installation-postgres-ha succeeded; authority lanes are
+  queued/running. Do not inherit earlier CI or claim full-log audit.
 - Prior pushed code: `b3c3d157fd58af0743f4ef4721123b27de05abf8`.
   Verification39746740451 attempt1 is completed/success: the exact SHA and all
   nineteen jobs were independently checked through GitHub API. Four precheck
@@ -95,16 +97,23 @@
   This attempt's PG/network/empty-root cleanup was denied before execution.
   Those resources remain; do not retry through another route or claim cleanup.
   IAM/010 owns the precise acceptance; R2 attachment recovery remains separate.
-- R2 attachment revocation remains unaccepted. The fresh clean-dea0 run made
-  one actual revocation and read the original receipt. Its Role detail401,
-  explicit original source200 and source application403 were observed, but
-  loss injection returned false and recovery reads were not counted. Root
-  554.94 seconds/race557.535, exit1; no full-chain acceptance. The exact
-  original receipt/outbox and version2 revoked attachment each exist once.
-  The test-only wrapper composition cause is fixed above; never backfill the
-  failed run from DOM. Processes/listener/clients are zero and tabs closed;
-  this run's PG/network/empty root cleanup was denied before execution and
-  remains untouched. Its URL/objects are no longer a browser intent.
+- R2 attachment revocation recovery is now accepted on clean b3bd03958.
+  Fresh PG18.4, actual restricted IAM/Audit/PaaS/dispatchers and original UX
+  executor: root325.73 seconds/race329.294, exit0. One page assumption,
+  exact application200, one attachment revoke, true partial-response loss,
+  one same-origin original receipt GET and zero post-loss writes. Same Role
+  detail401/BLOCKED before natural expiry, explicit original source200 and
+  source application403; original issuance unchanged, fresh explicit Role
+  follows no-attachment authority and cannot revive the old credential.
+  Unique completion/outbox/Audit and full tenant chain verified. Task
+  processes/listener/clients zero, two pages closed; its PG/tmpfs DB, empty
+  network and empty root were removed with label rechecks. 010 owns details.
+  The earlier clean-dea0 run remains failed554.94/race557.535 because the old
+  loss wrapper was blocked. Its denied cleanup residues remain untouched.
+- K1/K2/R1/R2 page requirements for this bounded goal are all accepted at
+  their exact sources. Remaining closure: latest independent CI and permitted
+  cleanup, not another broad browser run or signed release. Do not promote
+  the full IAM/010/011 matrix to Accepted; its other paths remain separate.
 - The current observer requires the issued Role's prior application200, actual
   admin revocation, protected401 before natural expiry, explicit original
   source validation200 and source application403. Never request again using a
