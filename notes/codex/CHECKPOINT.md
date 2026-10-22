@@ -18,9 +18,12 @@
   one receipt read and the exact credential journey. Related probes passed
   race3.795 seconds, default process/architecture5.541/2.772 and vet passed.
   No production/API/SQL/UI/profile change. Its fresh R2 passed as below.
-  Exact-SHA Verification39761561748 attempt1 remains pending: Go, console,
-  node-process and installation-postgres-ha succeeded; authority lanes are
-  queued/running. Do not inherit earlier CI or claim full-log audit.
+  Exact-SHA Verification39761561748 attempt1 is completed/success: GitHub API
+  independently confirmed all nineteen jobs and the final aggregate. The 370
+  steps comprise 175 success/195 skipped with no failure, cancellation or pending
+  step. Required-root selection still rejects absent RUN, SKIP or missing PASS;
+  the exact Role PG step was also checked. Full-log audit is not sealed. Do not
+  inherit another source's logs, signed release or the full IAM acceptance.
 - Prior pushed code: `b3c3d157fd58af0743f4ef4721123b27de05abf8`.
   Verification39746740451 attempt1 is completed/success: the exact SHA and all
   nineteen jobs were independently checked through GitHub API. Four precheck
@@ -111,8 +114,9 @@
   The earlier clean-dea0 run remains failed554.94/race557.535 because the old
   loss wrapper was blocked. Its denied cleanup residues remain untouched.
 - K1/K2/R1/R2 page requirements for this bounded goal are all accepted at
-  their exact sources. Remaining closure: latest independent CI and permitted
-  cleanup, not another broad browser run or signed release. Do not promote
+  their exact sources, and the latest exact-code independent CI has succeeded.
+  Remaining required closure is the previously tool-denied resource cleanup,
+  not another broad browser run or signed release. Do not promote
   the full IAM/010/011 matrix to Accepted; its other paths remain separate.
 - The current observer requires the issued Role's prior application200, actual
   admin revocation, protected401 before natural expiry, explicit original
@@ -132,10 +136,10 @@
   expired confirmation or start another heavy fixture merely to idle.
   K1's consumed approval is not a Role or later Key-fixture approval.
 - Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999. Keep its one existing monitor,
-  no new chat/agent/duplicate monitor. Follow b3c3/39746740451 and preserve the
-  unfinished7d6 log audit. Prioritize exact-SHA required-job outcomes and affected
-  roots; distinguish checked evidence from unaudited detail. Closed logs do not
-  need fetching again.
+  no new chat/agent/duplicate monitor. b3bd/39761561748 has an API-confirmed green
+  terminal; do not poll it as live or rerun accepted gates. Preserve unfinished
+  log audits until the original reading capability is available. Distinguish
+  checked evidence from unaudited detail; closed logs need no repeated fetching.
 - User authorizes autonomous MATRIX development/testing; no product-design
   decision is missing. Actual tool confirmation/handoff restrictions remain.
 - Own unique labels/IDs with explicit CPU/memory/PID limits. Go GOMAXPROCS2/-p2,
@@ -143,8 +147,9 @@
   nvm, prune, shared/remote restart, other Phase writes or retained install use.
 - Clean only verified own unused resources. Tool-denied cleanup is not done and
   must not be retried through another executor, shell, rename or parent deletion.
-  A generated Linux test binary, an older stopped diagnostic container, empty
-  task directories, Analyzer PG/network, successful R1 PG/network/root and
+  A generated Linux test binary, an older stopped diagnostic container with its
+  attached anonymous volume, empty task directories, Analyzer PG/network,
+  successful R1 PG/network/root and
   the failed R2 PG/network/root
   remain denied residues. The PGs were last read-only checked running with zero
   fixture clients.

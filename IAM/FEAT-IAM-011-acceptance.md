@@ -42,15 +42,14 @@
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
 | 最近完整日志审计通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
-| 最近代码的CI终态 | `b3c3d157fd58af0743f4ef4721123b27de05abf8`只修正R1夹具按当前metadata定位准确Role；真实PG预检、默认race/vet及[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1十九项job均通过。完整日志审计尚未封存；其代码的R1及准确会话撤销已有010的独立真实页面证据，该固定版本的R2附件恢复未通过，不由绿色CI补证 |
-| 最新测试修正 | `b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`修正Role观察器遮挡故障注入的连接能力；同一实际装配的真实HTTP红绿、默认race/vet及新库完整R2页面后验通过，准确证据归010。生产代码/嵌入/Profile不变；[Verification39761561748](https://github.com/xiak/matrix/actions/runs/39761561748) attempt1尚未终态，不能继承上一行CI |
+| 最近代码的CI终态 | `b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`修正Role观察器遮挡故障注入的连接能力；同一实际装配的真实HTTP红绿、默认race/vet及新库完整R2页面后验通过，准确证据归010。[Verification39761561748](https://github.com/xiak/matrix/actions/runs/39761561748) attempt1精确SHA及十九项job均为completed/success；完整日志审计尚未封存。生产代码/嵌入/Profile不变，不继承签名发布或其余IAM矩阵的验收 |
 | 前一候选的实际产品证据 | `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1十九项job全部成功；测试owner核验短容器门禁1.45秒、完整四产品128.51秒和Analyzer41.08秒。十六份日志完整、三份仅局部，不冒充全量日志审计或其他版本通过 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
 
-固定`b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`的[Verification39761561748](https://github.com/xiak/matrix/actions/runs/39761561748) attempt1于2026-10-22 18:24:17+08已通过GitHub API核对精确SHA，Go、console、node-process与installation-postgres-ha四项成功；authority lanes继续排队或执行，整轮未完成。其新PG18.4角色附件恢复页面已独立通过，但不能代填CI终态或全部日志审计。
+固定`b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`的[Verification39761561748](https://github.com/xiak/matrix/actions/runs/39761561748) attempt1于2026-10-22 18:43:23+08通过GitHub API核实精确SHA、整轮completed/success及十九项job全部成功，包括十四条authority lane、Go、console、node-process、installation-postgres-ha与最终authority-process汇总。API返回370个step：175成功、195跳过，没有失败、取消或未决step。当前工作流仍通过原必跑选择器拒绝根测试未RUN、SKIP或缺少PASS；角色真实PG根及最终汇总的准确step终态已核对。该轮完整日志尚未封存，不据job/step状态补造每个测试的时长、数量或日志审计结论。K1/K2/R1/R2分别由010的准确源码、真实页面和独立后验接受，不回填旧失败，也不接受其余IAM矩阵或新签名发布。此次新R2环境已清理；历史工具拒删残留仍未清理，资源清理未全部完成。
 
 固定`b3c3d157fd58af0743f4ef4721123b27de05abf8`的[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1已于2026-10-22 16:56:58+08通过GitHub API再次核实精确SHA、`completed/success`和十九项job全部成功。测试owner已完整读取并校验四份前置日志，共186,134字节；其中Go93包、前端79文件2062项Vitest及八项Node检查通过。authority日志尚未完成独立核验，不能由job状态或前一候选的详细结果补作全量日志审计。此片仅修正R1准备后的Role查询，实际浏览器证据仍由010分别判定，发布Profile不变。
 
