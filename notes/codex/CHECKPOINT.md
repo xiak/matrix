@@ -41,6 +41,18 @@ pages and 324 files, and PaaS UI plus architecture Go gates. Exact evidence and
 limits are recorded once in FEAT-007; IAM semantics and real-process acceptance
 remain with FEAT-IAM-010/011.
 
+The same fixed UX source and embedded consumer were exercised through IAM
+consumer `b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f` for the existing Policy
+`SET_DEFAULT` response-loss fixture. The real page inspected DENY v2, submitted
+once, showed UNKNOWN, replayed the byte-identical original request exactly once,
+and independently reread v2 as default while retaining v1 and both digests.
+The race fixture/page passed in 188.14 seconds and the package in 191.687 seconds;
+the probe observed two POST attempts, zero completion reads and one post-loss
+write, while the database retained one Policy revision effect, zero authorization
+consumers, one outbox/Audit fact and a complete tenant chain. Its uniquely
+labelled PG18 container/network were removed only after test termination and
+zero external clients. FEAT-IAM-010 owns exact evidence and limits.
+
 ## Continuation boundary
 
 Preserve the inspectable `4317` isolated MOCK and existing composition. LIVE
@@ -48,7 +60,10 @@ Role and User deletion still need IAM-owned real-browser writes, Audit and
 authorization postconditions; User deletion additionally has no completion
 lookup and therefore must remain locked after an uncertain result. Do not
 infer those gates from strict-client tests, same-tab reminders or MOCK
-journeys. Continue from the smallest unaccepted FEAT-007 slice instead of
+journeys. Policy `SET_DEFAULT` is accepted only for its exact zero-reference
+response-loss scenario; do not inherit it for other version operations, signed
+release or the remaining IAM matrix. Continue from the smallest unaccepted
+FEAT-007 slice instead of
 replaying accepted navigation, attachment or preview gates. The UX branch has
 changed no backend/API/SQL/profile, real resource or mandatory authentication
 setting. Phase 1 still keeps email only for contact verification and
