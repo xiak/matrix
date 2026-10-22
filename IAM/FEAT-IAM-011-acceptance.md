@@ -88,7 +88,7 @@
 
 User资料/状态、Group Membership及Group附件恢复、Account安全设置正常替换已有真实浏览器证据；当前9621另完成Group删除、GROUP/USER附件撤销的可见回执、导航、下一请求权限与唯一完成/outbox/Audit后验。准确请求、唯一性查询范围和代码采用归010，不扩大为跨action唯一性。CREATE的新回执、Role附件及身份返回、Policy默认切换/边界/冲突、日常改密、AccessKey恢复，以及010其余非Deferred路径仍未全部闭合；最终审阅、完成marker或后台后验不能替代页面最终提交。
 
-[Issue #4](https://github.com/xiak/matrix/issues/4)仅按010所列固定消费者、原样红绿和独立CI关闭，不扩张为Role页面验收。[Issue #5](https://github.com/xiak/matrix/issues/5)仍按原范围审阅：010已记录SET_STATUS、NETWORK、DELETE三条独立真实页面响应丢失恢复与权威后验，不能再描述为均未执行；旧1800.02秒超时仍不回填。正常Key创建/一次性材料/双Key程序访问与Role页面尚未完成；API预建密钥不证明recovered-create的页面路径。运行资源按确切身份清理，工具拒绝的清理不计完成。
+[Issue #4](https://github.com/xiak/matrix/issues/4)仅按010所列固定消费者、原样红绿和独立CI关闭，不扩张为Role页面验收。[Issue #5](https://github.com/xiak/matrix/issues/5)仍按原范围审阅：010已记录SET_STATUS、NETWORK、DELETE三条独立真实页面响应丢失恢复与权威后验，不能再描述为均未执行；旧1800.02秒超时仍不回填。正常Key生命周期、Role页面及其剩余缺口统一由[010的本轮真实证据](FEAT-IAM-010-console.md#本轮消费者与真实恢复证据)维护；API预建密钥不证明recovered-create的页面路径。运行资源按确切身份清理，工具拒绝的清理不计完成。
 
 [Issue #6](https://github.com/xiak/matrix/issues/6)保持打开。原`ef10d51bfbf120ec521e665bac9d54b14fa26c0d`的[Verification 39284297226](https://github.com/xiak/matrix/actions/runs/39284297226)仍为failure；唯一失败根`TestManagedProductProviderProcesses`39.94秒，在取得HTTP200前以exit1/`PAAS_WORKER_EXECUTION_PROFILE_OBSERVE_TIMEOUT`退出。日志不足以确定底层命令或连接原因，不能归为网络或资源抖动。5935的封闭超时诊断由FEAT-007拥有，保留原3秒CLI/5秒Observe预算、API/SQL/Profile及重试；新CI四产品通过不证明旧超时根因已修复。签名生命周期的旧失败、当前候选运行和大包处理限制只归FEAT-005及[Issue #3](https://github.com/xiak/matrix/issues/3)，不得并入本CI或页面接受。
 
