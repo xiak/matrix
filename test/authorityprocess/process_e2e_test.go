@@ -6076,7 +6076,8 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 		t.Fatal("Role setup did not come from its three exact browser commands")
 	}
 	var roleID iamv1.RoleID
-	if err := database.QueryRow(ctx, `SELECT id FROM iam.roles WHERE tenant_id=$1 AND name=$2`, user.AccountID, roleName).Scan(&roleID); err != nil {
+	if err := database.QueryRow(ctx, `SELECT id FROM iam.roles
+		WHERE tenant_id=$1 AND metadata->>'name'=$2 AND management='CUSTOMER' AND deleted_at IS NULL`, user.AccountID, roleName).Scan(&roleID); err != nil {
 		t.Fatal("read page-created Role identity")
 	}
 	rolePath := "/v1/roles/" + string(roleID)
