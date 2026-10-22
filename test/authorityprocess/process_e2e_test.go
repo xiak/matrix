@@ -12138,12 +12138,15 @@ func assertExactLocalImage(t *testing.T, ctx context.Context, imageID string) {
 }
 
 type childProcess struct {
-	command *exec.Cmd
-	done    chan error
-	stdout  bytes.Buffer
-	stderr  bytes.Buffer
-	exited  bool
-	err     error
+	command          *exec.Cmd
+	done             chan error
+	stdout           bytes.Buffer
+	stderr           bytes.Buffer
+	startRequestedAt time.Time
+	startReturnedAt  time.Time
+	waitReturnedAt   time.Time
+	exited           bool
+	err              error
 }
 
 var errProcessWaitTimeout = errors.New("authority process wait timed out")
@@ -12162,11 +12165,57 @@ func startChild(
 	child.command.Env = append(append(os.Environ(), environment...), "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
 	child.command.Stdout = &child.stdout
 	child.command.Stderr = &child.stderr
+	child.startRequestedAt = time.Now()
 	if err := child.command.Start(); err != nil {
 		t.Fatalf("start authority process: %v", err)
 	}
-	go func() { child.done <- child.command.Wait() }()
+	child.startReturnedAt = time.Now()
+	go func() {
+		err := child.command.Wait()
+		// Publish the observation with the terminal result. This is when Wait
+		// returned, not the kernel's exact exit time or a Docker CLI duration.
+		child.waitReturnedAt = time.Now()
+		child.done <- err
+	}()
 	return child
+}
+
+func TestAuthorityProcessCompletionObservations(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal("locate authority test executable")
+	}
+	for _, test := range []struct {
+		name, selector string
+		wantFailure    bool
+	}{
+		{name: "success", selector: "^$"},
+		{name: "failure", selector: "[", wantFailure: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			before := time.Now()
+			child := startChild(t, t.TempDir(), binary, nil, "-test.run="+test.selector)
+			t.Cleanup(child.stop)
+			waitErr := child.wait(10 * time.Second)
+			after := time.Now()
+			if errors.Is(waitErr, errProcessWaitTimeout) || (waitErr != nil) != test.wantFailure {
+				t.Fatalf("child completion = %v, wantFailure=%t", waitErr, test.wantFailure)
+			}
+			if child.startRequestedAt.Before(before) || child.startReturnedAt.Before(child.startRequestedAt) ||
+				child.waitReturnedAt.Before(child.startReturnedAt) || child.waitReturnedAt.After(after) ||
+				child.command.ProcessState == nil {
+				t.Fatal("completed child lacks ordered start/Wait observations and process state")
+			}
+			completedAt := child.waitReturnedAt
+			if exited, _ := child.poll(); !exited {
+				t.Fatal("completed child became live again")
+			}
+			_ = child.wait(0)
+			if child.waitReturnedAt != completedAt {
+				t.Fatal("reading completion replaced the original observation time")
+			}
+		})
+	}
 }
 
 func (child *childProcess) poll() (bool, error) {
@@ -12220,6 +12269,18 @@ func waitHTTPStatus(
 	deadline := time.Now().Add(45 * time.Second)
 	for time.Now().Before(deadline) {
 		if exited, err := child.poll(); exited {
+			userCPU, systemCPU := "unavailable", "unavailable"
+			if state := child.command.ProcessState; state != nil {
+				userCPU, systemCPU = state.UserTime().String(), state.SystemTime().String()
+			}
+			t.Logf("authority readiness exit observation: start_requested_at=%s start_returned_at=%s wait_returned_at=%s start_elapsed=%s run_wait_elapsed=%s user_cpu=%s system_cpu=%s",
+				child.startRequestedAt.UTC().Format(time.RFC3339Nano),
+				child.startReturnedAt.UTC().Format(time.RFC3339Nano),
+				child.waitReturnedAt.UTC().Format(time.RFC3339Nano),
+				child.startReturnedAt.Sub(child.startRequestedAt),
+				child.waitReturnedAt.Sub(child.startReturnedAt),
+				userCPU, systemCPU,
+			)
 			t.Fatalf("authority process exited before HTTP status %d: %v output=%q", want, err, child.output())
 		}
 		request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
