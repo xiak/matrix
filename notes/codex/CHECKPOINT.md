@@ -6,7 +6,7 @@
 - Updated: 2026-10-22
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed candidate: `ad3e23838`
+- Pushed candidate: `824f05a9f`
 - Source commit: `369482c2abcf7ae385727a2ded52f8c390c3bf30`
 
 ## Authoritative route
@@ -32,12 +32,15 @@ acceptance remain with FEAT-IAM-010.
 
 Preserve the inspectable `4317` isolated MOCK and existing composition. The
 first R2 Role-attachment recovery run at `65171` proved the real authorization
-transition but failed its response-loss observer and must not be accepted or
-replayed. The IAM owner has fixed that test-only composition on its own pushed
-branch and is preparing one fresh exact environment; wait for its fixed URL,
-objects and one combined human confirmation before any new browser mutation.
-Do not copy another worktree or touch `4317` while coordinating that run. The
-UX branch has changed no backend/API/SQL/profile, real resource or mandatory
-authentication setting. Phase 1 still keeps email only for contact verification
-and security-notification receiving; email login/MFA, phone login, SMS, phone
-binding and physical-phone integration remain excluded.
+transition but failed its response-loss observer and remains unaccepted. The
+IAM owner fixed that test-only composition at `b3bd03958`, after which the one
+fresh `54103` journey passed the exact partial-response, original-receipt,
+Role-blocking, source-restore, application-denial and tenant-Audit postconditions.
+Authoritative details and cleanup evidence are pushed once at IAM evidence
+commit `27ac1c11f`; do not replay either environment or copy its worktree. The
+fixed source's independent CI is still pending, so no new broad browser run or
+release claim is allowed yet. The UX branch has changed no backend/API/SQL/
+profile, real resource or mandatory authentication setting. Phase 1 still
+keeps email only for contact verification and security-notification receiving;
+email login/MFA, phone login, SMS, phone binding and physical-phone integration
+remain excluded.
