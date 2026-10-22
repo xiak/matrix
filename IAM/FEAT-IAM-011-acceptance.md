@@ -42,7 +42,8 @@
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
 | 最近完整日志审计通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
-| 最新代码及CI终态 | `b3c3d157fd58af0743f4ef4721123b27de05abf8`只修正R1夹具按当前metadata定位准确Role；真实PG预检、默认race/vet及[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1十九项job均通过。完整日志审计尚未封存；其代码的R1及准确会话撤销已有010的独立真实页面证据，R2附件恢复仍未验收，不由绿色CI补证 |
+| 最近代码的CI终态 | `b3c3d157fd58af0743f4ef4721123b27de05abf8`只修正R1夹具按当前metadata定位准确Role；真实PG预检、默认race/vet及[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1十九项job均通过。完整日志审计尚未封存；其代码的R1及准确会话撤销已有010的独立真实页面证据，R2附件恢复仍未验收，不由绿色CI补证 |
+| 后继测试修正 | R2真实页面暴露Role观察器遮挡故障注入的连接能力；同一实际装配的真实HTTP红绿及默认race/vet通过，准确失败/修正证据归010。生产代码/嵌入/Profile不变；后继精确SHA的独立CI及新库R2仍待核验，不能继承上一行CI |
 | 前一候选的实际产品证据 | `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1十九项job全部成功；测试owner核验短容器门禁1.45秒、完整四产品128.51秒和Analyzer41.08秒。十六份日志完整、三份仅局部，不冒充全量日志审计或其他版本通过 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |

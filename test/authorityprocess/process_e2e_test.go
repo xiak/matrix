@@ -5783,11 +5783,7 @@ func runIAMPolicyAttachmentRecoveryConsoleBrowser(
 	}
 	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(
 		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, func(mux http.Handler) http.Handler {
-			handler := iamConsoleBrowserFixtureHandler(mux, make(chan struct{}, 16), loss)
-			if roleJourney != nil {
-				return roleJourney.wrap(handler)
-			}
-			return handler
+			return iamPolicyAttachmentBrowserHandler(mux, loss, roleJourney)
 		})
 	defer closeBrowser()
 	finish := filepath.Join(temporary, "browser-policy-attachment-recovery-finished")
@@ -6259,6 +6255,16 @@ type browserRoleRevocationProbe struct {
 	revokeRequest   string
 }
 
+func iamPolicyAttachmentBrowserHandler(upstream http.Handler, loss *browserResponseLoss, journey *browserRoleRevocationProbe) http.Handler {
+	if journey != nil {
+		upstream = journey.wrap(upstream)
+	}
+	// Observe the real upstream result before fault injection. The loss boundary
+	// must own the actual connection so it can flush and truncate the committed
+	// response; a status/credential observer is not a hijackable transport.
+	return iamConsoleBrowserFixtureHandler(upstream, make(chan struct{}, 16), loss)
+}
+
 func (probe *browserRoleRevocationProbe) wrap(upstream http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		digest := sha256.Sum256([]byte(r.Header.Get("Authorization")))
@@ -6676,6 +6682,123 @@ func TestRoleBrowserResponseObservationPreservesTransportAndBoundsMaterial(t *te
 		if underlying := response.Unwrap(); underlying != recorder {
 			t.Fatal("observation changed the underlying response-controller boundary")
 		}
+	}
+}
+
+func TestRoleAttachmentBrowserResponseLossPreservesWireAndCredentialJourney(t *testing.T) {
+	const (
+		mutationPath    = "/api/iam/v1/policy-attachments/browser-attachment:revoke"
+		recoveryPrefix  = "/api/iam/v1/policy-attachment-changes/by-request/"
+		requestID       = "browser-role-attachment-revoke"
+		applicationPath = "/api/paas/v1/applications/browser-owned-application"
+		sourceBearer    = "synthetic-source-browser-probe"
+		roleBearer      = "synthetic-role-browser-probe"
+	)
+	probe := &browserRoleRevocationProbe{account: "browser-account", user: "browser-member", role: "browser-role",
+		mutationPath: mutationPath, applicationPath: applicationPath}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	issuance, err := iamv1.EncodeAssumeRoleResponse(iamv1.AssumeRoleResponse{Outcome: "APPLIED",
+		Session: iamv1.RoleSession{APIVersion: iamv1.APIVersion, Kind: "RoleSession", ID: "browser-role-session",
+			AccountID: probe.account, RoleID: probe.role, SourceUserID: probe.user, Status: iamv1.SessionActive,
+			IssuedAt: now, ExpiresAt: now.Add(time.Hour)}, Credential: processSecret(t, roleBearer)})
+	if err != nil {
+		t.Fatal("encode synthetic issuance")
+	}
+	defer clear(issuance)
+	finished := make(chan struct{})
+	loss := &browserResponseLoss{method: http.MethodPost, path: mutationPath, recoveryPathPrefix: recoveryPrefix,
+		allowSameHostRecovery: true, postLossWritePrefix: "/api/iam/v1/policy-attachments", holdFinished: finished}
+	var revoked atomic.Bool
+	var writes, reads atomic.Int32
+	const completed = `{"requestId":"browser-role-attachment-revoke","resourceVersion":2}`
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-store")
+		switch r.Method + " " + r.URL.Path {
+		case "POST /api/iam/v1/roles/browser-role:assume":
+			_, _ = w.Write(issuance)
+		case "POST " + mutationPath:
+			writes.Add(1)
+			revoked.Store(true)
+			_, _ = io.WriteString(w, completed)
+		case "GET " + recoveryPrefix + requestID:
+			reads.Add(1)
+			_, _ = io.WriteString(w, completed)
+		case "GET /api/iam/v1/auth/me":
+			w.WriteHeader(http.StatusOK)
+		case "GET " + applicationPath:
+			status := http.StatusForbidden
+			if r.Header.Get("Authorization") == "Bearer "+roleBearer {
+				status = http.StatusOK
+				if revoked.Load() {
+					status = http.StatusUnauthorized
+				}
+			}
+			w.WriteHeader(status)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	server := httptest.NewServer(iamPolicyAttachmentBrowserHandler(upstream, loss, probe))
+	defer server.Close()
+	client := server.Client()
+	client.Timeout = 3 * time.Second
+	invoke := func(method, path, bearer, input string, wantStatus int, truncated bool) {
+		t.Helper()
+		request, err := http.NewRequest(method, server.URL+path, strings.NewReader(input))
+		if err != nil {
+			t.Fatal("create synthetic browser request")
+		}
+		request.Header.Set("Authorization", "Bearer "+bearer)
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("browser request did not receive committed headers: %v", err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		defer clear(body)
+		if response.StatusCode != wantStatus {
+			t.Fatalf("browser response changed its status: status=%d", response.StatusCode)
+		}
+		if truncated {
+			if !errors.Is(readErr, io.ErrUnexpectedEOF) || len(body) == 0 || len(body) >= len(completed) ||
+				response.ContentLength != int64(len(completed)) || !bytes.Equal(body, []byte(completed[:len(body)])) {
+				t.Fatalf("one committed response was not truncated on the actual connection: bytes=%d length=%d unexpected_eof=%t",
+					len(body), response.ContentLength, errors.Is(readErr, io.ErrUnexpectedEOF))
+			}
+		} else if readErr != nil {
+			t.Fatal("ordinary browser response was truncated")
+		} else if path == recoveryPrefix+requestID && string(body) != completed {
+			t.Fatal("read-only recovery changed the original completion")
+		}
+		if response.Header.Get("Cache-Control") != "no-store" {
+			t.Fatal("browser response changed its cache boundary")
+		}
+	}
+	invoke(http.MethodPost, "/api/iam/v1/roles/browser-role:assume", sourceBearer, "{}", http.StatusOK, false)
+	invoke(http.MethodGet, applicationPath, roleBearer, "", http.StatusOK, false)
+	invoke(http.MethodPost, mutationPath, "synthetic-admin-browser-probe",
+		`{"resourceVersion":1,"requestId":"browser-role-attachment-revoke"}`, http.StatusOK, true)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("loss injection did not publish its terminal observation")
+	}
+	invoke(http.MethodGet, recoveryPrefix+requestID, "synthetic-admin-browser-probe", "", http.StatusOK, false)
+	invoke(http.MethodGet, applicationPath, roleBearer, "", http.StatusUnauthorized, false)
+	invoke(http.MethodGet, "/api/iam/v1/auth/me", sourceBearer, "", http.StatusOK, false)
+	invoke(http.MethodGet, applicationPath, sourceBearer, "", http.StatusForbidden, false)
+	if err := probe.check(); err != nil {
+		t.Fatal(err)
+	}
+	observation := loss.snapshot()
+	defer clear(observation.RequestBody)
+	if writes.Load() != 1 || reads.Load() != 1 || observation.Attempts != 1 || !observation.ResponseLost ||
+		observation.BackendStatus != http.StatusOK || observation.RecoveryReads != 1 ||
+		observation.RecoveryHost != observation.MutationHost || observation.PostLossWrites != 0 ||
+		len(observation.RecoveryAttempts) != 1 || observation.RecoveryAttempts[0].RequestURI != recoveryPrefix+requestID ||
+		observation.RecoveryAttempts[0].BackendStatus != http.StatusOK {
+		t.Fatal("combined browser observers lost the single write, exact receipt read or credential transition")
 	}
 }
 

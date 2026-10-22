@@ -10,7 +10,16 @@
   necessary fixes, independent verification and cleanup of unused own resources.
   The host goal is authoritative. Do not reopen accepted permission-aware work
   or mark the overall IAM matrix complete.
-- Latest pushed code: `b3c3d157fd58af0743f4ef4721123b27de05abf8`.
+- Latest test-only milestone after `dea0af7fdcdb82533c20704015fafaa6ec3ff81c`:
+  `fix(test): preserve role recovery response-loss transport`. It keeps the
+  loss boundary on the actual connection and observes the upstream response
+  inside it. The shared real-HTTP assembly failed on the old wiring with an
+  empty200 (race2.553 seconds), then passed with actual partial-body/EOF,
+  one receipt read and the exact credential journey. Related probes passed
+  race3.795 seconds, default process/architecture5.541/2.772 and vet passed.
+  No production/API/SQL/UI/profile change. Its exact-SHA CI and fresh R2
+  remain pending; do not inherit earlier CI.
+- Prior pushed code: `b3c3d157fd58af0743f4ef4721123b27de05abf8`.
   Verification39746740451 attempt1 is completed/success: the exact SHA and all
   nineteen jobs were independently checked through GitHub API. Four precheck
   logs were fully audited; authority logs are not yet audited. Only the existing
@@ -86,10 +95,16 @@
   This attempt's PG/network/empty-root cleanup was denied before execution.
   Those resources remain; do not retry through another route or claim cleanup.
   IAM/010 owns the precise acceptance; R2 attachment recovery remains separate.
-- R2 attachment revocation remains unaccepted. R2d made the actual UI write,
-  but its old observer missed exact application-detail HTTP evidence. Never
-  backfill that evidence from DOM. Fixed958's R2e made no revocation and expired
-  unchanged; its URL/request/confirmation is not a resumable intent.
+- R2 attachment revocation remains unaccepted. The fresh clean-dea0 run made
+  one actual revocation and read the original receipt. Its Role detail401,
+  explicit original source200 and source application403 were observed, but
+  loss injection returned false and recovery reads were not counted. Root
+  554.94 seconds/race557.535, exit1; no full-chain acceptance. The exact
+  original receipt/outbox and version2 revoked attachment each exist once.
+  The test-only wrapper composition cause is fixed above; never backfill the
+  failed run from DOM. Processes/listener/clients are zero and tabs closed;
+  this run's PG/network/empty root cleanup was denied before execution and
+  remains untouched. Its URL/objects are no longer a browser intent.
 - The current observer requires the issued Role's prior application200, actual
   admin revocation, protected401 before natural expiry, explicit original
   source validation200 and source application403. Never request again using a
@@ -120,7 +135,8 @@
 - Clean only verified own unused resources. Tool-denied cleanup is not done and
   must not be retried through another executor, shell, rename or parent deletion.
   A generated Linux test binary, an older stopped diagnostic container, empty
-  task directories, Analyzer PG/network and the successful R1 PG/network/root
+  task directories, Analyzer PG/network, successful R1 PG/network/root and
+  the failed R2 PG/network/root
   remain denied residues. The PGs were last read-only checked running with zero
   fixture clients.
   Do not ask another task to bypass the denial or claim complete cleanup.
