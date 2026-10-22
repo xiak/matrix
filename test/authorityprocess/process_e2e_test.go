@@ -6944,9 +6944,12 @@ func runIAMUserDeletionConsoleBrowser(t *testing.T, ctx context.Context, databas
 		ResourceVersion: access.User.ResourceVersion, Status: iamv1.PrincipalDisabled, RequestID: "browser-user-delete-disable",
 	}, http.StatusOK, &disabled)
 	user = disabled
-	call(http.MethodGet, iamEndpoint, userPath, ownerBearer, nil, http.StatusOK, &access)
+	var disabledAccess iamv1.UserAccess
+	call(http.MethodGet, iamEndpoint, userPath, ownerBearer, nil, http.StatusOK, &disabledAccess)
+	access = disabledAccess
 	if iamv1.ValidateUser(user) != nil || user.Status != iamv1.PrincipalDisabled || iamv1.ValidateUserAccess(access) != nil || access.User != user {
-		t.Fatal("User deletion target did not reach its precise disabled revision")
+		t.Fatalf("User deletion disabled revision: userValidation=%v accessValidation=%v sameUser=%t",
+			iamv1.ValidateUser(user), iamv1.ValidateUserAccess(access), access.User == user)
 	}
 	capabilityFound = false
 	for _, capability := range access.Capabilities {
