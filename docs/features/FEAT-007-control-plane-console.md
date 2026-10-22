@@ -2603,6 +2603,42 @@ explicit finish and then observed the independently rendered empty Role
 directory. This is MOCK browser evidence, not a real IAM deletion, Audit or
 authorization postcondition. Those runtime gates remain with FEAT-IAM-010/011.
 
+LIVE User deletion now owns a dedicated `UserDeletion` operation instead of
+passing through the generic Account command. The browser sends exactly the
+target resource version and one caller-owned request ID to the fixed User
+deletion route, and accepts completion only when Account, User ID, login name,
+next resource version and deletion time all match the frozen intent. Before
+the POST, LIVE writes and reads back a bounded non-secret intent owned by the
+current Account, actor and target. Storage failure, malformed same-owner state
+or an existing target intent fails closed and sends no request.
+
+Because the backend has no User-deletion completion lookup, an uncertain
+result remains locked across IAM navigation, component remount, same-tab reload
+and same-owner re-login without replaying the POST or minting a second request
+ID. A current directory absence, `403`, `404` or another read is never upgraded
+to completion. Account or actor switches neither expose nor clear another
+owner's intent, and late replies from an obsolete Session/client cannot clear,
+navigate or replace current evidence. A strict success remains a success
+receipt even when local reminder cleanup fails; the remaining recovery error
+still closes further deletion. Only an explicit rejection before uncertainty
+may clear that exact intent.
+
+The isolated MOCK continues to delete only its browser-memory User and simulated
+relations through the preview workspace; it does not write recovery storage or
+manufacture an IAM receipt. Source and synchronized embedded assets are pushed
+at `8c40091ec`. The complete frontend gate passed **80 files / 2,087 cases**
+plus all eight Node export-boundary cases; typecheck, lint, architecture and all
+234 theme contrast pairs passed. The production build exported 59 pages,
+normalized 57 segment paths and matched all 324 embedded files byte-for-byte;
+PaaS UI Go test/vet and the repository architecture test passed. A fresh
+in-app-browser MOCK pass opened `lin`, verified that confirmation stayed
+disabled until the exact login name was entered, observed the enabled red
+danger action, then cancelled without deleting the fixture. The browser log
+contained no warning/error. This proves the strict client, same-tab recovery
+boundary and isolated UX only; real-IAM deletion, Audit, authorization
+postconditions, cross-tab/device idempotency and signed-runtime acceptance stay
+with FEAT-IAM-010/011.
+
 The production-export repair in fixed UI source
 `8a14592223dbfa943ce9d653db34778f381d1790` addresses the failed embedded check
 at fixed IAM source `89505567643ed1c8e71d80277d5a3527d7987605`, which consumed the exact
