@@ -4,156 +4,97 @@
 
 ## Pushed milestone
 
-- Repository https://github.com/xiak/matrix.git, branch `feat/iam`; repository-local
+- Repository https://github.com/xiak/matrix.git, branch `feat/iam`; local Git
   identity `Xiak <Jellal@aliyun.com>`.
-- Incomplete bounded goal: AccessKey and same-account Role real-console closure,
-  necessary fixes, independent verification and cleanup of unused own resources.
-  The host goal is authoritative. Do not reopen accepted permission-aware work
-  or mark the overall IAM matrix complete.
-- Latest pushed code: `b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`,
-  `fix(test): preserve role recovery response-loss transport`. It keeps the
-  loss boundary on the actual connection and observes the upstream response
-  inside it. The shared real-HTTP assembly failed on the old wiring with an
-  empty200 (race2.553 seconds), then passed with actual partial-body/EOF,
-  one receipt read and the exact credential journey. Related probes passed
-  race3.795 seconds, default process/architecture5.541/2.772 and vet passed.
-  No production/API/SQL/UI/profile change. Its fresh R2 passed as below.
-  Exact-SHA Verification39761561748 attempt1 is completed/success: GitHub API
-  independently confirmed all nineteen jobs and the final aggregate. The 370
-  steps comprise 175 success/195 skipped with no failure, cancellation or pending
-  step. Required-root selection still rejects absent RUN, SKIP or missing PASS;
-  the exact Role PG step was also checked. Full-log audit is not sealed. Do not
-  inherit another source's logs, signed release or the full IAM acceptance.
-- Prior pushed code: `b3c3d157fd58af0743f4ef4721123b27de05abf8`.
-  Verification39746740451 attempt1 is completed/success: the exact SHA and all
-  nineteen jobs were independently checked through GitHub API. Four precheck
-  logs were fully audited; authority logs are not yet audited. Only the existing
-  R1 test and IAM/010 changed: Role names live in metadata, not a standalone
-  name column. Its original lookup failed with SQLSTATE42703 in actual PG18.4;
-  the corrected exact live CUSTOMER lookup returned the right Role and no
-  match in another existing Account. Default process/architecture race passed
-  5.452/1.917 seconds and vet passed. This does not execute/accept R1 or R2.
-  No UI/API/production SQL/profile change; embedded build remains
-  `matrix-f0c6f4f1a804dcfebbf2`.
-- Previous code `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`,
-  Verification39743005047 attempt1, is completed/success: exact SHA and all
-  nineteen jobs were independently checked through GitHub API. Test Expert
-  verified the actual short client root1.45 seconds, full four-product root
-  128.51 seconds and Analyzer41.08 seconds. The complete product summary and
-  pinned client marker each matched once. Sixteen logs are fully audited and
-  three are partial; the original in-memory log-reading session was lost.
-  Whole-log audit is not sealed. Do not claim all root details were audited or
-  inherit browser/release status. IAM/011 owns exact evidence.
-- That slice uses the fixed volume-free Docker27.5.1 CLI client; image resolution
-  rejects declared volumes/missing Config before creation, and the short real
-  gate executes the CLI and checks actual mounts. Original runtime mount,
-  database identity, private archive and three-/five-second budgets remain.
-  The old DinD image reproduced the unexpected-volume failure; the corrected
-  short gate passed. SQLSTATE-only Analyzer tracing changes no migration,
-  scanner, retry or deadline. IAM/011 owns exact evidence.
-- Prior22591/Verification39736548709 is CLOSED FAILURE, with all nineteen logs
-  now audited. Storage failed at the final Analyzer schema replay without an
-  underlying SQLSTATE; its next six roots did not RUN. Products passed the short
-  input root but failed the unexpected-volume assertion after HTTP readiness.
-  Never refetch closed logs or rewrite this as success.
-- Earlier ef909,08e0d76 and958 CI attempts are also closed failures. Linux source
-  ownership and client image volumes were separately reproduced/corrected.
-  These do not identify the original Engine/Observe timeout; Issue6 stays open.
-  Never blindly rerun old attempts or increase production probe budgets.
-- Latest fully audited successful CI source remains
-  `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`, Verification39604675084 attempt1,
-  until the newer audit is explicitly sealed. IAM/011 owns its scope.
-- Latest accepted signed production source remains
-  `5935fa5005529b2c4e1da943b98f49300430ba10`, IAM/Audit/PaaS87/39/7+r37.
-  Sole retained-data predecessor:
-  `08e1dc4a6ce81386ea7223e62d03356f82aeee58`,86/39/7+r36.
-  FEAT-005 owns signed lifecycle evidence. Later test/UI commits do not inherit
-  a new signed-release conclusion.
+- The host goal remains the bounded AccessKey/same-account Role real-console
+  closure, necessary fixes, independent verification and cleanup. Do not reopen
+  the complete IAM matrix or silently add every unaccepted UI path to this goal.
+- Latest pushed code: `b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f`, parent
+  `fe6e5220efc602fbe7744f416078288527a9fcd9`. It integrates the existing User
+  deletion UI owner with exact server receipts and same-tab non-replayable
+  UNKNOWN protection. Fixed donors and selective adoption are recorded only in
+  docs/adoption/FEAT-007-control-plane-console.md; no donor generated assets,
+  checkpoint or acceptance status were imported.
+- User deletion now treats untrusted protocol errors as UNKNOWN, not known
+  refusals that clear the original intent. Local stale-target preflight is a
+  conflict with zero storage/HTTP effects. The consumer preserves two protocol
+  regressions and proves the stale case red before the one-line production fix.
+  IAM/010 owns precise red/green and local verification evidence: affected tests,
+  type/lint/architecture/styles, two bounded production exports, exact embedded
+  equivalence and Go UI/architecture/vet. Build is
+  `matrix-a6f26f9b65bd7e6b26c1`; all 324 generated files matched.
+- Verification39794059308 attempt1 was independently confirmed for exact b2ae
+  through GitHub API. At the latest check it was non-terminal: the installation
+  job was running and other initial jobs queued. Continue that run; do not start
+  another attempt because observation timed out. A green predecessor is not its
+  CI evidence. Test Expert has the exact fixed handoff and existing monitor.
+- Previous code fe6e5220e integrates the Role deletion server receipt. Its exact
+  Verification39775416795 attempt1 is completed/success, nineteen jobs confirmed
+  through GitHub API. This is run/job metadata, not a completed whole-log audit.
+  Real Role deletion and User deletion browser gates remain separate and pending;
+  neither is part of the already scoped K1/K2/R1/R2 acceptance.
+- API/SQL/Profile did not change. Latest accepted signed production source is
+  still `5935fa5005529b2c4e1da943b98f49300430ba10`, IAM/Audit/PaaS87/39/7+r37.
+  Sole rolling data predecessor is `08e1dc4a6ce81386ea7223e62d03356f82aeee58`,
+  86/39/7+r36. FEAT-005 owns signed lifecycle acceptance. The latest fully
+  audited successful CI source remains e22d748/Verification39604675084 until a
+  newer full-log audit is explicitly sealed in IAM/011.
 
-## Acceptance and next boundary
+## Completion audit and remaining boundary
 
-- Read AGENTS, IAM/FEAT-IAM-010-console.md's AccessKey/Role section and owning
-  tests. IAM/007 owns Key rules, IAM/006 owns Role rules, IAM/011 owns CI.
-  Navigation changes additionally use FEAT-007/ADR-0002/adoption. No parallel
-  acceptance document or browser framework.
-- K2 SET_STATUS, NETWORK and DELETE each have actual browser/process/PG18
-  response-loss, exact replay, independent readback and Audit proof in010.
-- K1 normal lifecycle is accepted on clean113a2299, code08e0d76 and embedded e22.
-  The original UX executor completed all seven confirmed page writes; fresh
-  PG18 and actual IAM/Audit/PaaS/dispatchers passed727.31 seconds, race730.876.
-  Actual signing proved overlap, disable/enable, deletion, quota release and
-  replacement; seven exact facts and the complete tenant chain matched.
-  Secrets stayed in one-time UI/test memory. This does not accept R1/R2.
-- R1 creation/trust/boundary/attachment/assume plus exact RoleSession revocation
-  is accepted on clean382243922, codeb3c3 and actual PG18.4. The original UX
-  executor obtained direct confirmation for the fresh destination/objects and
-  completed all five page actions. Root834.25 seconds/race837.760, exit0.
-  Actual single assumption and application200/Audit403 were observed; exact
-  revocation produced same-Role401 on managed-services, explicit original
-  source200 and source application403. Source Session remained valid; the
-  independent sibling retained IAM/application200 and Audit403. Role/trust/
-  attachment were unchanged, five exact facts and the complete chain matched.
-  The temporary product-menu overlay was dismissed before the successful return;
-  it is not a proven backend/session defect. No relogin or second assumption.
-  Postconditions found Role1/active attachment1/RoleSessions2 (one revoked,
-  one valid sibling), zero clients/processes/browser listener; tabs are closed.
-  This attempt's PG/network/empty-root cleanup was denied before execution.
-  Those resources remain; do not retry through another route or claim cleanup.
-  IAM/010 owns the precise acceptance; R2 attachment recovery remains separate.
-- R2 attachment revocation recovery is now accepted on clean b3bd03958.
-  Fresh PG18.4, actual restricted IAM/Audit/PaaS/dispatchers and original UX
-  executor: root325.73 seconds/race329.294, exit0. One page assumption,
-  exact application200, one attachment revoke, true partial-response loss,
-  one same-origin original receipt GET and zero post-loss writes. Same Role
-  detail401/BLOCKED before natural expiry, explicit original source200 and
-  source application403; original issuance unchanged, fresh explicit Role
-  follows no-attachment authority and cannot revive the old credential.
-  Unique completion/outbox/Audit and full tenant chain verified. Task
-  processes/listener/clients zero, two pages closed; its PG/tmpfs DB, empty
-  network and empty root were removed with label rechecks. 010 owns details.
-  The earlier clean-dea0 run remains failed554.94/race557.535 because the old
-  loss wrapper was blocked. Its denied cleanup residues remain untouched.
-- K1/K2/R1/R2 page requirements for this bounded goal are all accepted at
-  their exact sources, and the latest exact-code independent CI has succeeded.
-  Remaining required closure is the previously tool-denied resource cleanup,
-  not another broad browser run or signed release. Do not promote
-  the full IAM/010/011 matrix to Accepted; its other paths remain separate.
-- The current observer requires the issued Role's prior application200, actual
-  admin revocation, protected401 before natural expiry, explicit original
-  source validation200 and source application403. Never request again using a
-  credential already blocked by the UI or widen exact resources.
-- Every accepted journey needs both page observations and independent effects.
-  Markers only trigger verification; API/component tests do not substitute for
-  page writes. No SSO, WebAuthn, cross-account or role-chain expansion.
+- Read AGENTS, IAM/FEAT-IAM-010-console.md's AccessKey/Role section, then its
+  owning tests. IAM/007 owns Key rules, IAM/006 Role rules and IAM/011 CI.
+- K1 accepted at fixed113a2299, code08e0d76/embedded e22: seven actual page
+  commands, one-time Secret dismissal and navigation, two real signing Keys,
+  disable/enable/delete, quota release and replacement. Actual process root
+  passed727.31 seconds/race730.876 with unique facts and complete Audit chain.
+- K2 SET_STATUS, NETWORK and DELETE each have separate fresh PG18/process/page
+  response-loss evidence, original exact replay, independent current readback,
+  unique effects and complete tenant chain in010. No mock/API-only substitute.
+- R1 accepted at fixed382243922/codeb3c3: page Role/Trust/boundary/attachment,
+  one assumption, application200/Audit403 and exact RoleSession revocation.
+  Root834.25 seconds/race837.760, source Session and independent sibling intact,
+  BLOCKED then explicit source validation200 and source application403.
+- R2 accepted at fixedb3bd039: root325.73 seconds/race329.294. One page attachment
+  revocation, genuine partial-response loss, one exact original receipt GET and
+  zero post-loss writes. Same Role401 before natural expiry, explicit source200
+  then application403, unique completion/outbox/Audit and full chain. Its own
+  processes, pages, PG/tmpfs DB, empty network and root were cleaned.
+- The earlier R2 dea0 attempt remains a failure: the old wrapper did not own the
+  actual hijackable connection. The fixed shared real-HTTP assembly proved the
+  old failure and correct partial-body/EOF plus exact receipt observations.
+  Do not rerun or relabel that historical failed attempt.
+- K1/K2/R1/R2 requirements are accepted at their exact sources. Remaining bounded
+  goal closure is current independent CI and unused own resource cleanup, not
+  another broad browser run, signed release or Policy SET_DEFAULT gate. Other
+  IAM/010 non-Deferred paths remain incomplete for the larger product goal.
+- Read-only revalidation on 2026-10-22 confirmed the previously tool-denied
+  residues still exist: three running task PG containers, one stopped diagnostic
+  container with its attached volume, their networks, the generated test binary
+  and task directories. These are not cleaned. Previous denial must not be
+  bypassed by another executor, split shell command, rename or parent deletion.
+  Do not ask another task to clean them. Exact machine-local handles are in this
+  thread's evidence, not portable runtime assumptions.
+- No new PG/browser/network was created for b2ae. All local test/build commands
+  in this slice finished. Do not restart an old browser fixture to fill CI wait.
 
 ## Coordination and operating boundaries
 
-- UX/UI owner:01a07b21-9a0d-7fd0-b090-7827ce18262e, fixed UI source
-  `7a704f5f2f3deb25e7972015a495a503288f4733`.
-  Use the original executor and fixed objects only; no WIP/retained MOCK use.
-  It requires action-time confirmation for Key/permission writes. Do not
-  substitute another executor/API to evade that requirement, transfer an
-  expired confirmation or start another heavy fixture merely to idle.
-  K1's consumed approval is not a Role or later Key-fixture approval.
-- Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999. Keep its one existing monitor,
-  no new chat/agent/duplicate monitor. b3bd/39761561748 has an API-confirmed green
-  terminal; do not poll it as live or rerun accepted gates. Preserve unfinished
-  log audits until the original reading capability is available. Distinguish
-  checked evidence from unaudited detail; closed logs need no repeated fetching.
-- User authorizes autonomous MATRIX development/testing; no product-design
-  decision is missing. Actual tool confirmation/handoff restrictions remain.
-- Own unique labels/IDs with explicit CPU/memory/PID limits. Go GOMAXPROCS2/-p2,
-  heavy gates serial; process-local Node22/2GiB with bounded workers. No global
-  nvm, prune, shared/remote restart, other Phase writes or retained install use.
-- Clean only verified own unused resources. Tool-denied cleanup is not done and
-  must not be retried through another executor, shell, rename or parent deletion.
-  A generated Linux test binary, an older stopped diagnostic container with its
-  attached anonymous volume, empty task directories, Analyzer PG/network,
-  successful R1 PG/network/root and
-  the failed R2 PG/network/root
-  remain denied residues. The PGs were last read-only checked running with zero
-  fixture clients.
-  Do not ask another task to bypass the denial or claim complete cleanup.
-  Machine-local handles are not portable runtime evidence.
-- Markdown and existing owners only. Keep this single checkpoint for pushed
-  work; no transient URLs, absolute machine paths or another owner's WIP.
+- UX/UI owner:01a07b21-9a0d-7fd0-b090-7827ce18262e. User authorizes technical
+  decisions and coordination; internal A/B decisions belong to IAM, not a new
+  human approval. Actual browser action-time confirmations or tool restrictions
+  cannot be self-approved or evaded through another executor.
+- UX acknowledged b2ae as a candidate. Its next suggested Policy SET_DEFAULT
+  browser gate is separately scoped in010 and is not running. Do not create a
+  heavy environment before the original browser executor is ready. Main owns
+  the existing process fixture and effects/Audit checks; UX owns page execution.
+- Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999. Keep its existing single
+  monitor, not another chat/agent/duplicate monitor. Preserve any unavailable
+  log-reading boundary; do not turn run metadata into a full-log audit.
+- Every test resource is own, uniquely labelled and bounded. Go uses
+  GOMAXPROCS2/-p2; heavy real gates run serially. Use process-local Node22/2GiB,
+  bounded workers and existing nvm installation; never change global nvm.
+- No prune, shared/remote restart, other Phase WIP, retained install or remote
+  test host use. Clean only verified own unused objects when the tool permits.
+- Markdown and existing owners only. This checkpoint describes pushed work;
+  no new transient report, absolute checkout path or external WIP inventory.
