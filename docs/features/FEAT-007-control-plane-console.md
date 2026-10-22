@@ -3298,6 +3298,28 @@ landed on the single localized `应用服务` H1 and no Dialog remained. This
 changes no IAM API, permission model, data contract or real Account/resource;
 the preview observation is not LIVE Role-session acceptance.
 
+On 2026-10-22 the same maintained `4317` preview extended that inspection
+through all eleven entries exposed by Products and services: Region,
+Application hosting, PostgreSQL, MySQL, Elasticsearch, RabbitMQ, DevOps, IAM,
+Observability, Log Service and Audit. Every launcher selection closed the
+directory before the destination was exposed, rendered one destination H1,
+left no Dialog or horizontal document overflow, and kept the fixed service
+frame available without a whole-content skeleton. PostgreSQL alone exposed
+two local busy regions while its product heading, product navigation and
+getting-started content remained mounted; that is a data-region load, not a
+page replacement. The IAM User title actions also retained the exact same
+desktop rectangles before and after selecting one User: `More actions` and
+`Create user` both remained 106×32 pixels at the same X/Y coordinates while
+only selection status and command availability changed. User, Group, Policy,
+Role and AccessKey directories each rendered the shared page status, page-size
+selector and previous/next controls with one table and no horizontal overflow.
+The account menu's tenant, theme/language and account-action sections shared
+the same transparent surface, 16-pixel outer inset and separator grammar;
+account actions no longer introduce a second darker panel. These are
+isolated-MOCK presentation and interaction observations only. They neither
+prove a latency service level nor replace the independent LIVE IAM and product
+runtime gates.
+
 These gates do not establish a universal click-latency budget, a new whole-repository
 or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
 IAM acceptance. Earlier live User-boundary evidence retains its named source
