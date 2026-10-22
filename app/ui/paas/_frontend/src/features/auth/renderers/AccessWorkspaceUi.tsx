@@ -228,7 +228,7 @@ export function WorkspaceDelete({ name, onClose, onConfirm, impact, hint, operat
   const t = useTranslations("IamWorkspace");
   const [confirmation, setConfirmation] = useState("");
   const id = useId();
-  return <WorkspaceDialog title={t("deleteTitle", { name })} onClose={onClose} submitLabel={t("deleteConfirm")} onSubmit={async () => confirmation === name && Boolean(await onConfirm())} operation={operation} draft={draft}>
+  return <WorkspaceDialog title={t("deleteTitle", { name })} onClose={onClose} submitLabel={t("deleteConfirm")} submitDisabled={confirmation !== name} submitVariant="danger" onSubmit={async () => confirmation === name && Boolean(await onConfirm())} operation={operation} draft={draft}>
     <Alert status="warning">{hint ?? t("deleteHint")}</Alert>{impact}<strong>{name}</strong>
     <FormField id={id} label={t("confirmName")}><Input id={id} autoComplete="off" required value={confirmation} onChange={(event) => setConfirmation(event.target.value)} /></FormField>
     {confirmation && confirmation !== name ? <p className={styles.note}>{t("confirmName")}: {name}</p> : null}

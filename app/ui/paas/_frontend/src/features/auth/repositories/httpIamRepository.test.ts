@@ -3222,18 +3222,26 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("binds irreversible deletion to one user revision", async () => {
-    const fetcher = reply({ apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp });
-    await httpAccountRepository.execute("bearer", { kind: "delete-user", userId: user.id, resourceVersion: 2 });
+    const deletion = { apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp };
+    const command = { resourceVersion: 2, requestId: "ui-user-delete-reviewed", expectedLoginName: user.loginName };
+    const fetcher = reply(deletion);
+    await expect(httpAccountRepository.deleteUser!("bearer", account.id, user.id, command)).resolves.toEqual({
+      accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp
+    });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/users/user-alex:delete");
-    expect(requestBody(fetcher)).toEqual({ resourceVersion: 2, requestId: expect.any(String) });
+    expect(firstRequest(fetcher)[1]?.method).toBe("POST");
+    expect(requestBody(fetcher)).toEqual({ resourceVersion: 2, requestId: "ui-user-delete-reviewed" });
 
     for (const body of [
+      { ...deletion, accountId: "account-other" },
       { apiVersion, kind: "UserDeletion", accountId: account.id, id: "another-user", loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp },
+      { ...deletion, loginName: "another-login" },
       { apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 4, deletedAt: timestamp },
+      { ...deletion, deletedAt: "not-a-time" },
       { apiVersion, kind: "UserDeletion", accountId: account.id, id: user.id, loginName: user.loginName, resourceVersion: 3, deletedAt: timestamp, password: "PRIVATE" }
     ]) {
       reply(body);
-      await expect(httpAccountRepository.execute("bearer", { kind: "delete-user", userId: user.id, resourceVersion: 2 })).rejects.toThrow("INVALID_IAM_RESPONSE");
+      await expect(httpAccountRepository.deleteUser!("bearer", account.id, user.id, command)).rejects.toThrow("INVALID_IAM_RESPONSE");
     }
   });
 

@@ -47,7 +47,7 @@ import { LiveSecurityReport } from "./LiveSecurityReport";
 import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
 import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
 import { AuthorizationProfilePublishingWorkspace } from "./AccountAuthorizationProfileCatalog";
-import type { AccountUserDetailTab } from "./AccountUserWorkspace";
+import { LiveUserDeletionUnknownView, type AccountUserDetailTab } from "./AccountUserWorkspace";
 import styles from "./AccountAccessRenderer.module.css";
 import { AccountDirectoryReadFailure } from "./AccountReadBoundary";
 
@@ -212,6 +212,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const workspace = access.workspace;
   const unknownReset = access.passwordResetUnknown;
   const resetLookup = access.passwordResetLookup;
+  const deletionUnknowns = access.userDeletionUnknowns;
   const clearFeedback = access.clearFeedback;
   const workflow = view === "create-user" || view === "create-policy" || view === "policy-language" || view === "create-group" || view === "create-role";
   useEffect(() => { clearFeedback(); }, [view, clearFeedback]);
@@ -234,6 +235,9 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   return <section aria-label={t("title")} aria-busy={access.loading || access.busy} className={styles.stack}>
     {access.accountLifecycle && (view === "tenants" || access.accountLifecycle.pending || access.accountLifecycle.recoveryError)
       ? <AccountLifecycleRecoveryNotice client={access.accountLifecycle} key={session.sessionRevision} /> : null}
+    {access.userDeletionRecoveryError ? <Alert status="danger" role="alert">{t("userDeleteRecoveryUnavailable")}</Alert> : null}
+    {deletionUnknowns.filter((intent) => view !== "users" || entityId !== intent.userId).map((intent) =>
+      <LiveUserDeletionUnknownView key={`${intent.accountId}:${intent.actorPrincipalId}:${intent.userId}:${intent.commandRequestId}`} intent={intent} />)}
     {unknownReset ? <Alert status={resetLookup?.status === "confirmed" ? "success" : "warning"}><div className={styles.confirmation}>
       <strong>{t(resetLookup?.status === "confirmed" ? "resetConfirmedTitle" : "resetUnknownTitle")}</strong>
       <p>{t("resetUnknownTarget", { user: unknownReset.userQualifiedName, version: unknownReset.resourceVersion })}</p>

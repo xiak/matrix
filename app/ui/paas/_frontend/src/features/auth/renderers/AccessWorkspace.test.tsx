@@ -204,6 +204,31 @@ describe("selection-driven user directory", () => {
     expect(screen.getByRole("button", { name: "管理" })).toBe(document.activeElement);
   });
 
+  it("keeps a MOCK user deletion receipt until explicit completion without fabricating server evidence", async () => {
+    const { user, extension } = await open("users");
+    const target = users[0]!.user;
+    await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
+    await invokePageAction(user, "删除");
+    const dialog = screen.getByRole("dialog");
+    const confirm = within(dialog).getByRole("button", { name: "确认删除" }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    await user.type(within(dialog).getByLabelText("输入名称以确认"), target.loginName);
+    expect(confirm.disabled).toBe(false);
+    await user.click(confirm);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const receipt = screen.getByRole("status", { name: "用户删除完成（MOCK）" });
+    expect(receipt.textContent).toContain(target.loginName);
+    expect(receipt.textContent).toContain(target.id);
+    expect(receipt.textContent).toContain("不是 IAM 服务器回执");
+    expect(receipt.textContent).not.toContain("请求 ID");
+    expect(receipt.textContent).not.toContain("资源版本");
+    expect(receipt.textContent).not.toContain("删除时间");
+    expect(screen.queryByRole("table", { name: "租户用户列表" })).toBeNull();
+    expect((await extension.read("preview")).userProfiles[target.id]).toBeUndefined();
+    await user.click(screen.getByRole("button", { name: "完成并返回用户列表" }));
+    expect(await screen.findByRole("table", { name: "租户用户列表" })).toBeTruthy();
+  });
+
   it("keeps a MOCK password-reset uncertainty in memory without browser storage", async () => {
     const execute = vi.fn(async (_credential: string, command: { kind: string }) => {
       if (command.kind === "reset-password") throw new Error("preview response lost");

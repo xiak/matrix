@@ -38,6 +38,8 @@ import type {
   SetAccountLifecycleStatusCommand,
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
+  UserDeletion,
+  UserDeletionIntent,
   UserPermissionBoundary,
   User,
   UserManagementIntent,
@@ -52,13 +54,14 @@ import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDi
 import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, type AccessKeyNetworkRestrictions } from "../domain/accessKeyNetwork";
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { clearAccountLifecycleIntent, parseAccountLifecycleIntent, readAccountLifecycleIntent, sameAccountLifecycleActor, writeAccountLifecycleIntent } from "../repositories/accountLifecycleRecoveryStorage";
+import { clearUserDeletionIntent, readUserDeletionIntents, writeUserDeletionIntent } from "../repositories/userDeletionRecoveryStorage";
 import { buildAccountAccessScene, buildAccountPolicyScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene, type AccountDirectoryKind, type AccountDirectoryFailures } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 import type { CreateRoleCommand, CreateRolePolicyAttachmentCommand, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand } from "../domain/roles";
 import type { AccessAnalyzer, AccessAnalyzerAccess, AccessAnalyzerDirectory, AccessFinding, AccessFindingAccess, AccessFindingDirectory, AccessFindingDispositionCommand, AccessFindingStatusFilter, CreateAccessAnalyzerCommand, SetAccessDispositionCommand, UpdateAccessAnalyzerCommand } from "../domain/accessAnalysis";
 import type { AccountSecurityReportAccess, AccountSecurityReportCreation, AccountSecurityReportDownload } from "../domain/securityReports";
 import type { SecurityStepUp } from "../domain/personalSecurity";
-import { sameSecuritySettingsIntent } from "../domain/accounts";
+import { sameSecuritySettingsIntent, userDeletionResultMatches } from "../domain/accounts";
 
 type AccountError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
 type WorkspaceExecutionError = AccessWorkspaceError["code"] | AccountError;
@@ -91,6 +94,16 @@ export type UserManagementClient = {
   readCompletion(intent: UserManagementIntent): Promise<UserManagementCompletion>;
   expire(): void;
 };
+export type UserDeletionClient = {
+  identity: string;
+  accountId: string;
+  actorPrincipalId: string;
+  delete(userId: string, command: { resourceVersion: number; requestId: string; expectedLoginName: string }): Promise<UserDeletion>;
+  expire(): void;
+};
+export class UserDeletionRecoveryUnavailable extends Error {
+  constructor() { super("USER_DELETION_RECOVERY_UNAVAILABLE"); }
+}
 export type UserBoundaryClient = {
   accountId: string;
   load(userId: string): Promise<UserBoundarySnapshot>;
@@ -735,6 +748,9 @@ type AccountAccess = {
   clearFeedback(): void;
   groups: GroupAccessClient | null;
   userManagement: UserManagementClient | null;
+  userDeletion: UserDeletionClient | null;
+  userDeletionUnknowns: readonly UserDeletionIntent[];
+  userDeletionRecoveryError: boolean;
   permissionBoundaries: UserBoundaryClient | null;
   authorizationProfiles: AuthorizationProfileClient | null;
   serviceRoleTemplates: ServiceRoleTemplateClient | null;
@@ -841,7 +857,6 @@ function accountCommandAvailable(scene: AccountAccessScene, command: AccountComm
   }
   const user = exactUsers.get(command.userId) ?? scene.users.find((item) => item.id === command.userId);
   if (!user) return false;
-  if (command.kind === "delete-user") return user.canDelete;
   if (command.kind === "set-status") return user.canSetStatus;
   if (command.kind === "reset-password") return user.canResetPassword;
   const policy = scene.policies.find((item) => item.id === command.policyId);
@@ -1026,6 +1041,49 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
   const [storedPasswordResetUnknown, setStoredPasswordResetUnknown] = useState<typeof passwordResetUnknownRef.current>(null);
   const passwordResetUnknown = storedPasswordResetUnknown?.session === viewSession ? storedPasswordResetUnknown.intent : null;
   const [storedPasswordResetLookup, setStoredPasswordResetLookup] = useState<{ session: typeof viewSession; result: PasswordResetLookup } | null>(null);
+  const userDeletionRecoveryOwner = useMemo(() => active && tenantId && principalId && !repository.workspace &&
+    verifiedIdentityOwner?.session === viewSession && verifiedIdentityOwner.repository === repository
+    ? { accountId: tenantId, actorPrincipalId: principalId, repository, viewSession }
+    : null, [active, principalId, repository, tenantId, verifiedIdentityOwner, viewSession]);
+  type UserDeletionRecoveryObservation = {
+    owner: typeof userDeletionRecoveryOwner;
+    intents: readonly UserDeletionIntent[];
+    recoveryError: boolean;
+    submittingRequestId: string | null;
+  };
+  const [storedUserDeletionRecovery, setStoredUserDeletionRecovery] = useState<UserDeletionRecoveryObservation | null>(null);
+  if ((storedUserDeletionRecovery?.owner ?? null) !== userDeletionRecoveryOwner) {
+    let next: UserDeletionRecoveryObservation | null = null;
+    if (userDeletionRecoveryOwner && typeof window !== "undefined") {
+      try {
+        next = { owner: userDeletionRecoveryOwner, intents: readUserDeletionIntents(window.sessionStorage, userDeletionRecoveryOwner), recoveryError: false, submittingRequestId: null };
+      } catch {
+        next = { owner: userDeletionRecoveryOwner, intents: [], recoveryError: true, submittingRequestId: null };
+      }
+    }
+    setStoredUserDeletionRecovery(next);
+  }
+  const userDeletionRecovery = storedUserDeletionRecovery?.owner === userDeletionRecoveryOwner ? storedUserDeletionRecovery : null;
+  const userDeletionSubmission = useRef<{ owner: NonNullable<typeof userDeletionRecoveryOwner>; intent: UserDeletionIntent } | null>(null);
+  const userDeletionUnknowns = (userDeletionRecovery?.intents ?? []).filter((intent) =>
+    userDeletionRecovery?.submittingRequestId !== intent.commandRequestId);
+  const userDeletionRecoveryError = Boolean(userDeletionRecoveryOwner && (!userDeletionRecovery || userDeletionRecovery.recoveryError));
+  const userDeletionRecoveryRef = useRef<UserDeletionRecoveryObservation | null>(userDeletionRecovery);
+  const currentUserDeletionRecoveryOwner = useRef<typeof userDeletionRecoveryOwner>(userDeletionRecoveryOwner);
+  useLayoutEffect(() => {
+    currentUserDeletionRecoveryOwner.current = userDeletionRecoveryOwner;
+    userDeletionRecoveryRef.current = userDeletionRecovery;
+  }, [userDeletionRecovery, userDeletionRecoveryOwner]);
+  const publishUserDeletionRecovery = useCallback((owner: NonNullable<typeof userDeletionRecoveryOwner>, intents: readonly UserDeletionIntent[], recoveryError = false, submittingRequestId: string | null = null) => {
+    if (currentUserDeletionRecoveryOwner.current !== owner) return false;
+    const next: UserDeletionRecoveryObservation = { owner, intents: Object.freeze([...intents]), recoveryError, submittingRequestId };
+    userDeletionRecoveryRef.current = next;
+    setStoredUserDeletionRecovery(next);
+    return true;
+  }, []);
+  useLayoutEffect(() => {
+    if (userDeletionSubmission.current?.owner !== userDeletionRecoveryOwner) userDeletionSubmission.current = null;
+  }, [userDeletionRecoveryOwner]);
   const accessKeyCreateRef = useRef<{ session: typeof viewSession; intent: AccessKeyCreateIntent } | null>(null);
   const accessKeyCreateSubmitting = useRef<{ session: typeof viewSession; requestId: string } | null>(null);
   const accessKeyIssuedRef = useRef<{ session: typeof viewSession; requestId: string; accessKeyId: string } | null>(null);
@@ -1588,6 +1646,90 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       expire() { if (owns() && expireSession(credential, sessionRevision)) { setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired"); } }
     };
   }, [active, credential, exactUsers, expireSession, principalId, repository, scene, sessionRevision, tenantId, userManagementOwner, verifiedIdentityOwner, viewSession]);
+
+  const userDeletionOwner = useMemo(() => ({ active, repository, viewSession, identity: requestToken("ui-user-deletion-view-") }), [active, repository, viewSession]);
+  const currentUserDeletionOwner = useRef<typeof userDeletionOwner | null>(userDeletionOwner);
+  useLayoutEffect(() => { currentUserDeletionOwner.current = userDeletionOwner; return () => { currentUserDeletionOwner.current = null; }; }, [userDeletionOwner]);
+  const userDeletion = useMemo<UserDeletionClient | null>(() => {
+    const remove = repository.deleteUser;
+    if (!active || !credential || !scene || repository.workspace || !remove || scene.accountId !== tenantId || scene.currentUserId !== principalId ||
+        verifiedIdentityOwner?.session !== viewSession || verifiedIdentityOwner.repository !== repository || !userDeletionRecoveryOwner) return null;
+    const owns = () => currentUserDeletionOwner.current === userDeletionOwner && currentViewSession.current === viewSession && currentExactUsers.current === exactUsers;
+    return {
+      identity: userDeletionOwner.identity,
+      accountId: tenantId,
+      actorPrincipalId: principalId,
+      async delete(userId, command) {
+        const user = exactUsers.users.get(userId);
+        if (!owns() || !user || user.id === scene.accountOwner.id || user.id === principalId || !user.canDelete ||
+            user.accountId !== tenantId || user.resourceVersion !== command.resourceVersion || user.loginName !== command.expectedLoginName) {
+          return Promise.reject(new HttpProblem(409, "STALE_USER_DELETION_OWNER"));
+        }
+        const recovery = userDeletionRecoveryRef.current;
+        if (currentUserDeletionRecoveryOwner.current !== userDeletionRecoveryOwner || recovery?.owner !== userDeletionRecoveryOwner ||
+            recovery.recoveryError || recovery.intents.some((known) => known.userId === userId) ||
+            userDeletionSubmission.current?.owner === userDeletionRecoveryOwner) {
+          throw new UserDeletionRecoveryUnavailable();
+        }
+        const intent: UserDeletionIntent = Object.freeze({
+          format: 1,
+          accountId: tenantId,
+          actorPrincipalId: principalId,
+          userId,
+          loginName: command.expectedLoginName,
+          expectedResourceVersion: command.resourceVersion,
+          commandRequestId: command.requestId
+        });
+        try {
+          writeUserDeletionIntent(window.sessionStorage, intent);
+        } catch {
+          publishUserDeletionRecovery(userDeletionRecoveryOwner, recovery.intents, true);
+          throw new UserDeletionRecoveryUnavailable();
+        }
+        const pending = [...recovery.intents, intent].sort((left, right) => left.userId.localeCompare(right.userId));
+        const submission = { owner: userDeletionRecoveryOwner, intent };
+        userDeletionSubmission.current = submission;
+        publishUserDeletionRecovery(userDeletionRecoveryOwner, pending, false, intent.commandRequestId);
+        try {
+          const result = await protectedMutation(() => remove(credential, tenantId, userId, command));
+          if (!owns() || currentUserDeletionRecoveryOwner.current !== userDeletionRecoveryOwner || userDeletionSubmission.current !== submission) return result;
+          if (!userDeletionResultMatches(result, intent)) throw new Error("INVALID_IAM_USER_DELETION");
+          const remaining = pending.filter((known) => known.userId !== intent.userId);
+          try {
+            clearUserDeletionIntent(window.sessionStorage, intent);
+            publishUserDeletionRecovery(userDeletionRecoveryOwner, remaining);
+          } catch {
+            // The verified server receipt remains success evidence. Keep the
+            // deletion boundary closed because the stale local fence could not
+            // be removed safely.
+            publishUserDeletionRecovery(userDeletionRecoveryOwner, remaining, true);
+          }
+          return result;
+        } catch (failure) {
+          if (!owns() || currentUserDeletionRecoveryOwner.current !== userDeletionRecoveryOwner || userDeletionSubmission.current !== submission) throw failure;
+          if (failure instanceof HttpProblem && [400, 401, 403, 409, 422].includes(failure.status)) {
+            const remaining = pending.filter((known) => known.userId !== intent.userId);
+            try {
+              clearUserDeletionIntent(window.sessionStorage, intent);
+              publishUserDeletionRecovery(userDeletionRecoveryOwner, remaining);
+            } catch {
+              publishUserDeletionRecovery(userDeletionRecoveryOwner, remaining, true);
+            }
+          } else {
+            publishUserDeletionRecovery(userDeletionRecoveryOwner, pending);
+          }
+          throw failure;
+        } finally {
+          if (userDeletionSubmission.current === submission) userDeletionSubmission.current = null;
+        }
+      },
+      expire() {
+        if (owns() && expireSession(credential, sessionRevision)) {
+          setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
+        }
+      }
+    };
+  }, [active, credential, exactUsers, expireSession, principalId, protectedMutation, publishUserDeletionRecovery, repository, scene, sessionRevision, tenantId, userDeletionOwner, userDeletionRecoveryOwner, verifiedIdentityOwner, viewSession]);
 
   const groupsOwner = useMemo(() => ({ active, repository, viewSession, identity: requestToken("ui-groups-view-") }), [active, repository, viewSession]);
   const currentGroupsOwner = useRef<typeof groupsOwner | null>(groupsOwner);
@@ -2847,6 +2989,9 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     userDirectoryView,
     groups,
     userManagement,
+    userDeletion,
+    userDeletionUnknowns,
+    userDeletionRecoveryError,
     permissionBoundaries,
     authorizationProfiles,
     serviceRoleTemplates,
@@ -3010,7 +3155,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       }
       finally { mutationPending.current = false; setBusy(false); }
     }
-  }), [active, authorityPending, busy, credential, error, exactUsers, loading, repository, requestAuthorityRefresh, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, userManagement, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, userPolicyChangeReady, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyRecoveryError, accessKeyCreateIntent, accessKeyMutationIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
+  }), [active, authorityPending, busy, credential, error, exactUsers, loading, repository, requestAuthorityRefresh, retryDirectory, loadPolicyDirectory, scene, success, tenantId, principalId, viewSession, workspace, workspaceError, clearWorkspaceError, clearFeedback, groups, userManagement, userDeletion, userDeletionUnknowns, userDeletionRecoveryError, permissionBoundaries, authorizationProfiles, serviceRoleTemplates, serviceLinkedRoles, policyRead, policyCreate, policyMutation, policyVersionMutation, accountLifecycle, userCreation, userPolicyChangeReady, accountSecuritySettings, accessAnalysis, securityReports, accessKeys, accessKeyRecoveryError, accessKeyCreateIntent, accessKeyMutationIntent, roles, roleSessionRevokeIntent, changeRoleSessionRevokeIntent, userPolicyChangeIntent, passwordResetUnknown, passwordResetLookup, beginUserPolicyAttachment, beginUserPolicyRevocation, submitUserPolicyChange, inspectUserPolicyChange, endUserPolicyChange, loadUser, loadUsersPage, loadAccountsPage, policyDirectoryView, userDirectoryView]);
 
   return <AccountCapabilitiesContext.Provider value={capabilities}>
     <AccountAccessContext.Provider value={value}>{children}</AccountAccessContext.Provider>

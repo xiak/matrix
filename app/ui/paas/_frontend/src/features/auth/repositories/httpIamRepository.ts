@@ -49,6 +49,7 @@ import type {
   PasswordResetRequestIdentity,
   UserPasswordResetCompletion,
   User,
+  UserDeletion,
   UserManagementCompletion,
   UserAccess,
   UserPolicyAttachment,
@@ -301,6 +302,23 @@ function parseUser(value: unknown): User {
     mustChangePassword: wire.mustChangePassword === true,
     resourceVersion: accountVersion(wire.resourceVersion)
   };
+}
+
+function parseUserDeletion(value: unknown, accountId: string, userId: string, expectedLoginName: string, resourceVersion: number): UserDeletion {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "accountId", "id", "loginName", "resourceVersion", "deletedAt"]);
+  requireAccountKind(wire, "UserDeletion");
+  const result: UserDeletion = {
+    accountId: accountIdentifier(wire.accountId),
+    id: accountIdentifier(wire.id),
+    loginName: accountText(wire.loginName),
+    resourceVersion: accountVersion(wire.resourceVersion),
+    deletedAt: accountTimestamp(wire.deletedAt)
+  };
+  if (result.accountId !== accountId || result.id !== userId || result.loginName !== expectedLoginName || result.resourceVersion !== resourceVersion + 1) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
+  return result;
 }
 
 function parseAttachment(value: unknown): Omit<UserPolicyAttachment, "target"> & {
@@ -3462,6 +3480,19 @@ export const httpAccountRepository: AccountRepository = {
     if (access.user.id !== userId) throw new Error("INVALID_IAM_RESPONSE");
     return access;
   },
+  async deleteUser(credential, accountId, userId, command) {
+    const owner = accountIdentifier(accountId);
+    const target = accountIdentifier(userId);
+    const resourceVersion = accountVersion(command.resourceVersion);
+    if (resourceVersion === Number.MAX_SAFE_INTEGER) throw new Error("INVALID_IAM_REQUEST");
+    const requestId = accountIdentifier(command.requestId);
+    const expectedLoginName = accountText(command.expectedLoginName);
+    return parseUserDeletion(await requestJSON<unknown>(`/api/iam/v1/users/${encodeURIComponent(target)}:delete`, {
+      method: "POST",
+      headers: { ...accountHeaders(credential), "Content-Type": "application/json" },
+      body: JSON.stringify({ resourceVersion, requestId })
+    }), owner, target, expectedLoginName, resourceVersion);
+  },
   async readPasswordResetCompletion(credential, request) {
     const userId = accountIdentifier(request.userId);
     const requestId = accountIdentifier(request.requestId);
@@ -3726,7 +3757,6 @@ export const httpAccountRepository: AccountRepository = {
     let body: object;
     switch (command.kind) {
       case "set-alias": path = "/api/iam/v1/account:alias"; body = { alias: command.alias, resourceVersion: command.resourceVersion }; break;
-      case "delete-user": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:delete`; body = { resourceVersion: command.resourceVersion }; break;
       case "reset-password": path = `/api/iam/v1/users/${encodeURIComponent(command.userId)}:reset-password`; body = { initialPassword: command.initialPassword, resourceVersion: command.resourceVersion }; break;
       case "create-policy-attachment": path = "/api/iam/v1/policy-attachments"; body = { target: { kind: "USER", id: command.userId }, policyId: command.policyId, policyResourceVersion: command.policyResourceVersion }; break;
       default: throw new Error("INVALID_IAM_COMMAND");
@@ -3740,19 +3770,6 @@ export const httpAccountRepository: AccountRepository = {
     if (command.kind === "create-policy-attachment") {
       const attachment = parsePolicyAttachment(result);
       if (attachment.target.id !== command.userId || attachment.policyId !== command.policyId) throw new Error("INVALID_IAM_RESPONSE");
-      return;
-    }
-    if (command.kind === "delete-user") {
-      const wire = accountRecord(result);
-      exactKeys(wire, ["apiVersion", "kind", "accountId", "id", "loginName", "resourceVersion", "deletedAt"]);
-      requireAccountKind(wire, "UserDeletion");
-      if (
-        wire.id !== command.userId ||
-        typeof wire.accountId !== "string" || !wire.accountId.length ||
-        typeof wire.loginName !== "string" || !wire.loginName.length ||
-        accountVersion(wire.resourceVersion) !== command.resourceVersion + 1
-      ) throw new Error("INVALID_IAM_RESPONSE");
-      accountTimestamp(wire.deletedAt);
       return;
     }
     const user = parseUser(result);
