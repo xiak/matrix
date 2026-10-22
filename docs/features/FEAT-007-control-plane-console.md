@@ -3320,6 +3320,20 @@ isolated-MOCK presentation and interaction observations only. They neither
 prove a latency service level nor replace the independent LIVE IAM and product
 runtime gates.
 
+The final closure rerun used pushed source and synchronized assets at
+`369482c2a`. `npm run check` passed 79 frontend files / 2,073 cases and all
+eight Node export-boundary cases, including typecheck, lint, architecture and
+theme-style gates; the production export again produced 59 pages, normalized
+57 segment files and matched all 324 embedded files byte-for-byte. PaaS UI Go
+test and vet also passed. A fresh in-app-browser entry to the retained `4317`
+preview reached the Dashboard, opened PostgreSQL from Products and services,
+and switched IAM User → Group without a whole-page busy region or loading
+placeholder; destination URLs and H1s changed and the launcher left no Dialog.
+The corresponding real-IAM Role-recovery evidence and exact-source CI terminal
+remain owned by FEAT-IAM-010/011 at IAM evidence commit `ae284497b`; this UI
+rerun does not broaden that accepted slice into the full IAM matrix or a signed
+release.
+
 These gates do not establish a universal click-latency budget, a new whole-repository
 or PostgreSQL runtime regression, a new APISIX installation/upgrade, or complete
 IAM acceptance. Earlier live User-boundary evidence retains its named source
