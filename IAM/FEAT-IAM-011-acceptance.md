@@ -41,14 +41,17 @@
 | 边界 | 固定对象与当前结论 |
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
-| 最近独立CI通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
-| 最新代码候选 | `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`：原测试owner改用无声明卷的固定Docker CLI镜像，并为访问分析器schema重放增加SQLSTATE-only诊断；局部真实容器、PG及默认门禁通过，[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1待确认。`22591d3a52285c98ed269cd4a41643872d0b30c3`的[Verification39736548709](https://github.com/xiak/matrix/actions/runs/39736548709) attempt1已失败，不能接受为四产品或本轮全部存储通过 |
+| 最近完整日志审计通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
+| 最新CI终态 | `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1已核实`completed/success`，十九项job全部成功；测试owner已取得Analyzer实际PASS41.08秒，完整日志审计仍未封存，不冒充浏览器或签名发布通过 |
+| 最新代码候选 | `b3c3d157fd58af0743f4ef4721123b27de05abf8`：只修正R1夹具按当前metadata定位准确Role，真实PG预检与默认race/vet通过；[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1待确认。页面实际创建、承担和撤销仍按010未验收，不由查询修正或前一CI补证 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
 
-固定`22591d3a52285c98ed269cd4a41643872d0b30c3`的[Verification39736548709](https://github.com/xiak/matrix/actions/runs/39736548709) attempt1已确认`completed/failure`：十九项job为十六成功，storage、managed-products和派生汇总失败。两项原始失败已取得准确证据，其余日志的独立全量核对尚未封存，不能称全部子测试人工审计完成。
+固定`7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1已于2026-10-22 16:17:47+08通过GitHub API核实精确SHA、`completed/success`和十九项job全部成功。测试owner已取得`TestIAMAccessAnalyzerPostgres`实际PASS41.08秒；短输入根、完整产品根及其余完整日志的独立逐项审计尚未封存。该CI终态不回填22591的失败，不证明旧Engine或迁移失败的唯一根因，不接受尚未实际执行的R1/R2或新签名发布。
+
+固定`22591d3a52285c98ed269cd4a41643872d0b30c3`的[Verification39736548709](https://github.com/xiak/matrix/actions/runs/39736548709) attempt1已确认`completed/failure`：十九项job为十六成功，storage、managed-products和派生汇总失败。测试owner已完成十九份日志核验并封存；Analyzer失败后另六个storage根未RUN，不能只由job清单补作通过。两项原始失败保持以下结论，不重复获取已关闭日志。
 
 [产品job119686270746](https://github.com/xiak/matrix/actions/runs/39736548709/job/119686270746)的短输入根实际通过0.42秒（package1.480秒），另两条存储根通过0.46/0.50秒（package2.022秒）；完整provider根却以46.09秒失败（package46.161秒）。它已越过HTTP200等待，随后在容器挂载检查报`managed worker exposes an unexpected host directory or volume`；固定client验证标记与四产品完成摘要均为零，不能当作产品通过或旧Engine超时。本job完整78,174字节已由测试owner核验，不重复获取。固定DinD镜像实际声明`/var/lib/docker`卷；在原短容器门禁新增相同边界的实际mount检查后，本机以1.90秒复现拒绝（race包4.466秒），不是推测为资源抖动。
 
@@ -58,7 +61,7 @@
 
 [storage job119686270764](https://github.com/xiak/matrix/actions/runs/39736548709/job/119686270764)的`TestIAMAccessAnalyzerPostgres`在末端schema重放以50.07秒失败（package50.150秒），原错误只有`apply IAM migration: PostgreSQL migration apply failed`，没有SQLSTATE或底层锁证据。本机在workflow相同PostgreSQL镜像实际18.4、独占2CPU/1GiB/PIDs128/tmpfs的新库，以Windows Go1.26.3/race-p1原样通过40.760秒；不能反推Linux CI根因。当前候选仅复用既有SQLSTATE-only trace，在该admin连接和准确replay处记录去敏错误码及context状态；不记录SQL/参数/错误细节，不改变迁移、扫描器、重试或期限。另一新库通过37.192秒，但存储CI失败仍未确定根因，不能称已经修复。
 
-本机Elasticsearch内核前提仍不足且未修改，完整Linux四产品及本轮存储需后继精确CI证明。新短容器均由原cleanup回收；新PG及其独占网络清理被工具策略拒绝，旧拒删残留未重试，不宣称全部资源清理完成。生产代码、API、SQL、UI及发布profile均未改变。
+本机Elasticsearch内核前提仍不足且未修改；本机短容器和PG检查不证明完整Linux四产品，独立CI证据以上述准确版本和实际核验范围为准。新短容器均由原cleanup回收；新PG及其独占网络清理被工具策略拒绝，旧拒删残留未重试，不宣称全部资源清理完成。生产代码、API、SQL、UI及发布profile均未改变。
 
 固定`08e0d76bbea2d63c59b790e61c2870162d928c19`的[Verification 39711834716](https://github.com/xiak/matrix/actions/runs/39711834716) attempt1于2026-10-22由测试owner核对为`completed/failure`，全部十九份job日志核验后仍为十七成功、managed-products及派生汇总两项失败。[实际失败job](https://github.com/xiak/matrix/actions/runs/39711834716/job/119607098586)的唯一原始失败为`TestManagedProductProviderProcesses`：运行43.43秒、package43.497秒后失败，worker在预期HTTP200就绪前exit1，封闭码为`PAAS_WORKER_EXECUTION_PROFILE_DOCKER_ENGINE_TIMEOUT`；另两条产品存储根通过0.47/0.41秒，但四产品完整效果摘要为零次，不能接受真实四产品旅程。新增观测记录`Start`调用耗时460.219微秒、`Start`返回到`Wait`返回3.021389335秒、系统报告的进程user/system CPU为66.865/57.404毫秒。它们不是Docker CLI自身的起止、内核精确退出时间或daemon CPU，也未提供探针时刻的资源/OOM及底层响应证据；不能从根测试时长或初始化/清理成功反推原因。此前固定958d5b4的[Verification 39646488455](https://github.com/xiak/matrix/actions/runs/39646488455) attempt1同为十九项中十七成功、该产品根与汇总失败，已封存，不重复获取旧日志或回填终态。
 
