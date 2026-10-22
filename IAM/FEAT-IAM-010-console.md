@@ -575,9 +575,11 @@ UX/UI owner后继固定`6083f30008a6d57e1073b506f14e3c0fb42ee830`只提交其分
 
 响应丢失按[005的版本事务合同](FEAT-IAM-005-policy-versions-and-boundaries.md#版本发布事务)验收，不冒充附件的只读完成查询：首个POST真实提交后丢回包，页面冻结UNKNOWN及原意图；只允许操作者显式重试完全相同的method/path/Host/requestId/version/body一次。两个POST必须对应一个Policy修订变化和一条成功outbox/Audit，原结果修订仍当前时才能确认；当前状态GET或冲突都不证明原意图完成。页面确认后独立重读版本目录，目标为当前默认，两个版本的内容/编译声明及零授权引用保持。后继修订后的历史结果恢复没有新接口，本片不扩张为不可变completion GET或通用receipt框架；原数据/Audit后验与页面观察必须同时通过，才登记该路径验收。
 
-测试候选`83d7c42cf665296d10de5fec15cf5ea26feb8dd7`已完成本地默认/race/架构/vet及原生Linux编译，但2026-10-19的真实页面仅到最终审阅：浏览器owner的工具要求人类逐次确认，未执行最终点击。独立PostgreSQL18.4中Policy仍为修订2、默认V1，只有准备阶段的创建/发布事实；没有完成marker、切换事实或Go PASS。该次专属进程主动停止，零数据库客户端后清理其PG容器、卷、网络、转发与临时目录。默认切换及响应丢失恢复仍未验收，不能以审阅截图、编译通过或进程停止成功替代。
+既有ResponseLoss观察器覆盖集合根`/api/iam/v1/policies`的创建、目标冒号动作和其他Policy写，排除相邻`policies-archive`、登录及GET/HEAD/OPTIONS。原单个Policy路径会漏计`:set-default-version`的等值重试，消费回归准确得到`post_loss_writes=0 want=1`后修正；十二个入口race3.733秒、默认authorityprocess/architecture race3.954/2.583秒及vet通过。主门禁仍要求一次丢包后写、两次逐字等值账本、准确path/Host及原预算，不以降低断言掩盖接线错误。此前只到审阅且未提交的运行不计验收，固定历史由Git保留。
 
-独立源码审查发现该准备版本的写观察范围是单个Policy路径，会漏计同ID的`:set-default-version`重试，导致正确页面效果仍被后验判为失败。既有ResponseLoss表复用真实fixture的唯一配置构造后，旧范围准确得到`post_loss_writes=0 want=1`，并暴露UPDATE/RETIRE漏计其他Policy写；这属于测试接线假红，不是已观察到的生产漏洞。当前范围改为集合根`/api/iam/v1/policies`，同时覆盖集合创建、目标冒号动作和其他Policy写，仍排除相邻`policies-archive`、登录及GET/HEAD/OPTIONS；没有降低主门禁的计数1、两次等值账本、准确path/Host或原预算。十二个既有ResponseLoss入口的race通过3.733秒，完整默认authorityprocess/architecture race为3.954/2.583秒，vet通过；这些廉价回归只证明观察器，不替代仍缺的真实页面提交。
+2026-10-22，UX/UI owner在本分支固定生产源码`b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f`、嵌入`matrix-a6f26f9b65bd7e6b26c1`上，使用全新专属PostgreSQL18、受限IAM/Audit/PaaS进程及内置浏览器完成该旅程。页面先打开v2确认DENY，再审阅资源修订2、当前v1、目标v2及摘要；首次确认提交后丢回包进入UNKNOWN，只点击一次原请求重试。完成后独立切换到当前默认版本，再重开版本目录，确认v2当前默认、v1仍保留且两份摘要不变。主线复核UX固定证据`1ae9ead6427b39880d0d252af65aa4e5999901b8`与原执行终态：`TestIAMPolicyMutationRecoveryConsoleBrowser`实际PASS188.14秒，race包191.687秒、exit0；不是另一次缺少数据库配置的默认跳过。
+
+原fixture同时验证两次POST的method/path/Host/body及原requestId等值，只有首次响应被截断，`RecoveryReads=0`、`PostLossWrites=1`；Policy仅修订2→3及默认指针v1→v2，两个不可变版本的内容、编译和归属保持，附件及User/Role权限边界引用均为零。同租户/action/request恰有一个准确目标、原USER actor及decision关联的outbox/Audit成功事实，完整租户链VERIFIED且Complete。测试结束且外部数据库客户端归零后，UX精确清理该次专属容器与网络，主线只读确认均不存在，没有操作其他历史拒删资源。此证据只接受零引用CUSTOMER Policy的默认版本切换和本场景恢复，不接受版本创建/退休的其余组合、并发冲突、带附件Policy、签名APISIX组合或整份IAM矩阵；没有导入donor生成资产或checkpoint。
 
 ### User资料与状态原结果恢复源码
 

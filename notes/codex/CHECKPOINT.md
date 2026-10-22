@@ -84,10 +84,17 @@
   decisions and coordination; internal A/B decisions belong to IAM, not a new
   human approval. Actual browser action-time confirmations or tool restrictions
   cannot be self-approved or evaded through another executor.
-- UX acknowledged b2ae as a candidate. Its next suggested Policy SET_DEFAULT
-  browser gate is separately scoped in010 and is not running. Do not create a
-  heavy environment before the original browser executor is ready. Main owns
-  the existing process fixture and effects/Audit checks; UX owns page execution.
+- UX acknowledged b2ae as a candidate and separately completed the original
+  Policy SET_DEFAULT fixture on b2ae/build a6f26f9b65bd7e6b26c1. Main verified
+  the actual PASS188.14/race191.687 and current effect assertions, and confirmed
+  that its own PG/network were absent after cleanup. Fixed evidence1ae9ead is
+  selectively reconciled into the existing010 section, not copied as a second
+  section or imported checkpoint. It proves two byte-identical POSTs, no
+  completion GET, one revision/effect and immutable versions/Audit; it does not
+  expand K1/K2/R1/R2 completion or accept User/Role deletion. No fixture is live.
+- UX must not write this checkout. Its accidental uncommitted two-document
+  delta was reversed by an exact patch, preserving pushed b4ec80dcf; clean Git
+  status was independently checked before this evidence reconciliation.
 - Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999. Keep its existing single
   monitor, not another chat/agent/duplicate monitor. Preserve any unavailable
   log-reading boundary; do not turn run metadata into a full-log audit.
