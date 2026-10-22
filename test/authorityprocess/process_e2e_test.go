@@ -6960,7 +6960,7 @@ func runIAMUserDeletionConsoleBrowser(t *testing.T, ctx context.Context, databas
 	if !capabilityFound {
 		t.Fatal("disabled ordinary User does not expose its authorized deletion")
 	}
-	assertCredentialsRejected := func(stage string) {
+	assertCredentialsRejected := func(stage string, keyStatus int) {
 		t.Helper()
 		for _, bearer := range []string{initialCredential, first.Credential, second.Credential} {
 			call(http.MethodGet, iamEndpoint, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
@@ -6968,13 +6968,15 @@ func runIAMUserDeletionConsoleBrowser(t *testing.T, ctx context.Context, databas
 			queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)
 		}
 		getPaaSApplication(t, paasEndpoint, roleBearer, applicationID, http.StatusUnauthorized)
-		assertBrowserKeyApplicationRead(t, ctx, database, paasEndpoint, edgeAssertion, applicationID, user.AccountID, key, http.StatusUnauthorized)
+		assertBrowserKeyApplicationRead(t, ctx, database, paasEndpoint, edgeAssertion, applicationID, user.AccountID, key, keyStatus)
 		call(http.MethodPost, iamEndpoint, "/v1/auth/login", "", map[string]any{
 			"loginName": loginName + "@" + string(user.AccountID), "password": changedDeveloperPassword,
 			"requestId": "browser-user-delete-login-" + stage,
 		}, http.StatusUnauthorized, nil)
 	}
-	assertCredentialsRejected("disabled")
+	// A valid MAC whose User is disabled is a current authorization denial.
+	// After deletion the encrypted key material is gone: authentication fails.
+	assertCredentialsRejected("disabled", http.StatusForbidden)
 	var beforeDelete bool
 	if err := database.QueryRow(ctx, `SELECT p.deleted_at IS NULL AND p.status='DISABLED'
 		AND (SELECT count(*) FROM iam.user_credentials c WHERE c.tenant_id=p.tenant_id AND c.principal_id=p.id)=1
@@ -7017,7 +7019,7 @@ func runIAMUserDeletionConsoleBrowser(t *testing.T, ctx context.Context, databas
 		receipt.ResourceVersion, user.LoginName, key.key.ID, key.key.ResourceVersion+1).Scan(&storedDeletion); err != nil || !storedDeletion {
 		t.Fatalf("User deletion did not atomically retain the exact tombstone and retire credentials: %v", err)
 	}
-	assertCredentialsRejected("deleted")
+	assertCredentialsRejected("deleted", http.StatusUnauthorized)
 	if !time.Now().UTC().Before(assumed.Session.ExpiresAt) {
 		t.Fatal("User deletion RoleSession denial was observed after natural expiry")
 	}
