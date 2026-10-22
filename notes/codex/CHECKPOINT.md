@@ -23,11 +23,14 @@
   type/lint/architecture/styles, two bounded production exports, exact embedded
   equivalence and Go UI/architecture/vet. Build is
   `matrix-a6f26f9b65bd7e6b26c1`; all 324 generated files matched.
-- Verification39794059308 attempt1 was independently confirmed for exact b2ae
-  through GitHub API. At the latest check it was non-terminal: the installation
-  job was running and other initial jobs queued. Continue that run; do not start
-  another attempt because observation timed out. A green predecessor is not its
-  CI evidence. Test Expert has the exact fixed handoff and existing monitor.
+- Verification39794059308 attempt1 is exact b2ae and the run now reports
+  completed/success. Detailed state is not fully consistent: eighteen jobs are
+  completed/success, while authority-managed-products119880681664 and its check
+  remain in_progress/no conclusion despite all their steps reporting success.
+  A fresh API response dated2026-10-22 15:04:19UTC retained that discrepancy.
+  IAM/011 records the precise boundary; do not claim nineteen consistent final
+  jobs or a whole-log audit. Keep only the original Test Expert monitor for that
+  metadata reconciliation, never rerun because an observation is delayed.
 - Previous code fe6e5220e integrates the Role deletion server receipt. Its exact
   Verification39775416795 attempt1 is completed/success, nineteen jobs confirmed
   through GitHub API. This is run/job metadata, not a completed whole-log audit.
@@ -65,9 +68,9 @@
   old failure and correct partial-body/EOF plus exact receipt observations.
   Do not rerun or relabel that historical failed attempt.
 - K1/K2/R1/R2 requirements are accepted at their exact sources. Remaining bounded
-  goal closure is current independent CI and unused own resource cleanup, not
-  another broad browser run, signed release or Policy SET_DEFAULT gate. Other
-  IAM/010 non-Deferred paths remain incomplete for the larger product goal.
+  goal closure is unused own resource cleanup and the above CI-detail boundary,
+  not another broad browser run, signed release or Policy SET_DEFAULT gate.
+  Other IAM/010 non-Deferred paths remain incomplete for the larger product goal.
 - Read-only revalidation on 2026-10-22 confirmed the previously tool-denied
   residues still exist: three running task PG containers, one stopped diagnostic
   container with its attached volume, their networks, the generated test binary
@@ -75,6 +78,12 @@
   bypassed by another executor, split shell command, rename or parent deletion.
   Do not ask another task to clean them. Exact machine-local handles are in this
   thread's evidence, not portable runtime assumptions.
+- The same cleanup restriction has persisted through at least three successive
+  goal continuations and the final read-only inventory still found all four
+  containers and ten paths. No in-scope implementation remains that can remove
+  this restriction. The host goal status, not this checkpoint, controls whether
+  work resumes; do not repeatedly reopen completed browser journeys or pretend
+  that ordinary user product authorization overrides a tool refusal.
 - No new PG/browser/network was created for b2ae. All local test/build commands
   in this slice finished. Do not restart an old browser fixture to fill CI wait.
 
