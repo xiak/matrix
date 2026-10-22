@@ -4789,7 +4789,16 @@
     "liveDeleteConfirmHint": "这是连接 IAM 的真实删除命令。请输入角色名称确认；不会删除用户或策略。",
     "liveDeleteImpact": "删除会关闭该角色、撤销其策略关联并使相关角色会话失效，同时保留审计历史。此操作不会因为同名重建而恢复原身份。",
     "retryDeleteOriginal": "上一次提交结果未知。保持当前窗口并再次确认时，将使用完全相同的资源版本和请求 ID。",
-    "deleteRole": "删除角色"
+    "deleteRole": "删除角色",
+    "liveDeleteReceiptTitle": "角色删除回执",
+    "liveDeleteReceiptHint": "这是本次删除命令的服务器回执；角色目录将独立重新读取，不用于反推原命令结果。",
+    "liveDeleteReceiptName": "角色名称",
+    "liveDeleteReceiptId": "稳定角色 ID",
+    "liveDeleteReceiptRequest": "原请求 ID",
+    "liveDeleteReceiptRevision": "结果资源版本",
+    "liveDeleteReceiptPolicies": "已撤销直接策略关联",
+    "liveDeleteReceiptTime": "删除时间",
+    "liveDeleteFinish": "完成并返回角色列表"
   },
   "IamWorkspace": {
     "selectionEmpty": "尚未选择对象",

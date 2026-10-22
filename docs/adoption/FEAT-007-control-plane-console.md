@@ -77,6 +77,19 @@ changes no production interaction logic, but the existing deterministic build
 identity includes test source. Regenerate and verify this branch's complete
 embedded export; a test-only change is not an exemption from that contract.
 
+For the LIVE Role deletion receipt, `ADAPT` the five existing renderer, test
+and locale deltas from `f0dbf742cb14bd5ff20d928c63798dd1b0e623f7`, parent
+`c10ccc9f1675741cf984c599c3ccef32b8dea597`. The three Role source/test parent
+blobs match this branch; retain both locale files outside the fixed delta.
+Validate the exact Role/account/name/next revision, nonnegative revoked
+attachment count and deletion time before displaying the server result. Keep
+UNKNOWN on the original frozen command, discard a replaced client's late
+result, and require explicit Finish before independently reading the directory.
+`REFERENCE` donor tests; prove the original failures and corrected behavior
+in this consumer. `REJECT` donor assets, the separate MOCK preview flow,
+documentation/checkpoint status and inherited browser or CI acceptance.
+Rebuild delivery here; FEAT-IAM-010 owns the remaining real deletion gate.
+
 The FEAT-007 outcome, user journey, ownership, model, authority boundary, and
 three acceptance gates were fixed before the following adoption decisions.
 The earlier FEAT-006 rejection of the legacy UI applied only to the IAM/Audit

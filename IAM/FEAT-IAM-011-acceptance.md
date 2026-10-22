@@ -42,7 +42,8 @@
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
 | 最近完整日志审计通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
-| 最近代码的CI终态 | `b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`修正Role观察器遮挡故障注入的连接能力；同一实际装配的真实HTTP红绿、默认race/vet及新库完整R2页面后验通过，准确证据归010。[Verification39761561748](https://github.com/xiak/matrix/actions/runs/39761561748) attempt1精确SHA及十九项job均为completed/success；完整日志审计尚未封存。生产代码/嵌入/Profile不变，不继承签名发布或其余IAM矩阵的验收 |
+| 当前Role删除回执候选 | 选择性采用固定UX `f0dbf742cb14bd5ff20d928c63798dd1b0e623f7`，本分支嵌入`matrix-5ee251ec73ca8a183cc1`；消费端红绿、聚焦回归和双导出证据由[010](FEAT-IAM-010-console.md#role删除的服务器完成回执)拥有。精确SHA的独立CI及真实删除浏览器仍待确认，Profile不变，不继承下列旧版本或donor的接受状态 |
+| 最近已确认的CI终态 | `b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`修正Role观察器遮挡故障注入的连接能力；同一实际装配的真实HTTP红绿、默认race/vet及新库完整R2页面后验通过，准确证据归010。[Verification39761561748](https://github.com/xiak/matrix/actions/runs/39761561748) attempt1精确SHA及十九项job均为completed/success；完整日志审计尚未封存。该片生产代码/嵌入/Profile不变，不继承签名发布或其余IAM矩阵的验收 |
 | 前一候选的实际产品证据 | `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1十九项job全部成功；测试owner核验短容器门禁1.45秒、完整四产品128.51秒和Analyzer41.08秒。十六份日志完整、三份仅局部，不冒充全量日志审计或其他版本通过 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
