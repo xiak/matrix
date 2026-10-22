@@ -466,7 +466,7 @@ jobs:
           mysql_image='mysql:8.4@sha256:6ea90827b1100f8f2ae306a539f86d2c264a26ed435a2a9f75551dd5c3aeb242'
           elasticsearch_image='docker.elastic.co/elasticsearch/elasticsearch:8.19.23@sha256:4d0724bb8d78d7a2330693623e26ca4d621079d062ecc8a30b3e1fc180ec14c1'
           rabbitmq_image='rabbitmq:4.1.8@sha256:a82b5a24f4434a33cd15e1e47c444d1e07440261358e46c179539998557d4e29'
-          worker_image='docker:27.5.1-dind-alpine3.21@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce'
+          worker_image='docker:27.5.1-cli-alpine3.21@sha256:f56779b4e86550493153cc8642c9c8e40b5d934e43cb5b4ea463aea5245c5c01'
           current_max_map_count="$(sysctl -n vm.max_map_count)"
           case "$current_max_map_count" in
             ''|*[!0-9]*) exit 1 ;;

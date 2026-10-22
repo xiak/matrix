@@ -94,7 +94,7 @@ const (
 	// Match the published PaaS client environment on every host. Resolve this
 	// manifest reference to the local image ID; classic and containerd stores
 	// need not expose the manifest digest as their runtime image ID.
-	managedDockerCLIReference = "docker:27.5.1-dind-alpine3.21@sha256:aa3df78ecf320f5fafdce71c659f1629e96e9de0968305fe1de670e0ca9176ce"
+	managedDockerCLIReference = "docker:27.5.1-cli-alpine3.21@sha256:f56779b4e86550493153cc8642c9c8e40b5d934e43cb5b4ea463aea5245c5c01"
 	// The real managed-service worker shares the PaaS worker database role with
 	// the audit dispatcher but owns a separate bounded connection pool. Keep a
 	// distinct application identity so the process gate proves both pools
@@ -220,7 +220,7 @@ func TestManagedProductWorkerConnectionPreservesRestrictedIdentity(t *testing.T)
 func TestManagedWorkerImageRequiresResolvedLinuxAMD64Identity(t *testing.T) {
 	// A classic store's config ID can differ from the pinned source manifest.
 	imageID := "sha256:" + strings.Repeat("b", 64)
-	content := []byte(`{"Id":"` + imageID + `","Os":"linux","Architecture":"amd64"}`)
+	content := []byte(`{"Id":"` + imageID + `","Os":"linux","Architecture":"amd64","Config":{}}`)
 	if actual, err := managedWorkerImageID(content); err != nil || actual != imageID {
 		t.Fatal("resolved image identity was replaced by the source manifest digest")
 	}
@@ -230,6 +230,8 @@ func TestManagedWorkerImageRequiresResolvedLinuxAMD64Identity(t *testing.T) {
 		strings.Replace(string(content), imageID, "docker:latest", 1),
 		strings.Replace(string(content), imageID, "sha256:"+strings.Repeat("g", 64), 1),
 		strings.Replace(string(content), imageID, "sha256:"+strings.Repeat("b", 63), 1),
+		strings.Replace(string(content), `"Config":{}`, `"Config":{"Volumes":{"/var/lib/docker":{}}}`, 1),
+		strings.Replace(string(content), `"Config":{}`, `"Config":null`, 1),
 		`{}`, `[]`, string(content) + `{}`,
 	} {
 		if _, err := managedWorkerImageID([]byte(invalid)); err == nil {
@@ -306,6 +308,7 @@ func TestManagedWorkerPrivateInputsContainer(t *testing.T) {
 	defer cancel()
 	root := t.TempDir()
 	worker := writeProtectedFile(t, root, "worker", []byte("#!/bin/sh\nset -eu\n"+
+		"case \"$(docker --version)\" in 'Docker version 27.5.1, '*) ;; *) exit 1 ;; esac\n"+
 		"test ! -e /tmp/fixture\n"+
 		"test \"$(stat -c %u:%g:%a /run/matrix/matrix-paas-worker)\" = 0:0:700\n"+
 		"test \"$(stat -c %u:%g:%a /run/matrix/paas-worker-dsn)\" = 0:0:600\n"+
@@ -335,7 +338,7 @@ func TestManagedWorkerPrivateInputsContainer(t *testing.T) {
 			t.Error("worker input gate cleanup ownership mismatch")
 			return
 		}
-		if err := exec.CommandContext(cleanup, "docker", "rm", "--force", id).Run(); err != nil {
+		if err := exec.CommandContext(cleanup, "docker", "rm", "--force", "--volumes", id).Run(); err != nil {
 			t.Error("remove isolated worker input gate")
 		}
 	})
@@ -345,6 +348,16 @@ func TestManagedWorkerPrivateInputsContainer(t *testing.T) {
 	output, err := exec.CommandContext(ctx, "docker", "start", "--attach", id).CombinedOutput()
 	if err != nil || strings.TrimSpace(string(output)) != "MATRIX_MANAGED_WORKER_INPUTS_READY" {
 		t.Fatal("private input transfer or exact bootstrap did not complete")
+	}
+	var mounts []struct{ Type string }
+	inspection, err := exec.CommandContext(ctx, "docker", "inspect", "--format", "{{json .Mounts}}", id).Output()
+	if err != nil || json.Unmarshal(inspection, &mounts) != nil {
+		t.Fatal("inspect private input gate mounts")
+	}
+	for _, mount := range mounts {
+		if mount.Type == "bind" || mount.Type == "volume" {
+			t.Fatal("private input gate inherited an unexpected host directory or volume")
+		}
 	}
 	// The consumed inputs must not become an implicit restart credential. This
 	// second one-shot shell has no workload and must report its closed phase.
@@ -9990,10 +10003,13 @@ func resolveManagedWorkerImage(t *testing.T, ctx context.Context) string {
 }
 
 func managedWorkerImageID(content []byte) (string, error) {
-	var image struct{ ID, OS, Architecture string }
+	var image struct {
+		ID, OS, Architecture string
+		Config               *struct{ Volumes map[string]json.RawMessage }
+	}
 	if json.Unmarshal(content, &image) != nil || image.OS != "linux" || image.Architecture != "amd64" ||
-		!strings.HasPrefix(image.ID, "sha256:") {
-		return "", errors.New("managed worker image platform or identity is invalid")
+		!strings.HasPrefix(image.ID, "sha256:") || image.Config == nil || len(image.Config.Volumes) != 0 {
+		return "", errors.New("managed worker image platform, identity or declared volumes are invalid")
 	}
 	digest, err := hex.DecodeString(strings.TrimPrefix(image.ID, "sha256:"))
 	if err != nil || len(digest) != sha256.Size || image.ID != strings.ToLower(image.ID) {
@@ -10704,7 +10720,7 @@ func cleanupManagedProductWorker(t *testing.T, containerName string, volumeName 
 			t.Errorf("managed-service worker ownership is invalid")
 			return
 		}
-		if exec.CommandContext(ctx, "docker", "container", "rm", "--force", identities[0]).Run() != nil {
+		if exec.CommandContext(ctx, "docker", "container", "rm", "--force", "--volumes", identities[0]).Run() != nil {
 			t.Errorf("remove owned managed-service worker")
 			return
 		}

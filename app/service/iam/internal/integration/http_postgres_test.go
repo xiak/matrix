@@ -22626,6 +22626,8 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 	if err != nil || !strings.HasPrefix(config.Database, "matrix_iam_access_analyzer_") {
 		t.Fatal("access analyzer gate requires its own database")
 	}
+	migrationFailures := &iamTransactionFailureTrace{}
+	config.Tracer = migrationFailures
 	config.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	database, err := pgx.ConnectConfig(ctx, config)
 	if err != nil {
@@ -23639,6 +23641,14 @@ func TestIAMAccessAnalyzerPostgres(t *testing.T) {
 		t.Fatal("automatic disposition crossed a protected identity boundary", protectedEnabled, protectedAttempts, protectedAutomaticFacts, platformBindings, err)
 	}
 
+	// Keep the production migration's normalized error boundary. The fixture
+	// records only the driver's code for this replay, never SQL or error details.
+	migrationFailures.lastSQLState.Store("")
+	defer func() {
+		if t.Failed() {
+			t.Logf("access analyzer schema replay diagnostic: SQLSTATE=%v context=%v", migrationFailures.lastSQLState.Load(), ctx.Err())
+		}
+	}()
 	applyIAMSchema(t, ctx, database)
 	var afterReplay iamv1.AccessAnalyzerDetail
 	call(http.MethodGet, path, root, nil, http.StatusOK, &afterReplay)
