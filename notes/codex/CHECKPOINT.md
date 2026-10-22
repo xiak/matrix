@@ -3,11 +3,11 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-10-21
+- Updated: 2026-10-22
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/cloud-console-ux`
-- Pushed candidate: `5b3a27e08cf4139b77bac401d64ccc13a11b9f03`
-- Source commit: `dae78452461ebdee461c2e07ac1fe96dfbb82ba3`
+- Pushed candidate: `ad3e23838`
+- Source commit: `369482c2abcf7ae385727a2ded52f8c390c3bf30`
 
 ## Authoritative route
 
@@ -20,35 +20,24 @@
 
 ## Pushed milestone
 
-The Log Service compact renderer keeps event summaries, expanded facts and
-topic/collection directories inside the mobile content width. All eleven
-product homes passed the compact launcher audit. The current candidate also
-rechecked the complete compact IAM User action journey from selection through
-content-area policy review and one isolated MOCK commit; the directory returned
-with a completion notice, exact 390px geometry, one H1, no Dialog and no browser
-warning/error. Exact evidence and limitations belong to FEAT-007; IAM semantics
-remain with FEAT-IAM-010.
-
-The permission-refresh client now separates authorization for a new Policy or
-PolicyVersion write from recovery of one already-frozen UNKNOWN request. New
-writes still require the current exact target and revision. Recovery stays
-frozen through authority refresh and rechecks its live fence after acquiring
-the browser lock; after recheck, only the original byte-equivalent request may
-be retried with the current verified owner. A retired Policy detail becoming
-unreadable no longer blocks that recovery, while a server 403 keeps the intent
-UNKNOWN. PolicyVersion observation is read-only and independent of write
-capability. Five focused files passed 487 cases together with typecheck, lint,
-architecture and style gates. FEAT-IAM-010 owns the exact evidence and limits.
+The current candidate preserves the shared product-navigation and exact-IAM-
+read source at `369482c2a`, including synchronized embedded assets. The
+maintained `4317` isolated preview has now exercised every Products and
+services destination plus the shared IAM directory footer, stable User-title
+actions and unified account-menu sections. The authoritative observations and
+their limits are recorded once in FEAT-007; IAM semantics and real-process
+acceptance remain with FEAT-IAM-010.
 
 ## Continuation boundary
 
-Preserve the inspectable isolated MOCK and existing composition. Commits
-`a453890e9` and `dae784524` are pushed source handoff commits; this branch has
-not rebuilt embedded production assets for them, so `5b3a27e08` is not a
-release candidate. The IAM engineer has accepted the fixed chain and is
-assembling the independent PostgreSQL 18 permission-aware browser fixture; its
-new URL and terminal result are still pending. Do not copy that task's
-uncommitted worktree. No backend/API/SQL/profile, real resource or mandatory
-authentication setting changed. Phase 1 keeps email only for
-contact verification and security-notification receiving; email login/MFA,
-phone login, SMS, phone binding and physical-phone integration remain excluded.
+Preserve the inspectable `4317` isolated MOCK and existing composition. The
+first R2 Role-attachment recovery run at `65171` proved the real authorization
+transition but failed its response-loss observer and must not be accepted or
+replayed. The IAM owner has fixed that test-only composition on its own pushed
+branch and is preparing one fresh exact environment; wait for its fixed URL,
+objects and one combined human confirmation before any new browser mutation.
+Do not copy another worktree or touch `4317` while coordinating that run. The
+UX branch has changed no backend/API/SQL/profile, real resource or mandatory
+authentication setting. Phase 1 still keeps email only for contact verification
+and security-notification receiving; email login/MFA, phone login, SMS, phone
+binding and physical-phone integration remain excluded.
