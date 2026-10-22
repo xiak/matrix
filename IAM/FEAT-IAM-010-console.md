@@ -301,6 +301,14 @@ LIVE删除只接受准确Role ID、Account、名称、下一resourceVersion、�
 
 消费验收覆盖准确wire与错误回执、先写存储再POST、不可用/损坏/已存在记录零写入、导航与同owner重新登录保留、owner切换和迟到结果、成功后清除失败，以及独立MOCK精确名称确认。本地目标版本已经过期时，必须在存储和HTTP之前返回明确冲突；零副作用不能误报为已发送命令的UNKNOWN。真实IAM最终删除、不可逆凭据/会话效果、资源归属与唯一outbox/Audit仍须独立进程和浏览器后验，组件测试或MOCK截图不替代。
 
+独立LIVE验收沿用`test/authorityprocess/process_e2e_test.go`的真实IAM/Audit/PaaS、受限数据库登录和同源浏览器入口，新增目的限定的`TestIAMUserDeletionConsoleBrowser`，不另造环境框架。`MATRIX_IAM_USER_DELETION_BROWSER=1`显式启用，`MATRIX_IAM_USER_DELETION_BROWSER_OUTCOME=NORMAL|RESPONSE_LOSS`选择两条分别使用全新数据库的旅程；每条只有一个准确停用User、一次页面删除POST。API只准备合成身份、业务资源和停用前置条件，不代替页面提交。正常旅程须呈现与实际响应相符的不可变收据，显式完成后独立读取目录；响应丢失旅程在真实事务成功后截断响应，同标签页导航、reload和同owner重新登录均保持UNKNOWN与原意图，零重发、零虚构完成查询，不能因目录缺失推断成功。页面观察归UX，线上的请求/响应计数和权威后验归IAM；完成marker本身不是验收证据。
+
+前置条件先证明目标的密码、多个Session、RoleSession和AccessKey实际可用，再经现有状态API停用并证明下一请求拒绝。删除后独立检查唯一tombstone、版本恰增一、密码材料移除、Key秘密清除和关联附件终止；旧密码、原Session、RoleSession和Key均不得获得访问。停用已造成的拒绝不得归功于删除，也不把历史RoleSession发行记录仍存在等同于仍有效。目标曾创建的租户应用、配置及Operation通过另一有效身份读取，原归属、创建者与内容保持。每条原request只允许一条`iam.user.deleted`成功outbox及相同Audit记录；Key级联事实按现有封闭动作单独核对，不误称所有动作总计一条。成功事实须绑定原actor、target、requestId和允许的IAM决定，完整租户链必须验证通过。
+
+本片只证明当前发布契约，不重跑已移除的全历史schema链，不新增完成API或改变原删除重放语义。真实浏览器之前先跑观察器的正常、真实半截响应、重复写入和不匹配回执负向检查；重型旅程串行、唯一命名、显式限额。每次结束只按准确身份清理该次新建的进程、容器、网络和临时目录，不复用或触碰此前工具明确拒绝清理的历史残留。此片独立于已受阻的AccessKey/Role目标，不改其完成状态。
+
+该新增门禁的正常/真实响应截断及六项负向观察检查在race下通过3.593秒；现有authorityprocess默认门禁和架构门禁分别通过5.594秒、2.769秒，相关vet与diff检查通过。默认跳过的真实数据库/browser入口不构成验收，两个独立LIVE旅程与新源码CI仍待执行。
+
 本分支选择性采用固定`8c40091ec1d48ecb81281c4ffa55d8bcd5b9ee9d`的17个前端路径及修正`09640c6cefce7361574206753fdb0b2bd1133847`、`3dec632876828d87a785319043881ff65f00ce5e`，保留五个既有差异文件及两条消费端协议回归；固定来源边界归[既有adoption owner](../docs/adoption/FEAT-007-control-plane-console.md)。旧HTTP客户端接受错误Account回执的回归先以1.63秒失败；初始增量的四个相关文件727项通过176.89秒后，额外协议回归仍准确暴露两个403错误码清除原意图的缺口，以6.29秒失败。采用目的限定状态/错误码分类后，同两条回归以6.90秒通过，三个受影响文件535项通过91.76秒。随后仅先采用本地过期版本回归，旧生产实现以7.96秒暴露冲突误报UNKNOWN；采用对应一行修正后，该项与两条协议回归共三项以6.98秒通过，均证明不开放另一删除意图。
 
 Node22.22.2、2GiB/单worker下类型、lint、架构、234组主题对比度及八项导出边界测试通过；最后一行修正后再次通过类型、受影响文件lint及架构。两次限两个worker的生产导出在preview未设置与显式`0`时324文件逐字一致，57项segment路径规范化，重新同步的Go嵌入与324项生成文件一致，build ID为`matrix-a6f26f9b65bd7e6b26c1`。最终Go UI/architecture分别1.611/0.877秒、UI vet和diff检查通过。独立CI须按本消费提交另行核对，不能继承donor或前一Role切片的结果；真实User删除浏览器仍未验收，Profile与已接受签名发布不变。

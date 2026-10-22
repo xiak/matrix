@@ -387,6 +387,7 @@ const (
 	authorityProcessGroupMembershipRecoveryBrowser
 	authorityProcessPolicyAttachmentRecoveryBrowser
 	authorityProcessGroupDeletionBrowser
+	authorityProcessUserDeletionBrowser
 	authorityProcessPasswordChangeBrowser
 	authorityProcessDailyPasswordChangeBrowser
 	authorityProcessAccountSecuritySettingsBrowser
@@ -571,6 +572,21 @@ func TestIAMGroupDeletionConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessGroupDeletionBrowser)
 }
 
+// User deletion has neither command replay nor a completion-query contract.
+// Each outcome gets a clean database and exactly one real browser POST.
+func TestIAMUserDeletionConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_USER_DELETION_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_USER_DELETION_BROWSER=1 for the bounded LIVE User deletion browser fixture")
+	}
+	if outcome := os.Getenv("MATRIX_IAM_USER_DELETION_BROWSER_OUTCOME"); outcome != "NORMAL" && outcome != "RESPONSE_LOSS" {
+		t.Fatal("User deletion outcome must be NORMAL or RESPONSE_LOSS")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("User deletion browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessUserDeletionBrowser)
+}
+
 // This opt-in fixture proves the first-login password ceremony in the real
 // browser. A successful change must advance the credential epoch, retain only
 // the exact calling restricted Session, revoke its peer and never treat the
@@ -694,7 +710,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser ||
 		mode == authorityProcessUserManagementRecoveryBrowser || mode == authorityProcessGroupMembershipRecoveryBrowser ||
 		mode == authorityProcessPolicyAttachmentRecoveryBrowser ||
-		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
+		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessUserDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
 		mode == authorityProcessDailyPasswordChangeBrowser || mode == authorityProcessAccountSecuritySettingsBrowser ||
 		mode == authorityProcessAccessKeyRecoveryBrowser || mode == authorityProcessAccessKeyLifecycleBrowser || mode == authorityProcessRoleLifecycleBrowser || mode == authorityProcessPermissionAwareBrowser {
 		duration = authorityProcessBrowserObservation
@@ -1149,6 +1165,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		sensitive = append(sensitive, runIAMGroupDeletionConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
+		return
+	}
+	if mode == authorityProcessUserDeletionBrowser {
+		sensitive = append(sensitive, runIAMUserDeletionConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, paasEdgeAssertion, start,
 		)...)
 		return
 	}
@@ -6799,6 +6822,453 @@ func TestRoleAttachmentBrowserResponseLossPreservesWireAndCredentialJourney(t *t
 		len(observation.RecoveryAttempts) != 1 || observation.RecoveryAttempts[0].RequestURI != recoveryPrefix+requestID ||
 		observation.RecoveryAttempts[0].BackendStatus != http.StatusOK {
 		t.Fatal("combined browser observers lost the single write, exact receipt read or credential transition")
+	}
+}
+
+func runIAMUserDeletionConsoleBrowser(t *testing.T, ctx context.Context, database *pgx.Conn,
+	root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, edgeAssertion string,
+	start func(string, []string) *childProcess) []string {
+	t.Helper()
+	outcome := os.Getenv("MATRIX_IAM_USER_DELETION_BROWSER_OUTCOME")
+	const loginName = "browser.user.deletion"
+	user, keyDirectory, initialCredential := prepareAccessKeyBrowserUser(t, iamEndpoint, ownerBearer, loginName, "browser-user-delete")
+	userPath := "/v1/users/" + string(user.ID)
+	call := func(method, endpoint, path, bearer string, body any, want int, result any) {
+		t.Helper()
+		response := performJSON(t, method, endpoint+path, bearer, body)
+		defer clear(response.Body)
+		if response.Status != want || result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil {
+			t.Fatalf("User deletion setup/postcondition %s %s status=%d want=%d", method, path, response.Status, want)
+		}
+	}
+	first := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), changedDeveloperPassword, "browser-user-delete-session-one")
+	second := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), changedDeveloperPassword, "browser-user-delete-session-two")
+	grant := createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, user.ID, iamv1.SystemPolicyPaaSDeveloper, "browser-user-delete-business-grant")
+	var keyResponse iamv1.CreateAccessKeyResponse
+	call(http.MethodPost, iamEndpoint, userPath+"/access-keys", ownerBearer, iamv1.CreateAccessKeyRequest{
+		UserResourceVersion: keyDirectory.UserResourceVersion, RequestID: "browser-user-delete-key",
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{}},
+	}, http.StatusCreated, &keyResponse)
+	if iamv1.ValidateCreateAccessKeyResponse(keyResponse) != nil || keyResponse.Outcome != "APPLIED" ||
+		keyResponse.Key.UserID != user.ID || keyResponse.Key.AccountID != user.AccountID {
+		t.Fatal("User deletion fixture lacks a real issued key")
+	}
+	key := browserIssuedAccessKey{key: keyResponse.Key, secret: keyResponse.Secret.CopyBytes()}
+	defer clear(key.secret)
+	sensitive := []string{initialCredential, first.Credential, second.Credential, string(key.secret)}
+
+	// Keep a real issued RoleSession as a second credential kind. Its historical
+	// issuance is not rewritten merely because its source User becomes invalid.
+	var role iamv1.Role
+	call(http.MethodPost, iamEndpoint, "/v1/roles", ownerBearer, iamv1.CreateRoleRequest{
+		Name: "User deletion retained role", Tags: []iamv1.RoleTag{}, RequestID: "browser-user-delete-role",
+		TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{
+			SID: "source-user", Effect: iamv1.PolicyAllow, Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: user.ID}},
+		}}},
+	}, http.StatusCreated, &role)
+	if iamv1.ValidateRole(role) != nil {
+		t.Fatal("User deletion fixture role is invalid")
+	}
+	rolePath := "/v1/roles/" + string(role.ID)
+	call(http.MethodPost, iamEndpoint, "/v1/policy-attachments", ownerBearer, iamv1.CreatePolicyAttachmentRequest{
+		Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)},
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, RequestID: "browser-user-delete-role-viewer",
+	}, http.StatusOK, nil)
+	var assumePolicy iamv1.PolicyDetail
+	call(http.MethodPost, iamEndpoint, "/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "User deletion exact role assumption", RequestID: "browser-user-delete-assume-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "assume-one", Effect: iamv1.PolicyAllow,
+				Actions:   []iamv1.Action{iamv1.ActionIAMRoleAssume},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceExact, ID: string(role.ID)}}}}},
+	}, http.StatusCreated, &assumePolicy)
+	if iamv1.ValidatePolicyDetail(assumePolicy) != nil {
+		t.Fatal("User deletion fixture assumption policy is invalid")
+	}
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, user.ID, assumePolicy.Policy.ID, "browser-user-delete-assume-grant")
+	var boundary iamv1.RolePermissionBoundary
+	call(http.MethodPut, iamEndpoint, rolePath+"/permission-boundary", ownerBearer, iamv1.SetRolePermissionBoundaryRequest{
+		PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1, ResourceVersion: role.ResourceVersion,
+		RequestID: "browser-user-delete-role-boundary",
+	}, http.StatusOK, &boundary)
+	var assumed iamv1.AssumeRoleResponse
+	call(http.MethodPost, iamEndpoint, rolePath+":assume", first.Credential,
+		iamv1.AssumeRoleRequest{ResourceVersion: boundary.ResourceVersion, RequestID: "browser-user-delete-role-session"}, http.StatusOK, &assumed)
+	if iamv1.ValidateAssumeRoleResponse(assumed) != nil || assumed.Outcome != "APPLIED" {
+		t.Fatal("User deletion fixture lacks an issued RoleSession")
+	}
+	roleSecret := assumed.Credential.CopyBytes()
+	defer clear(roleSecret)
+	roleBearer := string(roleSecret)
+	sensitive = append(sensitive, roleBearer)
+	const applicationID paasv1.ResourceID = "browser-user-delete-application"
+	applicationOperation := createPaaSApplication(t, paasEndpoint, first.Credential, applicationID, string(applicationID), "browser-user-delete-application", http.StatusCreated)
+	configurationOperation := createPaaSConfiguration(t, paasEndpoint, first.Credential, "browser-user-delete-configuration", "retained-configuration", applicationID, "browser-user-delete-configuration", http.StatusCreated)
+	for _, operation := range []paasv1.Operation{applicationOperation, configurationOperation} {
+		if operation.Scope.TenantID != paasv1.TenantID(user.AccountID) || operation.RequestedBy.Type != paasv1.SubjectUser || operation.RequestedBy.ID != string(user.ID) {
+			t.Fatal("User deletion precondition lost the actual resource creator or tenant")
+		}
+	}
+	retained := make(map[string]any)
+	for _, path := range []string{"/v1/applications/" + string(applicationID), "/v1/configurations/browser-user-delete-configuration",
+		"/v1/operations/" + string(applicationOperation.ID), "/v1/operations/" + string(configurationOperation.ID)} {
+		response := performJSON(t, http.MethodGet, paasEndpoint+path, ownerBearer, nil)
+		var value any
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &value) != nil {
+			t.Fatal("read tenant resource before User lifecycle")
+		}
+		retained[path] = value
+	}
+	for _, bearer := range []string{initialCredential, first.Credential, second.Credential, roleBearer} {
+		getPaaSApplication(t, paasEndpoint, bearer, applicationID, http.StatusOK)
+	}
+	assertBrowserKeyApplicationRead(t, ctx, database, paasEndpoint, edgeAssertion, applicationID, user.AccountID, key, http.StatusOK)
+	var access iamv1.UserAccess
+	call(http.MethodGet, iamEndpoint, userPath, ownerBearer, nil, http.StatusOK, &access)
+	if iamv1.ValidateUserAccess(access) != nil || access.User.Status != iamv1.PrincipalActive {
+		t.Fatal("User deletion target was not initially active")
+	}
+	capabilityFound := false
+	for _, capability := range access.Capabilities {
+		if capability.Action == iamv1.ActionIAMUserDelete {
+			capabilityFound = !capability.Available && capability.RestrictionReason == iamv1.CapabilityTargetMustBeDisabled
+		}
+	}
+	if !capabilityFound {
+		t.Fatal("active User unexpectedly exposes deletion")
+	}
+	call(http.MethodPost, iamEndpoint, userPath+":set-status", ownerBearer, iamv1.SetUserStatusRequest{
+		ResourceVersion: access.User.ResourceVersion, Status: iamv1.PrincipalDisabled, RequestID: "browser-user-delete-disable",
+	}, http.StatusOK, &user)
+	call(http.MethodGet, iamEndpoint, userPath, ownerBearer, nil, http.StatusOK, &access)
+	if iamv1.ValidateUser(user) != nil || user.Status != iamv1.PrincipalDisabled || iamv1.ValidateUserAccess(access) != nil || access.User != user {
+		t.Fatal("User deletion target did not reach its precise disabled revision")
+	}
+	capabilityFound = false
+	for _, capability := range access.Capabilities {
+		if capability.Action == iamv1.ActionIAMUserDelete {
+			capabilityFound = capability.Available
+		}
+	}
+	if !capabilityFound {
+		t.Fatal("disabled ordinary User does not expose its authorized deletion")
+	}
+	assertCredentialsRejected := func(stage string) {
+		t.Helper()
+		for _, bearer := range []string{initialCredential, first.Credential, second.Credential} {
+			call(http.MethodGet, iamEndpoint, "/v1/auth/me", bearer, nil, http.StatusUnauthorized, nil)
+			getPaaSApplication(t, paasEndpoint, bearer, applicationID, http.StatusUnauthorized)
+			queryAudit(t, auditEndpoint, bearer, auditv1.QueryRecordsRequest{PageSize: 1}, http.StatusUnauthorized)
+		}
+		getPaaSApplication(t, paasEndpoint, roleBearer, applicationID, http.StatusUnauthorized)
+		assertBrowserKeyApplicationRead(t, ctx, database, paasEndpoint, edgeAssertion, applicationID, user.AccountID, key, http.StatusUnauthorized)
+		call(http.MethodPost, iamEndpoint, "/v1/auth/login", "", map[string]any{
+			"loginName": loginName + "@" + string(user.AccountID), "password": changedDeveloperPassword,
+			"requestId": "browser-user-delete-login-" + stage,
+		}, http.StatusUnauthorized, nil)
+	}
+	assertCredentialsRejected("disabled")
+	var beforeDelete bool
+	if err := database.QueryRow(ctx, `SELECT p.deleted_at IS NULL AND p.status='DISABLED'
+		AND (SELECT count(*) FROM iam.user_credentials c WHERE c.tenant_id=p.tenant_id AND c.principal_id=p.id)=1
+		AND EXISTS(SELECT 1 FROM iam.access_keys k WHERE k.tenant_id=p.tenant_id AND k.id=$3 AND k.deleted_at IS NULL AND k.ciphertext IS NOT NULL)
+		AND EXISTS(SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=p.tenant_id AND a.id=$4 AND a.revoked_at IS NULL)
+		FROM iam.principals p WHERE p.tenant_id=$1 AND p.id=$2`, user.AccountID, user.ID, key.key.ID, grant.ID).Scan(&beforeDelete); err != nil || !beforeDelete {
+		t.Fatal("disable was confused with irreversible credential/attachment deletion")
+	}
+
+	probe := &browserUserDeletionProbe{target: user}
+	var loss *browserResponseLoss
+	if outcome == "RESPONSE_LOSS" {
+		loss = &browserResponseLoss{method: http.MethodPost, path: "/api/iam" + userPath + ":delete", postLossWritePrefix: "/api/iam/v1/users"}
+	}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, func(upstream http.Handler) http.Handler {
+			return iamConsoleBrowserFixtureHandler(probe.wrap(upstream), make(chan struct{}, 16), loss)
+		})
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-user-deletion-finished")
+	t.Logf("USER_DELETION_BROWSER_FIXTURE outcome=%s url=%s/console/access/users/?id=%s finish=%s account=%s user=%s login=%s resource_version=%d; log in as admin with the existing changed admin password; delete only this DISABLED User once; NORMAL reviews the exact receipt then explicitly finishes; RESPONSE_LOSS retains UNKNOWN through same-tab navigation, reload and same-owner relogin, with no replay or completion query",
+		outcome, server.URL, url.QueryEscape(string(user.ID)), finish, user.AccountID, user.ID, user.LoginName, user.ResourceVersion)
+	waitForBrowserMarker(t, ctx, ui, finish, "User deletion browser completion")
+	server.Close()
+	if err := probe.check(loss); err != nil {
+		t.Fatal(err)
+	}
+	observation := probe.snapshot()
+	receipt := observation.receipt
+	var storedDeletion bool
+	if err := database.QueryRow(ctx, `SELECT p.status='DISABLED' AND NOT p.must_change_password
+		AND p.deleted_at=$3 AND p.resource_version=$4 AND p.login_name=$5 AND p.principal_type='USER'
+		AND NOT EXISTS(SELECT 1 FROM iam.user_credentials c WHERE c.tenant_id=p.tenant_id AND c.principal_id=p.id)
+		AND NOT EXISTS(SELECT 1 FROM iam.sessions s WHERE s.tenant_id=p.tenant_id AND s.principal_id=p.id AND s.status='ACTIVE')
+		AND NOT EXISTS(SELECT 1 FROM iam.policy_attachments a WHERE a.tenant_id=p.tenant_id AND a.target_kind='USER' AND a.target_id=p.id AND a.revoked_at IS NULL)
+		AND EXISTS(SELECT 1 FROM iam.login_index i WHERE i.tenant_id=p.tenant_id AND i.principal_id=p.id)
+		AND EXISTS(SELECT 1 FROM iam.access_keys k WHERE k.tenant_id=p.tenant_id AND k.id=$6
+		  AND k.deleted_at=$3 AND k.resource_version=$7 AND k.format_version IS NULL AND k.nonce IS NULL AND k.ciphertext IS NULL)
+		FROM iam.principals p WHERE p.tenant_id=$1 AND p.id=$2`, user.AccountID, user.ID, receipt.DeletedAt,
+		receipt.ResourceVersion, user.LoginName, key.key.ID, key.key.ResourceVersion+1).Scan(&storedDeletion); err != nil || !storedDeletion {
+		t.Fatalf("User deletion did not atomically retain the exact tombstone and retire credentials: %v", err)
+	}
+	assertCredentialsRejected("deleted")
+	if !time.Now().UTC().Before(assumed.Session.ExpiresAt) {
+		t.Fatal("User deletion RoleSession denial was observed after natural expiry")
+	}
+	call(http.MethodPost, iamEndpoint, "/v1/users", ownerBearer, map[string]any{
+		"loginName": loginName, "displayName": "Must remain reserved", "initialPassword": initialDeveloperPassword,
+		"requestId": "browser-user-delete-reuse-rejected",
+	}, http.StatusConflict, nil)
+	for path, before := range retained {
+		response := performJSON(t, http.MethodGet, paasEndpoint+path, ownerBearer, nil)
+		var after any
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &after) != nil || !reflect.DeepEqual(before, after) {
+			t.Fatalf("User deletion changed tenant resource/Operation: %s", path)
+		}
+	}
+	var survivingRole iamv1.RoleAccess
+	call(http.MethodGet, iamEndpoint, rolePath, ownerBearer, nil, http.StatusOK, &survivingRole)
+	if iamv1.ValidateRoleAccess(survivingRole) != nil || survivingRole.Role.ID != role.ID || survivingRole.Role.Status != iamv1.RoleActive ||
+		len(survivingRole.TrustVersion.Document.Statements) != 1 || len(survivingRole.TrustVersion.Document.Statements[0].Principals) != 1 ||
+		survivingRole.TrustVersion.Document.Statements[0].Principals[0].ID != user.ID {
+		t.Fatal("User deletion rewrote the retained Role or trust history")
+	}
+	var directory iamv1.UserList
+	call(http.MethodGet, iamEndpoint, "/v1/users", ownerBearer, nil, http.StatusOK, &directory)
+	if iamv1.ValidateUserList(directory) != nil {
+		t.Fatal("read independent User directory after deletion")
+	}
+	for _, item := range directory.Items {
+		if item.User.ID == user.ID {
+			t.Fatal("deleted User remained in the current directory")
+		}
+	}
+
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	waitAllPaaSOutboxDelivered(t, ctx, database)
+	var deletionEvent auditv1.Event
+	for _, expected := range []struct {
+		action auditv1.Action
+		kind   auditv1.TargetKind
+		id     string
+	}{{auditv1.ActionIAMUserDeleted, auditv1.TargetUser, string(user.ID)}, {auditv1.ActionIAMAccessKeyDeleted, auditv1.TargetAccessKey, string(key.key.ID)}} {
+		var count, correlated int
+		var document []byte
+		if err := database.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE d.allowed AND d.action_name='iam.user.delete'
+			AND d.principal_id='principal-admin' AND d.request_id=$2 AND d.target_kind='USER' AND d.target_id=$5),min(o.event_document::text)::jsonb
+			FROM iam.audit_outbox o LEFT JOIN iam.authorization_decisions d ON d.id=o.event_document->>'iamDecisionId' AND d.tenant_id=o.tenant_id
+			WHERE o.tenant_id=$1 AND o.event_document->>'requestId'=$2 AND o.event_document->>'action'=$3
+			AND o.event_document#>>'{target,id}'=$4`, user.AccountID, observation.request.RequestID, expected.action, expected.id, user.ID).
+			Scan(&count, &correlated, &document); err != nil || count != 1 || correlated != 1 {
+			t.Fatalf("User deletion unique correlated %s fact count=%d correlated=%d err=%v", expected.action, count, correlated, err)
+		}
+		var event auditv1.Event
+		if auditv1.DecodeRequest(bytes.NewReader(document), &event) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil ||
+			event.Action != expected.action || event.Target.Kind != expected.kind || event.Target.ID != expected.id ||
+			event.Actor.Type != auditv1.ActorUser || event.Actor.ID != "principal-admin" || event.RequestID != observation.request.RequestID ||
+			event.TenantID != auditv1.TenantID(user.AccountID) || event.InstallationID != "" || event.Result != auditv1.ResultSucceeded {
+			t.Fatal("User deletion fact lost exact actor, request, target or tenant")
+		}
+		clear(document)
+		if expected.action == auditv1.ActionIAMUserDeleted {
+			deletionEvent = event
+		} else if event.IAMDecisionID != deletionEvent.IAMDecisionID {
+			t.Fatal("Key cascade did not bind the original User deletion decision")
+		}
+		page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{PageSize: 100, Action: expected.action}, http.StatusOK)
+		matches := 0
+		for _, record := range page.Records {
+			if record.Event.EventID == event.EventID {
+				matches++
+				if record.Source != auditv1.SourceIAM || !reflect.DeepEqual(record.Event, event) {
+					t.Fatal("User deletion Audit record differs from the committed IAM fact")
+				}
+			}
+		}
+		if matches != 1 || page.NextCursor != "" {
+			t.Fatal("User deletion did not deliver one exact Audit fact")
+		}
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete || chain.TenantID != auditv1.TenantID(user.AccountID) || chain.InstallationID != "" {
+		t.Fatal("User deletion tenant Audit chain is incomplete")
+	}
+	t.Logf("USER_DELETION_BROWSER_VERIFIED outcome=%s request=%s user=%s version=%d; one page deletion, exact internal receipt, no replay/completion query, irreversibly retired credentials, retained tenant resources/Operations and Role history, one deletion fact plus one Key cascade in the verified tenant Audit chain; UNKNOWN is not a page completion receipt", outcome, observation.request.RequestID, user.ID, receipt.ResourceVersion)
+	return sensitive
+}
+
+// Observe only this non-secret command and subsequent reads. In particular,
+// never retain login bodies, credentials or arbitrary upstream responses.
+type browserUserDeletionProbe struct {
+	target iamv1.User
+	mu     sync.Mutex
+	state  browserUserDeletionObservation
+}
+
+type browserUserDeletionObservation struct {
+	attempts, otherWrites, completionReads, directoryReads, relogins int
+	committed, invalid                                               bool
+	request                                                          iamv1.DeleteUserRequest
+	receipt                                                          iamv1.UserDeletion
+}
+
+func (probe *browserUserDeletionProbe) wrap(upstream http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		const users = "/api/iam/v1/users"
+		path := users + "/" + string(probe.target.ID)
+		isDelete := r.Method == http.MethodPost && r.URL.Path == path+":delete"
+		probe.mu.Lock()
+		after := probe.state.committed
+		if isDelete {
+			probe.state.attempts++
+		} else if strings.HasPrefix(r.URL.Path, users) && r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions {
+			probe.state.otherWrites++
+		}
+		if r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, path+"/") && strings.Contains(r.URL.Path, "completions") {
+			probe.state.completionReads++
+		}
+		probe.mu.Unlock()
+		if !isDelete {
+			observed := &browserPermissionResponse{ResponseWriter: w, status: http.StatusOK}
+			upstream.ServeHTTP(observed, r)
+			probe.mu.Lock()
+			if after && observed.status == http.StatusOK {
+				if r.Method == http.MethodGet && r.URL.Path == users {
+					probe.state.directoryReads++
+				}
+				if r.Method == http.MethodPost && r.URL.Path == "/api/iam/v1/auth/login" {
+					probe.state.relogins++
+				}
+			}
+			probe.mu.Unlock()
+			return
+		}
+		body, err := io.ReadAll(io.LimitReader(r.Body, 4097))
+		_ = r.Body.Close()
+		defer clear(body)
+		if err != nil || len(body) > 4096 {
+			probe.mu.Lock()
+			probe.state.invalid = true
+			probe.mu.Unlock()
+			http.Error(w, "invalid browser deletion observation", http.StatusBadRequest)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		captured := httptest.NewRecorder()
+		upstream.ServeHTTP(captured, r)
+		var request iamv1.DeleteUserRequest
+		var receipt iamv1.UserDeletion
+		valid := probe.target.Status == iamv1.PrincipalDisabled && captured.Code == http.StatusOK &&
+			iamv1.DecodeRequest(bytes.NewReader(body), &request) == nil && iamv1.ValidateDeleteUserRequest(request) == nil &&
+			request.ResourceVersion == probe.target.ResourceVersion &&
+			iamv1.DecodeRequest(bytes.NewReader(captured.Body.Bytes()), &receipt) == nil && iamv1.ValidateUserDeletion(receipt) == nil &&
+			receipt.AccountID == probe.target.AccountID && receipt.ID == probe.target.ID && receipt.LoginName == probe.target.LoginName &&
+			receipt.ResourceVersion == probe.target.ResourceVersion+1
+		probe.mu.Lock()
+		probe.state.invalid = probe.state.invalid || !valid
+		if captured.Code == http.StatusOK {
+			probe.state.committed = true
+		}
+		if valid && probe.state.attempts == 1 {
+			probe.state.request, probe.state.receipt = request, receipt
+		}
+		probe.mu.Unlock()
+		copyBrowserFixtureResponse(w, captured)
+		clear(captured.Body.Bytes())
+	})
+}
+
+func (probe *browserUserDeletionProbe) snapshot() browserUserDeletionObservation {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	return probe.state
+}
+
+func (probe *browserUserDeletionProbe) check(loss *browserResponseLoss) error {
+	state := probe.snapshot()
+	if state.attempts != 1 || state.invalid || !state.committed || state.otherWrites != 0 || state.completionReads != 0 || state.directoryReads == 0 {
+		return fmt.Errorf("User deletion journey attempts=%d invalid=%t committed=%t otherWrites=%d completionReads=%d directoryReads=%d",
+			state.attempts, state.invalid, state.committed, state.otherWrites, state.completionReads, state.directoryReads)
+	}
+	if loss != nil {
+		wire := loss.snapshot()
+		defer clear(wire.RequestBody)
+		if !wire.ResponseLost || wire.Attempts != 1 || wire.SelectedAttempt != 1 || wire.BackendStatus != http.StatusOK ||
+			wire.MutationOverflow || wire.PostLossWrites != 0 || wire.RecoveryReads != 0 || len(wire.RecoveryAttempts) != 0 || state.relogins == 0 {
+			return fmt.Errorf("User deletion UNKNOWN lacks genuine single-response loss, zero replay or same-owner relogin")
+		}
+	}
+	return nil
+}
+
+func TestUserDeletionBrowserObservation(t *testing.T) {
+	for _, name := range []string{"normal", "response-loss", "duplicate-command", "completion-read", "other-user-write", "wrong-account", "wrong-version", "active-target"} {
+		t.Run(name, func(t *testing.T) {
+			target := iamv1.User{AccountID: "account-browser", ID: "user-browser", LoginName: "browser.user", Status: iamv1.PrincipalDisabled, ResourceVersion: 3}
+			receipt := iamv1.UserDeletion{APIVersion: iamv1.APIVersion, Kind: "UserDeletion", AccountID: target.AccountID,
+				ID: target.ID, LoginName: target.LoginName, ResourceVersion: 4, DeletedAt: time.Now().UTC().Truncate(time.Microsecond)}
+			if name == "wrong-account" {
+				receipt.AccountID = "account-other"
+			} else if name == "wrong-version" {
+				receipt.ResourceVersion = 5
+			} else if name == "active-target" {
+				target.Status = iamv1.PrincipalActive
+			}
+			probe := &browserUserDeletionProbe{target: target}
+			path := "/api/iam/v1/users/" + string(target.ID) + ":delete"
+			var loss *browserResponseLoss
+			if name == "response-loss" {
+				loss = &browserResponseLoss{method: http.MethodPost, path: path, postLossWritePrefix: "/api/iam/v1/users"}
+			}
+			server := httptest.NewServer(iamConsoleBrowserFixtureHandler(probe.wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				if r.URL.Path == path {
+					_ = json.NewEncoder(w).Encode(receipt)
+					return
+				}
+				_, _ = w.Write([]byte("{}"))
+			})), make(chan struct{}, 2), loss))
+			defer server.Close()
+			invoke := func(method, route string, command any) ([]byte, error) {
+				t.Helper()
+				body, err := json.Marshal(command)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request, err := http.NewRequest(method, server.URL+route, bytes.NewReader(body))
+				if err != nil {
+					t.Fatal(err)
+				}
+				response, err := server.Client().Do(request)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				return io.ReadAll(response.Body)
+			}
+			command := iamv1.DeleteUserRequest{ResourceVersion: 3, RequestID: "browser-delete-request"}
+			body, readErr := invoke(http.MethodPost, path, command)
+			if loss != nil {
+				if readErr == nil || json.Valid(body) {
+					t.Fatal("the real connection did not lose the committed response")
+				}
+			} else if readErr != nil || !json.Valid(body) {
+				t.Fatal("normal receipt was not forwarded intact")
+			}
+			_, _ = invoke(http.MethodGet, "/api/iam/v1/users", nil)
+			_, _ = invoke(http.MethodPost, "/api/iam/v1/auth/login", nil)
+			switch name {
+			case "duplicate-command":
+				_, _ = invoke(http.MethodPost, path, command)
+			case "completion-read":
+				_, _ = invoke(http.MethodGet, "/api/iam/v1/users/user-browser/management-completions/browser-delete-request", nil)
+			case "other-user-write":
+				_, _ = invoke(http.MethodPost, "/api/iam/v1/users/user-other:delete", command)
+			}
+			server.Close()
+			if err := probe.check(loss); (err == nil) != (name == "normal" || name == "response-loss") {
+				t.Fatalf("observer accepted the wrong journey: %v", err)
+			}
+		})
 	}
 }
 
