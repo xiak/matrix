@@ -42,19 +42,23 @@
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
 | 最近独立CI通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
-| 最新代码候选 | `ef909e1f33ebc51af972c09ddafef3647710d77c`；统一固定容器worker客户端及输入准备，只改既有测试/workflow/证据，独立CI待确认。本机完整产品尝试因Elasticsearch内核前置不足而未通过，不能由默认race或旧CI继承验收 |
+| 最新代码候选 | 既有测试owner的私有输入归属修正：显式root归属的三文件流式archive、封闭bootstrap阶段码及同一步骤内的短容器门禁；本地通过，后继精确CI待确认。前一固定`ef909e1f33ebc51af972c09ddafef3647710d77c`已独立失败，不能继承旧CI或接受为四产品通过 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
 
+固定`ef909e1f33ebc51af972c09ddafef3647710d77c`的[Verification39731447102](https://github.com/xiak/matrix/actions/runs/39731447102) attempt1已确认`completed/failure`，十九项job为十七成功、managed-products及派生汇总失败；其余日志的独立全量核对尚未封存，不宣称全部子测试人工审计完成。[本次产品job](https://github.com/xiak/matrix/actions/runs/39731447102/job/119669744540)的步骤12运行122秒；`TestManagedProductProviderProcesses`实际48.09秒、package48.157秒后失败，外层`docker start --attach`在预期HTTP200前exit1，捕获输出为空。外层Start返回到Wait返回116.795441毫秒，不是内层worker或探针时长；本次没有旧Engine超时码、固定client验证标记或四产品完整效果摘要，不能套用旧故障原因。另两条产品存储根通过0.47/0.42秒。测试owner已完整读取本job必要日志，其余门禁成功不能覆盖这一失败。
+
+在本机独占、network-none、2CPU/512MiB/PIDs128、cap-dropALL容器中复现：Linux UID1001创建的0700源目录经原`docker cp`后仍为1001:0:700，原脚本首个root归属检查立即exit1，State.Error为空、没有OOM。Windows源目录自然为root的先前观察不能证明Linux复制会归一归属。这直接证明原夹具的错误所有权假设；不据此解释更早的Engine/Observe超时。
+
+后继修正仍只属于原测试/workflow owner：Linux与Windows共用固定linux/amd64 client及原Engine，保留原loopback/gateway、受限数据库身份、物理volume、2CPU/512MiB/PIDs128和三秒/五秒预算。只把worker、受限DSN及artifact catalog编码为三个固定名称的流式tar条目，明确UID/GID为0、目录/可执行文件0700及两个配置0600，再用`docker cp --archive -`送入未启动的专属容器；不枚举周边材料、不改变host权限、不加CHOWN capability，也不在磁盘留下另一份秘密archive。取消或复制失败会关闭管道并收回写入goroutine。bootstrap只输出OWNER/BINDINGS/INPUTS/MODES/CLEANUP/EXEC封闭阶段码，随后仍在私有tmpfs中执行并删除准确暂存材料；不输出秘密内容、不引入重试、native回退、relay或新daemon。
+
+默认process/architecture race通过5.248/2.071秒，vet及diff检查通过。archive回归证明准确内容/归属/mode、拒绝缺失或非文件输入、目标不可写和取消；真实短容器门禁在Windows以1.71秒通过（race包5.223秒），在network-none受限Linux客户端内以UID1001运行同一当前测试binary通过0.58秒，准确bootstrap验证三份root私有输入、消费后删除，并在没有新输入的第二次一次性执行中以OWNER失败关闭。后者未开产品worker或数据库，不冒充完整四产品或Linux race验收。现有managed-products步骤在产品镜像准备后先运行此准确短门禁，仍由原RUN/PASS/非SKIP wrapper守护；完整YAML语义比较仅新增这一调用，24段Bash语法通过，其余选择器、期限和限额不变。本机Elasticsearch内核前提仍不足且未修改，真实Linux完整产品效果需后继精确CI证明。本轮专属诊断/验证容器均清理；一个生成的Linux测试binary因工具策略拒删而保留，不能宣称全部磁盘清理完成。生产代码、API、SQL、UI及发布profile无变化。
+
 固定`08e0d76bbea2d63c59b790e61c2870162d928c19`的[Verification 39711834716](https://github.com/xiak/matrix/actions/runs/39711834716) attempt1于2026-10-22由测试owner核对为`completed/failure`，全部十九份job日志核验后仍为十七成功、managed-products及派生汇总两项失败。[实际失败job](https://github.com/xiak/matrix/actions/runs/39711834716/job/119607098586)的唯一原始失败为`TestManagedProductProviderProcesses`：运行43.43秒、package43.497秒后失败，worker在预期HTTP200就绪前exit1，封闭码为`PAAS_WORKER_EXECUTION_PROFILE_DOCKER_ENGINE_TIMEOUT`；另两条产品存储根通过0.47/0.41秒，但四产品完整效果摘要为零次，不能接受真实四产品旅程。新增观测记录`Start`调用耗时460.219微秒、`Start`返回到`Wait`返回3.021389335秒、系统报告的进程user/system CPU为66.865/57.404毫秒。它们不是Docker CLI自身的起止、内核精确退出时间或daemon CPU，也未提供探针时刻的资源/OOM及底层响应证据；不能从根测试时长或初始化/清理成功反推原因。此前固定958d5b4的[Verification 39646488455](https://github.com/xiak/matrix/actions/runs/39646488455) attempt1同为十九项中十七成功、该产品根与汇总失败，已封存，不重复获取旧日志或回填终态。
 
 该码只定位现有`docker info --format {{json .}}`探测路径，不能区分CLI启动/调度、Docker daemon响应或资源原因。生产worker、localmachine adapter、execution-profile用例和workflow与已通过的e22逐文件无差异；这也不能证明其一定是环境抖动。现有三秒CLI/五秒Observe预算和失败关闭行为不变；不盲目重跑、扩大超时或将新失败冒充[Issue #6](https://github.com/xiak/matrix/issues/6)旧Observe失败的唯一根因。后续修复或受控复现需要新的准确证据，旧失败终态不回填。
-
-本轮测试切片统一现有managed-product worker的执行环境：Linux与Windows都复用已有受限Linux容器路径，使用发布PaaS的固定Docker base，不再由Linux runner的可变CLI/plugin环境启动native worker。固定manifest引用必须解析为实际linux/amd64本地image ID并核对真实容器；不把manifest digest当作必然相同的config ID。Linux保留原loopback数据库及动态loopback就绪地址，Windows仅按已有Docker Desktop边界换址；受限数据库身份、连接池、秘密文件、物理volume路径和清理仍实际核对。只向专属未启动容器复制worker、受限DSN及artifact catalog三个私有输入，启动后放入0700 tmpfs并删除准确暂存文件；不挂载其他authority材料、不放宽runner文件权限，也不依赖cap-drop后的root越过0600。保持2CPU/512MiB/PIDs128、原Engine socket、三秒/五秒预算及全部四产品协议、权限撤销、隔离、Operation、quota、Audit断言；不启动daemon、不重试或回退native。默认连接/镜像身份负例与真实Linux四产品门禁、精确SHA独立CI分别验收。此片只统一客户端环境，即使通过，也不能证明原失败由runner插件造成；外层Start/Wait描述`docker start --attach`生命周期，不是容器内worker或探针的精确计时。
-
-本片默认process/architecture race以5.312/2.147秒通过，vet及diff检查通过；连接回归核对受限身份、密码转义、数据库、端口、两连接上限及application_name，拒绝越出loopback和不支持的平台；镜像回归拒绝错误OS/架构及非摘要ID，接受与manifest不同的真实config ID。完整YAML语义比较仅发现原产品步骤新增固定客户端准备，24段Bash语法通过，所有选择器、预算和效果保持。Windows的复制目录实际为root:root/0755，在独占受限容器验证可收紧为0700；夹具在读取材料前归一目录权限，不放宽capabilities。随后真实新库尝试止于Elasticsearch readiness：本机Docker Desktop内核只读值为262144，低于provider既有1048576下限；该运行不接受为四产品通过。临时诊断代码已全部撤回，生产/API/SQL/profile无差异，未修改共享内核参数。专属PG内的三套合成数据库、容器和空网络均已清理，worker及运行卷无残留；新原生Linux路径及完整产品效果仍待本片准确SHA的独立CI，CI原隔离runner已配置该内核前提。
 
 08e0d76的测试专用增量仅在原`authorityprocess`子进程owner记录`Start`调用前后与`Wait`返回的观测时间；就绪前退出时补充这些时间、相应耗时及系统报告的user/system CPU时间，不增加环境、参数、凭据或Docker原始输出。终态通过原完成channel发布，重复poll/wait不能重写原观测；`Wait`返回时间不是内核精确退出时间，进程CPU也不能单独解释探针原因。成功/失败子进程回归在Windows race通过1.51秒，默认process/architecture race通过5.171/1.966秒、vet与diff检查通过；同一测试在network-none、2CPU/512MiB/PIDs128的Linux容器通过0.03秒。另用未改的真实`DockerHostProbe`在相同限额的Linux容器只读访问本机Docker29.6.2引擎，Docker27.5.1 CLI下两次观测共0.31秒通过；这只说明本地未复现，不等于CI修复或四产品通过，默认跳过的PG/浏览器也不计运行证据。生产探针、预算、重试、workflow及release profile保持不变，Issue6继续开放；上述独立CI已确认该增量尚未解决原超时。
 

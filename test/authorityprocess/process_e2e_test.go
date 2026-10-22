@@ -1,6 +1,7 @@
 package authorityprocess
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
 	"crypto/aes"
@@ -235,6 +236,124 @@ func TestManagedWorkerImageRequiresResolvedLinuxAMD64Identity(t *testing.T) {
 			t.Fatal("invalid worker image identity or platform was accepted")
 		}
 	}
+}
+
+func TestManagedWorkerInputArchiveIsPrivateAndClosed(t *testing.T) {
+	root := t.TempDir()
+	worker := writeProtectedFile(t, root, "source-worker", []byte("test executable"))
+	dsn := writeProtectedFile(t, root, "source-dsn", []byte("test-only-dsn"))
+	catalog := writeProtectedFile(t, root, "source-catalog", []byte("test-only-catalog"))
+	writeProtectedFile(t, root, "unrelated-authority-material", []byte("must not be copied"))
+	var archive bytes.Buffer
+	if err := writeManagedWorkerInputArchive(&archive, worker, dsn, catalog); err != nil {
+		t.Fatal(err)
+	}
+	reader := tar.NewReader(&archive)
+	expected := map[string]struct {
+		mode int64
+		body string
+	}{
+		"fixture/":                 {0o700, ""},
+		"fixture/worker":           {0o700, "test executable"},
+		"fixture/database-dsn":     {0o600, "test-only-dsn"},
+		"fixture/artifact-catalog": {0o600, "test-only-catalog"},
+	}
+	for {
+		header, err := reader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry, ok := expected[header.Name]
+		body, err := io.ReadAll(reader)
+		if !ok || err != nil || string(body) != entry.body || header.Mode != entry.mode || header.Uid != 0 || header.Gid != 0 ||
+			header.Linkname != "" || (header.Name == "fixture/" && header.Typeflag != tar.TypeDir) ||
+			(header.Name != "fixture/" && header.Typeflag != tar.TypeReg) {
+			t.Fatal("worker transfer changed its closed content, private modes or container ownership")
+		}
+		delete(expected, header.Name)
+	}
+	if len(expected) != 0 {
+		t.Fatal("worker transfer omitted a required private input")
+	}
+	for _, invalid := range []string{root, filepath.Join(root, "missing")} {
+		if err := writeManagedWorkerInputArchive(io.Discard, invalid, dsn, catalog); err == nil {
+			t.Fatal("worker transfer accepted a non-file input")
+		}
+	}
+	writer, err := os.Open(worker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = writer.Close()
+	if err := writeManagedWorkerInputArchive(writer, worker, dsn, catalog); err == nil {
+		t.Fatal("worker transfer ignored an unavailable destination")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := copyManagedWorkerInputs(ctx, "unused-cancelled-input-gate", worker, dsn, catalog); err == nil {
+		t.Fatal("cancelled worker transfer was accepted")
+	}
+}
+
+func TestManagedWorkerPrivateInputsContainer(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_MANAGED_WORKER_INPUT_TEST") != "1" {
+		t.Skip("set MATRIX_IAM_MANAGED_WORKER_INPUT_TEST=1 for the bounded private-input transfer gate")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	root := t.TempDir()
+	worker := writeProtectedFile(t, root, "worker", []byte("#!/bin/sh\nset -eu\n"+
+		"test ! -e /tmp/fixture\n"+
+		"test \"$(stat -c %u:%g:%a /run/matrix/matrix-paas-worker)\" = 0:0:700\n"+
+		"test \"$(stat -c %u:%g:%a /run/matrix/paas-worker-dsn)\" = 0:0:600\n"+
+		"test \"$(stat -c %u:%g:%a /run/matrix/artifact-catalog.json)\" = 0:0:600\n"+
+		"printf '%s\\n' MATRIX_MANAGED_WORKER_INPUTS_READY\n"))
+	dsn := writeProtectedFile(t, root, "dsn", []byte("test-only-dsn"))
+	catalog := writeProtectedFile(t, root, "catalog", []byte("test-only-catalog"))
+	name := "matrix-iam-managed-inputs-" + newManagedHexSuffix(t)
+	imageID := resolveManagedWorkerImage(t, ctx)
+	created, err := exec.CommandContext(ctx, "docker", "create", "--name", name,
+		"--label", "matrix.task=iam-managed-worker-inputs", "--label", "matrix.fixture="+name,
+		"--network", "none", "--cpus", "2", "--memory", "512m", "--memory-swap", "512m", "--pids-limit", "128",
+		"--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
+		"--tmpfs", "/run/matrix:rw,exec,nosuid,nodev,size=64m,mode=0700",
+		"--env", "MATRIX_PAAS_WORKER_BINDING_ROOT=/run/matrix/bindings",
+		"--env", "MATRIX_PAAS_WORKER_SECRET_ROOT=/run/matrix/secrets",
+		"--entrypoint", "sh", imageID, "-c", managedWorkerBootstrapScript()).Output()
+	if err != nil {
+		t.Fatal("create isolated worker input gate")
+	}
+	id := strings.TrimSpace(string(created))
+	t.Cleanup(func() {
+		cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
+		defer stop()
+		label, err := exec.CommandContext(cleanup, "docker", "inspect", "--format", `{{index .Config.Labels "matrix.fixture"}}`, id).Output()
+		if err != nil || strings.TrimSpace(string(label)) != name {
+			t.Error("worker input gate cleanup ownership mismatch")
+			return
+		}
+		if err := exec.CommandContext(cleanup, "docker", "rm", "--force", id).Run(); err != nil {
+			t.Error("remove isolated worker input gate")
+		}
+	})
+	if err := copyManagedWorkerInputs(ctx, id, worker, dsn, catalog); err != nil {
+		t.Fatal(err)
+	}
+	output, err := exec.CommandContext(ctx, "docker", "start", "--attach", id).CombinedOutput()
+	if err != nil || strings.TrimSpace(string(output)) != "MATRIX_MANAGED_WORKER_INPUTS_READY" {
+		t.Fatal("private input transfer or exact bootstrap did not complete")
+	}
+	// The consumed inputs must not become an implicit restart credential. This
+	// second one-shot shell has no workload and must report its closed phase.
+	output, err = exec.CommandContext(ctx, "docker", "start", "--attach", id).CombinedOutput()
+	if err == nil || !strings.Contains(string(output), "MATRIX_MANAGED_WORKER_BOOTSTRAP_OWNER") ||
+		strings.Contains(string(output), "MATRIX_MANAGED_WORKER_INPUTS_READY") {
+		t.Fatal("bootstrap without fresh private inputs did not fail closed at its owning phase")
+	}
+	t.Log("fixed client copied only root-owned private inputs; exact cap-drop bootstrap consumed them without exposing source ownership")
 }
 
 func TestIndependentIAMAuditAndPaaSProcesses(t *testing.T) {
@@ -9723,7 +9842,6 @@ func startManagedProductWorker(
 	secretRoot := mountpoint + "/secrets"
 	containerDSNFile := "/run/matrix/paas-worker-dsn"
 	containerCatalogFile := "/run/matrix/artifact-catalog.json"
-	containerWorker := "/run/matrix/matrix-paas-worker"
 	workerEnvironment := managedProductWorkerEnvironment(
 		containerDSNFile, bindingRoot, secretRoot, containerCatalogFile, containerAddress, images,
 	)
@@ -9741,26 +9859,12 @@ func startManagedProductWorker(
 	for _, entry := range workerEnvironment {
 		arguments = append(arguments, "--env", entry)
 	}
-	script := "set -eu; " +
-		"test \"$(stat -c %u:%g /tmp/fixture)\" = 0:0; chmod 700 /tmp/fixture; " +
-		"mkdir -p \"$MATRIX_PAAS_WORKER_BINDING_ROOT\" \"$MATRIX_PAAS_WORKER_SECRET_ROOT\"; " +
-		"chmod 700 \"$MATRIX_PAAS_WORKER_BINDING_ROOT\" \"$MATRIX_PAAS_WORKER_SECRET_ROOT\"; " +
-		"cp /tmp/fixture/" + filepath.Base(workerBinary) + " " + containerWorker + "; " +
-		"cp /tmp/fixture/" + filepath.Base(containerDSNPath) + " " + containerDSNFile + "; " +
-		"cp /tmp/fixture/" + filepath.Base(catalogPath) + " " + containerCatalogFile + "; " +
-		"chmod 700 " + containerWorker + "; chmod 600 " + containerDSNFile + " " + containerCatalogFile + "; " +
-		"rm /tmp/fixture/" + filepath.Base(workerBinary) + " /tmp/fixture/" + filepath.Base(containerDSNPath) + " /tmp/fixture/" + filepath.Base(catalogPath) + "; rmdir /tmp/fixture; " +
-		"exec " + containerWorker
-	arguments = append(arguments, "--entrypoint", "sh", workerImageID, "-c", script)
-	// docker cp deliberately uses its default root ownership, not archive mode.
-	// A cap-drop=ALL root cannot read the Linux runner's uid-owned 0600 bind
-	// mount. Stage only these three inputs, preserving private modes and never
-	// mounting the test's other authority secrets or changing host permissions.
+	arguments = append(arguments, "--entrypoint", "sh", workerImageID, "-c", managedWorkerBootstrapScript())
 	if _, err := exec.CommandContext(ctx, "docker", arguments...).Output(); err != nil {
 		t.Fatal("create bounded managed worker container")
 	}
-	if err := exec.CommandContext(ctx, "docker", "cp", inputRoot, workerContainer+":/tmp/fixture").Run(); err != nil {
-		t.Fatal("copy private managed worker inputs")
+	if err := copyManagedWorkerInputs(ctx, workerContainer, workerBinary, containerDSNPath, catalogPath); err != nil {
+		t.Fatal(err)
 	}
 	workerReservation.release(t)
 	worker := startWithArguments("docker", nil, "start", "--attach", workerContainer)
@@ -9774,6 +9878,74 @@ func startManagedProductWorker(
 		volumeName: volumeName, workerContainer: workerContainer,
 		workerImageID: workerImageID, images: images,
 	}
+}
+
+func managedWorkerBootstrapScript() string {
+	return "set -eu; stage=OWNER; " +
+		"trap 'code=$?; if [ \"$code\" -ne 0 ]; then printf \"MATRIX_MANAGED_WORKER_BOOTSTRAP_%s\\n\" \"$stage\" >&2; fi' EXIT; " +
+		"test \"$(stat -c %u:%g:%a /tmp/fixture)\" = 0:0:700; stage=BINDINGS; " +
+		"mkdir -p \"$MATRIX_PAAS_WORKER_BINDING_ROOT\" \"$MATRIX_PAAS_WORKER_SECRET_ROOT\"; " +
+		"chmod 700 \"$MATRIX_PAAS_WORKER_BINDING_ROOT\" \"$MATRIX_PAAS_WORKER_SECRET_ROOT\"; stage=INPUTS; " +
+		"cp /tmp/fixture/worker /run/matrix/matrix-paas-worker; " +
+		"cp /tmp/fixture/database-dsn /run/matrix/paas-worker-dsn; " +
+		"cp /tmp/fixture/artifact-catalog /run/matrix/artifact-catalog.json; stage=MODES; " +
+		"chmod 700 /run/matrix/matrix-paas-worker; chmod 600 /run/matrix/paas-worker-dsn /run/matrix/artifact-catalog.json; stage=CLEANUP; " +
+		"rm /tmp/fixture/worker /tmp/fixture/database-dsn /tmp/fixture/artifact-catalog; rmdir /tmp/fixture; " +
+		"stage=EXEC; exec /run/matrix/matrix-paas-worker"
+}
+
+// Docker can retain the source directory's uid even without --archive. Encode
+// only the three owned inputs with explicit container ownership; never chmod or
+// chown host files, grant CHOWN to the worker, or copy the surrounding secrets.
+func writeManagedWorkerInputArchive(destination io.Writer, worker, dsn, catalog string) error {
+	writer := tar.NewWriter(destination)
+	if err := writer.WriteHeader(&tar.Header{Name: "fixture/", Typeflag: tar.TypeDir, Mode: 0o700}); err != nil {
+		return err
+	}
+	for _, input := range []struct {
+		name, path string
+		mode       int64
+	}{
+		{"worker", worker, 0o700}, {"database-dsn", dsn, 0o600}, {"artifact-catalog", catalog, 0o600},
+	} {
+		file, err := os.Open(input.path)
+		if err != nil {
+			return errors.New("managed worker input is unavailable")
+		}
+		info, err := file.Stat()
+		if err != nil || !info.Mode().IsRegular() {
+			_ = file.Close()
+			return errors.New("managed worker input is not a regular file")
+		}
+		err = writer.WriteHeader(&tar.Header{Name: "fixture/" + input.name, Typeflag: tar.TypeReg, Mode: input.mode, Size: info.Size()})
+		if err == nil {
+			_, err = io.CopyN(writer, file, info.Size())
+		}
+		closeErr := file.Close()
+		if err != nil || closeErr != nil {
+			return errors.New("managed worker input transfer failed")
+		}
+	}
+	return writer.Close()
+}
+
+func copyManagedWorkerInputs(ctx context.Context, container, worker, dsn, catalog string) error {
+	reader, writer := io.Pipe()
+	completed := make(chan error, 1)
+	go func() {
+		err := writeManagedWorkerInputArchive(writer, worker, dsn, catalog)
+		_ = writer.CloseWithError(err)
+		completed <- err
+	}()
+	command := exec.CommandContext(ctx, "docker", "cp", "--archive", "-", container+":/tmp")
+	command.Stdin = reader
+	err := command.Run()
+	_ = reader.CloseWithError(err)
+	archiveErr := <-completed
+	if err != nil || archiveErr != nil {
+		return errors.New("copy private managed worker inputs")
+	}
+	return nil
 }
 
 // The Linux container shares the fixture host's network, not a new Engine.

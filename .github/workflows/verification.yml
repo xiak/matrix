@@ -480,6 +480,10 @@ jobs:
           docker pull "$elasticsearch_image"
           docker pull "$rabbitmq_image"
           docker pull --platform linux/amd64 "$worker_image"
+          MATRIX_IAM_MANAGED_WORKER_INPUT_TEST=1 bash .github/scripts/run-go-test-selection.sh \
+            'TestManagedWorkerPrivateInputsContainer' \
+            -race -p 1 -count=1 ./test/authorityprocess \
+            -run '^TestManagedWorkerPrivateInputsContainer$'
           MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$postgres_image")"
           MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$mysql_image")"
           MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$elasticsearch_image")"
