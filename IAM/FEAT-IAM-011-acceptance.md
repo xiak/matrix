@@ -42,14 +42,18 @@
 | --- | --- |
 | 已接受签名组合 | `5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7+r37；同源A/B完整离线生命周期2627.90秒、重启后复验282.28秒通过，准确包、信任根、限额和观察约束由[FEAT-005](../docs/features/FEAT-005-offline-platform-lifecycle.md#current-iam87-user-management-completion-release-consumer-gate)拥有 |
 | 最近完整日志审计通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
-| 最新CI终态 | `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1已核实`completed/success`，十九项job全部成功；测试owner已取得Analyzer实际PASS41.08秒，完整日志审计仍未封存，不冒充浏览器或签名发布通过 |
-| 最新代码候选 | `b3c3d157fd58af0743f4ef4721123b27de05abf8`：只修正R1夹具按当前metadata定位准确Role，真实PG预检与默认race/vet通过；[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1待确认。页面实际创建、承担和撤销仍按010未验收，不由查询修正或前一CI补证 |
+| 最新代码及CI终态 | `b3c3d157fd58af0743f4ef4721123b27de05abf8`只修正R1夹具按当前metadata定位准确Role；真实PG预检、默认race/vet及[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1十九项job均通过。完整日志审计尚未封存，页面实际创建、承担和撤销仍按010未验收，不由查询修正或绿色CI补证 |
+| 前一候选的实际产品证据 | `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1十九项job全部成功；测试owner核验短容器门禁1.45秒、完整四产品128.51秒和Analyzer41.08秒。十六份日志完整、三份仅局部，不冒充全量日志审计或其他版本通过 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
 
-固定`7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1已于2026-10-22 16:17:47+08通过GitHub API核实精确SHA、`completed/success`和十九项job全部成功。测试owner已取得`TestIAMAccessAnalyzerPostgres`实际PASS41.08秒；短输入根、完整产品根及其余完整日志的独立逐项审计尚未封存。该CI终态不回填22591的失败，不证明旧Engine或迁移失败的唯一根因，不接受尚未实际执行的R1/R2或新签名发布。
+固定`b3c3d157fd58af0743f4ef4721123b27de05abf8`的[Verification39746740451](https://github.com/xiak/matrix/actions/runs/39746740451) attempt1已于2026-10-22 16:56:58+08通过GitHub API再次核实精确SHA、`completed/success`和十九项job全部成功。测试owner已完整读取并校验四份前置日志，共186,134字节；其中Go93包、前端79文件2062项Vitest及八项Node检查通过。authority日志尚未完成独立核验，不能由job状态或前一候选的详细结果补作全量日志审计。此片仅修正R1准备后的Role查询，实际浏览器证据仍由010分别判定，发布Profile不变。
+
+固定`7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1已于2026-10-22 16:17:47+08通过GitHub API核实精确SHA、`completed/success`和十九项job全部成功。测试owner核验`TestManagedWorkerPrivateInputsContainer`实际RUN/PASS各一次、1.45秒（package2.502秒），`TestManagedProductProviderProcesses`实际RUN/PASS各一次、128.51秒（package129.562秒），JSON与文本终态一致；固定linux/amd64客户端标记和四产品完整效果摘要各精确出现一次。摘要与该提交process文件blob`fe1403573f4a077c9d4f9cf35c0be00ad81f3683`一致。`TestIAMAccessAnalyzerPostgres`实际PASS41.08秒亦已核验。这些证据接受本固定版本对应根的真实运行，不证明旧Engine或迁移失败的唯一根因。
+
+该7d6轮370个step为175成功、195项矩阵设计跳过；十六份日志已完整核验，另storage、runtime、recovery-storage仅有局部读取。原日志读取会话随后丢失，全量审计仍未封存；不得将已观察根扩大为全部根已核验，也不重复获取已封存的旧失败日志或为取证重跑CI。上述两轮绿色终态均不回填22591等旧失败，不接受尚未实际执行的R1/R2或新签名发布。
 
 固定`22591d3a52285c98ed269cd4a41643872d0b30c3`的[Verification39736548709](https://github.com/xiak/matrix/actions/runs/39736548709) attempt1已确认`completed/failure`：十九项job为十六成功，storage、managed-products和派生汇总失败。测试owner已完成十九份日志核验并封存；Analyzer失败后另六个storage根未RUN，不能只由job清单补作通过。两项原始失败保持以下结论，不重复获取已关闭日志。
 

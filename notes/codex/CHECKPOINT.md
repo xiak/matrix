@@ -11,7 +11,9 @@
   The host goal is authoritative. Do not reopen accepted permission-aware work
   or mark the overall IAM matrix complete.
 - Latest pushed code: `b3c3d157fd58af0743f4ef4721123b27de05abf8`.
-  Verification39746740451 attempt1 is confirmed live/pending. Only the existing
+  Verification39746740451 attempt1 is completed/success: the exact SHA and all
+  nineteen jobs were independently checked through GitHub API. Four precheck
+  logs were fully audited; authority logs are not yet audited. Only the existing
   R1 test and IAM/010 changed: Role names live in metadata, not a standalone
   name column. Its original lookup failed with SQLSTATE42703 in actual PG18.4;
   the corrected exact live CUSTOMER lookup returned the right Role and no
@@ -21,9 +23,13 @@
   `matrix-f0c6f4f1a804dcfebbf2`.
 - Previous code `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`,
   Verification39743005047 attempt1, is completed/success: exact SHA and all
-  nineteen jobs were independently checked through GitHub API. Test Expert has
-  observed actual Analyzer PASS41.08 seconds; whole-log audit is not yet sealed.
-  Do not claim all root details were audited or inherit browser/release status.
+  nineteen jobs were independently checked through GitHub API. Test Expert
+  verified the actual short client root1.45 seconds, full four-product root
+  128.51 seconds and Analyzer41.08 seconds. The complete product summary and
+  pinned client marker each matched once. Sixteen logs are fully audited and
+  three are partial; the original in-memory log-reading session was lost.
+  Whole-log audit is not sealed. Do not claim all root details were audited or
+  inherit browser/release status. IAM/011 owns exact evidence.
 - That slice uses the fixed volume-free Docker27.5.1 CLI client; image resolution
   rejects declared volumes/missing Config before creation, and the short real
   gate executes the CLI and checks actual mounts. Original runtime mount,
@@ -70,6 +76,10 @@
   occurred. The fixture expired; zero Roles/facts and zero clients/listeners
   were independently checked, and its PG/network/page were closed.
   Do not reuse its URL/confirmation. Consume fixed b3c3 before the next run.
+  The user subsequently confirmed readiness for a new R1. The original UX
+  executor has restored its browser capability and explicitly requested a fresh
+  fixture. This milestone contains no new page-write acceptance: use new
+  resources and identifiers, then require the actual journey and effects.
 - R2 attachment revocation remains unaccepted. R2d made the actual UI write,
   but its old observer missed exact application-detail HTTP evidence. Never
   backfill that evidence from DOM. Fixed958's R2e made no revocation and expired
