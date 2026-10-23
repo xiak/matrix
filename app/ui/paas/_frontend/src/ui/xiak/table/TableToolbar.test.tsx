@@ -23,8 +23,11 @@ describe("TableToolbar collection search", () => {
     expect(screen.getAllByRole("searchbox")).toHaveLength(1);
     expect(screen.queryByRole("combobox")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Filters" }));
+    expect(screen.getByRole("combobox", { name: "State" }).getAttribute("data-size")).toBe("large");
+    expect(screen.getByRole("combobox", { name: "Type" }).getAttribute("data-size")).toBe("large");
     await user.click(screen.getByRole("combobox", { name: "State" }));
     await user.click(screen.getByRole("option", { name: "Active" }));
+    expect(screen.getByRole("button", { name: "Remove State: Active" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "Filters 1" }));
     expect(screen.queryByRole("combobox")).toBeNull();
     await user.click(screen.getByRole("button", { name: "Remove State: Active" }));

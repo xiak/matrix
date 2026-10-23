@@ -31,7 +31,7 @@ export function TableToolbar({ search, filters = [], labels, actions, status, to
     // Clearing removes the reset control; keep focus on a stable collection tool.
     toggle.current?.focus();
   };
-  return <div className={styles.root}>
+  return <div className={styles.root} data-expanded={expanded || undefined}>
     <div className={styles.bar}>
       {actions ? <div className={styles.actions}>{actions}</div> : null}
       <SearchInput className={styles.search} aria-label={search.label} placeholder={search.placeholder ?? search.label}
@@ -44,10 +44,12 @@ export function TableToolbar({ search, filters = [], labels, actions, status, to
     </div>
     {expanded ? <div id={panelId} role="group" aria-label={labels.filters} className={styles.filters}
       onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) { event.stopPropagation(); setExpanded(false); toggle.current?.focus(); } }}>
-      {filters.map((filter) => <div className={styles.field} key={filter.id}><span>{filter.label}</span>
-        <Select aria-label={filter.label} options={filter.options} value={filter.value} onValueChange={filter.onChange} />
-      </div>)}
-      {active.length ? <Button variant="ghost" onClick={reset}>{labels.clearFilters}</Button> : null}
+      <div className={styles.filterFields}>
+        {filters.map((filter) => <div className={styles.field} key={filter.id}><span>{filter.label}</span>
+          <Select aria-label={filter.label} controlSize="large" options={filter.options} value={filter.value} onValueChange={filter.onChange} />
+        </div>)}
+      </div>
+      {active.length ? <div className={styles.filterActions}><Button variant="ghost" onClick={reset}>{labels.clearFilters}</Button></div> : null}
     </div> : null}
     {active.length ? <div className={styles.conditions}>
       {active.map((filter) => { const label = `${filter.label}: ${filter.options.find((option) => option.value === filter.value)?.label ?? filter.value}`;
