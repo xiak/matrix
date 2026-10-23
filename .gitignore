@@ -21,6 +21,7 @@ coverage.out
 # Node / Next.js
 node_modules/
 .next/
+next-env.d.ts
 out/
 coverage/
 *.tsbuildinfo

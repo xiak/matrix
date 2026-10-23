@@ -2723,8 +2723,21 @@ export-boundary cases. Three production builds exported 59 pages, normalized
 57 segment paths and proved unset/`0` preview equivalence plus byte-identical
 Go embedding across all 322 files. The embedded build is
 `matrix-f54b1578f499abc8e086`; PaaS UI and full-repository Go test/vet passed.
-These source/build gates do not substitute for the receiving branch's exact
-CI, real-IAM browser acceptance or a signed installed-release replay.
+The first exact-source run,
+[Verification 39885755013](https://github.com/xiak/matrix/actions/runs/39885755013),
+is not accepted: the console's 80 files, 2,106 Vitest cases and eight Node
+cases passed, but the final clean-tree check found that Next 16.4.2 had changed
+tracked `next-env.d.ts` from DEV type paths to production type paths. The final
+authority summary then correctly failed because its authority matrix was
+skipped after the console prerequisite failed. `next-env.d.ts` is a
+Next-owned generated declaration whose contents vary by command; the corrected
+candidate removes it from version control, ignores it, and makes `typecheck`
+run `next typegen` before `tsc`. It does not hand-maintain generated imports or
+weaken the clean-tree gate. The resulting deterministic export is
+`matrix-382e368f7e95398e5502`; local typecheck, lint, architecture, 234 contrast
+pairs, the same 80/2,106 plus eight tests, two-build preview equivalence and
+322-file embed equality passed. A new exact-source CI, real-IAM browser
+acceptance and signed installed-release replay remain required.
 
 The Audit reader consumes the optional `authorityEvidenceDigest` from public
 Audit Event at fixed IAM/Audit source
