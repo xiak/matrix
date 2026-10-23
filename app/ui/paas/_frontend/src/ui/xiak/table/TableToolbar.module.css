@@ -4,7 +4,7 @@
 .bar, .actions, .tools, .conditions { display: flex; align-items: center; flex-wrap: wrap; min-width: 0; gap: var(--xiak-spacing-tight); }
 .bar { gap: var(--xiak-spacing-default); }
 .actions { flex: none; }
-.search { flex: 1 1 220px; min-width: 0; max-width: 440px; }
+.search { flex: 1 1 220px; min-width: 0; max-width: 320px; }
 .status { margin-inline-start: auto; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .tools { max-width: 100%; }
 .count { font-variant-numeric: tabular-nums; color: var(--xiak-color-accent-text); }
