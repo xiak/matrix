@@ -7,7 +7,8 @@
 - Repository `https://github.com/xiak/matrix.git`, branch
   `feat/iam-console-release-candidate`; repository-local Git identity is exactly
   `Xiak <Jellal@aliyun.com>`.
-- Latest pushed candidate source is `0b3f95d94`. Its integration base
+- Latest verified candidate code source is `3afe96248`; it follows the pushed
+  console source `0b3f95d94`. Its integration base
   `4b9080a33` composes IAM branch head `1da954e84` (production-code milestone
   `571692dd2`) with console UX branch `ed001f9ef` (latest source fix
   `8b4cc05d1`). Dependency hardening is owned by `74fdc98da`; the latest source
@@ -59,24 +60,38 @@
   aggregate. This closes the independent CI gate for that source; it does not
   pre-accept the remaining browser or signed-release gates.
 
+## Verified User deletion evidence at `3afe96248`
+
+- A fresh PostgreSQL 18.6 NORMAL fixture completed the real built-in-browser
+  User deletion with exactly one POST. The immutable receipt matched login,
+  stable User ID, request ID, deletion time and resource version 4; explicit
+  finish then independently reread an empty ordinary-User directory.
+- The authority-process root passed in 283.297 seconds. It proved the exact
+  tombstone, permanent password/Session/RoleSession/AccessKey denial, cleared
+  Key secret, ended direct attachments, preserved tenant resources/Operations
+  and Role trust history, unique User and Key-cascade Audit facts, and a
+  complete tenant Audit chain. The task-owned PostgreSQL container was removed
+  after exact ID and label verification.
+- `3afe96248` adds the required explicit `permissionBoundary: null` to the
+  deleted-login reservation probe so it reaches the expected 409 conflict
+  instead of failing request-shape validation with 400. It changes no
+  production contract. RESPONSE_LOSS remains a separate fresh-database gate.
+
 ## Unaccepted boundaries
 
 - This is a pushed integration candidate, not a signed final release. Read the
   exact remaining acceptance gates from FEAT-007, IAM/FEAT-IAM-010 and
   IAM/FEAT-IAM-011 rather than copying them into this checkpoint.
-- Real User deletion NORMAL and RESPONSE_LOSS browser journeys remain
-  unaccepted. The expired prior target was still disabled at version 3 with no
-  tombstone, deletion fact, page POST, receipt or finish marker; RESPONSE_LOSS
-  never started. It is no longer present in the current MOCK directory and no
-  deletion dialog is open. A confirmation must not be transferred to another
-  target.
+- Real User deletion NORMAL is accepted at `3afe96248`; RESPONSE_LOSS remains
+  unaccepted and must use a new target, database and one browser POST. The
+  completed NORMAL confirmation must not be transferred to that target.
 - Daily self-password-change browser acceptance remains open for both the
   revoke-other-sessions and retain-other-sessions modes. Do not infer acceptance
   from a prepared form or a live fixture; the runtime assertions must finish.
-- Cleanup remains policy-blocked. Read-only inspection found five owned
-  containers and eleven related paths. The rejection happened before cleanup
-  launched. Do not bypass it through another executor, split command,
-  delegation, rename or parent deletion.
+- Historical cleanup remains policy-blocked. The current NORMAL task-owned PG
+  was removed after verification; the four older denied containers remain out
+  of scope. Do not bypass the earlier rejection through another executor,
+  split command, delegation, rename or parent deletion.
 - Production dependency audit is closed at zero. The five-entry development
   finding above remains an explicit upstream risk; do not run an unscoped
   audit fix, force a mismatched framework downgrade or claim the complete
