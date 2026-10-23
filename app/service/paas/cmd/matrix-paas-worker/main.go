@@ -588,6 +588,7 @@ func runWorkerLoop(
 		return errors.New("PaaS worker loop configuration is invalid")
 	}
 	nextRefresh := time.Now().Add(refreshInterval)
+	refreshBlocked := false
 	for {
 		if !time.Now().Before(nextRefresh) {
 			if err := refreshExecutionTarget(ctx); err != nil {
@@ -595,6 +596,7 @@ func runWorkerLoop(
 					return nil
 				}
 				if retryableExecutionProfileRefreshFailure(err) {
+					refreshBlocked = true
 					nextRefresh = time.Now().Add(refreshBackoff)
 				} else {
 					var failure *workerFailure
@@ -604,7 +606,24 @@ func runWorkerLoop(
 					return errors.New("PaaS execution target refresh failed")
 				}
 			} else {
+				refreshBlocked = false
 				nextRefresh = time.Now().Add(refreshInterval)
+			}
+		}
+		if refreshBlocked {
+			wait := time.Until(nextRefresh)
+			if wait <= 0 {
+				continue
+			}
+			timer := time.NewTimer(wait)
+			select {
+			case <-ctx.Done():
+				if !timer.Stop() {
+					<-timer.C
+				}
+				return nil
+			case <-timer.C:
+				continue
 			}
 		}
 		processed, err := processNext(ctx, workerID)

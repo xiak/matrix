@@ -105,15 +105,29 @@ func TestWorkerLoopRetriesTransientRefreshWithoutRestart(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	refreshCalls := 0
+	processCallsBeforeRecovery := 0
+	processCallsAfterRecovery := 0
+	refreshFailed := false
+	recovered := false
 	err := runWorkerLoop(
 		ctx,
-		func(context.Context, string) (bool, error) { return false, nil },
+		func(context.Context, string) (bool, error) {
+			if refreshFailed && !recovered {
+				processCallsBeforeRecovery++
+			}
+			if recovered {
+				processCallsAfterRecovery++
+				cancel()
+			}
+			return false, nil
+		},
 		func(context.Context) error {
 			refreshCalls++
 			if refreshCalls < 3 {
+				refreshFailed = true
 				return failWorker(workerFailureExecutionEngineTimeout)
 			}
-			cancel()
+			recovered = true
 			return nil
 		},
 		"worker-a",
@@ -126,17 +140,32 @@ func TestWorkerLoopRetriesTransientRefreshWithoutRestart(t *testing.T) {
 	if refreshCalls != 3 {
 		t.Fatalf("refresh calls = %d, want 3", refreshCalls)
 	}
+	if processCallsBeforeRecovery != 0 || processCallsAfterRecovery != 1 {
+		t.Fatalf(
+			"process calls before/after recovery = %d/%d, want 0/1",
+			processCallsBeforeRecovery,
+			processCallsAfterRecovery,
+		)
+	}
 }
 
 func TestWorkerLoopPersistentTransientRefreshUsesBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	var refreshTimes []time.Time
+	processCallsAfterFailure := 0
+	refreshFailed := false
 	err := runWorkerLoop(
 		ctx,
-		func(context.Context, string) (bool, error) { return false, nil },
+		func(context.Context, string) (bool, error) {
+			if refreshFailed {
+				processCallsAfterFailure++
+			}
+			return false, nil
+		},
 		func(context.Context) error {
 			refreshTimes = append(refreshTimes, time.Now())
+			refreshFailed = true
 			if len(refreshTimes) == 3 {
 				cancel()
 			}
@@ -151,6 +180,9 @@ func TestWorkerLoopPersistentTransientRefreshUsesBackoff(t *testing.T) {
 	}
 	if len(refreshTimes) != 3 {
 		t.Fatalf("refresh calls = %d, want 3", len(refreshTimes))
+	}
+	if processCallsAfterFailure != 0 {
+		t.Fatalf("process calls during failed refresh = %d, want 0", processCallsAfterFailure)
 	}
 	for index := 1; index < len(refreshTimes); index++ {
 		if elapsed := refreshTimes[index].Sub(refreshTimes[index-1]); elapsed < 8*time.Millisecond {
