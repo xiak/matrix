@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；当前已接受的签名产品源码`5935fa5005529b2c4e1da943b98f49300430ba10`为IAM87/Audit39/PaaS7、`contractRevision=37`，唯一滚动数据前驱仍是固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。当前源码已通过十九项独立CI、同Profile签名A/B完整离线生命周期和重启后复验。页面仅采纳010中各自固定版本的实际操作与数据库/Audit证据，日常改密等IAM-UI-01–08非Deferred写路径尚未全部验收；签名通过不把它们自动标绿。因此整体目标仍未完成，生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
+- 状态：实施中；当前已接受的签名产品源码`5935fa5005529b2c4e1da943b98f49300430ba10`为IAM87/Audit39/PaaS7、`contractRevision=37`，唯一滚动数据前驱仍是固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。当前源码已通过十九项独立CI、同Profile签名A/B完整离线生命周期和重启后复验。页面仅采纳010中各自固定版本的实际操作与数据库/Audit证据；普通用户日常改密的撤销/保留其他会话两种正常选择已经闭合，IAM-UI-01–08其余非Deferred写路径尚未全部验收，签名通过不把它们自动标绿。因此整体目标仍未完成，生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -29,7 +29,7 @@
 | 总体架构、高可用与容量边界 | [000总体架构](FEAT-IAM-000-product-contract.md#总体架构)及其可用性、容量与一致性段落，跨产品边界由ADR-0002拥有 | 设计已完成；当前多IAM副本、失败关闭、受限容量与数据库切换夹具已有证据，部署尚不支持的完整数据库HA继续明确列为缺口，不虚构SLO |
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
-| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态、Group Membership及Group附件恢复、Account安全设置正常完整替换已有真实证据。固定9621又完成Group删除与GROUP/USER附件撤销的可见回执、导航和权威后验；固定3afe已完成User删除NORMAL与RESPONSE_LOSS真实页面及不可逆后验。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；附件USER/CREATE与ROLE/CREATE、日常改密及010矩阵其余非Deferred路径仍须闭合 |
+| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；User资料/状态、Group Membership及Group附件恢复、Account安全设置正常完整替换已有真实证据。固定9621又完成Group删除与GROUP/USER附件撤销的可见回执、导航和权威后验；固定3afe已完成User删除NORMAL与RESPONSE_LOSS真实页面、不可逆后验及普通用户日常改密两种Session选择的真实闭环。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；附件USER/CREATE与ROLE/CREATE及010矩阵其余非Deferred路径仍须闭合 |
 | 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`5935fa5005529b2c4e1da943b98f49300430ba10`的IAM87+r37同源签名A/B、完整离线生命周期和重启复验接受；各固定代码的IAM-AC-09证据与限制归[当前独立CI](#当前独立ci)，不继承旧签名结论。权限感知及受影响原Policy恢复页面由010拥有。Issue #4仍按其原固定消费者关闭；Issue #5的剩余范围复核与Issue #6的Observe超时根因保持打开。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。其余IAM-UI-01–08非Deferred页面效果尚未完成，生产账号公平性SLO和安装级数据库HA保持Deferred |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
@@ -109,7 +109,7 @@
 
 既有Session并发测试的固定修正`38a2cda69ec547c9e8d9d557bf61a3bcd992335c`保留原API、SQL、密码成本、期限和Profile。最终成功的Serializable重试可纳入并发期间已提交的新登录，断言必须核对精确Session集合、版本及终态，而非固定只撤销一个。专属PG18.4的真实40001先使旧断言以`APPLIED/revoked=2/want=1`失败，再证明B+C精确目标、caller保留、原回执重放及完成后新登录不受影响；聚焦52.48秒、三库串行race package267.261秒及默认integration/architecture race、vet通过。PG与Go runner各2CPU/2GiB、Go1.26.3、GOMAXPROCS2/GOMEMLIMIT1024MiB、`-p 1`。这不把原[39193669814](https://github.com/xiak/matrix/actions/runs/39193669814)失败回填为成功，也不将本地PG18.4等同于CI的PG18.6。
 
-User资料/状态、Group Membership及Group附件恢复、Account安全设置正常替换已有真实浏览器证据；当前9621另完成Group删除、GROUP/USER附件撤销的可见回执、导航、下一请求权限与唯一完成/outbox/Audit后验。准确请求、唯一性查询范围和代码采用归010，不扩大为跨action唯一性。AccessKey正常生命周期与三类原命令恢复、Role创建/承担/准确Session撤销及附件REVOKE恢复已有010的逐条真实证据。CREATE回执的其余恢复组合、Policy默认切换/边界/冲突、日常改密及010其余非Deferred路径仍未全部闭合；最终审阅、完成marker或后台后验不能替代页面最终提交。
+User资料/状态、Group Membership及Group附件恢复、Account安全设置正常替换已有真实浏览器证据；当前9621另完成Group删除、GROUP/USER附件撤销的可见回执、导航、下一请求权限与唯一完成/outbox/Audit后验。准确请求、唯一性查询范围和代码采用归010，不扩大为跨action唯一性。AccessKey正常生命周期与三类原命令恢复、Role创建/承担/准确Session撤销及附件REVOKE恢复已有010的逐条真实证据。当前3afe的两个独立PostgreSQL 18.6页面门禁又分别完成日常改密默认撤销其他会话及显式保留其他会话：调用Session均保留并迁移代次，旧有效Session按选择准确终结或升级，已退出Session不复活，旧密码拒绝、新密码登录和唯一Audit事实均通过。CREATE回执的其余恢复组合、Policy边界/冲突及010其余非Deferred路径仍未全部闭合；最终审阅、完成marker或后台后验不能替代页面最终提交。
 
 [Issue #4](https://github.com/xiak/matrix/issues/4)仅按010所列固定消费者、原样红绿和独立CI关闭，不扩张为Role页面验收。[Issue #5](https://github.com/xiak/matrix/issues/5)仍按原范围审阅：010已记录SET_STATUS、NETWORK、DELETE三条独立真实页面响应丢失恢复与权威后验，不能再描述为均未执行；旧1800.02秒超时仍不回填。正常Key生命周期、Role页面及其剩余缺口统一由[010的本轮真实证据](FEAT-IAM-010-console.md#本轮消费者与真实恢复证据)维护；API预建密钥不证明recovered-create的页面路径。运行资源按确切身份清理，工具拒绝的清理不计完成。
 
@@ -410,6 +410,8 @@ Release D的配额恢复还证明命令回执与资源读取相互独立：既�
 ## 运行约束
 
 固定`6298e7532`的显式opt-in浏览器门禁已在全新受限PostgreSQL 18和真实IAM/Audit/PaaS进程上完成普通User首次登录强制改密：浏览器用初始密码建立受限Session，从纯页面提交最终密码并进入IAM概览；数据库证明credential generation单调前进、另一条受限Session撤销、仅调用Session保留且同步到新generation，旧密码401、新密码可重新登录，唯一本人密码变更事实进入完整租户Audit链。fixture/race package分别为76.68/80.216秒，任务资源在零外部客户端后精确清理。该本地证据关闭IAM-UI-02的首次登录最终改密页面缺口，不替代日常主动改密选择、响应丢失、TOTP、签名release或当前候选独立CI。
+
+当前消费代码源`3afe96248`又在两个独立PostgreSQL 18.6空库上完成普通User日常改密的两种页面选择。`revokeOtherSessions=true`的测试/包82.26/84.624秒通过，两个旧有效Session各只撤销一次；`false`的测试/包67.03/68.973秒通过，两个旧有效Session各只迁移一次并继续返回原Account/User。两轮都证明调用Session保留、原退出Session不变、User/credential generation单调推进一次、旧密码401、新密码登录成功、唯一本人成功事实进入完整租户Audit链；任务容器在精确标签和空挂载核对后删除。该证据接受正常日常改密选择，不代替UNKNOWN恢复、签名release或当前候选独立CI。
 
 后继固定`18c115fe5007e36b7369e74f1c5c065952c0df32`包含上述首次改密门禁、Group级联删除fixture、从UX固定`db4ce3f51febf30975ca616bbff221e30a11f031`选择性采用的Group回执/导航客户端及本分支重建的324项嵌入资产，不改变后端API、SQL或发布Profile。[Verification 38984154633](https://github.com/xiak/matrix/actions/runs/38984154633)已由测试owner核实19个job、370个step全部终态，19项均success；14个authority lane的57个顶层根实际RUN/PASS，容量3100个样本无失败。`console`在Node22.22.2/npm11.6.4通过75个文件、1703项Vitest、8项Node测试、234组对比度和两次324文件确定性导出；Group导航20项包含busy guard卸载、准确回执计数以及403/409/503、非法回执和迟到响应的失败关闭。本轮默认CI未设置8个browser flag，不能把组件成功解释为真实Group删除、首次改密或签名APISIX页面验收；7个真实邮件子测试因无专属Postfix明确SKIP，也不接受真实SMTP。
 

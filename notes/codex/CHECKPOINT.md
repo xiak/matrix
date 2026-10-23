@@ -84,6 +84,23 @@
   instead of failing request-shape validation with 400. It changes no
   production contract. NORMAL and RESPONSE_LOSS are independently accepted.
 
+## Verified daily password evidence at `3afe96248`
+
+- Two fresh PostgreSQL 18.6 browser fixtures completed the normal daily
+  self-password-change flow. The default `revokeOtherSessions=true` path
+  passed in 82.26 seconds (84.624 seconds package time); the explicit
+  `false` path passed in 67.03 seconds (68.973 seconds package time).
+- Both paths advanced the exact User and credential epoch once, retained the
+  calling Session, preserved the previously revoked Session, rejected the old
+  password, accepted a fresh login with the new password, and emitted one
+  self-authenticated fact in the verified tenant Audit chain. The true path
+  revoked both other valid Sessions; the false path retained and upgraded
+  both without reviving the prior logout.
+- Each accepted fixture used an isolated task-labelled container and empty
+  database. The containers had no mounts and were removed after exact ID and
+  ownership verification. This accepts the two normal choices only; it does
+  not accept a response-loss recovery journey.
+
 ## Unaccepted boundaries
 
 - This is a pushed integration candidate, not a signed final release. Read the
@@ -91,9 +108,6 @@
   IAM/FEAT-IAM-011 rather than copying them into this checkpoint.
 - Real User deletion NORMAL and RESPONSE_LOSS are accepted at `3afe96248`;
   neither result is reused as evidence for another deletion path.
-- Daily self-password-change browser acceptance remains open for both the
-  revoke-other-sessions and retain-other-sessions modes. Do not infer acceptance
-  from a prepared form or a live fixture; the runtime assertions must finish.
 - Historical cleanup remains policy-blocked. The current NORMAL and
   RESPONSE_LOSS task-owned PGs were removed after verification; the four older
   denied containers remain out of scope. Do not bypass the earlier rejection
