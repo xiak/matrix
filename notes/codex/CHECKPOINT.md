@@ -7,8 +7,9 @@
 - Repository `https://github.com/xiak/matrix.git`, branch
   `feat/iam-console-release-candidate`; repository-local Git identity is exactly
   `Xiak <Jellal@aliyun.com>`.
-- Latest verified candidate code source is `3afe96248`; it follows the pushed
-  console source `0b3f95d94`. Its integration base
+- Latest verified candidate code source is `4d7ea249c`; it refines the
+  permission-catalog information hierarchy and shared filtering on top of
+  `3afe96248`, which follows the pushed console source `0b3f95d94`. Its integration base
   `4b9080a33` composes IAM branch head `1da954e84` (production-code milestone
   `571692dd2`) with console UX branch `ed001f9ef` (latest source fix
   `8b4cc05d1`). Dependency hardening is owned by `74fdc98da`; the latest source
@@ -20,7 +21,22 @@
   frontend and embedded export, its web-server contract test, FEAT-007 and its
   adoption/research owners. Old UX backend, provisioner and process-test slices
   were not imported.
-- Embedded console build is `matrix-382e368f7e95398e5502`.
+- Embedded console build is `matrix-c84da62275a74de5dcdc`.
+
+## Verified permission-catalog UX at `4d7ea249c`
+
+- The platform-only permission catalog now follows the same connected card
+  hierarchy as the User directory: section identity and boundary, shared
+  toolbar, table and shared footer align without the former nested inset.
+- The product collection reuses the disclosed shared filter pattern for exact
+  calling-service and authority-scope conditions. Active criteria remain
+  removable, clearing restores all four MOCK declarations and focus returns to
+  the stable trigger.
+- The complete 80-file/2,107-case frontend suite, eight export tests,
+  typecheck, lint, architecture, 234 theme-contrast pairs, 59-page export with
+  57 normalized segment files, 322-file embedded equality and PaaS Go
+  test/vet passed. Desktop and `390 × 844` built-in-browser checks proved the
+  exact combined result, no document/body overflow and no warning/error log.
 
 ## Verified evidence at `0b3f95d94`
 
