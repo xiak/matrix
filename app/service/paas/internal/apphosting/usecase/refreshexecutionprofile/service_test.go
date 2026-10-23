@@ -136,6 +136,24 @@ func TestRefreshCreatesAndKeepsLocalProfileFresh(t *testing.T) {
 	}
 }
 
+func TestReadyExpiresPersistedObservationAfterMaximumAge(t *testing.T) {
+	adapter := &profileAdapter{observation: readyProfileObservation(profileTestTime)}
+	repository := &profileRepository{snapshot: Snapshot{TransactionTime: profileTestTime}}
+	service := newProfileService(t, adapter, repository)
+	if err := service.Refresh(context.Background()); err != nil {
+		t.Fatalf("create local execution profile: %v", err)
+	}
+
+	repository.snapshot.TransactionTime = profileTestTime.Add(5 * time.Minute)
+	if err := service.Ready(context.Background()); err != nil {
+		t.Fatalf("execution profile at maximum age: %v", err)
+	}
+	repository.snapshot.TransactionTime = profileTestTime.Add(5*time.Minute + time.Microsecond)
+	if err := service.Ready(context.Background()); err == nil {
+		t.Fatal("expired execution profile reported ready")
+	}
+}
+
 func TestRefreshClassifiesNormalizedObservationFailureWithoutDroppingCause(t *testing.T) {
 	fault := paasv1.AdapterFault{Normalized: paasv1.NormalizedAdapterError{
 		Class: paasv1.AdapterErrorTimeout, Code: paasv1.ErrorDeadlineExceeded,

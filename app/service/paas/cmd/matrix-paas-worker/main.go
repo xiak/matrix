@@ -51,6 +51,7 @@ const (
 	executionTargetRefresh               = time.Minute
 	executionTargetMaximumAge            = 5 * time.Minute
 	executionTargetTimeout               = 5 * time.Second
+	executionTargetRefreshBackoff        = time.Second
 	executionProfileStartupAttempts      = 6
 	executionProfileStartupBackoff       = time.Second
 	operationLeaseDuration               = 30 * time.Second
@@ -109,7 +110,6 @@ const (
 	workerFailureProcess                 workerFailureStage = "PAAS_WORKER_PROCESS"
 	workerFailureManagedServiceCycle     workerFailureStage = "PAAS_WORKER_MANAGED_SERVICE_CYCLE"
 	workerFailureDeploymentCycle         workerFailureStage = "PAAS_WORKER_DEPLOYMENT_CYCLE"
-	workerFailureExecutionRefreshCycle   workerFailureStage = "PAAS_WORKER_EXECUTION_PROFILE_REFRESH_CYCLE"
 	workerFailureUnexpected              workerFailureStage = "PAAS_WORKER_UNEXPECTED"
 )
 
@@ -409,11 +409,13 @@ func run(ctx context.Context) (result error) {
 				},
 				func(refreshContext context.Context) error {
 					if refreshErr := executionProfile.Refresh(refreshContext); refreshErr != nil {
-						return failWorker(workerFailureExecutionRefreshCycle)
+						return failWorker(executionProfileRefreshFailure(refreshErr))
 					}
 					return nil
 				},
 				config.workerID,
+				executionTargetRefresh,
+				executionTargetRefreshBackoff,
 			)
 		},
 	)
@@ -538,7 +540,7 @@ func refreshExecutionProfileAtStartup(
 			return err
 		}
 		err := refresh(ctx)
-		if err == nil || !retryableExecutionProfileStartupFailure(err) || attempt == attempts {
+		if err == nil || !retryableExecutionProfileRefreshFailure(err) || attempt == attempts {
 			return err
 		}
 		timer := time.NewTimer(backoff)
@@ -557,7 +559,7 @@ func refreshExecutionProfileAtStartup(
 	return errors.New("PaaS execution profile startup retry is unavailable")
 }
 
-func retryableExecutionProfileStartupFailure(err error) bool {
+func retryableExecutionProfileRefreshFailure(err error) bool {
 	var failure *workerFailure
 	if !errors.As(err, &failure) || failure == nil {
 		return false
@@ -578,20 +580,32 @@ func runWorkerLoop(
 	processNext func(context.Context, string) (bool, error),
 	refreshExecutionTarget func(context.Context) error,
 	workerID string,
+	refreshInterval time.Duration,
+	refreshBackoff time.Duration,
 ) error {
-	if ctx == nil || processNext == nil || refreshExecutionTarget == nil {
+	if ctx == nil || processNext == nil || refreshExecutionTarget == nil ||
+		refreshInterval <= 0 || refreshBackoff <= 0 {
 		return errors.New("PaaS worker loop configuration is invalid")
 	}
-	nextRefresh := time.Now().Add(executionTargetRefresh)
+	nextRefresh := time.Now().Add(refreshInterval)
 	for {
 		if !time.Now().Before(nextRefresh) {
 			if err := refreshExecutionTarget(ctx); err != nil {
 				if ctx.Err() != nil {
 					return nil
 				}
-				return errors.New("PaaS execution target refresh failed")
+				if retryableExecutionProfileRefreshFailure(err) {
+					nextRefresh = time.Now().Add(refreshBackoff)
+				} else {
+					var failure *workerFailure
+					if errors.As(err, &failure) {
+						return failure
+					}
+					return errors.New("PaaS execution target refresh failed")
+				}
+			} else {
+				nextRefresh = time.Now().Add(refreshInterval)
 			}
-			nextRefresh = time.Now().Add(executionTargetRefresh)
 		}
 		processed, err := processNext(ctx, workerID)
 		if err != nil {

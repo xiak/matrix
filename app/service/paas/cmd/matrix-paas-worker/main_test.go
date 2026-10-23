@@ -41,6 +41,8 @@ func TestWorkerLoopProcessesAvailableWorkAndStopsWithContext(t *testing.T) {
 			worker.ProcessNext,
 			func(context.Context) error { return nil },
 			"worker-a",
+			time.Hour,
+			time.Hour,
 		)
 	}()
 	deadline := time.After(2 * time.Second)
@@ -72,6 +74,8 @@ func TestWorkerLoopNormalizesCycleFailure(t *testing.T) {
 		worker.ProcessNext,
 		func(context.Context) error { return nil },
 		"worker-a",
+		time.Hour,
+		time.Hour,
 	)
 	if err == nil || errors.Is(err, native) || err.Error() != "PaaS reconciliation cycle failed" {
 		t.Fatalf("worker loop error = %v", err)
@@ -86,12 +90,108 @@ func TestWorkerLoopPreservesOnlyClosedFailureStage(t *testing.T) {
 		},
 		func(context.Context) error { return nil },
 		"worker-a",
+		time.Hour,
+		time.Hour,
 	)
 	if code := workerFailureCode(err); code != workerFailureManagedServiceCycle {
 		t.Fatalf("worker failure code = %q", code)
 	}
 	if err == nil || err.Error() != string(workerFailureManagedServiceCycle) {
 		t.Fatalf("worker failure = %v", err)
+	}
+}
+
+func TestWorkerLoopRetriesTransientRefreshWithoutRestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	refreshCalls := 0
+	err := runWorkerLoop(
+		ctx,
+		func(context.Context, string) (bool, error) { return false, nil },
+		func(context.Context) error {
+			refreshCalls++
+			if refreshCalls < 3 {
+				return failWorker(workerFailureExecutionEngineTimeout)
+			}
+			cancel()
+			return nil
+		},
+		"worker-a",
+		time.Millisecond,
+		5*time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("worker loop after transient refresh failures: %v", err)
+	}
+	if refreshCalls != 3 {
+		t.Fatalf("refresh calls = %d, want 3", refreshCalls)
+	}
+}
+
+func TestWorkerLoopPersistentTransientRefreshUsesBackoff(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var refreshTimes []time.Time
+	err := runWorkerLoop(
+		ctx,
+		func(context.Context, string) (bool, error) { return false, nil },
+		func(context.Context) error {
+			refreshTimes = append(refreshTimes, time.Now())
+			if len(refreshTimes) == 3 {
+				cancel()
+			}
+			return failWorker(workerFailureExecutionObserveDown)
+		},
+		"worker-a",
+		time.Millisecond,
+		10*time.Millisecond,
+	)
+	if err != nil {
+		t.Fatalf("worker loop after persistent transient refresh failures: %v", err)
+	}
+	if len(refreshTimes) != 3 {
+		t.Fatalf("refresh calls = %d, want 3", len(refreshTimes))
+	}
+	for index := 1; index < len(refreshTimes); index++ {
+		if elapsed := refreshTimes[index].Sub(refreshTimes[index-1]); elapsed < 8*time.Millisecond {
+			t.Fatalf("refresh backoff = %s, want approximately 10ms", elapsed)
+		}
+	}
+}
+
+func TestWorkerLoopStopsOnTerminalRefreshFailure(t *testing.T) {
+	refreshCalls := 0
+	err := runWorkerLoop(
+		context.Background(),
+		func(context.Context, string) (bool, error) { return false, nil },
+		func(context.Context) error {
+			refreshCalls++
+			return failWorker(workerFailureExecutionValidate)
+		},
+		"worker-a",
+		time.Nanosecond,
+		time.Hour,
+	)
+	if code := workerFailureCode(err); code != workerFailureExecutionValidate {
+		t.Fatalf("worker failure code = %q", code)
+	}
+	if refreshCalls != 1 {
+		t.Fatalf("refresh calls = %d, want 1", refreshCalls)
+	}
+}
+
+func TestWorkerLoopDoesNotExposeUnexpectedRefreshFailure(t *testing.T) {
+	native := errors.New("database password and /host/path must not escape")
+	err := runWorkerLoop(
+		context.Background(),
+		func(context.Context, string) (bool, error) { return false, nil },
+		func(context.Context) error { return native },
+		"worker-a",
+		time.Nanosecond,
+		time.Hour,
+	)
+	if err == nil || errors.Is(err, native) || err.Error() != "PaaS execution target refresh failed" {
+		t.Fatalf("worker refresh error = %v", err)
 	}
 }
 
