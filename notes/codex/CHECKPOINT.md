@@ -59,6 +59,12 @@
   PostgreSQL HA installation, every authority shard and the authority-process
   aggregate. This closes the independent CI gate for that source; it does not
   pre-accept the remaining browser or signed-release gates.
+- Documentation successor `2df38c8b8` has the same production and test tree as
+  `3afe96248`. Its exact-source Verification
+  [run 39895467786](https://github.com/xiak/matrix/actions/runs/39895467786)
+  completed `success`: the run and all 19 jobs were independently confirmed
+  `completed/success`. Only run/job metadata was checked, so this does not
+  invent full-log details or replace the real browser evidence below.
 
 ## Verified User deletion evidence at `3afe96248`
 

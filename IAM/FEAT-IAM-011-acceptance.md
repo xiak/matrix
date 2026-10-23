@@ -44,7 +44,7 @@
 | 最近完整日志审计通过源码 | `e22d7481fec9ecaa33d0cdfe6df7942cabc6c064`，完整Profile不变；准确SHA的十九项job及全部必要日志已由测试owner独立核验，十四条authority lane的57个必跑根均实际通过。只接受各自准确版本的证据，不继承5935的签名发布或未执行的浏览器结论 |
 | Role删除回执源码 | 固定消费提交`fe6e5220efc602fbe7744f416078288527a9fcd9`选择性采用UX `f0dbf742cb14bd5ff20d928c63798dd1b0e623f7`，嵌入`matrix-5ee251ec73ca8a183cc1`；红绿、聚焦回归和双导出证据由[010](FEAT-IAM-010-console.md#role删除的服务器完成回执)拥有。精确SHA的独立CI已通过，真实删除浏览器仍未验收，Profile不变，不继承donor或其他旅程的接受状态 |
 | User删除回执源码 | 固定消费提交`b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f`采用UX固定`8c40091ec1d48ecb81281c4ffa55d8bcd5b9ee9d`及`09640c6cefce7361574206753fdb0b2bd1133847`、`3dec632876828d87a785319043881ff65f00ce5e`，保留消费端协议负向回归，嵌入`matrix-a6f26f9b65bd7e6b26c1`；准确回执、同标签页UNKNOWN保护、本地冲突零副作用及红绿/双构建证据归[010](FEAT-IAM-010-console.md#user删除回执与同标签页未知结果保护)。本地门禁通过，精确SHA的[Verification39794059308](https://github.com/xiak/matrix/actions/runs/39794059308) attempt1及十九项job已全部核实completed/success。后继固定`3afe9624808d323e2d8988dfd033d8544509183a`分别在两套全新PG18.6上以真实浏览器各一次POST完成NORMAL与RESPONSE_LOSS：前者显示准确回执并独立回读目录，后者在真实提交后截断响应并经导航、reload、同owner重新登录保留原UNKNOWN意图且零重发、零完成查询；两条墓碑/凭据/附件/资源/Role/Audit后验全部通过，包分别283.297秒和391.715秒。两套任务专属PG均已清理，因此User删除的该组真实浏览器门禁已接受 |
-| 最近已确认的CI终态 | `571692dd277317091af077beba79fe13f509738d`的[Verification39808302366](https://github.com/xiak/matrix/actions/runs/39808302366) attempt1精确SHA及十九项job均为completed/success；本次仅核实run/job元数据，完整日志审计尚未封存，不据此补测试时长、必跑根明细或浏览器结论。生产契约、Profile与已接受签名组合不变 |
+| 最近已确认的CI终态 | `2df38c8b863e57ea52feb94180c157107a5902c7`的[Verification39895467786](https://github.com/xiak/matrix/actions/runs/39895467786) attempt1精确SHA、整轮及十九项job均为completed/success。该提交只是`3afe96248`的文档后继，生产与测试树相同；本次仅核实run/job元数据，完整日志审计尚未封存，不据此补测试时长、必跑根明细或浏览器结论。生产契约、Profile与已接受签名组合不变 |
 | 前一候选的实际产品证据 | `7d6db51b0bbb676c446e08f82af0bf50ccc33a5b`的[Verification39743005047](https://github.com/xiak/matrix/actions/runs/39743005047) attempt1十九项job全部成功；测试owner核验短容器门禁1.45秒、完整四产品128.51秒和Analyzer41.08秒。十六份日志完整、三份仅局部，不冒充全量日志审计或其他版本通过 |
 | 唯一滚动数据前驱 | `08e1dc4a6ce81386ea7223e62d03356f82aeee58`，IAM86/Audit39/PaaS7+r36；该保留数据门禁不授予跨Profile签名升级许可 |
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
@@ -53,7 +53,7 @@
 
 固定`571692dd277317091af077beba79fe13f509738d`的[Verification39808302366](https://github.com/xiak/matrix/actions/runs/39808302366) attempt1于2026-10-23通过GitHub API核实精确SHA、整轮completed/success及十九项job全部成功：十四条authority lane、Go、console、node-process、installation-postgres-ha及最终authority-process汇总。该固定增量只在原process owner补User删除夹具及其负向观察、fresh decode和精确停用403/删除401断言；默认关闭的浏览器入口不因CI绿色变成已运行。此处仅封存run/job终态，没有完成该轮全量日志审计，不据此补造根测试时长或真实页面结论。
 
-固定`3afe9624808d323e2d8988dfd033d8544509183a`只修正User删除验收探针必填的显式空权限边界；NORMAL与RESPONSE_LOSS真实浏览器和权威后验均已由010接受，但该固定尚无自己的独立CI终态，不能继承`0b3f95d94`或571的CI。生产Profile与已接受签名组合不变。
+固定`3afe9624808d323e2d8988dfd033d8544509183a`只修正User删除验收探针必填的显式空权限边界；NORMAL与RESPONSE_LOSS真实浏览器和权威后验均已由010接受。其仅改文档的后继`2df38c8b863e57ea52feb94180c157107a5902c7`已由[Verification39895467786](https://github.com/xiak/matrix/actions/runs/39895467786) attempt1核实准确SHA、整轮及十九项job全部completed/success，因此相同生产/测试树的独立CI门禁闭合；本次没有读取或封存完整日志，不外推必跑根明细、真实页面或签名发布。生产Profile与已接受签名组合不变。
 
 同日独立核对固定`b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f`的[Verification39794059308](https://github.com/xiak/matrix/actions/runs/39794059308) attempt1，准确SHA、整轮及十九项job全部为completed/success，包括`authority-managed-products`119880681664；原状态不一致已消除，没有重新运行。K1/K2/R1/R2及独立SET_DEFAULT页面仍按010各自固定源码和实际后验接受，不继承为User删除。当前NORMAL与RESPONSE_LOSS任务专属PG均已按准确ID与标签清理；既有四个被拒绝清理的历史残留容器仍存在，不能绕过原拒绝或将全部现场清理标为完成。
 
