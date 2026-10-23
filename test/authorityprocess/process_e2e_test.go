@@ -20888,6 +20888,7 @@ func assertAuthorityPlaintextAbsent(
 	}
 	managedServiceRoleSessions := readManagedServiceRoleSessionRequests(t, ctx, admin)
 	roleActors := readRoleActorReferences(t, ctx, admin)
+	policyTargets := readPolicyTargetAuthorities(t, ctx, admin)
 	policyAttachmentTargets := readPolicyAttachmentTargetAuthorities(t, ctx, admin)
 	paasOperations := readPaaSOperationAuthorities(t, ctx, admin)
 	rows, err := admin.Query(ctx, `SELECT 'iam.outbox',event_document::text,''::text FROM iam.audit_outbox
@@ -20962,6 +20963,15 @@ func assertAuthorityPlaintextAbsent(
 			t.Fatalf("invalid Role actor plaintext inspection source %q: %v", source, err)
 		}
 		for value := range roleActorStructural {
+			structuralLowEntropy[value] = struct{}{}
+		}
+		policyStructural, err := policyTargetStructuralLowEntropy(
+			source, document, auditAuthorityDocument, policyTargets,
+		)
+		if err != nil {
+			t.Fatalf("invalid Policy target plaintext inspection source %q: %v", source, err)
+		}
+		for value := range policyStructural {
 			structuralLowEntropy[value] = struct{}{}
 		}
 		policyAttachmentStructural, err := policyAttachmentTargetStructuralLowEntropy(
@@ -21267,6 +21277,115 @@ func readRoleActorReferences(
 		t.Fatal("incomplete Role actor authority")
 	}
 	return result
+}
+
+// Customer Policy identities are derived by IAM from the Account, actor and
+// request identity, and their tenant ownership is immutable in iam.policies.
+// A random six-digit TOTP can still occur inside the SHA-256 identity. Trust
+// only an exact tenant/ID pair that remains in that authoritative table; an ID
+// shape, an Audit event, or caller-controlled request text is not sufficient.
+func readPolicyTargetAuthorities(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+) map[string]struct{} {
+	t.Helper()
+	rows, err := admin.Query(ctx, `SELECT owner_tenant_id,id FROM iam.policies
+		WHERE management='CUSTOMER' AND authority_scope='TENANT' AND owner_tenant_id IS NOT NULL`)
+	if err != nil {
+		t.Fatal("read Policy target authorities")
+	}
+	defer rows.Close()
+	result := make(map[string]struct{})
+	for rows.Next() {
+		var accountID, policyID string
+		if rows.Scan(&accountID, &policyID) != nil || accountID == "" || !isGeneratedPolicyID(policyID) {
+			t.Fatal("invalid Policy target authority row")
+		}
+		result[policyTargetAuthorityKey(accountID, policyID)] = struct{}{}
+	}
+	if rows.Err() != nil {
+		t.Fatal("incomplete Policy target authorities")
+	}
+	return result
+}
+
+func policyTargetStructuralLowEntropy(
+	source, inspectedDocument, authorityDocument string,
+	known map[string]struct{},
+) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	authority := inspectedDocument
+	prefix := ""
+	switch source {
+	case "iam.outbox":
+		if authorityDocument != "" {
+			return nil, errors.New("IAM outbox has an unexpected authority copy")
+		}
+		prefix = "$."
+	case "audit.document.IAM":
+		if inspectedDocument != authorityDocument {
+			return nil, errors.New("IAM Audit record document differs from its authority")
+		}
+		authority = authorityDocument
+		prefix = "$."
+	case "audit.canonical.IAM":
+		authority = authorityDocument
+		prefix = "$.event."
+	default:
+		return result, nil
+	}
+	var event auditv1.Event
+	if auditv1.DecodeRequest(strings.NewReader(authority), &event) != nil ||
+		auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+		return nil, errors.New("invalid Policy target Audit authority")
+	}
+	if source == "audit.canonical.IAM" {
+		canonical, _, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+		if err != nil || canonical != inspectedDocument {
+			return nil, errors.New("IAM Audit canonical document differs from its authority")
+		}
+	}
+	if event.Target.Kind != auditv1.TargetPolicy || !isPolicyAuditAction(event.Action) ||
+		event.TenantID == "" || event.InstallationID != "" || !isGeneratedPolicyID(event.Target.ID) {
+		return result, nil
+	}
+	if _, found := known[policyTargetAuthorityKey(string(event.TenantID), event.Target.ID)]; !found {
+		return result, nil
+	}
+	result[structuralLowEntropyPathKey(prefix+"target.id", event.Target.ID)] = struct{}{}
+	return result, nil
+}
+
+func policyTargetAuthorityKey(accountID, policyID string) string {
+	return accountID + "\x00" + policyID
+}
+
+func isPolicyAuditAction(action auditv1.Action) bool {
+	switch action {
+	case auditv1.ActionIAMPolicyCreated,
+		auditv1.ActionIAMPolicyVersionCreated,
+		auditv1.ActionIAMPolicyVersionDeleted,
+		auditv1.ActionIAMPolicyDefaultVersionSet,
+		auditv1.ActionIAMPolicyUpdated,
+		auditv1.ActionIAMPolicyDeleted:
+		return true
+	default:
+		return false
+	}
+}
+
+func isGeneratedPolicyID(value string) bool {
+	const prefix = "policy-"
+	if len(value) != len(prefix)+sha256.Size*2 || !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	for _, character := range value[len(prefix):] {
+		if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // A dynamic PolicyAttachment target is a server-generated SHA-256 identity,
@@ -22445,6 +22564,81 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 			if marshalErr != nil || scanErr != nil || structuralErr == nil && location == "" {
 				t.Fatal("caller-controlled or noncanonical Audit access identity escaped plaintext inspection")
 			}
+		}
+	})
+	t.Run("policy-target-authority", func(t *testing.T) {
+		policyID := "policy-" + strings.Repeat("a", 29) + code + strings.Repeat("b", 29)
+		for _, action := range []auditv1.Action{
+			auditv1.ActionIAMPolicyCreated,
+			auditv1.ActionIAMPolicyVersionCreated,
+			auditv1.ActionIAMPolicyVersionDeleted,
+			auditv1.ActionIAMPolicyDefaultVersionSet,
+			auditv1.ActionIAMPolicyUpdated,
+			auditv1.ActionIAMPolicyDeleted,
+		} {
+			t.Run(string(action), func(t *testing.T) {
+				policy := event
+				policy.EventID = auditv1.EventID("event-policy-target-" + string(action))
+				policy.Action = action
+				policy.Target = auditv1.TargetReference{Kind: auditv1.TargetPolicy, ID: policyID}
+				policy.IAMDecisionID = "decision-policy-target"
+				policy.RequestDigest = "sha256:" + strings.Repeat("c", 64)
+				policy.RequestID = "request-policy-target-" + string(action)
+				policy.CorrelationID = policy.RequestID
+				encoded, marshalErr := json.Marshal(policy)
+				canonical, _, canonicalErr := auditv1.CanonicalizeEvent(auditv1.SourceIAM, policy)
+				if marshalErr != nil || canonicalErr != nil ||
+					auditv1.ValidateEventForSource(auditv1.SourceIAM, policy) != nil {
+					t.Fatal("invalid Policy target authority fixture")
+				}
+				known := map[string]struct{}{policyTargetAuthorityKey(string(policy.TenantID), policyID): {}}
+				for _, sample := range []struct{ source, document, authority string }{
+					{"iam.outbox", string(encoded), ""},
+					{"audit.document.IAM", string(encoded), string(encoded)},
+					{"audit.canonical.IAM", canonical, string(encoded)},
+				} {
+					structural, structuralErr := policyTargetStructuralLowEntropy(
+						sample.source, sample.document, sample.authority, known,
+					)
+					location, scanErr := authorityPlaintextLocationWithStructural(
+						sample.document, nil, structural, code,
+					)
+					if structuralErr != nil || scanErr != nil || location != "" || len(structural) != 1 {
+						t.Fatal("verified Policy target identity was treated as persisted OTP")
+					}
+					if location, scanErr = authorityPlaintextLocationWithStructural(
+						sample.document, nil, structural, policyID,
+					); scanErr != nil || location == "" {
+						t.Fatal("Policy target authority hid an exact longer credential")
+					}
+				}
+				structural, structuralErr := policyTargetStructuralLowEntropy(
+					"iam.outbox", string(encoded), "", nil,
+				)
+				location, scanErr := authorityPlaintextLocationWithStructural(
+					string(encoded), nil, structural, code,
+				)
+				if structuralErr != nil || scanErr != nil || location == "" {
+					t.Fatal("unproved Policy target identity escaped plaintext inspection")
+				}
+				caller := policy
+				caller.RequestID, caller.CorrelationID = "request-"+code, "request-"+code
+				callerEncoded, marshalErr := json.Marshal(caller)
+				structural, structuralErr = policyTargetStructuralLowEntropy(
+					"iam.outbox", string(callerEncoded), "", known,
+				)
+				location, scanErr = authorityPlaintextLocationWithStructural(
+					string(callerEncoded), nil, structural, code,
+				)
+				if marshalErr != nil || structuralErr != nil || scanErr != nil || location == "" {
+					t.Fatal("caller-controlled Policy request escaped plaintext inspection")
+				}
+				if _, err := policyTargetStructuralLowEntropy(
+					"audit.canonical.IAM", canonical+" ", string(encoded), known,
+				); err == nil {
+					t.Fatal("mismatched IAM canonical document obtained a Policy target exception")
+				}
+			})
 		}
 	})
 	t.Run("policy-attachment-target-authority", func(t *testing.T) {
