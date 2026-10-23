@@ -305,13 +305,15 @@ LIVE删除只接受准确Role ID、Account、名称、下一resourceVersion、�
 
 前置条件先证明目标的密码、多个Session、RoleSession和AccessKey实际可用，再经现有状态API停用并证明下一请求拒绝。删除后独立检查唯一tombstone、版本恰增一、密码材料移除、Key秘密清除和关联附件终止；旧密码、原Session、RoleSession和Key均不得获得访问。停用已造成的拒绝不得归功于删除，也不把历史RoleSession发行记录仍存在等同于仍有效。目标曾创建的租户应用、配置及Operation通过另一有效身份读取，原归属、创建者与内容保持。每条原request只允许一条`iam.user.deleted`成功outbox及相同Audit记录；Key级联事实按现有封闭动作单独核对，不误称所有动作总计一条。成功事实须绑定原actor、target、requestId和允许的IAM决定，完整租户链必须验证通过。
 
-本片只证明当前发布契约，不重跑已移除的全历史schema链，不新增完成API或改变原删除重放语义。真实浏览器之前先跑观察器的正常、真实半截响应、重复写入和不匹配回执负向检查；重型旅程串行、唯一命名、显式限额。每次结束只按准确身份清理该次新建的进程、容器、网络和临时目录，不复用或触碰此前工具明确拒绝清理的历史残留。此片独立于已受阻的AccessKey/Role目标，不改其完成状态。
+本片只证明当前发布契约，不重跑已移除的全历史schema链，不新增完成API或改变原删除重放语义。真实浏览器之前先跑观察器的正常、真实半截响应、重复写入和不匹配回执负向检查；重型旅程串行、唯一命名、显式限额。每次结束只按准确身份清理该次新建的进程、容器、网络和临时目录，不复用或触碰此前工具明确拒绝清理的历史残留。此片独立于AccessKey/Role本轮闭环，不扩大其验收范围。
 
-该新增门禁的正常/真实响应截断及六项负向观察检查在race下通过3.593秒；现有authorityprocess默认门禁和架构门禁分别通过5.594秒、2.769秒，相关vet与diff检查通过。默认跳过的真实数据库/browser入口不构成验收，两个独立LIVE旅程与新源码CI仍待执行。
+固定`571692dd277317091af077beba79fe13f509738d`只补充并修正上述process测试owner，没有改变生产UI/API/SQL/Profile。停用响应和权限投影分别解码到新值，避免省略字段在复用对象中保留旧值；合法MAC的停用User返回403，删除并清除Key材料后返回401，不能将两者或任意失败混作同一通过条件。正常/真实响应截断及六项负向观察检查最终race通过3.581秒，默认authorityprocess/architecture分别通过5.327/1.899秒，相关vet及diff检查通过；默认跳过的真实数据库/browser入口不构成验收。独立CI准确终态及其证据边界归[011](FEAT-IAM-011-acceptance.md#当前独立ci)。
+
+本固定源码在全新PostgreSQL18.6数据库、1CPU/768MiB/PIDs128和512MiB tmpfs中成功完成NORMAL前置，真实IAM/Audit/PaaS及双dispatcher使用受限数据库身份；Go为GOMAXPROCS2、GOMEMLIMIT512MiB、`-race -p 2`。UX已观察准确DISABLED User、版本3和删除确认内容，但未最终提交。`TestIAMUserDeletionConsoleBrowser`随后以1800.06秒观察超时失败，race包1802.586秒、exit1，不能记为删除成功或产品拒绝。终态只读核对仍为DISABLED/版本3、无tombstone、零`iam.user.deleted`成功事实；没有删除POST、服务器回执或完成marker，RESPONSE_LOSS旅程未启动。先前三次准备失败也不计验收。任务子进程、浏览器监听和外部数据库连接已归零；该次独占PG、网络和临时目录的清理命令在执行前被工具策略拒绝，仍保留，不以另一执行器重试。两个独立LIVE旅程均未接受。
 
 本分支选择性采用固定`8c40091ec1d48ecb81281c4ffa55d8bcd5b9ee9d`的17个前端路径及修正`09640c6cefce7361574206753fdb0b2bd1133847`、`3dec632876828d87a785319043881ff65f00ce5e`，保留五个既有差异文件及两条消费端协议回归；固定来源边界归[既有adoption owner](../docs/adoption/FEAT-007-control-plane-console.md)。旧HTTP客户端接受错误Account回执的回归先以1.63秒失败；初始增量的四个相关文件727项通过176.89秒后，额外协议回归仍准确暴露两个403错误码清除原意图的缺口，以6.29秒失败。采用目的限定状态/错误码分类后，同两条回归以6.90秒通过，三个受影响文件535项通过91.76秒。随后仅先采用本地过期版本回归，旧生产实现以7.96秒暴露冲突误报UNKNOWN；采用对应一行修正后，该项与两条协议回归共三项以6.98秒通过，均证明不开放另一删除意图。
 
-Node22.22.2、2GiB/单worker下类型、lint、架构、234组主题对比度及八项导出边界测试通过；最后一行修正后再次通过类型、受影响文件lint及架构。两次限两个worker的生产导出在preview未设置与显式`0`时324文件逐字一致，57项segment路径规范化，重新同步的Go嵌入与324项生成文件一致，build ID为`matrix-a6f26f9b65bd7e6b26c1`。最终Go UI/architecture分别1.611/0.877秒、UI vet和diff检查通过。独立CI须按本消费提交另行核对，不能继承donor或前一Role切片的结果；真实User删除浏览器仍未验收，Profile与已接受签名发布不变。
+Node22.22.2、2GiB/单worker下类型、lint、架构、234组主题对比度及八项导出边界测试通过；最后一行修正后再次通过类型、受影响文件lint及架构。两次限两个worker的生产导出在preview未设置与显式`0`时324文件逐字一致，57项segment路径规范化，重新同步的Go嵌入与324项生成文件一致，build ID为`matrix-a6f26f9b65bd7e6b26c1`。最终Go UI/architecture分别1.611/0.877秒、UI vet和diff检查通过。本消费提交的独立CI准确终态已核对，证据归[011](FEAT-IAM-011-acceptance.md#当前独立ci)，不继承donor或前一Role切片的结果；真实User删除浏览器仍未验收，Profile与已接受签名发布不变。
 
 ## 验收
 
