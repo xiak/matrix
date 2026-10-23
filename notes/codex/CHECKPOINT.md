@@ -7,7 +7,7 @@
 - Repository `https://github.com/xiak/matrix.git`, branch
   `feat/iam-console-release-candidate`; repository-local Git identity is exactly
   `Xiak <Jellal@aliyun.com>`.
-- Latest verified candidate code source is `66e86549e`; it expands the shared
+- Latest verified candidate code source is `d34aa3ebd`; it refines the shared
   table-filter workspace on top of permission-catalog milestone `4d7ea249c`
   and candidate source `3afe96248`, which follows the pushed console source
   `0b3f95d94`. Its integration base
@@ -22,9 +22,9 @@
   frontend and embedded export, its web-server contract test, FEAT-007 and its
   adoption/research owners. Old UX backend, provisioner and process-test slices
   were not imported.
-- Embedded console build is `matrix-8ea9c08c538fa18b7909`.
+- Embedded console build is `matrix-aa63282b417019950700`.
 
-## Verified table-filter workspace at `66e86549e`
+## Verified table-filter workspace at `d34aa3ebd`
 
 - The platform-only permission catalog now follows the same connected card
   hierarchy as the User directory: section identity and boundary, shared
@@ -35,10 +35,11 @@
   the stable trigger.
 - Every consumer of the shared table toolbar now keeps search, disclosure and
   result status on the stable first row, then opens a bounded full-width filter
-  workspace. Labelled large controls fill equal responsive columns, the clear
-  action stays at the row edge, and applied criteria remain individually
-  removable. The User directory and permission catalog were both inspected in
-  the running DEV browser.
+  workspace. Labelled controls use the standard input height and bounded
+  `220–260px` widths, wrap on wider layouts and become full-width only in the
+  small-container layout. The clear action stays at the row edge, and applied
+  criteria remain individually removable. The User directory and permission
+  catalog were both inspected in the running DEV browser.
 - The complete 80-file/2,107-case frontend suite, eight export tests,
   typecheck, lint, architecture, 234 theme-contrast pairs, 59-page export with
   57 normalized segment files, 322-file embedded equality and PaaS Go
