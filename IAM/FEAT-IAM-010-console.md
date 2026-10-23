@@ -26,7 +26,7 @@
 | ID | 当前结论 | 仍需闭合或明确延期的边界 |
 | --- | --- | --- |
 | IAM-UI-01 | LIVE平台Account目录、Root初始化、受保护详情及停复用/恢复控件已接入；本地真实进程已证明三类命令的跨来源UNKNOWN恢复，固定IAM86+r36签名APISIX已证明Account开通和停用的完整页面组合，并证明原Root凭据恢复的单写响应半断、第二来源只读恢复、强制改密及权威状态/Audit边界 | 原Root凭据恢复的纯页面最终提交与UNKNOWN呈现仍须实跑；恢复启用的受控收尾不能冒充另一条UNKNOWN门禁 |
-| IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；固定IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果；后继独立真实浏览器已从普通User首次登录完成纯页面强制改密，并验证仅保留调用Session、撤销另一受限Session、旧密码失效和新密码重新登录 | 日常主动改密的可选会话处置、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
+| IAM-UI-02 | realm登录、强制改密、退出及Account/Root/User/Role身份已接入；固定IAM86+r36签名页面由真实`admin`登录并读取当前Root/Account、准确权限来源和有效Session，且明确Session不等于设备；策略最终创建时遇到已过期Session会回到登录且不产生部分效果；后继独立真实浏览器已从普通User首次登录完成纯页面强制改密，并验证仅保留调用Session、撤销另一受限Session、旧密码失效和新密码重新登录；日常主动改密的默认撤销及显式保留其他有效Session两种正常结果也已分别通过 | 日常主动改密的结果未知、其他敏感写入的过期会话及权威异常恢复仍需组合门禁 |
 | IAM-UI-03 | Users、Groups、Membership、附件和权限来源均为LIVE；IAM87+r37已通过前端/嵌入构建与独立CI。User资料/停用以原意图只读恢复，Membership添加/移除只显式等值重放原命令，Group附件CREATE/REVOKE已有响应丢失与下一请求权限效果。固定9621页面进一步证明Group删除的1+1级联及准确可见回执，以及GROUP/USER附件撤销的一次提交、一次原回执读取、零再写、明确完成导航与唯一outbox/Audit；User、Policy及不在级联范围内的资源保持。本轮又分别通过Role普通策略关联及附件撤销UNKNOWN的原回执恢复 | CREATE回执的其余恢复组合仍需验收；普通关联与ROLE/REVOKE只接受各自准确页面及独立后验，不扩大为所有关系操作。批量User不在本轮需求 |
 | IAM-UI-04 | 系统/自定义策略、版本、JSON/可视化编辑和边界客户端已接入；固定IAM86+r36签名页面读取八项系统Policy及`AuditReader`默认版本、摘要、冻结产品声明、结构化statement和原始JSON，从纯页面创建一个未关联身份的自定义策略并读取首个默认版本，另在零附件测试策略上从页面发布第二个不可变版本；缺少statement的文档在页面审阅阶段失败且未产生Policy/Version。后继候选UI已在同一r36后端从页面创建零附件Policy、改名并整策略退役，稳定ID/默认版本/摘要及不可变版本保持，活动目录移除且三条outbox/Audit事实和完整租户链均已核对；独立真实浏览器门禁进一步证明改名与整策略退役各自在响应半断后的双标签排他、关闭持锁标签和完全相同原命令恢复 | 默认版本的纯页面最终切换、边界、其余语法/语义错误、冲突、附件授权和结果恢复仍需完整浏览器门禁；AuthorizationProfile不得伪装成租户策略；当前签名组合已通过，但不能替代所列纯页面写路径 |
 | IAM-UI-05 | Role/trust/AssumeRole、原始身份/当前身份和返回入口已接入；固定IAM86+r36签名页面按权威空目录显示零Role。当前后端与真实PG已证明Role附件变化使原RoleSession失效，显式新承担才按新授权求值，历史发行记录不被改写。固定382243922的独立真实页面进一步完成CUSTOMER Role/准确USER Trust创建、PaaSViewer上限、正向策略关联、一次显式承担、应用允许/Audit拒绝、准确RoleSession撤销、BLOCKED及显式返回原User后业务403；Sibling与Role配置保持，原进程后验和完整Audit链通过。固定b3bd039的新库ROLE/REVOKE进一步通过一次撤销、半截响应UNKNOWN、一次原回执读取、零再写及同Role401→显式来源200→应用403，唯一事实和完整链通过。Issue #4仍按原精确消费者关闭 | Role资料/Trust后续编辑、停复用/删除及当前签名APISIX组合不由该独立旅程继承。跨Account、角色链、服务/外部身份trust明确Deferred |
@@ -663,11 +663,13 @@ Group删除沿用原严格结果校验，并在对话框卸载后保留独立回
 
 请求pending时禁止重复写；401、409、422和非法回包不得显示成功或切换到首次登录流程。无法确认结果时立即清除密码字段并锁住同一Session的后续改密，repository替换和迟到响应不得解除；只有新的正常认证所有者才能清除该非敏感阻断状态。成功后仍在当前内容区展示结果，不写入浏览器存储、不退出当前Session、不导航；明示`false`只请求保留服务端判定仍有效的其他会话，不能复活已过期或已撤销会话。
 
+结果未知的真实门禁只截断一次后端已经提交成功的`POST /api/iam/v1/auth/password`响应，不增加完成查询、自动重试或第二套恢复状态机。页面在同一认证所有者下必须显示UNKNOWN，当前密码、新密码和确认密码均已清空且禁用，推荐的会话处置选项与提交也不可再修改；在操作者显式退出前，数据库中调用Session仍为唯一迁入新凭据代次的有效调用Session。随后只能通过普通登录建立新的认证所有者：旧密码拒绝、新密码成功；新页面恢复正常可编辑状态但不得把原命令补造为成功或失败回执。门禁分两个完成标记分别冻结UNKNOWN中间态和重新认证终态，代理必须证明准确一次写、成功响应确实被截断、零自动重写、零不存在的完成读取；迟到响应换主不污染继续由既有组件测试拥有，不为测试增加生产钩子。
+
 当前消费者`5935fa5005529b2c4e1da943b98f49300430ba10`的SessionProvider、PasswordChangeForm、iamRepository和httpIamRepository四个生产blob均与UX/UI固定`14dccb1df71952fed5f6eb5581114a82c3da6ad1`一致，没有新的UI实现缺口或补丁。本分支独立运行现有SessionProvider、LoginRenderer和httpIamRepository三个测试文件，在Node22.22.2、单worker、2GiB堆下306项22.58秒通过，typecheck及四个生产路径ESLint通过；不继承另一分支的测试结果。
 
 这些用例证明省略/true/false的准确wire、强制模式两层固定true、同一认证所有者的重复/UNKNOWN写阻断，以及更换Session/repository后丢弃迟到成功与401。HTTP成功只接受严格的changedAt与bootstrapFileRetirable，不接受伪Session或额外字段；提示不推断其他Session的撤销数量，不把bootstrapFileRetirable变成普通用户权限。精确独立CI与签名组合状态由011拥有；这里的组件和HTTP适配结果不替代真实改密页面提交或数据库后验。
 
-既有`authorityprocess` owner提供同一个显式opt-in日常改密浏览器门禁。`MATRIX_IAM_DAILY_PASSWORD_REVOKE_OTHER_SESSIONS`省略或为`true`时检查默认退出其他会话，为`false`时要求页面显式取消该选项；其他值拒绝。两个模式各用独立空库，先准备同一普通User的两个有效generation-2 Session及一个已正常退出的Session，再由浏览器建立准确调用Session并提交下一密码，不另造套件或生产开关。
+既有`authorityprocess` owner提供同一个显式opt-in日常改密浏览器门禁。`MATRIX_IAM_DAILY_PASSWORD_CHANGE_BROWSER_OUTCOME`省略或为`NORMAL`时验收正常结果，为`RESPONSE_LOSS`时验收提交成功后的响应半断；其他值拒绝。`MATRIX_IAM_DAILY_PASSWORD_REVOKE_OTHER_SESSIONS`省略或为`true`时检查默认退出其他会话，为`false`时要求页面显式取消该选项；`RESPONSE_LOSS`只组合默认`true`，因为显式`false`的服务端效果由独立`NORMAL`旅程拥有，避免把同一不变量扩成无收益矩阵。每个模式使用独立空库，先准备同一普通User的两个有效generation-2 Session及一个已正常退出的Session，再由浏览器建立准确调用Session并提交下一密码，不另造套件或生产开关。
 
 两种选择都必须证明User/credential generation只推进一次、调用Session保持ACTIVE并迁移到新代次、原退出Session的状态/版本/generation/退出时间完全不变且其bearer继续401。`true`要求两个有效旧Session各只撤销一次且下一请求401；`false`要求两者继续ACTIVE、各只推进一次至新代次，下一请求仍返回原Account/User。精确Session总数和调用者集合不允许多出会话，旧密码拒绝、新密码正常登录、唯一本人`ui-password-*`成功事实及完整租户Audit链保持。
 

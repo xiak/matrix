@@ -605,6 +605,8 @@ func TestIAMPasswordChangeConsoleBrowser(t *testing.T) {
 // real browser. The default choice must revoke every other still-active
 // Session, retain only the already-authenticated calling Session and advance
 // its credential epoch without treating the password response as a new login.
+// RESPONSE_LOSS additionally freezes the committed-but-unconfirmed page before
+// the user explicitly establishes a new authenticated owner.
 func TestIAMDailyPasswordChangeConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_DAILY_PASSWORD_CHANGE_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_DAILY_PASSWORD_CHANGE_BROWSER=1 for the bounded LIVE daily password-change browser fixture")
@@ -7619,6 +7621,14 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 	start func(string, []string) *childProcess,
 ) {
 	t.Helper()
+	outcome := os.Getenv("MATRIX_IAM_DAILY_PASSWORD_CHANGE_BROWSER_OUTCOME")
+	if outcome == "" {
+		outcome = "NORMAL"
+	}
+	if outcome != "NORMAL" && outcome != "RESPONSE_LOSS" {
+		t.Fatal("MATRIX_IAM_DAILY_PASSWORD_CHANGE_BROWSER_OUTCOME must be NORMAL or RESPONSE_LOSS")
+	}
+	responseLoss := outcome == "RESPONSE_LOSS"
 	revokeOtherSessions := true
 	switch value := os.Getenv("MATRIX_IAM_DAILY_PASSWORD_REVOKE_OTHER_SESSIONS"); value {
 	case "", "true":
@@ -7626,6 +7636,9 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 		revokeOtherSessions = false
 	default:
 		t.Fatal("MATRIX_IAM_DAILY_PASSWORD_REVOKE_OTHER_SESSIONS must be true or false")
+	}
+	if responseLoss && !revokeOtherSessions {
+		t.Fatal("RESPONSE_LOSS uses the default revoke-other-sessions choice; false is owned by the independent NORMAL journey")
 	}
 	const loginName = "browser.daily.password.member"
 	realm := loginName + "@organization-process"
@@ -7665,16 +7678,77 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 			preparedActive, preparedTotal, preparedMinGeneration, preparedMaxGeneration, err)
 	}
 
-	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	var loss *browserResponseLoss
+	if responseLoss {
+		loss = &browserResponseLoss{
+			method: http.MethodPost, path: "/api/iam/v1/auth/password",
+			recoveryPathPrefix:  "/api/iam/v1/auth/password-completions/",
+			postLossWritePrefix: "/api/iam/v1/auth/password",
+		}
+	}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
+	)
 	defer closeBrowser()
 	finish := filepath.Join(temporary, "browser-daily-password-change-finished")
+	unknown := filepath.Join(temporary, "browser-daily-password-change-unknown")
 	choice := "leave the recommended revoke-other-sessions option selected"
 	if !revokeOtherSessions {
 		choice = "explicitly clear the revoke-other-sessions option to retain only other still-valid Sessions"
 	}
-	t.Logf("DAILY_PASSWORD_CHANGE_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s revoke_other_sessions=%t; sign in with the existing changed reader password, open the personal password editor, %s, submit the existing daily reader password, confirm the current Session stays authenticated, then create the completion marker",
-		server.URL, finish, realm, revokeOtherSessions, choice)
+	if responseLoss {
+		t.Logf("DAILY_PASSWORD_CHANGE_BROWSER_FIXTURE outcome=%s url=%s/console/access/settings/ unknown=%s finish=%s realm=%s revoke_other_sessions=true; sign in with the existing changed reader password, open the personal password editor, leave the recommended option selected and submit the daily reader password once. Confirm UNKNOWN is visible, all three password fields and the option/submit controls are empty and disabled, then create only the unknown marker. Wait for the continuation log before choosing sign in again; use the new daily password, return to settings, reopen the editor, confirm a new normal owner has empty enabled controls and no reconstructed receipt, then create the finish marker",
+			outcome, server.URL, unknown, finish, realm)
+	} else {
+		t.Logf("DAILY_PASSWORD_CHANGE_BROWSER_FIXTURE outcome=%s url=%s/console/access/settings/ finish=%s realm=%s revoke_other_sessions=%t; sign in with the existing changed reader password, open the personal password editor, %s, submit the existing daily reader password, confirm the current Session stays authenticated, then create the completion marker",
+			outcome, server.URL, finish, realm, revokeOtherSessions, choice)
+	}
+	if responseLoss {
+		waitForBrowserMarker(t, ctx, ui, unknown, "daily password change UNKNOWN observation")
+		observation := loss.snapshot()
+		defer clear(observation.RequestBody)
+		var command iamv1.ChangePasswordRequest
+		if observation.Attempts != 1 || observation.SelectedAttempt != 1 || observation.MutationOverflow ||
+			!observation.ResponseLost || observation.BackendStatus != http.StatusOK ||
+			observation.PostLossWrites != 0 || observation.RecoveryReads != 0 || len(observation.RecoveryAttempts) != 0 ||
+			len(observation.MutationAttempts) != 1 || !observation.MutationAttempts[0].BackendCalled ||
+			!observation.MutationAttempts[0].SelectedForLoss ||
+			iamv1.DecodeRequest(bytes.NewReader(observation.RequestBody), &command) != nil ||
+			iamv1.ValidateChangePasswordRequest(command) != nil || command.RevokeOtherSessions == nil ||
+			!*command.RevokeOtherSessions || !strings.HasPrefix(command.RequestID, "ui-password-") {
+			t.Fatalf("daily password UNKNOWN boundary was not an exact single committed loss: attempts=%d selected=%d overflow=%t lost=%t backend=%d post_loss_writes=%d recovery_reads=%d mutation_ledger=%d",
+				observation.Attempts, observation.SelectedAttempt, observation.MutationOverflow,
+				observation.ResponseLost, observation.BackendStatus, observation.PostLossWrites,
+				observation.RecoveryReads, len(observation.MutationAttempts))
+		}
+		var intermediateActive, intermediateTotal, intermediateCalling int
+		if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),count(*),
+			count(*) FILTER(WHERE id<>ALL($3::text[]) AND status='ACTIVE' AND revoked_at IS NULL
+			  AND credential_version=3 AND resource_version=2)
+			FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, member.AccountID, member.ID,
+			[]string{string(original.Session.ID), string(peer.Session.ID), string(loggedOut.Session.ID)}).
+			Scan(&intermediateActive, &intermediateTotal, &intermediateCalling); err != nil ||
+			intermediateActive != 1 || intermediateTotal != 4 || intermediateCalling != 1 {
+			t.Fatalf("daily password UNKNOWN did not retain exactly its generation-3 calling Session before explicit logout: active=%d total=%d calling=%d err=%v",
+				intermediateActive, intermediateTotal, intermediateCalling, err)
+		}
+		t.Logf("DAILY_PASSWORD_CHANGE_BROWSER_CONTINUE url=%s/console/access/settings/ finish=%s; the exact write is committed and UNKNOWN has been frozen. Now choose sign in again, authenticate normally with the new daily password, return to settings, reopen the password editor and create the finish marker only after the new owner has empty enabled controls and no reconstructed receipt",
+			server.URL, finish)
+	}
 	waitForBrowserMarker(t, ctx, ui, finish, "daily password change browser completion")
+	if responseLoss {
+		observation := loss.snapshot()
+		defer clear(observation.RequestBody)
+		if observation.Attempts != 1 || observation.SelectedAttempt != 1 || observation.MutationOverflow ||
+			!observation.ResponseLost || observation.BackendStatus != http.StatusOK ||
+			observation.PostLossWrites != 0 || observation.RecoveryReads != 0 || len(observation.RecoveryAttempts) != 0 ||
+			len(observation.MutationAttempts) != 1 {
+			t.Fatalf("daily password reauthentication changed the original UNKNOWN boundary: attempts=%d selected=%d overflow=%t lost=%t backend=%d post_loss_writes=%d recovery_reads=%d mutation_ledger=%d",
+				observation.Attempts, observation.SelectedAttempt, observation.MutationOverflow,
+				observation.ResponseLost, observation.BackendStatus, observation.PostLossWrites,
+				observation.RecoveryReads, len(observation.MutationAttempts))
+		}
+	}
 
 	var mustChange bool
 	var principalVersion, credentialVersion int64
@@ -7737,16 +7811,23 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 	if !revokeOtherSessions {
 		wantActiveSessions = 3
 	}
-	var activeSessions, totalSessions, callingSessions int
+	wantTotalSessions, wantRetiredCallingSessions := 4, 0
+	if responseLoss {
+		wantTotalSessions, wantRetiredCallingSessions = 5, 1
+	}
+	var activeSessions, totalSessions, callingSessions, retiredCallingSessions int
 	if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE status='ACTIVE' AND revoked_at IS NULL),count(*),
 		count(*) FILTER(WHERE id<>ALL($3::text[]) AND status='ACTIVE' AND revoked_at IS NULL
-		  AND credential_version=3 AND resource_version=2)
+		  AND credential_version=3),
+		count(*) FILTER(WHERE id<>ALL($3::text[]) AND status='REVOKED' AND revoked_at IS NOT NULL
+		  AND credential_version=3 AND resource_version=3)
 		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, member.AccountID, member.ID,
 		[]string{string(original.Session.ID), string(peer.Session.ID), string(loggedOut.Session.ID)}).
-		Scan(&activeSessions, &totalSessions, &callingSessions); err != nil ||
-		activeSessions != wantActiveSessions || totalSessions != 4 || callingSessions != 1 {
-		t.Fatalf("daily password change retained the wrong Session set: active=%d wantActive=%d total=%d calling=%d err=%v",
-			activeSessions, wantActiveSessions, totalSessions, callingSessions, err)
+		Scan(&activeSessions, &totalSessions, &callingSessions, &retiredCallingSessions); err != nil ||
+		activeSessions != wantActiveSessions || totalSessions != wantTotalSessions || callingSessions != 1 ||
+		retiredCallingSessions != wantRetiredCallingSessions {
+		t.Fatalf("daily password change retained the wrong Session set: outcome=%s active=%d wantActive=%d total=%d calling=%d retiredCalling=%d err=%v",
+			outcome, activeSessions, wantActiveSessions, totalSessions, callingSessions, retiredCallingSessions, err)
 	}
 
 	oldPassword := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/login", "", struct {
@@ -7817,7 +7898,11 @@ func runIAMDailyPasswordChangeConsoleBrowser(
 		chain.TenantID != auditv1.TenantID(member.AccountID) || chain.InstallationID != "" {
 		t.Fatalf("daily password change tenant Audit chain is incomplete: %#v", chain)
 	}
-	t.Logf("the live daily password flow advanced one User credential epoch with revokeOtherSessions=%t, retained the calling Session, preserved the prior logout, enforced the chosen disposition of both valid peers on their next requests, rejected the old password, accepted a fresh login with the new password and emitted one self-authenticated fact in the verified tenant Audit chain", revokeOtherSessions)
+	callingSessionBoundary := "retained the calling Session"
+	if responseLoss {
+		callingSessionBoundary = "retained the calling Session through UNKNOWN and retired it only on explicit logout"
+	}
+	t.Logf("the live daily password flow outcome=%s advanced one User credential epoch with revokeOtherSessions=%t, %s, preserved the prior logout, enforced the chosen disposition of both valid peers on their next requests, rejected the old password, accepted a fresh login with the new password and emitted one self-authenticated fact in the verified tenant Audit chain", outcome, revokeOtherSessions, callingSessionBoundary)
 }
 
 func runIAMAccountSecuritySettingsConsoleBrowser(
