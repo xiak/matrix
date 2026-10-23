@@ -2736,8 +2736,14 @@ run `next typegen` before `tsc`. It does not hand-maintain generated imports or
 weaken the clean-tree gate. The resulting deterministic export is
 `matrix-382e368f7e95398e5502`; local typecheck, lint, architecture, 234 contrast
 pairs, the same 80/2,106 plus eight tests, two-build preview equivalence and
-322-file embed equality passed. A new exact-source CI, real-IAM browser
-acceptance and signed installed-release replay remain required.
+322-file embed equality passed. Exact-source
+[Verification 39887832592](https://github.com/xiak/matrix/actions/runs/39887832592)
+then completed `success` at `0b3f95d94d74935217983ab3b19eab08427ed560`:
+all 19 jobs passed, including the corrected console clean-tree check, Go,
+Node-process, PostgreSQL HA installation, all authority shards and the final
+authority-process aggregate. This closes the independent CI gate for that
+source; real-IAM browser acceptance and signed installed-release replay remain
+required and are not inferred from CI.
 
 The Audit reader consumes the optional `authorityEvidenceDigest` from public
 Audit Event at fixed IAM/Audit source

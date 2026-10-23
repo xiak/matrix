@@ -54,7 +54,10 @@
   Source `0b3f95d94` fixes the ownership error instead of normalizing generated
   output after every build. Its exact-source Verification
   [run 39887832592](https://github.com/xiak/matrix/actions/runs/39887832592)
-  is in progress; local evidence does not pre-accept that remote gate.
+  completed `success`: all 19 jobs passed, including console, Go, Node-process,
+  PostgreSQL HA installation, every authority shard and the authority-process
+  aggregate. This closes the independent CI gate for that source; it does not
+  pre-accept the remaining browser or signed-release gates.
 
 ## Unaccepted boundaries
 
