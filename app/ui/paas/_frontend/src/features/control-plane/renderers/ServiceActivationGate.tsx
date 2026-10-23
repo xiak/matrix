@@ -17,14 +17,18 @@ export type ServiceActivationGateProps = {
   retryLabel?: string;
   unavailableHint?: ReactNode;
   failureHint?: ReactNode;
+  unknownHint?: ReactNode;
+  replayHint?: ReactNode;
   onEnable(): void;
+  onCheckOutcome?(): void;
+  onReplay?(): void;
   requestAccess?: ReactNode;
   children: ReactNode;
 };
 
 // A product-level workflow. Public controls remain owned by @ui/xiak; a LIVE
 // adapter must supply current activation facts and independent capabilities.
-export function ServiceActivationGate({ account, service, access, state, consent, enableLabel, retryLabel, unavailableHint, failureHint, onEnable, requestAccess, children }: ServiceActivationGateProps) {
+export function ServiceActivationGate({ account, service, access, state, consent, enableLabel, retryLabel, unavailableHint, failureHint, unknownHint, replayHint, onEnable, onCheckOutcome, onReplay, requestAccess, children }: ServiceActivationGateProps) {
   const t = useTranslations("ServiceActivation");
   const titleId = useId();
   const [acknowledgement, setAcknowledgement] = useState<string | null>(null);
@@ -35,7 +39,8 @@ export function ServiceActivationGate({ account, service, access, state, consent
   const status = (state.status === "enabled" && !validEnabled) || (state.status === "unobservable" && !validUnobservable)
     ? "unavailable"
     : state.status;
-  const busy = status === "checking" || status === "enabling";
+  const unknownState = state.status === "outcome-unknown" ? state : null;
+  const busy = status === "checking" || status === "enabling" || Boolean(unknownState?.checking);
   if (serviceWorkspaceMayLoad(state, access, { accountId: account.id, serviceKey: service.key })) return <>{children}</>;
 
   return <Card aria-labelledby={titleId} className={styles.card}>
@@ -44,7 +49,7 @@ export function ServiceActivationGate({ account, service, access, state, consent
         <span className={styles.icon}>{service.icon}</span>
         <div><Typography.Eyebrow>{t("eyebrow")}</Typography.Eyebrow><Typography.Title as="h2" id={titleId} level={2}>{service.name}</Typography.Title></div>
       </div>
-      <Badge status={validEnabled ? "success" : status === "failed" ? "danger" : busy ? "info" : "neutral"}>{t(`states.${status}`)}</Badge>
+      <Badge status={validEnabled ? "success" : status === "failed" ? "danger" : status === "outcome-unknown" ? "warning" : busy ? "info" : "neutral"}>{t(`states.${status}`)}</Badge>
     </Card.Header>
     <Card.Body className={styles.body}>
       <p className={styles.description}>{service.description}</p>
@@ -56,11 +61,17 @@ export function ServiceActivationGate({ account, service, access, state, consent
       </dl>
       {status === "unavailable" ? <Alert status="info">{unavailableHint ?? t("unavailableHint")}</Alert>
         : validEnabled ? <Alert status="info">{t("noUsePermission")}</Alert>
+          : unknownState ? <Alert status="warning">{unknownState.recovery === "replay" ? replayHint ?? t("replayHint") : unknownHint ?? t("unknownHint")}</Alert>
           : !access.canEnable && !busy ? <Alert status="info">{t("noEnablePermission")}</Alert>
             : status === "failed" ? <Alert status="danger">{failureHint ?? t("failedHint")}</Alert> : null}
     </Card.Body>
     <Card.Footer className={styles.footer}>
-      {(status === "not-enabled" || status === "failed" || status === "enabling") && access.canEnable ? <form className={styles.consent} onSubmit={(event) => {
+      {unknownState ? <div className={styles.status} role={busy ? "status" : undefined}>
+        <span>{t(unknownState.checking ? "checkingOutcomeHint" : "unknownFooter")}</span>
+        {unknownState.recovery === "replay"
+          ? <Button disabled={unknownState.checking || !onReplay} onClick={onReplay}>{t("replayOriginal")}</Button>
+          : <Button disabled={unknownState.checking || !onCheckOutcome} onClick={onCheckOutcome} variant="secondary">{t(unknownState.checking ? "checkingOutcome" : "checkOutcome")}</Button>}
+      </div> : (status === "not-enabled" || status === "failed" || status === "enabling") && access.canEnable ? <form className={styles.consent} onSubmit={(event) => {
         event.preventDefault();
         if (accepted && !busy) onEnable();
       }}>

@@ -39,6 +39,7 @@ export type ServiceActivation = {
 
 export type ServiceActivationState =
   | { status: "checking" | "not-enabled" | "enabling" | "failed" | "unavailable" }
+  | { status: "outcome-unknown"; checking: boolean; recovery: "inspect" | "replay" }
   | { status: "enabled"; scope: ServiceActivationScope; activation: ServiceActivation | ServiceActivationRecord }
   // Activation-directory access is independent from product-resource access.
   // In this state the UI may probe the owning resource API, which remains the

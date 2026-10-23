@@ -6,6 +6,7 @@ import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
 import type {
   ServiceActivationAccess,
+  ServiceActivation,
   ServiceActivationState,
   ServiceDefinition,
   ServiceDefinitionDirectory
@@ -25,7 +26,10 @@ type ScopedActivationSnapshot = {
 };
 
 type ActivationIntent = {
+  access: ServiceActivationAccess;
+  definition: ServiceDefinition;
   definitionKey: string;
+  repository: ControlPlaneRepository;
   requestId: string;
   scopeKey: string;
 };
@@ -38,6 +42,12 @@ const unavailable: LiveActivationSnapshot = {
 
 function definitionKey(definition: ServiceDefinition): string {
   return JSON.stringify([definition.id, definition.revision, definition.contentDigest]);
+}
+
+function activationMatchesDefinition(activation: ServiceActivation, definition: ServiceDefinition): boolean {
+  return activation.service.id === definition.id &&
+    activation.service.revision === definition.revision &&
+    activation.service.contentDigest === definition.contentDigest;
 }
 
 type ServiceDirectoryRead = () => Promise<ServiceDefinitionDirectory>;
@@ -112,8 +122,45 @@ export function useLiveServiceActivation({
     return expireEffectiveCredential(credential);
   }, [credential, expireEffectiveCredential]);
 
-  const load = useCallback(async () => {
+  const reconcileIntent = useCallback(async (currentIntent: ActivationIntent) => {
+    if (!active || !accountId || !credential || !serviceKey || !repository.getServiceActivation ||
+        currentIntent.repository !== repository || currentIntent.scopeKey !== scopeKey || intent.current !== currentIntent) return;
     const currentRevision = ++revision.current;
+    const unknownSnapshot = (recovery: "inspect" | "replay", checking = false): LiveActivationSnapshot => ({
+      access: currentIntent.access,
+      definition: currentIntent.definition,
+      state: { status: "outcome-unknown", checking, recovery }
+    });
+    setSnapshot(unknownSnapshot("inspect", true));
+    try {
+      const activation = await repository.getServiceActivation(credential, serviceKey);
+      if (currentRevision !== revision.current || intent.current !== currentIntent) return;
+      if (!activationMatchesDefinition(activation, currentIntent.definition)) {
+        setSnapshot(unknownSnapshot("inspect"));
+        return;
+      }
+      intent.current = null;
+      setSnapshot({
+        access: { ...currentIntent.access, mayLoadWorkspace: true },
+        definition: currentIntent.definition,
+        state: { status: "enabled", scope: { accountId, serviceKey }, activation }
+      });
+    } catch (failure) {
+      if (currentRevision !== revision.current || intent.current !== currentIntent) return;
+      if (failure instanceof HttpProblem && failure.status === 401) {
+        expireUnauthorized(failure);
+        setSnapshot(unavailable);
+      } else if (failure instanceof HttpProblem && failure.status === 404) {
+        setSnapshot(unknownSnapshot("replay"));
+      } else {
+        // A forbidden or temporarily unavailable observation cannot prove that
+        // the original POST failed. Keep the frozen intent and permit GET only.
+        setSnapshot(unknownSnapshot("inspect"));
+      }
+    }
+  }, [accountId, active, credential, expireUnauthorized, repository, scopeKey, serviceKey, setSnapshot]);
+
+  const load = useCallback(async () => {
     if (!active || !accountId || !credential || !serviceKey ||
         !repository.listServiceDefinitions || !repository.getServiceActivation) {
       intent.current = null;
@@ -121,6 +168,14 @@ export function useLiveServiceActivation({
       return;
     }
 
+    const currentIntent = intent.current;
+    if (currentIntent && currentIntent.repository === repository && currentIntent.scopeKey === scopeKey) {
+      await reconcileIntent(currentIntent);
+      return;
+    }
+    if (currentIntent) intent.current = null;
+
+    const currentRevision = ++revision.current;
     setSnapshot({ ...unavailable, state: { status: "checking" } });
     try {
       const directory = await repository.listServiceDefinitions(credential);
@@ -130,10 +185,6 @@ export function useLiveServiceActivation({
         intent.current = null;
         setSnapshot(unavailable);
         return;
-      }
-      const nextDefinitionKey = definitionKey(definition);
-      if (intent.current && (intent.current.scopeKey !== scopeKey || intent.current.definitionKey !== nextDefinitionKey)) {
-        intent.current = null;
       }
       const access: ServiceActivationAccess = {
         canEnable: directory.activationCapability.available,
@@ -146,6 +197,10 @@ export function useLiveServiceActivation({
       try {
         const activation = await repository.getServiceActivation(credential, serviceKey);
         if (currentRevision !== revision.current) return;
+        if (!activationMatchesDefinition(activation, definition)) {
+          setSnapshot({ access, definition, state: { status: "unavailable" } });
+          return;
+        }
         setSnapshot({
           access: { ...access, mayLoadWorkspace: true },
           definition,
@@ -178,7 +233,7 @@ export function useLiveServiceActivation({
         setSnapshot(unavailable);
       }
     }
-  }, [accountId, active, credential, expireUnauthorized, repository, scopeKey, serviceKey, setSnapshot]);
+  }, [accountId, active, credential, expireUnauthorized, reconcileIntent, repository, scopeKey, serviceKey, setSnapshot]);
 
   useEffect(() => {
     let mounted = true;
@@ -195,7 +250,10 @@ export function useLiveServiceActivation({
     const nextDefinitionKey = definitionKey(definition);
     if (!intent.current || intent.current.scopeKey !== scopeKey || intent.current.definitionKey !== nextDefinitionKey) {
       intent.current = {
+        access: snapshot.access,
+        definition,
         definitionKey: nextDefinitionKey,
+        repository,
         requestId: requestToken("ui-service-activation-"),
         scopeKey
       };
@@ -204,11 +262,15 @@ export function useLiveServiceActivation({
     setSnapshot({ ...snapshot, state: { status: "enabling" } });
     try {
       const activation = await repository.activateService(credential, {
-        id: definition.id,
-        revision: definition.revision,
-        contentDigest: definition.contentDigest
+        id: currentIntent.definition.id,
+        revision: currentIntent.definition.revision,
+        contentDigest: currentIntent.definition.contentDigest
       }, currentIntent.requestId);
       if (currentRevision !== revision.current) return;
+      if (!activationMatchesDefinition(activation, currentIntent.definition)) {
+        await reconcileIntent(currentIntent);
+        return;
+      }
       intent.current = null;
       setSnapshot({
         access: { ...snapshot.access, mayLoadWorkspace: true },
@@ -223,41 +285,62 @@ export function useLiveServiceActivation({
         return;
       }
       if (failure instanceof HttpProblem && failure.status >= 400 && failure.status < 500) {
+        intent.current = null;
         await load();
         return;
       }
       if (!repository.getServiceActivation) {
-        setSnapshot({ ...snapshot, state: { status: "unavailable" } });
+        setSnapshot({ ...snapshot, state: { status: "outcome-unknown", checking: false, recovery: "inspect" } });
         return;
       }
-      try {
-        const activation = await repository.getServiceActivation(credential, serviceKey);
-        if (currentRevision !== revision.current) return;
-        intent.current = null;
-        setSnapshot({
-          access: { ...snapshot.access, mayLoadWorkspace: true },
-          definition,
-          state: { status: "enabled", scope: { accountId, serviceKey }, activation }
-        });
-      } catch (readFailure) {
-        if (currentRevision !== revision.current) return;
-        if (readFailure instanceof HttpProblem && readFailure.status === 401) {
-          expireUnauthorized(readFailure);
-          setSnapshot(unavailable);
-        } else if (readFailure instanceof HttpProblem && readFailure.status === 404) {
-          setSnapshot({ ...snapshot, state: { status: "failed" } });
-        } else if (readFailure instanceof HttpProblem && readFailure.status === 403) {
-          setSnapshot({
-            access: { ...snapshot.access, mayLoadWorkspace: true },
-            definition,
-            state: { status: "unobservable", scope: { accountId, serviceKey } }
-          });
-        } else {
-          setSnapshot({ ...snapshot, state: { status: "unavailable" } });
-        }
-      }
+      await reconcileIntent(currentIntent);
     }
-  }, [accountId, active, credential, expireUnauthorized, load, repository, scopeKey, serviceKey, setSnapshot, snapshot]);
+  }, [accountId, active, credential, expireUnauthorized, load, reconcileIntent, repository, scopeKey, serviceKey, setSnapshot, snapshot]);
 
-  return { ...snapshot, enable, preview: false as const };
+  const checkOutcome = useCallback(async () => {
+    const currentIntent = intent.current;
+    if (snapshot.state.status !== "outcome-unknown" || snapshot.state.checking || !currentIntent) return;
+    await reconcileIntent(currentIntent);
+  }, [reconcileIntent, snapshot.state]);
+
+  const replay = useCallback(async () => {
+    const currentIntent = intent.current;
+    if (!active || !accountId || !credential || !serviceKey || !repository.activateService || !currentIntent ||
+        snapshot.state.status !== "outcome-unknown" || snapshot.state.checking || snapshot.state.recovery !== "replay" ||
+        currentIntent.repository !== repository || currentIntent.scopeKey !== scopeKey) return;
+    const currentRevision = ++revision.current;
+    setSnapshot({
+      access: currentIntent.access,
+      definition: currentIntent.definition,
+      state: { status: "enabling" }
+    });
+    try {
+      const activation = await repository.activateService(credential, {
+        id: currentIntent.definition.id,
+        revision: currentIntent.definition.revision,
+        contentDigest: currentIntent.definition.contentDigest
+      }, currentIntent.requestId);
+      if (currentRevision !== revision.current || intent.current !== currentIntent) return;
+      if (!activationMatchesDefinition(activation, currentIntent.definition)) {
+        await reconcileIntent(currentIntent);
+        return;
+      }
+      intent.current = null;
+      setSnapshot({
+        access: { ...currentIntent.access, mayLoadWorkspace: true },
+        definition: currentIntent.definition,
+        state: { status: "enabled", scope: { accountId, serviceKey }, activation }
+      });
+    } catch (failure) {
+      if (currentRevision !== revision.current || intent.current !== currentIntent) return;
+      if (failure instanceof HttpProblem && failure.status === 401) {
+        expireUnauthorized(failure);
+        setSnapshot(unavailable);
+        return;
+      }
+      await reconcileIntent(currentIntent);
+    }
+  }, [accountId, active, credential, expireUnauthorized, reconcileIntent, repository, scopeKey, serviceKey, setSnapshot, snapshot.state]);
+
+  return { ...snapshot, checkOutcome, enable, replay, preview: false as const };
 }

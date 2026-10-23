@@ -75,4 +75,35 @@ describe("ServiceActivationGate", () => {
     await user.click(screen.getByRole("button", { name: "开通服务" }));
     expect(onEnable).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps an unknown LIVE result distinct from failure and never retries it through the normal enable action", async () => {
+    const user = userEvent.setup();
+    const onEnable = vi.fn();
+    const onCheckOutcome = vi.fn();
+    const { rerender } = render(page({
+      consent: undefined,
+      onEnable,
+      onCheckOutcome,
+      state: { status: "outcome-unknown", checking: false, recovery: "inspect" }
+    }));
+
+    expect(screen.getByText("结果待确认")).toBeTruthy();
+    expect(screen.getByText(/不会自动重复开通/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "开通服务" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
+    expect(onCheckOutcome).toHaveBeenCalledTimes(1);
+    expect(onEnable).not.toHaveBeenCalled();
+
+    const onReplay = vi.fn();
+    rerender(page({
+      consent: undefined,
+      onEnable,
+      onReplay,
+      state: { status: "outcome-unknown", checking: false, recovery: "replay" }
+    }));
+    expect(screen.getByText(/原幂等键/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "使用原请求重试" }));
+    expect(onReplay).toHaveBeenCalledTimes(1);
+    expect(onEnable).not.toHaveBeenCalled();
+  });
 });
