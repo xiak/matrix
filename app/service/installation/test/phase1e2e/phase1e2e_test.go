@@ -804,6 +804,68 @@ func TestEdgeClientChecksSuccessAndProblemMediaTypes(t *testing.T) {
 	}
 }
 
+func TestEdgeClientReadsCurrentAccessAnalyzerDetail(t *testing.T) {
+	now := time.Date(2026, time.October, 23, 1, 2, 3, 456000000, time.UTC)
+	analyzer := iamv1.AccessAnalyzer{
+		APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzer",
+		ID: "analyzer-phase1", AccountID: "account-phase1",
+		Type: iamv1.AccessAnalyzerUnusedAccess, Status: iamv1.AccessAnalyzerActive,
+		UnusedAccessAgeDays: iamv1.MinUnusedAccessAgeDays,
+		Disposition: iamv1.AccessDispositionRule{
+			Mode: iamv1.AccessDispositionDisableAccessKeys, FindingDelayDays: iamv1.MinAccessDispositionDelayDays,
+		},
+		ResourceVersion: 2, CreatedAt: now, UpdatedAt: now,
+	}
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceAccessAnalyzer, ID: string(analyzer.ID)}
+	detail := iamv1.AccessAnalyzerDetail{
+		APIVersion: iamv1.APIVersion, Kind: "AccessAnalyzerDetail", Analyzer: analyzer,
+	}
+	for _, action := range []iamv1.Action{
+		iamv1.ActionIAMAccessAnalyzerUpdate,
+		iamv1.ActionIAMAccessAnalyzerSetDisposition,
+		iamv1.ActionIAMAccessFindingList,
+	} {
+		detail.Capabilities = append(detail.Capabilities, iamv1.ActionCapability{
+			Action: action, Resource: resource, Available: false,
+			RestrictionReason: iamv1.CapabilityAuthorityRequired,
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		body any
+		want bool
+	}{
+		{name: "current detail", body: detail, want: true},
+		{name: "superseded flat analyzer", body: analyzer, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet ||
+					request.URL.Path != "/api/iam/v1/account/access-analyzers/"+string(analyzer.ID) ||
+					request.Header.Get("Authorization") != "Bearer fixture-bearer" {
+					response.Header().Set("Content-Type", "application/problem+json")
+					response.WriteHeader(http.StatusBadRequest)
+					_, _ = response.Write([]byte(`{}`))
+					return
+				}
+				response.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(response).Encode(test.body)
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			actual, err := client.readAccessAnalyzer(context.Background(), []byte("fixture-bearer"), analyzer.ID)
+			if (err == nil) != test.want {
+				t.Fatalf("read accepted=%t, want %t: %v", err == nil, test.want, err)
+			}
+			if test.want && actual != analyzer {
+				t.Fatalf("read analyzer = %#v, want %#v", actual, analyzer)
+			}
+		})
+	}
+}
+
 func TestSignedManagedProductActivationReusesTheAccountActivation(t *testing.T) {
 	service := managedservicev1.ServiceDefinitionReference{
 		ID: managedservicev1.PostgreSQLServiceID, Revision: 1,

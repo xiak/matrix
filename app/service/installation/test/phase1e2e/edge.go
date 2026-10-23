@@ -428,12 +428,12 @@ func (client *edgeClient) readAccessAnalyzer(
 	bearer []byte,
 	analyzerID iamv1.AccessAnalyzerID,
 ) (iamv1.AccessAnalyzer, error) {
-	var result iamv1.AccessAnalyzer
+	var result iamv1.AccessAnalyzerDetail
 	if _, err := client.get(ctx, "/api/iam/v1/account/access-analyzers/"+string(analyzerID), bearer, &result); err != nil ||
-		iamv1.ValidateAccessAnalyzer(result) != nil || result.ID != analyzerID {
+		iamv1.ValidateAccessAnalyzerDetail(result) != nil || result.Analyzer.ID != analyzerID {
 		return iamv1.AccessAnalyzer{}, errors.New("IAM access analyzer response failed")
 	}
-	return result, nil
+	return result.Analyzer, nil
 }
 
 func (client *edgeClient) listAccessFindings(
