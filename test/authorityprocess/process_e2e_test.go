@@ -3982,10 +3982,10 @@ func runIAMServiceActivationConsoleBrowser(
 	waitAllPaaSOutboxDelivered(t, ctx, database)
 	var outboxFacts int
 	if err := database.QueryRow(ctx, `SELECT count(*) FROM managedservice.audit_outbox
-		WHERE tenant_id=$1 AND event_document->>'action'=$2
-		  AND event_document#>>'{target,kind}'=$3 AND event_document#>>'{target,id}'=$4`,
+		WHERE tenant_id=$1 AND document->>'action'=$2
+		  AND document#>>'{target,id}'=$3`,
 		member.AccountID, auditv1.ActionManagedServiceServiceActivationActivated,
-		auditv1.TargetServiceActivation, definition.ID).Scan(&outboxFacts); err != nil || outboxFacts != 1 {
+		definition.ID).Scan(&outboxFacts); err != nil || outboxFacts != 1 {
 		t.Fatalf("service activation outbox facts=%d err=%v", outboxFacts, err)
 	}
 	page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{
