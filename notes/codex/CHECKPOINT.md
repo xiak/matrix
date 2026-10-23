@@ -7,29 +7,29 @@
 - Repository `https://github.com/xiak/matrix.git`, branch
   `feat/iam-console-release-candidate`; repository-local Git identity is exactly
   `Xiak <Jellal@aliyun.com>`.
-- Latest pushed candidate source is `74fdc98da`. Its integration base
+- Latest pushed candidate source is `0b3f95d94`. Its integration base
   `4b9080a33` composes IAM branch head `1da954e84` (production-code milestone
   `571692dd2`) with console UX branch `ed001f9ef` (latest source fix
-  `8b4cc05d1`). The latest commit replaces vulnerable console runtime/tooling
-  dependencies and regenerates the owned static export; it does not import a
+  `8b4cc05d1`). Dependency hardening is owned by `74fdc98da`; the latest source
+  commit stops tracking Next's generated declaration, generates it before
+  typecheck, and regenerates the owned static export. It does not import a
   second backend or IAM model.
 - Ownership was kept explicit: IAM backend, IAM FEATs and authority-process
   tests remain from the IAM branch. The overlay is limited to the console
   frontend and embedded export, its web-server contract test, FEAT-007 and its
   adoption/research owners. Old UX backend, provisioner and process-test slices
   were not imported.
-- Embedded console build is `matrix-f54b1578f499abc8e086`.
+- Embedded console build is `matrix-382e368f7e95398e5502`.
 
-## Verified evidence at `74fdc98da`
+## Verified evidence at `0b3f95d94`
 
 - Frontend install and source gates passed: typecheck, lint, architecture,
   234 theme-contrast pairs, 80 test files / 2106 tests, and eight Node export
   tests.
 - Static export and embed verification passed: 59 pages, 57 normalized routes,
-  and 322 source/export/embed files byte-equivalent. PaaS UI Go test and vet
-  passed.
-- Full repository `go test -p 2 ./...` and `go vet -p 2 ./...` passed without
-  creating another Docker/PostgreSQL fixture.
+  and 322 source/export/embed files byte-equivalent. PaaS UI `go test` and
+  `go vet` passed. The broader repository Go gates had already passed on the
+  dependency slice without creating another Docker/PostgreSQL fixture.
 - Next and `eslint-config-next` are 16.4.2; compatible patched dependencies
   include Sharp 0.35.5, `source-map-js` 1.2.2, Vitest 4.1.12, Vite 8.3.5 and
   Undici 8.12.3. Supported Node 24.19.0/npm 11.6.4 reports zero production
@@ -46,8 +46,15 @@
   resource permission and links IAM authorization separately. Its consent is
   explicit and its action stays disabled until accepted.
 - Exact-source GitHub Verification
-  [#740](https://github.com/xiak/matrix/actions/runs/39885755013) is running;
-  local evidence does not pre-accept that remote gate.
+  [#740](https://github.com/xiak/matrix/actions/runs/39885755013) completed with
+  the console job failed only because Next 16.4.2 rewrote the tracked generated
+  `next-env.d.ts` from a development type path to the production type path.
+  All 80 frontend files / 2106 tests and all eight Node export tests passed;
+  the authority aggregate was skipped after the console prerequisite failed.
+  Source `0b3f95d94` fixes the ownership error instead of normalizing generated
+  output after every build. Its exact-source Verification
+  [run 39887832592](https://github.com/xiak/matrix/actions/runs/39887832592)
+  is in progress; local evidence does not pre-accept that remote gate.
 
 ## Unaccepted boundaries
 
@@ -60,6 +67,9 @@
   never started. It is no longer present in the current MOCK directory and no
   deletion dialog is open. A confirmation must not be transferred to another
   target.
+- Daily self-password-change browser acceptance remains open for both the
+  revoke-other-sessions and retain-other-sessions modes. Do not infer acceptance
+  from a prepared form or a live fixture; the runtime assertions must finish.
 - Cleanup remains policy-blocked. Read-only inspection found five owned
   containers and eleven related paths. The rejection happened before cleanup
   launched. Do not bypass it through another executor, split command,
