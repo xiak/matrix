@@ -263,6 +263,109 @@ func TestExecutionProfileRefreshRetainsClosedProbeTimeoutCode(t *testing.T) {
 	}
 }
 
+func TestExecutionProfileStartupRetriesOnlyTransientClosedFailures(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		failures  []workerFailureStage
+		attempts  int
+		wantCalls int
+		want      workerFailureStage
+	}{
+		{
+			name: "engine warmup converges",
+			failures: []workerFailureStage{
+				workerFailureExecutionEngineTimeout,
+				workerFailureExecutionEngineTimeout,
+			},
+			attempts: 4, wantCalls: 3,
+		},
+		{
+			name: "temporarily unavailable converges",
+			failures: []workerFailureStage{
+				workerFailureExecutionObserveDown,
+			},
+			attempts: 3, wantCalls: 2,
+		},
+		{
+			name: "compose warmup converges",
+			failures: []workerFailureStage{
+				workerFailureExecutionComposeTimeout,
+			},
+			attempts: 3, wantCalls: 2,
+		},
+		{
+			name: "observation timeout converges",
+			failures: []workerFailureStage{
+				workerFailureExecutionObserveTimeout,
+			},
+			attempts: 3, wantCalls: 2,
+		},
+		{
+			name: "validation fails once",
+			failures: []workerFailureStage{
+				workerFailureExecutionValidate,
+			},
+			attempts: 4, wantCalls: 1, want: workerFailureExecutionValidate,
+		},
+		{
+			name: "transient failure is bounded",
+			failures: []workerFailureStage{
+				workerFailureExecutionEngineTimeout,
+				workerFailureExecutionEngineTimeout,
+				workerFailureExecutionEngineTimeout,
+				workerFailureExecutionEngineTimeout,
+			},
+			attempts: 3, wantCalls: 3, want: workerFailureExecutionEngineTimeout,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			err := refreshExecutionProfileAtStartup(
+				context.Background(),
+				test.attempts,
+				time.Nanosecond,
+				func(context.Context) error {
+					calls++
+					if calls <= len(test.failures) {
+						return failWorker(test.failures[calls-1])
+					}
+					return nil
+				},
+			)
+			if calls != test.wantCalls {
+				t.Fatalf("startup refresh calls = %d, want %d", calls, test.wantCalls)
+			}
+			if test.want == "" {
+				if err != nil {
+					t.Fatalf("startup refresh = %v", err)
+				}
+				return
+			}
+			if code := workerFailureCode(err); code != test.want {
+				t.Fatalf("startup refresh code = %q, want %q", code, test.want)
+			}
+		})
+	}
+}
+
+func TestExecutionProfileStartupCancellationStopsRetry(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	calls := 0
+	err := refreshExecutionProfileAtStartup(
+		ctx,
+		6,
+		time.Hour,
+		func(context.Context) error {
+			calls++
+			cancel()
+			return failWorker(workerFailureExecutionEngineTimeout)
+		},
+	)
+	if calls != 1 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled startup refresh: calls=%d error=%v", calls, err)
+	}
+}
+
 func TestRunClassifiesIncompleteConfiguration(t *testing.T) {
 	for _, variable := range []string{
 		databaseDSNFileEnvironment,

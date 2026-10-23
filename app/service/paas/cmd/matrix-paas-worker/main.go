@@ -51,6 +51,8 @@ const (
 	executionTargetRefresh               = time.Minute
 	executionTargetMaximumAge            = 5 * time.Minute
 	executionTargetTimeout               = 5 * time.Second
+	executionProfileStartupAttempts      = 6
+	executionProfileStartupBackoff       = time.Second
 	operationLeaseDuration               = 30 * time.Second
 	effectTimeout                        = 20 * time.Second
 	reconcileBackoff                     = time.Second
@@ -185,8 +187,21 @@ func run(ctx context.Context) (result error) {
 		return err
 	}
 	stage = workerFailureExecutionProfileRefresh
-	if err := executionProfile.Refresh(ctx); err != nil {
-		return failWorker(executionProfileRefreshFailure(err))
+	if err := refreshExecutionProfileAtStartup(
+		ctx,
+		executionProfileStartupAttempts,
+		executionProfileStartupBackoff,
+		func(refreshContext context.Context) error {
+			if refreshErr := executionProfile.Refresh(refreshContext); refreshErr != nil {
+				return failWorker(executionProfileRefreshFailure(refreshErr))
+			}
+			return nil
+		},
+	); err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
 	}
 
 	stage = workerFailureArtifactCatalog
@@ -507,6 +522,55 @@ func newLocalExecutionProfile(
 			MaxTransactionAttempts: 5,
 		},
 	)
+}
+
+func refreshExecutionProfileAtStartup(
+	ctx context.Context,
+	attempts int,
+	backoff time.Duration,
+	refresh func(context.Context) error,
+) error {
+	if ctx == nil || refresh == nil || attempts < 1 || backoff <= 0 {
+		return errors.New("PaaS execution profile startup retry configuration is invalid")
+	}
+	for attempt := 1; attempt <= attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		err := refresh(ctx)
+		if err == nil || !retryableExecutionProfileStartupFailure(err) || attempt == attempts {
+			return err
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return errors.New("PaaS execution profile startup retry is unavailable")
+}
+
+func retryableExecutionProfileStartupFailure(err error) bool {
+	var failure *workerFailure
+	if !errors.As(err, &failure) || failure == nil {
+		return false
+	}
+	switch failure.stage {
+	case workerFailureExecutionEngineTimeout,
+		workerFailureExecutionComposeTimeout,
+		workerFailureExecutionObserveTimeout,
+		workerFailureExecutionObserveDown:
+		return true
+	default:
+		return false
+	}
 }
 
 func runWorkerLoop(
