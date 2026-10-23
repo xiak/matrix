@@ -1,6 +1,6 @@
 # FEAT-IAM-010：IAM 控制台
 
-- 状态：实施中；当前已接受的签名产品源码为`5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7、`contractRevision=37`。精确独立CI、同源签名A/B完整离线生命周期及重启后复验均已通过，发布证据归FEAT-005。页面仅采纳本文件各自固定版本的真实证据：User资料/状态、Group Membership、Account安全设置及Group附件恢复已覆盖相应路径，固定9621另证明Group删除和GROUP/USER附件撤销的可见回执与权限/Audit后验。AccessKey正常生命周期及原命令恢复、Role创建/承担/准确Session撤销及附件REVOKE原回执现已有独立真实闭环；附件CREATE的其余恢复组合、日常改密及矩阵其余非Deferred路径仍须逐项实跑。当前签名通过不继承或补造新版本浏览器验收，整个FEAT仍为实施中。
+- 状态：实施中；当前已接受的签名产品源码为`5935fa5005529b2c4e1da943b98f49300430ba10`，IAM87/Audit39/PaaS7、`contractRevision=37`。精确独立CI、同源签名A/B完整离线生命周期及重启后复验均已通过，发布证据归FEAT-005。页面仅采纳本文件各自固定版本的真实证据：User资料/状态、Group Membership、Account安全设置及Group附件恢复已覆盖相应路径，固定9621另证明Group删除和GROUP/USER附件撤销的可见回执与权限/Audit后验。AccessKey正常生命周期及原命令恢复、Role创建/承担/准确Session撤销及附件REVOKE原回执、普通用户日常改密的撤销/保留其他会话两种选择现已有独立真实闭环；附件CREATE的其余恢复组合及矩阵其余非Deferred路径仍须逐项实跑。当前签名通过不继承或补造新版本浏览器验收，整个FEAT仍为实施中。
 - 依赖：各后端 FEAT 先通过对应真实路径；在现有控制面 UI owner 内增量替换。
 - Owner：UX/UI 工程师统一负责 IAM 页面、客户端交互、样式与浏览器验收；IAM 工程师负责后端契约、服务端权限及真实进程支持。全局导航/视觉体系沿用控制台 FEAT-007，不平行实现另一套 UI。
 
@@ -669,7 +669,9 @@ Group删除沿用原严格结果校验，并在对话框卸载后保留独立回
 
 既有`authorityprocess` owner提供同一个显式opt-in日常改密浏览器门禁。`MATRIX_IAM_DAILY_PASSWORD_REVOKE_OTHER_SESSIONS`省略或为`true`时检查默认退出其他会话，为`false`时要求页面显式取消该选项；其他值拒绝。两个模式各用独立空库，先准备同一普通User的两个有效generation-2 Session及一个已正常退出的Session，再由浏览器建立准确调用Session并提交下一密码，不另造套件或生产开关。
 
-两种选择都必须证明User/credential generation只推进一次、调用Session保持ACTIVE并迁移到新代次、原退出Session的状态/版本/generation/退出时间完全不变且其bearer继续401。`true`要求两个有效旧Session各只撤销一次且下一请求401；`false`要求两者继续ACTIVE、各只推进一次至新代次，下一请求仍返回原Account/User。精确Session总数和调用者集合不允许多出会话，旧密码拒绝、新密码正常登录、唯一本人`ui-password-*`成功事实及完整租户Audit链保持。当前仅默认测试、编译和静态检查通过；两种模式都未完成页面最终提交，不能记为真实浏览器通过，也不继承当前签名A/B的周边生命周期结论。
+两种选择都必须证明User/credential generation只推进一次、调用Session保持ACTIVE并迁移到新代次、原退出Session的状态/版本/generation/退出时间完全不变且其bearer继续401。`true`要求两个有效旧Session各只撤销一次且下一请求401；`false`要求两者继续ACTIVE、各只推进一次至新代次，下一请求仍返回原Account/User。精确Session总数和调用者集合不允许多出会话，旧密码拒绝、新密码正常登录、唯一本人`ui-password-*`成功事实及完整租户Audit链保持。
+
+UX/UI owner固定`8c19204f469a4d67c0a90d91753ca2c45f2ee322`记录的消费代码源`3afe96248`已在两个独立空库和真实IAM/Audit/PaaS进程上完成上述页面最终提交。两轮均使用固定PostgreSQL 18.6镜像`postgres@sha256:fc973eb97c9fd04bfa1840e0f510719a584ccb3be8debfe6a4144637a9dfe8cf`、GOMAXPROCS 2及1 GiB Go内存上限：默认`revokeOtherSessions=true`的测试/包分别为82.26/84.624秒，页面保持推荐选项并明确显示改密成功；`false`的测试/包分别为67.03/68.973秒，页面显式取消选项后明确显示改密成功。真实后验逐项证明User与credential generation只推进一次、调用Session保留并进入新代次、原退出Session不变、两个旧有效Session分别按选择撤销或保留、旧密码拒绝、新密码可登录、唯一成功事实进入完整租户Audit链。两只接受用任务容器均在精确ID、owner、purpose、task及空挂载核对后删除；这接受日常改密两种正常结果，不外推响应丢失恢复、签名release或其他页面路径。
 
 ### Account安全设置编辑
 

@@ -6,9 +6,10 @@
 
 - Repository https://github.com/xiak/matrix.git, branch feat/iam; local Git
   identity Xiak <Jellal@aliyun.com>.
-- The host goal is the bounded AccessKey/same-account Role real-console closure,
-  necessary fixes, independent verification and cleanup. Do not silently expand
-  it to every unaccepted IAM page. Check the live host status before acting.
+- The host goal is the bounded ordinary-User daily password-change console
+  closure: default revocation, explicit retention of still-valid peer Sessions,
+  uncertain-result failure closure, independent verification and cleanup. Do
+  not silently expand it to every unaccepted IAM page.
 - Latest pushed code is 571692dd277317091af077beba79fe13f509738d. From d1ab8268d,
   this slice only adds and corrects the existing authorityprocess User deletion
   browser fixture: fresh response/capability decode and exact disabled-Key403
@@ -30,7 +31,7 @@
   successful CI log audit remains e22d748/Verification39604675084 until IAM/011
   explicitly seals a newer one; do not infer it from job metadata.
 
-## Original goal completion audit
+## Completed AccessKey and Role goal
 
 - Read AGENTS, IAM/FEAT-IAM-010-console.md's AccessKey/Role section, then owning
   tests. IAM/007 owns Key rules, IAM/006 Role rules and IAM/011 independent CI.
@@ -60,6 +61,24 @@
   volume; eleven task paths were moved to the Windows recycle bin and verified
   absent from their original locations. No prune, wildcard, parent deletion,
   shared/remote resource or other task object was used.
+
+## Active daily password goal
+
+- UX/UI owner fixed `8c19204f469a4d67c0a90d91753ca2c45f2ee322`
+  records two accepted real-browser paths on production code source `3afe96248`.
+  Separate PostgreSQL 18.6 databases proved default `revokeOtherSessions=true`
+  and explicit `false`; caller, peer and previously revoked Session generations,
+  old/new password behavior, one success fact and the complete tenant Audit
+  chain were checked. Exact task containers were removed after each run.
+- Main `feat/iam` production consumers are unchanged from that fixed source for
+  this path. IAM/010 and IAM/011 now own the selectively adopted evidence; the
+  UX checkpoint and unrelated later candidate work are not imported.
+- The remaining bounded gap is the real uncertain-response boundary. Existing
+  component tests prove password clearing, same-owner write lock and late-result
+  rejection, but no real partial-response browser/process acceptance has yet
+  been adopted. Do not infer success or failure from whichever password later
+  authenticates, and do not invent a generic completion API without a FEAT
+  decision.
 
 ## Independent User deletion fixture
 
