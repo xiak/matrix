@@ -191,6 +191,32 @@ func TestWorkerLoopPersistentTransientRefreshUsesBackoff(t *testing.T) {
 	}
 }
 
+func TestExecutionProfileRefreshRetriesPersistedDegradedObservation(t *testing.T) {
+	refreshCalls := 0
+	readyCalls := 0
+	err := refreshReadyExecutionProfile(
+		context.Background(),
+		func(context.Context) error {
+			refreshCalls++
+			return nil
+		},
+		func(context.Context) error {
+			readyCalls++
+			return errors.New("native readiness detail must not escape")
+		},
+	)
+	if refreshCalls != 1 || readyCalls != 1 {
+		t.Fatalf("refresh/ready calls = %d/%d, want 1/1", refreshCalls, readyCalls)
+	}
+	if code := workerFailureCode(err); code != workerFailureExecutionObserveDown ||
+		!retryableExecutionProfileRefreshFailure(err) {
+		t.Fatalf("degraded refresh failure = %v / %q", err, code)
+	}
+	if err == nil || err.Error() != string(workerFailureExecutionObserveDown) {
+		t.Fatalf("degraded refresh exposed native detail: %v", err)
+	}
+}
+
 func TestWorkerLoopStopsOnTerminalRefreshFailure(t *testing.T) {
 	refreshCalls := 0
 	err := runWorkerLoop(

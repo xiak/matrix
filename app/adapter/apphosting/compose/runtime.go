@@ -68,22 +68,58 @@ type DataPurger interface {
 	PurgeData(context.Context, RuntimeProject, string) error
 }
 
-type LocalRuntime struct{}
+type runtimeReadiness func(context.Context) error
+
+type LocalRuntime struct {
+	readiness runtimeReadiness
+}
+
+type runtimeReadinessContextKey struct{}
+
+type runtimeReadinessProof struct {
+	runtime *LocalRuntime
+}
 
 func NewLocalRuntime() *LocalRuntime {
-	return &LocalRuntime{}
+	return &LocalRuntime{readiness: probeLocalRuntimeReadiness}
 }
 
 // Ready proves that both the local Docker Engine and the Compose plugin can
 // accept commands. Version/profile admission remains the installation
 // preflight's responsibility; the worker only needs a live effect boundary.
-func (*LocalRuntime) Ready(ctx context.Context) error {
+func (runtime *LocalRuntime) Ready(ctx context.Context) error {
 	if ctx == nil {
 		return errors.New("Docker Compose readiness context is required")
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	proof, proved := ctx.Value(runtimeReadinessContextKey{}).(runtimeReadinessProof)
+	if proved && proof.runtime == runtime {
+		return nil
+	}
+	if runtime == nil || runtime.readiness == nil {
+		return ErrRuntimeUnavailable
+	}
+	return runtime.readiness(ctx)
+}
+
+// ProveReady performs one live runtime check and returns a derived context
+// that lets dependencies sharing this exact runtime reuse that result within
+// the same readiness request. A different runtime or request still probes the
+// live boundary independently.
+func (runtime *LocalRuntime) ProveReady(ctx context.Context) (context.Context, error) {
+	if err := runtime.Ready(ctx); err != nil {
+		return nil, err
+	}
+	return context.WithValue(
+		ctx,
+		runtimeReadinessContextKey{},
+		runtimeReadinessProof{runtime: runtime},
+	), nil
+}
+
+func probeLocalRuntimeReadiness(ctx context.Context) error {
 	if _, err := runDocker(ctx, nil, "version", "--format", "{{.Server.Version}}"); err != nil {
 		return ErrRuntimeUnavailable
 	}

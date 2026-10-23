@@ -192,10 +192,11 @@ func run(ctx context.Context) (result error) {
 		executionProfileStartupAttempts,
 		executionProfileStartupBackoff,
 		func(refreshContext context.Context) error {
-			if refreshErr := executionProfile.Refresh(refreshContext); refreshErr != nil {
-				return failWorker(executionProfileRefreshFailure(refreshErr))
-			}
-			return nil
+			return refreshReadyExecutionProfile(
+				refreshContext,
+				executionProfile.Refresh,
+				executionProfile.Ready,
+			)
 		},
 	); err != nil {
 		if ctx.Err() != nil {
@@ -354,13 +355,14 @@ func run(ctx context.Context) (result error) {
 		if checkErr := artifacts.Ready(readinessContext); checkErr != nil {
 			return failWorker(workerFailureReadinessArtifact)
 		}
-		if checkErr := runtime.Ready(readinessContext); checkErr != nil {
+		provedRuntimeContext, checkErr := runtime.ProveReady(readinessContext)
+		if checkErr != nil {
 			return failWorker(workerFailureReadinessCompose)
 		}
-		if checkErr := executionProfile.Ready(readinessContext); checkErr != nil {
+		if checkErr := executionProfile.Ready(provedRuntimeContext); checkErr != nil {
 			return failWorker(workerFailureReadinessExecution)
 		}
-		if checkErr := managedServiceWorker.Ready(readinessContext); checkErr != nil {
+		if checkErr := managedServiceWorker.Ready(provedRuntimeContext); checkErr != nil {
 			return failWorker(workerFailureReadinessManagedService)
 		}
 		return nil
@@ -408,10 +410,11 @@ func run(ctx context.Context) (result error) {
 					return processed, nil
 				},
 				func(refreshContext context.Context) error {
-					if refreshErr := executionProfile.Refresh(refreshContext); refreshErr != nil {
-						return failWorker(executionProfileRefreshFailure(refreshErr))
-					}
-					return nil
+					return refreshReadyExecutionProfile(
+						refreshContext,
+						executionProfile.Refresh,
+						executionProfile.Ready,
+					)
 				},
 				config.workerID,
 				executionTargetRefresh,
@@ -419,6 +422,23 @@ func run(ctx context.Context) (result error) {
 			)
 		},
 	)
+}
+
+func refreshReadyExecutionProfile(
+	ctx context.Context,
+	refresh func(context.Context) error,
+	ready func(context.Context) error,
+) error {
+	if ctx == nil || refresh == nil || ready == nil {
+		return failWorker(workerFailureExecutionProfileRefresh)
+	}
+	if err := refresh(ctx); err != nil {
+		return failWorker(executionProfileRefreshFailure(err))
+	}
+	if err := ready(ctx); err != nil {
+		return failWorker(workerFailureExecutionObserveDown)
+	}
+	return nil
 }
 
 func executionProfileRefreshFailure(err error) workerFailureStage {
