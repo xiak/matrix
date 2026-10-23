@@ -866,6 +866,86 @@ func TestEdgeClientReadsCurrentAccessAnalyzerDetail(t *testing.T) {
 	}
 }
 
+func TestEdgeClientReadsCurrentSecurityReportDetail(t *testing.T) {
+	observed := time.Date(2026, time.October, 23, 1, 2, 3, 456000000, time.UTC)
+	report := iamv1.AccountSecurityReport{
+		Metadata: iamv1.AccountSecurityReportMetadata{
+			APIVersion: iamv1.APIVersion, Kind: "AccountSecurityReportMetadata",
+			ID: "report-phase1", AccountID: "account-phase1",
+			FormatVersion: iamv1.SecurityReportFormatVersion,
+			ObservedAt:    observed, ExpiresAt: observed.Add(iamv1.SecurityReportRetention),
+			UserCount: 1, AccessKeyCount: 0, RowCount: 2,
+		},
+		AccountSecuritySettingsVersion: 1,
+		Coverage:                       iamv1.SecurityReportCoverageContract(),
+		Users: []iamv1.SecurityReportUser{{
+			ID: "root-phase1", LoginName: "root.phase1", DisplayName: "Root Phase1",
+			Status: iamv1.PrincipalActive, Root: true, ResourceVersion: 1,
+			CreatedAt: observed.Add(-time.Hour),
+			MFA:       iamv1.SecurityReportMFAState{EnrollmentState: "UNKNOWN"},
+			LastPasswordLogin: iamv1.SecurityReportTimeObservation{
+				State: iamv1.SecurityReportNotObservedInRetainedIAMState,
+			},
+		}},
+		AccessKeys: []iamv1.SecurityReportAccessKey{},
+	}
+	_, documentDigest, err := iamv1.CanonicalizeAccountSecurityReportDocument(report)
+	if err != nil {
+		t.Fatal("canonicalize security report fixture", err)
+	}
+	report.Metadata.DocumentDigest = documentDigest
+	csvDocument, csvDigest, err := iamv1.EncodeAccountSecurityReportCSV(report)
+	if err != nil {
+		t.Fatal("encode security report fixture", err)
+	}
+	report.Metadata.CSVContentDigest, report.Metadata.CSVBytes = csvDigest, uint32(len(csvDocument))
+	resource := iamv1.ResourceReference{Kind: iamv1.ResourceSecurityReport, ID: string(report.Metadata.ID)}
+	detail := iamv1.AccountSecurityReportDetail{
+		APIVersion: iamv1.APIVersion, Kind: "AccountSecurityReportDetail", Report: report,
+		Capabilities: []iamv1.ActionCapability{{
+			Action: iamv1.ActionIAMSecurityReportDownload, Resource: resource,
+			Available: false, RestrictionReason: iamv1.CapabilityAuthorityRequired,
+		}},
+	}
+	if iamv1.ValidateAccountSecurityReportDetail(detail) != nil {
+		t.Fatal("security report detail fixture is invalid")
+	}
+
+	for _, test := range []struct {
+		name string
+		body any
+		want bool
+	}{
+		{name: "current detail", body: detail, want: true},
+		{name: "superseded flat report", body: report, want: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodGet ||
+					request.URL.Path != "/api/iam/v1/account/security-reports/"+string(report.Metadata.ID) ||
+					request.Header.Get("Authorization") != "Bearer fixture-bearer" {
+					response.Header().Set("Content-Type", "application/problem+json")
+					response.WriteHeader(http.StatusBadRequest)
+					_, _ = response.Write([]byte(`{}`))
+					return
+				}
+				response.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(response).Encode(test.body)
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			actual, err := client.readSecurityReport(context.Background(), []byte("fixture-bearer"), report.Metadata.ID)
+			if (err == nil) != test.want {
+				t.Fatalf("read accepted=%t, want %t: %v", err == nil, test.want, err)
+			}
+			if test.want && !equalJSON(actual, report) {
+				t.Fatal("read security report differs from detail content")
+			}
+		})
+	}
+}
+
 func TestSignedManagedProductActivationReusesTheAccountActivation(t *testing.T) {
 	service := managedservicev1.ServiceDefinitionReference{
 		ID: managedservicev1.PostgreSQLServiceID, Revision: 1,

@@ -462,11 +462,12 @@ func (client *edgeClient) readSecurityReport(
 		return iamv1.AccountSecurityReport{}, err
 	}
 	defer clear(response.body)
-	var result iamv1.AccountSecurityReport
-	if decodeOne(response.body, &result) != nil || iamv1.ValidateAccountSecurityReport(result) != nil || result.Metadata.ID != reportID {
+	var result iamv1.AccountSecurityReportDetail
+	if decodeOne(response.body, &result) != nil || iamv1.ValidateAccountSecurityReportDetail(result) != nil ||
+		result.Report.Metadata.ID != reportID {
 		return iamv1.AccountSecurityReport{}, errors.New("IAM security report response failed")
 	}
-	return result, nil
+	return result.Report, nil
 }
 
 func (client *edgeClient) securityReportMissing(
