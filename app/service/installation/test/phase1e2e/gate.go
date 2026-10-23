@@ -136,6 +136,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("iam-login-current")
 	}
 	defer clear(bearer)
+	preBackupBearer := bearer
 	value.edge.addForbidden(bearer)
 	emit("iam-user-authority-through-apisix")
 	if err := value.prepareTenantRetention(ctx, bearer, newPassword, state.InstallationID); err != nil {
@@ -289,6 +290,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("release-b-upgrade-preservation")
+	postUpgradeBearer, err := value.edge.login(ctx, newPassword, "phase1-login-after-release-b")
+	if err != nil {
+		return fail("iam-login-after-release-b")
+	}
+	defer clear(postUpgradeBearer)
+	value.edge.addForbidden(postUpgradeBearer)
+	value.sensitive = append(value.sensitive, postUpgradeBearer)
+	bearer = postUpgradeBearer
 	if err := value.assertSecurityReportSnapshot(ctx, bearer, baselineReport, true); err != nil {
 		return err
 	}
@@ -345,12 +354,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
 		return err
 	}
-	rejected, err := value.edge.json(
-		ctx, http.MethodGet, "/api/iam/v1/auth/me", bearer, nil, nil, http.StatusUnauthorized,
-	)
-	clear(rejected.body)
-	if err != nil {
-		return fail("backup-recovery-old-session")
+	for _, staleBearer := range [][]byte{preBackupBearer, bearer} {
+		rejected, err := value.edge.json(
+			ctx, http.MethodGet, "/api/iam/v1/auth/me", staleBearer, nil, nil, http.StatusUnauthorized,
+		)
+		clear(rejected.body)
+		if err != nil {
+			return fail("backup-recovery-old-session")
+		}
 	}
 	recoveredBearer, err := value.edge.login(ctx, newPassword, "phase1-login-after-backup-recovery")
 	if err != nil {

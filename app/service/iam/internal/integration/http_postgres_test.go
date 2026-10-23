@@ -22279,8 +22279,12 @@ func TestIAMSecurityReportPostgres(t *testing.T) {
 		applied.Metadata.AccountID != document.Organization.ID || applied.Metadata.UserCount != 2 || applied.Metadata.AccessKeyCount != 1 {
 		t.Fatal("security report creation metadata differs from its authority snapshot")
 	}
+	replayBearer := localRecoveryLogin(t, handler, manager.LoginName+"@"+string(manager.AccountID), changedDeveloperPassword, false)
+	if replayBearer == managerBearer {
+		t.Fatal("security report replay did not use a distinct actor session")
+	}
 	var replay iamv1.CreateAccountSecurityReportResponse
-	call(http.MethodPost, "/v1/account/security-reports", managerBearer, create, http.StatusOK, &replay)
+	call(http.MethodPost, "/v1/account/security-reports", replayBearer, create, http.StatusOK, &replay)
 	if replay.Outcome != "EQUAL_REPLAY" || replay.Metadata != applied.Metadata {
 		t.Fatal("security report exact replay changed its snapshot")
 	}
