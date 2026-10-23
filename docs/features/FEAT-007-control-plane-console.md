@@ -2700,14 +2700,31 @@ the remaining timeouts are harmless flakes; the complete frontend gate
 remains open. No timeout, untouched page contract or failing scenario was
 relaxed to accept this candidate.
 
-Installation-time npm audit for that parent reported nine
-high and one critical advisory in unchanged Next/toolchain dependencies;
-neither newly pinned QR package appears in that report. This slice neither
-silently upgrades them nor claims their applicability or release acceptance
-has been resolved. Independent CI, the failed full-suite gate, dependency
-security review, real-device scanning and signed-runtime replay remain
-separate acceptance boundaries. No Go/API/SQL/profile, IAM FEAT, checkpoint
-or shared runtime process was changed.
+The release-candidate dependency replacement moves Next and
+`eslint-config-next` from 16.3.3 to 16.4.2, Vitest from 4.1.11 to 4.1.12 and
+their compatible transitive runtime/tooling to Vite 8.3.5, Sharp 0.35.5,
+`source-map-js` 1.2.2 and Undici 8.12.3. This closes the previously reported
+Next runtime, Sharp and source-map advisories without a compatibility alias or
+forced override. On supported Node 24.19.0/npm 11.6.4,
+`npm audit --omit=dev` reports zero vulnerabilities. The complete development
+tree still reports five high findings, all one unresolved
+`eslint-config-next -> @next/eslint-plugin-next -> fast-glob -> micromatch ->
+braces@3.0.3` chain under
+[GHSA-vfj7-8cjw-p6xm](https://github.com/advisories/GHSA-vfj7-8cjw-p6xm).
+Version 3.0.3 is the latest published `braces` release; npm's proposed fix
+would replace the matching Next 16 configuration with 14.2.35. The candidate
+therefore records this development-tool-only upstream risk instead of
+downgrading, forking or pretending that an override supplies a patched
+artifact.
+
+The replacement passed typecheck, lint, architecture, all 234 theme contrast
+pairs, the complete **80-file / 2,106-case** Vitest run and all eight Node
+export-boundary cases. Three production builds exported 59 pages, normalized
+57 segment paths and proved unset/`0` preview equivalence plus byte-identical
+Go embedding across all 322 files. The embedded build is
+`matrix-f54b1578f499abc8e086`; PaaS UI and full-repository Go test/vet passed.
+These source/build gates do not substitute for the receiving branch's exact
+CI, real-IAM browser acceptance or a signed installed-release replay.
 
 The Audit reader consumes the optional `authorityEvidenceDigest` from public
 Audit Event at fixed IAM/Audit source
