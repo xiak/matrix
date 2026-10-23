@@ -92,8 +92,15 @@ func restoreUpgradeConfiguration(plan platformcommand.UpgradePlan) error {
 	if err := validateUpgradeIdentity(source, plan.Target); err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
+	return restoreAuthenticatedUpgradeConfiguration(source, plan.Target)
+}
+
+func restoreAuthenticatedUpgradeConfiguration(
+	source platformcommand.InstallPlan,
+	target platformcommand.InstallPlan,
+) error {
 	return replaceReleaseConfiguration(
-		plan.Target, plan.Target.Bundle.Manifest, source.Bundle.Manifest,
+		target, target.Bundle.Manifest, source.Bundle.Manifest,
 	)
 }
 

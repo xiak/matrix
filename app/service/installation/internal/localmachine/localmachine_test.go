@@ -559,6 +559,76 @@ func TestPrepareReleaseRollbackRemovesOnlyCurrentAndRestoresPreviousConfiguratio
 	}
 }
 
+func TestAutomaticUpgradeRollbackAuthenticatesEachReleaseOnceAndReauthenticatesReplay(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine automatic rollback targets Linux")
+	}
+	upgrade := newUpgradePlan(t)
+	if err := configureUpgrade(
+		context.Background(), newImageRuntime(upgrade.Target.Bundle.Manifest, true), upgrade,
+	); err != nil {
+		t.Fatalf("configure rollback current release: %v", err)
+	}
+	previous, err := authenticateInstalledPlan(upgrade.Source)
+	if err != nil {
+		t.Fatalf("authenticate rollback predecessor fixture: %v", err)
+	}
+	defer clear(previous.TrustBytes)
+	currentExpectation, err := compileUpgradeExpectation(upgrade.Target)
+	if err != nil {
+		t.Fatalf("compile rollback current expectation: %v", err)
+	}
+	previousExpectation, err := compileUpgradeExpectation(previous)
+	if err != nil {
+		t.Fatalf("compile rollback predecessor expectation: %v", err)
+	}
+	runtimeBoundary := newAutomaticRollbackRuntime(
+		t, upgrade.Target, currentExpectation, previous, previousExpectation,
+	)
+	verifier := &recordingInstallationVerifier{}
+	verificationCalls := 0
+	verifyDirectory := func(root string, trustBytes []byte) (release.VerifiedBundle, error) {
+		verificationCalls++
+		bundle, verifyErr := release.VerifyDirectory(root, trustBytes)
+		if verifyErr == nil && verificationCalls == 2 {
+			unusedPayload := filepath.Join(
+				previous.Bundle.Root,
+				filepath.FromSlash(previous.Bundle.Manifest.Files[0].Path),
+			)
+			if removeErr := os.Remove(unusedPayload); removeErr != nil {
+				t.Fatalf("remove authenticated unused payload: %v", removeErr)
+			}
+		}
+		return bundle, verifyErr
+	}
+
+	if err := rollbackUpgradeWithVerifier(
+		context.Background(), runtimeBoundary, verifier, upgrade, verifyDirectory,
+	); err != nil {
+		t.Fatalf("automatic rollback with one authenticated view: %v", err)
+	}
+	if verificationCalls != 2 {
+		t.Fatalf("automatic rollback directory verifications = %d, want 2", verificationCalls)
+	}
+	if runtimeBoundary.source.composeCalls != 1 || verifier.calls != 1 {
+		t.Fatalf(
+			"automatic rollback start/verify calls = %d/%d, want 1/1",
+			runtimeBoundary.source.composeCalls, verifier.calls,
+		)
+	}
+	assertReleaseConfiguration(t, previous)
+
+	providerCalls := runtimeBoundary.calls
+	if err := rollbackUpgrade(
+		context.Background(), runtimeBoundary, verifier, upgrade,
+	); !errors.Is(err, platformcommand.ErrEffectVerification) {
+		t.Fatalf("automatic rollback replay after release drift = %v", err)
+	}
+	if runtimeBoundary.calls != providerCalls {
+		t.Fatal("automatic rollback replay reached provider effects before reauthentication")
+	}
+}
+
 func TestLoadInstallImagesUsesAuthenticatedStdinAndExactIdentities(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
@@ -2027,6 +2097,12 @@ type platformCleanupRuntime struct {
 	failedStartedRemoval   bool
 }
 
+type automaticRollbackRuntime struct {
+	cleanup *platformCleanupRuntime
+	source  *platformStartRuntime
+	calls   int
+}
+
 const platformTestConfigHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func newPlatformStartRuntime(
@@ -2104,6 +2180,33 @@ func newPlatformCleanupRuntime(
 		Config: platformContainerConfig{Labels: cloneTestLabels(selected.labels)},
 	}
 	return runtimeBoundary
+}
+
+func newAutomaticRollbackRuntime(
+	t *testing.T,
+	current platformcommand.InstallPlan,
+	currentExpectation platformComposeExpectation,
+	previous platformcommand.InstallPlan,
+	previousExpectation platformComposeExpectation,
+) *automaticRollbackRuntime {
+	t.Helper()
+	return &automaticRollbackRuntime{
+		cleanup: newPlatformCleanupRuntime(t, current, currentExpectation),
+		source:  newPlatformStartRuntime(previous, previousExpectation),
+	}
+}
+
+func (runtimeBoundary *automaticRollbackRuntime) Run(
+	ctx context.Context,
+	input io.Reader,
+	arguments ...string,
+) ([]byte, bool, error) {
+	runtimeBoundary.calls++
+	if len(runtimeBoundary.cleanup.containers) != 0 ||
+		len(runtimeBoundary.cleanup.networks) != 0 {
+		return runtimeBoundary.cleanup.Run(ctx, input, arguments...)
+	}
+	return runtimeBoundary.source.Run(ctx, input, arguments...)
 }
 
 func (runtimeBoundary *platformCleanupRuntime) Run(

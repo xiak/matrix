@@ -13,9 +13,21 @@ import (
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
 
+type releaseDirectoryVerifier func(string, []byte) (release.VerifiedBundle, error)
+
 func authenticateInstalledPlan(
 	installed platformcommand.InstalledPlan,
 ) (platformcommand.InstallPlan, error) {
+	return authenticateInstalledPlanWithVerifier(installed, release.VerifyDirectory)
+}
+
+func authenticateInstalledPlanWithVerifier(
+	installed platformcommand.InstalledPlan,
+	verifyDirectory releaseDirectoryVerifier,
+) (platformcommand.InstallPlan, error) {
+	if verifyDirectory == nil {
+		return platformcommand.InstallPlan{}, errors.New("release directory verifier is required")
+	}
 	if topology.ValidateNorthboundOrigin(installed.NorthboundOrigin, installed.Port) != nil {
 		return platformcommand.InstallPlan{}, errors.New("installed northbound origin is invalid")
 	}
@@ -41,7 +53,7 @@ func authenticateInstalledPlan(
 		clear(trustBytes)
 		return platformcommand.InstallPlan{}, err
 	}
-	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
+	bundle, err := verifyDirectory(releaseRoot, trustBytes)
 	if err != nil || bundle.Manifest.Release.ID != installed.ReleaseID ||
 		bundle.ManifestSHA256 != installed.ReleaseDigest ||
 		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
@@ -93,6 +105,16 @@ func authenticateInstalledPlan(
 }
 
 func verifiedStagedBundle(plan platformcommand.InstallPlan) (release.VerifiedBundle, error) {
+	return verifiedStagedBundleWithVerifier(plan, release.VerifyDirectory)
+}
+
+func verifiedStagedBundleWithVerifier(
+	plan platformcommand.InstallPlan,
+	verifyDirectory releaseDirectoryVerifier,
+) (release.VerifiedBundle, error) {
+	if verifyDirectory == nil {
+		return release.VerifiedBundle{}, errors.New("release directory verifier is required")
+	}
 	root, err := managedPath(
 		plan.Root,
 		filepath.FromSlash(layout.ReleaseDirectory(plan.Bundle.Manifest.Release.ID)),
@@ -100,7 +122,7 @@ func verifiedStagedBundle(plan platformcommand.InstallPlan) (release.VerifiedBun
 	if err != nil {
 		return release.VerifiedBundle{}, err
 	}
-	staged, err := release.VerifyDirectory(root, plan.TrustBytes)
+	staged, err := verifyDirectory(root, plan.TrustBytes)
 	if err != nil || staged.ManifestSHA256 != plan.Bundle.ManifestSHA256 ||
 		staged.Manifest.Release.ID != plan.Bundle.Manifest.Release.ID {
 		return release.VerifiedBundle{}, errors.New("staged release differs from the installation plan")
@@ -121,7 +143,17 @@ func verifiedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, err
 	}
-	compiled, err := topology.Compile(staged.Manifest, topology.Options{
+	plan.Bundle = staged
+	return authenticatedInstallationConfiguration(plan)
+}
+
+// authenticatedInstallationConfiguration consumes a plan whose exact bundle
+// was authenticated earlier in the same command. Payloads opened by later
+// effects retain their own same-file-descriptor verification boundary.
+func authenticatedInstallationConfiguration(
+	plan platformcommand.InstallPlan,
+) (verifiedInstallation, error) {
+	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
 		InstallationID:   plan.InstallationID,
 		Root:             plan.Root,
 		Listener:         plan.Listener,
@@ -131,7 +163,7 @@ func verifiedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, err
 	}
-	catalog, err := artifactCatalogConfig(staged.Manifest)
+	catalog, err := artifactCatalogConfig(plan.Bundle.Manifest)
 	if err != nil {
 		return verifiedInstallation{}, errors.New("generated artifact catalog is invalid")
 	}
@@ -165,6 +197,6 @@ func verifiedInstallationConfiguration(
 		return verifiedInstallation{}, err
 	}
 	return verifiedInstallation{
-		bundle: staged, topology: compiled, composePath: composePath,
+		bundle: plan.Bundle, topology: compiled, composePath: composePath,
 	}, nil
 }

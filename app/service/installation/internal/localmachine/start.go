@@ -165,6 +165,29 @@ func startInstallation(
 	if err != nil {
 		return err
 	}
+	return startPreparedInstallation(ctx, runtimeBoundary, installation, expectation)
+}
+
+func startAuthenticatedInstallation(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+) error {
+	installation, expectation, err := prepareAuthenticatedPlatformObservation(
+		ctx, runtimeBoundary, plan,
+	)
+	if err != nil {
+		return err
+	}
+	return startPreparedInstallation(ctx, runtimeBoundary, installation, expectation)
+}
+
+func startPreparedInstallation(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	installation verifiedInstallation,
+	expectation platformComposeExpectation,
+) error {
 
 	complete, err := observePlatformProject(ctx, runtimeBoundary, expectation)
 	if err != nil {
@@ -244,6 +267,29 @@ func preparePlatformObservation(
 	if err != nil {
 		return verifiedInstallation{}, platformComposeExpectation{}, err
 	}
+	return verifyPlatformImages(ctx, runtimeBoundary, installation, expectation)
+}
+
+func prepareAuthenticatedPlatformObservation(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+) (verifiedInstallation, platformComposeExpectation, error) {
+	installation, expectation, err := prepareAuthenticatedPlatformExpectation(
+		ctx, runtimeBoundary, plan,
+	)
+	if err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, err
+	}
+	return verifyPlatformImages(ctx, runtimeBoundary, installation, expectation)
+}
+
+func verifyPlatformImages(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	installation verifiedInstallation,
+	expectation platformComposeExpectation,
+) (verifiedInstallation, platformComposeExpectation, error) {
 	for _, image := range installation.bundle.Manifest.Images {
 		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
 		if inspectErr != nil {
@@ -270,6 +316,28 @@ func preparePlatformExpectation(
 			platformcommand.ErrEffectVerification, err,
 		)
 	}
+	return preparePlatformExpectationFromInstallation(ctx, runtimeBoundary, installation)
+}
+
+func prepareAuthenticatedPlatformExpectation(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+) (verifiedInstallation, platformComposeExpectation, error) {
+	installation, err := authenticatedInstallationConfiguration(plan)
+	if err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, errors.Join(
+			platformcommand.ErrEffectVerification, err,
+		)
+	}
+	return preparePlatformExpectationFromInstallation(ctx, runtimeBoundary, installation)
+}
+
+func preparePlatformExpectationFromInstallation(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	installation verifiedInstallation,
+) (verifiedInstallation, platformComposeExpectation, error) {
 	expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
 	if err != nil || expectation.Name != installation.topology.ProjectName {
 		return verifiedInstallation{}, platformComposeExpectation{}, errors.Join(
@@ -298,6 +366,29 @@ func inspectReadyInstalledPlatform(
 	if err != nil {
 		return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, err
 	}
+	return inspectReadyPreparedPlatform(ctx, runtimeBoundary, installation, expectation)
+}
+
+func inspectReadyAuthenticatedPlatform(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+) (verifiedInstallation, platformComposeExpectation, platformProjectObservation, error) {
+	installation, expectation, err := prepareAuthenticatedPlatformObservation(
+		ctx, runtimeBoundary, plan,
+	)
+	if err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, err
+	}
+	return inspectReadyPreparedPlatform(ctx, runtimeBoundary, installation, expectation)
+}
+
+func inspectReadyPreparedPlatform(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	installation verifiedInstallation,
+	expectation platformComposeExpectation,
+) (verifiedInstallation, platformComposeExpectation, platformProjectObservation, error) {
 	observation, exists, err := inspectOwnedPlatformProject(ctx, runtimeBoundary, expectation)
 	if err != nil {
 		return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, err
