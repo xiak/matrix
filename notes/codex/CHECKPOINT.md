@@ -2,100 +2,68 @@
 
 > Non-authoritative portable memory. Validate Git, the host goal and the owning FEAT.
 
-## Pushed milestone
+## Pushed release-candidate milestone
 
-- Repository https://github.com/xiak/matrix.git, branch feat/iam; local Git
-  identity Xiak <Jellal@aliyun.com>.
-- The host goal is the bounded AccessKey/same-account Role real-console closure,
-  necessary fixes, independent verification and cleanup. Do not silently expand
-  it to every unaccepted IAM page. Check the live host status before acting.
-- Latest pushed code is 571692dd277317091af077beba79fe13f509738d. From d1ab8268d,
-  this slice only adds and corrects the existing authorityprocess User deletion
-  browser fixture: fresh response/capability decode and exact disabled-Key403
-  versus deleted-Key401. No production API, SQL, Profile or UI changes.
-- The embedded User deletion consumer remains fixed
-  b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f, build
-  matrix-a6f26f9b65bd7e6b26c1. Existing adoption and IAM/010 own its fixed
-  donors, red/green regressions, double export and 324-file equivalence.
-- Verification39808302366 attempt1 is exact571 and completed/success; all
-  nineteen jobs were independently confirmed through GitHub API. The prior
-  b2ae Verification39794059308 attempt1 now also has nineteen completed/success
-  jobs, including authority-managed-products119880681664. The old metadata
-  discrepancy is resolved without rerunning. This is run/job verification,
-  not a full-log audit or opt-in browser acceptance; IAM/011 owns the evidence.
-- Latest accepted signed production source remains
-  5935fa5005529b2c4e1da943b98f49300430ba10, IAM/Audit/PaaS87/39/7+r37.
-  Sole rolling data predecessor is 08e1dc4a6ce81386ea7223e62d03356f82aeee58,
-  86/39/7+r36. FEAT-005 owns signed lifecycle acceptance. The latest complete
-  successful CI log audit remains e22d748/Verification39604675084 until IAM/011
-  explicitly seals a newer one; do not infer it from job metadata.
+- Repository `https://github.com/xiak/matrix.git`, branch
+  `feat/iam-console-release-candidate`; repository-local Git identity is exactly
+  `Xiak <Jellal@aliyun.com>`.
+- Latest pushed integration source is `4b9080a33`. It composes the current IAM
+  branch head `1da954e84` (production-code milestone `571692dd2`) with the
+  verified console UX branch `ed001f9ef` (latest source fix `8b4cc05d1`).
+- Ownership was kept explicit: IAM backend, IAM FEATs and authority-process
+  tests remain from the IAM branch. The overlay is limited to the console
+  frontend and embedded export, its web-server contract test, FEAT-007 and its
+  adoption/research owners. Old UX backend, provisioner and process-test slices
+  were not imported.
+- Embedded console build is `matrix-83584a7392a45b794192`.
 
-## Original goal completion audit
+## Verified evidence at `4b9080a33`
 
-- Read AGENTS, IAM/FEAT-IAM-010-console.md's AccessKey/Role section, then owning
-  tests. IAM/007 owns Key rules, IAM/006 Role rules and IAM/011 independent CI.
-- K1 accepted at fixed113a2299, code08e0d76/embedded e22: seven actual page
-  commands, one-time Secret dismissal/navigation, two real signing Keys,
-  disable/enable/delete, quota release and replacement. Process root passed
-  727.31 seconds/race730.876 with unique facts and complete Audit chain.
-- K2 SET_STATUS, NETWORK and DELETE each have separate fresh PG18/process/page
-  response-loss evidence, exact original replay, independent current readback,
-  unique effects and complete tenant chain in010. No API-only substitute.
-- R1 accepted at fixed382243922/codeb3c3: page Role/Trust/boundary/attachment,
-  one assumption, application200/Audit403 and exact RoleSession revocation.
-  Root834.25 seconds/race837.760, source Session and independent sibling intact,
-  BLOCKED then explicit source validation200 and source application403.
-- R2 accepted at fixedb3bd039: root325.73 seconds/race329.294. One page attachment
-  revocation, real partial-response loss, one exact receipt GET and zero replay
-  writes. Same Role401 before natural expiry, explicit source200/application403,
-  unique completion/outbox/Audit and full chain. Its own fixture was cleaned.
-  The earlier dea0 run remains failed; the actual HTTP assembly fixed the
-  hijackable-connection defect without changing production behavior.
-- K1/K2/R1/R2 are accepted at their exact sources. Necessary independent CI
-  metadata is now settled. Unused own resource cleanup remains incomplete;
-  do not rerun accepted journeys or redefine completion to exclude cleanup.
-- On 2026-10-23 read-only inspection still found the original four denied
-  containers, ten task paths and the later User fixture's PG/network/root.
-  Four PG containers run and one diagnostic container is stopped. A cleanup
-  tool rejection occurred before launch, not after partial success. Do not
-  bypass it through a split command, another executor, rename, parent deletion
-  or another task. Exact local handles remain in this thread's tool evidence,
-  not portable assumptions. No cleanup capability change has been established.
+- Frontend install and source gates passed: typecheck, lint, architecture,
+  234 theme-contrast pairs, 80 test files / 2106 tests, and eight Node export
+  tests.
+- Static export and embed verification passed: 59 pages, 57 normalized routes,
+  and 324 source/export/embed files byte-equivalent. PaaS UI Go test and vet
+  passed.
+- Full repository `go test -p 2 ./...` and `go vet -p 2 ./...` passed without
+  creating another Docker/PostgreSQL fixture.
+- In the built-in browser, the integrated MOCK console entered successfully,
+  opened the User directory and a User detail, kept Delete disabled for an
+  active User with an explanatory reason, navigated through Products & Services
+  to Cloud MySQL, and rendered the common opt-in gate. The browser emitted no
+  warning or error for this journey.
+- The MOCK service opt-in gate states that enabling a service creates no
+  resource permission and links IAM authorization separately. Its consent is
+  explicit and its action stays disabled until accepted.
 
-## Independent User deletion fixture
+## Unaccepted boundaries
 
-- This is not an addition to the scoped K1/K2/R1/R2 goal. Existing IAM/010 owns
-  the design, accepted consumer evidence and remaining NORMAL/RESPONSE_LOSS
-  browser gates; both remain unaccepted. No new deletion completion API exists.
-- At fixed571 the eight observation cases passed race3.581 seconds; default
-  process/architecture passed5.327/1.899 seconds and vet passed. Default skip
-  of the LIVE entry is not a real database/browser run.
-- A fresh bounded PG18.6 NORMAL fixture completed the real credential/resource
-  and disabled-User preconditions. UX inspected the precise target and the
-  confirmation UI but did not submit. The actual test ended1800.06 seconds
-  with observation timeout, package1802.586 seconds/exit1, not a product deletion
-  failure or success. Read-only postcheck: DISABLED/version3, no tombstone,
-  zero deletion facts; no page POST, receipt or finish marker. RESPONSE_LOSS
-  never started. The old destination and target must not be reused.
-- Child processes, listener and external DB connections are gone. The new PG,
-  network and temporary root remain after a pre-launch cleanup refusal. Do
-  not create another idle fixture or transfer the old human confirmation to
-  new objects. UX has been told why a new safely-cleanable fixture is not ready.
+- This is a pushed integration candidate, not a signed final release. Read the
+  exact remaining acceptance gates from FEAT-007, IAM/FEAT-IAM-010 and
+  IAM/FEAT-IAM-011 rather than copying them into this checkpoint.
+- Real User deletion NORMAL and RESPONSE_LOSS browser journeys remain
+  unaccepted. The expired prior target was still disabled at version 3 with no
+  tombstone, deletion fact, page POST, receipt or finish marker; RESPONSE_LOSS
+  never started. A prior confirmation must not be transferred to another
+  target.
+- Cleanup remains policy-blocked. Read-only inspection found five owned
+  containers and eleven related paths. The rejection happened before cleanup
+  launched. Do not bypass it through another executor, split command,
+  delegation, rename or parent deletion.
+- `npm ci` reported the lockfile's current dependency audit findings (two
+  moderate, ten high and one critical). Do not run an unscoped audit fix or
+  claim the dependency gate resolved; give it an owning dependency slice.
+- Previously accepted K1/K2/R1/R2 evidence and the signed installed-release
+  baseline remain owned by the IAM FEATs. Do not rerun them merely to restate
+  acceptance, and do not infer a new signed release from this integration
+  branch.
 
-## Coordination and operating boundaries
+## Continuation route
 
-- UX/UI owner:01a07b21-9a0d-7fd0-b090-7827ce18262e. It owns browser actions and
-  its own branch, never this checkout. Broad user authorization covers product
-  decisions; an actual tool action-time confirmation cannot be self-approved.
-  Do not use API writes to pretend a browser gate passed.
-- Test Expert:01a12f7b-be04-7590-acb1-3ba4f0dab999. Keep only its existing
-  monitor and preserve any unavailable log-reading boundary. Do not create
-  another chat/agent or request cleanup through it.
-- Other UI work, including the separately accepted Policy SET_DEFAULT journey,
-  is recorded in010 and is not a new dependency for this bounded goal. Do not
-  consume later UX MOCK work or its acceptance status merely to fill wait time.
-- Own unique labels and limits; GOMAXPROCS2/-p2, heavy gates serial. Node22 and
-  bounded workers are process-local, not a global nvm change. No prune, shared
-  or remote restart, other Phase WIP, retained install or remote test-host use.
-- Existing Markdown owners only. This checkpoint summarizes pushed work and
-  verified evidence; no machine-local paths, new diary or parallel matrix.
+- Read `AGENTS.md`, then the directly owning FEAT document and code/tests.
+  FEAT-007 owns console UX and export evidence; IAM/010 owns browser/runtime
+  journeys; IAM/011 owns independent CI evidence.
+- Validate branch/remote equality and the current host goal before acting.
+  Keep the MOCK experience inspectable while closing remaining release gates.
+- Preserve replacement-first changes and current ownership boundaries. Do not
+  add compatibility copies, duplicate status documents or a second checkpoint.
