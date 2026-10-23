@@ -55,7 +55,7 @@
 
 固定`3afe9624808d323e2d8988dfd033d8544509183a`只修正User删除验收探针必填的显式空权限边界；NORMAL与RESPONSE_LOSS真实浏览器和权威后验均已由010接受。其仅改文档的后继`2df38c8b863e57ea52feb94180c157107a5902c7`已由[Verification39895467786](https://github.com/xiak/matrix/actions/runs/39895467786) attempt1核实准确SHA、整轮及十九项job全部completed/success，因此相同生产/测试树的独立CI门禁闭合；本次没有读取或封存完整日志，不外推必跑根明细、真实页面或签名发布。生产Profile与已接受签名组合不变。
 
-同日独立核对固定`b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f`的[Verification39794059308](https://github.com/xiak/matrix/actions/runs/39794059308) attempt1，准确SHA、整轮及十九项job全部为completed/success，包括`authority-managed-products`119880681664；原状态不一致已消除，没有重新运行。K1/K2/R1/R2及独立SET_DEFAULT页面仍按010各自固定源码和实际后验接受，不继承为User删除。当前NORMAL与RESPONSE_LOSS任务专属PG均已按准确ID与标签清理；既有四个被拒绝清理的历史残留容器仍存在，不能绕过原拒绝或将全部现场清理标为完成。
+同日独立核对固定`b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f`的[Verification39794059308](https://github.com/xiak/matrix/actions/runs/39794059308) attempt1，准确SHA、整轮及十九项job全部为completed/success，包括`authority-managed-products`119880681664；原状态不一致已消除，没有重新运行。K1/K2/R1/R2及独立SET_DEFAULT页面仍按010各自固定源码和实际后验接受，不继承为User删除。2026-10-23最终收尾重新核对标签、任务标识、网络成员、卷引用和绝对路径边界后，以Docker原生命令删除五个本任务容器、四个独占网络和一个匿名卷；十一项本任务临时路径移入Windows回收站并从原位置验证不存在。未使用`prune`、通配或父目录删除，也未操作共享、远端或其他任务资源。
 
 固定`fe6e5220efc602fbe7744f416078288527a9fcd9`的[Verification39775416795](https://github.com/xiak/matrix/actions/runs/39775416795) attempt1于2026-10-22 21:39:56+08通过GitHub API核实准确SHA、整轮completed/success及十九项job全部成功，包括十四条authority lane、Go、console、node-process、installation-postgres-ha和最终authority-process汇总。本次没有读取或封存完整日志，不能把终态扩为所有必跑根日志已审计、真实Role删除浏览器或后继User删除已接受；发布Profile和已接受签名组合不变。
 
@@ -411,7 +411,7 @@ Release D的配额恢复还证明命令回执与资源读取相互独立：既�
 
 固定`6298e7532`的显式opt-in浏览器门禁已在全新受限PostgreSQL 18和真实IAM/Audit/PaaS进程上完成普通User首次登录强制改密：浏览器用初始密码建立受限Session，从纯页面提交最终密码并进入IAM概览；数据库证明credential generation单调前进、另一条受限Session撤销、仅调用Session保留且同步到新generation，旧密码401、新密码可重新登录，唯一本人密码变更事实进入完整租户Audit链。fixture/race package分别为76.68/80.216秒，任务资源在零外部客户端后精确清理。该本地证据关闭IAM-UI-02的首次登录最终改密页面缺口，不替代日常主动改密选择、响应丢失、TOTP、签名release或当前候选独立CI。
 
-当前消费代码源`3afe96248`又在两个独立PostgreSQL 18.6空库上完成普通User日常改密的两种页面选择。`revokeOtherSessions=true`的测试/包82.26/84.624秒通过，两个旧有效Session各只撤销一次；`false`的测试/包67.03/68.973秒通过，两个旧有效Session各只迁移一次并继续返回原Account/User。两轮都证明调用Session保留、原退出Session不变、User/credential generation单调推进一次、旧密码401、新密码登录成功、唯一本人成功事实进入完整租户Audit链；任务容器在精确标签和空挂载核对后删除。该证据接受正常日常改密选择，不代替UNKNOWN恢复、签名release或当前候选独立CI。
+UX/UI owner固定`8c19204f469a4d67c0a90d91753ca2c45f2ee322`记录的消费代码源`3afe96248`又在两个独立PostgreSQL 18.6空库上完成普通User日常改密的两种页面选择。`revokeOtherSessions=true`的测试/包82.26/84.624秒通过，两个旧有效Session各只撤销一次；`false`的测试/包67.03/68.973秒通过，两个旧有效Session各只迁移一次并继续返回原Account/User。两轮都证明调用Session保留、原退出Session不变、User/credential generation单调推进一次、旧密码401、新密码登录成功、唯一本人成功事实进入完整租户Audit链；任务容器在精确标签和空挂载核对后删除。该证据接受正常日常改密选择，不代替UNKNOWN恢复、签名release或当前候选独立CI。
 
 后继固定`18c115fe5007e36b7369e74f1c5c065952c0df32`包含上述首次改密门禁、Group级联删除fixture、从UX固定`db4ce3f51febf30975ca616bbff221e30a11f031`选择性采用的Group回执/导航客户端及本分支重建的324项嵌入资产，不改变后端API、SQL或发布Profile。[Verification 38984154633](https://github.com/xiak/matrix/actions/runs/38984154633)已由测试owner核实19个job、370个step全部终态，19项均success；14个authority lane的57个顶层根实际RUN/PASS，容量3100个样本无失败。`console`在Node22.22.2/npm11.6.4通过75个文件、1703项Vitest、8项Node测试、234组对比度和两次324文件确定性导出；Group导航20项包含busy guard卸载、准确回执计数以及403/409/503、非法回执和迟到响应的失败关闭。本轮默认CI未设置8个browser flag，不能把组件成功解释为真实Group删除、首次改密或签名APISIX页面验收；7个真实邮件子测试因无专属Postfix明确SKIP，也不接受真实SMTP。
 
