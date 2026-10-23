@@ -381,6 +381,7 @@ const (
 	authorityProcessPersonalSecurityBrowser
 	authorityProcessBrowser
 	authorityProcessCommandRecoveryBrowser
+	authorityProcessServiceActivationBrowser
 	authorityProcessAccountLifecycleRecoveryBrowser
 	authorityProcessPolicyMutationRecoveryBrowser
 	authorityProcessUserManagementRecoveryBrowser
@@ -487,6 +488,22 @@ func TestIAMManagedServiceCommandRecoveryConsoleBrowser(t *testing.T) {
 	}
 	_ = managedProductImagesFromEnvironment(t)
 	testIndependentAuthorityProcesses(t, authorityProcessCommandRecoveryBrowser)
+}
+
+// ServiceActivation is an Account-scoped singleton, not one of the generic
+// managed-service commands. This opt-in fixture proves its distinct recovery
+// boundary: one committed POST may lose its response, a temporary failure of
+// the exact activation GET stays UNKNOWN, and only an explicit later GET may
+// establish the current activated fact. The browser must never manufacture a
+// command receipt or issue a second write after the response is lost.
+func TestIAMServiceActivationConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_SERVICE_ACTIVATION_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_SERVICE_ACTIVATION_BROWSER=1 for the bounded LIVE service-activation browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("service-activation browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessServiceActivationBrowser)
 }
 
 // This opt-in fixture proves that a platform operator can recover one
@@ -709,6 +726,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		duration = 8 * time.Minute
 	} else if mode == authorityProcessBrowser || mode == authorityProcessIdentityBrowser ||
 		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
+		mode == authorityProcessServiceActivationBrowser ||
 		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser ||
 		mode == authorityProcessUserManagementRecoveryBrowser || mode == authorityProcessGroupMembershipRecoveryBrowser ||
 		mode == authorityProcessPolicyAttachmentRecoveryBrowser ||
@@ -1124,6 +1142,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	if mode == authorityProcessCommandRecoveryBrowser {
 		sensitive = append(sensitive, runIAMManagedServiceCommandRecoveryConsoleBrowser(
 			t, ctx, admin, root, temporary, managedRuntime,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
+		return
+	}
+	if mode == authorityProcessServiceActivationBrowser {
+		sensitive = append(sensitive, runIAMServiceActivationConsoleBrowser(
+			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)...)
 		return
@@ -3809,6 +3834,185 @@ func runIAMManagedServiceCommandRecoveryConsoleBrowser(
 		t.Fatalf("browser command recovery audit chain is incomplete: %#v", chain)
 	}
 	t.Logf("two isolated browser profiles recovered one committed %s after the client connection was closed; exactly one mutation, the raw public key, authoritative target, immutable Audit facts and the verified tenant chain all matched", commandType)
+	return []string{initial.Credential, memberLogin.Credential}
+}
+
+func runIAMServiceActivationConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	const loginName = "browser.service.activation"
+	member := createIAMUser(t, iamEndpoint, ownerBearer, loginName,
+		"Browser service activation", initialDeveloperPassword, "browser-service-activation-user-create")
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, member.ID,
+		iamv1.SystemPolicyServiceActivationAdministrator, "browser-service-activation-policy-grant")
+	initial := loginIAM(t, iamEndpoint, loginName+"@organization-process", initialDeveloperPassword,
+		"browser-service-activation-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-service-activation-password")
+	memberLogin := loginIAM(t, iamEndpoint, loginName+"@organization-process", changedDeveloperPassword,
+		"browser-service-activation-login")
+
+	base := paasEndpoint + "/managed-services/v1"
+	definitionResponse := performJSON(t, http.MethodGet,
+		base+"/services/"+managedservicev1.PostgreSQLServiceID, memberLogin.Credential, nil)
+	var definition managedservicev1.ServiceDefinition
+	if definitionResponse.Status != http.StatusOK || json.Unmarshal(definitionResponse.Body, &definition) != nil ||
+		managedservicev1.ValidateServiceDefinition(definition) != nil ||
+		definition.ID != managedservicev1.PostgreSQLServiceID ||
+		definition.State != managedservicev1.ServiceDefinitionAvailable ||
+		definition.ActivationPrerequisite != managedservicev1.ServiceActivationPermissionOnly {
+		t.Fatalf("read service-activation definition status=%d body=%s", definitionResponse.Status, definitionResponse.Body)
+	}
+	activationPath := "/api/managed-services/v1/service-activations/" + definition.ID
+	if response := performJSON(t, http.MethodGet, base+"/service-activations/"+definition.ID,
+		memberLogin.Credential, nil); response.Status != http.StatusNotFound {
+		t.Fatalf("service activation browser fixture is not clean: status=%d body=%s", response.Status, response.Body)
+	}
+
+	loss := &browserResponseLoss{
+		method:              http.MethodPost,
+		path:                "/api/managed-services/v1/service-activations",
+		postLossWritePrefix: "/api/managed-services/v1/service-activations",
+	}
+	probe := newServiceActivationReadProbe(definition.ID)
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start,
+		func(mux http.Handler) http.Handler {
+			fixture := iamConsoleBrowserFixtureHandler(mux, make(chan struct{}, 16), loss)
+			return probe.wrap(fixture, loss)
+		},
+	)
+	defer closeBrowser()
+	unknown := filepath.Join(temporary, "browser-service-activation-unknown")
+	finish := filepath.Join(temporary, "browser-service-activation-finished")
+	browserPath := "/console/products/" + definition.ID + "/"
+	t.Logf("SERVICE_ACTIVATION_BROWSER_FIXTURE url=%s%s unknown=%s finish=%s realm=%s@organization-process service=%s revision=%d digest=%s; sign in with the existing changed developer password, activate this service exactly once, confirm the committed response becomes explicit UNKNOWN after its first authoritative read returns temporarily unavailable, and create only the unknown marker while the frozen page offers a read-only check of the original result; wait for the continuation log before invoking that check once and creating the finish marker",
+		server.URL, browserPath, unknown, finish, loginName, definition.ID, definition.Revision, definition.ContentDigest)
+	waitForBrowserMarker(t, ctx, ui, unknown, "service activation UNKNOWN observation")
+
+	assertLoss := func(stage string) browserResponseLossObservation {
+		t.Helper()
+		observation := loss.snapshot()
+		if observation.Attempts != 1 || observation.SelectedAttempt != 1 || observation.MutationOverflow ||
+			!observation.ResponseLost || observation.BackendStatus != http.StatusCreated ||
+			!strings.HasPrefix(observation.IdempotencyKey, "ui-service-activation-") ||
+			managedservicev1.ValidateIdempotencyKey(observation.IdempotencyKey) != nil ||
+			observation.MutationHost == "" || observation.PostLossWrites != 0 ||
+			len(observation.MutationAttempts) != 1 || !observation.MutationAttempts[0].BackendCalled ||
+			!observation.MutationAttempts[0].SelectedForLoss {
+			t.Fatalf("%s service activation response-loss boundary was not exact: %#v", stage, observation)
+		}
+		return observation
+	}
+	unknownLoss := assertLoss("UNKNOWN")
+	var submitted managedservicev1.ActivateServiceRequest
+	expectedReference := managedservicev1.ServiceDefinitionReference{
+		ID: definition.ID, Revision: definition.Revision, ContentDigest: definition.ContentDigest,
+	}
+	if json.Unmarshal(unknownLoss.RequestBody, &submitted) != nil ||
+		managedservicev1.ValidateActivateServiceRequest(submitted) != nil || submitted.Service != expectedReference {
+		t.Fatalf("browser submitted a different service activation: %s", unknownLoss.RequestBody)
+	}
+	unknownReads := probe.snapshot()
+	if len(unknownReads.Attempts) != 1 || unknownReads.Attempts[0].RequestURI != activationPath ||
+		unknownReads.Attempts[0].Status != http.StatusServiceUnavailable ||
+		unknownReads.Attempts[0].AuthorizationDigest == sha256.Sum256(nil) {
+		t.Fatalf("service activation UNKNOWN did not stop after one failed authoritative read: %#v", unknownReads)
+	}
+	t.Logf("SERVICE_ACTIVATION_BROWSER_CONTINUE url=%s%s finish=%s; the exact POST is committed, its response was lost, and the first activation read failed. Invoke only the page's check-original-result action once; do not replay activation or create a new intent",
+		server.URL, browserPath, finish)
+	waitForBrowserMarker(t, ctx, ui, finish, "service activation explicit result check")
+
+	finalLoss := assertLoss("completed read")
+	if !bytes.Equal(finalLoss.RequestBody, unknownLoss.RequestBody) || finalLoss.IdempotencyKey != unknownLoss.IdempotencyKey {
+		t.Fatal("service activation UNKNOWN changed its frozen request commitment")
+	}
+	reads := probe.snapshot()
+	if len(reads.Attempts) != 2 || reads.Attempts[0].RequestURI != activationPath ||
+		reads.Attempts[1].RequestURI != activationPath ||
+		reads.Attempts[0].Status != http.StatusServiceUnavailable || reads.Attempts[1].Status != http.StatusOK ||
+		reads.Attempts[0].AuthorizationDigest != reads.Attempts[1].AuthorizationDigest {
+		t.Fatalf("service activation was not recovered by one explicit same-owner read: %#v", reads)
+	}
+
+	response := performJSON(t, http.MethodGet, base+"/service-activations/"+definition.ID,
+		memberLogin.Credential, nil)
+	var activation managedservicev1.ServiceActivation
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &activation) != nil ||
+		managedservicev1.ValidateServiceActivation(activation) != nil || activation.Service != expectedReference ||
+		activation.ResourceVersion != 1 {
+		t.Fatalf("read authoritative service activation status=%d body=%s", response.Status, response.Body)
+	}
+
+	var (
+		rowCount                                     int
+		serviceRevision, resourceVersion             int64
+		serviceDigest, idempotencyKey, requestDigest string
+		actorType, actorID, decisionID, requestID    string
+	)
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM managedservice.service_activations
+		WHERE tenant_id=$1 AND service_id=$2`, member.AccountID, definition.ID).Scan(&rowCount); err != nil || rowCount != 1 {
+		t.Fatalf("service activation rows=%d err=%v", rowCount, err)
+	}
+	if err := database.QueryRow(ctx, `SELECT service_revision,service_digest,resource_version,idempotency_key,
+		request_digest,activated_by_type,activated_by_id,iam_decision_id,request_id
+		FROM managedservice.service_activations WHERE tenant_id=$1 AND service_id=$2`,
+		member.AccountID, definition.ID).Scan(&serviceRevision, &serviceDigest, &resourceVersion, &idempotencyKey,
+		&requestDigest, &actorType, &actorID, &decisionID, &requestID); err != nil {
+		t.Fatalf("read authoritative service activation row: %v", err)
+	}
+	if serviceRevision != int64(definition.Revision) || serviceDigest != definition.ContentDigest || resourceVersion != 1 ||
+		idempotencyKey != finalLoss.IdempotencyKey || auditv1.ValidateDigest("requestDigest", requestDigest) != nil ||
+		actorType != string(iamv1.SubjectUser) || actorID != string(member.ID) ||
+		iamv1.ValidateID("iamDecisionId", decisionID) != nil || iamv1.ValidateID("requestId", requestID) != nil {
+		t.Fatalf("service activation row lost its exact authority: revision=%d digest=%s version=%d key=%s actor=%s/%s decision=%s request=%s",
+			serviceRevision, serviceDigest, resourceVersion, idempotencyKey, actorType, actorID, decisionID, requestID)
+	}
+
+	waitAllPaaSOutboxDelivered(t, ctx, database)
+	var outboxFacts int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM managedservice.audit_outbox
+		WHERE tenant_id=$1 AND event_document->>'action'=$2
+		  AND event_document#>>'{target,kind}'=$3 AND event_document#>>'{target,id}'=$4`,
+		member.AccountID, auditv1.ActionManagedServiceServiceActivationActivated,
+		auditv1.TargetServiceActivation, definition.ID).Scan(&outboxFacts); err != nil || outboxFacts != 1 {
+		t.Fatalf("service activation outbox facts=%d err=%v", outboxFacts, err)
+	}
+	page := queryAudit(t, auditEndpoint, ownerBearer, auditv1.QueryRecordsRequest{
+		PageSize: 100, Action: auditv1.ActionManagedServiceServiceActivationActivated,
+	}, http.StatusOK)
+	matches := 0
+	for _, record := range page.Records {
+		if record.Event.Target.Kind != auditv1.TargetServiceActivation || record.Event.Target.ID != definition.ID {
+			continue
+		}
+		matches++
+		if record.Source != auditv1.SourcePaaS || record.Event.TenantID != auditv1.TenantID(member.AccountID) ||
+			record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != auditv1.ActorID(member.ID) ||
+			string(record.Event.IAMDecisionID) != decisionID || record.Event.RequestID != requestID ||
+			record.Event.RequestDigest != requestDigest || record.Event.Result != auditv1.ResultSucceeded {
+			t.Fatalf("service activation Audit fact lost its original authority: %#v", record)
+		}
+	}
+	if matches != 1 || page.NextCursor != "" {
+		t.Fatalf("service activation Audit facts=%d cursor=%q, want one", matches, page.NextCursor)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(member.AccountID) {
+		t.Fatalf("service activation Audit chain is incomplete: %#v", chain)
+	}
+	t.Log("one browser service activation survived a lost success response and a temporarily unavailable exact read without replaying the write; the later explicit read, unique Account fact, original USER authority, single outbox fact and verified tenant Audit chain all matched")
 	return []string{initial.Credential, memberLogin.Credential}
 }
 
@@ -8876,6 +9080,15 @@ func (value *browserResponseLoss) markLost() {
 	value.responseLost = true
 }
 
+func (value *browserResponseLoss) responseWasLost() bool {
+	if value == nil {
+		return false
+	}
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return value.responseLost
+}
+
 func (value *browserResponseLoss) markPartialResponseComplete() {
 	if value == nil || value.holdFinished == nil {
 		return
@@ -8905,6 +9118,124 @@ func (value *browserResponseLoss) snapshot() browserResponseLossObservation {
 		PostLossWrites:   value.postLossWrites,
 		PostLossMethod:   value.postLossMethod, PostLossPath: value.postLossPath,
 		PostLossHost: value.postLossHost,
+	}
+}
+
+type serviceActivationReadAttempt struct {
+	RequestURI          string
+	Status              int
+	AuthorizationDigest [sha256.Size]byte
+}
+
+type serviceActivationReadObservation struct {
+	Attempts []serviceActivationReadAttempt
+}
+
+// serviceActivationReadProbe models an unavailable authoritative read after a
+// committed activation response is lost. It is deliberately narrower than a
+// generic command-result fixture: only the exact Account/service activation
+// GET is intercepted, only after genuine response loss, and only its first
+// post-loss read fails. A later read always reaches the real PaaS process.
+type serviceActivationReadProbe struct {
+	path string
+
+	mu       sync.Mutex
+	attempts []serviceActivationReadAttempt
+}
+
+func newServiceActivationReadProbe(serviceID string) *serviceActivationReadProbe {
+	return &serviceActivationReadProbe{
+		path: "/api/managed-services/v1/service-activations/" + serviceID,
+	}
+}
+
+func (value *serviceActivationReadProbe) wrap(
+	upstream http.Handler,
+	responseLoss *browserResponseLoss,
+) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != value.path || !responseLoss.responseWasLost() {
+			upstream.ServeHTTP(w, r)
+			return
+		}
+
+		attempt := serviceActivationReadAttempt{
+			RequestURI:          r.URL.RequestURI(),
+			AuthorizationDigest: sha256.Sum256([]byte(r.Header.Get("Authorization"))),
+		}
+		value.mu.Lock()
+		first := len(value.attempts) == 0
+		if first {
+			attempt.Status = http.StatusServiceUnavailable
+			value.attempts = append(value.attempts, attempt)
+		}
+		value.mu.Unlock()
+		if first {
+			w.Header().Set("Content-Type", "application/problem+json")
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = io.WriteString(w, `{"status":503,"code":"managedservice.unavailable","requestId":"service-activation-read-fault"}`)
+			return
+		}
+
+		captured := httptest.NewRecorder()
+		upstream.ServeHTTP(captured, r)
+		attempt.Status = captured.Code
+		value.mu.Lock()
+		value.attempts = append(value.attempts, attempt)
+		value.mu.Unlock()
+		copyBrowserFixtureResponse(w, captured)
+	})
+}
+
+func (value *serviceActivationReadProbe) snapshot() serviceActivationReadObservation {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return serviceActivationReadObservation{
+		Attempts: append([]serviceActivationReadAttempt(nil), value.attempts...),
+	}
+}
+
+func TestServiceActivationReadProbeRequiresCommittedLossAndExplicitRetry(t *testing.T) {
+	t.Parallel()
+	loss := &browserResponseLoss{}
+	probe := newServiceActivationReadProbe(managedservicev1.PostgreSQLServiceID)
+	upstreamCalls := 0
+	upstream := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamCalls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"kind":"ServiceActivation"}`)
+	})
+	handler := probe.wrap(upstream, loss)
+	path := "http://browser.test/api/managed-services/v1/service-activations/" + managedservicev1.PostgreSQLServiceID
+	request := func() *httptest.ResponseRecorder {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, path, nil)
+		r.Header.Set("Authorization", "Bearer service-activation-test")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		return w
+	}
+	if response := request(); response.Code != http.StatusOK || upstreamCalls != 1 || len(probe.snapshot().Attempts) != 0 {
+		t.Fatalf("pre-loss activation read was intercepted: status=%d upstream=%d observation=%#v",
+			response.Code, upstreamCalls, probe.snapshot())
+	}
+	loss.markLost()
+	if response := request(); response.Code != http.StatusServiceUnavailable || upstreamCalls != 1 {
+		t.Fatalf("first post-loss read did not fail before upstream: status=%d upstream=%d", response.Code, upstreamCalls)
+	}
+	if response := request(); response.Code != http.StatusOK || upstreamCalls != 2 {
+		t.Fatalf("explicit post-loss read did not reach upstream: status=%d upstream=%d", response.Code, upstreamCalls)
+	}
+	observation := probe.snapshot()
+	wantURI := "/api/managed-services/v1/service-activations/" + managedservicev1.PostgreSQLServiceID
+	if len(observation.Attempts) != 2 || observation.Attempts[0].Status != http.StatusServiceUnavailable ||
+		observation.Attempts[1].Status != http.StatusOK ||
+		observation.Attempts[0].RequestURI != wantURI || observation.Attempts[1].RequestURI != wantURI ||
+		observation.Attempts[0].AuthorizationDigest == sha256.Sum256(nil) ||
+		observation.Attempts[0].AuthorizationDigest != observation.Attempts[1].AuthorizationDigest {
+		t.Fatalf("activation read probe observation=%#v", observation)
 	}
 }
 

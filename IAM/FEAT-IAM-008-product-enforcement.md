@@ -78,6 +78,8 @@ list先做collection决定，再对受信catalog/数据库候选执行现有批�
 
 当前候选已落地五条HTTP路径：服务目录list/detail、Account开通目录list/detail及幂等activate。服务定义以精确`{id,revision,contentDigest}`承诺；同Account同服务唯一、同幂等键等值重放、变体冲突，开通记录与唯一Audit outbox在同一事务提交。新`managedservice.service-activation.activated`事实的事件身份包含Account范围，避免两个Account开通同名服务时碰撞，同时不改既有managedservice事件的历史重放身份。IAM producer proof只接受原`COLLECTION_CREATE`决定，Audit存储继续按封闭action/target/result契约接收。
 
+`ServiceActivation`是唯一的Account业务事实，不加入通用`command-results`回执目录。activate响应不确定时，客户端必须冻结原Account身份、精确定义引用、请求body和`Idempotency-Key`；`GET /managed-services/v1/service-activations/{serviceId}`只权威回答当前是否存在该精确开通事实，不证明前一命令由哪个actor完成。精确GET返回匹配的200可以开放服务工作区但不得伪造命令回执；503、超时或非法响应继续保持UNKNOWN，只允许用户显式检查同一路径，不得自动POST或换key；404也只证明读取时尚无事实，后续重试如被产品允许，只能由用户显式提交原key与逐字节等值请求，不能自动重放。401使当前凭据失效，UNKNOWN仍不得被新身份转成新写入；403不能被当作未开通或成功。真实浏览器门禁须证明恰好一次POST在提交后丢失响应、第一次精确GET临时失败、零自动重写、用户随后一次显式GET恢复精确事实，并核对唯一数据库行、原USER/决定/请求摘要、唯一outbox事实和完整租户Audit链。
+
 当前后继候选在`GET /managed-services/v1/services`的顶层返回精确`activationCapability`：Action固定为`managedservice.service-activation.activate`，资源固定为`SERVICE_ACTIVATION:collection`。目录候选仍只通过同Action/同资源种类的批量实例PDP过滤；集合create能力使用同一USER credential发起独立、逐字段绑定的IAM决定，因为批量PDP契约刻意只接受同构实例列表。Allow还必须与本次目录准入的Account和主体一致；Deny不返回Account/主体，只投影`AUTHORITY_REQUIRED`。该值只帮助UI选择控件状态，POST仍重新认证、授权并检查当前定义与Account状态，不能把目录响应缓存为permit。
 
 Audit对主体载体的允许范围由同一封闭action catalog逐行声明：每一行同时拥有source、target、result、IAM/Operation要求以及ROLE/AccessKey能力。`assert_event`只消费该行能力，未知action、缺失能力或不匹配主体均失败关闭；不再维护分散的ROLE/AccessKey action名称白名单。该catalog仍是受信发布DDL而不是租户或产品运行时可写注册表，避免把“更灵活”实现成动态扩权；当前服务开通事实只允许USER/ROLE，AccessKey继续拒绝。
