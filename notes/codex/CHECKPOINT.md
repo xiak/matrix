@@ -7,9 +7,10 @@
 - Repository `https://github.com/xiak/matrix.git`, branch
   `feat/iam-console-release-candidate`; repository-local Git identity is exactly
   `Xiak <Jellal@aliyun.com>`.
-- Latest verified candidate code source is `4d7ea249c`; it refines the
-  permission-catalog information hierarchy and shared filtering on top of
-  `3afe96248`, which follows the pushed console source `0b3f95d94`. Its integration base
+- Latest verified candidate code source is `66e86549e`; it expands the shared
+  table-filter workspace on top of permission-catalog milestone `4d7ea249c`
+  and candidate source `3afe96248`, which follows the pushed console source
+  `0b3f95d94`. Its integration base
   `4b9080a33` composes IAM branch head `1da954e84` (production-code milestone
   `571692dd2`) with console UX branch `ed001f9ef` (latest source fix
   `8b4cc05d1`). Dependency hardening is owned by `74fdc98da`; the latest source
@@ -21,9 +22,9 @@
   frontend and embedded export, its web-server contract test, FEAT-007 and its
   adoption/research owners. Old UX backend, provisioner and process-test slices
   were not imported.
-- Embedded console build is `matrix-c84da62275a74de5dcdc`.
+- Embedded console build is `matrix-8ea9c08c538fa18b7909`.
 
-## Verified permission-catalog UX at `4d7ea249c`
+## Verified table-filter workspace at `66e86549e`
 
 - The platform-only permission catalog now follows the same connected card
   hierarchy as the User directory: section identity and boundary, shared
@@ -32,11 +33,18 @@
   calling-service and authority-scope conditions. Active criteria remain
   removable, clearing restores all four MOCK declarations and focus returns to
   the stable trigger.
+- Every consumer of the shared table toolbar now keeps search, disclosure and
+  result status on the stable first row, then opens a bounded full-width filter
+  workspace. Labelled large controls fill equal responsive columns, the clear
+  action stays at the row edge, and applied criteria remain individually
+  removable. The User directory and permission catalog were both inspected in
+  the running DEV browser.
 - The complete 80-file/2,107-case frontend suite, eight export tests,
   typecheck, lint, architecture, 234 theme-contrast pairs, 59-page export with
   57 normalized segment files, 322-file embedded equality and PaaS Go
-  test/vet passed. Desktop and `390 × 844` built-in-browser checks proved the
-  exact combined result, no document/body overflow and no warning/error log.
+  test/vet passed. The expanded controls, combined result, clear path and
+  persistent removable criteria passed behavior and built-in-browser checks;
+  the browser warning/error log remained empty.
 
 ## Verified evidence at `0b3f95d94`
 
