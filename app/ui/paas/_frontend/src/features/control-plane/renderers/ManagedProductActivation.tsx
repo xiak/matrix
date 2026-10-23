@@ -54,6 +54,8 @@ export function ManagedProductActivation({ account, activation, children, previe
       unavailableHint={t(preview ? "previewUnavailableHint" : "liveUnavailableHint")}
       failureHint={t(activation.preview ? "previewFailedHint" : "failedHint")}
       onEnable={() => void activation.enable()}
+      onCheckOutcome={"checkOutcome" in activation ? () => void activation.checkOutcome() : undefined}
+      onReplay={"replay" in activation ? () => void activation.replay() : undefined}
       requestAccess={<Button asChild variant="secondary"><ConsoleLink href="/console/access/">{t("openAccess")}</ConsoleLink></Button>}
     >{children}</ServiceActivationGate>
   </div>;

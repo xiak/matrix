@@ -149,12 +149,96 @@ describe("useLiveServiceActivation", () => {
 
     await waitFor(() => expect(result.current.state.status).toBe("not-enabled"));
     await act(async () => { await result.current.enable(); });
-    expect(result.current.state.status).toBe("failed");
+    expect(result.current.state).toEqual({ status: "outcome-unknown", checking: false, recovery: "replay" });
     const originalKey = activateService.mock.calls[0]![2];
-    await act(async () => { await result.current.enable(); });
+    expect(activateService).toHaveBeenCalledTimes(1);
+    await act(async () => { await result.current.replay(); });
     expect(activateService.mock.calls[1]![2]).toBe(originalKey);
     expect(result.current.state.status).toBe("enabled");
     expect(result.current.access.mayLoadWorkspace).toBe(true);
+  });
+
+  it("keeps an indeterminate write unknown and lets inspection perform GET only", async () => {
+    const activateService = vi.fn().mockRejectedValue(new Error("connection closed"));
+    const getServiceActivation = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(404, "NOT_FOUND"))
+      .mockRejectedValueOnce(new HttpProblem(503, "UNAVAILABLE"))
+      .mockResolvedValueOnce(activation);
+    const repo = repository({ activateService, getServiceActivation });
+    const { result } = renderHook(() => useLiveServiceActivation({
+      accountId: "account-a", active: true, credential: "session-a", repository: repo, serviceKey: "postgresql"
+    }));
+
+    await waitFor(() => expect(result.current.state.status).toBe("not-enabled"));
+    await act(async () => { await result.current.enable(); });
+    expect(result.current.state).toEqual({ status: "outcome-unknown", checking: false, recovery: "inspect" });
+    expect(activateService).toHaveBeenCalledTimes(1);
+    expect(getServiceActivation).toHaveBeenCalledTimes(2);
+
+    await act(async () => { await result.current.checkOutcome(); });
+    expect(activateService).toHaveBeenCalledTimes(1);
+    expect(getServiceActivation).toHaveBeenCalledTimes(3);
+    expect(result.current.state.status).toBe("enabled");
+  });
+
+  it("does not turn a forbidden reconciliation read into an enabled workspace", async () => {
+    const repo = repository({
+      activateService: vi.fn().mockRejectedValue(new Error("connection closed")),
+      getServiceActivation: vi.fn()
+        .mockRejectedValueOnce(new HttpProblem(404, "NOT_FOUND"))
+        .mockRejectedValueOnce(new HttpProblem(403, "PERMISSION_DENIED"))
+    });
+    const { result } = renderHook(() => useLiveServiceActivation({
+      accountId: "account-a", active: true, credential: "session-a", repository: repo, serviceKey: "postgresql"
+    }));
+
+    await waitFor(() => expect(result.current.state.status).toBe("not-enabled"));
+    await act(async () => { await result.current.enable(); });
+    expect(result.current.state).toEqual({ status: "outcome-unknown", checking: false, recovery: "inspect" });
+    expect(result.current.access.mayLoadWorkspace).toBe(false);
+  });
+
+  it("keeps mismatched activation evidence unknown instead of opening the workspace", async () => {
+    const mismatched = { ...activation, service: { ...activation.service, revision: 2 } };
+    const repo = repository({
+      activateService: vi.fn().mockRejectedValue(new Error("connection closed")),
+      getServiceActivation: vi.fn()
+        .mockRejectedValueOnce(new HttpProblem(404, "NOT_FOUND"))
+        .mockResolvedValueOnce(mismatched)
+    });
+    const { result } = renderHook(() => useLiveServiceActivation({
+      accountId: "account-a", active: true, credential: "session-a", repository: repo, serviceKey: "postgresql"
+    }));
+
+    await waitFor(() => expect(result.current.state.status).toBe("not-enabled"));
+    await act(async () => { await result.current.enable(); });
+    expect(result.current.state).toEqual({ status: "outcome-unknown", checking: false, recovery: "inspect" });
+    expect(result.current.access.mayLoadWorkspace).toBe(false);
+  });
+
+  it("discards a late unknown-result observation after the credential owner changes", async () => {
+    let releaseOld!: (value: typeof activation) => void;
+    const getServiceActivation = vi.fn()
+      .mockRejectedValueOnce(new HttpProblem(404, "NOT_FOUND"))
+      .mockReturnValueOnce(new Promise<typeof activation>((resolve) => { releaseOld = resolve; }))
+      .mockRejectedValueOnce(new HttpProblem(404, "NOT_FOUND"));
+    const repo = repository({
+      activateService: vi.fn().mockRejectedValue(new Error("connection closed")),
+      getServiceActivation
+    });
+    const { result, rerender } = renderHook(({ credential }) => useLiveServiceActivation({
+      accountId: "account-a", active: true, credential, repository: repo, serviceKey: "postgresql"
+    }), { initialProps: { credential: "session-a" } });
+
+    await waitFor(() => expect(result.current.state.status).toBe("not-enabled"));
+    act(() => { void result.current.enable(); });
+    await waitFor(() => expect(getServiceActivation).toHaveBeenCalledTimes(2));
+
+    rerender({ credential: "session-b" });
+    await waitFor(() => expect(result.current.state.status).toBe("not-enabled"));
+    await act(async () => { releaseOld(activation); });
+    expect(result.current.state.status).toBe("not-enabled");
+    expect(result.current.access.mayLoadWorkspace).toBe(false);
   });
 
   it("fails closed when the fixed LIVE repository methods are absent", async () => {
