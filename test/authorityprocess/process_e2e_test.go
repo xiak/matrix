@@ -7025,7 +7025,7 @@ func runIAMUserDeletionConsoleBrowser(t *testing.T, ctx context.Context, databas
 	}
 	call(http.MethodPost, iamEndpoint, "/v1/users", ownerBearer, map[string]any{
 		"loginName": loginName, "displayName": "Must remain reserved", "initialPassword": initialDeveloperPassword,
-		"requestId": "browser-user-delete-reuse-rejected",
+		"permissionBoundary": nil, "requestId": "browser-user-delete-reuse-rejected",
 	}, http.StatusConflict, nil)
 	for path, before := range retained {
 		response := performJSON(t, http.MethodGet, paasEndpoint+path, ownerBearer, nil)
