@@ -193,7 +193,7 @@ describe("atomic user directory batches", () => {
     for (const targets of selections) await expect(previewAccountRepository.executeUserBatch!(previewCredential, { action: "disable", targets })).rejects.toThrow();
     expect((await previewAccountRepository.listUsers(previewCredential)).items).toEqual(f.users);
     expect(await previewAccountRepository.workspace!.read(previewCredential)).toEqual(f.workspace);
-    expect(userBatchDisabledReason("delete", { canListUsers: true, supported: true, rootId: "owner", actorId: "actor", targets: Array.from({ length: userBatchLimit + 1 }, (_, index) => ({ id: String(index), enabled: true, canSetStatus: true, canAttachPolicy: true, protected: false })) })).toBe("limit");
+    expect(userBatchDisabledReason("delete", { canListUsers: true, supported: true, rootId: "owner", actorId: "actor", targets: Array.from({ length: userBatchLimit + 1 }, (_, index) => ({ id: String(index), enabled: true, canSetStatus: true, canAttachPolicy: true, canDelete: false, protected: false })) })).toBe("limit");
     await expect(previewAccountRepository.executeUserBatch!("wrong-credential", { action: "delete", targets: f.targets })).rejects.toThrow();
   });
   it("guards the current actor, actor authority and mixed states for the whole selection", async () => {
@@ -226,8 +226,16 @@ describe("atomic user directory batches", () => {
     const f = await fixture();
     f.workspace.roles[0]!.trustedUserIds = ["principal-lin", "principal-chen"];
     f.workspace.roleSessions = [{ id: "session-lin", roleId: f.workspace.roles[0]!.id, caller: { type: "user", id: "principal-lin" }, createdAt: context.at, expiresAt: "2099-01-01T00:00:00Z" }];
-    const result = applyUserBatch(f.workspace, f.users, f.identity, { action: "delete", targets: [f.targets[0]!] }, context);
-    expect(result.users).toEqual(f.users.filter((entry) => entry.user.id !== "principal-lin"));
+    expect(() => applyUserBatch(f.workspace, f.users, f.identity, { action: "delete", targets: [f.targets[0]!] }, context)).toThrow("ineligibleUsers");
+    const disabled = f.users.map((entry) => entry.user.id === "principal-lin" ? {
+      ...entry,
+      user: { ...entry.user, status: "DISABLED" as const },
+      capabilities: entry.capabilities.map((item) => item.action === "iam.user.delete"
+        ? { ...item, available: true, restrictionReason: null }
+        : item)
+    } : entry);
+    const result = applyUserBatch(f.workspace, disabled, f.identity, { action: "delete", targets: [f.targets[0]!] }, context);
+    expect(result.users).toEqual(disabled.filter((entry) => entry.user.id !== "principal-lin"));
     expect(result.workspace.groups.flatMap((group) => group.memberIds)).not.toContain("principal-lin");
     expect(result.workspace.keys.some((key) => key.ownerId === "principal-lin")).toBe(false);
     expect(result.workspace.roles[0]!.trustedUserIds).toEqual(["principal-chen"]);
@@ -449,6 +457,9 @@ describe("access workspace preview invariants", () => {
     expect(created.policyAttachments.map((attachment) => attachment.policyId)).toEqual(["policy-read"]);
     expect(created.user.mustChangePassword).toBe(true);
     await expect(extension.execute(previewCredential, command)).rejects.toThrow("duplicate");
+    await expect(extension.execute(previewCredential, { kind: "delete-user", principalId })).rejects.toThrow("invalid");
+    expect((await previewAccountRepository.listUsers(previewCredential)).items.some((entry) => entry.user.id === principalId)).toBe(true);
+    await previewAccountRepository.execute(previewCredential, { kind: "set-status", userId: principalId, status: "DISABLED", resourceVersion: created.user.resourceVersion });
     const removed = await extension.execute(previewCredential, { kind: "delete-user", principalId });
     expect(removed.workspace.userProfiles[principalId]).toBeUndefined();
     expect(removed.workspace.userPolicies[principalId]).toBeUndefined();

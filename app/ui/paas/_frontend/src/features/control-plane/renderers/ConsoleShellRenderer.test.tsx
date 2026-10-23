@@ -2565,7 +2565,8 @@ describe("ConsoleShellRenderer", () => {
     it("drops Role-owned Audit filters when exit and source validation settle immediately", async () => {
       const { user, fetchAudit } = await enterAudit(selfService());
       await user.click(screen.getByRole("button", { name: "查询条件" }));
-      await user.type(screen.getByLabelText("操作者 ID", { exact: true }), "role-owned-filter");
+      // Prepare the fixed criterion; this case owns query/Role-exit semantics.
+      fireEvent.change(screen.getByLabelText("操作者 ID", { exact: true }), { target: { value: "role-owned-filter" } });
       await user.click(screen.getByRole("button", { name: "查询" }));
       await waitFor(() => expect(fetchAudit).toHaveBeenCalledTimes(2));
       expect(JSON.parse(String(fetchAudit.mock.calls[1]![1]?.body)).actor).toEqual({ type: "USER", id: "role-owned-filter" });

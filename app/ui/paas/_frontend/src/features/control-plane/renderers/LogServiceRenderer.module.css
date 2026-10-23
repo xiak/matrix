@@ -28,4 +28,17 @@
 @container matrix-control-shell (max-width: 620px) {
   .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .welcome { padding: var(--xiak-spacing-comfortable); }
+  .events { overflow-x: visible; }
+  .eventHeading { display: none; }
+  .event summary {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: var(--xiak-spacing-comfortable);
+  }
+  .event summary > div { grid-column: 1 / -1; }
+  .eventFields {
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    padding: 0 var(--xiak-spacing-comfortable) var(--xiak-spacing-comfortable);
+  }
 }

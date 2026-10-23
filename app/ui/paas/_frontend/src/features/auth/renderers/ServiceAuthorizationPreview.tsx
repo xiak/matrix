@@ -590,12 +590,11 @@ export function ServiceAuthorizationUnbindReview({ accountId, targetResourceId, 
   </div>;
 }
 
-export function ServiceAuthorizationPreview({ workspace, onClose }: {
+export function ServiceAuthorizationPreview({ workspace }: {
   workspace: AccessWorkspace;
-  onClose(): void;
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
-  const [view, setView] = useState<PreviewView>("directory");
+  const [{ view, focusHeading }, setNavigation] = useState<{ view: PreviewView; focusHeading: boolean }>({ view: "directory", focusHeading: true });
   const [directorySection, setDirectorySection] = useState<DirectorySection>("authorizations");
   const [accountAccessOrigin, setAccountAccessOrigin] = useState<"directory" | "detail">("directory");
   const [stage, setStage] = useState(0);
@@ -618,16 +617,14 @@ export function ServiceAuthorizationPreview({ workspace, onClose }: {
   }, [view]);
 
   const back = () => {
-    if (view === "directory") onClose();
-    else if (view === "detail") setView("directory");
-    else if (view === "account-access") setView(accountAccessOrigin);
-    else setView("detail");
+    const destination = view === "detail" ? "directory" : view === "account-access" ? accountAccessOrigin : "detail";
+    setNavigation({ view: destination, focusHeading: false });
   };
-  const backLabel = view === "directory" ? t("backToRoles") : view === "detail" ? t("backToDirectory") : view === "account-access" && accountAccessOrigin === "directory" ? t("backToDirectory") : t("backToTemplate");
+  const backLabel = view === "detail" ? t("backToDirectory") : view === "account-access" && accountAccessOrigin === "directory" ? t("backToDirectory") : t("backToTemplate");
   const title = view === "directory" ? t("title") : view === "detail" ? t("detail.title") : view === "account-access" ? t("observation.pageTitle") : t("review.title");
 
   return <>
-    <ContentPage.Heading key={view} title={title} scrollKey={`service-authorization:${view}`} back={{ label: backLabel, onClick: back }} focus />
+    <ContentPage.Heading key={view} title={title} scrollKey={`service-authorization:${view}`} back={view === "directory" ? undefined : { label: backLabel, onClick: back }} focus={focusHeading} />
     <Card aria-label={title}>
       <Card.Body className={styles.root}>
         <div className={styles.summary}><p>{t("subtitle")}</p><div className={styles.badges}><Badge status="warning">MOCK</Badge><Badge>{t("previewOnly")}</Badge></div></div>
@@ -635,11 +632,11 @@ export function ServiceAuthorizationPreview({ workspace, onClose }: {
         <ServiceAuthorizationResponsibility />
         {view === "directory" ? <Tabs.Root value={directorySection} onValueChange={(value) => setDirectorySection(value as DirectorySection)}>
           <Tabs.List aria-label={t("directory.sectionsLabel")}><Tabs.Trigger value="authorizations">{t("directory.authorizations")}</Tabs.Trigger><Tabs.Trigger value="templates">{t("directory.templates")}</Tabs.Trigger></Tabs.List>
-          <Tabs.Content className={styles.stack} value="authorizations"><AccountAuthorizationDirectory accountId={workspace.accountId} triggerRef={accountAccessTrigger} onOpen={() => { setAccountAccessOrigin("directory"); setView("account-access"); }} /></Tabs.Content>
-          <Tabs.Content className={styles.stack} value="templates"><TemplateDirectory triggerRef={templateTrigger} onOpen={() => setView("detail")} /></Tabs.Content>
+          <Tabs.Content className={styles.stack} value="authorizations"><AccountAuthorizationDirectory accountId={workspace.accountId} triggerRef={accountAccessTrigger} onOpen={() => { setAccountAccessOrigin("directory"); setNavigation({ view: "account-access", focusHeading: true }); }} /></Tabs.Content>
+          <Tabs.Content className={styles.stack} value="templates"><TemplateDirectory triggerRef={templateTrigger} onOpen={() => setNavigation({ view: "detail", focusHeading: true })} /></Tabs.Content>
         </Tabs.Root> : null}
-        {view === "detail" ? <TemplateDetail reviewRef={reviewTrigger} observationRef={observationTrigger} onReview={() => { setStage(0); setView("review"); }} onObserve={() => { setAccountAccessOrigin("detail"); setView("account-access"); }} /> : null}
-        {view === "review" ? <ServiceAuthorizationConsentReview accountId={workspace.accountId} targetResourceId={previewWorkload.id} stage={stage} onStageChange={setStage} onClose={() => setView("detail")} /> : null}
+        {view === "detail" ? <TemplateDetail reviewRef={reviewTrigger} observationRef={observationTrigger} onReview={() => { setStage(0); setNavigation({ view: "review", focusHeading: true }); }} onObserve={() => { setAccountAccessOrigin("detail"); setNavigation({ view: "account-access", focusHeading: true }); }} /> : null}
+        {view === "review" ? <ServiceAuthorizationConsentReview accountId={workspace.accountId} targetResourceId={previewWorkload.id} stage={stage} onStageChange={setStage} onClose={() => setNavigation({ view: "detail", focusHeading: false })} /> : null}
         {view === "account-access" ? <ServiceLinkedRoleObservation accountId={workspace.accountId} /> : null}
       </Card.Body>
     </Card>

@@ -442,33 +442,6 @@ describe("ControlPlaneProvider", () => {
     expect(screen.getByTestId("command-restored").textContent).toBe("true");
     expect(read).toHaveBeenCalledTimes(1);
   });
-  it("does not expire the current User from a replaced repository's late resource 401", async () => {
-    let rejectOldRead!: (reason: unknown) => void;
-    const iam = iamRepository();
-    const previous: ControlPlaneRepository = {
-      load: vi.fn(() => new Promise<ControlPlaneResourceSnapshot>((_resolve, reject) => { rejectOldRead = reject; })),
-      getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn()
-    };
-    const replacement: ControlPlaneRepository = {
-      ...previous, load: vi.fn(async () => snapshot(readyInstallation, 0))
-    };
-    const view = (repository: ControlPlaneRepository) => <SessionProvider repository={iam}>
-      <ControlPlaneProvider repository={repository} selection={{ section: "regions" }}><Probe /></ControlPlaneProvider>
-    </SessionProvider>;
-    const screen = render(view(previous));
-    await act(async () => { fireEvent.click(screen.getByText("login")); });
-    await waitFor(() => expect(previous.load).toHaveBeenCalledTimes(1));
-
-    screen.rerender(view(replacement));
-    await act(async () => { fireEvent.click(screen.getByText("refresh current page")); });
-    expect(replacement.load).toHaveBeenCalledWith("memory-only-session", ["regions"]);
-    expect(screen.getByTestId("session-phase").textContent).toBe("authenticated");
-    await act(async () => { rejectOldRead(new HttpProblem(401, "RETIRED_REPOSITORY")); });
-
-    expect(screen.getByTestId("session-phase").textContent).toBe("authenticated");
-    expect(screen.getByTestId("error").textContent).toBe("none");
-    expect(replacement.createInstallation).not.toHaveBeenCalled();
-  });
 
   it.each([401, "success"] as const)("preserves a new Session's restored UNKNOWN command when the old mutation returns %s", async (completion) => {
     let settleMutation!: () => void;
@@ -504,6 +477,33 @@ describe("ControlPlaneProvider", () => {
     expect(screen.repository.createInstallation).toHaveBeenCalledTimes(1);
   });
 
+  it("does not expire the current User from a replaced repository's late resource 401", async () => {
+    let rejectOldRead!: (reason: unknown) => void;
+    const iam = iamRepository();
+    const previous: ControlPlaneRepository = {
+      load: vi.fn(() => new Promise<ControlPlaneResourceSnapshot>((_resolve, reject) => { rejectOldRead = reject; })),
+      getInstallation: vi.fn(), activateQuota: vi.fn(), createInstallation: vi.fn()
+    };
+    const replacement: ControlPlaneRepository = {
+      ...previous, load: vi.fn(async () => snapshot(readyInstallation, 0))
+    };
+    const view = (repository: ControlPlaneRepository) => <SessionProvider repository={iam}>
+      <ControlPlaneProvider repository={repository} selection={{ section: "regions" }}><Probe /></ControlPlaneProvider>
+    </SessionProvider>;
+    const screen = render(view(previous));
+    await act(async () => { fireEvent.click(screen.getByText("login")); });
+    await waitFor(() => expect(previous.load).toHaveBeenCalledTimes(1));
+
+    screen.rerender(view(replacement));
+    await act(async () => { fireEvent.click(screen.getByText("refresh current page")); });
+    expect(replacement.load).toHaveBeenCalledWith("memory-only-session", ["regions"]);
+    expect(screen.getByTestId("session-phase").textContent).toBe("authenticated");
+    await act(async () => { rejectOldRead(new HttpProblem(401, "RETIRED_REPOSITORY")); });
+
+    expect(screen.getByTestId("session-phase").textContent).toBe("authenticated");
+    expect(screen.getByTestId("error").textContent).toBe("none");
+    expect(replacement.createInstallation).not.toHaveBeenCalled();
+  });
   it("keeps a slow managed-service command local to its data region and preserves the caller idempotency key", async () => {
     vi.useFakeTimers();
     let resolveInstallation!: (installation: ServiceInstallation) => void;

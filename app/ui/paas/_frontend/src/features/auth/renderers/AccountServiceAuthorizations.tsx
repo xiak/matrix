@@ -388,10 +388,9 @@ function RelationDetail({ client, roleId, initialName, onBack }: { client: Servi
   </WorkspaceDetail>;
 }
 
-export function AccountServiceAuthorizations({ relations, templates, onBack }: {
+export function AccountServiceAuthorizations({ relations, templates }: {
   relations: ServiceLinkedRoleClient | null;
   templates: ServiceRoleTemplateClient | null;
-  onBack?(): void;
 }) {
   const t = useTranslations("ServiceAuthorizationDirectory");
   const [section, setSection] = useState(relations ? "authorizations" : "templates");
@@ -417,7 +416,7 @@ export function AccountServiceAuthorizations({ relations, templates, onBack }: {
   if (visibleSelection?.kind === "template") return <TemplateDetail template={visibleSelection.template} onBack={() => setSelection(null)} />;
 
   return <Card aria-description={t("hint")}>
-    <ContentPage.Heading title={t("title")} scrollKey="service-authorization-directory" back={onBack ? { label: t("backToRoles"), onClick: onBack } : undefined} focus />
+    <ContentPage.Heading title={t("title")} scrollKey="service-authorization-directory" focus />
     <div className={styles.policyDirectoryIntro}><p>{t("hint")}</p><p>{t("boundary")}</p></div>
     <ServiceAuthorizationResponsibility />
     <Tabs.Root value={activeSection} onValueChange={setSection}>

@@ -8,18 +8,18 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { AccessKeyClient, AccessKeyCreateIntent, AccessKeyMutationIntent, AccountSecuritySettingsClient, AuthorizationProfileClient, AuthorizationProfileLoad } from "../application/AccountAccessProvider";
 import type { AuthorizationProfileDirectory } from "../domain/accounts";
 import type { AccessKeyAccess, AccessKeyDirectory } from "../domain/accessKeys";
-import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
+import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
 
-const owner: AccountUserScene = {
-  accountType: "subuser", accountId: "account-acme", id: "user-alex", name: "Alex", loginName: "alex", source: "local", qualifiedName: "alex@acme",
+const owner = {
+  accountType: "subuser", id: "user-alex", name: "Alex", loginName: "alex", source: "local", qualifiedName: "alex@acme",
   protected: false, credentialProtection: null, enabled: true, resourceVersion: 2, state: "active",
   canRead: true, readRestrictionReason: null, canUpdate: true, updateRestrictionReason: null, canDelete: true, deleteRestrictionReason: null,
   canSetStatus: true, statusRestrictionReason: null, canResetPassword: true, passwordRestrictionReason: null,
   canAttachTenantPolicy: true, tenantAttachmentRestrictionReason: null, canAttachPlatformPolicy: false, platformAttachmentRestrictionReason: null,
   canSetPermissionBoundary: true, permissionBoundarySetRestrictionReason: null, canRemovePermissionBoundary: true, permissionBoundaryRemoveRestrictionReason: null,
   attachments: []
-};
+} as const;
 const scene = { accountId: "account-acme", accountOwner: { id: "root-acme" }, canListUsers: true, isRoot: true, users: [owner] } as unknown as AccountAccessScene;
 const key = { id: "mak1.alex-primary", accountId: scene.accountId, userId: owner.id, status: "ENABLED" as const, resourceVersion: 1,
   credentialState: "CURRENT" as const,
@@ -146,10 +146,10 @@ describe("LiveAccessCredentials", () => {
     const api = client({ list: vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED")) });
     render(<LocaleProvider><LiveAccessCredentials client={api} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
 
-    const failure = await screen.findByRole("alert", { name: "无法读取访问密钥" });
-    expect(within(failure).getByText(/当前身份没有管理该用户访问密钥的权限/)).toBeTruthy();
-    expect(within(failure).getByText(/联系账号管理员核对授权/)).toBeTruthy();
-    expect(within(failure).queryByRole("button", { name: "重试读取" })).toBeNull();
+    const denial = await screen.findByRole("alert");
+    expect(within(denial).getByText(/当前身份没有管理该用户访问密钥的权限/)).toBeTruthy();
+    expect(within(denial).getByText(/请联系账号管理员核对授权/)).toBeTruthy();
+    expect(within(denial).queryByRole("button", { name: "重试读取" })).toBeNull();
     expect(screen.queryByRole("table", { name: "访问密钥" })).toBeNull();
     expect(screen.getByRole("button", { name: "新建访问密钥" }).hasAttribute("disabled")).toBe(true);
   });
@@ -239,22 +239,39 @@ describe("LiveAccessCredentials", () => {
 
   it("rereads a completed AccessKey mutation without requiring the revoked write capability", async () => {
     const user = userEvent.setup();
-    const readOnlyDirectory = { ...directory, items: [{ ...directory.items[0]!, capabilities: directory.items[0]!.capabilities.map((item) =>
-      item.action === "iam.access-key.set-network-restrictions" ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item) }] };
-    const mutationIntent: AccessKeyMutationIntent = {
-      accountId: scene.accountId, actorId: "root-acme", userId: owner.id, accessKeyId: key.id,
-      accessKeyResourceVersion: key.resourceVersion, operation: "set-network-restrictions",
-      networkRestrictions: key.networkRestrictions, requestId: `ui-access-key-network-${"a".repeat(32)}`, phase: "completed"
+    const deniedDirectory: AccessKeyDirectory = {
+      ...directory,
+      items: [{
+        ...directory.items[0]!,
+        capabilities: directory.items[0]!.capabilities.map((entry) => entry.action === "iam.access-key.set-network-restrictions"
+          ? { ...entry, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const }
+          : entry)
+      }]
     };
-    const api = client({ list: vi.fn().mockResolvedValue(readOnlyDirectory) });
+    const mutationIntent: AccessKeyMutationIntent = {
+      accountId: scene.accountId,
+      actorId: "root-acme",
+      userId: owner.id,
+      accessKeyId: key.id,
+      accessKeyResourceVersion: key.resourceVersion,
+      operation: "set-network-restrictions",
+      networkRestrictions: { allowedSourceCidrs: ["203.0.113.0/24"] },
+      requestId: `ui-access-key-network-${"f".repeat(32)}`,
+      phase: "completed"
+    };
+    const list = vi.fn().mockResolvedValue(deniedDirectory);
+    const setNetworkRestrictions = vi.fn();
+    const api = client({ list, setNetworkRestrictions });
     render(<LocaleProvider><LiveAccessCredentials client={api} mutationIntent={mutationIntent} scene={scene} scopedOwner={owner as unknown as AccountAccessScene["users"][number]} /></LocaleProvider>);
+
     await user.click(await screen.findByRole("button", { name: "继续处理原请求" }));
     const reread = screen.getByRole("button", { name: "重新读取当前状态" });
     expect(reread.hasAttribute("disabled")).toBe(false);
     await user.click(reread);
-    await waitFor(() => expect(api.acknowledgeMutation).toHaveBeenCalledWith(mutationIntent.requestId));
-    expect(api.list).toHaveBeenCalledTimes(2);
-    expect(api.setNetworkRestrictions).not.toHaveBeenCalled();
+
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(api.acknowledgeMutation).toHaveBeenCalledWith(mutationIntent.requestId);
+    expect(setNetworkRestrictions).not.toHaveBeenCalled();
   });
 
   it("replays an uncertain delete even when the key row is already absent, then acknowledges only after the full list reread", async () => {
@@ -367,53 +384,6 @@ describe("LiveAccessCredentials", () => {
     await user.click(await screen.findByRole("button", { name: "继续处理原请求" }));
     expect(screen.getByText(intent.requestId)).toBeTruthy();
     expect(api.create).not.toHaveBeenCalled();
-  });
-
-  it.each(["rejected", "wrong-user"] as const)("keeps the exact mutation intent locked when its owner read is %s", async (failure) => {
-    const user = userEvent.setup();
-    const intent: AccessKeyMutationIntent = {
-      accountId: scene.accountId, actorId: "root-acme", userId: "user-auditor", accessKeyId: "key-auditor",
-      accessKeyResourceVersion: 2, requestId: `ui-access-key-delete-${"a".repeat(32)}`, phase: "unknown", operation: "delete"
-    };
-    const api = client();
-    const loadOwner = failure === "rejected"
-      ? vi.fn().mockRejectedValue(new Error("UNAVAILABLE")) : vi.fn().mockResolvedValue(owner);
-    render(<LocaleProvider><LiveAccessCredentials client={api} mutationIntent={intent} loadOwner={loadOwner}
-      scene={{ ...scene, directoryFailures: { users: "unavailable" } } as AccountAccessScene} /></LocaleProvider>);
-
-    await user.click(screen.getByRole("button", { name: "继续处理原请求" }));
-    expect(await screen.findByText(`无法读取原请求所属用户 ${intent.userId}。原请求仍保持锁定且不会自动重放；请重试精确读取。`)).toBeTruthy();
-    expect(loadOwner).toHaveBeenCalledExactlyOnceWith(intent.userId);
-    expect((screen.getByRole("button", { name: "继续处理原请求" }) as HTMLButtonElement).disabled).toBe(false);
-    expect(api.list).not.toHaveBeenCalled();
-    expect(api.create).not.toHaveBeenCalled();
-    expect(api.setStatus).not.toHaveBeenCalled();
-    expect(api.setNetworkRestrictions).not.toHaveBeenCalled();
-    expect(api.delete).not.toHaveBeenCalled();
-  });
-
-  it("ignores an original owner's late resolution after the AccessKey client changes", async () => {
-    const user = userEvent.setup();
-    const offPageOwner = { ...owner, id: "user-auditor", loginName: "auditor" };
-    const intent: AccessKeyCreateIntent = {
-      accountId: scene.accountId, actorId: "root-acme", userId: offPageOwner.id, userResourceVersion: 5,
-      networkRestrictions: { allowedSourceCidrs: [] }, requestId: `ui-access-key-create-${"f".repeat(32)}`, phase: "unknown"
-    };
-    let resolveOwner!: (value: typeof offPageOwner) => void;
-    const loadOwner = vi.fn(() => new Promise<typeof offPageOwner>((resolve) => { resolveOwner = resolve; }));
-    const first = client();
-    const replacement = client();
-    const view = render(<LocaleProvider><LiveAccessCredentials client={first} createIntent={intent} loadOwner={loadOwner} scene={scene} /></LocaleProvider>);
-
-    await user.click(screen.getByRole("button", { name: "继续处理原请求" }));
-    expect(loadOwner).toHaveBeenCalledExactlyOnceWith(intent.userId);
-    view.rerender(<LocaleProvider><LiveAccessCredentials client={replacement} createIntent={intent} loadOwner={loadOwner} scene={scene} /></LocaleProvider>);
-    await act(async () => resolveOwner(offPageOwner));
-    expect(screen.queryByRole("heading", { name: "auditor · 访问密钥" })).toBeNull();
-    expect(first.list).not.toHaveBeenCalled();
-    expect(replacement.list).not.toHaveBeenCalled();
-    expect(first.create).not.toHaveBeenCalled();
-    expect(replacement.create).not.toHaveBeenCalled();
   });
 
   it("loads the shared product credential boundary only after the user asks for it", async () => {

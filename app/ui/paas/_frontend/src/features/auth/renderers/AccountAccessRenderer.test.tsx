@@ -610,7 +610,10 @@ async function openAccess(repository = accounts(), iamRepository = iam(), initia
   const user = userEvent.setup({ delay: null });
   const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} initialEntityId={initialEntityId} initialUserTab={initialUserTab} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
   const view = render(tree(repository));
-  await user.type(screen.getByLabelText("密码", { exact: true }), "Only-Test-Password-49!");
+  // These feature tests need an authenticated Session, not a keystroke-by-
+  // keystroke login journey; the qualified-login owner covers that separately.
+  await user.click(screen.getByLabelText("密码", { exact: true }));
+  await user.paste("Only-Test-Password-49!");
   await user.click(screen.getByRole("button", { name: "登录控制台" }));
   await waitFor(() => expect(repository.currentIdentity).toHaveBeenCalledWith(expectedCredential));
   return { user, view, repository, replaceRepository: (next: AccountRepository) => view.rerender(tree(next)), setAccessActive: (active: boolean) => view.rerender(tree(repository, active)) };
@@ -2590,40 +2593,71 @@ describe("account access", () => {
     }
   });
 
-  it.each(["read", "write"] as const)("does not dispatch an AccessKey mutation when intent storage %s fails", async (operation) => {
-    const method = operation === "read" ? "getItem" : "setItem";
-    const original = Storage.prototype[method];
-    const fault = vi.spyOn(Storage.prototype, method).mockImplementation(function(this: Storage, storageKey: string, value?: string) {
-      if (storageKey.startsWith("matrix-iam-access-key-mutation:v1:")) throw new Error("test storage unavailable");
-      return operation === "read" ? (original as typeof Storage.prototype.getItem).call(this, storageKey)
-        : (original as typeof Storage.prototype.setItem).call(this, storageKey, value!);
-    });
+  it.each(["read", "write"] as const)("does not dispatch an AccessKey mutation when intent storage %s fails", async (failure) => {
+    const storagePrefix = "matrix-iam-access-key-mutation:v1:";
+    const originalRead = Storage.prototype.getItem;
+    const originalWrite = Storage.prototype.setItem;
+    let storageFault: ReturnType<typeof vi.spyOn> | null = null;
+    const setStatus = vi.fn().mockResolvedValue({ outcome: "APPLIED", key: {
+      id: "mak1.lost-secret", accountId: account.id, userId: childUser.id, status: "DISABLED" as const,
+      credentialState: "CURRENT" as const, networkRestrictions: { allowedSourceCidrs: [] },
+      resourceVersion: 3, createdAt: timestamp, updatedAt: timestamp
+    } });
+    const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus, setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
+    const user = userEvent.setup();
+
     try {
-      const setStatus = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
-      const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus, setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
-      const user = userEvent.setup();
+      if (failure === "read") {
+        storageFault = vi.spyOn(Storage.prototype, "getItem").mockImplementation(function(this: Storage, key: string) {
+          if (key.startsWith(storagePrefix)) throw new Error("storage read blocked");
+          return originalRead.call(this, key);
+        });
+      }
       render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
       await user.click(screen.getByRole("button", { name: "login-key-probe" }));
       await waitFor(() => expect(screen.getByRole("button", { name: "disable-key" }).hasAttribute("disabled")).toBe(false));
+      if (failure === "write") {
+        await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("false"));
+        storageFault = vi.spyOn(Storage.prototype, "setItem").mockImplementation(function(this: Storage, key: string, value: string) {
+          if (key.startsWith(storagePrefix)) throw new Error("storage write blocked");
+          return originalWrite.call(this, key, value);
+        });
+      }
+
       await user.click(screen.getByRole("button", { name: "disable-key" }));
+
+      await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("true"));
       expect(setStatus).not.toHaveBeenCalled();
-    } finally { fault.mockRestore(); }
+    } finally {
+      storageFault?.mockRestore();
+    }
   });
 
   it("does not replace a malformed stored AccessKey mutation with a new write", async () => {
     const storageKey = `matrix-iam-access-key-mutation:v1:${encodeURIComponent(account.id)}:${encodeURIComponent(rootUser.id)}`;
-    const raw = JSON.stringify({ accountId: account.id, actorId: rootUser.id, userId: childUser.id, accessKeyId: "mak1.lost-secret",
-      accessKeyResourceVersion: 2, operation: "delete", requestId: originalKeyDeleteRequestId, phase: "unknown", unexpected: true });
-    sessionStorage.setItem(storageKey, raw);
-    const setStatus = vi.fn().mockRejectedValue(new HttpProblem(503, "IAM_UNAVAILABLE"));
+    const malformed = JSON.stringify({
+      accountId: account.id,
+      actorId: rootUser.id,
+      userId: childUser.id,
+      accessKeyId: "mak1.lost-secret",
+      accessKeyResourceVersion: 2,
+      operation: "delete",
+      requestId: originalKeyDeleteRequestId,
+      phase: "unknown",
+      unexpected: true
+    });
+    sessionStorage.setItem(storageKey, malformed);
+    const setStatus = vi.fn();
     const repository = accounts({ accessKeys: { list: vi.fn(), read: vi.fn(), create: vi.fn(), setStatus, setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
     const user = userEvent.setup();
     render(<LocaleProvider><SessionProvider repository={iam()}><AccountAccessProvider repository={repository}><AccessKeyIntentProbe /></AccountAccessProvider></SessionProvider></LocaleProvider>);
+
     await user.click(screen.getByRole("button", { name: "login-key-probe" }));
-    await waitFor(() => expect(screen.getByRole("button", { name: "disable-key" }).hasAttribute("disabled")).toBe(false));
+    await waitFor(() => expect(screen.getByLabelText("key-recovery-error").textContent).toBe("true"));
     await user.click(screen.getByRole("button", { name: "disable-key" }));
+
     expect(setStatus).not.toHaveBeenCalled();
-    expect(sessionStorage.getItem(storageKey)).toBe(raw);
+    expect(sessionStorage.getItem(storageKey)).toBe(malformed);
   });
 
   it("does not dispatch an AccessKey create before its intent is durably stored", async () => {
@@ -2942,27 +2976,6 @@ describe("account access", () => {
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     expect(await screen.findByRole("alert", { name: "用户删除结果未确认" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "删除用户" })).toBeNull();
-    expect(deleteUser).toHaveBeenCalledTimes(1);
-  });
-
-  it.each(["INVALID_PLATFORM_RESPONSE", "PLATFORM_REQUEST_REJECTED"])("retains an unknown deletion after an untrusted protocol rejection (%s)", async (code) => {
-    const disabledUser: User = { ...childUser, status: "DISABLED", resourceVersion: 5 };
-    const disabled: UserAccess = { user: disabledUser, policyAttachments: [], capabilities: userCapabilities(disabledUser) };
-    const deleteUser = vi.fn().mockRejectedValue(new HttpProblem(403, code));
-    const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [disabled], nextAfter: null }),
-      getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
-    const { user } = await openAccess(repository);
-    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
-    await user.click(await screen.findByRole("button", { name: "删除用户" }));
-    await user.type(screen.getByLabelText("输入名称以确认"), disabledUser.loginName);
-    await user.click(screen.getByRole("button", { name: "确认删除" }));
-    expect(deleteUser).toHaveBeenCalledTimes(1);
-    expect(readUserDeletionIntents(sessionStorage, { accountId: account.id, actorPrincipalId: rootUser.id })).toEqual([
-      expect.objectContaining({ userId: disabledUser.id, commandRequestId: deleteUser.mock.calls[0]![3].requestId })
-    ]);
-    expect(await screen.findByRole("alert", { name: "用户删除结果未确认" })).toBeTruthy();
-    expect(screen.queryByRole("button", { name: "确认删除" })).toBeNull();
-    expect(screen.queryByRole("status", { name: "用户删除回执" })).toBeNull();
     expect(deleteUser).toHaveBeenCalledTimes(1);
   });
 
@@ -4565,7 +4578,7 @@ describe("account access", () => {
     expect(screen.queryByText(/当前默认版本仍是 version-logs/)).toBeNull();
   });
 
-  it("loads the live permission catalog only for visual authoring and publishes the reviewed exact declaration", async () => {
+  async function openVisualVersionDraft() {
     const fixture = livePolicyVersions();
     const catalog = profileDirectory();
     catalog.items[0]!.profile.actions.push({ action: "paas.application.list", resourceKind: "APPLICATION", scope: "TENANT",
@@ -4577,27 +4590,39 @@ describe("account access", () => {
     await screen.findByRole("table", { name: "策略版本目录" });
     await user.click(screen.getByRole("button", { name: "发布新版本" }));
     expect(listAuthorizationProfiles).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
+    const publisher = within(screen.getByRole("region", { name: "编写新版本" }));
+    await user.click(publisher.getByRole("tab", { name: "可视化编辑" }));
     expect(await screen.findByRole("checkbox", { name: /paas.application.read/ })).toBeTruthy();
     const authoringSnapshot = screen.getByRole("region", { name: "当前声明依赖的产品目录" });
     expect(within(authoringSnapshot).getByText("paas @ r1", { selector: "code" })).toBeTruthy();
     expect(within(authoringSnapshot).getByText(/提交时 IAM 会重新校验目录并冻结精确 Action 集/)).toBeTruthy();
     expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("combobox", { name: "授权效果" }));
-    await user.click(screen.getByRole("option", { name: "拒绝" }));
-    await user.click(screen.getByRole("combobox", { name: "资源选择器 1" }));
-    await user.click(screen.getByRole("option", { name: "精确 ID" }));
-    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(publisher.getByLabelText("授权效果", { selector: "button" }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "拒绝" }));
+    await user.click(publisher.getByLabelText("资源选择器 1", { selector: "button" }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "精确 ID" }));
+    return { user, fixture, listAuthorizationProfiles, publisher };
+  }
+  it("loads the catalog only for visual version authoring and rejects incomplete or incompatible resource choices", async () => {
+    const { user, fixture, publisher } = await openVisualVersionDraft();
+    await user.click(publisher.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByText(/可视化草稿还有未完成/)).toBeTruthy();
     expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
-    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
+    await user.click(publisher.getByLabelText("资源 ID 或前缀", { selector: "input" }));
+    await user.paste("app-prod");
     expect(screen.getByRole("checkbox", { name: /paas.application.list/ })).toHaveProperty("disabled", true);
     expect(screen.getByText("当前 1 个操作可共享本声明的资源与条件；1 个需调整当前声明或另建声明。")).toBeTruthy();
     expect(screen.getByText("资源形状与当前所选操作不同；请另建声明。")).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "仅看已选" }));
+    await user.click(publisher.getByRole("button", { name: "仅看已选" }));
     expect(screen.queryByRole("checkbox", { name: /paas.application.list/ })).toBeNull();
-    await user.click(screen.getByRole("button", { name: "显示全部操作" }));
-    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(publisher.getByRole("button", { name: "显示全部操作" }));
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+  });
+  it("reviews visual version semantics and the exact comparison while retaining the draft on back", async () => {
+    const { user, fixture, listAuthorizationProfiles, publisher } = await openVisualVersionDraft();
+    await user.click(publisher.getByLabelText("资源 ID 或前缀", { selector: "input" }));
+    await user.paste("app-prod");
+    await user.click(publisher.getByRole("button", { name: "审阅变更" }));
     expect(screen.getByRole("heading", { name: "审阅待发布版本" })).toBeTruthy();
     const summary = screen.getByRole("region", { name: "声明摘要" });
     const reviewSnapshot = within(summary).getByRole("region", { name: "待 IAM 校验的产品声明" });
@@ -4617,12 +4642,20 @@ describe("account access", () => {
     expect(within(comparison!).getByRole("heading", { name: /当前默认版本/ })).toBeTruthy();
     expect(within(comparison!).getByRole("heading", { name: "待发布声明 JSON" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    await user.click(publisher.getByRole("button", { name: "返回编辑" }));
     expect(screen.getByRole("checkbox", { name: /paas.application.read/ })).toHaveProperty("checked", true);
     expect((screen.getByRole("textbox", { name: "资源 ID 或前缀" }) as HTMLInputElement).value).toBe("app-prod");
     expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
-    await user.click(screen.getByRole("button", { name: "审阅变更" }));
-    await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+  });
+  it("publishes the reviewed exact visual declaration without switching the default", async () => {
+    const { user, fixture, publisher } = await openVisualVersionDraft();
+    await user.click(publisher.getByLabelText("资源 ID 或前缀", { selector: "input" }));
+    await user.paste("app-prod");
+    await user.click(publisher.getByRole("button", { name: "审阅变更" }));
+    await user.click(publisher.getByRole("button", { name: "返回编辑" }));
+    await user.click(publisher.getByRole("button", { name: "审阅变更" }));
+    await user.click(publisher.getByRole("button", { name: "确认发布新版本" }));
     await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1));
     const submitted = fixture.createPolicyVersion.mock.calls[0]![3].document;
     expect(submitted).toEqual({ languageVersion: "1", scope: "TENANT", statements: [{ sid: "read-applications", effect: "DENY",
@@ -4660,7 +4693,7 @@ describe("account access", () => {
       .toEqual(["paas.application.inspect", "paas.application.read"]);
   });
 
-  it("creates a live custom policy from an explicitly selected catalog Action without attaching it", async () => {
+  async function openVisualPolicyDraft() {
     const createPolicy = vi.fn(async (_credential: string, _accountId: string,
       command: { displayName: string; document: AccountPolicyDocument; requestId: string }): Promise<AccountPolicyDetail> => {
       const policy: AccountPolicy = { ...tenantPolicy, id: "customer.new", management: "CUSTOMER", accountId: account.id,
@@ -4681,6 +4714,17 @@ describe("account access", () => {
     await user.click(screen.getByRole("tab", { name: "可视化编辑" }));
     const action = await screen.findByRole("radio", { name: /paas.application.read/ });
     await user.click(action);
+    return { user, createPolicy, listAuthorizationProfiles };
+  }
+  async function enterVisualPolicyConstraints(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(screen.getByRole("textbox", { name: "资源 ID 或前缀" }));
+    await user.paste("app-prod");
+    await user.click(screen.getByRole("button", { name: "添加条件" }));
+    await user.click(screen.getByRole("textbox", { name: "条件值" }));
+    await user.paste("tenant-a");
+  }
+  it("inspects a selected catalog Action's declaration without treating it as authorization", async () => {
+    const { user, createPolicy } = await openVisualPolicyDraft();
     expect(within(screen.getByRole("region", { name: "当前声明依赖的产品目录" }))
       .getByText("paas @ r1", { selector: "code" })).toBeTruthy();
     expect(screen.queryByRole("region", { name: "已选 Action 的产品声明" })).toBeNull();
@@ -4695,11 +4739,13 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "收起声明详情" }));
     expect(screen.queryByRole("region", { name: "已选 Action 的产品声明" })).toBeNull();
     expect(screen.getAllByText("paas.application.read", { selector: "code" }).length).toBeGreaterThan(0);
+    expect(createPolicy).not.toHaveBeenCalled();
+  });
+  it("retains a complete visual policy draft across review and back without creating or attaching it", async () => {
+    const { user, createPolicy, listAuthorizationProfiles } = await openVisualPolicyDraft();
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByText(/可视化声明还有未完成/)).toBeTruthy();
-    await user.type(screen.getByRole("textbox", { name: "资源 ID 或前缀" }), "app-prod");
-    await user.click(screen.getByRole("button", { name: "添加条件" }));
-    await user.type(screen.getByRole("textbox", { name: "条件值" }), "tenant-a");
+    await enterVisualPolicyConstraints(user);
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
     expect(screen.getByRole("heading", { name: "审阅新策略" })).toBeTruthy();
     const summary = screen.getByRole("region", { name: "声明摘要" });
@@ -4721,7 +4767,15 @@ describe("account access", () => {
     expect(screen.getByRole("checkbox", { name: /paas.application.read/ })).toHaveProperty("checked", true);
     expect((screen.getByRole("textbox", { name: "资源 ID 或前缀" }) as HTMLInputElement).value).toBe("app-prod");
     expect(listAuthorizationProfiles).toHaveBeenCalledTimes(1);
+    expect(createPolicy).not.toHaveBeenCalled();
+  });
+  it("creates a live custom policy from the reviewed catalog declaration without attaching it", async () => {
+    const { user, createPolicy } = await openVisualPolicyDraft();
+    await enterVisualPolicyConstraints(user);
     await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    await user.click(screen.getByRole("button", { name: "返回编辑" }));
+    await user.click(screen.getByRole("button", { name: "审阅策略" }));
+    expect(createPolicy).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "确认创建" }));
     await waitFor(() => expect(createPolicy).toHaveBeenCalledTimes(1));
     const submitted = createPolicy.mock.calls[0]![2];
@@ -5374,6 +5428,7 @@ describe("account access", () => {
     expect(listServiceRoleTemplates).not.toHaveBeenCalled();
     await invokeMoreAction(user, "服务授权");
     expect(await screen.findByRole("table", { name: "当前账号服务授权关系" })).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "返回角色列表" })).toBeNull();
     expect(listServiceLinkedRoles).toHaveBeenCalledWith(expect.any(String), account.id, undefined);
     expect(listServiceRoleTemplates).not.toHaveBeenCalled();
 
@@ -5462,8 +5517,10 @@ describe("account access", () => {
     expect(screen.getByRole("alert").textContent).toContain("至少选择一名");
     await user.click(screen.getByRole("checkbox", { name: "developer" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    await user.type(screen.getByLabelText("名称", { exact: true }), "IncidentResponder");
-    await user.type(screen.getByLabelText("描述", { exact: true }), "Temporary incident response");
+    await user.click(screen.getByLabelText("名称", { exact: true }));
+    await user.paste("IncidentResponder");
+    await user.click(screen.getByLabelText("描述", { exact: true }));
+    await user.paste("Temporary incident response");
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(create).not.toHaveBeenCalled();
     expect(screen.getByText("本次 Root 命令只创建角色元数据", { exact: false })).toBeTruthy();

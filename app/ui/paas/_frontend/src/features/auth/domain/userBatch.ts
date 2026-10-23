@@ -13,7 +13,7 @@ export type UserBatchCommand = { targets: UserBatchTarget[] } & (
 );
 export type UserBatchContext = {
   canListUsers: boolean; supported: boolean; rootId: string; actorId: string;
-  targets: { id: string; enabled: boolean | null; canSetStatus: boolean; canAttachPolicy: boolean; protected: boolean }[];
+  targets: { id: string; enabled: boolean | null; canSetStatus: boolean; canAttachPolicy: boolean; canDelete: boolean; protected: boolean }[];
 };
 
 // The same eligibility rule drives menu explanations and mutation validation.
@@ -28,6 +28,8 @@ export function userBatchDisabledReason(action: UserBatchAction, context: UserBa
   if (action === "authorize") return context.targets.some((target) => !target.canAttachPolicy) ? "protected" : null;
   if (context.targets.some((target) => target.id === context.actorId)) return "self";
   if (action === "delete" && context.targets.some((target) => target.protected)) return "protected";
+  if (action === "delete" && context.targets.some((target) => target.enabled !== false)) return "mustDisable";
+  if (action === "delete" && context.targets.some((target) => !target.canDelete)) return "protected";
   if ((action === "enable" || action === "disable") && context.targets.some((target) => !target.canSetStatus)) return "protected";
   if (action === "enable" && context.targets.some((target) => target.enabled !== false)) return "notDisabled";
   if (action === "disable" && context.targets.some((target) => target.enabled !== true)) return "notEnabled";
@@ -44,7 +46,7 @@ export function applyUserBatch(source: AccessWorkspace, users: UserAccess[], ide
   const directory = new Map(users.map((entry) => [entry.user.id, entry]));
   const rootId = identity.account.rootIdentity.principalId;
   const targets = command.targets.map((target) => {
-    if (target.id === rootId) return { id: target.id, enabled: null, canSetStatus: false, canAttachPolicy: false, protected: true };
+    if (target.id === rootId) return { id: target.id, enabled: null, canSetStatus: false, canAttachPolicy: false, canDelete: false, protected: true };
     const entry = directory.get(target.id);
     if (!entry) throw new AccessWorkspaceError("notFound");
     if (target.resourceVersion !== entry.user.resourceVersion) throw new AccessWorkspaceError("staleUsers");
@@ -54,6 +56,7 @@ export function applyUserBatch(source: AccessWorkspace, users: UserAccess[], ide
       enabled: entry.user.status === "ACTIVE",
       canSetStatus: capability("iam.user.set-status")?.available === true,
       canAttachPolicy: capability("iam.policy-attachment.create")?.available === true,
+      canDelete: capability("iam.user.delete")?.available === true,
       protected: entry.capabilities.some((item) => item.restrictionReason === "INSTALLATION_AUTHORITY_PROTECTED")
     };
   });

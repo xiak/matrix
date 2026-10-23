@@ -1,16 +1,31 @@
 import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { ContentPage } from "@ui/xiak";
 import { initialAccessWorkspace } from "../repositories/previewAccessWorkspace";
 import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
 
 afterEach(cleanup);
 
 describe("ServiceAuthorizationPreview", () => {
+  it("restores the template trigger when the shared page header owns the visible title", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ContentPage><ContentPage.Header title="服务授权" navigationFocusKey="/console/access/service-authorizations/" /><ContentPage.Body>
+      <ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} />
+    </ContentPage.Body></ContentPage></LocaleProvider>);
+
+    await user.click(screen.getByRole("tab", { name: "平台模板" }));
+    const template = screen.getByRole("button", { name: "托管服务安装访问" });
+    await user.click(template);
+    expect(screen.getByRole("heading", { level: 1, name: "服务授权模板" })).toBe(document.activeElement);
+    await user.click(screen.getByRole("button", { name: "返回服务授权" }));
+    expect(screen.getByRole("button", { name: "托管服务安装访问" })).toBe(document.activeElement);
+  });
+
   it("moves focus through the current consent step without returning to the page title", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
 
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
@@ -24,19 +39,22 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getByText("iam.role.pass")).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "核对模板权限上限" })).toBe(document.activeElement));
+    const permissionsHeading = await screen.findByRole("heading", { level: 3, name: "核对模板权限上限" });
+    await waitFor(() => expect(permissionsHeading).toBe(document.activeElement));
     expect(screen.getByText("system.managedservice-installation-reader")).toBeTruthy();
     expect(screen.getByText("version-preview-managedservice-installation-reader-v1", { selector: "code" })).toBeTruthy();
     expect(screen.getByText(`sha256:${"9".repeat(64)}`)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
-    await waitFor(() => expect(screen.getByRole("heading", { level: 3, name: "确认客户同意与撤销边界" })).toBe(document.activeElement));
+    const consentHeading = await screen.findByRole("heading", { level: 3, name: "确认客户同意与撤销边界" });
+    await waitFor(() => expect(consentHeading).toBe(document.activeElement));
     expect(screen.getByRole("button", { name: "授权服务（未接入）" }).hasAttribute("disabled")).toBe(true);
   });
 
   it("opens the current account authorization directory before platform templates", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
 
+    expect(screen.queryByRole("button", { name: "返回角色列表" })).toBeNull();
     const directory = screen.getByRole("table", { name: "当前账号服务授权" });
     expect(within(directory).getByText("1 个有效 / 1 个全部")).toBeTruthy();
     expect(within(directory).getByText("ManagedServiceInstallationReader")).toBeTruthy();
@@ -66,6 +84,12 @@ describe("ServiceAuthorizationPreview", () => {
     expect(screen.getAllByText(`sha256:${"8".repeat(64)}`).length).toBeGreaterThan(0);
     expect(screen.getAllByText(`sha256:${"9".repeat(64)}`).length).toBeGreaterThan(0);
     expect(screen.getByText("服务关联角色为 ACTIVE 只说明账号与发布模板、注册服务主体的关系可用；它不证明任何业务资源已经绑定，也不能替代逐条 WorkloadRoleBinding。")).toBeTruthy();
+  });
+
+  it("keeps resource bindings and observed runtime metadata separate from execution", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "查看账号服务授权：托管服务安装访问" }));
 
     await user.click(screen.getByRole("tab", { name: "资源绑定 (1)" }));
     const bindings = screen.getByRole("table", { name: "服务角色业务资源绑定" });
@@ -96,7 +120,7 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(runtime).queryByRole("button")).toBeNull();
     expect(within(runtime).getByText(/下方目录另行展示固定契约允许公开的非秘密会话元数据/)).toBeTruthy();
 
-    let sessions = screen.getByRole("table", { name: "服务会话目录样例" });
+    const sessions = screen.getByRole("table", { name: "服务会话目录样例" });
     expect(within(sessions).getByText("preview.service-role-session.expired")).toBeTruthy();
     expect(within(sessions).getByText("preview.service-role-session.revoked")).toBeTruthy();
     expect(within(sessions).getAllByText("preview.paas.service").length).toBe(3);
@@ -108,25 +132,43 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(sessions).queryByText("2026-10-01T02:20:00Z")).toBeNull();
     expect(within(sessions).queryByText(/credential|proof|decision/i)).toBeNull();
     expect(screen.getByText("显示 3 / 3 条")).toBeTruthy();
+  });
+
+  it("searches and filters service-session metadata without changing the directory", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "查看账号服务授权：托管服务安装访问" }));
+    await user.click(screen.getByRole("tab", { name: "运行边界" }));
 
     const sessionSearch = screen.getByRole("searchbox", { name: "搜索会话 ID、账号、来源身份或目标角色" });
-    await user.type(sessionSearch, "expired");
-    sessions = screen.getByRole("table", { name: "服务会话目录样例" });
+    await user.click(sessionSearch);
+    await user.paste("expired");
+    let sessions = screen.getByRole("table", { name: "服务会话目录样例" });
     expect(within(sessions).queryByRole("button", { name: "preview.service-role-session.current" })).toBeNull();
     expect(within(sessions).getByRole("button", { name: "preview.service-role-session.expired" })).toBeTruthy();
     expect(screen.getByText("显示 1 / 3 条")).toBeTruthy();
     await user.clear(sessionSearch);
-    await user.type(sessionSearch, "missing-session");
+    await user.paste("missing-session");
     expect(screen.getByRole("heading", { name: "没有匹配的服务会话" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "重置查询" }));
     expect(screen.getByRole("table", { name: "服务会话目录样例" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "筛选" }));
     await user.click(screen.getByRole("combobox", { name: "生命周期" }));
-    await user.click(screen.getByRole("option", { name: "EXPIRED · 已到期" }));
+    await user.click(within(screen.getByRole("listbox")).getByRole("option", { name: "EXPIRED · 已到期" }));
     sessions = screen.getByRole("table", { name: "服务会话目录样例" });
     expect(within(sessions).queryByRole("button", { name: "preview.service-role-session.current" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "移除筛选：生命周期: EXPIRED · 已到期" }));
     sessions = screen.getByRole("table", { name: "服务会话目录样例" });
+    expect(within(sessions).getByRole("button", { name: "preview.service-role-session.current" })).toBeTruthy();
+    expect(screen.getByText("显示 3 / 3 条")).toBeTruthy();
+  });
+
+  it("previews revocation by session lifecycle and restores directory focus", async () => {
+    const user = userEvent.setup();
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
+    await user.click(screen.getByRole("button", { name: "查看账号服务授权：托管服务安装访问" }));
+    await user.click(screen.getByRole("tab", { name: "运行边界" }));
+    const sessions = screen.getByRole("table", { name: "服务会话目录样例" });
     const currentSession = within(sessions).getByRole("button", { name: "preview.service-role-session.current" });
 
     await user.click(currentSession);
@@ -164,7 +206,7 @@ describe("ServiceAuthorizationPreview", () => {
 
   it("keeps the published template, account relation, and exact workload binding visibly separate", async () => {
     const user = userEvent.setup();
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
 
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
     await user.click(screen.getByRole("button", { name: "托管服务安装访问" }));
@@ -181,7 +223,7 @@ describe("ServiceAuthorizationPreview", () => {
   });
 
   it("explains product, IAM, and tenant ownership without exposing publisher controls", async () => {
-    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} onClose={vi.fn()} /></LocaleProvider>);
+    render(<LocaleProvider><ServiceAuthorizationPreview workspace={initialAccessWorkspace("org-xiak")} /></LocaleProvider>);
 
     const responsibility = screen.getByRole("region", { name: "服务授权职责边界" });
     expect(within(responsibility).getByText("产品团队定义能力")).toBeTruthy();

@@ -1659,6 +1659,7 @@
       "primary": "包含主账号，不支持此操作。",
       "self": "包含当前登录用户，不能操作自己的账号状态或删除自己。",
       "protected": "所选用户中包含受保护或无对应操作权限的身份。",
+      "mustDisable": "删除前必须先禁用所有所选用户。",
       "notDisabled": "启用操作仅适用于已禁用的子用户。",
       "notEnabled": "禁用操作仅适用于未禁用的子用户。"
     },
@@ -2854,7 +2855,6 @@
     "finish": "结束体验"
   },
   "ServiceAuthorizationPreview": {
-    "backToRoles": "返回角色列表",
     "backToDirectory": "返回服务授权",
     "backToTemplate": "返回授权模板",
     "title": "服务授权",
@@ -3145,7 +3145,6 @@
     "title": "服务授权",
     "hint": "查看当前账号已同意的服务关联角色、资源绑定历史，以及平台可用于后续同意流程的模板。",
     "boundary": "平台模板、账号同意与资源绑定是三个独立边界；模板可用不代表账号已授权，账号已授权也不代表所有资源已绑定。",
-    "backToRoles": "返回角色列表",
     "sectionsLabel": "服务授权视图",
     "sections": { "authorizations": "当前账号授权", "templates": "平台模板" },
     "readOnly": "只读",
@@ -3227,7 +3226,6 @@
   },
   "ServiceRoleTemplateDirectory": {
     "title": "服务授权模板",
-    "backToRoles": "返回角色列表",
     "directoryHint": "查看由云产品和 IAM 平台受控发布的服务角色模板。模板定义未来授权可使用的固定权限上限和工作负载类型。",
     "boundary": "此目录只表达平台能力，不是当前账号的授权清单。客户同意、服务关联角色和具体资源绑定是另外的状态。",
     "loading": "正在读取服务授权模板",
@@ -4814,7 +4812,9 @@
     "liveDeleteReceiptRevision": "结果资源版本",
     "liveDeleteReceiptPolicies": "已撤销直接策略关联",
     "liveDeleteReceiptTime": "删除时间",
-    "liveDeleteFinish": "完成并返回角色列表"
+    "liveDeleteFinish": "完成并返回角色列表",
+    "previewDeleteReceiptTitle": "角色删除完成（MOCK）",
+    "previewDeleteReceiptHint": "该角色已从当前浏览器体验会话中移除。这不是 IAM 服务器回执，也不会改变真实账号。"
   },
   "IamWorkspace": {
     "selectionEmpty": "尚未选择对象",
