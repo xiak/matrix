@@ -65,33 +65,39 @@
 - A fresh PostgreSQL 18.6 NORMAL fixture completed the real built-in-browser
   User deletion with exactly one POST. The immutable receipt matched login,
   stable User ID, request ID, deletion time and resource version 4; explicit
-  finish then independently reread an empty ordinary-User directory.
-- The authority-process root passed in 283.297 seconds. It proved the exact
-  tombstone, permanent password/Session/RoleSession/AccessKey denial, cleared
-  Key secret, ended direct attachments, preserved tenant resources/Operations
-  and Role trust history, unique User and Key-cascade Audit facts, and a
-  complete tenant Audit chain. The task-owned PostgreSQL container was removed
-  after exact ID and label verification.
+  finish then independently reread an empty ordinary-User directory. The
+  authority-process root passed in 283.297 seconds.
+- A separate fresh PostgreSQL 18.6 RESPONSE_LOSS fixture also issued exactly
+  one POST. The server committed and dropped the response; the console kept
+  the exact login, stable User ID, original request ID and submitted version
+  as UNKNOWN through navigation, reload and same-owner relogin. It performed
+  no retry and no completion query. The authority-process root passed in
+  391.715 seconds.
+- Both paths proved the exact tombstone, permanent
+  password/Session/RoleSession/AccessKey denial, cleared Key secret, ended
+  direct attachments, preserved tenant resources/Operations and Role trust
+  history, unique User and Key-cascade Audit facts, and a complete tenant
+  Audit chain. Both task-owned PostgreSQL containers were removed after exact
+  ID and label verification.
 - `3afe96248` adds the required explicit `permissionBoundary: null` to the
   deleted-login reservation probe so it reaches the expected 409 conflict
   instead of failing request-shape validation with 400. It changes no
-  production contract. RESPONSE_LOSS remains a separate fresh-database gate.
+  production contract. NORMAL and RESPONSE_LOSS are independently accepted.
 
 ## Unaccepted boundaries
 
 - This is a pushed integration candidate, not a signed final release. Read the
   exact remaining acceptance gates from FEAT-007, IAM/FEAT-IAM-010 and
   IAM/FEAT-IAM-011 rather than copying them into this checkpoint.
-- Real User deletion NORMAL is accepted at `3afe96248`; RESPONSE_LOSS remains
-  unaccepted and must use a new target, database and one browser POST. The
-  completed NORMAL confirmation must not be transferred to that target.
+- Real User deletion NORMAL and RESPONSE_LOSS are accepted at `3afe96248`;
+  neither result is reused as evidence for another deletion path.
 - Daily self-password-change browser acceptance remains open for both the
   revoke-other-sessions and retain-other-sessions modes. Do not infer acceptance
   from a prepared form or a live fixture; the runtime assertions must finish.
-- Historical cleanup remains policy-blocked. The current NORMAL task-owned PG
-  was removed after verification; the four older denied containers remain out
-  of scope. Do not bypass the earlier rejection through another executor,
-  split command, delegation, rename or parent deletion.
+- Historical cleanup remains policy-blocked. The current NORMAL and
+  RESPONSE_LOSS task-owned PGs were removed after verification; the four older
+  denied containers remain out of scope. Do not bypass the earlier rejection
+  through another executor, split command, delegation, rename or parent deletion.
 - Production dependency audit is closed at zero. The five-entry development
   finding above remains an explicit upstream risk; do not run an unscoped
   audit fix, force a mismatched framework downgrade or claim the complete
