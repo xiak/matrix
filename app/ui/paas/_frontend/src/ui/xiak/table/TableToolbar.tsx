@@ -46,7 +46,7 @@ export function TableToolbar({ search, filters = [], labels, actions, status, to
       onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) { event.stopPropagation(); setExpanded(false); toggle.current?.focus(); } }}>
       <div className={styles.filterFields}>
         {filters.map((filter) => <div className={styles.field} key={filter.id}><span>{filter.label}</span>
-          <Select aria-label={filter.label} controlSize="large" options={filter.options} value={filter.value} onValueChange={filter.onChange} />
+          <Select aria-label={filter.label} options={filter.options} value={filter.value} onValueChange={filter.onChange} />
         </div>)}
       </div>
       {active.length ? <div className={styles.filterActions}><Button variant="ghost" onClick={reset}>{labels.clearFilters}</Button></div> : null}

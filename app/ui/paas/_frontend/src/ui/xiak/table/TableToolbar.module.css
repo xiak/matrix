@@ -10,10 +10,10 @@
 .count { font-variant-numeric: tabular-nums; color: var(--xiak-color-accent-text); }
 .filterTrigger[aria-expanded="true"] { background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
 .filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--xiak-spacing-default); margin: var(--xiak-spacing-default) calc(-1 * var(--xiak-table-cell-padding-inline)) 0; border-top: var(--xiak-border-subtle); padding: var(--xiak-spacing-comfortable) var(--xiak-table-cell-padding-inline); background: var(--xiak-color-bg-canvas); }
-.filterFields { display: grid; min-width: 0; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: var(--xiak-spacing-comfortable); }
-.field { display: grid; min-width: 0; gap: var(--xiak-spacing-tight); }
+.filterFields { display: flex; flex-wrap: wrap; min-width: 0; gap: var(--xiak-spacing-default); }
+.field { display: grid; width: min(100%, 260px); min-width: 220px; gap: var(--xiak-spacing-narrow); }
 .field > span { color: var(--xiak-color-text-base); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-medium); }
-.filterActions { display: flex; align-items: center; justify-content: flex-end; min-width: 0; min-height: var(--xiak-control-height-large); }
+.filterActions { display: flex; align-items: center; justify-content: flex-end; min-width: 0; min-height: var(--xiak-control-height); }
 .conditions { margin-top: var(--xiak-spacing-tight); }
 .root[data-expanded="true"] .conditions { margin: 0 calc(-1 * var(--xiak-table-cell-padding-inline)); padding: 0 var(--xiak-table-cell-padding-inline) var(--xiak-spacing-default); background: var(--xiak-color-bg-canvas); }
 .chip { max-width: 100%; }
@@ -23,6 +23,7 @@
   .actions { flex-basis: 100%; }
   .status { margin-inline-start: 0; }
   .filters { grid-template-columns: minmax(0, 1fr); padding-block: var(--xiak-spacing-default); }
-  .filterFields { grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-default); }
+  .filterFields { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-default); }
+  .field { width: 100%; min-width: 0; }
 }
 }
