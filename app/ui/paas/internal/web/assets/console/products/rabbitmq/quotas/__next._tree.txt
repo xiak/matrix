@@ -1,10 +1,10 @@
 :HL["/_next/static/chunks/3xzrjotzsjb5b.css","style"]
 :HL["/_next/static/chunks/1awi1kk9rluy3.css","style"]
-:HL["/_next/static/chunks/0kej5kpppa32p.css","style"]
+:HL["/_next/static/chunks/0at_vfk29eo-x.css","style"]
 :HL["/_next/static/chunks/31y09ucvtga2d.css","style"]
 5:[["children",{"s":"__PAGE__","h":160}]]
 4:[["children",{"s":{"n":"view","t":"d","k":"quotas","s":[]},"h":65632,"c":"$Q5"}]]
 3:[["children",{"s":{"n":"product","t":"d","k":"rabbitmq","s":[]},"h":196704,"c":"$Q4"}]]
 2:[["children",{"s":"products","h":131168,"c":"$Q3"}]]
 1:[["children",{"s":"console","h":131168,"c":"$Q2"}]]
-0:{"b":"matrix-382e368f7e95398e5502","t":{"t":{"s":"","h":131152,"c":"$Q1"}}}
+0:{"b":"matrix-c84da62275a74de5dcdc","t":{"t":{"s":"","h":131152,"c":"$Q1"}}}

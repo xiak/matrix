@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
+import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AuthorizationProfileClient, type AuthorizationProfileLoad } from "../application/AccountAccessProvider";
 import {
@@ -40,7 +40,8 @@ export function AccountAuthorizationProfileCatalog({ surface = "tenant" }: { sur
   const client = useAccountAccess().authorizationProfiles;
   if (!client) return <EmptyState title={t("notConnected")} description={t("notConnectedHint")} />;
   if (surface === "platform-preview" && !client.preview) return <EmptyState title={publishing("workspaceUnavailable")} description={publishing("workspaceUnavailableHint")} />;
-  return <AuthorizationProfileCatalog key={`${client.accountId}:${client.preview ? "preview" : "live"}:${surface}`} client={client} publishingEnabled={surface === "platform-preview"} />;
+  const catalog = <AuthorizationProfileCatalog key={`${client.accountId}:${client.preview ? "preview" : "live"}:${surface}`} client={client} surface={surface} />;
+  return surface === "platform-preview" ? <Card>{catalog}</Card> : catalog;
 }
 
 export function AuthorizationProfilePublishingWorkspace() {
@@ -52,12 +53,15 @@ export function AuthorizationProfilePublishingWorkspace() {
   </div>;
 }
 
-function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: AuthorizationProfileClient; publishingEnabled: boolean }) {
+function AuthorizationProfileCatalog({ client, surface }: { client: AuthorizationProfileClient; surface: CatalogSurface }) {
   const t = useTranslations("AuthorizationProfileCatalog");
   const toolbarLabels = useTableToolbarLabels();
+  const publishingEnabled = surface === "platform-preview";
   const [result, setResult] = useState<CatalogResult>(() => ({ client, state: loadingCatalogState }));
   const state: CatalogState = result.client === client ? result.state : loadingCatalogState;
   const [query, setQuery] = useState("");
+  const [productServiceFilter, setProductServiceFilter] = useState("all");
+  const [productScopeFilter, setProductScopeFilter] = useState<"all" | AuthorizationAuthorityScope>("all");
   const [actionQuery, setActionQuery] = useState("");
   const [scopeFilter, setScopeFilter] = useState<"all" | AuthorizationAuthorityScope>("all");
   const [subjectFilter, setSubjectFilter] = useState<"all" | AuthorizationSubjectType>("all");
@@ -106,10 +110,13 @@ function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: Au
   const filteredEntries = useMemo(() => {
     const words = query.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
     return entries.filter((entry) => {
+      if (productServiceFilter !== "all" && entry.profile.callingService !== productServiceFilter) return false;
+      if (productScopeFilter !== "all" && !entry.profile.actions.some((action) => action.scope === productScopeFilter)) return false;
       const value = [entry.profile.product, entry.profile.callingService, ...entry.profile.actions.map((action) => action.action)].join(" ").toLowerCase();
       return words.every((word) => value.includes(word));
     });
-  }, [entries, query]);
+  }, [entries, productScopeFilter, productServiceFilter, query]);
+  const callingServices = useMemo(() => [...new Set(entries.map((entry) => entry.profile.callingService))].sort((left, right) => left.localeCompare(right)), [entries]);
 
   const filteredActions = useMemo(() => {
     if (!selected) return [];
@@ -149,7 +156,7 @@ function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: Au
 
   if (selected && publishingPreview) return <AuthorizationProfilePublishingPreview entry={selected} onClose={closePublishingPreview} />;
 
-  if (selected) return <section aria-label={t("productDetail", { product: selected.profile.product })} className={styles.catalogSection}>
+  if (selected) return <section aria-label={t("productDetail", { product: selected.profile.product })} className={styles.catalogDetailSection}>
     <div className={styles.catalogDetailHeading}>
       <Button variant="ghost" size="small" onClick={back}><ArrowLeft aria-hidden="true" />{t("back")}</Button>
       <h2 ref={selectedHeading} tabIndex={-1}>{selected.profile.product}</h2>
@@ -205,10 +212,29 @@ function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: Au
     <Table.Footer note={t("completeActions", { count: selected.profile.actions.length })}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
   </section>;
 
-  return <section aria-label={t("title")} className={styles.catalogSection}>
+  const resetProducts = () => {
+    setQuery("");
+    setProductServiceFilter("all");
+    setProductScopeFilter("all");
+    setProductPage(1);
+  };
+
+  return <section aria-label={t("title")} className={styles.catalogSection} data-surface={surface}>
     <CatalogNotice preview={client.preview} publishingPreview={publishingEnabled} />
     <TableToolbar labels={toolbarLabels}
       search={{ label: t("searchProducts"), placeholder: t("searchProductsPlaceholder"), value: query, onChange: (value) => { setQuery(value); setProductPage(1); } }}
+      filters={[
+        { id: "calling-service", label: t("callingService"), value: productServiceFilter, defaultValue: "all", onChange: (value) => { setProductServiceFilter(value); setProductPage(1); }, options: [
+          { value: "all", label: t("allCallingServices") },
+          ...callingServices.map((value) => ({ value, label: value }))
+        ] },
+        { id: "scope", label: t("scopeFilter"), value: productScopeFilter, defaultValue: "all", onChange: (value) => { setProductScopeFilter(value as "all" | AuthorizationAuthorityScope); setProductPage(1); }, options: [
+          { value: "all", label: t("allScopes") },
+          { value: "TENANT", label: t("scopes.TENANT") },
+          { value: "INSTALLATION", label: t("scopes.INSTALLATION") },
+          { value: "INSTALLATION_PROBE", label: t("scopes.INSTALLATION_PROBE") }
+        ] }
+      ]}
       status={state.status === "ready" ? t("productCount", { count: filteredEntries.length }) : state.status === "loading" ? t("loading") : undefined} />
     {state.status === "loading" ? <TableSkeleton label={t("loading")} rows={4} /> : null}
     {state.status !== "ready" && state.status !== "loading" ? <>
@@ -234,7 +260,7 @@ function AuthorizationProfileCatalog({ client, publishingEnabled }: { client: Au
           <td data-label={t("digest")}><code className={styles.catalogDigestShort} title={entry.contentDigest}>{entry.contentDigest.slice(0, 18)}…</code></td>
         </tr>;
       })}</tbody>
-    </Table> : <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setProductPage(1); }}>{toolbarLabels.resetQuery}</Button>} />}
+    </Table> : <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={resetProducts}>{toolbarLabels.resetQuery}</Button>} />}
     <Table.Footer note={t("completeProducts", { count: entries.length })}><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer></> : null}
   </section>;
 }
@@ -243,7 +269,10 @@ function CatalogNotice({ preview, publishingPreview }: { preview: boolean; publi
   const t = useTranslations("AuthorizationProfileCatalog");
   const publishing = useTranslations("AuthorizationProfilePublishingPreview");
   return <div className={styles.catalogNotice}>
+    <div className={styles.catalogNoticeHeader}>
+      <h2 className={styles.detailTitle}>{t("title")}</h2>
+      <p className={styles.note}>{t("ownershipHint")}</p>
+    </div>
     <Alert status={publishingPreview ? "warning" : preview ? "warning" : "info"}>{publishingPreview ? publishing("workspaceBoundary") : t(preview ? "mockNotice" : "notice")}</Alert>
-    <p className={styles.note}>{t("ownershipHint")}</p>
   </div>;
 }

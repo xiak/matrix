@@ -2623,6 +2623,7 @@
     "table": "产品权限能力目录",
     "product": "产品",
     "callingService": "调用服务",
+    "allCallingServices": "全部调用服务",
     "revision": "修订",
     "actions": "Action 数量",
     "scope": "权限范围",

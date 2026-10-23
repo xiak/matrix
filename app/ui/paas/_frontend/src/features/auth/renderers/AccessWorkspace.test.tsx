@@ -801,6 +801,29 @@ describe("policy creation entry and directory contract", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "查看内部接入流程（MOCK）" })).toBe(document.activeElement));
     expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "nearest", inline: "nearest" });
   });
+  it("uses the shared disclosed filters for product permission declarations", async () => {
+    const { user } = await open("authorization-profiles", { repository: {
+      listAuthorizationProfiles: vi.fn(() => previewAccountRepository.listAuthorizationProfiles(previewCredential))
+    } });
+    expect(await screen.findByRole("table", { name: "产品权限能力目录" })).toBeTruthy();
+    expect(screen.queryByRole("combobox", { name: "调用服务" })).toBeNull();
+
+    await select(user, "调用服务", "PAAS");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "audit" })).toBeNull());
+    expect(screen.getByText("2 个产品声明")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "iam" })).toBeNull();
+    expect(screen.getByRole("button", { name: "managedservice" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "paas" })).toBeTruthy();
+
+    await select(user, "权限范围", "平台安装");
+    await waitFor(() => expect(screen.queryByRole("button", { name: "managedservice" })).toBeNull());
+    expect(screen.getByText("1 个产品声明")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "paas" })).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "清除筛选" }));
+    await waitFor(() => expect(screen.getByText("4 个产品声明")).toBeTruthy());
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "筛选" }));
+  });
   it("does not expose the internal onboarding workflow from a live route", async () => {
     await open("authorization-profiles", { live: true });
     expect(await screen.findByText("此能力尚未接入后端")).toBeTruthy();

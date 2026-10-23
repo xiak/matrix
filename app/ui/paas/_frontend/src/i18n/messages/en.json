@@ -2623,6 +2623,7 @@
     "table": "Product permission catalog",
     "product": "Product",
     "callingService": "Calling service",
+    "allCallingServices": "All calling services",
     "revision": "Revision",
     "actions": "Actions",
     "scope": "Authority scope",
