@@ -10,10 +10,9 @@
   closure: default revocation, explicit retention of still-valid peer Sessions,
   uncertain-result failure closure, independent verification and cleanup. Do
   not silently expand it to every unaccepted IAM page.
-- Latest pushed code is 571692dd277317091af077beba79fe13f509738d. From d1ab8268d,
-  this slice only adds and corrects the existing authorityprocess User deletion
-  browser fixture: fresh response/capability decode and exact disabled-Key403
-  versus deleted-Key401. No production API, SQL, Profile or UI changes.
+- Latest pushed code is 9650c19c1e110be3555ccb5de6faa1932d01f6a1. It adds only
+  the existing authorityprocess daily-password `RESPONSE_LOSS` mode and its
+  owning IAM/010 requirements; no production API, SQL, Profile or UI changes.
 - The embedded User deletion consumer remains fixed
   b2ae60f17ce8e4d7e8e33dcb7b6be4b3db3fa97f, build
   matrix-a6f26f9b65bd7e6b26c1. Existing adoption and IAM/010 own its fixed
@@ -79,6 +78,20 @@
   been adopted. Do not infer success or failure from whichever password later
   authenticates, and do not invent a generic completion API without a FEAT
   decision.
+- Fixed `9650c19c1` reuses the real browser response-loss observer for one
+  successful `POST /api/iam/v1/auth/password`, two separate UNKNOWN/final
+  markers, the pre-logout generation-3 calling-Session snapshot, zero replay or
+  completion read, explicit new-owner login and the existing credential,
+  Session, outbox and Audit postconditions. Focused compile and race gates pass
+  (latest race 3.752 seconds).
+- The first fresh PG18 attempt reached its final page with all three synthetic
+  password fields filled, but the required human final click did not occur and
+  the browser tab later disappeared. Read-only authority state remained User
+  version2, credential generation2 and zero `ui-password-*` facts, so it is
+  neither a product success nor failure and must not be cited as acceptance.
+  The test process was interrupted; its exact labeled container/network,
+  temporary credential directory and listeners were verified absent. Resume
+  with a new isolated database and the fixed gate; do not reuse that old page.
 
 ## Independent User deletion fixture
 
