@@ -191,7 +191,7 @@ relay只保存封闭路径/状态/阶段计数，并用不输出、不持久化�
 
 既有authorityprocess owner新增可选AccessKey浏览器恢复入口，选择SET_STATUS、NETWORK或DELETE之一，API只准备可丢弃User、密钥及显式Policy/Attachment；冻结bootstrap策略不能隐式取得新增密钥权限。响应丢失后必须实际操作页面，沿原意图精确重放一次并另做授权目录读取；结束标记只触发原版本单增、唯一完成/outbox/Audit及租户完整链的后验，标记本身不构成验收。默认observer回归拒绝变化的请求体、来源、目标、失败重放、额外写以及重放前的读取。该门禁不声称浏览器创建密钥、保存一次性Secret或程序访问已完成。
 
-此前Windows服务经SSH访问远端数据库的准备在PaaS installation verify处71.75秒超时；改为同机独立PG18.4后修正夹具遗漏的显式密钥授权，没有放宽产品权限。该2CPU/4GiB、Go1.26.3/GOMAXPROCS2的非race运行仅取得登录页证据，SET_STATUS最终以1800.02秒浏览器超时失败（package1800.038秒、exit1、OOM=false）；不接受UNKNOWN或密钥效果，也不能据此断言产品命令失败。已核对身份并关闭转发、删除该轮独占runner/PG/空网络；先前工具拒绝删除的源码、依赖和SDK归档仍保留，不计已清理。后继本机新鲜空库的三类成功页面证据由下表拥有，不回填这次失败；签名组合仍独立验收。
+此前Windows服务经SSH访问远端数据库的准备在PaaS installation verify处71.75秒超时；改为同机独立PG18.4后修正夹具遗漏的显式密钥授权，没有放宽产品权限。该2CPU/4GiB、Go1.26.3/GOMAXPROCS2的非race运行仅取得登录页证据，SET_STATUS最终以1800.02秒浏览器超时失败（package1800.038秒、exit1、OOM=false）；不接受UNKNOWN或密钥效果，也不能据此断言产品命令失败。已核对身份并关闭转发、删除该轮独占runner/PG/空网络；当时工具拒绝删除的源码、依赖和SDK归档已在2026-10-23最终收尾移入Windows回收站并从原位置验证不存在。后继本机新鲜空库的三类成功页面证据由下表拥有，不回填这次失败；签名组合仍独立验收。
 
 最小验收沿原provider/repository/renderer及真实进程owner，不另建测试框架：
 
@@ -245,7 +245,7 @@ UI-K1在同一authorityprocess owner提供独立opt-in正常旅程：准备无Ke
 | 再禁用并删除Key1 | 401 / 200 / — | 精确版本4的Key1删除，nonce/ciphertext为NULL；仅Key2并释放名额 |
 | 创建Key3、结束展示并离页返回 | 401 / 200 / 200 | 只保留Key2和Key3，均版本1/ENABLED；页面2/2再次禁用创建 |
 
-七条原request各自恰有一条准确actor/目标/decision关联的intent和成功outbox，Audit中成功事实不与同request的授权决定混计；完整租户链验证通过，原测试owner的秘密明文存储及日志检查通过。结束后进程、监听及数据库外部连接归零，本轮独占PG容器和空网络已按准确ID/标签删除，合成数据库随tmpfs销毁；测试页已关闭。测试临时文件已由正常收尾清除，仅任务目录内两个空子目录因工具策略拒删而保留，不宣称全部磁盘清理完成。此证据只接受UI-K1，不回填此前超时，也不接受尚未执行的R1/R2、后继独立CI或签名发布。
+七条原request各自恰有一条准确actor/目标/decision关联的intent和成功outbox，Audit中成功事实不与同request的授权决定混计；完整租户链验证通过，原测试owner的秘密明文存储及日志检查通过。结束后进程、监听及数据库外部连接归零，本轮独占PG容器和空网络已按准确ID/标签删除，合成数据库随tmpfs销毁；测试页已关闭。测试临时文件已由正常收尾清除，当时拒删的两个空子目录已在2026-10-23最终收尾移入Windows回收站并验证原位置不存在。此证据只接受UI-K1，不回填此前超时，也不接受尚未执行的R1/R2、后继独立CI或签名发布。
 
 选择性接入UX固定`7a704f5f2f3deb25e7972015a495a503288f4733`的两个既有测试文件增量，保留本分支准确owner读取和拒绝分类回归。状态化Key组件测试从空目录连续创建两把、明确结束Secret展示、卸载重挂载后无Secret，使用第一把的准确版本1/2/3停启停、版本4删除，再由权威目录释放名额并创建替代Key；每条命令的requestId和确认绑定分别核对。原RoleSession UNKNOWN恢复测试增加另一条服务会话，证明只移除准确目标，Sibling仍未撤销且不调用Role/附件/上限变更。消费分支两文件54项以21.42秒通过，Node22.22.2、2GiB、单worker，typecheck及两文件ESLint通过；默认process/architecture race3.980/2.510秒及vet通过，默认opt-in跳过不计真实运行。没有改变生产交互逻辑，不替代K1真实签名/浏览器及R1/R2实际会话撤销验收。
 
@@ -261,7 +261,7 @@ R2当前观察器只认可同一页面发行Role的实际GET：应用目录、�
 
 当前准确详情路径与自然到期判定由原owner的41种身份/路由/时序场景保护：五条过期负例和两条正常详情顺序分别先暴露错误通过与缺失观察，修正后的race3.499秒、默认process/architecture race4.016/2.555秒及vet通过。R2只准备自己的真实应用，R1绑定已有的准确应用；没有通配URL或放宽原身份、动作、完成记录及审计后验。更早因缺失详情观察或等待动作确认超时的运行仍为失败，固定证据留在Git，不因后继运行成功而回填。
 
-2026-10-22在干净固定`dea0af7fdcdb82533c20704015fafaa6ec3ff81c`（代码b3c3、同一嵌入消费者）的新PG18.4执行ROLE/REVOKE，页面完成一次承担、准确应用目录/详情读取、附件撤销UNKNOWN、一次原回执读取和零附件目录；真实探针已证明准确详情上的原Role401、显式同来源200及来源应用403。原request=`role-revocation-4a81ce83e5b53341b9be37d51ee3236b`，数据库附件版本1→2/已撤销、REVOKE完成记录及成功outbox各一条。但response-loss后验为`lost=false/recovery_reads=0`，因此根554.94秒/race557.535秒、exit1，该次完整R2未验收；不能用DOM补作连接截断或回执HTTP观察，也没有执行后续完整链断言。进程/监听/外部DB连接归零、两页关闭；本次专属PG/网络/空目录清理被工具策略在执行前拒绝，仍保留且不绕路重试。
+2026-10-22在干净固定`dea0af7fdcdb82533c20704015fafaa6ec3ff81c`（代码b3c3、同一嵌入消费者）的新PG18.4执行ROLE/REVOKE，页面完成一次承担、准确应用目录/详情读取、附件撤销UNKNOWN、一次原回执读取和零附件目录；真实探针已证明准确详情上的原Role401、显式同来源200及来源应用403。原request=`role-revocation-4a81ce83e5b53341b9be37d51ee3236b`，数据库附件版本1→2/已撤销、REVOKE完成记录及成功outbox各一条。但response-loss后验为`lost=false/recovery_reads=0`，因此根554.94秒/race557.535秒、exit1，该次完整R2未验收；不能用DOM补作连接截断或回执HTTP观察，也没有执行后续完整链断言。进程/监听/外部DB连接归零、两页关闭；当时拒删的专属PG、网络和空目录已在2026-10-23最终收尾按精确身份清除，不改变该次失败终态。
 
 该失败的确定夹具原因是Role观察器位于故障注入层之外，其ResponseWriter只提供Unwrap，不直接实现Flusher/Hijacker；原截断函数因此返回false，客户端收到空200而非已提交半截响应。现有owner提取同一实际装配入口，以真实HTTP连接回归同时覆盖凭据转换、成功状态/Content-Length/半截正文与unexpected EOF、唯一写入、准确原回执GET及零再写。旧组合先以race2.553秒失败（实际body0/length0/无unexpected EOF）；固定`b3bd03958f7e3b6f251d78693abdad1b5d23cbcc`修正为外层故障注入拥有真实连接、内层观察权威响应后，相关探针race3.795秒、默认process/architecture race5.541/2.772秒及vet通过。没有改变生产UI/API/SQL、会话时长、权限或后验标准；该固定源码的新库页面复验如下，独立CI状态归011。
 
@@ -269,7 +269,7 @@ R2当前观察器只认可同一页面发行Role的实际GET：应用目录、�
 
 同一页面发行的RoleSession下一次准确应用详情GET得到401/BLOCKED，发生在其自然到期前；仅点击显式返回后，原来源USER验证200、应用详情及目录403。没有重新登录、整页刷新、二次承担、静默回退或被BLOCKED后追加旧凭据请求。严格探针确认`attempts=selected=mutation_ledger=1`、成功backend200被截断、`lost=true`、同源精确原request的GET200恰一次、`post_loss_writes=0`，没有替代Idempotency-Key。独立SQL及HTTP后验确认准确附件版本2/撤销、唯一原完成记录、原RoleSession发行记录不变；独立新承担按无附件的当前权限返回应用403，不能复活旧RoleSession。原request各恰一条准确actor/target成功outbox与IAM来源tenant Audit事实，完整租户链VERIFIED且Complete。
 
-`TestIAMPolicyAttachmentRecoveryConsoleBrowser`实际PASS325.73秒、race包329.294秒、exit0。实际页面RoleSession为`role-session-16c00076d7767f5edf0c28ea573d8f0c`，拒绝路由为`/api/paas/v1/applications/browser-attachment-application`；本次只接受UI-R2附件REVOKE恢复，不回填旧失败或扩展为签名发布。结束后任务子进程、浏览器监听与外部DB连接归零；两页已关闭，唯一专属PG及tmpfs合成数据库、空网络和空任务目录均已删除，标签复查无残留。其他轮次被工具拒删的对象保持原状，不能据此宣称所有历史清理已完成。
+`TestIAMPolicyAttachmentRecoveryConsoleBrowser`实际PASS325.73秒、race包329.294秒、exit0。实际页面RoleSession为`role-session-16c00076d7767f5edf0c28ea573d8f0c`，拒绝路由为`/api/paas/v1/applications/browser-attachment-application`；本次只接受UI-R2附件REVOKE恢复，不回填旧失败或扩展为签名发布。结束后任务子进程、浏览器监听与外部DB连接归零；两页已关闭，唯一专属PG及tmpfs合成数据库、空网络和空任务目录均已删除，标签复查无残留。其他轮次当时拒删的对象已在2026-10-23最终收尾清除。
 
 UI-R1与UI-R2单Session撤销复用同一个新鲜进程旅程，减少重复启动：API只准备普通User、一个真实应用和可选Policy，页面创建CUSTOMER Role及准确USER Trust、设置PaaSViewer上限并显式关联允许应用与Audit读取的租户Policy。随后才为成员授予该实际Role的精确assume权限；成员从页面承担，以应用200/Audit403证明正向授权与上限的交集。管理员最终只撤销该页面发行的准确RoleSession，原角色下一请求401/BLOCKED、显式验证来源后业务403，另一条独立发行的Sibling Session继续200。原Role、Trust和附件不变，五类原命令唯一outbox/Audit及完整链分别核对；默认观察器覆盖错误Session、等值回执冒充首次撤销、缺失拒绝观察等负向路径。
 
@@ -279,7 +279,7 @@ UI-R1与UI-R2单Session撤销复用同一个新鲜进程旅程，减少重复启
 
 页面创建的CUSTOMER Role仅信任原普通USER，设置`system.paas-viewer`上限并关联包含应用与Audit读取的正向Policy；原夹具独立核对准确Role版本2、Trust、边界及唯一附件后，才授予该User对此实际Role的精确assume许可。页面仅承担一次并显示准确Role/来源/期限，经SPA应用列表200且包含真实应用、Audit403，证明上限与正向授权的交集。管理员只撤销该页面发行的RoleSession；成员同一凭据下一受保护请求在`/api/managed-services/v1/services`得到401并进入BLOCKED，显式验证原来源200后返回USER，应用读取403。没有重新登录、整页刷新、再次承担或静默回退；原来源Session在独立SQL中仍ACTIVE、未撤销/未到期、idle有效且credential generation一致。
 
-`TestIAMRoleLifecycleConsoleBrowser`实际PASS834.25秒，race包837.760秒、exit0。后验确认目标RoleSession终态revoked，独立Sibling的IAM/应用仍200、Audit仍403；Role、Trust及正向附件完全不变。五类原页面命令各恰有一条准确actor/target/request/decision关联成功outbox，Audit归属、唯一事实与完整租户链均通过。收尾时Role1、活动ROLE附件1、RoleSession2（准确撤销1、有效Sibling1），外部数据库连接、任务子进程及浏览器监听均归零，两个测试标签已关闭。后续PG/网络/空目录清理命令在执行前被工具策略拒绝，三者仍保留，不以其他执行器重试，也不宣称全部资源已清理。旧未执行或失败的旅程不回填；该证据不接受R2附件撤销UNKNOWN恢复、Role其他变更或新签名发布。
+`TestIAMRoleLifecycleConsoleBrowser`实际PASS834.25秒，race包837.760秒、exit0。后验确认目标RoleSession终态revoked，独立Sibling的IAM/应用仍200、Audit仍403；Role、Trust及正向附件完全不变。五类原页面命令各恰有一条准确actor/target/request/decision关联成功outbox，Audit归属、唯一事实与完整租户链均通过。收尾时Role1、活动ROLE附件1、RoleSession2（准确撤销1、有效Sibling1），外部数据库连接、任务子进程及浏览器监听均归零，两个测试标签已关闭。当时拒删的PG、网络和空目录已在2026-10-23最终收尾按精确身份清除。旧未执行或失败的旅程不回填；该证据不接受R2附件撤销UNKNOWN恢复、Role其他变更或新签名发布。
 
 新增正常Key/Role夹具的最终默认进程race3.971秒、架构race2.683秒及vet通过；Key观察器十五种场景、Role观察器十九种场景及响应有界/透明转发在原owner执行。浏览器根默认opt-in跳过，不计实际生命周期通过。首次K1准备因夹具使用非规范应用名返回400，未进入页面；修正后另一空库成功启动，但创建密钥的具体浏览器确认未完成，以1800.06秒观察超时结束（race1802.516秒）。数据库仍零Key，进程、监听和外部连接均归零后删除该独占库，不能视为产品创建失败或页面通过；上述后继新库K1成功不改变该次失败终态。
 
@@ -305,11 +305,11 @@ LIVE删除只接受准确Role ID、Account、名称、下一resourceVersion、�
 
 前置条件先证明目标的密码、多个Session、RoleSession和AccessKey实际可用，再经现有状态API停用并证明下一请求拒绝。删除后独立检查唯一tombstone、版本恰增一、密码材料移除、Key秘密清除和关联附件终止；旧密码、原Session、RoleSession和Key均不得获得访问。停用已造成的拒绝不得归功于删除，也不把历史RoleSession发行记录仍存在等同于仍有效。目标曾创建的租户应用、配置及Operation通过另一有效身份读取，原归属、创建者与内容保持。每条原request只允许一条`iam.user.deleted`成功outbox及相同Audit记录；Key级联事实按现有封闭动作单独核对，不误称所有动作总计一条。成功事实须绑定原actor、target、requestId和允许的IAM决定，完整租户链必须验证通过。
 
-本片只证明当前发布契约，不重跑已移除的全历史schema链，不新增完成API或改变原删除重放语义。真实浏览器之前先跑观察器的正常、真实半截响应、重复写入和不匹配回执负向检查；重型旅程串行、唯一命名、显式限额。每次结束只按准确身份清理该次新建的进程、容器、网络和临时目录，不复用或触碰此前工具明确拒绝清理的历史残留。此片独立于AccessKey/Role本轮闭环，不扩大其验收范围。
+本片只证明当前发布契约，不重跑已移除的全历史schema链，不新增完成API或改变原删除重放语义。真实浏览器之前先跑观察器的正常、真实半截响应、重复写入和不匹配回执负向检查；重型旅程串行、唯一命名、显式限额。每次结束只按准确身份清理该次新建的进程、容器、网络和临时目录；本目标此前拒删的历史残留已在2026-10-23最终收尾，不复用或触碰其他任务资源。此片独立于AccessKey/Role本轮闭环，不扩大其验收范围。
 
 固定`571692dd277317091af077beba79fe13f509738d`只补充并修正上述process测试owner，没有改变生产UI/API/SQL/Profile。停用响应和权限投影分别解码到新值，避免省略字段在复用对象中保留旧值；合法MAC的停用User返回403，删除并清除Key材料后返回401，不能将两者或任意失败混作同一通过条件。正常/真实响应截断及六项负向观察检查最终race通过3.581秒，默认authorityprocess/architecture分别通过5.327/1.899秒，相关vet及diff检查通过；默认跳过的真实数据库/browser入口不构成验收。独立CI准确终态及其证据边界归[011](FEAT-IAM-011-acceptance.md#当前独立ci)。
 
-本固定源码在全新PostgreSQL18.6数据库、1CPU/768MiB/PIDs128和512MiB tmpfs中成功完成NORMAL前置，真实IAM/Audit/PaaS及双dispatcher使用受限数据库身份；Go为GOMAXPROCS2、GOMEMLIMIT512MiB、`-race -p 2`。UX已观察准确DISABLED User、版本3和删除确认内容，但未最终提交。`TestIAMUserDeletionConsoleBrowser`随后以1800.06秒观察超时失败，race包1802.586秒、exit1，不能记为删除成功或产品拒绝。终态只读核对仍为DISABLED/版本3、无tombstone、零`iam.user.deleted`成功事实；没有删除POST、服务器回执或完成marker，RESPONSE_LOSS旅程未启动。先前三次准备失败也不计验收。任务子进程、浏览器监听和外部数据库连接已归零；该次独占PG、网络和临时目录的清理命令在执行前被工具策略拒绝，仍保留，不以另一执行器重试。两个独立LIVE旅程均未接受。
+本固定源码在全新PostgreSQL18.6数据库、1CPU/768MiB/PIDs128和512MiB tmpfs中成功完成NORMAL前置，真实IAM/Audit/PaaS及双dispatcher使用受限数据库身份；Go为GOMAXPROCS2、GOMEMLIMIT512MiB、`-race -p 2`。UX已观察准确DISABLED User、版本3和删除确认内容，但未最终提交。`TestIAMUserDeletionConsoleBrowser`随后以1800.06秒观察超时失败，race包1802.586秒、exit1，不能记为删除成功或产品拒绝。终态只读核对仍为DISABLED/版本3、无tombstone、零`iam.user.deleted`成功事实；没有删除POST、服务器回执或完成marker，RESPONSE_LOSS旅程未启动。先前三次准备失败也不计验收。任务子进程、浏览器监听和外部数据库连接已归零；当时拒删的独占PG、网络和临时目录已在2026-10-23最终收尾按精确身份清除。两个独立LIVE旅程仍均未接受。
 
 本分支选择性采用固定`8c40091ec1d48ecb81281c4ffa55d8bcd5b9ee9d`的17个前端路径及修正`09640c6cefce7361574206753fdb0b2bd1133847`、`3dec632876828d87a785319043881ff65f00ce5e`，保留五个既有差异文件及两条消费端协议回归；固定来源边界归[既有adoption owner](../docs/adoption/FEAT-007-control-plane-console.md)。旧HTTP客户端接受错误Account回执的回归先以1.63秒失败；初始增量的四个相关文件727项通过176.89秒后，额外协议回归仍准确暴露两个403错误码清除原意图的缺口，以6.29秒失败。采用目的限定状态/错误码分类后，同两条回归以6.90秒通过，三个受影响文件535项通过91.76秒。随后仅先采用本地过期版本回归，旧生产实现以7.96秒暴露冲突误报UNKNOWN；采用对应一行修正后，该项与两条协议回归共三项以6.98秒通过，均证明不开放另一删除意图。
 

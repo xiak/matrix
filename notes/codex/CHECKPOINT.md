@@ -51,16 +51,15 @@
   unique completion/outbox/Audit and full chain. Its own fixture was cleaned.
   The earlier dea0 run remains failed; the actual HTTP assembly fixed the
   hijackable-connection defect without changing production behavior.
-- K1/K2/R1/R2 are accepted at their exact sources. Necessary independent CI
-  metadata is now settled. Unused own resource cleanup remains incomplete;
-  do not rerun accepted journeys or redefine completion to exclude cleanup.
-- On 2026-10-23 read-only inspection still found the original four denied
-  containers, ten task paths and the later User fixture's PG/network/root.
-  Four PG containers run and one diagnostic container is stopped. A cleanup
-  tool rejection occurred before launch, not after partial success. Do not
-  bypass it through a split command, another executor, rename, parent deletion
-  or another task. Exact local handles remain in this thread's tool evidence,
-  not portable assumptions. No cleanup capability change has been established.
+- K1/K2/R1/R2 are accepted at their exact sources and necessary independent CI
+  metadata is settled. Do not rerun accepted journeys or broaden this bounded
+  result to other IAM pages.
+- On 2026-10-23 final cleanup revalidated exact ownership, task labels, network
+  membership, volume references and path boundaries. Docker-native commands
+  removed five task containers, four exclusive networks and one anonymous
+  volume; eleven task paths were moved to the Windows recycle bin and verified
+  absent from their original locations. No prune, wildcard, parent deletion,
+  shared/remote resource or other task object was used.
 
 ## Independent User deletion fixture
 
@@ -77,10 +76,10 @@
   failure or success. Read-only postcheck: DISABLED/version3, no tombstone,
   zero deletion facts; no page POST, receipt or finish marker. RESPONSE_LOSS
   never started. The old destination and target must not be reused.
-- Child processes, listener and external DB connections are gone. The new PG,
-  network and temporary root remain after a pre-launch cleanup refusal. Do
-  not create another idle fixture or transfer the old human confirmation to
-  new objects. UX has been told why a new safely-cleanable fixture is not ready.
+- Child processes, listener and external DB connections are gone. The old PG,
+  network and temporary root were included in the final exact cleanup above.
+  The failed browser journey remains unaccepted; cleanup does not transfer its
+  old confirmation or evidence to another fixture.
 
 ## Coordination and operating boundaries
 
