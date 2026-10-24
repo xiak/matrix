@@ -587,9 +587,11 @@ func TestIAMPolicyMutationRecoveryConsoleBrowser(t *testing.T) {
 // one nondefault version through the page, and publishes into the freed slot.
 // PUBLISH_RESPONSE_LOSS and RETIRE_RESPONSE_LOSS prove that the corresponding
 // version command survives a committed truncated response and is recovered
-// only by an explicit byte-identical replay from the same actor. ROLE_DEFAULT_SWITCH
-// and GROUP_DEFAULT_SWITCH prove the two distinct RoleSession invalidation paths:
-// current Role authority and the issuing User's inherited Group authority.
+// only by an explicit byte-identical replay from the same actor. ROLE_DEFAULT_SWITCH,
+// ROLE_BOUNDARY_DEFAULT_SWITCH, SOURCE_USER_BOUNDARY_DEFAULT_SWITCH and
+// GROUP_DEFAULT_SWITCH prove the four distinct RoleSession invalidation paths:
+// current Role authority, the Role permission boundary, the issuing User's
+// permission boundary and that User's inherited Group authority.
 func TestIAMPolicyVersionLifecycleConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER=1 for the bounded LIVE Policy-version lifecycle browser fixture")
@@ -4754,6 +4756,12 @@ func runIAMPolicyVersionLifecycleConsoleBrowser(
 	case "ROLE_DEFAULT_SWITCH":
 		return runIAMRolePolicyDefaultSwitchConsoleBrowser(t, ctx, database, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, start)
+	case "ROLE_BOUNDARY_DEFAULT_SWITCH":
+		return runIAMRoleBoundaryDefaultSwitchConsoleBrowser(t, ctx, database, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, start)
+	case "SOURCE_USER_BOUNDARY_DEFAULT_SWITCH":
+		return runIAMSourceUserBoundaryDefaultSwitchConsoleBrowser(t, ctx, database, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, start)
 	case "GROUP_DEFAULT_SWITCH":
 		return runIAMGroupPolicyDefaultSwitchConsoleBrowser(t, ctx, database, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, start)
@@ -5197,8 +5205,8 @@ func runIAMRolePolicyDefaultSwitchConsoleBrowser(
 		iamEndpoint, auditEndpoint, paasEndpoint, start, journey.wrap)
 	defer closeBrowser()
 	assumedMarker := filepath.Join(temporary, "browser-role-policy-default-assumed")
-	t.Logf("ROLE_POLICY_DEFAULT_MEMBER url=%s/console/access/role-access/ login=%s@%s role=%s application=%s marker=%s; in the member browser profile use the existing changed developer password, explicitly assume this Role once, open the exact application through real SPA links and observe 200, then create the marker without returning to USER mode",
-		server.URL, loginName, user.AccountID, role.ID, applicationID, assumedMarker)
+	t.Logf("ROLE_POLICY_DEFAULT_MEMBER url=%s/console/applications/?resource=%s login=%s@%s role=%s application=%s marker=%s; in the member browser profile start at this exact Application deep link, use the existing changed developer password and observe source USER403, enter the Role session from the account menu and explicitly assume this Role once, use Products and services to visit the denied Application directory, then return through browser history to the same exact Application and observe Role200 before creating the marker without returning to USER mode",
+		server.URL, url.QueryEscape(string(applicationID)), loginName, user.AccountID, role.ID, applicationID, assumedMarker)
 	waitForBrowserMarker(t, ctx, ui, assumedMarker, "Role assumption and exact Application read before the default switch")
 	journey.mu.Lock()
 	browserIssued := journey.session
@@ -5468,6 +5476,1177 @@ func runIAMRolePolicyDefaultSwitchConsoleBrowser(
 		t.Fatalf("Role policy default tenant Audit chain is incomplete: %#v", chain)
 	}
 	t.Log("one page-selected Role Policy default invalidated the existing browser and sibling RoleSessions with 401, the console fenced the rejected bearer and explicitly restored the unchanged source USER, switching back did not revive either credential, and a new requestId issued a distinct working RoleSession while Role, Trust, attachment, boundary, issuance evidence, Allow decision and Audit history remained immutable")
+	return []string{initial.Credential, member.Credential, siblingBearer, freshBearer}
+}
+
+func runIAMRoleBoundaryDefaultSwitchConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	const (
+		loginName = "browser.role.boundary.default"
+		roleName  = "Browser boundary default Role"
+	)
+	const applicationID paasv1.ResourceID = "browser-role-boundary-default-application"
+	allowDocument := iamv1.PolicyDocument{
+		LanguageVersion: iamv1.PolicyLanguageVersion,
+		Scope:           iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{
+			SID:     "read-one-application",
+			Effect:  iamv1.PolicyAllow,
+			Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{
+				Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: string(applicationID),
+			}},
+		}},
+	}
+	createPaaSApplication(t, paasEndpoint, ownerBearer, applicationID, string(applicationID),
+		"browser-role-boundary-default-application-create", http.StatusCreated)
+	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser Role boundary member",
+		initialDeveloperPassword, "browser-role-boundary-default-user")
+	initial := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), initialDeveloperPassword,
+		"browser-role-boundary-default-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-role-boundary-default-password")
+	member := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), changedDeveloperPassword,
+		"browser-role-boundary-default-login")
+
+	response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/roles", ownerBearer, iamv1.CreateRoleRequest{
+		Name: roleName, Tags: []iamv1.RoleTag{}, RequestID: "browser-role-boundary-default-role",
+		TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{
+			SID: "source", Effect: iamv1.PolicyAllow,
+			Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: user.ID}},
+		}}},
+	})
+	var role iamv1.Role
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &role) != nil ||
+		iamv1.ValidateRole(role) != nil || role.AccountID != user.AccountID || role.ResourceVersion != 1 {
+		t.Fatalf("prepare Role boundary default Role status=%d body=%s", response.Status, response.Body)
+	}
+	rolePath := "/v1/roles/" + string(role.ID)
+
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser Role positive application authority", Document: allowDocument,
+		RequestID: "browser-role-boundary-default-positive-policy",
+	})
+	var positivePolicy iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &positivePolicy) != nil ||
+		iamv1.ValidatePolicyDetail(positivePolicy) != nil {
+		t.Fatalf("prepare Role positive Policy status=%d body=%s", response.Status, response.Body)
+	}
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", ownerBearer,
+		iamv1.CreatePolicyAttachmentRequest{
+			Target:   iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)},
+			PolicyID: positivePolicy.Policy.ID, PolicyResourceVersion: positivePolicy.Policy.ResourceVersion,
+			RequestID: "browser-role-boundary-default-positive-attachment",
+		})
+	var roleAttachment iamv1.PolicyAttachment
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &roleAttachment) != nil ||
+		iamv1.ValidatePolicyAttachment(roleAttachment) != nil ||
+		roleAttachment.Target != (iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}) ||
+		roleAttachment.PolicyID != positivePolicy.Policy.ID {
+		t.Fatalf("prepare Role positive attachment status=%d body=%s", response.Status, response.Body)
+	}
+
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser Role application boundary", Document: allowDocument,
+		RequestID: "browser-role-boundary-default-create-v1",
+	})
+	var boundaryPolicy iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &boundaryPolicy) != nil ||
+		iamv1.ValidatePolicyDetail(boundaryPolicy) != nil || boundaryPolicy.Policy.ResourceVersion != 1 ||
+		boundaryPolicy.Policy.DefaultVersionID != boundaryPolicy.Version.ID {
+		t.Fatalf("prepare Role boundary ALLOW v1 status=%d body=%s", response.Status, response.Body)
+	}
+	denyDocument := allowDocument
+	denyDocument.Statements = append([]iamv1.PolicyStatement(nil), allowDocument.Statements...)
+	denyDocument.Statements[0].Effect = iamv1.PolicyDeny
+	response = performJSON(t, http.MethodPost,
+		iamEndpoint+"/v1/policies/"+string(boundaryPolicy.Policy.ID)+"/versions", ownerBearer,
+		iamv1.CreatePolicyVersionRequest{Document: denyDocument,
+			ResourceVersion: boundaryPolicy.Policy.ResourceVersion,
+			RequestID:       "browser-role-boundary-default-create-v2"})
+	var denyVersion iamv1.PolicyVersionDetail
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &denyVersion) != nil ||
+		iamv1.ValidatePolicyVersionDetail(denyVersion) != nil || denyVersion.Policy.ResourceVersion != 2 ||
+		denyVersion.Policy.DefaultVersionID != boundaryPolicy.Version.ID ||
+		denyVersion.Version.ID == boundaryPolicy.Version.ID || len(denyVersion.Version.Document.Statements) != 1 ||
+		denyVersion.Version.Document.Statements[0].Effect != iamv1.PolicyDeny {
+		t.Fatalf("prepare Role boundary DENY v2 status=%d body=%s", response.Status, response.Body)
+	}
+
+	response = performJSON(t, http.MethodPut, iamEndpoint+rolePath+"/permission-boundary", ownerBearer,
+		iamv1.SetRolePermissionBoundaryRequest{PolicyID: boundaryPolicy.Policy.ID,
+			PolicyResourceVersion: denyVersion.Policy.ResourceVersion, ResourceVersion: role.ResourceVersion,
+			RequestID: "browser-role-boundary-default-set"})
+	var originalBoundary iamv1.RolePermissionBoundary
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &originalBoundary) != nil ||
+		iamv1.ValidateRolePermissionBoundary(originalBoundary) != nil || originalBoundary.AccountID != user.AccountID ||
+		originalBoundary.RoleID != role.ID || originalBoundary.ResourceVersion != 2 || originalBoundary.Policy == nil ||
+		originalBoundary.Policy.PolicyID != boundaryPolicy.Policy.ID ||
+		originalBoundary.Policy.VersionID != boundaryPolicy.Version.ID ||
+		originalBoundary.Policy.ContentDigest != boundaryPolicy.Version.ContentDigest {
+		t.Fatalf("prepare Role customer boundary status=%d body=%s", response.Status, response.Body)
+	}
+
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Assume Browser boundary default Role",
+		RequestID:   "browser-role-boundary-default-assume-policy",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion,
+			Scope: iamv1.AuthorityScopeTenant, Statements: []iamv1.PolicyStatement{{
+				SID: "assume", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{iamv1.ActionIAMRoleAssume},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceRole,
+					Match: iamv1.PolicyResourceExact, ID: string(role.ID)}},
+			}}},
+	})
+	var assumePolicy iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &assumePolicy) != nil ||
+		iamv1.ValidatePolicyDetail(assumePolicy) != nil {
+		t.Fatalf("prepare Role boundary assumption Policy status=%d body=%s", response.Status, response.Body)
+	}
+	createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, user.ID, assumePolicy.Policy.ID,
+		"browser-role-boundary-default-assume-grant")
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications/"+string(applicationID),
+		member.Credential, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("source USER inherited Role boundary business permission before assumption: status=%d", response.Status)
+	}
+
+	var originalRoleAccess iamv1.RoleAccess
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath, ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &originalRoleAccess) != nil ||
+		iamv1.ValidateRoleAccess(originalRoleAccess) != nil || originalRoleAccess.Role.ID != role.ID ||
+		originalRoleAccess.Role.ResourceVersion != originalBoundary.ResourceVersion ||
+		len(originalRoleAccess.PolicyAttachments) != 1 ||
+		originalRoleAccess.PolicyAttachments[0].ID != roleAttachment.ID {
+		t.Fatalf("read original Role boundary authority status=%d body=%s", response.Status, response.Body)
+	}
+	readBoundary := func(expected iamv1.PolicyVersion) iamv1.RolePermissionBoundary {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, iamEndpoint+rolePath+"/permission-boundary", ownerBearer, nil)
+		var boundary iamv1.RolePermissionBoundary
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &boundary) != nil ||
+			iamv1.ValidateRolePermissionBoundary(boundary) != nil || boundary.AccountID != user.AccountID ||
+			boundary.RoleID != role.ID || boundary.ResourceVersion != originalBoundary.ResourceVersion ||
+			boundary.Policy == nil || boundary.Policy.PolicyID != boundaryPolicy.Policy.ID ||
+			boundary.Policy.VersionID != expected.ID || boundary.Policy.ContentDigest != expected.ContentDigest {
+			t.Fatalf("read Role boundary version=%s status=%d body=%s", expected.ID, response.Status, response.Body)
+		}
+		return boundary
+	}
+	if !reflect.DeepEqual(originalBoundary, readBoundary(boundaryPolicy.Version)) {
+		t.Fatal("initial Role boundary projection changed before the browser journey")
+	}
+	var boundaryID, boundaryRelationBefore string
+	if err := database.QueryRow(ctx, `SELECT id,jsonb_build_array(id,role_id,policy_id,resource_version,created_at,updated_at,revoked_at)::text
+		FROM iam.role_permission_boundaries WHERE tenant_id=$1 AND role_id=$2 AND revoked_at IS NULL`,
+		user.AccountID, role.ID).Scan(&boundaryID, &boundaryRelationBefore); err != nil || boundaryID == "" {
+		t.Fatal("read original Role boundary relationship", err)
+	}
+
+	mutationPath := "/api/iam/v1/policies/" + string(boundaryPolicy.Policy.ID) + ":set-default-version"
+	applicationPath := "/api/paas/v1/applications/" + string(applicationID)
+	journey := &browserRoleAuthorityChangeProbe{account: user.AccountID, user: user.ID, role: role.ID,
+		mutationPath: mutationPath, applicationPath: applicationPath}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, journey.wrap)
+	defer closeBrowser()
+	assumedMarker := filepath.Join(temporary, "browser-role-boundary-default-assumed")
+	t.Logf("ROLE_BOUNDARY_DEFAULT_MEMBER url=%s/console/applications/?resource=%s login=%s@%s role=%s application=%s marker=%s; in the member browser profile start at this exact Application deep link, use the existing changed developer password and observe source USER403, enter the Role session from the account menu and explicitly assume this Role once, use Products and services to visit the denied Application directory, then return through browser history to the same exact Application and observe Role200 before creating the marker without returning to USER mode",
+		server.URL, url.QueryEscape(string(applicationID)), loginName, user.AccountID, role.ID, applicationID, assumedMarker)
+	waitForBrowserMarker(t, ctx, ui, assumedMarker, "Role assumption and exact Application read before the boundary switch")
+	journey.mu.Lock()
+	browserIssued := journey.session
+	assumedExactly := !journey.invalid && journey.assumptions == 1 && journey.issued && journey.allowed &&
+		!journey.authorityChanging && browserIssued.ID != ""
+	journey.mu.Unlock()
+	if !assumedExactly {
+		t.Fatal("Role boundary default journey lacks one actual browser issuance and Application 200")
+	}
+
+	var browserProofBefore []byte
+	if err := database.QueryRow(ctx, "SELECT iam.role_authorization_evidence($1,$2)", user.AccountID, browserIssued.ID).
+		Scan(&browserProofBefore); err != nil {
+		t.Fatal("read Role boundary browser issuance proof", err)
+	}
+	const siblingRequestID = "browser-role-boundary-default-sibling-v1"
+	response = performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+		iamv1.AssumeRoleRequest{ResourceVersion: originalRoleAccess.Role.ResourceVersion, RequestID: siblingRequestID})
+	var sibling iamv1.AssumeRoleResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &sibling) != nil ||
+		iamv1.ValidateAssumeRoleResponse(sibling) != nil || sibling.Outcome != "APPLIED" ||
+		sibling.Session.ID == browserIssued.ID || sibling.Session.RoleID != role.ID ||
+		sibling.Session.SourceUserID != user.ID {
+		t.Fatalf("prepare Role boundary sibling v1 Session status=%d body=%s", response.Status, response.Body)
+	}
+	material := sibling.Credential.CopyBytes()
+	siblingBearer := string(material)
+	clear(material)
+	for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session",
+		paasEndpoint + "/v1/applications/" + string(applicationID)} {
+		if response := performJSON(t, http.MethodGet, endpoint, siblingBearer, nil); response.Status != http.StatusOK {
+			t.Fatalf("Role boundary sibling v1 precondition status=%d endpoint=%s", response.Status, endpoint)
+		}
+	}
+	var siblingProofBefore []byte
+	if err := database.QueryRow(ctx, "SELECT iam.role_authorization_evidence($1,$2)", user.AccountID, sibling.Session.ID).
+		Scan(&siblingProofBefore); err != nil {
+		t.Fatal("read Role boundary sibling v1 issuance proof", err)
+	}
+
+	type policyEvidence struct {
+		AttachmentID iamv1.PolicyAttachmentID     `json:"attachmentId"`
+		Version      iamv1.PolicyVersionReference `json:"version"`
+	}
+	type roleEvidence struct {
+		SessionID iamv1.RoleSessionID `json:"sessionId"`
+		RoleID    iamv1.RoleID        `json:"roleId"`
+		Boundary  struct {
+			BoundaryID      string                       `json:"boundaryId"`
+			ResourceVersion uint64                       `json:"resourceVersion"`
+			Version         iamv1.PolicyVersionReference `json:"version"`
+		} `json:"boundary"`
+	}
+	readDecision := func(session iamv1.RoleSessionID, allowed bool, expectedBoundary iamv1.PolicyVersion) (string, string, string, string, string) {
+		t.Helper()
+		var id, document, policies, roleProof, fact string
+		if err := database.QueryRow(ctx, `SELECT d.id,d.document::text,d.policy_evidence::text,d.role_evidence::text,o.event_document::text
+			FROM iam.authorization_decisions d JOIN iam.audit_outbox o ON o.tenant_id=d.tenant_id
+			AND o.event_document->>'iamDecisionId'=d.id AND o.event_document->>'action'='iam.authorization.decided'
+			WHERE d.tenant_id=$1 AND d.subject_type='ROLE' AND d.role_id=$2 AND d.allowed=$3
+			AND d.action_name=$4 AND d.target_kind=$5 AND d.target_id=$6
+			AND d.role_evidence->>'sessionId'=$7 ORDER BY d.decided_at DESC,d.id DESC LIMIT 1`,
+			user.AccountID, role.ID, allowed, iamv1.ActionPaaSApplicationRead,
+			iamv1.ResourceApplication, applicationID, session).
+			Scan(&id, &document, &policies, &roleProof, &fact); err != nil {
+			t.Fatal("read Role boundary business decision", err)
+		}
+		var positive []policyEvidence
+		var evidence roleEvidence
+		if json.Unmarshal([]byte(policies), &positive) != nil || len(positive) != 1 ||
+			positive[0].AttachmentID != roleAttachment.ID ||
+			positive[0].Version.PolicyID != positivePolicy.Policy.ID ||
+			positive[0].Version.VersionID != positivePolicy.Version.ID ||
+			positive[0].Version.ContentDigest != positivePolicy.Version.ContentDigest ||
+			json.Unmarshal([]byte(roleProof), &evidence) != nil || evidence.SessionID != session ||
+			evidence.RoleID != role.ID || evidence.Boundary.BoundaryID != boundaryID ||
+			evidence.Boundary.ResourceVersion != 1 ||
+			evidence.Boundary.Version.PolicyID != boundaryPolicy.Policy.ID ||
+			evidence.Boundary.Version.VersionID != expectedBoundary.ID ||
+			evidence.Boundary.Version.ContentDigest != expectedBoundary.ContentDigest {
+			t.Fatal("Role business decision did not bind the exact positive attachment and boundary version")
+		}
+		return id, document, policies, roleProof, fact
+	}
+	allowID, allowDocumentJSON, allowPolicies, allowRoleProof, allowFact :=
+		readDecision(browserIssued.ID, true, boundaryPolicy.Version)
+
+	finished := filepath.Join(temporary, "browser-role-boundary-default-finished")
+	browserPath := "/console/access/policies/?id=" + url.QueryEscape(string(boundaryPolicy.Policy.ID))
+	t.Logf("ROLE_BOUNDARY_DEFAULT_SWITCH admin_url=%s%s member_url=%s/console/applications/ marker=%s boundary_policy=%s target_v2=%s resource_version=2; keep the member Role tab alive in its own browser profile; in the administrator profile use the existing changed admin password and the version row action to set only target v2 as default; in the member profile navigate once so the first protected Role GET returns 401 and the page enters BLOCKED, then explicitly choose 验证并返回用户模式 and observe the exact Application403; do not reassume and do not send another request with the blocked Role credential; create the marker after both views are visible",
+		server.URL, browserPath, server.URL, finished, boundaryPolicy.Policy.ID, denyVersion.Version.ID)
+	waitForBrowserMarker(t, ctx, ui, finished, "Role blocked by a boundary default switch and explicitly restored source USER")
+	if err := journey.check(); err != nil {
+		t.Fatal(err)
+	}
+	journey.mu.Lock()
+	t.Logf("ROLE_BOUNDARY_DEFAULT_BROWSER_TRANSITION rejection_route=%s; one issued Role401, no blocked credential reuse, explicit source200 and exact Application403",
+		journey.rejectionRoute)
+	journey.mu.Unlock()
+
+	response = performJSON(t, http.MethodGet,
+		iamEndpoint+"/v1/policies/"+string(boundaryPolicy.Policy.ID), ownerBearer, nil)
+	var selected iamv1.PolicyAccess
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &selected) != nil ||
+		iamv1.ValidatePolicyAccess(selected) != nil || selected.Detail.Policy.ResourceVersion != 3 ||
+		selected.Detail.Policy.DefaultVersionID != denyVersion.Version.ID ||
+		selected.Detail.Version.ID != denyVersion.Version.ID {
+		t.Fatalf("browser did not select exact Role boundary DENY default status=%d body=%s", response.Status, response.Body)
+	}
+	boundaryV2 := readBoundary(denyVersion.Version)
+	if boundaryV2.ResourceVersion != originalBoundary.ResourceVersion || boundaryV2.Policy == nil ||
+		originalBoundary.Policy == nil || boundaryV2.Policy.VersionID == originalBoundary.Policy.VersionID {
+		t.Fatal("Role boundary relationship did not retain identity while projecting the new default")
+	}
+	for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session",
+		paasEndpoint + "/v1/applications/" + string(applicationID)} {
+		if response := performJSON(t, http.MethodGet, endpoint, siblingBearer, nil); response.Status != http.StatusUnauthorized {
+			t.Fatalf("Role boundary default switch retained sibling v1 Session status=%d endpoint=%s", response.Status, endpoint)
+		}
+	}
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", member.Credential, nil); response.Status != http.StatusOK {
+		t.Fatalf("source USER Session was invalidated with Role boundary authority: status=%d", response.Status)
+	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications/"+string(applicationID),
+		member.Credential, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("source USER inherited Role boundary permission after explicit restore: status=%d", response.Status)
+	}
+
+	const restrictedRequestID = "browser-role-boundary-default-restricted-v2"
+	response = performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+		iamv1.AssumeRoleRequest{ResourceVersion: originalRoleAccess.Role.ResourceVersion,
+			RequestID: restrictedRequestID})
+	var restricted iamv1.AssumeRoleResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &restricted) != nil ||
+		iamv1.ValidateAssumeRoleResponse(restricted) != nil || restricted.Outcome != "APPLIED" ||
+		restricted.Session.ID == browserIssued.ID || restricted.Session.ID == sibling.Session.ID ||
+		restricted.Session.RoleID != role.ID || restricted.Session.SourceUserID != user.ID {
+		t.Fatalf("issue current RoleSession under DENY boundary v2 status=%d body=%s", response.Status, response.Body)
+	}
+	material = restricted.Credential.CopyBytes()
+	restrictedBearer := string(material)
+	clear(material)
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/role-session", restrictedBearer, nil); response.Status != http.StatusOK {
+		t.Fatalf("RoleSession under DENY boundary is not a current identity: status=%d", response.Status)
+	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications/"+string(applicationID),
+		restrictedBearer, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("DENY boundary failed to restrict a newly issued RoleSession: status=%d", response.Status)
+	}
+	deniedID, deniedDocument, deniedPolicies, deniedRoleProof, deniedFact :=
+		readDecision(restricted.Session.ID, false, denyVersion.Version)
+	var restrictedProofBefore []byte
+	if err := database.QueryRow(ctx, "SELECT iam.role_authorization_evidence($1,$2)",
+		user.AccountID, restricted.Session.ID).Scan(&restrictedProofBefore); err != nil {
+		t.Fatal("read restricted v2 Role issuance proof", err)
+	}
+
+	for _, expected := range []iamv1.RoleSession{browserIssued, sibling.Session, restricted.Session} {
+		var access iamv1.RoleSessionAccess
+		response = performJSON(t, http.MethodGet,
+			iamEndpoint+rolePath+"/sessions/"+string(expected.ID), ownerBearer, nil)
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &access) != nil ||
+			iamv1.ValidateRoleSessionAccess(access) != nil || !reflect.DeepEqual(access.Item.Session, expected) ||
+			access.Item.Lifecycle != iamv1.RoleSessionUnrevoked || !access.Item.RevokeCapability.Available {
+			t.Fatalf("Role boundary default switch rewrote or revoked issuance %s status=%d", expected.ID, response.Status)
+		}
+	}
+	var currentRoleAccess iamv1.RoleAccess
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath, ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &currentRoleAccess) != nil ||
+		iamv1.ValidateRoleAccess(currentRoleAccess) != nil || !reflect.DeepEqual(originalRoleAccess, currentRoleAccess) {
+		t.Fatal("Role boundary default switch altered Role, Trust or positive attachment authority")
+	}
+
+	const restoreRequestID = "browser-role-boundary-default-restore-v1"
+	response = performJSON(t, http.MethodPost,
+		iamEndpoint+"/v1/policies/"+string(boundaryPolicy.Policy.ID)+":set-default-version", ownerBearer,
+		iamv1.SetDefaultPolicyVersionRequest{VersionID: boundaryPolicy.Version.ID,
+			ResourceVersion: selected.Detail.Policy.ResourceVersion, RequestID: restoreRequestID})
+	var restored iamv1.PolicyDetail
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &restored) != nil ||
+		iamv1.ValidatePolicyDetail(restored) != nil || restored.Policy.ResourceVersion != 4 ||
+		restored.Policy.DefaultVersionID != boundaryPolicy.Version.ID ||
+		restored.Version.ID != boundaryPolicy.Version.ID {
+		t.Fatalf("restore Role boundary ALLOW v1 for ABA proof status=%d body=%s", response.Status, response.Body)
+	}
+	if !reflect.DeepEqual(originalBoundary, readBoundary(boundaryPolicy.Version)) {
+		t.Fatal("Role boundary projection did not return to the original default version")
+	}
+	for name, bearer := range map[string]string{"sibling-v1": siblingBearer, "restricted-v2": restrictedBearer} {
+		for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session",
+			paasEndpoint + "/v1/applications/" + string(applicationID)} {
+			if response := performJSON(t, http.MethodGet, endpoint, bearer, nil); response.Status != http.StatusUnauthorized {
+				t.Fatalf("Role boundary ABA restoration revived %s status=%d endpoint=%s", name, response.Status, endpoint)
+			}
+		}
+	}
+	for requestID, expected := range map[string]iamv1.RoleSession{
+		siblingRequestID: sibling.Session, restrictedRequestID: restricted.Session,
+	} {
+		response = performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+			iamv1.AssumeRoleRequest{ResourceVersion: originalRoleAccess.Role.ResourceVersion, RequestID: requestID})
+		var replay iamv1.AssumeRoleResponse
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &replay) != nil ||
+			iamv1.ValidateAssumeRoleResponse(replay) != nil || replay.Outcome != "EQUAL_REPLAY" ||
+			replay.Credential.Present() || !reflect.DeepEqual(replay.Session, expected) {
+			t.Fatalf("equal Role boundary issuance replay renewed old authority request=%s", requestID)
+		}
+	}
+	const freshRequestID = "browser-role-boundary-default-fresh-v1"
+	response = performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+		iamv1.AssumeRoleRequest{ResourceVersion: originalRoleAccess.Role.ResourceVersion, RequestID: freshRequestID})
+	var fresh iamv1.AssumeRoleResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &fresh) != nil ||
+		iamv1.ValidateAssumeRoleResponse(fresh) != nil || fresh.Outcome != "APPLIED" ||
+		fresh.Session.ID == browserIssued.ID || fresh.Session.ID == sibling.Session.ID ||
+		fresh.Session.ID == restricted.Session.ID || fresh.Session.RoleID != role.ID ||
+		fresh.Session.SourceUserID != user.ID {
+		t.Fatalf("fresh Role boundary v1 assumption status=%d body=%s", response.Status, response.Body)
+	}
+	material = fresh.Credential.CopyBytes()
+	freshBearer := string(material)
+	clear(material)
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/role-session", freshBearer, nil); response.Status != http.StatusOK {
+		t.Fatalf("fresh Role boundary v1 Session is not a current identity: status=%d", response.Status)
+	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications/"+string(applicationID),
+		freshBearer, nil); response.Status != http.StatusOK {
+		t.Fatalf("fresh Role boundary v1 Session did not recover Application access: status=%d", response.Status)
+	}
+	readDecision(fresh.Session.ID, true, boundaryPolicy.Version)
+
+	var browserProofAfter, siblingProofAfter, restrictedProofAfter []byte
+	if err := database.QueryRow(ctx, "SELECT iam.role_authorization_evidence($1,$2)",
+		user.AccountID, browserIssued.ID).Scan(&browserProofAfter); err != nil {
+		t.Fatal("read retained Role boundary browser issuance proof", err)
+	}
+	if err := database.QueryRow(ctx, "SELECT iam.role_authorization_evidence($1,$2)",
+		user.AccountID, sibling.Session.ID).Scan(&siblingProofAfter); err != nil {
+		t.Fatal("read retained Role boundary sibling issuance proof", err)
+	}
+	if err := database.QueryRow(ctx, "SELECT iam.role_authorization_evidence($1,$2)",
+		user.AccountID, restricted.Session.ID).Scan(&restrictedProofAfter); err != nil {
+		t.Fatal("read retained restricted v2 Role issuance proof", err)
+	}
+	if !bytes.Equal(browserProofBefore, browserProofAfter) || !bytes.Equal(siblingProofBefore, siblingProofAfter) ||
+		!bytes.Equal(restrictedProofBefore, restrictedProofAfter) {
+		t.Fatal("Role boundary default switch rewrote historical issuance evidence")
+	}
+	assertDecision := func(id, document, policies, roleProof, fact string) {
+		t.Helper()
+		var currentDocument, currentPolicies, currentRoleProof, currentFact string
+		if err := database.QueryRow(ctx, `SELECT d.document::text,d.policy_evidence::text,d.role_evidence::text,o.event_document::text
+			FROM iam.authorization_decisions d JOIN iam.audit_outbox o ON o.tenant_id=d.tenant_id
+			AND o.event_document->>'iamDecisionId'=d.id AND o.event_document->>'action'='iam.authorization.decided'
+			WHERE d.tenant_id=$1 AND d.id=$2`, user.AccountID, id).
+			Scan(&currentDocument, &currentPolicies, &currentRoleProof, &currentFact); err != nil ||
+			currentDocument != document || currentPolicies != policies || currentRoleProof != roleProof || currentFact != fact {
+			t.Fatal("Role boundary default switch rewrote a historical business decision or Audit fact", err)
+		}
+	}
+	assertDecision(allowID, allowDocumentJSON, allowPolicies, allowRoleProof, allowFact)
+	assertDecision(deniedID, deniedDocument, deniedPolicies, deniedRoleProof, deniedFact)
+	var boundaryRelationAfter string
+	if err := database.QueryRow(ctx, `SELECT jsonb_build_array(id,role_id,policy_id,resource_version,created_at,updated_at,revoked_at)::text
+		FROM iam.role_permission_boundaries WHERE tenant_id=$1 AND id=$2`,
+		user.AccountID, boundaryID).Scan(&boundaryRelationAfter); err != nil ||
+		boundaryRelationAfter != boundaryRelationBefore {
+		t.Fatal("Role boundary default switch changed the boundary relationship", err)
+	}
+	var oldSessionsCurrent bool
+	if err := database.QueryRow(ctx, "SELECT bool_and(revoked_at IS NULL AND expires_at>clock_timestamp()) "+
+		"FROM iam.role_sessions WHERE tenant_id=$1 AND id=ANY($2::text[])", user.AccountID,
+		[]string{string(browserIssued.ID), string(sibling.Session.ID), string(restricted.Session.ID)}).
+		Scan(&oldSessionsCurrent); err != nil || !oldSessionsCurrent {
+		t.Fatal("Role boundary ABA proof accidentally relied on expiry or explicit revocation", err)
+	}
+
+	rows, err := database.Query(ctx, "SELECT event_document->>'requestId' FROM iam.audit_outbox "+
+		"WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document#>>'{target,kind}'='POLICY' "+
+		"AND event_document#>>'{target,id}'=$3 ORDER BY event_document->>'requestId'",
+		user.AccountID, auditv1.ActionIAMPolicyDefaultVersionSet, boundaryPolicy.Policy.ID)
+	if err != nil {
+		t.Fatal("read Role boundary default switch facts", err)
+	}
+	defaultRequests := make([]string, 0, 2)
+	for rows.Next() {
+		var requestID string
+		if rows.Scan(&requestID) != nil {
+			rows.Close()
+			t.Fatal("scan Role boundary default switch fact")
+		}
+		defaultRequests = append(defaultRequests, requestID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatal("close Role boundary default switch facts", err)
+	}
+	if len(defaultRequests) != 2 || defaultRequests[0] == defaultRequests[1] ||
+		!slices.Contains(defaultRequests, restoreRequestID) {
+		t.Fatalf("Role boundary default switch facts=%v want one UI switch and one ABA restore", defaultRequests)
+	}
+	uiRequestID := ""
+	for _, requestID := range defaultRequests {
+		if requestID != restoreRequestID && strings.HasPrefix(requestID, "ui-policy-version-") {
+			uiRequestID = requestID
+		}
+	}
+	if uiRequestID == "" {
+		t.Fatalf("Role boundary default switch did not originate from the version-page action: %v", defaultRequests)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	wantedAudit := map[string]bool{uiRequestID: false, restoreRequestID: false}
+	query := auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMPolicyDefaultVersionSet}
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if _, ok := wantedAudit[record.Event.RequestID]; !ok {
+				continue
+			}
+			if wantedAudit[record.Event.RequestID] || record.Source != auditv1.SourceIAM ||
+				record.Event.TenantID != auditv1.TenantID(user.AccountID) || record.Event.InstallationID != "" ||
+				record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != "principal-admin" ||
+				record.Event.Target.Kind != auditv1.TargetPolicy ||
+				record.Event.Target.ID != string(boundaryPolicy.Policy.ID) ||
+				record.Event.Result != auditv1.ResultSucceeded || record.Event.IAMDecisionID == "" {
+				t.Fatal("Role boundary default switch Audit attribution changed or duplicated")
+			}
+			wantedAudit[record.Event.RequestID] = true
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		query.Cursor = page.NextCursor
+	}
+	if !wantedAudit[uiRequestID] || !wantedAudit[restoreRequestID] {
+		t.Fatalf("Role boundary default switch Audit delivery incomplete: %#v", wantedAudit)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(user.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("Role boundary default tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Log("one page-selected Role boundary Policy default fenced existing RoleSessions with 401, a fresh v2 session remained valid but business-denied by the current boundary, restoring v1 did not revive any old credential or replay secret, and only a fresh v1 issuance recovered access while Role, Trust, positive attachment, boundary relationship, issuance proofs and historical decisions remained immutable")
+	return []string{initial.Credential, member.Credential, siblingBearer, restrictedBearer, freshBearer}
+}
+
+func runIAMSourceUserBoundaryDefaultSwitchConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	const (
+		loginName = "browser.source.boundary.default"
+		roleName  = "Browser source boundary Role"
+	)
+	const applicationID paasv1.ResourceID = "browser-source-boundary-application"
+	createPaaSApplication(t, paasEndpoint, ownerBearer, applicationID, string(applicationID),
+		"browser-source-boundary-application-create", http.StatusCreated)
+
+	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser source boundary member",
+		initialDeveloperPassword, "browser-source-boundary-user")
+	initial := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), initialDeveloperPassword,
+		"browser-source-boundary-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-source-boundary-password")
+	member := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), changedDeveloperPassword,
+		"browser-source-boundary-login")
+
+	response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/roles", ownerBearer, iamv1.CreateRoleRequest{
+		Name: roleName, Tags: []iamv1.RoleTag{}, RequestID: "browser-source-boundary-role",
+		TrustPolicy: iamv1.TrustPolicyDocument{LanguageVersion: "1", Statements: []iamv1.TrustPolicyStatement{{
+			SID: "source", Effect: iamv1.PolicyAllow,
+			Principals: []iamv1.TrustPrincipal{{Type: iamv1.PrincipalUser, ID: user.ID}},
+		}}},
+	})
+	var role iamv1.Role
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &role) != nil ||
+		iamv1.ValidateRole(role) != nil || role.AccountID != user.AccountID || role.ResourceVersion != 1 {
+		t.Fatalf("prepare source-boundary Role status=%d body=%s", response.Status, response.Body)
+	}
+	rolePath := "/v1/roles/" + string(role.ID)
+	response = performJSON(t, http.MethodPut, iamEndpoint+rolePath+"/permission-boundary", ownerBearer,
+		iamv1.SetRolePermissionBoundaryRequest{PolicyID: iamv1.SystemPolicyPaaSViewer, PolicyResourceVersion: 1,
+			ResourceVersion: role.ResourceVersion, RequestID: "browser-source-boundary-role-boundary"})
+	var roleBoundary iamv1.RolePermissionBoundary
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &roleBoundary) != nil ||
+		iamv1.ValidateRolePermissionBoundary(roleBoundary) != nil || roleBoundary.AccountID != user.AccountID ||
+		roleBoundary.RoleID != role.ID || roleBoundary.ResourceVersion != 2 || roleBoundary.Policy == nil ||
+		roleBoundary.Policy.PolicyID != iamv1.SystemPolicyPaaSViewer {
+		t.Fatalf("prepare source-boundary Role permission boundary status=%d body=%s", response.Status, response.Body)
+	}
+
+	roleDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "read-exact-application", Effect: iamv1.PolicyAllow,
+			Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead}, Resources: []iamv1.PolicyResourceSelector{{
+				Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: string(applicationID),
+			}}}}}
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser source boundary Role application", Document: roleDocument,
+		RequestID: "browser-source-boundary-role-policy",
+	})
+	var rolePolicy iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &rolePolicy) != nil ||
+		iamv1.ValidatePolicyDetail(rolePolicy) != nil {
+		t.Fatalf("prepare source-boundary Role Policy status=%d body=%s", response.Status, response.Body)
+	}
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policy-attachments", ownerBearer,
+		iamv1.CreatePolicyAttachmentRequest{Target: iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)},
+			PolicyID: rolePolicy.Policy.ID, PolicyResourceVersion: rolePolicy.Policy.ResourceVersion,
+			RequestID: "browser-source-boundary-role-attachment"})
+	var roleAttachment iamv1.PolicyAttachment
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &roleAttachment) != nil ||
+		iamv1.ValidatePolicyAttachment(roleAttachment) != nil || roleAttachment.PolicyID != rolePolicy.Policy.ID ||
+		roleAttachment.Target != (iamv1.PolicyAttachmentTarget{Kind: iamv1.PolicyTargetRole, ID: string(role.ID)}) {
+		t.Fatalf("prepare source-boundary Role attachment status=%d body=%s", response.Status, response.Body)
+	}
+
+	assumeDocument := iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{SID: "assume-exact-role", Effect: iamv1.PolicyAllow,
+			Actions: []iamv1.Action{iamv1.ActionIAMRoleAssume}, Resources: []iamv1.PolicyResourceSelector{{
+				Kind: iamv1.ResourceRole, Match: iamv1.PolicyResourceExact, ID: string(role.ID),
+			}}}}}
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser source direct Role grant", Document: assumeDocument,
+		RequestID: "browser-source-boundary-grant-policy",
+	})
+	var sourcePolicy iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &sourcePolicy) != nil ||
+		iamv1.ValidatePolicyDetail(sourcePolicy) != nil {
+		t.Fatalf("prepare source direct Role Policy status=%d body=%s", response.Status, response.Body)
+	}
+	sourceAttachment := createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, user.ID, sourcePolicy.Policy.ID,
+		"browser-source-boundary-grant-attachment")
+
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser source Role ceiling", Document: assumeDocument,
+		RequestID: "browser-source-boundary-create-v1",
+	})
+	var boundaryPolicy iamv1.PolicyDetail
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &boundaryPolicy) != nil ||
+		iamv1.ValidatePolicyDetail(boundaryPolicy) != nil || boundaryPolicy.Policy.ResourceVersion != 1 ||
+		boundaryPolicy.Policy.DefaultVersionID != boundaryPolicy.Version.ID {
+		t.Fatalf("prepare source boundary Policy v1 status=%d body=%s", response.Status, response.Body)
+	}
+	denyDocument := assumeDocument
+	denyDocument.Statements = append([]iamv1.PolicyStatement(nil), assumeDocument.Statements...)
+	denyDocument.Statements[0].Effect = iamv1.PolicyDeny
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies/"+string(boundaryPolicy.Policy.ID)+"/versions", ownerBearer,
+		iamv1.CreatePolicyVersionRequest{Document: denyDocument, ResourceVersion: boundaryPolicy.Policy.ResourceVersion,
+			RequestID: "browser-source-boundary-create-v2"})
+	var denyVersion iamv1.PolicyVersionDetail
+	if response.Status != http.StatusCreated || iamv1.DecodeRequest(bytes.NewReader(response.Body), &denyVersion) != nil ||
+		iamv1.ValidatePolicyVersionDetail(denyVersion) != nil || denyVersion.Policy.ResourceVersion != 2 ||
+		denyVersion.Policy.DefaultVersionID != boundaryPolicy.Version.ID || denyVersion.Version.ID == boundaryPolicy.Version.ID ||
+		len(denyVersion.Version.Document.Statements) != 1 || denyVersion.Version.Document.Statements[0].Effect != iamv1.PolicyDeny {
+		t.Fatalf("prepare source boundary DENY v2 status=%d body=%s", response.Status, response.Body)
+	}
+
+	boundaryPath := iamEndpoint + "/v1/users/" + string(user.ID) + "/permission-boundary"
+	var emptyBoundary, userBoundary iamv1.UserPermissionBoundary
+	response = performJSON(t, http.MethodGet, boundaryPath, ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &emptyBoundary) != nil ||
+		iamv1.ValidateUserPermissionBoundary(emptyBoundary) != nil || emptyBoundary.Policy != nil {
+		t.Fatalf("read empty source User boundary status=%d body=%s", response.Status, response.Body)
+	}
+	response = performJSON(t, http.MethodPut, boundaryPath, ownerBearer, iamv1.SetUserPermissionBoundaryRequest{
+		PolicyID: boundaryPolicy.Policy.ID, PolicyResourceVersion: denyVersion.Policy.ResourceVersion,
+		ResourceVersion: emptyBoundary.ResourceVersion, RequestID: "browser-source-boundary-set",
+	})
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &userBoundary) != nil ||
+		iamv1.ValidateUserPermissionBoundary(userBoundary) != nil || userBoundary.Policy == nil ||
+		*userBoundary.Policy != (iamv1.PolicyVersionReference{PolicyID: boundaryPolicy.Policy.ID,
+			VersionID: boundaryPolicy.Version.ID, ContentDigest: boundaryPolicy.Version.ContentDigest}) {
+		t.Fatalf("set source User boundary status=%d body=%s", response.Status, response.Body)
+	}
+	var boundaryID string
+	var boundaryResourceVersion uint64
+	if err := database.QueryRow(ctx, `SELECT id,resource_version FROM iam.user_permission_boundaries
+		WHERE tenant_id=$1 AND user_id=$2 AND policy_id=$3 AND revoked_at IS NULL`,
+		user.AccountID, user.ID, boundaryPolicy.Policy.ID).Scan(&boundaryID, &boundaryResourceVersion); err != nil ||
+		boundaryID == "" || boundaryResourceVersion != 1 {
+		t.Fatal("read exact source User boundary relationship", err)
+	}
+
+	readIdentity := func(expected iamv1.PolicyVersionReference) iamv1.CurrentIdentity {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", member.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &identity) != nil ||
+			iamv1.ValidateCurrentIdentity(identity) != nil || identity.Account.ID != user.AccountID ||
+			identity.User.ID != user.ID || len(identity.PolicySources) != 1 ||
+			identity.PolicySources[0].Kind != iamv1.PolicyGrantDirect ||
+			identity.PolicySources[0].Attachment.ID != sourceAttachment.ID || identity.PermissionBoundary.Policy == nil ||
+			*identity.PermissionBoundary.Policy != expected {
+			t.Fatalf("read source-boundary identity status=%d body=%s", response.Status, response.Body)
+		}
+		return identity
+	}
+	v1Reference := iamv1.PolicyVersionReference{PolicyID: boundaryPolicy.Policy.ID,
+		VersionID: boundaryPolicy.Version.ID, ContentDigest: boundaryPolicy.Version.ContentDigest}
+	v2Reference := iamv1.PolicyVersionReference{PolicyID: boundaryPolicy.Policy.ID,
+		VersionID: denyVersion.Version.ID, ContentDigest: denyVersion.Version.ContentDigest}
+	beforeIdentity := readIdentity(v1Reference)
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications/"+string(applicationID),
+		member.Credential, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("source User inherited Role business access before assumption: status=%d", response.Status)
+	}
+
+	var originalRoleAccess iamv1.RoleAccess
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath, ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &originalRoleAccess) != nil ||
+		iamv1.ValidateRoleAccess(originalRoleAccess) != nil || originalRoleAccess.Role.ID != role.ID ||
+		len(originalRoleAccess.PolicyAttachments) != 1 || originalRoleAccess.PolicyAttachments[0].ID != roleAttachment.ID {
+		t.Fatalf("read source-boundary Role authority status=%d body=%s", response.Status, response.Body)
+	}
+	var sourceAuthorityBefore, sourceSessionBefore string
+	if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+		'user',(SELECT to_jsonb(p) FROM iam.principals p WHERE p.tenant_id=$1 AND p.id=$2),
+		'attachment',(SELECT to_jsonb(a) FROM iam.policy_attachments a WHERE a.tenant_id=$1 AND a.id=$3),
+		'boundary',(SELECT to_jsonb(b) FROM iam.user_permission_boundaries b WHERE b.tenant_id=$1 AND b.id=$4)
+	)::text`, user.AccountID, user.ID, sourceAttachment.ID, boundaryID).Scan(&sourceAuthorityBefore); err != nil {
+		t.Fatal("snapshot source User authority relationships", err)
+	}
+	if err := database.QueryRow(ctx, `SELECT jsonb_build_array(id,principal_id,verification_digest,status,issued_at,expires_at,
+		revoked_at,credential_version,authentication_method,mfa_revision,idle_timeout_seconds)::text
+		FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, user.AccountID, member.Session.ID).Scan(&sourceSessionBefore); err != nil {
+		t.Fatal("snapshot source User Session", err)
+	}
+
+	type policyEvidence struct {
+		AttachmentID iamv1.PolicyAttachmentID     `json:"attachmentId"`
+		Version      iamv1.PolicyVersionReference `json:"version"`
+	}
+	type boundaryEvidence struct {
+		State               string                        `json:"state"`
+		UserResourceVersion uint64                        `json:"userResourceVersion"`
+		BoundaryID          string                        `json:"boundaryId"`
+		ResourceVersion     uint64                        `json:"resourceVersion"`
+		Version             *iamv1.PolicyVersionReference `json:"version"`
+	}
+	readIssuanceAuthority := func(sessionID iamv1.RoleSessionID, expected iamv1.PolicyVersionReference) (string, []byte) {
+		t.Helper()
+		var raw string
+		var proof []byte
+		var userRevision, sourceCount, roleCount, relationshipRevision uint64
+		var sourceAttachmentID, sourcePolicyID, sourceVersionID, state, observedBoundaryID string
+		var observedBoundaryPolicy, observedBoundaryVersion, observedBoundaryDigest string
+		var observedRoleAttachment, observedRolePolicy, observedRoleVersion, observedRoleBoundary string
+		if err := database.QueryRow(ctx, `SELECT authority_evidence::text,iam.role_authorization_evidence(tenant_id,id),
+			(authority_evidence->>'userResourceVersion')::bigint,jsonb_array_length(authority_evidence->'sourcePolicies'),
+			authority_evidence#>>'{sourcePolicies,0,attachment,id}',authority_evidence#>>'{sourcePolicies,0,policy,id}',
+			authority_evidence#>>'{sourcePolicies,0,version,value,versionId}',authority_evidence#>>'{sourceBoundary,state}',
+			authority_evidence#>>'{sourceBoundary,boundaryId}',(authority_evidence#>>'{sourceBoundary,resourceVersion}')::bigint,
+			authority_evidence#>>'{sourceBoundary,version,value,policyId}',authority_evidence#>>'{sourceBoundary,version,value,versionId}',
+			authority_evidence#>>'{sourceBoundary,version,value,contentDigest}',jsonb_array_length(authority_evidence->'rolePolicies'),
+			authority_evidence#>>'{rolePolicies,0,attachment,id}',authority_evidence#>>'{rolePolicies,0,policy,id}',
+			authority_evidence#>>'{rolePolicies,0,version,value,versionId}',authority_evidence#>>'{roleBoundary,policy,id}'
+			FROM iam.role_sessions WHERE tenant_id=$1 AND id=$2`, user.AccountID, sessionID).Scan(
+			&raw, &proof, &userRevision, &sourceCount, &sourceAttachmentID, &sourcePolicyID, &sourceVersionID,
+			&state, &observedBoundaryID, &relationshipRevision, &observedBoundaryPolicy, &observedBoundaryVersion,
+			&observedBoundaryDigest, &roleCount, &observedRoleAttachment, &observedRolePolicy, &observedRoleVersion,
+			&observedRoleBoundary); err != nil {
+			t.Fatal("read exact source-boundary Role issuance authority", err)
+		}
+		if userRevision != beforeIdentity.User.ResourceVersion || sourceCount != 1 ||
+			sourceAttachmentID != string(sourceAttachment.ID) || sourcePolicyID != string(sourcePolicy.Policy.ID) ||
+			sourceVersionID != string(sourcePolicy.Version.ID) || state != "BOUND" ||
+			observedBoundaryID != boundaryID || relationshipRevision != boundaryResourceVersion ||
+			observedBoundaryPolicy != string(expected.PolicyID) || observedBoundaryVersion != string(expected.VersionID) ||
+			observedBoundaryDigest != expected.ContentDigest || roleCount != 1 ||
+			observedRoleAttachment != string(roleAttachment.ID) || observedRolePolicy != string(rolePolicy.Policy.ID) ||
+			observedRoleVersion != string(rolePolicy.Version.ID) || observedRoleBoundary != string(iamv1.SystemPolicyPaaSViewer) {
+			t.Fatal("Role issuance did not freeze the exact source grant, source boundary and Role authority")
+		}
+		return raw, proof
+	}
+	readAssumeDecision := func(sessionID iamv1.RoleSessionID) (string, string, string, string, string) {
+		t.Helper()
+		var id, document, grants, limit, fact string
+		if err := database.QueryRow(ctx, `SELECT d.id,d.document::text,d.policy_evidence::text,d.boundary_evidence::text,o.event_document::text
+			FROM iam.role_sessions s JOIN iam.authorization_decisions d ON d.tenant_id=s.tenant_id AND d.id=s.decision_id
+			JOIN iam.audit_outbox o ON o.tenant_id=s.tenant_id AND o.event_document->>'action'='iam.role-session.issued'
+			AND o.event_document#>>'{target,id}'=s.id AND o.event_document->>'iamDecisionId'=d.id
+			WHERE s.tenant_id=$1 AND s.id=$2`, user.AccountID, sessionID).Scan(&id, &document, &grants, &limit, &fact); err != nil {
+			t.Fatal("read source-boundary Role issuance decision", err)
+		}
+		return id, document, grants, limit, fact
+	}
+	assertAssumeEvidence := func(grantsJSON, boundaryJSON string, expected iamv1.PolicyVersionReference) {
+		t.Helper()
+		var grants []policyEvidence
+		var limit boundaryEvidence
+		if json.Unmarshal([]byte(grantsJSON), &grants) != nil || json.Unmarshal([]byte(boundaryJSON), &limit) != nil ||
+			len(grants) != 1 || grants[0].AttachmentID != sourceAttachment.ID ||
+			grants[0].Version.PolicyID != sourcePolicy.Policy.ID || grants[0].Version.VersionID != sourcePolicy.Version.ID ||
+			limit.State != "BOUND" || limit.UserResourceVersion != beforeIdentity.User.ResourceVersion ||
+			limit.BoundaryID != boundaryID || limit.ResourceVersion != boundaryResourceVersion ||
+			limit.Version == nil || *limit.Version != expected {
+			t.Fatal("Role assumption decision lost its direct source grant or source boundary evidence")
+		}
+	}
+
+	mutationPath := "/api/iam/v1/policies/" + string(boundaryPolicy.Policy.ID) + ":set-default-version"
+	applicationPath := "/api/paas/v1/applications/" + string(applicationID)
+	journey := &browserRoleAuthorityChangeProbe{account: user.AccountID, user: user.ID, role: role.ID,
+		mutationPath: mutationPath, applicationPath: applicationPath,
+		sourceDenyBeforePath: applicationPath, sourceDenyPath: applicationPath}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, journey.wrap)
+	defer closeBrowser()
+	assumedMarker := filepath.Join(temporary, "browser-source-boundary-default-assumed")
+	t.Logf("SOURCE_USER_BOUNDARY_DEFAULT_MEMBER url=%s/console/applications/?resource=%s login=%s@%s role=%s application=%s marker=%s; in the member browser profile start at this exact Application deep link and observe source USER403, enter the Role session from the account menu and explicitly assume this Role once, use Products and services to visit the denied Application directory, then return through browser history to this same exact Application and observe Role200 before creating the marker without returning to USER mode",
+		server.URL, url.QueryEscape(string(applicationID)), loginName, user.AccountID, role.ID, applicationID, assumedMarker)
+	waitForBrowserMarker(t, ctx, ui, assumedMarker, "source User boundary v1 Role assumption and exact Application read")
+	journey.mu.Lock()
+	browserIssued := journey.session
+	assumedExactly := !journey.invalid && journey.assumptions == 1 && journey.issued && journey.allowed &&
+		!journey.authorityChanging && browserIssued.ID != ""
+	journey.mu.Unlock()
+	if !assumedExactly {
+		t.Fatal("source User boundary journey lacks one browser Role issuance and exact Application 200")
+	}
+	browserAuthorityBefore, browserProofBefore := readIssuanceAuthority(browserIssued.ID, v1Reference)
+	browserAssumeID, browserAssumeDocument, browserAssumeGrants, browserAssumeBoundary, browserIssuedFact :=
+		readAssumeDecision(browserIssued.ID)
+	assertAssumeEvidence(browserAssumeGrants, browserAssumeBoundary, v1Reference)
+
+	const siblingRequestID = "browser-source-boundary-sibling"
+	response = performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+		iamv1.AssumeRoleRequest{ResourceVersion: originalRoleAccess.Role.ResourceVersion, RequestID: siblingRequestID})
+	var sibling iamv1.AssumeRoleResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &sibling) != nil ||
+		iamv1.ValidateAssumeRoleResponse(sibling) != nil || sibling.Outcome != "APPLIED" ||
+		sibling.Session.ID == browserIssued.ID || sibling.Session.RoleID != role.ID || sibling.Session.SourceUserID != user.ID {
+		t.Fatalf("prepare source-boundary sibling RoleSession status=%d body=%s", response.Status, response.Body)
+	}
+	material := sibling.Credential.CopyBytes()
+	siblingBearer := string(material)
+	clear(material)
+	for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session",
+		paasEndpoint + "/v1/applications/" + string(applicationID)} {
+		if response := performJSON(t, http.MethodGet, endpoint, siblingBearer, nil); response.Status != http.StatusOK {
+			t.Fatalf("source-boundary sibling RoleSession precondition status=%d endpoint=%s", response.Status, endpoint)
+		}
+	}
+	siblingAuthorityBefore, siblingProofBefore := readIssuanceAuthority(sibling.Session.ID, v1Reference)
+	_, _, siblingAssumeGrants, siblingAssumeBoundary, _ := readAssumeDecision(sibling.Session.ID)
+	assertAssumeEvidence(siblingAssumeGrants, siblingAssumeBoundary, v1Reference)
+
+	var allowDecisionID, allowDocument, allowPolicies, allowRoleProof, allowFact string
+	if err := database.QueryRow(ctx, `SELECT d.id,d.document::text,d.policy_evidence::text,d.role_evidence::text,o.event_document::text
+		FROM iam.authorization_decisions d JOIN iam.audit_outbox o ON o.tenant_id=d.tenant_id
+		AND o.event_document->>'iamDecisionId'=d.id AND o.event_document->>'action'='iam.authorization.decided'
+		WHERE d.tenant_id=$1 AND d.subject_type='ROLE' AND d.role_id=$2 AND d.allowed
+		AND d.action_name=$3 AND d.target_kind=$4 AND d.target_id=$5 AND d.role_evidence->>'sessionId'=$6
+		ORDER BY d.decided_at DESC,d.id DESC LIMIT 1`, user.AccountID, role.ID, iamv1.ActionPaaSApplicationRead,
+		iamv1.ResourceApplication, applicationID, browserIssued.ID).Scan(
+		&allowDecisionID, &allowDocument, &allowPolicies, &allowRoleProof, &allowFact); err != nil {
+		t.Fatal("read source-boundary original Role Allow decision", err)
+	}
+	var allowEvidence []policyEvidence
+	if json.Unmarshal([]byte(allowPolicies), &allowEvidence) != nil || len(allowEvidence) != 1 ||
+		allowEvidence[0].AttachmentID != roleAttachment.ID || allowEvidence[0].Version.PolicyID != rolePolicy.Policy.ID ||
+		allowEvidence[0].Version.VersionID != rolePolicy.Version.ID {
+		t.Fatal("source-boundary Role Allow lost its independent Role Policy evidence")
+	}
+
+	finished := filepath.Join(temporary, "browser-source-boundary-default-finished")
+	browserPath := "/console/access/policies/?id=" + url.QueryEscape(string(boundaryPolicy.Policy.ID))
+	t.Logf("SOURCE_USER_BOUNDARY_DEFAULT_SWITCH admin_url=%s%s member_url=%s/console/applications/?resource=%s marker=%s boundary_policy=%s target_v2=%s resource_version=2; keep the member Role tab alive; in the administrator profile set only target v2 as default; in the member profile navigate once so the first protected Role GET returns 401 and the page enters BLOCKED, explicitly choose 验证并返回用户模式, then observe the exact Application403; do not reassume and do not reuse the blocked Role bearer; create the marker after both views are visible",
+		server.URL, browserPath, server.URL, url.QueryEscape(string(applicationID)), finished,
+		boundaryPolicy.Policy.ID, denyVersion.Version.ID)
+	waitForBrowserMarker(t, ctx, ui, finished, "source User boundary default switch fenced Role and retained source USER")
+	if err := journey.check(); err != nil {
+		t.Fatal(err)
+	}
+	journey.mu.Lock()
+	t.Logf("SOURCE_USER_BOUNDARY_BROWSER_TRANSITION rejection_route=%s; source403 before assumption, one Role401, no blocked credential reuse, explicit source200 and exact source Application403",
+		journey.rejectionRoute)
+	journey.mu.Unlock()
+
+	response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(boundaryPolicy.Policy.ID), ownerBearer, nil)
+	var selected iamv1.PolicyAccess
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &selected) != nil ||
+		iamv1.ValidatePolicyAccess(selected) != nil || selected.Detail.Policy.ResourceVersion != 3 ||
+		selected.Detail.Policy.DefaultVersionID != denyVersion.Version.ID || selected.Detail.Version.ID != denyVersion.Version.ID {
+		t.Fatalf("browser did not select exact source boundary DENY default status=%d body=%s", response.Status, response.Body)
+	}
+	for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session",
+		paasEndpoint + "/v1/applications/" + string(applicationID)} {
+		if response := performJSON(t, http.MethodGet, endpoint, siblingBearer, nil); response.Status != http.StatusUnauthorized {
+			t.Fatalf("source boundary default switch retained sibling RoleSession status=%d endpoint=%s", response.Status, endpoint)
+		}
+	}
+	afterIdentity := readIdentity(v2Reference)
+	if !reflect.DeepEqual(beforeIdentity.Account, afterIdentity.Account) || !reflect.DeepEqual(beforeIdentity.User, afterIdentity.User) ||
+		beforeIdentity.IdentityKind != afterIdentity.IdentityKind ||
+		!reflect.DeepEqual(beforeIdentity.PolicySources, afterIdentity.PolicySources) {
+		t.Fatal("source boundary default switch rewrote source User or direct grant identity")
+	}
+	if response := performJSON(t, http.MethodGet, paasEndpoint+"/v1/applications/"+string(applicationID),
+		member.Credential, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("source USER gained Role Application authority under boundary v2: status=%d", response.Status)
+	}
+
+	var roleSessionsBefore int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.role_sessions WHERE tenant_id=$1 AND source_user_id=$2`,
+		user.AccountID, user.ID).Scan(&roleSessionsBefore); err != nil || roleSessionsBefore != 2 {
+		t.Fatal("unexpected RoleSession count before denied source-boundary assumption", err)
+	}
+	const deniedRequestID = "browser-source-boundary-denied-v2"
+	response = performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+		iamv1.AssumeRoleRequest{ResourceVersion: originalRoleAccess.Role.ResourceVersion, RequestID: deniedRequestID})
+	if response.Status != http.StatusForbidden {
+		t.Fatalf("source boundary v2 allowed a fresh Role assumption status=%d body=%s", response.Status, response.Body)
+	}
+	var roleSessionsAfter, deniedIssuedFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.role_sessions WHERE tenant_id=$1 AND source_user_id=$2),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.role-session.issued'
+		 AND event_document->>'requestId'=$3)`, user.AccountID, user.ID, deniedRequestID).
+		Scan(&roleSessionsAfter, &deniedIssuedFacts); err != nil || roleSessionsAfter != roleSessionsBefore || deniedIssuedFacts != 0 {
+		t.Fatal("denied source-boundary assumption created a RoleSession or issuance fact", err)
+	}
+	var deniedDecisionID, deniedDocument, deniedGrants, deniedBoundary string
+	if err := database.QueryRow(ctx, `SELECT id,document::text,policy_evidence::text,boundary_evidence::text
+		FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND NOT allowed
+		AND action_name=$3 AND target_kind=$4 AND target_id=$5 AND request_id=$6`, user.AccountID, user.ID,
+		iamv1.ActionIAMRoleAssume, iamv1.ResourceRole, role.ID, deniedRequestID).
+		Scan(&deniedDecisionID, &deniedDocument, &deniedGrants, &deniedBoundary); err != nil {
+		t.Fatal("read source boundary v2 denied assumption decision", err)
+	}
+	assertAssumeEvidence(deniedGrants, deniedBoundary, v2Reference)
+
+	var sourceAuthorityAfter, sourceSessionAfter string
+	if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+		'user',(SELECT to_jsonb(p) FROM iam.principals p WHERE p.tenant_id=$1 AND p.id=$2),
+		'attachment',(SELECT to_jsonb(a) FROM iam.policy_attachments a WHERE a.tenant_id=$1 AND a.id=$3),
+		'boundary',(SELECT to_jsonb(b) FROM iam.user_permission_boundaries b WHERE b.tenant_id=$1 AND b.id=$4)
+	)::text`, user.AccountID, user.ID, sourceAttachment.ID, boundaryID).Scan(&sourceAuthorityAfter); err != nil ||
+		sourceAuthorityAfter != sourceAuthorityBefore {
+		t.Fatal("source boundary default switch changed the User, grant or boundary relationship", err)
+	}
+	if err := database.QueryRow(ctx, `SELECT jsonb_build_array(id,principal_id,verification_digest,status,issued_at,expires_at,
+		revoked_at,credential_version,authentication_method,mfa_revision,idle_timeout_seconds)::text
+		FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, user.AccountID, member.Session.ID).Scan(&sourceSessionAfter); err != nil ||
+		sourceSessionAfter != sourceSessionBefore {
+		t.Fatal("source boundary default switch changed the source USER Session", err)
+	}
+	var currentRoleAccess iamv1.RoleAccess
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath, ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &currentRoleAccess) != nil ||
+		iamv1.ValidateRoleAccess(currentRoleAccess) != nil || !reflect.DeepEqual(originalRoleAccess, currentRoleAccess) {
+		t.Fatal("source boundary default switch altered Role, Trust or Role Policy attachment")
+	}
+	var currentRoleBoundary iamv1.RolePermissionBoundary
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath+"/permission-boundary", ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &currentRoleBoundary) != nil ||
+		iamv1.ValidateRolePermissionBoundary(currentRoleBoundary) != nil || !reflect.DeepEqual(roleBoundary, currentRoleBoundary) {
+		t.Fatal("source boundary default switch altered the Role permission boundary")
+	}
+	for _, expected := range []iamv1.RoleSession{browserIssued, sibling.Session} {
+		var access iamv1.RoleSessionAccess
+		response = performJSON(t, http.MethodGet, iamEndpoint+rolePath+"/sessions/"+string(expected.ID), ownerBearer, nil)
+		if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &access) != nil ||
+			iamv1.ValidateRoleSessionAccess(access) != nil || !reflect.DeepEqual(access.Item.Session, expected) ||
+			access.Item.Lifecycle != iamv1.RoleSessionUnrevoked || !access.Item.RevokeCapability.Available {
+			t.Fatalf("source boundary invalidation rewrote or revoked issuance %s status=%d", expected.ID, response.Status)
+		}
+	}
+	browserAuthorityAfter, browserProofAfter := readIssuanceAuthority(browserIssued.ID, v1Reference)
+	siblingAuthorityAfter, siblingProofAfter := readIssuanceAuthority(sibling.Session.ID, v1Reference)
+	if browserAuthorityAfter != browserAuthorityBefore || siblingAuthorityAfter != siblingAuthorityBefore ||
+		!bytes.Equal(browserProofAfter, browserProofBefore) || !bytes.Equal(siblingProofAfter, siblingProofBefore) {
+		t.Fatal("source boundary default switch rewrote historical Role issuance evidence")
+	}
+	var retainedAssumeDocument, retainedAssumeGrants, retainedAssumeBoundary, retainedIssuedFact string
+	if err := database.QueryRow(ctx, `SELECT d.document::text,d.policy_evidence::text,d.boundary_evidence::text,o.event_document::text
+		FROM iam.authorization_decisions d JOIN iam.audit_outbox o ON o.tenant_id=d.tenant_id
+		AND o.event_document->>'action'='iam.role-session.issued' AND o.event_document->>'iamDecisionId'=d.id
+		WHERE d.tenant_id=$1 AND d.id=$2 AND o.event_document#>>'{target,id}'=$3`,
+		user.AccountID, browserAssumeID, browserIssued.ID).Scan(&retainedAssumeDocument, &retainedAssumeGrants,
+		&retainedAssumeBoundary, &retainedIssuedFact); err != nil || retainedAssumeDocument != browserAssumeDocument ||
+		retainedAssumeGrants != browserAssumeGrants || retainedAssumeBoundary != browserAssumeBoundary ||
+		retainedIssuedFact != browserIssuedFact {
+		t.Fatal("source boundary switch rewrote the original assumption decision or issuance fact", err)
+	}
+	var retainedAllowDocument, retainedAllowPolicies, retainedAllowRole, retainedAllowFact string
+	if err := database.QueryRow(ctx, `SELECT d.document::text,d.policy_evidence::text,d.role_evidence::text,o.event_document::text
+		FROM iam.authorization_decisions d JOIN iam.audit_outbox o ON o.tenant_id=d.tenant_id
+		AND o.event_document->>'iamDecisionId'=d.id AND o.event_document->>'action'='iam.authorization.decided'
+		WHERE d.tenant_id=$1 AND d.id=$2`, user.AccountID, allowDecisionID).Scan(&retainedAllowDocument,
+		&retainedAllowPolicies, &retainedAllowRole, &retainedAllowFact); err != nil ||
+		retainedAllowDocument != allowDocument || retainedAllowPolicies != allowPolicies ||
+		retainedAllowRole != allowRoleProof || retainedAllowFact != allowFact {
+		t.Fatal("source boundary switch rewrote the historical Role Allow decision or fact", err)
+	}
+
+	const restoreRequestID = "browser-source-boundary-restore-v1"
+	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies/"+string(boundaryPolicy.Policy.ID)+":set-default-version",
+		ownerBearer, iamv1.SetDefaultPolicyVersionRequest{VersionID: boundaryPolicy.Version.ID,
+			ResourceVersion: selected.Detail.Policy.ResourceVersion, RequestID: restoreRequestID})
+	var restored iamv1.PolicyDetail
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &restored) != nil ||
+		iamv1.ValidatePolicyDetail(restored) != nil || restored.Policy.ResourceVersion != 4 ||
+		restored.Policy.DefaultVersionID != boundaryPolicy.Version.ID || restored.Version.ID != boundaryPolicy.Version.ID {
+		t.Fatalf("restore source boundary v1 for ABA proof status=%d body=%s", response.Status, response.Body)
+	}
+	restoredIdentity := readIdentity(v1Reference)
+	if !reflect.DeepEqual(beforeIdentity, restoredIdentity) {
+		t.Fatal("restored source boundary v1 changed the source identity projection")
+	}
+	for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session",
+		paasEndpoint + "/v1/applications/" + string(applicationID)} {
+		if response := performJSON(t, http.MethodGet, endpoint, siblingBearer, nil); response.Status != http.StatusUnauthorized {
+			t.Fatalf("source boundary ABA restoration revived old RoleSession status=%d endpoint=%s", response.Status, endpoint)
+		}
+	}
+	response = performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+		iamv1.AssumeRoleRequest{ResourceVersion: originalRoleAccess.Role.ResourceVersion, RequestID: siblingRequestID})
+	var replay iamv1.AssumeRoleResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &replay) != nil ||
+		iamv1.ValidateAssumeRoleResponse(replay) != nil || replay.Outcome != "EQUAL_REPLAY" || replay.Credential.Present() ||
+		!reflect.DeepEqual(replay.Session, sibling.Session) {
+		t.Fatal("equal source-boundary issuance replay renewed old Role authority")
+	}
+	const freshRequestID = "browser-source-boundary-fresh-v1"
+	response = performJSON(t, http.MethodPost, iamEndpoint+rolePath+":assume", member.Credential,
+		iamv1.AssumeRoleRequest{ResourceVersion: originalRoleAccess.Role.ResourceVersion, RequestID: freshRequestID})
+	var fresh iamv1.AssumeRoleResponse
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &fresh) != nil ||
+		iamv1.ValidateAssumeRoleResponse(fresh) != nil || fresh.Outcome != "APPLIED" ||
+		fresh.Session.ID == sibling.Session.ID || fresh.Session.ID == browserIssued.ID ||
+		fresh.Session.RoleID != role.ID || fresh.Session.SourceUserID != user.ID {
+		t.Fatalf("fresh source-boundary Role assumption status=%d body=%s", response.Status, response.Body)
+	}
+	material = fresh.Credential.CopyBytes()
+	freshBearer := string(material)
+	clear(material)
+	for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session",
+		paasEndpoint + "/v1/applications/" + string(applicationID)} {
+		if response := performJSON(t, http.MethodGet, endpoint, freshBearer, nil); response.Status != http.StatusOK {
+			t.Fatalf("fresh source-boundary RoleSession status=%d endpoint=%s", response.Status, endpoint)
+		}
+	}
+	_, _ = readIssuanceAuthority(fresh.Session.ID, v1Reference)
+	_, _, freshAssumeGrants, freshAssumeBoundary, _ := readAssumeDecision(fresh.Session.ID)
+	assertAssumeEvidence(freshAssumeGrants, freshAssumeBoundary, v1Reference)
+	if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+		'user',(SELECT to_jsonb(p) FROM iam.principals p WHERE p.tenant_id=$1 AND p.id=$2),
+		'attachment',(SELECT to_jsonb(a) FROM iam.policy_attachments a WHERE a.tenant_id=$1 AND a.id=$3),
+		'boundary',(SELECT to_jsonb(b) FROM iam.user_permission_boundaries b WHERE b.tenant_id=$1 AND b.id=$4)
+	)::text`, user.AccountID, user.ID, sourceAttachment.ID, boundaryID).Scan(&sourceAuthorityAfter); err != nil ||
+		sourceAuthorityAfter != sourceAuthorityBefore {
+		t.Fatal("source boundary ABA restoration changed the User, grant or boundary relationship", err)
+	}
+	if err := database.QueryRow(ctx, `SELECT jsonb_build_array(id,principal_id,verification_digest,status,issued_at,expires_at,
+		revoked_at,credential_version,authentication_method,mfa_revision,idle_timeout_seconds)::text
+		FROM iam.sessions WHERE tenant_id=$1 AND id=$2`, user.AccountID, member.Session.ID).Scan(&sourceSessionAfter); err != nil ||
+		sourceSessionAfter != sourceSessionBefore {
+		t.Fatal("source boundary ABA restoration changed the source USER Session", err)
+	}
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath, ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &currentRoleAccess) != nil ||
+		iamv1.ValidateRoleAccess(currentRoleAccess) != nil || !reflect.DeepEqual(originalRoleAccess, currentRoleAccess) {
+		t.Fatal("source boundary ABA restoration altered Role, Trust or Role Policy attachment")
+	}
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath+"/permission-boundary", ownerBearer, nil)
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &currentRoleBoundary) != nil ||
+		iamv1.ValidateRolePermissionBoundary(currentRoleBoundary) != nil || !reflect.DeepEqual(roleBoundary, currentRoleBoundary) {
+		t.Fatal("source boundary ABA restoration altered the Role permission boundary")
+	}
+	browserAuthorityFinal, browserProofFinal := readIssuanceAuthority(browserIssued.ID, v1Reference)
+	siblingAuthorityFinal, siblingProofFinal := readIssuanceAuthority(sibling.Session.ID, v1Reference)
+	if browserAuthorityFinal != browserAuthorityBefore || siblingAuthorityFinal != siblingAuthorityBefore ||
+		!bytes.Equal(browserProofFinal, browserProofBefore) || !bytes.Equal(siblingProofFinal, siblingProofBefore) {
+		t.Fatal("source boundary ABA restoration rewrote historical Role issuance evidence")
+	}
+	_, finalAssumeDocument, finalAssumeGrants, finalAssumeBoundary, finalIssuedFact := readAssumeDecision(browserIssued.ID)
+	if finalAssumeDocument != browserAssumeDocument || finalAssumeGrants != browserAssumeGrants ||
+		finalAssumeBoundary != browserAssumeBoundary || finalIssuedFact != browserIssuedFact {
+		t.Fatal("source boundary ABA restoration rewrote the original assumption decision or issuance fact")
+	}
+	if err := database.QueryRow(ctx, `SELECT d.document::text,d.policy_evidence::text,d.role_evidence::text,o.event_document::text
+		FROM iam.authorization_decisions d JOIN iam.audit_outbox o ON o.tenant_id=d.tenant_id
+		AND o.event_document->>'iamDecisionId'=d.id AND o.event_document->>'action'='iam.authorization.decided'
+		WHERE d.tenant_id=$1 AND d.id=$2`, user.AccountID, allowDecisionID).Scan(&retainedAllowDocument,
+		&retainedAllowPolicies, &retainedAllowRole, &retainedAllowFact); err != nil ||
+		retainedAllowDocument != allowDocument || retainedAllowPolicies != allowPolicies ||
+		retainedAllowRole != allowRoleProof || retainedAllowFact != allowFact {
+		t.Fatal("source boundary ABA restoration rewrote the historical Role Allow decision or fact", err)
+	}
+	var oldSessionsCurrent bool
+	if err := database.QueryRow(ctx, `SELECT bool_and(revoked_at IS NULL AND expires_at>clock_timestamp())
+		FROM iam.role_sessions WHERE tenant_id=$1 AND id=ANY($2::text[])`, user.AccountID,
+		[]string{string(browserIssued.ID), string(sibling.Session.ID)}).Scan(&oldSessionsCurrent); err != nil || !oldSessionsCurrent {
+		t.Fatal("source boundary ABA proof relied on expiry or explicit revocation", err)
+	}
+	var deniedIssuedAfter, siblingIssuedFacts, freshIssuedFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		count(*) FILTER(WHERE event_document->>'requestId'=$2),
+		count(*) FILTER(WHERE event_document->>'requestId'=$3),
+		count(*) FILTER(WHERE event_document->>'requestId'=$4)
+		FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'='iam.role-session.issued'`,
+		user.AccountID, deniedRequestID, siblingRequestID, freshRequestID).
+		Scan(&deniedIssuedAfter, &siblingIssuedFacts, &freshIssuedFacts); err != nil ||
+		deniedIssuedAfter != 0 || siblingIssuedFacts != 1 || freshIssuedFacts != 1 {
+		t.Fatal("source boundary denial, replay or fresh issuance facts are inconsistent", err)
+	}
+
+	rows, err := database.Query(ctx, `SELECT event_document->>'requestId' FROM iam.audit_outbox
+		WHERE tenant_id=$1 AND event_document->>'action'=$2 AND event_document#>>'{target,kind}'='POLICY'
+		AND event_document#>>'{target,id}'=$3 ORDER BY event_document->>'requestId'`,
+		user.AccountID, auditv1.ActionIAMPolicyDefaultVersionSet, boundaryPolicy.Policy.ID)
+	if err != nil {
+		t.Fatal("read source boundary Policy default facts", err)
+	}
+	defaultRequests := make([]string, 0, 2)
+	for rows.Next() {
+		var requestID string
+		if rows.Scan(&requestID) != nil {
+			rows.Close()
+			t.Fatal("scan source boundary Policy default fact")
+		}
+		defaultRequests = append(defaultRequests, requestID)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		t.Fatal("close source boundary Policy default facts", err)
+	}
+	if len(defaultRequests) != 2 || defaultRequests[0] == defaultRequests[1] ||
+		!slices.Contains(defaultRequests, restoreRequestID) {
+		t.Fatalf("source boundary Policy default facts=%v want one UI switch and one API restore", defaultRequests)
+	}
+	uiRequestID := ""
+	for _, requestID := range defaultRequests {
+		if requestID != restoreRequestID && strings.HasPrefix(requestID, "ui-policy-version-") {
+			uiRequestID = requestID
+		}
+	}
+	if uiRequestID == "" {
+		t.Fatalf("source boundary Policy switch did not originate from the version page: %v", defaultRequests)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	wantedAudit := map[string]bool{uiRequestID: false, restoreRequestID: false}
+	query := auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMPolicyDefaultVersionSet}
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if _, ok := wantedAudit[record.Event.RequestID]; !ok {
+				continue
+			}
+			if wantedAudit[record.Event.RequestID] || record.Source != auditv1.SourceIAM ||
+				record.Event.TenantID != auditv1.TenantID(user.AccountID) || record.Event.InstallationID != "" ||
+				record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != "principal-admin" ||
+				record.Event.Target.Kind != auditv1.TargetPolicy || record.Event.Target.ID != string(boundaryPolicy.Policy.ID) ||
+				record.Event.Result != auditv1.ResultSucceeded || record.Event.IAMDecisionID == "" {
+				t.Fatal("source boundary Policy default Audit attribution changed or duplicated")
+			}
+			wantedAudit[record.Event.RequestID] = true
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		query.Cursor = page.NextCursor
+	}
+	if !wantedAudit[uiRequestID] || !wantedAudit[restoreRequestID] {
+		t.Fatalf("source boundary Policy default Audit delivery incomplete: %#v", wantedAudit)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(user.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("source boundary Policy default tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Logf("one page-selected source User permission-boundary default fenced two existing RoleSessions with 401, denied fresh v2 assumption without an issuance, preserved source User, Session, direct grant, boundary relationship, Role, Trust, Role Policy, Role boundary and immutable history, resisted ABA restoration and replay, then issued one fresh v1 RoleSession; denied_decision=%s denied_document_bytes=%d",
+		deniedDecisionID, len(deniedDocument))
 	return []string{initial.Credential, member.Credential, siblingBearer, freshBearer}
 }
 
@@ -9204,35 +10383,37 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 // counts and private in-memory credential digests; never retain or log bearer
 // material, request bodies or successful response documents.
 type browserRoleAuthorityChangeProbe struct {
-	mu                sync.Mutex
-	now               func() time.Time
-	account           iamv1.AccountID
-	user              iamv1.PrincipalID
-	role              iamv1.RoleID
-	mutationPath      string
-	sourceDigest      [sha256.Size]byte
-	roleDigest        [sha256.Size]byte
-	assumptions       int
-	issued            bool
-	invalid           bool
-	authorityChanging bool
-	allowed           bool
-	sourceAllowPath   string
-	sourceAllowed     bool
-	roleRejected      bool
-	rejectionRoute    string
-	sourceRead        bool
-	sourceDenied      bool
-	allowPath         string
-	applicationPath   string
-	sourceDenyPath    string
-	denyPath          string
-	denyMethod        string
-	denied            bool
-	sessionRevoke     bool
-	session           iamv1.RoleSession
-	revokeCount       int
-	revokeRequest     string
+	mu                   sync.Mutex
+	now                  func() time.Time
+	account              iamv1.AccountID
+	user                 iamv1.PrincipalID
+	role                 iamv1.RoleID
+	mutationPath         string
+	sourceDigest         [sha256.Size]byte
+	roleDigest           [sha256.Size]byte
+	assumptions          int
+	issued               bool
+	invalid              bool
+	authorityChanging    bool
+	allowed              bool
+	sourceAllowPath      string
+	sourceAllowed        bool
+	sourceDenyBeforePath string
+	sourceDeniedBefore   bool
+	roleRejected         bool
+	rejectionRoute       string
+	sourceRead           bool
+	sourceDenied         bool
+	allowPath            string
+	applicationPath      string
+	sourceDenyPath       string
+	denyPath             string
+	denyMethod           string
+	denied               bool
+	sessionRevoke        bool
+	session              iamv1.RoleSession
+	revokeCount          int
+	revokeRequest        string
 }
 
 func iamPolicyAttachmentBrowserHandler(upstream http.Handler, loss *browserResponseLoss, journey *browserRoleAuthorityChangeProbe) http.Handler {
@@ -9325,6 +10506,10 @@ func (probe *browserRoleAuthorityChangeProbe) wrap(upstream http.Handler) http.H
 				if !probe.sourceAllowed || probe.sourceDigest != digest {
 					probe.invalid = true
 				}
+			} else if probe.sourceDenyBeforePath != "" {
+				if !probe.sourceDeniedBefore || probe.sourceDigest != digest {
+					probe.invalid = true
+				}
 			} else {
 				probe.sourceDigest = digest
 			}
@@ -9364,6 +10549,15 @@ func (probe *browserRoleAuthorityChangeProbe) wrap(upstream http.Handler) http.H
 				r.URL.Path == probe.sourceAllowPath && response.status == http.StatusOK {
 				probe.sourceDigest = digest
 				probe.sourceAllowed = true
+			}
+			if probe.sourceDenyBeforePath != "" && r.Method == http.MethodGet &&
+				r.URL.Path == probe.sourceDenyBeforePath && response.status == http.StatusForbidden &&
+				strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+				if probe.sourceDeniedBefore && probe.sourceDigest != digest {
+					probe.invalid = true
+				}
+				probe.sourceDigest = digest
+				probe.sourceDeniedBefore = true
 			}
 			return
 		}
@@ -9429,10 +10623,11 @@ func (probe *browserRoleAuthorityChangeProbe) check() error {
 	defer probe.mu.Unlock()
 	if probe.invalid || probe.assumptions != 1 || !probe.issued || !probe.allowed ||
 		probe.sourceAllowPath != "" && !probe.sourceAllowed ||
+		probe.sourceDenyBeforePath != "" && !probe.sourceDeniedBefore ||
 		!probe.authorityChanging || !probe.roleRejected || probe.rejectionRoute == "" || !probe.sourceRead || !probe.sourceDenied ||
 		probe.denyPath != "" && !probe.denied || probe.sessionRevoke && (probe.revokeCount != 1 || probe.revokeRequest == "") {
-		return fmt.Errorf("browser Role journey incomplete: assumptions=%d invalid=%t issued=%t sourceBefore200=%t application200=%t authorityChanging=%t rejectionRoute=%q source200=%t source403=%t boundary403=%t sessionRevokeCount=%d",
-			probe.assumptions, probe.invalid, probe.issued, probe.sourceAllowed, probe.allowed, probe.authorityChanging, probe.rejectionRoute, probe.sourceRead, probe.sourceDenied, probe.denied, probe.revokeCount)
+		return fmt.Errorf("browser Role journey incomplete: assumptions=%d invalid=%t issued=%t sourceBefore200=%t sourceBefore403=%t application200=%t authorityChanging=%t rejectionRoute=%q source200=%t source403=%t boundary403=%t sessionRevokeCount=%d",
+			probe.assumptions, probe.invalid, probe.issued, probe.sourceAllowed, probe.sourceDeniedBefore, probe.allowed, probe.authorityChanging, probe.rejectionRoute, probe.sourceRead, probe.sourceDenied, probe.denied, probe.revokeCount)
 	}
 	return nil
 }
@@ -9468,7 +10663,8 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 		"expired before revoke", "expired at rejection", "expired during rejection", "expired session before revoke", "expired session at rejection",
 		"complete near expiry", "complete after delayed final check",
 		"complete detail rejection", "complete detail before revoke", "detail wrong target", "detail wrong bearer", "detail wrong method", "detail forbidden", "detail unavailable",
-		"complete source transition", "source transition missing allow", "source transition wrong allow bearer", "source transition wrong deny path"} {
+		"complete source transition", "source transition missing allow", "source transition wrong allow bearer", "source transition wrong deny path",
+		"complete source initial deny", "source initial deny missing", "source initial deny wrong bearer"} {
 		t.Run(scenario, func(t *testing.T) {
 			observedAt := time.Date(2026, time.October, 22, 0, 0, 0, 0, time.UTC)
 			probe := &browserRoleAuthorityChangeProbe{account: "browser-account", user: "browser-member", role: "browser-role",
@@ -9481,6 +10677,12 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 				probe.applicationPath = "/api/paas/v1/applications/role-owned-application"
 				probe.sourceAllowPath = "/api/paas/v1/applications/source-owned-application"
 				probe.sourceDenyPath = probe.sourceAllowPath
+			}
+			sourceInitialDeny := strings.Contains(scenario, "source initial deny")
+			if sourceInitialDeny {
+				probe.applicationPath = "/api/paas/v1/applications/source-denied-application"
+				probe.sourceDenyBeforePath = probe.applicationPath
+				probe.sourceDenyPath = probe.applicationPath
 			}
 			if strings.Contains(scenario, "session") {
 				probe.sessionRevoke = true
@@ -9604,13 +10806,20 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 				}
 				invoke(http.MethodGet, probe.sourceAllowPath, sourceBefore)
 			}
+			if sourceInitialDeny && scenario != "source initial deny missing" {
+				sourceBefore := source
+				if scenario == "source initial deny wrong bearer" {
+					sourceBefore = "another-source-bearer"
+				}
+				invoke(http.MethodGet, probe.sourceDenyBeforePath, sourceBefore)
+			}
 			if scenario != "API-only setup" {
 				invoke(http.MethodPost, "/api/iam/v1/roles/browser-role:assume", source)
 			}
 			initialPath := allowPath
 			if scenario == "complete detail before revoke" {
 				initialPath = probe.applicationPath
-			} else if sourceTransition {
+			} else if sourceTransition || sourceInitialDeny {
 				initialPath = probe.applicationPath
 			}
 			invoke(http.MethodGet, initialPath, roleBearer)
@@ -9649,7 +10858,7 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 				if scenario == "detail wrong target" {
 					rejectionPath = "/api/paas/v1/applications/another-application"
 				}
-			} else if sourceTransition {
+			} else if sourceTransition || sourceInitialDeny {
 				rejectionPath = probe.applicationPath
 			}
 			if scenario == "directory wrong method" || scenario == "detail wrong method" {
@@ -9675,7 +10884,7 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 			sourceReadPath := allowPath
 			if strings.Contains(scenario, "detail") {
 				sourceReadPath = probe.applicationPath
-			} else if sourceTransition {
+			} else if sourceTransition || sourceInitialDeny {
 				sourceReadPath = probe.sourceDenyPath
 				if scenario == "source transition wrong deny path" {
 					sourceReadPath = probe.applicationPath
@@ -9689,7 +10898,7 @@ func TestRoleBrowserJourneyRequiresActualCredentialTransitions(t *testing.T) {
 				scenario == "complete directory rejection" || scenario == "complete current Role rejection" ||
 				scenario == "complete near expiry" || scenario == "complete after delayed final check" ||
 				scenario == "complete detail rejection" || scenario == "complete detail before revoke" ||
-				scenario == "complete source transition"
+				scenario == "complete source transition" || scenario == "complete source initial deny"
 			if err := probe.check(); (err == nil) != wantComplete {
 				t.Fatalf("browser credential boundary result=%v", err)
 			}
