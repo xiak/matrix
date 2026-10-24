@@ -267,6 +267,38 @@ describe("SessionProvider", () => {
     expect(screen.container.textContent).not.toContain(secretCredential);
   });
 
+  it("reports a trusted foreground interaction without rendering activity state and expires on a current-session 401", async () => {
+    const iam = repository();
+    const touchCurrent = vi.fn().mockRejectedValue(new HttpProblem(401, "SESSION_EXPIRED"));
+    iam.sessions = {
+      touchCurrent,
+      list: vi.fn(),
+      revoke: vi.fn(),
+      revokeOthers: vi.fn()
+    };
+    const addEventListener = vi.spyOn(document, "addEventListener");
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    const registration = addEventListener.mock.calls.find(([type, , options]) =>
+      type === "pointerdown" && typeof options === "object" && options !== null && options.capture === true && options.passive === true
+    );
+    expect(registration).toBeDefined();
+    const listener = registration![1] as EventListener;
+    await act(async () => {
+      listener({ type: "pointerdown", isTrusted: true } as Event);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(touchCurrent).toHaveBeenCalledExactlyOnceWith(secretCredential, expect.objectContaining({
+      id: "session-test",
+      organizationId: "organization-test",
+      principalId: "principal-test"
+    }));
+    expect(screen.getByTestId("phase").textContent).toBe("anonymous");
+    expect(screen.getByTestId("principal").textContent).toBe("none");
+    expect(screen.container.textContent).not.toContain(secretCredential);
+  });
+
   it("does not expire a new login because an older bearer's request returned late", async () => {
     const iam = repository();
     const initial = iam.login;

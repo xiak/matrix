@@ -5,7 +5,9 @@ import type {
   LoginResult,
   OtherSessionsRevocation,
   OwnSessionPage,
-  OwnSessionRevocation
+  OwnSessionRevocation,
+  SessionActivity,
+  SessionSummary
 } from "../domain/session";
 import type {
   Account,
@@ -109,6 +111,7 @@ export interface IamRepository {
     revalidateSource(credential: string, accountId: string, userId: string): Promise<void>;
   };
   sessions?: {
+    touchCurrent?(credential: string, expected: SessionSummary): Promise<SessionActivity>;
     list(credential: string, after?: string): Promise<OwnSessionPage>;
     revoke(credential: string, targetSessionId: string, requestId: string): Promise<OwnSessionRevocation>;
     revokeOthers(credential: string, requestId: string): Promise<OtherSessionsRevocation>;

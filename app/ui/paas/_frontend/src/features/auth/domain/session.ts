@@ -7,6 +7,15 @@ export type SessionSummary = {
   expiresAt: string;
 };
 
+export type SessionActivity = {
+  sessionId: string;
+  accountId: string;
+  userId: string;
+  lastActivityAt: string;
+  idleExpiresAt: string;
+  absoluteExpiresAt: string;
+};
+
 export type OwnSessionPage = {
   accountId: string;
   userId: string;

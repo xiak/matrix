@@ -23,6 +23,7 @@ import type {
 import type { EnrollmentRecoveryMaterial, FirstEnrollmentProgress } from "../domain/personalSecurity";
 import { httpIamRepository } from "../repositories/httpIamRepository";
 import type { IamRepository } from "../repositories/iamRepository";
+import { createForegroundSessionTouchReporter } from "./foregroundSessionActivity";
 import { OwnSessionsProvider } from "./OwnSessionsProvider";
 import { PersonalSecurityProvider } from "./PersonalSecurityProvider";
 import { RoleSessionProvider } from "./RoleSessionProvider";
@@ -222,6 +223,31 @@ export function SessionProvider({
   }, [forget]);
   const isCurrentSession = useCallback((expectedCredential: string, expectedRevision: number) =>
     credentialRef.current === expectedCredential && authenticationRevisionRef.current === expectedRevision, []);
+
+  useEffect(() => {
+    const touchCurrent = repository.sessions?.touchCurrent;
+    if (!credential || !current || !touchCurrent) return;
+    const expectedCredential = credential;
+    const expectedRevision = sessionRevision;
+    const expectedSession = current.session;
+    const reporter = createForegroundSessionTouchReporter({
+      expire: () => { expire(expectedCredential, expectedRevision); },
+      isCurrent: () => isCurrentSession(expectedCredential, expectedRevision),
+      now: () => performance.now(),
+      touch: () => touchCurrent(expectedCredential, expectedSession)
+    });
+    const reportDocumentActivity = (event: Event) => reporter.handle(event, document.visibilityState);
+    const reportNavigationActivity = (event: PopStateEvent) => reporter.handle(event, document.visibilityState);
+    document.addEventListener("pointerdown", reportDocumentActivity, { capture: true, passive: true });
+    document.addEventListener("keydown", reportDocumentActivity, { capture: true });
+    window.addEventListener("popstate", reportNavigationActivity, { capture: true, passive: true });
+    return () => {
+      reporter.dispose();
+      document.removeEventListener("pointerdown", reportDocumentActivity, { capture: true });
+      document.removeEventListener("keydown", reportDocumentActivity, { capture: true });
+      window.removeEventListener("popstate", reportNavigationActivity, { capture: true });
+    };
+  }, [credential, current, expire, isCurrentSession, repository, sessionRevision]);
 
   useEffect(() => {
     if (!current) return;
