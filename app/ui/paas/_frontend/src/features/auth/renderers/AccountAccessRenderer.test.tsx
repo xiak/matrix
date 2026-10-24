@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, UserDeletionRejected, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent, type UserManagementClient } from "../application/AccountAccessProvider";
-import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyAccess, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserDeletion, UserDeletionIntent, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyAccess, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountPolicyVersionDirectory, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserDeletion, UserDeletionIntent, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
 import type { AccountLifecycleCompletion, AccountLifecycleIntent, UserManagementIntent, UserManagementCompletion } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
@@ -4576,6 +4576,70 @@ describe("account access", () => {
     await screen.findByRole("table", { name: "策略版本目录" });
     expect(screen.queryByRole("heading", { name: "版本 version-new 已发布" })).toBeNull();
     expect(screen.queryByText(/当前默认版本仍是 version-logs/)).toBeNull();
+  });
+
+  it("preserves a publish draft across a resource-version conflict and requires a new explicit review", async () => {
+    const fixture = livePolicyVersions();
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    await screen.findByRole("table", { name: "策略版本目录" });
+
+    const initialDirectory = structuredClone(await fixture.listPolicyVersions.mock.results[0]!.value) as AccountPolicyVersionDirectory;
+    const refreshedDirectory = structuredClone(initialDirectory);
+    refreshedDirectory.policy.resourceVersion = 5;
+    fixture.readPolicy.mockResolvedValueOnce(policyAccess({
+      policy: structuredClone(refreshedDirectory.policy),
+      version: structuredClone(refreshedDirectory.items.find((item) => item.versionId === refreshedDirectory.policy.defaultVersionId)!)
+    }));
+    let finishRefresh!: () => void;
+    fixture.listPolicyVersions.mockImplementationOnce(async () => {
+      await new Promise<void>((resolve) => { finishRefresh = resolve; });
+      return structuredClone(refreshedDirectory);
+    });
+
+    const proposed = structuredClone(tenantPolicyDetail.version.document);
+    proposed.statements[0]!.actions = ["paas.application.list"];
+    const draftText = JSON.stringify(proposed, null, 2);
+    const publishedVersion: AccountPolicyVersion = {
+      ...initialDirectory.items.find((item) => item.versionId === initialDirectory.policy.defaultVersionId)!,
+      versionId: "version-after-conflict",
+      document: structuredClone(proposed),
+      contentDigest: `sha256:${"d".repeat(64)}`
+    };
+    fixture.createPolicyVersion
+      .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"))
+      .mockResolvedValueOnce({ policy: { ...refreshedDirectory.policy, resourceVersion: 6 }, version: publishedVersion });
+
+    await user.click(screen.getByRole("button", { name: "发布新版本" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "待发布声明 JSON" }), { target: { value: draftText } });
+    await user.click(screen.getByRole("button", { name: "审阅变更" }));
+    await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
+
+    await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fixture.listPolicyVersions).toHaveBeenCalledTimes(2));
+    expect(screen.getByRole("heading", { name: "编写新版本" })).toBeTruthy();
+    expect(screen.getByText(/当前草稿已保留/)).toBeTruthy();
+    expect((screen.getByRole("textbox", { name: "待发布声明 JSON" }) as HTMLTextAreaElement).value).toBe(draftText);
+    const review = screen.getByRole("button", { name: "审阅变更" });
+    expect(review).toHaveProperty("disabled", true);
+    const firstRequestId = fixture.createPolicyVersion.mock.calls[0]![3].requestId;
+    expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1);
+
+    await act(async () => { finishRefresh(); });
+    await waitFor(() => expect(review).toHaveProperty("disabled", false));
+    expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1);
+    await user.click(review);
+    await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
+    await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(2));
+    expect(fixture.createPolicyVersion.mock.calls[1]![3]).toEqual({
+      document: proposed,
+      resourceVersion: 5,
+      expectedDefaultVersionId: "version-logs",
+      requestId: expect.stringMatching(/^ui-policy-version-/)
+    });
+    expect(fixture.createPolicyVersion.mock.calls[1]![3].requestId).not.toBe(firstRequestId);
+    expect(await screen.findByRole("heading", { name: "版本 version-after-conflict 已发布" })).toBeTruthy();
   });
 
   async function openVisualVersionDraft() {
