@@ -22,6 +22,8 @@ type options struct {
 	securityMailFixtureSHA string
 	securityMailFixtureID  string
 	edge                   string
+	accessKeyBrowser       bool
+	accessKeyBrowserDir    string
 	afterStart             bool
 }
 

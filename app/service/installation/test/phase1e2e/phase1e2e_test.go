@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
@@ -759,6 +761,20 @@ func TestOptionsRequirePrivateSecurityMailOnlyForEffectfulLifecycle(t *testing.T
 		config.edge != "http://127.0.0.1:49123" {
 		t.Fatalf("effectful lifecycle options = %#v / %v", config, err)
 	}
+	t.Setenv("MATRIX_PHASE1_ACCESS_KEY_BROWSER", "1")
+	if _, err := optionsFromEnvironment(); err == nil {
+		t.Fatal("browser AccessKey lifecycle admitted without its private handoff directory")
+	}
+	t.Setenv("MATRIX_PHASE1_ACCESS_KEY_BROWSER_DIR", "relative-browser-handoff")
+	if _, err := optionsFromEnvironment(); err == nil {
+		t.Fatal("browser AccessKey lifecycle admitted a relative handoff directory")
+	}
+	browserDirectory := filepath.Join(root, "browser-handoff")
+	t.Setenv("MATRIX_PHASE1_ACCESS_KEY_BROWSER_DIR", browserDirectory)
+	config, err = optionsFromEnvironment()
+	if err != nil || !config.accessKeyBrowser || config.accessKeyBrowserDir != browserDirectory {
+		t.Fatalf("browser AccessKey lifecycle options = %#v / %v", config, err)
+	}
 	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256", strings.Repeat("a", 64))
 	if _, err := optionsFromEnvironment(); err == nil {
 		t.Fatal("fixture archive admitted without an exact SHA-256 identity")
@@ -776,6 +792,11 @@ func TestOptionsRequirePrivateSecurityMailOnlyForEffectfulLifecycle(t *testing.T
 	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_ARCHIVE", "")
 	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256", "")
 	t.Setenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_IMAGE_ID", "")
+	if _, err := optionsFromEnvironment(); err == nil {
+		t.Fatal("read-only after-restart lifecycle admitted an interactive browser selector")
+	}
+	t.Setenv("MATRIX_PHASE1_ACCESS_KEY_BROWSER", "")
+	t.Setenv("MATRIX_PHASE1_ACCESS_KEY_BROWSER_DIR", "")
 	if _, err := optionsFromEnvironment(); err != nil {
 		t.Fatalf("read-only after-restart lifecycle requires removed private input: %v", err)
 	}
@@ -808,6 +829,265 @@ func TestEdgeClientChecksSuccessAndProblemMediaTypes(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAccessKeyBrowserRelayObservesOnlyTheExactTransparentLifecycle(t *testing.T) {
+	accountID := iamv1.AccountID("account-browser-relay")
+	userID := iamv1.PrincipalID("user-browser-relay")
+	keyID := iamv1.AccessKeyID("mak-browser-relay")
+	sourceCIDR := "127.0.0.1/32"
+	now := time.Date(2026, time.October, 25, 1, 2, 3, 0, time.UTC)
+	key := iamv1.AccessKey{
+		APIVersion: iamv1.APIVersion, Kind: "AccessKey", ID: keyID, AccountID: accountID, UserID: userID,
+		Status: iamv1.AccessKeyEnabled, CredentialState: iamv1.AccessKeyCredentialCurrent,
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{sourceCIDR}},
+		ResourceVersion:     1, CreatedAt: now, UpdatedAt: now,
+	}
+	secret, err := iamv1.NewSecret("mak1.AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := iamv1.CreateAccessKeyResponse{Outcome: "APPLIED", Key: key, Secret: secret}
+	createdDocument, err := iamv1.EncodeCreateAccessKeyResponse(created)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(createdDocument)
+	disabledKey := key
+	disabledKey.Status = iamv1.AccessKeyDisabled
+	disabledKey.ResourceVersion = 2
+	disabledKey.UpdatedAt = now.Add(time.Second)
+	disabled := iamv1.SetAccessKeyStatusResponse{Outcome: "APPLIED", Key: disabledKey}
+	disabledDocument, err := json.Marshal(disabled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(disabledDocument)
+
+	collection := "/api/iam/v1/users/" + string(userID) + "/access-keys"
+	createRequest := iamv1.CreateAccessKeyRequest{UserResourceVersion: 4,
+		NetworkRestrictions: iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{sourceCIDR}},
+		RequestID:           "ui-access-key-create-0123456789abcdef0123456789abcdef"}
+	disableRequest := iamv1.SetAccessKeyStatusRequest{AccessKeyResourceVersion: 1,
+		Status: iamv1.AccessKeyDisabled, RequestID: "ui-access-key-status-fedcba9876543210fedcba9876543210"}
+	var requests atomic.Int32
+	var upstreamHost atomic.Value
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		wantHost, _ := upstreamHost.Load().(string)
+		if wantHost == "" || request.Host != wantHost ||
+			request.Header.Get("X-Forwarded-For") != "" || request.Header.Get("Forwarded") != "" ||
+			request.Header.Get("X-Matrix-Account-ID") != "" || request.Header.Get("X-Matrix-Principal-ID") != "" {
+			t.Errorf("relay changed an authority-bearing request header: host=%q headers=%#v", request.Host, request.Header)
+		}
+		body, readErr := io.ReadAll(request.Body)
+		if readErr != nil {
+			t.Error(readErr)
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		defer clear(body)
+		response.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case collection:
+			want, _ := json.Marshal(createRequest)
+			defer clear(want)
+			if !bytes.Equal(body, want) {
+				t.Errorf("create body changed across relay: %s", body)
+			}
+			response.Header().Set("Cache-Control", "no-store")
+			response.WriteHeader(http.StatusCreated)
+			_, _ = response.Write(createdDocument)
+		case collection + "/" + string(keyID) + ":set-status":
+			want, _ := json.Marshal(disableRequest)
+			defer clear(want)
+			if !bytes.Equal(body, want) {
+				t.Errorf("disable body changed across relay: %s", body)
+			}
+			_, _ = response.Write(disabledDocument)
+		default:
+			response.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer upstream.Close()
+	upstreamEndpoint, err := url.Parse(upstream.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstreamHost.Store(upstreamEndpoint.Host)
+	observer := newAccessKeyBrowserObserver(accountID, userID, sourceCIDR)
+	defer observer.clear()
+	proxy, err := startAccessKeyBrowserProxy(upstream.URL, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.close()
+
+	request := func(path string, body any, wantStatus int, wantDocument []byte) {
+		t.Helper()
+		encoded, encodeErr := json.Marshal(body)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		defer clear(encoded)
+		httpRequest, requestErr := http.NewRequest(http.MethodPost, proxy.URL()+path, bytes.NewReader(encoded))
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		httpRequest.Header.Set("Authorization", "Bearer browser-relay-session")
+		httpRequest.Header.Set("Content-Type", "application/json")
+		httpResponse, requestErr := http.DefaultClient.Do(httpRequest)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		content, readErr := io.ReadAll(httpResponse.Body)
+		closeErr := httpResponse.Body.Close()
+		defer clear(content)
+		if readErr != nil || closeErr != nil || httpResponse.StatusCode != wantStatus || !bytes.Equal(content, wantDocument) {
+			t.Fatalf("transparent relay response status=%d body_equal=%t read=%v close=%v",
+				httpResponse.StatusCode, bytes.Equal(content, wantDocument), readErr, closeErr)
+		}
+	}
+	request(collection, createRequest, http.StatusCreated, createdDocument)
+	select {
+	case <-observer.createReady:
+	case <-time.After(time.Second):
+		t.Fatal("create observation was not published")
+	}
+	observedCreateRequest, observedCreate, err := observer.takeCreate()
+	if err != nil || !reflect.DeepEqual(observedCreateRequest, createRequest) ||
+		!reflect.DeepEqual(observedCreate.Key, created.Key) || !observedCreate.Secret.Present() {
+		t.Fatalf("create observation = %#v / %#v / %v", observedCreateRequest, observedCreate, err)
+	}
+	observedCreate.Secret = iamv1.Secret{}
+	request(collection+"/"+string(keyID)+":set-status", disableRequest, http.StatusOK, disabledDocument)
+	select {
+	case <-observer.disableReady:
+	case <-time.After(time.Second):
+		t.Fatal("disable observation was not published")
+	}
+	observedDisableRequest, observedDisable, err := observer.takeDisable()
+	if err != nil || !reflect.DeepEqual(observedDisableRequest, disableRequest) || !reflect.DeepEqual(observedDisable, disabled) || requests.Load() != 2 {
+		t.Fatalf("disable observation = %#v / %#v / requests=%d / %v", observedDisableRequest, observedDisable, requests.Load(), err)
+	}
+}
+
+func TestAccessKeyBrowserRequestIDMatchesCurrentUIIntentFormat(t *testing.T) {
+	for _, sample := range []struct {
+		value, prefix string
+		valid         bool
+	}{
+		{"ui-access-key-create-0123456789abcdef0123456789abcdef", "ui-access-key-create-", true},
+		{"ui-access-key-status-fedcba9876543210fedcba9876543210", "ui-access-key-status-", true},
+		{"ui-access-key-create-0123456789ABCDEF0123456789ABCDEF", "ui-access-key-create-", false},
+		{"ui-access-key-create-browser-relay", "ui-access-key-create-", false},
+		{"ui-access-key-status-0123456789abcdef", "ui-access-key-status-", false},
+	} {
+		if got := validAccessKeyBrowserRequestID(sample.value, sample.prefix); got != sample.valid {
+			t.Fatalf("validAccessKeyBrowserRequestID(%q, %q)=%t want=%t", sample.value, sample.prefix, got, sample.valid)
+		}
+	}
+}
+
+func TestAccessKeyBrowserRelayPreservesOversizedUnknownRequest(t *testing.T) {
+	accountID := iamv1.AccountID("account-browser-oversized")
+	userID := iamv1.PrincipalID("user-browser-oversized")
+	payload := bytes.Repeat([]byte("x"), int(iamv1.MaxRequestBytes)+37)
+	defer clear(payload)
+	upstream := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		content, err := io.ReadAll(request.Body)
+		if err != nil {
+			t.Error(err)
+		}
+		defer clear(content)
+		if !bytes.Equal(content, payload) {
+			t.Errorf("oversized request changed across relay: got=%d want=%d", len(content), len(payload))
+		}
+		response.Header().Set("Content-Type", "application/problem+json")
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte(`{"type":"about:blank","title":"invalid","status":400}`))
+	}))
+	defer upstream.Close()
+	observer := newAccessKeyBrowserObserver(accountID, userID, "127.0.0.1/32")
+	defer observer.clear()
+	proxy, err := startAccessKeyBrowserProxy(upstream.URL, observer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.close()
+	collection := "/api/iam/v1/users/" + string(userID) + "/access-keys"
+	request, err := http.NewRequest(http.MethodPost, proxy.URL()+collection, io.NopCloser(bytes.NewReader(payload)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.ContentLength = -1
+	request.Header.Set("Authorization", "Bearer browser-relay-session")
+	request.Header.Set("Content-Type", "application/json")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	defer clear(content)
+	if readErr != nil || closeErr != nil || response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("oversized relay response status=%d read=%v close=%v", response.StatusCode, readErr, closeErr)
+	}
+	if _, _, err := observer.takeCreate(); err == nil {
+		t.Fatal("oversized request was admitted as a browser AccessKey observation")
+	}
+}
+
+func TestAccessKeyBrowserHandoffRequiresPrivateEmptyMarkers(t *testing.T) {
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	login, created, disabled, err := prepareAccessKeyBrowserHandoff(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := []byte("Browser-Handoff-Password-93!")
+	defer clear(password)
+	if err := writeAccessKeyBrowserLogin(login, "offline.alpha.primary", password); err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(content)
+	expected := append([]byte("offline.alpha.primary\n"), password...)
+	expected = append(expected, '\n')
+	defer clear(expected)
+	if !bytes.Equal(content, expected) {
+		t.Fatal("protected browser login handoff changed")
+	}
+	information, err := os.Stat(login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS != "windows" && information.Mode().Perm() != 0o600 {
+		t.Fatalf("protected browser login mode=%v", information.Mode().Perm())
+	}
+	ready := make(chan struct{}, 1)
+	ready <- struct{}{}
+	if err := os.WriteFile(created, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := waitAccessKeyBrowserStage(ctx, ready, created); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(disabled, []byte("not-empty"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ready <- struct{}{}
+	if err := waitAccessKeyBrowserStage(ctx, ready, disabled); err == nil {
+		t.Fatal("non-empty browser marker was accepted")
+	}
+	removeAccessKeyBrowserHandoff(login, created, disabled)
 }
 
 func TestEdgeClientTouchesOnlyThePossessedCurrentSession(t *testing.T) {
@@ -1380,6 +1660,14 @@ func optionsFromEnvironment() (options, error) {
 	if phase != "run" && phase != "after-restart" {
 		return options{}, fail("command-input")
 	}
+	browserSelector := os.Getenv("MATRIX_PHASE1_ACCESS_KEY_BROWSER")
+	browserDirectory := os.Getenv("MATRIX_PHASE1_ACCESS_KEY_BROWSER_DIR")
+	if browserSelector != "" && browserSelector != "1" ||
+		browserSelector == "" && browserDirectory != "" ||
+		browserSelector == "1" && (phase != "run" || browserDirectory == "" ||
+			!filepath.IsAbs(browserDirectory) || filepath.Clean(browserDirectory) != browserDirectory) {
+		return options{}, fail("command-input")
+	}
 	edge := os.Getenv("MATRIX_PHASE1_EDGE")
 	if edge == "" {
 		edge = defaultEdgeEndpoint
@@ -1404,6 +1692,8 @@ func optionsFromEnvironment() (options, error) {
 		securityMailFixtureSHA: os.Getenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256"),
 		securityMailFixtureID:  os.Getenv("MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_IMAGE_ID"),
 		edge:                   edge,
+		accessKeyBrowser:       browserSelector == "1",
+		accessKeyBrowserDir:    browserDirectory,
 		afterStart:             phase == "after-restart",
 	}
 	for _, path := range []string{config.root, config.releaseA, config.trustKey} {
