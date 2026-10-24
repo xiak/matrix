@@ -1,6 +1,6 @@
 # FEAT-IAM-011：交付与需求验收
 
-- 状态：实施中；当前已接受的签名产品源码`95a343ae2f4efb4c9845c9af25d0225e722f870c`为IAM87/Audit39/PaaS7、`contractRevision=37`，唯一滚动数据前驱仍是固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。当前源码已通过十九项独立CI、同Profile签名A/B完整离线生命周期和容器级重启后复验；真实恢复保留Analyzer的`RESTORE_GAP`，前台会话活动入口随冻结UI构建进入同源包。后继真实浏览器又闭合前台Session活动、GROUP/USER/ROLE三类附件CREATE/REVOKE完整恢复矩阵、Role资料/Trust/停复用/删除、Account Root凭据恢复、受管实例终止，以及账号强制MFA下的首次绑定、自助恢复和既有`RECOVERY_REQUIRED`流程取代边界。页面仍只采纳010中各自固定版本的实际操作与数据库/Audit证据，签名通过不把未执行的LIVE旅程自动标绿。因此整体目标仍未完成，生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
+- 状态：实施中；当前已接受的签名产品源码`95a343ae2f4efb4c9845c9af25d0225e722f870c`为IAM87/Audit39/PaaS7、`contractRevision=37`，唯一滚动数据前驱仍是固定`08e1dc4a6ce81386ea7223e62d03356f82aeee58`的IAM86/Audit39/PaaS7+r36。当前源码已通过十九项独立CI、同Profile签名A/B完整离线生命周期和容器级重启后复验；真实恢复保留Analyzer的`RESTORE_GAP`，前台会话活动入口随冻结UI构建进入同源包。后继真实浏览器又闭合前台Session活动、GROUP/USER/ROLE三类附件CREATE/REVOKE完整恢复矩阵、Role资料/Trust/停复用/删除、Account Root凭据恢复、受管实例终止、CUSTOMER Policy作为普通USER权限边界时的默认版本切换与响应丢失恢复，以及账号强制MFA下的首次绑定、自助恢复和既有`RECOVERY_REQUIRED`流程取代边界。页面仍只采纳010中各自固定版本的实际操作与数据库/Audit证据，签名通过不把未执行的LIVE旅程自动标绿。因此整体目标仍未完成，生产账号公平性SLO与安装级数据库HA继续因缺少真实部署前提明确Deferred。
 - Owner：IAM 组合验收；安装命令/签名/profile admission 与既有 FEAT-005/008 owner 协作。
 
 ## 验收定义
@@ -29,8 +29,8 @@
 | 总体架构、高可用与容量边界 | [000总体架构](FEAT-IAM-000-product-contract.md#总体架构)及其可用性、容量与一致性段落，跨产品边界由ADR-0002拥有 | 设计已完成；当前多IAM副本、失败关闭、受限容量与数据库切换夹具已有证据，部署尚不支持的完整数据库HA继续明确列为缺口，不虚构SLO |
 | 详细设计与API约定 | 001–010各自拥有行为、锁序、事务、API/schema及验收；000只拥有公共wire/版本/分页约定 | 已完成当前范围设计；没有新增平行模型、通用receipt框架或第二套API文档 |
 | 分解为可验收FEAT | 001–011覆盖本轮实现与组合验收，012保存满足前置后才启动的外部集成 | 已完成分解；每项有唯一owner，固定来源采用记录仍由既有adoption文件拥有 |
-| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：固定`95a343ae`的IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；真实恢复保留Analyzer恢复缺口且旧Session/AccessKey失败关闭。User资料/状态、Group Membership、Account安全设置正常完整替换、Group/User删除、普通User日常改密、前台Session活动、Role资料/Trust/停复用/删除、用途限定恢复码重新生成、账号策略强制MFA下普通User首次绑定、保存恢复码后的认证器丢失自助恢复、既有`RECOVERY_REQUIRED`流程取代，以及GROUP/USER/ROLE三类附件CREATE/REVOKE完整恢复矩阵已有真实证据；Account服务开通、Root凭据恢复和受管实例终止也已完成一次写入、UNKNOWN停写、跨来源只读恢复及权威后验。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；010矩阵中Policy引用/版本边界、其他敏感用途step-up和当前签名APISIX组合等其余非Deferred路径仍须闭合 |
-| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`95a343ae2f4efb4c9845c9af25d0225e722f870c`的IAM87+r37同源签名A/B、完整离线生命周期和容器级重启复验接受；各固定代码的IAM-AC-09证据与限制归[当前独立CI](#当前独立ci)，不继承旧签名结论。权限感知、受影响原Policy恢复、前台Session活动、附件完整恢复矩阵、Root凭据恢复与实例终止页面均由010按各自固定源码和真实后验拥有；Account服务开通及结果不确定恢复由FEAT-008拥有。Issue #4仍按其原固定消费者关闭；Issue #5的剩余范围复核与Issue #6的Observe超时根因保持打开。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。其余IAM-UI-01–08非Deferred页面效果尚未完成，生产账号公平性SLO和安装级数据库HA保持Deferred |
+| 实现所有本轮FEAT | 001–009当前后端、真实PG18/多进程及同Profile签名生命周期证据；010拥有控制台 | **未完成总目标**：固定`95a343ae`的IAM87+r37后端、当前单前驱、19项独立CI、同Profile签名A/B、完整离线生命周期和重启复验已经实现并通过；真实恢复保留Analyzer恢复缺口且旧Session/AccessKey失败关闭。User资料/状态、Group Membership、Account安全设置正常完整替换、Group/User删除、普通User日常改密、前台Session活动、Role资料/Trust/停复用/删除、用途限定恢复码重新生成、账号策略强制MFA下普通User首次绑定、保存恢复码后的认证器丢失自助恢复、既有`RECOVERY_REQUIRED`流程取代，以及GROUP/USER/ROLE三类附件CREATE/REVOKE完整恢复矩阵已有真实证据；CUSTOMER Policy作为普通USER权限边界时的默认版本切换也已完成UNKNOWN精确重放、同Session下一请求即时拒绝、历史Allow证据保留与唯一Audit后验。Account服务开通、Root凭据恢复和受管实例终止已完成一次写入、UNKNOWN停写、跨来源只读恢复及权威后验。外部物理认证器，以及受保护Root/平台身份丢失全部因子后的目的限定恢复与强制重新绑定继续按设计延期；010矩阵中直接/Group/Role附件引用Policy、Role权限边界、其他版本边界、其他敏感用途step-up和当前签名APISIX组合等其余非Deferred路径仍须闭合 |
+| 验收与可交付证据 | IAM-AC-01–11、FEAT-005签名生命周期、精确SHA独立CI、010/FEAT-007真实浏览器 | **未完成总验收**：IAM-AC-07由固定`95a343ae2f4efb4c9845c9af25d0225e722f870c`的IAM87+r37同源签名A/B、完整离线生命周期和容器级重启复验接受；各固定代码的IAM-AC-09证据与限制归[当前独立CI](#当前独立ci)，不继承旧签名结论。权限感知、受影响原Policy恢复、普通USER权限边界默认版本切换、前台Session活动、附件完整恢复矩阵、Root凭据恢复与实例终止页面均由010按各自固定源码和真实后验拥有；Account服务开通及结果不确定恢复由FEAT-008拥有。Issue #4仍按其原固定消费者关闭；Issue #5的剩余范围复核与Issue #6的Observe超时根因保持打开。IAM-AC-11只接受已记录的受限容量、业务隔离、恢复和受控数据库切换边界。其余IAM-UI-01–08非Deferred页面效果尚未完成，生产账号公平性SLO和安装级数据库HA保持Deferred |
 
 只有上表仍列出的未完成边界均获得其owner的真实证据后，才能把000及本总目标标为Accepted。设计文件齐全、静态页面、组件测试、健康端点、另一个分支的浏览器结果或局部CI成功都不能改变这一判定。
 
@@ -50,6 +50,8 @@
 | 真实页面 | 只接受[010交付矩阵](FEAT-IAM-010-console.md#当前交付矩阵)逐项记录的页面效果，不由签名包、组件测试或其他分支结果推导 |
 
 #### 当前独立CI
+
+固定`a15623010460e507489ab041e8ddd6b387cc4e27`的[Verification40118253393](https://github.com/xiak/matrix/actions/runs/40118253393)已由GitHub官方API核实准确head SHA、整轮`completed/success`及十九项job全部成功：Go、console、node-process、installation-postgres-ha四项前置，十四条authority lane和最终`authority-process`汇总均无失败、取消或未决终态。该固定源码只在既有Policy浏览器测试owner增加普通USER权限边界消费者的默认版本切换、即时业务拒绝、不可变历史决定及唯一Audit后验；没有修改生产API、SQL、Profile或授权实现。默认CI不运行显式opt-in真实浏览器入口，实际页面与PostgreSQL 18证据仍只由010拥有，本段仅接受准确源码的IAM-AC-09，不能冒充当前签名APISIX或其他未运行旅程。
 
 固定`95a343ae2f4efb4c9845c9af25d0225e722f870c`的[Verification40085311144](https://github.com/xiak/matrix/actions/runs/40085311144) attempt1已经由GitHub官方API核实：head SHA准确，整轮`completed/success`，十九项job全部成功且无其他终态。该固定源码包含冻结UX构建、前台Session活动消费、离线生命周期调用点，以及恢复后Analyzer覆盖谱系修正；默认CI没有执行opt-in签名生命周期或真实浏览器入口。IAM-AC-07采用FEAT-005记录的独立network-none签名运行，IAM-AC-09采用本段CI终态，两类证据不互相冒充。
 
