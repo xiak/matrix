@@ -66,6 +66,18 @@
   old credentials and Sessions were fenced, the replacement credential required
   password change, and the unique completion/outbox/Audit chain passed. The
   disposable `--rm` container had no task-labelled residue after the run.
+- Fixed `72dc37c714825ccfe5f38464ff66f398a13e45b9` reused the existing managed-
+  service command-recovery owner for `INSTALLATION_TERMINATE`. A real disposable
+  PostgreSQL installation was read at version 3, reviewed and submitted once;
+  after the accepted response was lost, the second browser origin imported only
+  the non-secret intent, read the matching completion and re-read the same
+  installation as `TERMINATED` version 6 with the matching termination Operation.
+  The fixture/package passed in 141.74/145.271 seconds with one mutation, zero
+  post-loss writes, an authoritative input commitment, unique request Audit fact
+  and a verified complete tenant chain. A first pre-UI invocation failed closed
+  on the existing worker readiness prerequisite; only the fresh run after
+  `vm.max_map_count=1048576` was established counts. Database, worker container
+  and worker volume labels had no residue after cleanup.
 
 ## Remaining boundaries
 
@@ -73,10 +85,11 @@
   CI and signed-lifecycle evidence do not mark an unexecuted browser path green.
   Foreground Session activity and the complete GROUP/USER/ROLE × CREATE/REVOKE
   policy-attachment recovery matrix are now accepted, as is the Account
-  Root-credential recovery final submit/UNKNOWN path. The next finite browser
-  gap is managed-service termination final submit/UNKNOWN; it must reuse its
-  existing owner and exact contract rather than introduce another UI or recovery
-  model.
+  Root-credential recovery final submit/UNKNOWN path and managed-service
+  termination final submit/UNKNOWN path. The finite gaps previously named by
+  this checkpoint are closed. Do not infer overall release completion from that
+  list: derive any remaining non-Deferred gate from the owning FEAT matrix and
+  current Git/CI/runtime state before changing the release status.
 - [Issue #6](https://github.com/xiak/matrix/issues/6) remains open: the current
   green four-product and signed runs do not retroactively establish the unique
   cause of the preserved Docker observation timeout.

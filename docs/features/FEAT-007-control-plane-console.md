@@ -2133,6 +2133,15 @@ advance, forced-password-change boundary, old-credential fencing and unique
 Audit chain all matched. FEAT-IAM-010 owns the precise runtime evidence; this
 does not add another recovery contract or accept another Account mutation.
 
+The existing managed-service command-recovery owner then completed the same
+two-origin page journey for termination of a real disposable PostgreSQL
+installation. The first origin reviewed the exact destructive scope and
+submitted once; after the accepted response was lost, the second origin
+imported only the non-secret intent, read the matching completion and re-read
+the installation as terminated. The precise command, runtime and Audit evidence
+is owned by FEAT-IAM-010, while signed physical cleanup and quota-return evidence
+remains with its existing managed-service gate.
+
 ### Current shared-navigation development evidence
 
 The current independent-read slice revalidates existing public contracts at
