@@ -472,6 +472,7 @@ export function SessionProvider({
       replaceChallenge(null);
       replaceAuthenticatorRecovery(null);
       setEnrollmentRecovery({ enrollmentId: result.recovery.id, recoveryCodes: [...result.recoveryCodes] });
+      setReauthenticationReason("FACTOR");
       setPhase("recovery-codes-required");
       return true;
     } catch (confirmError) {
@@ -527,6 +528,7 @@ export function SessionProvider({
       if (result.state === "COMPLETED") {
         replaceChallenge(null);
         replaceAuthenticatorRecovery(null);
+        setReauthenticationReason("FACTOR");
         setPhase("reauthentication-required");
       } else if (result.state === "STARTED") {
         replaceAuthenticatorRecovery({
