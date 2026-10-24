@@ -35,14 +35,27 @@
 - FEAT-005 owns the manifest, trust and delivery archive identities. The archives
   were re-extracted and compared for bytes, type, uid/gid and mode, then rehashed
   after transfer; no private signer or installation state is included.
+- Fixed test source `6efc6c8febc8221e5cf2b9ecf737c8192643c26b`
+  passed the real same-origin foreground-Session browser gate: 61 seconds of
+  passive page work emitted zero touches; three immediate trusted pointer
+  interactions emitted exactly one valid touch and advanced only the current
+  browser Session. The untouched peer and its ordinary protected read did not
+  advance its activity waterline. FEAT-IAM-010 owns the exact evidence and the
+  distinction from server-owned natural idle expiry.
+- [Verification 40097217325](https://github.com/xiak/matrix/actions/runs/40097217325)
+  accepted that exact source with all nineteen jobs `completed/success`.
+  The default workflow compiles the opt-in browser test and runs its adjacent
+  automated regressions; it does not replace the separately executed human-input
+  browser journey.
 
 ## Remaining boundaries
 
 - FEAT-IAM-010 owns remaining non-Deferred LIVE UI journeys. Backend, component,
   CI and signed-lifecycle evidence do not mark an unexecuted browser path green.
-  The immediate IAM-UI-02 gap is a real-browser foreground-activity gate: one
-  trusted interaction touches the exact current Session, passive/background
-  events do not, and an untouched comparison Session still expires.
+  Foreground Session activity is now accepted; the next finite IAM-UI-03 gaps
+  are the existing USER/CREATE and ROLE/CREATE attachment-recovery browser
+  variants. They must reuse the current fixture and exact contracts rather than
+  introduce another UI or recovery model.
 - [Issue #6](https://github.com/xiak/matrix/issues/6) remains open: the current
   green four-product and signed runs do not retroactively establish the unique
   cause of the preserved Docker observation timeout.

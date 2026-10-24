@@ -2109,6 +2109,13 @@ journeys into page acceptance. Those remaining paths stay owned by
 [FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md), while the isolated 4317 MOCK
 remains an independently inspectable UX surface.
 
+The UI owner separately accepted the frozen foreground-Session consumer in a
+real same-origin browser at fixed test source `6efc6c8febc8221e5cf2b9ecf737c8192643c26b`:
+passive page work remained silent across the coalescing boundary, while trusted
+pointer input advanced only the exact current Session once. The precise runtime
+evidence and exclusions remain owned by FEAT-IAM-010; this does not broaden the
+release milestone or replace any other unexecuted LIVE journey.
+
 ### Current shared-navigation development evidence
 
 The current independent-read slice revalidates existing public contracts at
