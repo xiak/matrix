@@ -582,7 +582,9 @@ func TestIAMPolicyMutationRecoveryConsoleBrowser(t *testing.T) {
 // lifecycle. MATRIX_IAM_POLICY_VERSION_BROWSER_FLOW=CONFLICT narrows the same
 // owner to a real stale-review conflict: one controlled writer advances the
 // Policy while the page is reviewing, the stale page write is rejected once,
-// and only a fresh explicit review may publish the preserved draft.
+// and only a fresh explicit review may publish the preserved draft. CAPACITY
+// fills all five management slots, proves the full-state affordance, retires
+// one nondefault version through the page, and publishes into the freed slot.
 func TestIAMPolicyVersionLifecycleConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER=1 for the bounded LIVE Policy-version lifecycle browser fixture")
@@ -4738,6 +4740,9 @@ func runIAMPolicyVersionLifecycleConsoleBrowser(
 	case "CONFLICT":
 		return runIAMPolicyVersionConflictConsoleBrowser(t, ctx, database, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, start)
+	case "CAPACITY":
+		return runIAMPolicyVersionCapacityConsoleBrowser(t, ctx, database, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, start)
 	default:
 		t.Fatalf("unsupported MATRIX_IAM_POLICY_VERSION_BROWSER_FLOW=%q", flow)
 	}
@@ -5295,6 +5300,272 @@ func runIAMPolicyVersionConflictConsoleBrowser(
 		t.Fatalf("Policy-version conflict tenant Audit chain is incomplete: %#v", chain)
 	}
 	t.Log("one real page held a DENY draft while a controlled writer advanced the Policy, sent the stale revision exactly once, preserved the draft through 409, aligned PolicyAccess and the version directory on revision 2, then used a new request ID only after explicit re-review to publish one immutable nondefault version; the rejected command created no version, completion or Audit fact")
+	return nil
+}
+
+func runIAMPolicyVersionCapacityConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	document := iamv1.PolicyDocument{
+		LanguageVersion: iamv1.PolicyLanguageVersion,
+		Scope:           iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{
+			SID:       "capacity-read-application-v1",
+			Effect:    iamv1.PolicyAllow,
+			Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}},
+		}},
+	}
+	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer,
+		iamv1.CreatePolicyRequest{DisplayName: "Browser Policy version capacity", Document: document,
+			RequestID: "browser-policy-version-capacity-create-v1"})
+	var created iamv1.PolicyDetail
+	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &created) != nil ||
+		iamv1.ValidatePolicyDetail(created) != nil || created.Policy.AccountID != "organization-process" ||
+		created.Policy.ResourceVersion != 1 || created.Policy.DefaultVersionID != created.Version.ID {
+		t.Fatalf("prepare Policy-version capacity target status=%d body=%s", createdResponse.Status, createdResponse.Body)
+	}
+
+	prepared := []iamv1.PolicyVersion{created.Version}
+	controlledRequests := make([]string, 0, 4)
+	currentPolicy := created.Policy
+	for index := 2; index <= 5; index++ {
+		draft := document
+		draft.Statements = append([]iamv1.PolicyStatement(nil), document.Statements...)
+		draft.Statements[0].SID = fmt.Sprintf("capacity-read-application-v%d", index)
+		requestID := fmt.Sprintf("browser-policy-version-capacity-prepare-v%d", index)
+		response := performJSON(t, http.MethodPost,
+			iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions", ownerBearer,
+			iamv1.CreatePolicyVersionRequest{Document: draft, ResourceVersion: currentPolicy.ResourceVersion, RequestID: requestID})
+		var detail iamv1.PolicyVersionDetail
+		if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &detail) != nil ||
+			iamv1.ValidatePolicyVersionDetail(detail) != nil || detail.Policy.ID != created.Policy.ID ||
+			detail.Policy.ResourceVersion != uint64(index) || detail.Policy.DefaultVersionID != created.Version.ID ||
+			detail.Version.ID == created.Version.ID || detail.Version.Document.Statements[0].SID != draft.Statements[0].SID {
+			t.Fatalf("prepare Policy-version capacity slot %d status=%d body=%s", index, response.Status, response.Body)
+		}
+		prepared = append(prepared, detail.Version)
+		controlledRequests = append(controlledRequests, requestID)
+		currentPolicy = detail.Policy
+	}
+
+	readCurrent := func(wantRevision uint64, wantCount int) (iamv1.PolicyAccess, iamv1.PolicyVersionList) {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID), ownerBearer, nil)
+		var access iamv1.PolicyAccess
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &access) != nil ||
+			iamv1.ValidatePolicyAccess(access) != nil || access.Detail.Policy.ResourceVersion != wantRevision ||
+			access.Detail.Policy.DefaultVersionID != created.Version.ID || access.Detail.Version.ID != created.Version.ID {
+			t.Fatalf("read capacity PolicyAccess status=%d body=%s", response.Status, response.Body)
+		}
+		response = performJSON(t, http.MethodGet,
+			iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions", ownerBearer, nil)
+		var directory iamv1.PolicyVersionList
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &directory) != nil ||
+			iamv1.ValidatePolicyVersionList(directory) != nil || directory.Policy.ResourceVersion != wantRevision ||
+			directory.Policy.DefaultVersionID != created.Version.ID || len(directory.Items) != wantCount {
+			t.Fatalf("read capacity Policy-version directory status=%d body=%s", response.Status, response.Body)
+		}
+		return access, directory
+	}
+	_, fullDirectory := readCurrent(5, 5)
+	if len(fullDirectory.Items) != len(prepared) {
+		t.Fatal("capacity preparation did not fill exactly five active management slots")
+	}
+
+	probe := &policyVersionConflictBrowserProbe{policyPath: string(created.Policy.ID)}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, func(mux http.Handler) http.Handler {
+			return probe.wrap(iamConsoleBrowserFixtureHandler(mux, make(chan struct{}, 16), nil))
+		})
+	defer closeBrowser()
+	fullMarker := filepath.Join(temporary, "browser-policy-version-capacity-full")
+	retiredMarker := filepath.Join(temporary, "browser-policy-version-capacity-retired")
+	refilledMarker := filepath.Join(temporary, "browser-policy-version-capacity-refilled")
+	browserPath := "/console/access/policies/?id=" + url.QueryEscape(string(created.Policy.ID))
+	t.Logf("POLICY_VERSION_CAPACITY_FULL url=%s%s marker=%s policy=%s resource_version=5 default=%s; use the existing changed admin password, open 策略版本, verify 当前可管理版本：5 / 5, the capacity explanation says to retire a nondefault version while preserving history and Audit evidence, 发布新版本 remains in place but disabled, and no write occurs; then create the marker",
+		server.URL, browserPath, fullMarker, created.Policy.ID, created.Version.ID)
+	waitForBrowserMarker(t, ctx, ui, fullMarker, "page-explained the full Policy-version capacity")
+	fullEvents, invalid := probe.snapshot()
+	if invalid {
+		t.Fatal("Policy-version capacity probe rejected the full-state page exchange")
+	}
+	for _, event := range fullEvents {
+		if event.kind == "publish" {
+			t.Fatal("the full-capacity page submitted a hidden or disabled publication")
+		}
+	}
+
+	retireTarget := prepared[1]
+	t.Logf("POLICY_VERSION_CAPACITY_RETIRE url=%s%s marker=%s policy=%s target_nondefault=%s resource_version=5; use that exact opaque row's action menu, retire it once, confirm the directory shows 4 / 5, the capacity warning is gone and 发布新版本 is enabled; then create the marker without publishing",
+		server.URL, browserPath, retiredMarker, created.Policy.ID, retireTarget.ID)
+	waitForBrowserMarker(t, ctx, ui, retiredMarker, "page-retired one nondefault version and freed a slot")
+	retiredEvents, invalid := probe.snapshot()
+	if invalid {
+		t.Fatal("Policy-version capacity probe rejected the retirement refresh")
+	}
+	for _, event := range retiredEvents {
+		if event.kind == "publish" {
+			t.Fatal("the page published before the operator explicitly used the freed slot")
+		}
+	}
+	seenDetail, seenDirectory := false, false
+	for _, event := range retiredEvents[len(fullEvents):] {
+		if event.status != http.StatusOK || event.resourceVersion != 6 || event.defaultVersionID != created.Version.ID {
+			continue
+		}
+		seenDetail = seenDetail || event.kind == "detail"
+		seenDirectory = seenDirectory || event.kind == "directory"
+	}
+	if !seenDetail || !seenDirectory {
+		t.Fatal("the page enabled publication without aligning PolicyAccess and the version directory on revision 6")
+	}
+	_, reducedDirectory := readCurrent(6, 4)
+	for _, item := range reducedDirectory.Items {
+		if item.ID == retireTarget.ID {
+			t.Fatal("retired version remained in the active management directory")
+		}
+	}
+	var retiredDigest string
+	var retired bool
+	if err := database.QueryRow(ctx, `SELECT content_digest,retired_at IS NOT NULL
+		FROM iam.policy_versions WHERE policy_id=$1 AND id=$2`, created.Policy.ID, retireTarget.ID).
+		Scan(&retiredDigest, &retired); err != nil || !retired || retiredDigest != retireTarget.ContentDigest {
+		t.Fatalf("retired capacity version lost immutable history digest=%q retired=%v err=%v", retiredDigest, retired, err)
+	}
+
+	t.Logf("POLICY_VERSION_CAPACITY_REFILL url=%s%s marker=%s policy=%s resource_version=6 default=%s; select 发布新版本, change only the cloned default statement effect from ALLOW to DENY so it differs from every remaining and retired version, explicitly review and confirm once, verify success leaves the default unchanged, return to the directory and confirm 5 / 5, the capacity warning and disabled publish action return; then create the marker",
+		server.URL, browserPath, refilledMarker, created.Policy.ID, created.Version.ID)
+	waitForBrowserMarker(t, ctx, ui, refilledMarker, "page-published once into the freed Policy-version slot")
+	finalEvents, invalid := probe.snapshot()
+	if invalid {
+		t.Fatal("Policy-version capacity probe rejected the refill page exchange")
+	}
+	var writes []policyVersionConflictBrowserEvent
+	for _, event := range finalEvents {
+		if event.kind == "publish" {
+			writes = append(writes, event)
+		}
+	}
+	if len(writes) != 1 || writes[0].status != http.StatusCreated || writes[0].request == nil ||
+		writes[0].request.ResourceVersion != 6 || !strings.HasPrefix(writes[0].request.RequestID, "ui-policy-version-") ||
+		writes[0].resourceVersion != 7 || writes[0].defaultVersionID != created.Version.ID || writes[0].versionID == "" {
+		t.Fatalf("capacity refill page writes=%#v", writes)
+	}
+	pageDocument := writes[0].request.Document
+	if len(pageDocument.Statements) != 1 || pageDocument.Statements[0].SID != document.Statements[0].SID ||
+		pageDocument.Statements[0].Effect != iamv1.PolicyDeny ||
+		!reflect.DeepEqual(pageDocument.Statements[0].Actions, document.Statements[0].Actions) ||
+		!reflect.DeepEqual(pageDocument.Statements[0].Resources, document.Statements[0].Resources) {
+		t.Fatal("capacity refill page did not publish the one requested unique DENY document")
+	}
+	_, finalDirectory := readCurrent(7, 5)
+	foundPublished := false
+	for _, item := range finalDirectory.Items {
+		if item.ID == retireTarget.ID {
+			t.Fatal("refilling a slot resurrected the retired version")
+		}
+		foundPublished = foundPublished || item.ID == writes[0].versionID
+	}
+	if !foundPublished {
+		t.Fatal("page-published capacity replacement is absent from the active directory")
+	}
+
+	var totalVersions, activeVersions, retiredVersions, defaultChanges int
+	var createdFacts, distinctCreatedFacts, deletedFacts, distinctDeletedFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$1),
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$1 AND retired_at IS NULL),
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$1 AND retired_at IS NOT NULL),
+		(SELECT count(*) FROM iam.policy_default_version_changes WHERE policy_id=$1),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$2 AND event_document->>'action'=$3
+		 AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$1),
+		(SELECT count(DISTINCT event_document->>'requestId') FROM iam.audit_outbox WHERE tenant_id=$2 AND event_document->>'action'=$3
+		 AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$1),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$2 AND event_document->>'action'=$4
+		 AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$1),
+		(SELECT count(DISTINCT event_document->>'requestId') FROM iam.audit_outbox WHERE tenant_id=$2 AND event_document->>'action'=$4
+		 AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$1)`,
+		created.Policy.ID, created.Policy.AccountID, auditv1.ActionIAMPolicyVersionCreated, auditv1.ActionIAMPolicyVersionDeleted).
+		Scan(&totalVersions, &activeVersions, &retiredVersions, &defaultChanges,
+			&createdFacts, &distinctCreatedFacts, &deletedFacts, &distinctDeletedFacts); err != nil ||
+		totalVersions != 6 || activeVersions != 5 || retiredVersions != 1 || defaultChanges != 0 ||
+		createdFacts != 5 || distinctCreatedFacts != 5 || deletedFacts != 1 || distinctDeletedFacts != 1 {
+		t.Fatalf("Policy-version capacity total=%d active=%d retired=%d default_changes=%d created=%d/%d deleted=%d/%d err=%v",
+			totalVersions, activeVersions, retiredVersions, defaultChanges,
+			createdFacts, distinctCreatedFacts, deletedFacts, distinctDeletedFacts, err)
+	}
+	for _, requestID := range append(slices.Clone(controlledRequests), writes[0].request.RequestID) {
+		var count int
+		if err := database.QueryRow(ctx, `SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1
+			AND event_document->>'action'=$2 AND event_document#>>'{target,kind}'='POLICY'
+			AND event_document#>>'{target,id}'=$3 AND event_document->>'requestId'=$4`,
+			created.Policy.AccountID, auditv1.ActionIAMPolicyVersionCreated, created.Policy.ID, requestID).Scan(&count); err != nil || count != 1 {
+			t.Fatalf("capacity creation request=%s facts=%d err=%v", requestID, count, err)
+		}
+	}
+	var deleteRequestID string
+	if err := database.QueryRow(ctx, `SELECT event_document->>'requestId' FROM iam.audit_outbox WHERE tenant_id=$1
+		AND event_document->>'action'=$2 AND event_document#>>'{target,kind}'='POLICY'
+		AND event_document#>>'{target,id}'=$3`, created.Policy.AccountID,
+		auditv1.ActionIAMPolicyVersionDeleted, created.Policy.ID).Scan(&deleteRequestID); err != nil ||
+		!strings.HasPrefix(deleteRequestID, "ui-policy-version-") || deleteRequestID == writes[0].request.RequestID {
+		t.Fatalf("capacity retirement request=%q err=%v", deleteRequestID, err)
+	}
+
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	wantedAudit := map[string]auditv1.Action{deleteRequestID: auditv1.ActionIAMPolicyVersionDeleted,
+		writes[0].request.RequestID: auditv1.ActionIAMPolicyVersionCreated}
+	for _, requestID := range controlledRequests {
+		wantedAudit[requestID] = auditv1.ActionIAMPolicyVersionCreated
+	}
+	foundAudit := map[string]int{}
+	for _, action := range []auditv1.Action{auditv1.ActionIAMPolicyVersionCreated, auditv1.ActionIAMPolicyVersionDeleted} {
+		query := auditv1.QueryRecordsRequest{PageSize: 100, Action: action}
+		for {
+			page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+			for _, record := range page.Records {
+				if record.Event.Target.Kind != auditv1.TargetPolicy || record.Event.Target.ID != string(created.Policy.ID) {
+					continue
+				}
+				if wantedAudit[record.Event.RequestID] != action || record.Source != auditv1.SourceIAM ||
+					record.Event.TenantID != auditv1.TenantID(created.Policy.AccountID) ||
+					record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != "principal-admin" ||
+					record.Event.Result != auditv1.ResultSucceeded || record.Event.IAMDecisionID == "" {
+					t.Fatal("Policy-version capacity Audit record changed request, actor, target or result")
+				}
+				foundAudit[record.Event.RequestID]++
+			}
+			if page.NextCursor == "" {
+				break
+			}
+			query.Cursor = page.NextCursor
+		}
+	}
+	if len(foundAudit) != len(wantedAudit) {
+		t.Fatalf("Policy-version capacity Audit requests=%v", foundAudit)
+	}
+	for requestID := range wantedAudit {
+		if foundAudit[requestID] != 1 {
+			t.Fatalf("Policy-version capacity Audit request=%s matches=%d", requestID, foundAudit[requestID])
+		}
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(created.Policy.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("Policy-version capacity tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Log("one real page kept the publish action stable but disabled with a recovery explanation at five active versions, retired exactly one nondefault version only after review, aligned PolicyAccess and the directory on the new revision, and explicitly published one unique version into the freed slot; five active plus one immutable retired version, the unchanged default, unique lifecycle facts and the verified Audit chain all matched")
 	return nil
 }
 
