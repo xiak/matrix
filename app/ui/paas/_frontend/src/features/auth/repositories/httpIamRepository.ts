@@ -1,5 +1,5 @@
 import { HttpProblem, requestJSON, requestJSONResponse, requestToken } from "@/infrastructure/http/jsonRequest";
-import { policyDisplayNameValid, policyMetadataResultMatches, userManagementCompletionMatches, userManagementResultMatches } from "../domain/accounts";
+import { policyDisplayNameValid, policyMetadataResultMatches, policyVersionLimit, userManagementCompletionMatches, userManagementResultMatches } from "../domain/accounts";
 import type {
   Account,
   AccountLifecycleCompletion,
@@ -2404,7 +2404,7 @@ function parsePolicyVersionDirectory(value: unknown, accountId: string, policyId
   exactKeys(wire, ["apiVersion", "kind", "policy", "items"]);
   requireAccountKind(wire, "PolicyVersionList");
   const policy = parseCustomerVersionPolicy(wire.policy, accountId, policyId);
-  const items = policyArray(wire.items, 5).map((item) => parsePolicyVersion(item, policyId));
+  const items = policyArray(wire.items, policyVersionLimit).map((item) => parsePolicyVersion(item, policyId));
   if (items.some((item, index) => index > 0 && items[index - 1]!.versionId >= item.versionId) ||
       !items.some((item) => item.versionId === policy.defaultVersionId)) throw new Error("INVALID_IAM_RESPONSE");
   return { policy, items };

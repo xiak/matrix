@@ -4,6 +4,7 @@ export type PolicyScope = "TENANT" | "INSTALLATION";
 export type PolicyManagement = "SYSTEM" | "CUSTOMER";
 export type PolicyStatus = "ACTIVE" | "RETIRED";
 export type IdentityKind = "ROOT_IDENTITY" | "USER";
+export const policyVersionLimit = 5;
 
 export type IamAction =
   | "iam.account.create"

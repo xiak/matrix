@@ -7,7 +7,7 @@ import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, FormFi
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad, type AccountPolicyVersionReadLoad, type PolicyVersionMutationClient, type PolicyVersionMutationResult } from "../application/AccountAccessProvider";
 import type { PolicyMutationClient } from "../application/policyMutation";
-import { policyDisplayNameValid } from "../domain/accounts";
+import { policyDisplayNameValid, policyVersionLimit } from "../domain/accounts";
 import type { AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, ActionCapability, AuthorizationProfileDirectory, IamAction } from "../domain/accounts";
 import { visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAuthoring";
 import { findActionCapability, type AccountAccessScene } from "../scenes/accountAccessScene";
@@ -400,6 +400,7 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
   const publishAuthorized = policyCapability(authorizedCapabilities, "iam.policy-version.create", policy.id)?.available === true;
   const setDefaultAuthorized = policyCapability(authorizedCapabilities, "iam.policy.set-default-version", policy.id)?.available === true;
   const retireAuthorized = policyCapability(authorizedCapabilities, "iam.policy-version.delete", policy.id)?.available === true;
+  const versionLimitReached = state.status === "ready" && state.directory.items.length >= policyVersionLimit;
   useEffect(() => {
     let current = true;
     void listVersions(policy.id).then((result) => { if (current) { setState(result); setDirectoryAuthority({ listVersions, refreshRevision, revision }); } });
@@ -492,9 +493,10 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
     {state.status === "loading" ? <TableSkeleton label={t("loadingVersions")} rows={3} header={false} /> :
       state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${state.status}`)}</Alert>
         {state.status !== "expired" && state.status !== "notFound" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> : <>
-        <div className={styles.catalogDetailHeading}><p>{t("versionCount", { count: state.directory.items.length })}</p>
-          {mutation?.canPublish && canPublish && state.directory.items.length < 5 ? <Button ref={publishButton} variant="secondary" disabled={!writesAuthorized || !publishAuthorized || Boolean(mutation.pending) || mutation.blockedByMetadata || mutation.blockedByAuthority} onClick={() => { setPublished(null); setMutationError(null); setPublisherOpen(true); }}>{t("publishVersion")}</Button> : null}
+        <div className={styles.catalogDetailHeading}><p>{t("versionCount", { count: state.directory.items.length, limit: policyVersionLimit })}</p>
+          {mutation?.canPublish && canPublish ? <Button ref={publishButton} variant="secondary" disabled={versionLimitReached || !writesAuthorized || !publishAuthorized || Boolean(mutation.pending) || mutation.blockedByMetadata || mutation.blockedByAuthority} onClick={() => { setPublished(null); setMutationError(null); setPublisherOpen(true); }}>{t("publishVersion")}</Button> : null}
         </div>
+        {versionLimitReached ? <Alert status="warning">{t("versionLimitReached", { limit: policyVersionLimit })}</Alert> : null}
         <Table aria-label={t("versionTable")} mobileLayout="stack" className={styles.policyVersionTable}>
           <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th></tr></thead>
           <tbody>{state.directory.items.map((item) => <tr key={item.versionId}>

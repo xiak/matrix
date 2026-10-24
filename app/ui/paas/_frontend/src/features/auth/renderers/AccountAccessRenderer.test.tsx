@@ -342,11 +342,16 @@ function livePolicyVersions() {
     policy = { ...policy, resourceVersion: policy.resourceVersion + 1 };
     return { policy: structuredClone(policy), version: structuredClone(versions.find((item) => item.versionId === policy.defaultVersionId)!) };
   });
+  const fillVersionCapacity = () => {
+    versions = [earlier, current, ...["b", "c", "d"].map((suffix, index): AccountPolicyVersion => ({
+      ...current, versionId: `version-${suffix}`, contentDigest: `sha256:${String.fromCharCode(100 + index).repeat(64)}`
+    }))].sort((left, right) => left.versionId.localeCompare(right.versionId));
+  };
   const repository = accounts({ readPolicy, listPolicyVersions, readPolicyVersion: vi.fn(async (_credential, _accountId, _policyId, versionId) =>
     ({ policy: structuredClone(policy), version: structuredClone(versions.find((item) => item.versionId === versionId)!) })),
   createPolicyVersion, setDefaultPolicyVersion, retirePolicyVersion,
   listPolicies: vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) : { ...directory(false), items: [structuredClone(policy)] }) });
-  return { repository, readPolicy, listPolicyVersions, createPolicyVersion, setDefaultPolicyVersion, retirePolicyVersion };
+  return { repository, readPolicy, listPolicyVersions, createPolicyVersion, setDefaultPolicyVersion, retirePolicyVersion, fillVersionCapacity };
 }
 
 function livePolicyMetadata() {
@@ -4266,6 +4271,22 @@ describe("account access", () => {
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "返回版本目录" }));
     expect(within(screen.getByRole("table", { name: "策略版本目录" })).getByRole("button", { name: "version-a" })).toBe(document.activeElement);
+  });
+
+  it("keeps the publish action in place and explains how to free a slot at the five-version limit", async () => {
+    const fixture = livePolicyVersions(); fixture.fillVersionCapacity();
+    const { user } = await openAccess(fixture.repository, iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: "LogBoundary" }));
+    await user.click(await screen.findByRole("tab", { name: "策略版本" }));
+    const table = await screen.findByRole("table", { name: "策略版本目录" });
+    expect(screen.getByText("当前可管理版本：5 / 5")).toBeTruthy();
+    expect(screen.getByText(/已达到 5 个可管理版本上限.*退休一个非默认版本.*历史内容和审计证据仍会保留/)).toBeTruthy();
+    const publish = screen.getByRole("button", { name: "发布新版本" });
+    expect(publish).toHaveProperty("disabled", true);
+    await user.click(publish);
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+    await user.click(within(table).getByRole("button", { name: "版本 version-a 的操作" }));
+    expect((await screen.findByRole("menuitem", { name: "退休版本" })).getAttribute("aria-disabled")).not.toBe("true");
   });
 
   it("renames live Policy metadata inline with old/new review, byte validation and a stable target", async () => {
