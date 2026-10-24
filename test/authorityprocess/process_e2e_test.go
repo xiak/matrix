@@ -396,6 +396,7 @@ const (
 	authorityProcessAccessKeyLifecycleBrowser
 	authorityProcessRoleLifecycleBrowser
 	authorityProcessPermissionAwareBrowser
+	authorityProcessSessionActivityBrowser
 	authorityProcessManagedProducts
 	authorityProcessCapacity
 	authorityProcessPasswordCapacity
@@ -414,6 +415,19 @@ func TestIAMPermissionAwareConsoleBrowser(t *testing.T) {
 		t.Fatalf("permission-aware browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
 	}
 	testIndependentAuthorityProcesses(t, authorityProcessPermissionAwareBrowser)
+}
+
+// This opt-in fixture proves that only a real, trusted foreground browser
+// interaction renews the exact current Session. Ordinary authenticated reads
+// and an untouched peer Session must not advance either activity waterline.
+func TestIAMSessionActivityConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_SESSION_ACTIVITY_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_SESSION_ACTIVITY_BROWSER=1 for the bounded LIVE Session activity browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("Session activity browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessSessionActivityBrowser)
 }
 
 // This opt-in fixture proves the Account -> Root -> LIVE User identity path
@@ -732,7 +746,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		mode == authorityProcessPolicyAttachmentRecoveryBrowser ||
 		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessUserDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
 		mode == authorityProcessDailyPasswordChangeBrowser || mode == authorityProcessAccountSecuritySettingsBrowser ||
-		mode == authorityProcessAccessKeyRecoveryBrowser || mode == authorityProcessAccessKeyLifecycleBrowser || mode == authorityProcessRoleLifecycleBrowser || mode == authorityProcessPermissionAwareBrowser {
+		mode == authorityProcessAccessKeyRecoveryBrowser || mode == authorityProcessAccessKeyLifecycleBrowser || mode == authorityProcessRoleLifecycleBrowser ||
+		mode == authorityProcessPermissionAwareBrowser || mode == authorityProcessSessionActivityBrowser {
 		duration = authorityProcessBrowserObservation
 	} else if mode == authorityProcessManagedProducts {
 		duration = 18 * time.Minute
@@ -1242,6 +1257,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)...)
+		return
+	}
+	if mode == authorityProcessSessionActivityBrowser {
+		runIAMSessionActivityConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)
 		return
 	}
 	if mode == authorityProcessRoleLifecycleBrowser {
@@ -2983,6 +3005,234 @@ func assertManagedProductTerminationProof(
 	if response.Status != http.StatusOK {
 		t.Fatalf("resolve %s termination Audit proof: status=%d body=%s", installationID, response.Status, response.Body)
 	}
+}
+
+type browserSessionActivityObservation struct {
+	attempts   int
+	statuses   []int
+	activities []iamv1.SessionActivity
+	invalid    bool
+}
+
+type browserSessionActivityProbe struct {
+	mu         sync.Mutex
+	attempts   int
+	statuses   []int
+	activities []iamv1.SessionActivity
+	invalid    bool
+}
+
+func (value *browserSessionActivityProbe) handler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/iam/v1/auth/sessions/current:touch" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		captured := httptest.NewRecorder()
+		next.ServeHTTP(captured, r)
+		var activity iamv1.SessionActivity
+		valid := r.URL.RawQuery == "" && captured.Code == http.StatusOK &&
+			json.Unmarshal(captured.Body.Bytes(), &activity) == nil &&
+			iamv1.ValidateSessionActivity(activity) == nil
+		value.mu.Lock()
+		value.attempts++
+		value.statuses = append(value.statuses, captured.Code)
+		if valid {
+			value.activities = append(value.activities, activity)
+		} else {
+			value.invalid = true
+		}
+		value.mu.Unlock()
+		copyBrowserFixtureResponse(w, captured)
+	})
+}
+
+func (value *browserSessionActivityProbe) snapshot() browserSessionActivityObservation {
+	value.mu.Lock()
+	defer value.mu.Unlock()
+	return browserSessionActivityObservation{
+		attempts:   value.attempts,
+		statuses:   append([]int(nil), value.statuses...),
+		activities: append([]iamv1.SessionActivity(nil), value.activities...),
+		invalid:    value.invalid,
+	}
+}
+
+func runIAMSessionActivityConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	const loginName = "browser.session.activity"
+	realm := loginName + "@organization-process"
+	member := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser Session activity member",
+		initialReaderPassword, "browser-session-activity-user-create")
+	initial := loginIAM(t, iamEndpoint, realm, initialReaderPassword, "browser-session-activity-initial-login")
+	changePasswordIAM(t, iamEndpoint, initial.Credential, initialReaderPassword, changedReaderPassword,
+		"browser-session-activity-password")
+	logout := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/logout", initial.Credential,
+		iamv1.LogoutRequest{RequestID: "browser-session-activity-initial-logout"})
+	if logout.Status != http.StatusOK {
+		t.Fatalf("close Session activity setup Session: status=%d body=%s", logout.Status, logout.Body)
+	}
+	peer := loginIAM(t, iamEndpoint, realm, changedReaderPassword, "browser-session-activity-peer-login")
+	if peer.Session.AccountID != member.AccountID || peer.Session.PrincipalID != member.ID ||
+		peer.Session.Status != iamv1.SessionActive {
+		t.Fatal("Session activity peer does not belong to the prepared User")
+	}
+
+	probe := &browserSessionActivityProbe{}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start,
+		func(mux http.Handler) http.Handler {
+			return probe.handler(iamConsoleBrowserFixtureHandler(mux, make(chan struct{}, 16), nil))
+		},
+	)
+	defer closeBrowser()
+	t.Logf("SESSION_ACTIVITY_BROWSER_FIXTURE url=%s/console/access/sessions/ realm=%s; sign in with the existing changed reader password and leave the loaded page untouched until the continuation log", server.URL, realm)
+
+	type storedSession struct {
+		id                                       string
+		issuedAt, lastActivityAt, absoluteExpiry time.Time
+		idleTimeoutSeconds                       int
+	}
+	readActive := func() []storedSession {
+		t.Helper()
+		rows, err := database.Query(ctx, `SELECT id,issued_at,last_activity_at,expires_at,idle_timeout_seconds
+			FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND status='ACTIVE' AND revoked_at IS NULL
+			ORDER BY issued_at,id`, member.AccountID, member.ID)
+		if err != nil {
+			t.Fatal("read Session activity fixture", err)
+		}
+		defer rows.Close()
+		var result []storedSession
+		for rows.Next() {
+			var session storedSession
+			if err := rows.Scan(&session.id, &session.issuedAt, &session.lastActivityAt,
+				&session.absoluteExpiry, &session.idleTimeoutSeconds); err != nil {
+				t.Fatal("scan Session activity fixture", err)
+			}
+			result = append(result, session)
+		}
+		if err := rows.Err(); err != nil {
+			t.Fatal("iterate Session activity fixture", err)
+		}
+		return result
+	}
+
+	var browser, peerStored storedSession
+	for browser.id == "" {
+		select {
+		case <-ctx.Done():
+			t.Fatal("Session activity browser did not authenticate")
+		case <-time.After(time.Second):
+		}
+		if exited, _ := ui.poll(); exited {
+			t.Fatal("browser UI exited before Session activity observation")
+		}
+		active := readActive()
+		if len(active) < 2 {
+			continue
+		}
+		if len(active) != 2 {
+			t.Fatalf("Session activity fixture active Sessions=%d want=2", len(active))
+		}
+		for _, session := range active {
+			if session.id == string(peer.Session.ID) {
+				peerStored = session
+			} else {
+				browser = session
+			}
+		}
+	}
+	if peerStored.id == "" || browser.id == string(peer.Session.ID) ||
+		!browser.lastActivityAt.Equal(browser.issuedAt) || !peerStored.lastActivityAt.Equal(peerStored.issuedAt) ||
+		probe.snapshot().attempts != 0 {
+		t.Fatal("Session activity fixture did not begin with two untouched Sessions")
+	}
+
+	for {
+		if observation := probe.snapshot(); observation.attempts != 0 {
+			t.Fatalf("passive page work emitted %d foreground Session touches", observation.attempts)
+		}
+		var ready bool
+		if err := database.QueryRow(ctx, `SELECT clock_timestamp()>=$1::timestamptz+interval '61 seconds'`, browser.issuedAt).Scan(&ready); err != nil {
+			t.Fatal("read Session activity coalescing boundary", err)
+		}
+		if ready {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("Session activity browser foreground window timed out")
+		case <-time.After(time.Second):
+		}
+		if exited, _ := ui.poll(); exited {
+			t.Fatal("browser UI exited while proving passive activity silence")
+		}
+	}
+	t.Logf("SESSION_ACTIVITY_BROWSER_READY url=%s/console/access/sessions/; perform several immediate real pointer interactions in the loaded page. They must produce one coalesced touch without signing in again", server.URL)
+
+	for probe.snapshot().attempts == 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatal("Session activity browser received no trusted foreground interaction")
+		case <-time.After(250 * time.Millisecond):
+		}
+		if exited, _ := ui.poll(); exited {
+			t.Fatal("browser UI exited before the foreground interaction")
+		}
+	}
+	time.Sleep(2 * time.Second)
+	observation := probe.snapshot()
+	if observation.attempts != 1 || observation.invalid || len(observation.statuses) != 1 ||
+		observation.statuses[0] != http.StatusOK || len(observation.activities) != 1 {
+		t.Fatalf("foreground browser touches=%d statuses=%v activities=%d invalid=%t want one valid 200",
+			observation.attempts, observation.statuses, len(observation.activities), observation.invalid)
+	}
+	activity := observation.activities[0]
+	if activity.SessionID != iamv1.SessionID(browser.id) || activity.AccountID != member.AccountID ||
+		activity.UserID != member.ID || !activity.AbsoluteExpiresAt.Equal(browser.absoluteExpiry) ||
+		activity.IdleExpiresAt.Sub(activity.LastActivityAt) != time.Duration(browser.idleTimeoutSeconds)*time.Second ||
+		!activity.LastActivityAt.After(browser.lastActivityAt.Add(60*time.Second)) {
+		t.Fatalf("foreground Session activity response changed its exact owner or time boundary: %#v", activity)
+	}
+
+	active := readActive()
+	if len(active) != 2 {
+		t.Fatalf("foreground touch changed the active Session count=%d", len(active))
+	}
+	var browserAfter, peerAfter storedSession
+	for _, session := range active {
+		if session.id == browser.id {
+			browserAfter = session
+		}
+		if session.id == peerStored.id {
+			peerAfter = session
+		}
+	}
+	if browserAfter.id == "" || !browserAfter.lastActivityAt.Equal(activity.LastActivityAt) ||
+		peerAfter.id == "" || !peerAfter.lastActivityAt.Equal(peerStored.lastActivityAt) {
+		t.Fatal("foreground interaction did not advance only the exact browser Session")
+	}
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", peer.Credential, nil); response.Status != http.StatusOK {
+		t.Fatalf("untouched peer Session stopped authenticating during the bounded observation: status=%d", response.Status)
+	}
+	active = readActive()
+	for _, session := range active {
+		if session.id == peerStored.id && !session.lastActivityAt.Equal(peerStored.lastActivityAt) {
+			t.Fatal("ordinary protected peer read renewed Session activity")
+		}
+	}
+	t.Log("the real browser stayed silent during passive page work, then several trusted pointer interactions produced exactly one coalesced touch for its current Session; the untouched peer and its ordinary protected read did not advance activity")
 }
 
 func runIAMPermissionAwareConsoleBrowser(
