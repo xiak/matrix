@@ -579,10 +579,10 @@ func TestIAMPolicyMutationRecoveryConsoleBrowser(t *testing.T) {
 }
 
 // This opt-in fixture proves the complete CUSTOMER Policy-version page
-// lifecycle without using an API-created draft: publishing creates an
-// immutable nondefault version, an explicit default switch changes the next
-// business decision for the same Session, and retirement removes only the old
-// nondefault version from the management directory while preserving history.
+// lifecycle. MATRIX_IAM_POLICY_VERSION_BROWSER_FLOW=CONFLICT narrows the same
+// owner to a real stale-review conflict: one controlled writer advances the
+// Policy while the page is reviewing, the stale page write is rejected once,
+// and only a fresh explicit review may publish the preserved draft.
 func TestIAMPolicyVersionLifecycleConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER=1 for the bounded LIVE Policy-version lifecycle browser fixture")
@@ -4615,6 +4615,110 @@ func runIAMAccountLifecycleRecoveryConsoleBrowser(
 	return sensitive
 }
 
+type policyVersionConflictBrowserEvent struct {
+	kind             string
+	status           int
+	request          *iamv1.CreatePolicyVersionRequest
+	resourceVersion  uint64
+	defaultVersionID iamv1.PolicyVersionID
+	versionID        iamv1.PolicyVersionID
+}
+
+type policyVersionConflictBrowserProbe struct {
+	policyPath string
+
+	mu      sync.Mutex
+	events  []policyVersionConflictBrowserEvent
+	invalid bool
+}
+
+func (probe *policyVersionConflictBrowserProbe) wrap(upstream http.Handler) http.Handler {
+	detailPath := "/api/iam/v1/policies/" + probe.policyPath
+	versionPath := detailPath + "/versions"
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		kind := ""
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == versionPath:
+			kind = "publish"
+		case request.Method == http.MethodGet && request.URL.Path == detailPath:
+			kind = "detail"
+		case request.Method == http.MethodGet && request.URL.Path == versionPath:
+			kind = "directory"
+		default:
+			upstream.ServeHTTP(response, request)
+			return
+		}
+
+		var requestBody []byte
+		var bodyErr error
+		if kind == "publish" {
+			requestBody, bodyErr = io.ReadAll(io.LimitReader(request.Body, 64*1024+1))
+			_ = request.Body.Close()
+			request.Body = io.NopCloser(bytes.NewReader(requestBody))
+		}
+		captured := httptest.NewRecorder()
+		upstream.ServeHTTP(captured, request)
+		event := policyVersionConflictBrowserEvent{kind: kind, status: captured.Code}
+		invalid := bodyErr != nil || len(requestBody) > 64*1024
+		switch kind {
+		case "publish":
+			var command iamv1.CreatePolicyVersionRequest
+			if !invalid && (iamv1.DecodeRequest(bytes.NewReader(requestBody), &command) != nil ||
+				iamv1.ValidateCreatePolicyVersionRequestSyntax(command) != nil) {
+				invalid = true
+			}
+			if !invalid {
+				event.request = &command
+			}
+			if captured.Code == http.StatusCreated {
+				var detail iamv1.PolicyVersionDetail
+				if iamv1.DecodeRequest(bytes.NewReader(captured.Body.Bytes()), &detail) != nil ||
+					iamv1.ValidatePolicyVersionDetail(detail) != nil {
+					invalid = true
+				} else {
+					event.resourceVersion = detail.Policy.ResourceVersion
+					event.defaultVersionID = detail.Policy.DefaultVersionID
+					event.versionID = detail.Version.ID
+				}
+			}
+		case "detail":
+			if captured.Code == http.StatusOK {
+				var access iamv1.PolicyAccess
+				if iamv1.DecodeRequest(bytes.NewReader(captured.Body.Bytes()), &access) != nil ||
+					iamv1.ValidatePolicyAccess(access) != nil {
+					invalid = true
+				} else {
+					event.resourceVersion = access.Detail.Policy.ResourceVersion
+					event.defaultVersionID = access.Detail.Policy.DefaultVersionID
+				}
+			}
+		case "directory":
+			if captured.Code == http.StatusOK {
+				var directory iamv1.PolicyVersionList
+				if iamv1.DecodeRequest(bytes.NewReader(captured.Body.Bytes()), &directory) != nil ||
+					iamv1.ValidatePolicyVersionList(directory) != nil {
+					invalid = true
+				} else {
+					event.resourceVersion = directory.Policy.ResourceVersion
+					event.defaultVersionID = directory.Policy.DefaultVersionID
+				}
+			}
+		}
+		probe.mu.Lock()
+		probe.invalid = probe.invalid || invalid
+		probe.events = append(probe.events, event)
+		probe.mu.Unlock()
+		copyBrowserFixtureResponse(response, captured)
+		clear(requestBody)
+	})
+}
+
+func (probe *policyVersionConflictBrowserProbe) snapshot() ([]policyVersionConflictBrowserEvent, bool) {
+	probe.mu.Lock()
+	defer probe.mu.Unlock()
+	return slices.Clone(probe.events), probe.invalid
+}
+
 func runIAMPolicyVersionLifecycleConsoleBrowser(
 	t *testing.T,
 	ctx context.Context,
@@ -4628,6 +4732,15 @@ func runIAMPolicyVersionLifecycleConsoleBrowser(
 	start func(string, []string) *childProcess,
 ) []string {
 	t.Helper()
+	flow := strings.ToUpper(strings.TrimSpace(os.Getenv("MATRIX_IAM_POLICY_VERSION_BROWSER_FLOW")))
+	switch flow {
+	case "", "LIFECYCLE":
+	case "CONFLICT":
+		return runIAMPolicyVersionConflictConsoleBrowser(t, ctx, database, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, start)
+	default:
+		t.Fatalf("unsupported MATRIX_IAM_POLICY_VERSION_BROWSER_FLOW=%q", flow)
+	}
 	const (
 		policyName = "Browser Policy version lifecycle"
 		loginName  = "browser.policy.version.member"
@@ -4923,6 +5036,266 @@ func runIAMPolicyVersionLifecycleConsoleBrowser(
 	}
 	t.Log("one pure page lifecycle published an immutable nondefault DENY version without changing access, explicitly selected it so the same ordinary User Session changed from 200 to 403 on its next business request, retired only the old nondefault management row while preserving its immutable database history, and produced one POLICY-targeted created/default-set/deleted Audit fact each")
 	return []string{memberLogin.Credential}
+}
+
+func runIAMPolicyVersionConflictConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	document := iamv1.PolicyDocument{
+		LanguageVersion: iamv1.PolicyLanguageVersion,
+		Scope:           iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{
+			SID:     "read-one-application",
+			Effect:  iamv1.PolicyAllow,
+			Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{
+				Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: "browser-policy-conflict-application",
+			}},
+		}},
+	}
+	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer,
+		iamv1.CreatePolicyRequest{DisplayName: "Browser Policy version conflict", Document: document,
+			RequestID: "browser-policy-version-conflict-create-v1"})
+	var created iamv1.PolicyDetail
+	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &created) != nil ||
+		iamv1.ValidatePolicyDetail(created) != nil || created.Policy.AccountID != "organization-process" ||
+		created.Policy.ResourceVersion != 1 || created.Policy.DefaultVersionID != created.Version.ID {
+		t.Fatalf("prepare Policy-version conflict target status=%d body=%s", createdResponse.Status, createdResponse.Body)
+	}
+
+	browserDraft := document
+	browserDraft.Statements = append([]iamv1.PolicyStatement(nil), document.Statements...)
+	browserDraft.Statements[0].Effect = iamv1.PolicyDeny
+	concurrentDraft := document
+	concurrentDraft.Statements = append([]iamv1.PolicyStatement(nil), document.Statements...)
+	concurrentDraft.Statements[0].SID = "concurrent-read-one-application"
+	sameDocument := func(left, right iamv1.PolicyDocument) bool {
+		leftCanonical, _, leftErr := iamv1.CanonicalizePolicyDocument(left)
+		rightCanonical, _, rightErr := iamv1.CanonicalizePolicyDocument(right)
+		return leftErr == nil && rightErr == nil && leftCanonical == rightCanonical
+	}
+	readCurrent := func(wantRevision uint64, wantCount int) (iamv1.PolicyAccess, iamv1.PolicyVersionList) {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID), ownerBearer, nil)
+		var access iamv1.PolicyAccess
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &access) != nil ||
+			iamv1.ValidatePolicyAccess(access) != nil || access.Detail.Policy.ResourceVersion != wantRevision ||
+			access.Detail.Policy.DefaultVersionID != created.Version.ID || access.Detail.Version.ID != created.Version.ID {
+			t.Fatalf("read current Policy after conflict status=%d body=%s", response.Status, response.Body)
+		}
+		response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions", ownerBearer, nil)
+		var directory iamv1.PolicyVersionList
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &directory) != nil ||
+			iamv1.ValidatePolicyVersionList(directory) != nil || directory.Policy.ResourceVersion != wantRevision ||
+			directory.Policy.DefaultVersionID != created.Version.ID || len(directory.Items) != wantCount {
+			t.Fatalf("read current Policy-version directory after conflict status=%d body=%s", response.Status, response.Body)
+		}
+		return access, directory
+	}
+	readCurrent(1, 1)
+
+	probe := &policyVersionConflictBrowserProbe{policyPath: string(created.Policy.ID)}
+	server, ui, closeBrowser := startIAMConsoleBrowserWithHandler(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start, func(mux http.Handler) http.Handler {
+			return probe.wrap(iamConsoleBrowserFixtureHandler(mux, make(chan struct{}, 16), nil))
+		})
+	defer closeBrowser()
+	reviewedMarker := filepath.Join(temporary, "browser-policy-version-conflict-reviewed")
+	conflictMarker := filepath.Join(temporary, "browser-policy-version-conflict-refreshed")
+	finishedMarker := filepath.Join(temporary, "browser-policy-version-conflict-finished")
+	browserPath := "/console/access/policies/?id=" + url.QueryEscape(string(created.Policy.ID))
+	t.Logf("POLICY_VERSION_CONFLICT_REVIEW url=%s%s marker=%s policy=%s default=%s resource_version=1 realm=admin; use the existing changed admin password, open 策略版本 and 发布新版本, change only the cloned statement effect from ALLOW to DENY, enter the review step without confirming, verify the proposed document is still visible, then create the marker",
+		server.URL, browserPath, reviewedMarker, created.Policy.ID, created.Version.ID)
+	waitForBrowserMarker(t, ctx, ui, reviewedMarker, "page-held stale Policy-version review")
+	if events, invalid := probe.snapshot(); invalid {
+		t.Fatal("Policy-version conflict browser probe rejected an initial page read")
+	} else {
+		for _, event := range events {
+			if event.kind == "publish" {
+				t.Fatal("the page published before the controlled concurrent writer advanced authority")
+			}
+		}
+	}
+
+	concurrentRequestID := "browser-policy-version-conflict-concurrent"
+	concurrentResponse := performJSON(t, http.MethodPost,
+		iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions", ownerBearer,
+		iamv1.CreatePolicyVersionRequest{Document: concurrentDraft, ResourceVersion: 1, RequestID: concurrentRequestID})
+	var concurrent iamv1.PolicyVersionDetail
+	if concurrentResponse.Status != http.StatusCreated || json.Unmarshal(concurrentResponse.Body, &concurrent) != nil ||
+		iamv1.ValidatePolicyVersionDetail(concurrent) != nil || concurrent.Policy.ID != created.Policy.ID ||
+		concurrent.Policy.ResourceVersion != 2 || concurrent.Policy.DefaultVersionID != created.Version.ID ||
+		concurrent.Version.ID == created.Version.ID || !sameDocument(concurrent.Version.Document, concurrentDraft) {
+		t.Fatalf("controlled Policy-version writer status=%d body=%s", concurrentResponse.Status, concurrentResponse.Body)
+	}
+	t.Logf("POLICY_VERSION_CONFLICT_SUBMIT url=%s%s marker=%s policy=%s stale_resource_version=1 authoritative_resource_version=2 concurrent_version=%s; confirm the already-open review exactly once, verify the page returns to the editor with the exact DENY draft and conflict notice, wait until revision 2 is visible and review is enabled again, then create the marker without submitting again",
+		server.URL, browserPath, conflictMarker, created.Policy.ID, concurrent.Version.ID)
+	waitForBrowserMarker(t, ctx, ui, conflictMarker, "page-preserved Policy-version draft after one 409")
+
+	eventsAfterConflict, invalid := probe.snapshot()
+	if invalid {
+		t.Fatal("Policy-version conflict browser probe observed an invalid request or authority response")
+	}
+	firstWriteIndex := -1
+	var firstWrite policyVersionConflictBrowserEvent
+	for index, event := range eventsAfterConflict {
+		if event.kind != "publish" {
+			continue
+		}
+		if firstWriteIndex >= 0 {
+			t.Fatal("the page automatically retried its rejected stale Policy-version write")
+		}
+		firstWriteIndex, firstWrite = index, event
+	}
+	if firstWriteIndex < 0 || firstWrite.status != http.StatusConflict || firstWrite.request == nil ||
+		firstWrite.request.ResourceVersion != 1 || !strings.HasPrefix(firstWrite.request.RequestID, "ui-policy-version-") ||
+		!sameDocument(firstWrite.request.Document, browserDraft) {
+		t.Fatalf("stale page publication was not one exact rejected draft: index=%d status=%d request=%#v",
+			firstWriteIndex, firstWrite.status, firstWrite.request)
+	}
+	seenDetail, seenDirectory := false, false
+	for _, event := range eventsAfterConflict[firstWriteIndex+1:] {
+		if event.status != http.StatusOK || event.resourceVersion != 2 || event.defaultVersionID != created.Version.ID {
+			continue
+		}
+		seenDetail = seenDetail || event.kind == "detail"
+		seenDirectory = seenDirectory || event.kind == "directory"
+	}
+	if !seenDetail || !seenDirectory {
+		t.Fatal("the page did not align PolicyAccess and the version directory on authoritative revision 2 after conflict")
+	}
+	readCurrent(2, 2)
+	var versionsAfterConflict, staleOutbox int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$1),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$2 AND event_document->>'requestId'=$3)`,
+		created.Policy.ID, created.Policy.AccountID, firstWrite.request.RequestID).
+		Scan(&versionsAfterConflict, &staleOutbox); err != nil || versionsAfterConflict != 2 || staleOutbox != 0 {
+		t.Fatalf("rejected stale publication changed authority: versions=%d stale_outbox=%d err=%v",
+			versionsAfterConflict, staleOutbox, err)
+	}
+
+	t.Logf("POLICY_VERSION_CONFLICT_REVIEW_AGAIN url=%s%s marker=%s policy=%s resource_version=2 default=%s; do not edit the preserved draft, explicitly review it again, confirm publication once, verify success still names the original default, return to the three-row version directory, then create the marker",
+		server.URL, browserPath, finishedMarker, created.Policy.ID, created.Version.ID)
+	waitForBrowserMarker(t, ctx, ui, finishedMarker, "freshly reviewed Policy-version draft publication")
+
+	finalEvents, invalid := probe.snapshot()
+	if invalid {
+		t.Fatal("Policy-version conflict browser probe rejected the final page exchange")
+	}
+	type indexedWrite struct {
+		index int
+		event policyVersionConflictBrowserEvent
+	}
+	var writes []indexedWrite
+	for index, event := range finalEvents {
+		if event.kind == "publish" {
+			writes = append(writes, indexedWrite{index: index, event: event})
+		}
+	}
+	if len(writes) != 2 || writes[0].event.status != http.StatusConflict ||
+		writes[1].event.status != http.StatusCreated || writes[0].event.request == nil || writes[1].event.request == nil {
+		t.Fatalf("Policy-version conflict page writes=%#v", writes)
+	}
+	staleRequest, freshRequest := writes[0].event.request, writes[1].event.request
+	if staleRequest.RequestID == freshRequest.RequestID ||
+		!strings.HasPrefix(freshRequest.RequestID, "ui-policy-version-") || freshRequest.ResourceVersion != 2 ||
+		!sameDocument(staleRequest.Document, browserDraft) || !sameDocument(freshRequest.Document, browserDraft) ||
+		writes[1].event.resourceVersion != 3 || writes[1].event.defaultVersionID != created.Version.ID ||
+		writes[1].event.versionID == "" || writes[1].event.versionID == created.Version.ID ||
+		writes[1].event.versionID == concurrent.Version.ID {
+		t.Fatal("fresh review reused stale command identity, authority or changed the preserved draft")
+	}
+	alignedDetail, alignedDirectory := false, false
+	for _, event := range finalEvents[writes[0].index+1 : writes[1].index] {
+		if event.status != http.StatusOK || event.resourceVersion != 2 || event.defaultVersionID != created.Version.ID {
+			continue
+		}
+		alignedDetail = alignedDetail || event.kind == "detail"
+		alignedDirectory = alignedDirectory || event.kind == "directory"
+	}
+	if !alignedDetail || !alignedDirectory {
+		t.Fatal("fresh Policy-version command was sent before both authoritative revision-2 reads completed")
+	}
+	_, finalDirectory := readCurrent(3, 3)
+	var pageVersion *iamv1.PolicyVersion
+	for index := range finalDirectory.Items {
+		if finalDirectory.Items[index].ID == writes[1].event.versionID {
+			pageVersion = &finalDirectory.Items[index]
+		}
+	}
+	if pageVersion == nil || !sameDocument(pageVersion.Document, browserDraft) ||
+		pageVersion.ID == finalDirectory.Policy.DefaultVersionID {
+		t.Fatal("freshly reviewed browser draft was not the immutable nondefault third version")
+	}
+
+	var versionCount, defaultChanges, retirements int
+	var versionFacts, concurrentFacts, freshFacts, staleFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$1),
+		(SELECT count(*) FROM iam.policy_default_version_changes WHERE policy_id=$1),
+		(SELECT count(*) FROM iam.policy_version_retirements WHERE policy_id=$1),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$2 AND event_document->>'action'=$3
+		 AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$1),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$2 AND event_document->>'action'=$3
+		 AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$1 AND event_document->>'requestId'=$4),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$2 AND event_document->>'action'=$3
+		 AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$1 AND event_document->>'requestId'=$5),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$2 AND event_document->>'action'=$3
+		 AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$1 AND event_document->>'requestId'=$6)`,
+		created.Policy.ID, created.Policy.AccountID, auditv1.ActionIAMPolicyVersionCreated,
+		concurrentRequestID, freshRequest.RequestID, staleRequest.RequestID).
+		Scan(&versionCount, &defaultChanges, &retirements, &versionFacts, &concurrentFacts, &freshFacts, &staleFacts); err != nil ||
+		versionCount != 3 || defaultChanges != 0 || retirements != 0 || versionFacts != 2 ||
+		concurrentFacts != 1 || freshFacts != 1 || staleFacts != 0 {
+		t.Fatalf("Policy-version conflict authority versions=%d default_changes=%d retirements=%d facts=%d concurrent=%d fresh=%d stale=%d err=%v",
+			versionCount, defaultChanges, retirements, versionFacts, concurrentFacts, freshFacts, staleFacts, err)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	wantedRequests := map[string]struct{}{concurrentRequestID: {}, freshRequest.RequestID: {}}
+	foundRequests := map[string]int{}
+	query := auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMPolicyVersionCreated}
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if record.Event.Target.Kind != auditv1.TargetPolicy || record.Event.Target.ID != string(created.Policy.ID) {
+				continue
+			}
+			if _, ok := wantedRequests[record.Event.RequestID]; !ok || record.Source != auditv1.SourceIAM ||
+				record.Event.TenantID != auditv1.TenantID(created.Policy.AccountID) ||
+				record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != "principal-admin" ||
+				record.Event.Action != auditv1.ActionIAMPolicyVersionCreated ||
+				record.Event.Result != auditv1.ResultSucceeded || record.Event.IAMDecisionID == "" {
+				t.Fatal("Policy-version conflict Audit record changed request, actor, target or result")
+			}
+			foundRequests[record.Event.RequestID]++
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		query.Cursor = page.NextCursor
+	}
+	if len(foundRequests) != 2 || foundRequests[concurrentRequestID] != 1 ||
+		foundRequests[freshRequest.RequestID] != 1 || foundRequests[staleRequest.RequestID] != 0 {
+		t.Fatalf("Policy-version conflict Audit requests=%v", foundRequests)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(created.Policy.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("Policy-version conflict tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Log("one real page held a DENY draft while a controlled writer advanced the Policy, sent the stale revision exactly once, preserved the draft through 409, aligned PolicyAccess and the version directory on revision 2, then used a new request ID only after explicit re-review to publish one immutable nondefault version; the rejected command created no version, completion or Audit fact")
+	return nil
 }
 
 func runIAMPolicyMutationRecoveryConsoleBrowser(
