@@ -972,6 +972,36 @@ attempt 1: the exact head SHA, overall run and all nineteen jobs are
 not inherit an unexecuted browser journey, production fairness SLO or database
 HA claim.
 
+On 2026-10-25, test-owner-only source
+`024ff4d0c5ea56aa65f103392f901deb783bb619` reran the same authenticated A/B
+archives while adding the installed-browser AccessKey observation owned by
+FEAT-IAM-010. The Linux/amd64 test executable was built from that source with
+SHA-256 `a11e8d68a7a3ecc472e0291510d0c759cedc4e51e6d3fee5cde18d431b1662d3`;
+the signed runtime bytes, profile and trust document were unchanged. A fresh
+task-owned Docker 27.5.1 engine again had no external route, a private cgroup
+namespace, limits of 2 CPU/4 GiB/PIDs1024, and zero inner containers, images
+and volumes. Its host prerequisite `vm.max_map_count=1048576` matched the
+Verification worker contract; an earlier attempt at the host default 262144
+failed at Elasticsearch provider readiness before a product request and was
+discarded with its entire installation namespace rather than hidden by retry
+or a weakened readiness check.
+
+The clean effectful gate then passed in 993.40 seconds: fresh A installation,
+status/verify, APISIX IAM, the browser slice, SMTP/TOTP, Access Analyzer, four
+real managed-product protocol lifecycles, two application generations, Audit,
+protected backup, injected upgrade rollback, B preservation, explicit A
+rollback, selected recovery, AccessKey recovery fence, application rollback,
+capacity release and bounded support evidence all reached their named PASS
+points. The private mail configuration was removed, only that outer engine was
+stopped and started, and the read-only gate passed in 95.96 seconds with
+retained AccessKey retirement, fresh MFA login, tenant primary/revocation
+state, status/verify and `complete-offline-lifecycle`. The exact task engine,
+its inner installation and three task volumes were then removed; the separate
+4317 MOCK runtime was not touched. Browser interaction and its 401/403/409
+meaning are recorded only in FEAT-IAM-010. This supplemental run strengthens
+the current signed consumer evidence but still admits no new release bytes,
+cross-profile transition, arbitrary N-1, production HA or latency SLO.
+
 The authenticated Linux trees were archived in a separate `network=none`,
 read-only-root packaging container limited to 1 CPU/1 GiB/PIDs128. Each archive
 was independently extracted and compared with its source for bytes, object
