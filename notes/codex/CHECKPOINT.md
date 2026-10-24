@@ -47,15 +47,27 @@
   The default workflow compiles the opt-in browser test and runs its adjacent
   automated regressions; it does not replace the separately executed human-input
   browser journey.
+- Fixed `76b166b2d816be546c46cf2c9dc8203cdb36d344` reused the existing
+  policy-attachment recovery fixture in two fresh PostgreSQL 18.6 browser runs.
+  USER/CREATE passed in 109.88 seconds and ROLE/CREATE passed in 93.74 seconds:
+  each issued one write, observed UNKNOWN after the successful response was
+  lost, read the immutable original receipt once, issued zero post-loss writes
+  and passed the exact permission, unique outbox/Audit and complete-chain
+  checks. The Role run additionally closed the old RoleSession and required an
+  explicit fresh assumption. FEAT-IAM-010 owns the exact request, target and
+  attachment identities. Both disposable `--rm` containers were removed and
+  the task label had no residual container.
 
 ## Remaining boundaries
 
 - FEAT-IAM-010 owns remaining non-Deferred LIVE UI journeys. Backend, component,
   CI and signed-lifecycle evidence do not mark an unexecuted browser path green.
-  Foreground Session activity is now accepted; the next finite IAM-UI-03 gaps
-  are the existing USER/CREATE and ROLE/CREATE attachment-recovery browser
-  variants. They must reuse the current fixture and exact contracts rather than
-  introduce another UI or recovery model.
+  Foreground Session activity and the complete GROUP/USER/ROLE × CREATE/REVOKE
+  policy-attachment recovery matrix are now accepted. The next finite browser
+  gaps are the Account Root-credential recovery final submit/UNKNOWN path and
+  the managed-service termination final submit/UNKNOWN path; both must reuse
+  their existing owners and exact contracts rather than introduce another UI
+  or recovery model.
 - [Issue #6](https://github.com/xiak/matrix/issues/6) remains open: the current
   green four-product and signed runs do not retroactively establish the unique
   cause of the preserved Docker observation timeout.

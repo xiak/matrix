@@ -2116,6 +2116,14 @@ pointer input advanced only the exact current Session once. The precise runtime
 evidence and exclusions remain owned by FEAT-IAM-010; this does not broaden the
 release milestone or replace any other unexecuted LIVE journey.
 
+The same frozen UI and existing recovery owner were then exercised in two
+fresh real-browser runs for direct USER/CREATE and ROLE/CREATE policy
+attachments. Each run showed the UNKNOWN state after one lost successful
+response, read the exact immutable receipt once, returned to the authoritative
+detail and passed the independent permission, outbox and Audit-chain checks.
+FEAT-IAM-010 owns the exact identities and runtime evidence; no alternate
+relationship UI, retry contract or backend model was introduced.
+
 ### Current shared-navigation development evidence
 
 The current independent-read slice revalidates existing public contracts at
