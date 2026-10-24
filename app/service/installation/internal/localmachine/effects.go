@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"io"
+	"time"
 
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
@@ -17,6 +18,9 @@ type Effects struct {
 	runtime          dockerRuntime
 	entropy          io.Reader
 	verifier         installationVerifier
+	readinessWait    platformReadinessWait
+	readinessTimeout time.Duration
+	readinessPoll    time.Duration
 	projectInspector RecoveryProjectInspector
 }
 
@@ -24,6 +28,9 @@ func NewEffects(projectInspector RecoveryProjectInspector) *Effects {
 	return &Effects{
 		runtime: localDockerRuntime{}, entropy: rand.Reader,
 		verifier:         newHTTPInstallationVerifier(nil),
+		readinessWait:    waitForPlatformReadiness,
+		readinessTimeout: platformVerificationReadinessTimeout,
+		readinessPoll:    platformVerificationReadinessPollInterval,
 		projectInspector: projectInspector,
 	}
 }
@@ -266,7 +273,21 @@ func (effects *Effects) VerifyInstallation(
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	defer clear(plan.TrustBytes)
-	installation, _, _, err := inspectReadyInstalledPlatform(ctx, effects.runtime, plan)
+	readinessWait := effects.readinessWait
+	if readinessWait == nil {
+		readinessWait = waitForPlatformReadiness
+	}
+	readinessTimeout := effects.readinessTimeout
+	if readinessTimeout <= 0 {
+		readinessTimeout = platformVerificationReadinessTimeout
+	}
+	readinessPoll := effects.readinessPoll
+	if readinessPoll <= 0 {
+		readinessPoll = platformVerificationReadinessPollInterval
+	}
+	installation, _, _, err := inspectStableReadyInstalledPlatform(
+		ctx, effects.runtime, plan, readinessWait, readinessTimeout, readinessPoll,
+	)
 	if err != nil {
 		return err
 	}

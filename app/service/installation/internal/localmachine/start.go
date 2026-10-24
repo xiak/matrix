@@ -10,11 +10,24 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 )
 
-const platformStartWaitSeconds = "180"
+const (
+	platformStartWaitSeconds                  = "180"
+	platformVerificationReadinessTimeout      = 180 * time.Second
+	platformVerificationReadinessPollInterval = 2 * time.Second
+)
+
+type platformReadinessWait func(context.Context, time.Duration) error
+
+type platformObservationAssessment struct {
+	Exact          bool
+	Healthy        bool
+	HealthWaitable bool
+}
 
 type platformComposeExpectation struct {
 	Name     string                             `json:"name"`
@@ -369,6 +382,134 @@ func inspectReadyInstalledPlatform(
 	return inspectReadyPreparedPlatform(ctx, runtimeBoundary, installation, expectation)
 }
 
+// inspectStableReadyInstalledPlatform proves immutable release and topology
+// identity once, then tolerates only a bounded transient health transition.
+// It never invokes Compose convergence. Missing objects, configuration drift,
+// provider conflicts and uncertain observations still fail immediately.
+func inspectStableReadyInstalledPlatform(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+	wait platformReadinessWait,
+	timeout time.Duration,
+	pollInterval time.Duration,
+) (verifiedInstallation, platformComposeExpectation, platformProjectObservation, error) {
+	if ctx == nil || timeout <= 0 || pollInterval <= 0 || pollInterval > timeout {
+		return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("platform readiness observation is unavailable"),
+		)
+	}
+	installation, expectation, err := preparePlatformObservation(ctx, runtimeBoundary, plan)
+	if err != nil {
+		return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, err
+	}
+	if wait == nil {
+		wait = waitForPlatformReadiness
+	}
+	readinessContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var baseline *platformProjectObservation
+	for {
+		if readinessErr := readinessContext.Err(); readinessErr != nil {
+			return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{},
+				platformReadinessWindowError(ctx, readinessErr)
+		}
+		observation, exists, inspectErr := inspectOwnedPlatformProject(
+			readinessContext, runtimeBoundary, expectation,
+		)
+		if inspectErr != nil {
+			return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, inspectErr
+		}
+		assessment, assessErr := assessPlatformObservation(observation, exists, expectation)
+		if assessErr != nil {
+			return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, assessErr
+		}
+		if !assessment.Exact {
+			return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("platform differs from its fixed release topology"),
+			)
+		}
+		if baseline != nil && !samePlatformRuntimeIdentity(*baseline, observation) {
+			return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("platform runtime identity changed during verification"),
+			)
+		}
+		if assessment.Healthy {
+			return installation, expectation, observation, nil
+		}
+		if !assessment.HealthWaitable {
+			return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, errors.Join(
+				platformcommand.ErrEffectVerification,
+				errors.New("platform has a non-waitable runtime failure"),
+			)
+		}
+		if baseline == nil {
+			copy := observation
+			baseline = &copy
+		}
+		if waitErr := wait(readinessContext, pollInterval); waitErr != nil {
+			if readinessContext.Err() != nil {
+				return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{},
+					platformReadinessWindowError(ctx, readinessContext.Err())
+			}
+			return verifiedInstallation{}, platformComposeExpectation{}, platformProjectObservation{}, errors.Join(
+				platformcommand.ErrEffectUnavailable, waitErr,
+			)
+		}
+	}
+}
+
+func platformReadinessWindowError(ctx context.Context, readinessErr error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return errors.Join(
+		platformcommand.ErrEffectVerification,
+		readinessErr,
+		errors.New("platform health did not stabilize within its bounded verification window"),
+	)
+}
+
+func samePlatformRuntimeIdentity(
+	baseline platformProjectObservation,
+	current platformProjectObservation,
+) bool {
+	if len(baseline.Containers) != len(current.Containers) ||
+		len(baseline.Networks) != len(current.Networks) {
+		return false
+	}
+	for name, first := range baseline.Networks {
+		if current.Networks[name].ID != first.ID {
+			return false
+		}
+	}
+	for name, first := range baseline.Containers {
+		next, found := current.Containers[name]
+		if !found || next.ID != first.ID || next.RestartCount != first.RestartCount ||
+			next.State.StartedAt != first.State.StartedAt {
+			return false
+		}
+	}
+	return true
+}
+
+func waitForPlatformReadiness(ctx context.Context, duration time.Duration) error {
+	if ctx == nil || duration <= 0 {
+		return errors.New("platform readiness wait is invalid")
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func inspectReadyAuthenticatedPlatform(
 	ctx context.Context,
 	runtimeBoundary dockerRuntime,
@@ -483,14 +624,26 @@ func validatePlatformObservation(
 	exists bool,
 	expectation platformComposeExpectation,
 ) (bool, error) {
+	assessment, err := assessPlatformObservation(observation, exists, expectation)
+	if err != nil {
+		return false, err
+	}
+	return assessment.Exact && assessment.Healthy, nil
+}
+
+func assessPlatformObservation(
+	observation platformProjectObservation,
+	exists bool,
+	expectation platformComposeExpectation,
+) (platformObservationAssessment, error) {
 	if !exists {
-		return false, nil
+		return platformObservationAssessment{}, nil
 	}
 	networkIDs := make(map[string]string, len(observation.Networks))
 	for logicalName, inspection := range observation.Networks {
 		expected := expectation.Networks[logicalName]
 		if inspection.Internal != expected.Internal {
-			return false, errors.Join(
+			return platformObservationAssessment{}, errors.Join(
 				platformcommand.ErrEffectVerification,
 				errors.New("platform project network configuration drifted"),
 			)
@@ -498,22 +651,45 @@ func validatePlatformObservation(
 		networkIDs[logicalName] = inspection.ID
 	}
 
-	allReady := true
+	assessment := platformObservationAssessment{
+		Exact: len(observation.Containers) == len(expectation.Services) &&
+			len(observation.Networks) == len(expectation.Networks),
+		Healthy:        true,
+		HealthWaitable: true,
+	}
 	for serviceName, inspection := range observation.Containers {
 		expected := expectation.Services[serviceName]
 		if err := validatePlatformContainer(inspection, expected, networkIDs); err != nil {
-			return false, errors.Join(platformcommand.ErrEffectVerification, err)
+			return platformObservationAssessment{}, errors.Join(platformcommand.ErrEffectVerification, err)
 		}
 		if inspection.Config.Labels["com.docker.compose.config-hash"] != expected.ConfigHash {
-			allReady = false
+			assessment.Exact = false
 		}
 		if !inspection.State.Running || inspection.State.Status != "running" ||
-			inspection.State.Health == nil || inspection.State.Health.Status != "healthy" {
-			allReady = false
+			inspection.State.OOMKilled || inspection.State.Error != "" ||
+			inspection.State.ExitCode != 0 ||
+			!validPlatformStartedAt(inspection.State.StartedAt) || inspection.State.Health == nil {
+			assessment.Healthy = false
+			assessment.HealthWaitable = false
+			continue
+		}
+		switch inspection.State.Health.Status {
+		case "healthy":
+		case "starting", "unhealthy":
+			assessment.Healthy = false
+		default:
+			assessment.Healthy = false
+			assessment.HealthWaitable = false
 		}
 	}
-	return len(observation.Containers) == len(expectation.Services) &&
-		len(observation.Networks) == len(expectation.Networks) && allReady, nil
+	assessment.Healthy = assessment.Exact && assessment.Healthy
+	assessment.HealthWaitable = assessment.Exact && assessment.HealthWaitable
+	return assessment, nil
+}
+
+func validPlatformStartedAt(value string) bool {
+	startedAt, err := time.Parse(time.RFC3339Nano, value)
+	return err == nil && !startedAt.IsZero()
 }
 
 func inspectOwnedPlatformProject(

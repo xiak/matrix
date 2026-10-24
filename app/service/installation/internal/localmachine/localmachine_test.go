@@ -988,6 +988,299 @@ func TestOperationalEffectsObserveAndVerifyWithoutComposeConvergence(t *testing.
 	}
 }
 
+func TestVerifyInstallationWaitsForTransientHealthWithoutConvergence(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine operational effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	runtimeBoundary.unhealthyService = "paas-worker"
+	verifier := &recordingInstallationVerifier{}
+	waits := 0
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+		readinessWait: func(ctx context.Context, duration time.Duration) error {
+			waits++
+			if ctx == nil || duration != platformVerificationReadinessPollInterval {
+				t.Fatal("verification readiness wait changed")
+			}
+			runtimeBoundary.unhealthyService = ""
+			return nil
+		},
+	}
+	if err := effects.VerifyInstallation(context.Background(), installedPlanFrom(plan)); err != nil {
+		t.Fatalf("verify transiently unhealthy platform: %v", err)
+	}
+	if waits != 1 || verifier.calls != 1 || runtimeBoundary.composeCalls != 0 {
+		t.Fatalf(
+			"transient verification waits=%d verifier=%d compose=%d",
+			waits, verifier.calls, runtimeBoundary.composeCalls,
+		)
+	}
+}
+
+func TestVerifyInstallationRejectsPersistentHealthAfterBound(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine operational effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	runtimeBoundary.unhealthyService = "paas-worker"
+	verifier := &recordingInstallationVerifier{}
+	waits := 0
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+		readinessTimeout: 5 * time.Millisecond,
+		readinessPoll:    time.Millisecond,
+		readinessWait: func(ctx context.Context, duration time.Duration) error {
+			waits++
+			return waitForPlatformReadiness(ctx, duration)
+		},
+	}
+	err := effects.VerifyInstallation(context.Background(), installedPlanFrom(plan))
+	if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+		waits == 0 || verifier.calls != 0 ||
+		runtimeBoundary.composeCalls != 0 {
+		t.Fatalf(
+			"persistent verification err=%v waits=%d verifier=%d compose=%d",
+			err, waits, verifier.calls, runtimeBoundary.composeCalls,
+		)
+	}
+}
+
+func TestVerifyInstallationRejectsContainerRestartDuringHealthWait(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine operational effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	runtimeBoundary.unhealthyService = "paas-worker"
+	verifier := &recordingInstallationVerifier{}
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+		readinessWait: func(context.Context, time.Duration) error {
+			runtimeBoundary.unhealthyService = ""
+			runtimeBoundary.restartCounts = map[string]uint64{"paas-worker": 1}
+			runtimeBoundary.startedAt = map[string]string{
+				"paas-worker": "2026-08-26T03:05:05Z",
+			}
+			return nil
+		},
+	}
+	err := effects.VerifyInstallation(context.Background(), installedPlanFrom(plan))
+	if !errors.Is(err, platformcommand.ErrEffectVerification) || verifier.calls != 0 ||
+		runtimeBoundary.composeCalls != 0 {
+		t.Fatalf(
+			"restart verification err=%v verifier=%d compose=%d",
+			err, verifier.calls, runtimeBoundary.composeCalls,
+		)
+	}
+}
+
+func TestVerifyInstallationRejectsDriftDuringHealthWait(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine operational effects target Linux")
+	}
+	for _, test := range []struct {
+		name    string
+		mutate  func(*platformStartRuntime)
+		wantErr error
+	}{
+		{"configuration", func(value *platformStartRuntime) {
+			value.configHashDriftService = "paas-api"
+		}, platformcommand.ErrEffectVerification},
+		{"image", func(value *platformStartRuntime) {
+			value.imageDriftService = "paas-api"
+		}, platformcommand.ErrEffectConflict},
+		{"isolation", func(value *platformStartRuntime) {
+			value.resourceDriftService = "paas-worker"
+		}, platformcommand.ErrEffectVerification},
+		{"missing service", func(value *platformStartRuntime) {
+			value.removedContainers = map[string]bool{"paas-worker": true}
+		}, platformcommand.ErrEffectVerification},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan, expectation := configuredPlatformStartFixture(t)
+			runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+			runtimeBoundary.started = true
+			runtimeBoundary.unhealthyService = "paas-worker"
+			verifier := &recordingInstallationVerifier{}
+			waits := 0
+			effects := &Effects{
+				runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+				readinessWait: func(context.Context, time.Duration) error {
+					waits++
+					runtimeBoundary.unhealthyService = ""
+					test.mutate(runtimeBoundary)
+					return nil
+				},
+			}
+			err := effects.VerifyInstallation(context.Background(), installedPlanFrom(plan))
+			if !errors.Is(err, test.wantErr) || waits != 1 || verifier.calls != 0 ||
+				runtimeBoundary.composeCalls != 0 {
+				t.Fatalf(
+					"drift verification err=%v waits=%d verifier=%d compose=%d",
+					err, waits, verifier.calls, runtimeBoundary.composeCalls,
+				)
+			}
+		})
+	}
+}
+
+func TestSamePlatformRuntimeIdentityRejectsReplacement(t *testing.T) {
+	startedAt := "2026-08-26T03:04:05Z"
+	baseline := platformProjectObservation{
+		Containers: map[string]platformContainerInspection{
+			"paas-worker": {
+				ID: "container-a", RestartCount: 0,
+				State: platformContainerState{StartedAt: startedAt},
+			},
+		},
+		Networks: map[string]platformNetworkInspection{
+			"control": {ID: "network-a"},
+		},
+	}
+	if !samePlatformRuntimeIdentity(baseline, baseline) {
+		t.Fatal("unchanged runtime identity was rejected")
+	}
+	for _, test := range []struct {
+		name    string
+		current platformProjectObservation
+	}{
+		{"container replacement", platformProjectObservation{
+			Containers: map[string]platformContainerInspection{
+				"paas-worker": {
+					ID: "container-b", RestartCount: 0,
+					State: platformContainerState{StartedAt: startedAt},
+				},
+			},
+			Networks: baseline.Networks,
+		}},
+		{"network replacement", platformProjectObservation{
+			Containers: baseline.Containers,
+			Networks: map[string]platformNetworkInspection{
+				"control": {ID: "network-b"},
+			},
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if samePlatformRuntimeIdentity(baseline, test.current) {
+				t.Fatal("replacement runtime identity was accepted")
+			}
+		})
+	}
+}
+
+func TestVerifyInstallationRejectsNonWaitableRuntimeFailure(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine operational effects target Linux")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*platformStartRuntime)
+	}{
+		{"oom", func(value *platformStartRuntime) { value.oomService = "paas-worker" }},
+		{"runtime error", func(value *platformStartRuntime) { value.stateErrorService = "paas-worker" }},
+		{"unknown health", func(value *platformStartRuntime) { value.unknownHealthService = "paas-worker" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan, expectation := configuredPlatformStartFixture(t)
+			runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+			runtimeBoundary.started = true
+			test.mutate(runtimeBoundary)
+			verifier := &recordingInstallationVerifier{}
+			waits := 0
+			effects := &Effects{
+				runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+				readinessWait: func(context.Context, time.Duration) error {
+					waits++
+					return nil
+				},
+			}
+			err := effects.VerifyInstallation(context.Background(), installedPlanFrom(plan))
+			if !errors.Is(err, platformcommand.ErrEffectVerification) || waits != 0 ||
+				verifier.calls != 0 || runtimeBoundary.composeCalls != 0 {
+				t.Fatalf(
+					"runtime failure err=%v waits=%d verifier=%d compose=%d",
+					err, waits, verifier.calls, runtimeBoundary.composeCalls,
+				)
+			}
+		})
+	}
+}
+
+func TestVerifyInstallationRejectsTopologyDriftWithoutWaiting(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine operational effects target Linux")
+	}
+	for _, test := range []struct {
+		name    string
+		mutate  func(*platformStartRuntime)
+		wantErr error
+	}{
+		{"configuration", func(value *platformStartRuntime) { value.configHashDriftService = "paas-api" }, platformcommand.ErrEffectVerification},
+		{"image", func(value *platformStartRuntime) { value.imageDriftService = "paas-api" }, platformcommand.ErrEffectConflict},
+		{"isolation", func(value *platformStartRuntime) { value.resourceDriftService = "paas-worker" }, platformcommand.ErrEffectVerification},
+		{"missing service", func(value *platformStartRuntime) {
+			value.removedContainers = map[string]bool{"paas-worker": true}
+		}, platformcommand.ErrEffectVerification},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			plan, expectation := configuredPlatformStartFixture(t)
+			runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+			runtimeBoundary.started = true
+			test.mutate(runtimeBoundary)
+			verifier := &recordingInstallationVerifier{}
+			waits := 0
+			effects := &Effects{
+				runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+				readinessWait: func(context.Context, time.Duration) error {
+					waits++
+					return nil
+				},
+			}
+			err := effects.VerifyInstallation(context.Background(), installedPlanFrom(plan))
+			if !errors.Is(err, test.wantErr) || waits != 0 ||
+				verifier.calls != 0 || runtimeBoundary.composeCalls != 0 {
+				t.Fatalf(
+					"drift verification err=%v waits=%d verifier=%d compose=%d",
+					err, waits, verifier.calls, runtimeBoundary.composeCalls,
+				)
+			}
+		})
+	}
+}
+
+func TestVerifyInstallationCancellationStopsHealthWait(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine operational effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	runtimeBoundary.unhealthyService = "paas-worker"
+	verifier := &recordingInstallationVerifier{}
+	ctx, cancel := context.WithCancel(context.Background())
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
+		readinessWait: func(context.Context, time.Duration) error {
+			cancel()
+			return ctx.Err()
+		},
+	}
+	err := effects.VerifyInstallation(ctx, installedPlanFrom(plan))
+	if !errors.Is(err, context.Canceled) || verifier.calls != 0 ||
+		runtimeBoundary.composeCalls != 0 {
+		t.Fatalf(
+			"cancelled verification err=%v verifier=%d compose=%d",
+			err, verifier.calls, runtimeBoundary.composeCalls,
+		)
+	}
+}
+
 func TestAuthenticateInstalledPlanPinsSealedTrustAndRelease(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
@@ -2066,6 +2359,12 @@ type platformStartRuntime struct {
 	portDriftService          string
 	configHashDriftService    string
 	unhealthyService          string
+	imageDriftService         string
+	oomService                string
+	stateErrorService         string
+	unknownHealthService      string
+	restartCounts             map[string]uint64
+	startedAt                 map[string]string
 	failObservationAfterStart bool
 	composeCalls              int
 	observationsBeforeStart   int
@@ -3000,6 +3299,9 @@ func (runtimeBoundary *platformStartRuntime) inspectContainer(
 		labels["com.docker.compose.config-hash"] = strings.Repeat("b", 64)
 	}
 	imageID := expected.Image
+	if runtimeBoundary.imageDriftService == serviceName {
+		imageID = "sha256:" + strings.Repeat("f", 64)
+	}
 	mounts := make([]map[string]any, 0, len(expected.Volumes))
 	for _, mount := range expected.Volumes {
 		mounts = append(mounts, map[string]any{
@@ -3041,11 +3343,25 @@ func (runtimeBoundary *platformStartRuntime) inspectContainer(
 	if runtimeBoundary.unhealthyService == serviceName {
 		health = "unhealthy"
 	}
+	if runtimeBoundary.unknownHealthService == serviceName {
+		health = "unknown"
+	}
+	startedAt := "2026-08-26T03:04:05Z"
+	if replacement := runtimeBoundary.startedAt[serviceName]; replacement != "" {
+		startedAt = replacement
+	}
+	restartCount := runtimeBoundary.restartCounts[serviceName]
+	stateError := ""
+	if runtimeBoundary.stateErrorService == serviceName {
+		stateError = "runtime failure"
+	}
 	content, err := json.Marshal(map[string]any{
-		"Id": identity, "Image": imageID,
+		"Id": identity, "Image": imageID, "RestartCount": restartCount,
 		"Config": map[string]any{"Labels": labels, "User": user},
 		"State": map[string]any{
 			"Status": "running", "Running": true,
+			"StartedAt": startedAt, "OOMKilled": runtimeBoundary.oomService == serviceName,
+			"Error":  stateError,
 			"Health": map[string]any{"Status": health},
 		},
 		"HostConfig": map[string]any{
