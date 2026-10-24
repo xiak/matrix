@@ -2124,6 +2124,15 @@ detail and passed the independent permission, outbox and Audit-chain checks.
 FEAT-IAM-010 owns the exact identities and runtime evidence; no alternate
 relationship UI, retry contract or backend model was introduced.
 
+The existing Account-lifecycle recovery owner was likewise exercised in a
+fresh two-origin browser run for Root-credential recovery. One content-area
+submission lost its successful response, the second origin imported only the
+non-secret command summary, performed exactly one completion read, and then
+re-read the authoritative Account detail. The same Root identity, version
+advance, forced-password-change boundary, old-credential fencing and unique
+Audit chain all matched. FEAT-IAM-010 owns the precise runtime evidence; this
+does not add another recovery contract or accept another Account mutation.
+
 ### Current shared-navigation development evidence
 
 The current independent-read slice revalidates existing public contracts at

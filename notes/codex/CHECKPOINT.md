@@ -57,17 +57,26 @@
   explicit fresh assumption. FEAT-IAM-010 owns the exact request, target and
   attachment identities. Both disposable `--rm` containers were removed and
   the task label had no residual container.
+- Fixed `80ca44282225e119377c31909dbbc8b4e7a3f769` reused the existing Account
+  lifecycle recovery owner in a fresh PostgreSQL 18.6 two-origin browser run.
+  Root-credential recovery submitted once, rendered UNKNOWN after its successful
+  response was lost, exported only a non-secret command summary, performed one
+  completion GET from the second origin and issued zero post-loss writes. The
+  authoritative Account detail retained the same Root identity at version 2;
+  old credentials and Sessions were fenced, the replacement credential required
+  password change, and the unique completion/outbox/Audit chain passed. The
+  disposable `--rm` container had no task-labelled residue after the run.
 
 ## Remaining boundaries
 
 - FEAT-IAM-010 owns remaining non-Deferred LIVE UI journeys. Backend, component,
   CI and signed-lifecycle evidence do not mark an unexecuted browser path green.
   Foreground Session activity and the complete GROUP/USER/ROLE × CREATE/REVOKE
-  policy-attachment recovery matrix are now accepted. The next finite browser
-  gaps are the Account Root-credential recovery final submit/UNKNOWN path and
-  the managed-service termination final submit/UNKNOWN path; both must reuse
-  their existing owners and exact contracts rather than introduce another UI
-  or recovery model.
+  policy-attachment recovery matrix are now accepted, as is the Account
+  Root-credential recovery final submit/UNKNOWN path. The next finite browser
+  gap is managed-service termination final submit/UNKNOWN; it must reuse its
+  existing owner and exact contract rather than introduce another UI or recovery
+  model.
 - [Issue #6](https://github.com/xiak/matrix/issues/6) remains open: the current
   green four-product and signed runs do not retroactively establish the unique
   cause of the preserved Docker observation timeout.
