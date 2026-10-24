@@ -411,6 +411,7 @@ const (
 	personalSecurityBrowserFlowLifecycle        personalSecurityBrowserFlow = "LIFECYCLE"
 	personalSecurityBrowserFlowForcedEnrollment personalSecurityBrowserFlow = "FORCED_ENROLLMENT"
 	personalSecurityBrowserFlowRecovery         personalSecurityBrowserFlow = "RECOVERY"
+	personalSecurityBrowserFlowRecoveryRequired personalSecurityBrowserFlow = "RECOVERY_REQUIRED"
 )
 
 func selectedPersonalSecurityBrowserFlow(t *testing.T) personalSecurityBrowserFlow {
@@ -420,7 +421,8 @@ func selectedPersonalSecurityBrowserFlow(t *testing.T) personalSecurityBrowserFl
 		return personalSecurityBrowserFlowLifecycle
 	}
 	switch flow {
-	case personalSecurityBrowserFlowLifecycle, personalSecurityBrowserFlowForcedEnrollment, personalSecurityBrowserFlowRecovery:
+	case personalSecurityBrowserFlowLifecycle, personalSecurityBrowserFlowForcedEnrollment, personalSecurityBrowserFlowRecovery,
+		personalSecurityBrowserFlowRecoveryRequired:
 		return flow
 	default:
 		t.Fatalf("unsupported MATRIX_IAM_PERSONAL_SECURITY_BROWSER_FLOW=%q", flow)
@@ -1183,6 +1185,11 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			prepared := prepareIAMAuthenticatorRecoveryBrowser(t, ctx, admin, iamEndpoint, adminLogin.Credential)
 			sensitive = append(sensitive, prepared.sensitive...)
 			runIAMAuthenticatorRecoveryConsoleBrowser(t, ctx, admin, root, temporary, bootstrap,
+				iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, prepared, start)
+		case personalSecurityBrowserFlowRecoveryRequired:
+			prepared := prepareIAMRequiredAuthenticatorRecoveryBrowser(t, ctx, admin, iamEndpoint, adminLogin.Credential)
+			sensitive = append(sensitive, prepared.sensitive...)
+			runIAMRequiredAuthenticatorRecoveryConsoleBrowser(t, ctx, admin, root, temporary, bootstrap,
 				iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, prepared, start)
 		}
 		return
@@ -8758,12 +8765,15 @@ func prepareIAMPersonalSecurityBrowser(t *testing.T, iamEndpoint, platformBearer
 }
 
 type authenticatorRecoveryBrowserPreparation struct {
-	target           iamv1.User
-	homeHomonym      iamv1.User
-	recoveryCode     string
-	originalFactorID string
-	originalBatchID  string
-	sensitive        []string
+	target                  iamv1.User
+	homeHomonym             iamv1.User
+	recoveryCode            string
+	replacementRecoveryCode string
+	originalFactorID        string
+	originalBatchID         string
+	initialRecoveryID       string
+	initialPendingFactorID  string
+	sensitive               []string
 }
 
 // Recovery starts from a fully usable MFA identity, not from a synthetic row
@@ -8830,6 +8840,8 @@ func prepareIAMAuthenticatorRecoveryBrowser(
 		material := secret(code)
 		if index == 0 {
 			prepared.recoveryCode = material
+		} else if index == 1 {
+			prepared.replacementRecoveryCode = material
 		}
 	}
 	if err := database.QueryRow(ctx, `SELECT m.factor_id,b.id
@@ -8840,6 +8852,211 @@ func prepareIAMAuthenticatorRecoveryBrowser(
 		&prepared.originalFactorID, &prepared.originalBatchID,
 	); err != nil {
 		t.Fatalf("read authenticator-recovery browser baseline: %v", err)
+	}
+	return prepared
+}
+
+// Enabling an Account-wide MFA rule is a delegated IAM operation, not an
+// implicit Root capability. Exercise the same least-privilege operator path
+// used by the settings UI so recovery fixtures cannot accidentally widen the
+// Root identity or bypass policy evaluation.
+func enableBrowserAccountRequiredMFA(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	iamEndpoint string,
+	rootCredential string,
+	operatorName string,
+	operatorDisplayName string,
+	operatorEmail string,
+	requestPrefix string,
+) []string {
+	t.Helper()
+	sensitive := make([]string, 0, 16)
+	secret := func(value iamv1.Secret) string {
+		material := value.CopyBytes()
+		defer clear(material)
+		sensitive = append(sensitive, string(material))
+		return string(material)
+	}
+	call := func(method, path, bearer string, body any, want int, result any) processResponse {
+		t.Helper()
+		response := performJSON(t, method, iamEndpoint+path, bearer, body)
+		if response.Status != want {
+			t.Fatalf("%s Account MFA preparation %s %s status=%d want=%d body=%s",
+				requestPrefix, method, path, response.Status, want, response.Body)
+		}
+		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil {
+			t.Fatalf("%s Account MFA preparation returned an invalid %s response", requestPrefix, path)
+		}
+		return response
+	}
+
+	operator := createIAMUser(t, iamEndpoint, rootCredential, operatorName, operatorDisplayName,
+		initialReaderPassword, requestPrefix+"-operator-create")
+	var settingsPolicy iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", rootCredential, iamv1.CreatePolicyRequest{
+		DisplayName: operatorDisplayName + " settings", RequestID: requestPrefix + "-settings-policy-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead, iamv1.ActionIAMSecuritySettingsUpdate},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact,
+					ID: browserAccountID}}}}},
+	}, http.StatusCreated, &settingsPolicy)
+	createIAMPolicyAttachment(t, iamEndpoint, rootCredential, operator.ID, settingsPolicy.Policy.ID,
+		requestPrefix+"-settings-policy-attach")
+	operatorRealm := operatorName + "@" + browserAccountID
+	operatorInitial := loginIAM(t, iamEndpoint, operatorRealm, initialReaderPassword, requestPrefix+"-operator-initial")
+	sensitive = append(sensitive, operatorInitial.Credential)
+	changePasswordIAM(t, iamEndpoint, operatorInitial.Credential, initialReaderPassword,
+		changedReaderPassword, requestPrefix+"-operator-password")
+
+	var contact iamv1.NotificationContactVerification
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications", operatorInitial.Credential,
+		map[string]string{"email": operatorEmail, "password": changedReaderPassword, "requestId": requestPrefix + "-operator-contact"},
+		http.StatusOK, &contact)
+	contactCode := readProcessContactCode(t, ctx, database, contact)
+	sensitive = append(sensitive, contactCode)
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications/"+contact.ID+":confirm", operatorInitial.Credential,
+		map[string]string{"requestId": requestPrefix + "-operator-contact-confirm", "code": contactCode}, http.StatusOK, nil)
+
+	var enrollment iamv1.StartTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments", operatorInitial.Credential,
+		map[string]any{"requestId": requestPrefix + "-operator-totp-start", "password": changedReaderPassword,
+			"expectedFactorRevision": 1}, http.StatusOK, &enrollment)
+	if enrollment.Provisioning == nil {
+		t.Fatalf("%s Account MFA operator lacks TOTP provisioning", requestPrefix)
+	}
+	seed := secret(enrollment.Provisioning.Seed)
+	secret(enrollment.Provisioning.URI)
+	bindingCode, _ := processTOTPCode(t, ctx, database, seed, -1, true)
+	sensitive = append(sensitive, bindingCode)
+	var bound iamv1.ConfirmTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments/"+enrollment.Enrollment.ID+":confirm", operatorInitial.Credential,
+		map[string]string{"requestId": requestPrefix + "-operator-totp-confirm", "code": bindingCode}, http.StatusOK, &bound)
+	if iamv1.ValidateConfirmTOTPEnrollmentResponse(bound) != nil || bound.Enrollment.State != "CONFIRMED" || len(bound.RecoveryCodes) != 10 {
+		t.Fatalf("%s Account MFA operator returned an invalid TOTP completion", requestPrefix)
+	}
+	for _, code := range bound.RecoveryCodes {
+		secret(code)
+	}
+	qualified := loginIAMWithTOTP(t, ctx, database, iamEndpoint, operatorRealm, changedReaderPassword,
+		operator.ID, seed, requestPrefix+"-operator-qualified")
+	sensitive = append(sensitive, qualified.Credential)
+
+	var settings iamv1.AccountSecuritySettings
+	call(http.MethodGet, "/v1/account/security-settings", qualified.Credential, nil, http.StatusOK, &settings)
+	if iamv1.ValidateAccountSecuritySettings(settings) != nil || settings.AccountID != browserAccountID || settings.ResourceVersion != 1 ||
+		settings.Password == nil || settings.Session == nil || settings.AccessKeyNetwork == nil || settings.MFA.RequiredForUsers {
+		t.Fatalf("%s Account MFA preparation lacks the default complete settings", requestPrefix)
+	}
+	intent := iamv1.SecuritySettingsUpdateIntent{
+		ExpectedResourceVersion: settings.ResourceVersion,
+		MFA:                     iamv1.AccountMFASettings{RequiredForUsers: true},
+		Password:                settings.Password,
+		Session:                 settings.Session,
+		AccessKeyNetwork:        settings.AccessKeyNetwork,
+	}
+	var proof iamv1.StepUp
+	call(http.MethodPost, "/v1/auth/step-up", qualified.Credential, iamv1.StartStepUpRequest{
+		RequestID: requestPrefix + "-settings-update", Operation: iamv1.StepUpUpdateSecuritySettings,
+		ExpectedFactorRevision: 2, SecuritySettings: &intent,
+	}, http.StatusOK, &proof)
+	var consumed int64
+	if err := database.QueryRow(ctx, `SELECT last_consumed_step FROM iam.totp_authenticators
+		WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND state='ACTIVE'`,
+		browserAccountID, operator.ID, enrollment.Enrollment.ID).Scan(&consumed); err != nil {
+		t.Fatalf("read %s Account MFA operator TOTP watermark: %v", requestPrefix, err)
+	}
+	proofCode, _ := processTOTPCode(t, ctx, database, seed, consumed, false)
+	sensitive = append(sensitive, proofCode)
+	call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", qualified.Credential,
+		map[string]string{"requestId": requestPrefix + "-settings-proof", "password": changedReaderPassword, "code": proofCode},
+		http.StatusOK, &proof)
+	if proof.State != "PROVED" {
+		t.Fatalf("%s Account MFA settings proof was not established", requestPrefix)
+	}
+	var applied iamv1.UpdateAccountSecuritySettingsResponse
+	call(http.MethodPut, "/v1/account/security-settings", qualified.Credential, iamv1.UpdateAccountSecuritySettingsRequest{
+		RequestID: requestPrefix + "-settings-update", StepUpID: proof.ID,
+		ExpectedResourceVersion: settings.ResourceVersion, MFA: intent.MFA,
+		Password: *settings.Password, Session: *settings.Session, AccessKeyNetwork: *settings.AccessKeyNetwork,
+	}, http.StatusOK, &applied)
+	if applied.Outcome != "APPLIED" || applied.Change.Settings.ResourceVersion != 2 ||
+		!applied.Change.Settings.MFA.RequiredForUsers || !applied.Change.CallerSessionEnded {
+		t.Fatalf("%s Account MFA preparation did not enable the exact rule", requestPrefix)
+	}
+	call(http.MethodGet, "/v1/auth/me", qualified.Credential, nil, http.StatusUnauthorized, nil)
+	return sensitive
+}
+
+// Required recovery begins after the Account has enabled MFA and after one
+// real saved-code ceremony has already entered RECOVERY_REQUIRED. A fresh
+// browser cannot discover that first request ID or recover its one-time
+// provisioning, so it must explicitly supersede it with another saved code.
+func prepareIAMRequiredAuthenticatorRecoveryBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	iamEndpoint string,
+	platformBearer string,
+) authenticatorRecoveryBrowserPreparation {
+	t.Helper()
+	prepared := prepareIAMAuthenticatorRecoveryBrowser(t, ctx, database, iamEndpoint, platformBearer)
+	if prepared.replacementRecoveryCode == "" {
+		t.Fatal("required-recovery browser fixture lacks a second original recovery code")
+	}
+	secret := func(value iamv1.Secret) string {
+		material := value.CopyBytes()
+		defer clear(material)
+		prepared.sensitive = append(prepared.sensitive, string(material))
+		return string(material)
+	}
+	call := func(method, path, bearer string, body any, want int, result any) processResponse {
+		t.Helper()
+		response := performJSON(t, method, iamEndpoint+path, bearer, body)
+		if response.Status != want {
+			t.Fatalf("required-recovery preparation %s %s status=%d want=%d body=%s", method, path, response.Status, want, response.Body)
+		}
+		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil {
+			t.Fatalf("required-recovery preparation returned an invalid %s response", path)
+		}
+		return response
+	}
+
+	root := loginIAM(t, iamEndpoint, browserRootLoginName, changedReaderPassword, "required-recovery-root-login")
+	prepared.sensitive = append(prepared.sensitive, root.Credential)
+	prepared.sensitive = append(prepared.sensitive, enableBrowserAccountRequiredMFA(
+		t, ctx, database, iamEndpoint, root.Credential,
+		"browser.required.recovery.operator", "Browser required-recovery security operator",
+		"browser.required.recovery.operator@matrix.test", "required-recovery")...)
+
+	realm := browserUserLoginName + "@" + browserAccountID
+	var source iamv1.LoginResponse
+	call(http.MethodPost, "/v1/auth/login", "", map[string]string{
+		"loginName": realm, "password": changedDeveloperPassword, "requestId": "required-recovery-source-login",
+	}, http.StatusOK, &source)
+	if iamv1.ValidateLoginResponse(source) != nil || source.Outcome != iamv1.LoginChallengeRequired ||
+		source.Challenge.Purpose != "LOGIN" || source.Challenge.NextStep != "TOTP" {
+		t.Fatal("required-recovery source login issued a Session or bypassed its bound factor")
+	}
+	var started iamv1.StartAuthenticatorRecoveryResponse
+	call(http.MethodPost, "/v1/auth/challenges/"+source.Challenge.ID+":recover", "", map[string]string{
+		"requestId": "required-recovery-lost-start", "challengeCredential": secret(source.ChallengeCredential),
+		"recoveryCode": prepared.recoveryCode,
+	}, http.StatusOK, &started)
+	if iamv1.ValidateStartAuthenticatorRecoveryResponse(started) != nil || started.Recovery.State != "STARTED" ||
+		!started.Recovery.ExpiresAt.Equal(source.Challenge.ExpiresAt) {
+		t.Fatal("required-recovery preparation did not enter a real bounded recovery")
+	}
+	prepared.initialRecoveryID = started.Recovery.ID
+	secret(started.ChallengeCredential)
+	secret(started.Provisioning.Seed)
+	secret(started.Provisioning.URI)
+	if err := database.QueryRow(ctx, `SELECT factor_id FROM iam.authenticator_recoveries
+		WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND state='STARTED' AND revision=3`,
+		browserAccountID, prepared.target.ID, prepared.initialRecoveryID).Scan(&prepared.initialPendingFactorID); err != nil {
+		t.Fatalf("read required-recovery lost pending factor: %v", err)
 	}
 	return prepared
 }
@@ -8907,95 +9124,8 @@ func prepareIAMForcedEnrollmentBrowser(
 		initialDeveloperPassword, "forced-enrollment-target-initial")
 	changePasswordIAM(t, iamEndpoint, targetInitial.Credential, initialDeveloperPassword,
 		changedDeveloperPassword, "forced-enrollment-target-password")
-	operator := createIAMUser(t, iamEndpoint, root.Credential, operatorName,
-		"Browser forced-enrollment security operator", initialReaderPassword, "forced-enrollment-operator-create")
-	var settingsPolicy iamv1.PolicyDetail
-	call(http.MethodPost, "/v1/policies", root.Credential, iamv1.CreatePolicyRequest{
-		DisplayName: "Browser forced-enrollment security settings", RequestID: "forced-enrollment-settings-policy-create",
-		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
-			Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: iamv1.PolicyAllow,
-				Actions: []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead, iamv1.ActionIAMSecuritySettingsUpdate},
-				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact,
-					ID: browserAccountID}}}}},
-	}, http.StatusCreated, &settingsPolicy)
-	createIAMPolicyAttachment(t, iamEndpoint, root.Credential, operator.ID, settingsPolicy.Policy.ID,
-		"forced-enrollment-settings-policy-attach")
-	operatorRealm := operatorName + "@" + browserAccountID
-	operatorInitial := loginIAM(t, iamEndpoint, operatorRealm, initialReaderPassword, "forced-enrollment-operator-initial")
-	changePasswordIAM(t, iamEndpoint, operatorInitial.Credential, initialReaderPassword,
-		changedReaderPassword, "forced-enrollment-operator-password")
-
-	var contact iamv1.NotificationContactVerification
-	call(http.MethodPost, "/v1/auth/notification-contact/verifications", operatorInitial.Credential,
-		map[string]string{"email": operatorEmail, "password": changedReaderPassword, "requestId": "forced-enrollment-operator-contact"},
-		http.StatusOK, &contact)
-	contactCode := readProcessContactCode(t, ctx, database, contact)
-	call(http.MethodPost, "/v1/auth/notification-contact/verifications/"+contact.ID+":confirm", operatorInitial.Credential,
-		map[string]string{"requestId": "forced-enrollment-operator-contact-confirm", "code": contactCode}, http.StatusOK, nil)
-
-	var enrollment iamv1.StartTOTPEnrollmentResponse
-	call(http.MethodPost, "/v1/auth/totp/enrollments", operatorInitial.Credential,
-		map[string]any{"requestId": "forced-enrollment-operator-totp-start", "password": changedReaderPassword,
-			"expectedFactorRevision": 1}, http.StatusOK, &enrollment)
-	if enrollment.Provisioning == nil {
-		t.Fatal("forced-enrollment settings operator lacks TOTP provisioning")
-	}
-	seedBytes := enrollment.Provisioning.Seed.CopyBytes()
-	defer clear(seedBytes)
-	seed := string(seedBytes)
-	bindingCode, _ := processTOTPCode(t, ctx, database, seed, -1, true)
-	var bound iamv1.ConfirmTOTPEnrollmentResponse
-	call(http.MethodPost, "/v1/auth/totp/enrollments/"+enrollment.Enrollment.ID+":confirm", operatorInitial.Credential,
-		map[string]string{"requestId": "forced-enrollment-operator-totp-confirm", "code": bindingCode}, http.StatusOK, &bound)
-	if iamv1.ValidateConfirmTOTPEnrollmentResponse(bound) != nil || bound.Enrollment.State != "CONFIRMED" || len(bound.RecoveryCodes) != 10 {
-		t.Fatal("forced-enrollment settings operator returned an invalid TOTP completion")
-	}
-	clear(bound.RecoveryCodes)
-	qualified := loginIAMWithTOTP(t, ctx, database, iamEndpoint, operatorRealm, changedReaderPassword,
-		operator.ID, seed, "forced-enrollment-operator-qualified")
-
-	var settings iamv1.AccountSecuritySettings
-	call(http.MethodGet, "/v1/account/security-settings", qualified.Credential, nil, http.StatusOK, &settings)
-	if iamv1.ValidateAccountSecuritySettings(settings) != nil || settings.AccountID != browserAccountID || settings.ResourceVersion != 1 ||
-		settings.Password == nil || settings.Session == nil || settings.AccessKeyNetwork == nil || settings.MFA.RequiredForUsers {
-		t.Fatal("forced-enrollment preparation lacks the default complete Account security settings")
-	}
-	intent := iamv1.SecuritySettingsUpdateIntent{
-		ExpectedResourceVersion: settings.ResourceVersion,
-		MFA:                     iamv1.AccountMFASettings{RequiredForUsers: true},
-		Password:                settings.Password,
-		Session:                 settings.Session,
-		AccessKeyNetwork:        settings.AccessKeyNetwork,
-	}
-	var proof iamv1.StepUp
-	call(http.MethodPost, "/v1/auth/step-up", qualified.Credential, iamv1.StartStepUpRequest{
-		RequestID: "forced-enrollment-settings-update", Operation: iamv1.StepUpUpdateSecuritySettings,
-		ExpectedFactorRevision: 2, SecuritySettings: &intent,
-	}, http.StatusOK, &proof)
-	var consumed int64
-	if err := database.QueryRow(ctx, `SELECT last_consumed_step FROM iam.totp_authenticators
-		WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND state='ACTIVE'`,
-		browserAccountID, operator.ID, enrollment.Enrollment.ID).Scan(&consumed); err != nil {
-		t.Fatalf("read forced-enrollment settings operator TOTP watermark: %v", err)
-	}
-	proofCode, _ := processTOTPCode(t, ctx, database, seed, consumed, false)
-	call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", qualified.Credential,
-		map[string]string{"requestId": "forced-enrollment-settings-proof", "password": changedReaderPassword, "code": proofCode},
-		http.StatusOK, &proof)
-	if proof.State != "PROVED" {
-		t.Fatal("forced-enrollment Account settings proof was not established")
-	}
-	var applied iamv1.UpdateAccountSecuritySettingsResponse
-	call(http.MethodPut, "/v1/account/security-settings", qualified.Credential, iamv1.UpdateAccountSecuritySettingsRequest{
-		RequestID: "forced-enrollment-settings-update", StepUpID: proof.ID,
-		ExpectedResourceVersion: settings.ResourceVersion, MFA: intent.MFA,
-		Password: *settings.Password, Session: *settings.Session, AccessKeyNetwork: *settings.AccessKeyNetwork,
-	}, http.StatusOK, &applied)
-	if applied.Outcome != "APPLIED" || applied.Change.Settings.ResourceVersion != 2 ||
-		!applied.Change.Settings.MFA.RequiredForUsers || !applied.Change.CallerSessionEnded {
-		t.Fatal("forced-enrollment preparation did not apply the exact required-MFA Account setting")
-	}
-	call(http.MethodGet, "/v1/auth/me", qualified.Credential, nil, http.StatusUnauthorized, nil)
+	_ = enableBrowserAccountRequiredMFA(t, ctx, database, iamEndpoint, root.Credential,
+		operatorName, "Browser forced-enrollment security operator", operatorEmail, "forced-enrollment")
 	return target, homeHomonym
 }
 
@@ -9115,16 +9245,56 @@ func runIAMAuthenticatorRecoveryConsoleBrowser(
 	t.Log("authenticator-recovery browser fixture finished with an irreversibly consumed old recovery code, revoked old factor/batch, one-time new provisioning and recovery-code acknowledgement, mandatory reauthentication, normal MFA login, unchanged password obligation, realm isolation, zero implicit grants and a verified Account Audit chain; old-Session revocation and TCP response-loss recovery remain covered by the existing dual-IAM process gate")
 }
 
+func runIAMRequiredAuthenticatorRecoveryConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	bootstrap iamv1.BootstrapDocument,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	prepared authenticatorRecoveryBrowserPreparation,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-required-authenticator-recovery-finished")
+	recoveryCodePath := filepath.Join(temporary, "browser-required-authenticator-recovery-code")
+	writePersonalSecurityBrowserCode(t, recoveryCodePath, prepared.replacementRecoveryCode)
+	material := totpEnrollmentBrowserMaterial{
+		bindingCodePath: filepath.Join(temporary, "browser-required-authenticator-recovery-binding-code"),
+		loginCodePath:   filepath.Join(temporary, "browser-required-authenticator-recovery-login-code"),
+		userID:          prepared.target.ID,
+		contactWritten:  true,
+		ignoredFactorIDs: map[string]struct{}{
+			prepared.initialPendingFactorID: {},
+		},
+		codeSteps: make(map[string]int64, 2),
+	}
+	t.Logf("REQUIRED_AUTHENTICATOR_RECOVERY_BROWSER_FIXTURE url=%s/console/access/ finish=%s realm=%s@%s recoveryCode=%s bindingCode=%s loginCode=%s; Account MFA is required and the first recovery is already STARTED with its provisioning discarded: sign in with the changed developer password, enter the second saved recovery code, bind the replacement authenticator, save and acknowledge all ten new recovery codes, then reauthenticate and complete normal TOTP login before creating the marker",
+		server.URL, finish, browserUserLoginName, browserAccountID,
+		recoveryCodePath, material.bindingCodePath, material.loginCodePath)
+	waitForTOTPEnrollmentBrowserCompletion(t, ctx, database, ui, finish, bootstrap, "required-authenticator-recovery", &material)
+	assertBrowserRequiredAuthenticatorRecoveryFlow(t, ctx, database, iamEndpoint, auditEndpoint, paasEndpoint,
+		platformBearer, prepared, material.finalSeed)
+	t.Log("required-authenticator-recovery browser fixture finished from an Account-required RECOVERY_REQUIRED state by superseding the lost first ceremony, consuming exactly a second saved code, binding only the new factor, delivering one-time replacement codes, reauthenticating normally and preserving zero implicit grants plus the verified Account Audit chain; recovery-result and response-loss remain owned by the existing dual-IAM process gate")
+}
+
 type totpEnrollmentBrowserMaterial struct {
-	contactCodePath string
-	bindingCodePath string
-	loginCodePath   string
-	userID          iamv1.PrincipalID
-	finalSeed       string
-	contactWritten  bool
-	bindingWritten  bool
-	loginWritten    bool
-	codeSteps       map[string]int64
+	contactCodePath  string
+	bindingCodePath  string
+	loginCodePath    string
+	userID           iamv1.PrincipalID
+	finalSeed        string
+	contactWritten   bool
+	bindingWritten   bool
+	loginWritten     bool
+	ignoredFactorIDs map[string]struct{}
+	codeSteps        map[string]int64
 }
 
 func waitForTOTPEnrollmentBrowserCompletion(
@@ -9189,6 +9359,9 @@ func observeTOTPEnrollmentBrowserMaterial(
 	}
 	factors := readProcessBrowserTOTPFactors(t, ctx, database, bootstrap, material.userID)
 	for _, factor := range factors {
+		if _, ignored := material.ignoredFactorIDs[factor.id]; ignored {
+			continue
+		}
 		if factor.state == "PENDING" && !material.bindingWritten {
 			code, step := processTOTPCode(t, ctx, database, factor.seed, -1, true)
 			refreshBrowserSecurityCode(t, material.codeSteps, material.bindingCodePath, code, step)
@@ -11541,6 +11714,130 @@ func assertBrowserAuthenticatorRecoveryFlow(
 			return loginIAMWithTOTP(t, ctx, database, iamEndpoint,
 				browserUserLoginName+"@"+browserAccountID, changedDeveloperPassword,
 				created.ID, totpSeed, "authenticator-recovery-authoritative-login")
+		})
+}
+
+func assertBrowserRequiredAuthenticatorRecoveryFlow(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	prepared authenticatorRecoveryBrowserPreparation,
+	totpSeed string,
+) {
+	t.Helper()
+	if totpSeed == "" || prepared.originalFactorID == "" || prepared.originalBatchID == "" ||
+		prepared.initialRecoveryID == "" || prepared.initialPendingFactorID == "" {
+		t.Fatal("required-recovery browser baseline, lost ceremony or new factor observation is absent")
+	}
+	var settingsVersion uint64
+	var requiredForUsers bool
+	if err := database.QueryRow(ctx, `SELECT security_settings_version,mfa_required_for_users
+		FROM iam.accounts WHERE id=$1`, browserAccountID).Scan(&settingsVersion, &requiredForUsers); err != nil ||
+		settingsVersion != 2 || !requiredForUsers {
+		t.Fatalf("required-recovery changed or lost the Account MFA rule: version=%d required=%t err=%v",
+			settingsVersion, requiredForUsers, err)
+	}
+
+	var mustChangePassword bool
+	var enrollmentState, currentFactorID string
+	var factorRevision uint64
+	if err := database.QueryRow(ctx, `SELECT p.must_change_password,m.enrollment_state,m.revision,m.factor_id
+		FROM iam.principals p JOIN iam.user_mfa_states m ON (m.tenant_id,m.user_id)=(p.tenant_id,p.id)
+		WHERE p.tenant_id=$1 AND p.id=$2`, browserAccountID, prepared.target.ID).Scan(
+		&mustChangePassword, &enrollmentState, &factorRevision, &currentFactorID,
+	); err != nil || mustChangePassword || enrollmentState != "BOUND" || factorRevision != 5 ||
+		currentFactorID == "" || currentFactorID == prepared.originalFactorID || currentFactorID == prepared.initialPendingFactorID {
+		t.Fatalf("required recovery changed the password obligation or failed to bind only the second replacement: mustChange=%t enrollment=%q revision=%d factor=%q err=%v",
+			mustChangePassword, enrollmentState, factorRevision, currentFactorID, err)
+	}
+	var factors, activeFactors, revokedFactors, originalRevoked, lostPendingRevoked int
+	if err := database.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE state='ACTIVE'),count(*) FILTER(WHERE state='REVOKED'),
+		count(*) FILTER(WHERE id=$3 AND state='REVOKED'),count(*) FILTER(WHERE id=$4 AND state='REVOKED')
+		FROM iam.totp_authenticators WHERE tenant_id=$1 AND user_id=$2`,
+		browserAccountID, prepared.target.ID, prepared.originalFactorID, prepared.initialPendingFactorID).Scan(
+		&factors, &activeFactors, &revokedFactors, &originalRevoked, &lostPendingRevoked,
+	); err != nil || factors != 3 || activeFactors != 1 || revokedFactors != 2 || originalRevoked != 1 || lostPendingRevoked != 1 {
+		t.Fatalf("required recovery factors=%d active=%d revoked=%d originalRevoked=%d lostPendingRevoked=%d err=%v",
+			factors, activeFactors, revokedFactors, originalRevoked, lostPendingRevoked, err)
+	}
+
+	var completedRecoveryID, oldBatchID, recoveryFactorID, newBatchID, startRequestID, completionRequestID string
+	if err := database.QueryRow(ctx, `SELECT id,old_batch_id,factor_id,new_batch_id,request_id,completion_request_id
+		FROM iam.authenticator_recoveries WHERE tenant_id=$1 AND user_id=$2 AND state='COMPLETED'`,
+		browserAccountID, prepared.target.ID).Scan(&completedRecoveryID, &oldBatchID, &recoveryFactorID, &newBatchID,
+		&startRequestID, &completionRequestID); err != nil || completedRecoveryID == prepared.initialRecoveryID ||
+		oldBatchID != prepared.originalBatchID || recoveryFactorID != currentFactorID || newBatchID == "" ||
+		!strings.HasPrefix(startRequestID, "ui-authenticator-recovery-") ||
+		!strings.HasPrefix(completionRequestID, "ui-authenticator-recovery-confirm-") {
+		t.Fatalf("required recovery completion id=%q oldBatch=%q factor=%q newBatch=%q start=%q completion=%q err=%v",
+			completedRecoveryID, oldBatchID, recoveryFactorID, newBatchID, startRequestID, completionRequestID, err)
+	}
+	var initialState, initialRequestID, supersededBy string
+	if err := database.QueryRow(ctx, `SELECT state,request_id,superseded_by FROM iam.authenticator_recoveries
+		WHERE tenant_id=$1 AND user_id=$2 AND id=$3`, browserAccountID, prepared.target.ID, prepared.initialRecoveryID).Scan(
+		&initialState, &initialRequestID, &supersededBy,
+	); err != nil || initialState != "SUPERSEDED" || initialRequestID != "required-recovery-lost-start" || supersededBy != completedRecoveryID {
+		t.Fatalf("required recovery did not supersede the lost ceremony: state=%q request=%q supersededBy=%q err=%v",
+			initialState, initialRequestID, supersededBy, err)
+	}
+
+	var batches, activeBatches, revokedBatches, oldCodes, consumedOldCodes, newCodes, consumedNewCodes int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2),
+		(SELECT count(*) FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NULL),
+		(SELECT count(*) FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND revoked_at IS NOT NULL),
+		(SELECT count(*) FROM iam.mfa_recovery_codes WHERE tenant_id=$1 AND batch_id=$3),
+		(SELECT count(*) FROM iam.mfa_recovery_codes WHERE tenant_id=$1 AND batch_id=$3 AND consumed_at IS NOT NULL),
+		(SELECT count(*) FROM iam.mfa_recovery_codes WHERE tenant_id=$1 AND batch_id=$4),
+		(SELECT count(*) FROM iam.mfa_recovery_codes WHERE tenant_id=$1 AND batch_id=$4 AND consumed_at IS NOT NULL)`,
+		browserAccountID, prepared.target.ID, prepared.originalBatchID, newBatchID).Scan(
+		&batches, &activeBatches, &revokedBatches, &oldCodes, &consumedOldCodes, &newCodes, &consumedNewCodes,
+	); err != nil || batches != 2 || activeBatches != 1 || revokedBatches != 1 || oldCodes != 10 ||
+		consumedOldCodes != 2 || newCodes != 10 || consumedNewCodes != 0 {
+		t.Fatalf("required recovery batches=%d active=%d revoked=%d oldCodes=%d oldConsumed=%d newCodes=%d newConsumed=%d err=%v",
+			batches, activeBatches, revokedBatches, oldCodes, consumedOldCodes, newCodes, consumedNewCodes, err)
+	}
+
+	var activeMFA, activePassword, activeSessions int
+	if err := database.QueryRow(ctx, `SELECT
+		count(*) FILTER(WHERE status='ACTIVE' AND authentication_method='PASSWORD_TOTP' AND mfa_revision=5 AND security_settings_version=2),
+		count(*) FILTER(WHERE status='ACTIVE' AND authentication_method='PASSWORD'),
+		count(*) FILTER(WHERE status='ACTIVE')
+		FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2`, browserAccountID, prepared.target.ID).Scan(
+		&activeMFA, &activePassword, &activeSessions); err != nil || activeMFA != 1 || activePassword != 0 || activeSessions != 1 {
+		t.Fatalf("required recovery sessions activeMFA=%d activePassword=%d active=%d err=%v",
+			activeMFA, activePassword, activeSessions, err)
+	}
+	var sourceTOTP, sourceRecover, recoveryConsumed, recoveryCancelled, notices, startedFacts, uiStartedFacts, completedFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND purpose='LOGIN' AND next_step='TOTP' AND state='CONSUMED'),
+		(SELECT count(*) FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND purpose='LOGIN' AND next_step='RECOVER' AND state='CONSUMED'),
+		(SELECT count(*) FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND purpose='RECOVERY' AND next_step='ENROLLMENT' AND state='CONSUMED'),
+		(SELECT count(*) FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND purpose='RECOVERY' AND next_step='ENROLLMENT' AND state='CANCELLED'),
+		(SELECT count(*) FROM iam.security_notifications WHERE tenant_id=$1 AND user_id=$2 AND kind IN ('RECOVERY_STARTED','AUTHENTICATOR_RECOVERED')),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{actor,id}'=$2 AND event_document->>'action'='iam.authenticator.recovery-started'),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{actor,id}'=$2 AND event_document->>'action'='iam.authenticator.recovery-started' AND event_document->>'requestId' LIKE 'ui-authenticator-recovery-%'),
+		(SELECT count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{actor,id}'=$2 AND event_document->>'action'='iam.authenticator.recovered' AND event_document->>'requestId' LIKE 'ui-authenticator-recovery-confirm-%')`,
+		browserAccountID, prepared.target.ID).Scan(&sourceTOTP, &sourceRecover, &recoveryConsumed, &recoveryCancelled,
+		&notices, &startedFacts, &uiStartedFacts, &completedFacts); err != nil || sourceTOTP != 2 || sourceRecover != 1 ||
+		recoveryConsumed != 1 || recoveryCancelled != 1 || notices != 3 || startedFacts != 2 || uiStartedFacts != 1 || completedFacts != 1 {
+		t.Fatalf("required recovery challenges sourceTOTP=%d sourceRecover=%d recoveryConsumed=%d recoveryCancelled=%d notices=%d startedFacts=%d uiStartedFacts=%d completedFacts=%d err=%v",
+			sourceTOTP, sourceRecover, recoveryConsumed, recoveryCancelled, notices, startedFacts, uiStartedFacts, completedFacts, err)
+	}
+
+	assertBrowserIdentityFlowWithMemberLogin(t, ctx, database, iamEndpoint, auditEndpoint, paasEndpoint,
+		platformBearer, prepared.homeHomonym, func(created iamv1.User) loginResult {
+			if created.ID != prepared.target.ID {
+				t.Fatal("required-recovery browser assertion selected a different User")
+			}
+			waitForBrowserTOTPBudgetReopen(t, ctx, database, created.AccountID, created.ID)
+			return loginIAMWithTOTP(t, ctx, database, iamEndpoint,
+				browserUserLoginName+"@"+browserAccountID, changedDeveloperPassword,
+				created.ID, totpSeed, "required-recovery-authoritative-login")
 		})
 }
 
