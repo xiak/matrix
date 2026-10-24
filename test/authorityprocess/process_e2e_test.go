@@ -385,6 +385,7 @@ const (
 	authorityProcessServiceActivationBrowser
 	authorityProcessAccountLifecycleRecoveryBrowser
 	authorityProcessPolicyMutationRecoveryBrowser
+	authorityProcessPolicyVersionLifecycleBrowser
 	authorityProcessUserManagementRecoveryBrowser
 	authorityProcessGroupMembershipRecoveryBrowser
 	authorityProcessPolicyAttachmentRecoveryBrowser
@@ -575,6 +576,21 @@ func TestIAMPolicyMutationRecoveryConsoleBrowser(t *testing.T) {
 		t.Fatalf("Policy mutation recovery browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
 	}
 	testIndependentAuthorityProcesses(t, authorityProcessPolicyMutationRecoveryBrowser)
+}
+
+// This opt-in fixture proves the complete CUSTOMER Policy-version page
+// lifecycle without using an API-created draft: publishing creates an
+// immutable nondefault version, an explicit default switch changes the next
+// business decision for the same Session, and retirement removes only the old
+// nondefault version from the management directory while preserving history.
+func TestIAMPolicyVersionLifecycleConsoleBrowser(t *testing.T) {
+	if os.Getenv("MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER") != "1" {
+		t.Skip("set MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER=1 for the bounded LIVE Policy-version lifecycle browser fixture")
+	}
+	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
+		t.Fatalf("Policy-version lifecycle browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
+	}
+	testIndependentAuthorityProcesses(t, authorityProcessPolicyVersionLifecycleBrowser)
 }
 
 // This opt-in fixture proves that User profile/status recovery reads the
@@ -770,6 +786,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		mode == authorityProcessPersonalSecurityBrowser || mode == authorityProcessCommandRecoveryBrowser ||
 		mode == authorityProcessServiceActivationBrowser ||
 		mode == authorityProcessAccountLifecycleRecoveryBrowser || mode == authorityProcessPolicyMutationRecoveryBrowser ||
+		mode == authorityProcessPolicyVersionLifecycleBrowser ||
 		mode == authorityProcessUserManagementRecoveryBrowser || mode == authorityProcessGroupMembershipRecoveryBrowser ||
 		mode == authorityProcessPolicyAttachmentRecoveryBrowser ||
 		mode == authorityProcessGroupDeletionBrowser || mode == authorityProcessUserDeletionBrowser || mode == authorityProcessPasswordChangeBrowser ||
@@ -1222,6 +1239,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 	if mode == authorityProcessPolicyMutationRecoveryBrowser {
 		sensitive = append(sensitive, runIAMPolicyMutationRecoveryConsoleBrowser(
+			t, ctx, admin, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
+		)...)
+		return
+	}
+	if mode == authorityProcessPolicyVersionLifecycleBrowser {
+		sensitive = append(sensitive, runIAMPolicyVersionLifecycleConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
 		)...)
@@ -4589,6 +4613,316 @@ func runIAMAccountLifecycleRecoveryConsoleBrowser(
 	}
 	t.Logf("two isolated browser origins recovered one committed %s after its successful response was truncated; exactly one lifecycle mutation, one immutable completion, current Account state, credential effects and the verified installation Audit chain all matched", operation)
 	return sensitive
+}
+
+func runIAMPolicyVersionLifecycleConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+) []string {
+	t.Helper()
+	const (
+		policyName = "Browser Policy version lifecycle"
+		loginName  = "browser.policy.version.member"
+	)
+	const applicationID paasv1.ResourceID = "browser-policy-version-application"
+	document := iamv1.PolicyDocument{
+		LanguageVersion: iamv1.PolicyLanguageVersion,
+		Scope:           iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{
+			SID:     "read-one-application",
+			Effect:  iamv1.PolicyAllow,
+			Actions: []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{
+				Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: string(applicationID),
+			}},
+		}},
+	}
+	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer,
+		iamv1.CreatePolicyRequest{DisplayName: policyName, Document: document, RequestID: "browser-policy-version-create-v1"})
+	var created iamv1.PolicyDetail
+	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &created) != nil ||
+		iamv1.ValidatePolicyDetail(created) != nil || created.Policy.AccountID != "organization-process" ||
+		created.Policy.ResourceVersion != 1 || created.Policy.DefaultVersionID != created.Version.ID {
+		t.Fatalf("prepare Policy-version lifecycle target status=%d body=%s", createdResponse.Status, createdResponse.Body)
+	}
+	createPaaSApplication(t, paasEndpoint, ownerBearer, applicationID, string(applicationID),
+		"browser-policy-version-application-create", http.StatusCreated)
+	member := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser Policy version member",
+		initialDeveloperPassword, "browser-policy-version-member-create")
+	memberLogin := loginIAM(t, iamEndpoint, loginName+"@"+string(member.AccountID), initialDeveloperPassword,
+		"browser-policy-version-member-login")
+	changePasswordIAM(t, iamEndpoint, memberLogin.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "browser-policy-version-member-password")
+	attachment := createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, member.ID, created.Policy.ID,
+		"browser-policy-version-member-attachment")
+
+	readIdentity := func() iamv1.CurrentIdentity {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", memberLogin.Credential, nil)
+		var identity iamv1.CurrentIdentity
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &identity) != nil ||
+			iamv1.ValidateCurrentIdentity(identity) != nil || identity.Account.ID != member.AccountID ||
+			identity.User.ID != member.ID || len(identity.PolicySources) != 1 ||
+			identity.PolicySources[0].Kind != iamv1.PolicyGrantDirect ||
+			identity.PolicySources[0].Attachment.ID != attachment.ID || identity.PermissionBoundary.Policy != nil {
+			t.Fatalf("Policy-version member identity status=%d body=%s", response.Status, response.Body)
+		}
+		return identity
+	}
+	beforeIdentity := readIdentity()
+	getPaaSApplication(t, paasEndpoint, memberLogin.Credential, applicationID, http.StatusOK)
+
+	type decisionEvidence struct {
+		AttachmentID iamv1.PolicyAttachmentID     `json:"attachmentId"`
+		Version      iamv1.PolicyVersionReference `json:"version"`
+	}
+	readLatestDecision := func(allowed bool) (string, string, string, []decisionEvidence) {
+		t.Helper()
+		var id, body, policyProof string
+		if err := database.QueryRow(ctx, `SELECT id,document::text,policy_evidence::text
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND allowed=$3
+			AND action_name=$4 AND target_kind=$5 AND target_id=$6
+			ORDER BY decided_at DESC,id DESC LIMIT 1`, member.AccountID, member.ID, allowed,
+			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication, applicationID).
+			Scan(&id, &body, &policyProof); err != nil {
+			t.Fatal("read Policy-version business decision", err)
+		}
+		var evidence []decisionEvidence
+		if json.Unmarshal([]byte(policyProof), &evidence) != nil || len(evidence) != 1 ||
+			evidence[0].AttachmentID != attachment.ID || evidence[0].Version.PolicyID != created.Policy.ID {
+			t.Fatal("Policy-version business decision lost its direct attachment evidence")
+		}
+		return id, body, policyProof, evidence
+	}
+	allowDecisionID, allowDocument, allowProof, initialEvidence := readLatestDecision(true)
+	if initialEvidence[0].Version.VersionID != created.Version.ID ||
+		initialEvidence[0].Version.ContentDigest != created.Version.ContentDigest {
+		t.Fatal("initial business decision did not use the original default version")
+	}
+
+	type storedVersionEvidence struct {
+		Document, Canonical, Digest, Compilation string
+		Contract                                 int
+	}
+	readStoredVersion := func(id iamv1.PolicyVersionID) (storedVersionEvidence, bool) {
+		t.Helper()
+		var evidence storedVersionEvidence
+		var retiredAt sql.NullTime
+		if err := database.QueryRow(ctx, `SELECT document::text,canonical_document,content_digest,
+			contract_version,COALESCE(compilation::text,''),retired_at
+			FROM iam.policy_versions WHERE policy_id=$1 AND id=$2`, created.Policy.ID, id).
+			Scan(&evidence.Document, &evidence.Canonical, &evidence.Digest, &evidence.Contract,
+				&evidence.Compilation, &retiredAt); err != nil {
+			t.Fatal("read stored Policy version evidence", err)
+		}
+		return evidence, retiredAt.Valid
+	}
+	v1Evidence, v1Retired := readStoredVersion(created.Version.ID)
+	if v1Retired || v1Evidence.Digest != created.Version.ContentDigest {
+		t.Fatal("initial Policy version was not active and immutable")
+	}
+
+	wantedCapabilities := map[iamv1.Action]struct{}{
+		iamv1.ActionIAMPolicyUpdate: {}, iamv1.ActionIAMPolicyDelete: {},
+		iamv1.ActionIAMPolicyVersionList: {}, iamv1.ActionIAMPolicyVersionRead: {},
+		iamv1.ActionIAMPolicyVersionCreate: {}, iamv1.ActionIAMPolicyVersionDelete: {},
+		iamv1.ActionIAMPolicySetDefaultVersion: {},
+	}
+	readPolicy := func(revision uint64, defaultVersion iamv1.PolicyVersionID) iamv1.PolicyAccess {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID), ownerBearer, nil)
+		var access iamv1.PolicyAccess
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &access) != nil ||
+			iamv1.ValidatePolicyAccess(access) != nil || access.Detail.Policy.ResourceVersion != revision ||
+			access.Detail.Policy.DefaultVersionID != defaultVersion || access.Detail.Version.ID != defaultVersion ||
+			len(access.Capabilities) != len(wantedCapabilities) {
+			t.Fatalf("read Policy-version lifecycle PolicyAccess status=%d body=%s", response.Status, response.Body)
+		}
+		seen := map[iamv1.Action]struct{}{}
+		for _, capability := range access.Capabilities {
+			if _, ok := wantedCapabilities[capability.Action]; !ok || !capability.Available ||
+				capability.Resource != (iamv1.ResourceReference{Kind: iamv1.ResourcePolicy, ID: string(created.Policy.ID)}) {
+				t.Fatal("PolicyAccess did not expose the exact seven current POLICY capabilities")
+			}
+			seen[capability.Action] = struct{}{}
+		}
+		if len(seen) != len(wantedCapabilities) {
+			t.Fatal("PolicyAccess duplicated or omitted a current POLICY capability")
+		}
+		return access
+	}
+	listVersions := func(revision uint64, defaultVersion iamv1.PolicyVersionID, count int) iamv1.PolicyVersionList {
+		t.Helper()
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions", ownerBearer, nil)
+		var list iamv1.PolicyVersionList
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &list) != nil ||
+			iamv1.ValidatePolicyVersionList(list) != nil || list.Policy.ResourceVersion != revision ||
+			list.Policy.DefaultVersionID != defaultVersion || len(list.Items) != count {
+			t.Fatalf("read Policy-version lifecycle directory status=%d body=%s", response.Status, response.Body)
+		}
+		return list
+	}
+	readPolicy(1, created.Version.ID)
+	listVersions(1, created.Version.ID, 1)
+
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary,
+		iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
+	publishedMarker := filepath.Join(temporary, "browser-policy-version-lifecycle-published")
+	defaultedMarker := filepath.Join(temporary, "browser-policy-version-lifecycle-defaulted")
+	retiredMarker := filepath.Join(temporary, "browser-policy-version-lifecycle-retired")
+	browserPath := "/console/access/policies/?id=" + url.QueryEscape(string(created.Policy.ID))
+	t.Logf("POLICY_VERSION_LIFECYCLE_PUBLISH url=%s%s marker=%s policy=%s current=%s application=%s realm=admin; use the existing changed admin password, open 策略版本, publish exactly one new version by changing only the cloned statement effect from ALLOW to DENY, confirm the success view says the current default is still the opaque original version, return to the two-row directory, then create the marker",
+		server.URL, browserPath, publishedMarker, created.Policy.ID, created.Version.ID, applicationID)
+	waitForBrowserMarker(t, ctx, ui, publishedMarker, "page-published nondefault Policy version")
+
+	publishedAccess := readPolicy(2, created.Version.ID)
+	publishedList := listVersions(2, created.Version.ID, 2)
+	var publishedVersion *iamv1.PolicyVersion
+	for index := range publishedList.Items {
+		candidate := &publishedList.Items[index]
+		if candidate.ID != created.Version.ID {
+			if publishedVersion != nil {
+				t.Fatal("browser published more than one nondefault Policy version")
+			}
+			publishedVersion = candidate
+		}
+	}
+	if publishedVersion == nil || publishedVersion.ID == publishedAccess.Detail.Version.ID ||
+		len(publishedVersion.Document.Statements) != 1 || publishedVersion.Document.Statements[0].Effect != iamv1.PolicyDeny ||
+		!reflect.DeepEqual(publishedVersion.Document.Statements[0].Actions, []iamv1.Action{iamv1.ActionPaaSApplicationRead}) ||
+		!reflect.DeepEqual(publishedVersion.Document.Statements[0].Resources, document.Statements[0].Resources) {
+		t.Fatal("page-published version changed more than the requested effect or became default implicitly")
+	}
+	getPaaSApplication(t, paasEndpoint, memberLogin.Credential, applicationID, http.StatusOK)
+	_, _, _, postPublishEvidence := readLatestDecision(true)
+	if postPublishEvidence[0].Version.VersionID != created.Version.ID ||
+		postPublishEvidence[0].Version.ContentDigest != created.Version.ContentDigest {
+		t.Fatal("publishing a nondefault version changed current business authorization")
+	}
+
+	t.Logf("POLICY_VERSION_LIFECYCLE_SET_DEFAULT url=%s%s marker=%s policy=%s target=%s resource_version=2; use the opaque target row's action menu, explicitly set it as default once, confirm the table marks that exact row current, then create the marker",
+		server.URL, browserPath, defaultedMarker, created.Policy.ID, publishedVersion.ID)
+	waitForBrowserMarker(t, ctx, ui, defaultedMarker, "page-selected Policy default version")
+	readPolicy(3, publishedVersion.ID)
+	listVersions(3, publishedVersion.ID, 2)
+	getPaaSApplication(t, paasEndpoint, memberLogin.Credential, applicationID, http.StatusForbidden)
+	afterIdentity := readIdentity()
+	if afterIdentity.User.ResourceVersion != beforeIdentity.User.ResourceVersion ||
+		afterIdentity.PolicySources[0].Attachment.ResourceVersion != beforeIdentity.PolicySources[0].Attachment.ResourceVersion {
+		t.Fatal("default-version switch mutated the ordinary User or its direct attachment")
+	}
+	_, _, _, deniedEvidence := readLatestDecision(false)
+	if deniedEvidence[0].Version.VersionID != publishedVersion.ID ||
+		deniedEvidence[0].Version.ContentDigest != publishedVersion.ContentDigest {
+		t.Fatal("same Session denial did not use the newly selected default version")
+	}
+	var retainedAllowDocument, retainedAllowProof string
+	if err := database.QueryRow(ctx, `SELECT document::text,policy_evidence::text
+		FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`, member.AccountID, allowDecisionID).
+		Scan(&retainedAllowDocument, &retainedAllowProof); err != nil ||
+		retainedAllowDocument != allowDocument || retainedAllowProof != allowProof {
+		t.Fatal("default-version switch rewrote the historical Allow decision")
+	}
+
+	t.Logf("POLICY_VERSION_LIFECYCLE_RETIRE url=%s%s marker=%s policy=%s old_nondefault=%s resource_version=3; retire only the opaque old nondefault row, confirm the management directory contains exactly the current default row and no recovery action, then create the marker",
+		server.URL, browserPath, retiredMarker, created.Policy.ID, created.Version.ID)
+	waitForBrowserMarker(t, ctx, ui, retiredMarker, "page-retired old nondefault Policy version")
+	readPolicy(4, publishedVersion.ID)
+	finalList := listVersions(4, publishedVersion.ID, 1)
+	if finalList.Items[0].ID != publishedVersion.ID {
+		t.Fatal("retirement removed or replaced the current default version")
+	}
+	if response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions/"+string(created.Version.ID), ownerBearer, nil); response.Status != http.StatusForbidden {
+		t.Fatalf("retired version escaped the management concealment boundary: status=%d", response.Status)
+	}
+	response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions/"+string(publishedVersion.ID), ownerBearer, nil)
+	var retainedDefault iamv1.PolicyVersionDetail
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &retainedDefault) != nil ||
+		iamv1.ValidatePolicyVersionDetail(retainedDefault) != nil || retainedDefault.Version.ID != publishedVersion.ID ||
+		retainedDefault.Version.ContentDigest != publishedVersion.ContentDigest {
+		t.Fatalf("current default version changed after retirement status=%d body=%s", response.Status, response.Body)
+	}
+	retainedV1, v1NowRetired := readStoredVersion(created.Version.ID)
+	if !v1NowRetired || retainedV1 != v1Evidence {
+		t.Fatal("retirement erased or rewrote the immutable original version history")
+	}
+	var activeVersions, retiredVersions int
+	if err := database.QueryRow(ctx, `SELECT count(*) FILTER(WHERE retired_at IS NULL),count(*) FILTER(WHERE retired_at IS NOT NULL)
+		FROM iam.policy_versions WHERE policy_id=$1`, created.Policy.ID).Scan(&activeVersions, &retiredVersions); err != nil ||
+		activeVersions != 1 || retiredVersions != 1 {
+		t.Fatalf("Policy-version management slots active=%d retired=%d err=%v", activeVersions, retiredVersions, err)
+	}
+	var decisions, allows, denies int
+	if err := database.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE allowed),count(*) FILTER(WHERE NOT allowed)
+		FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND action_name=$3
+		AND target_kind=$4 AND target_id=$5`, member.AccountID, member.ID, iamv1.ActionPaaSApplicationRead,
+		iamv1.ResourceApplication, applicationID).Scan(&decisions, &allows, &denies); err != nil ||
+		decisions != 3 || allows != 2 || denies != 1 {
+		t.Fatalf("same-Session business decisions=%d allows=%d denies=%d err=%v", decisions, allows, denies, err)
+	}
+
+	requestIDs := map[auditv1.Action]string{}
+	for _, action := range []auditv1.Action{auditv1.ActionIAMPolicyVersionCreated,
+		auditv1.ActionIAMPolicyDefaultVersionSet, auditv1.ActionIAMPolicyVersionDeleted} {
+		var count int
+		var requestID string
+		if err := database.QueryRow(ctx, `SELECT count(*),COALESCE(min(event_document->>'requestId'),'')
+			FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'=$2
+			AND event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$3`,
+			created.Policy.AccountID, action, created.Policy.ID).Scan(&count, &requestID); err != nil || count != 1 ||
+			!strings.HasPrefix(requestID, "ui-policy-version-") {
+			t.Fatalf("Policy-version outbox action=%s count=%d request=%q err=%v", action, count, requestID, err)
+		}
+		for _, existing := range requestIDs {
+			if existing == requestID {
+				t.Fatal("different Policy-version commands reused one request identifier")
+			}
+		}
+		requestIDs[action] = requestID
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	for action, requestID := range requestIDs {
+		query := auditv1.QueryRecordsRequest{PageSize: 100, Action: action}
+		matches := 0
+		for {
+			page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+			for _, record := range page.Records {
+				if record.Event.RequestID != requestID {
+					continue
+				}
+				matches++
+				if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(created.Policy.AccountID) ||
+					record.Event.Actor.Type != auditv1.ActorUser || record.Event.Actor.ID != "principal-admin" ||
+					record.Event.Target.Kind != auditv1.TargetPolicy || record.Event.Target.ID != string(created.Policy.ID) ||
+					record.Event.Action != action || record.Event.Result != auditv1.ResultSucceeded || record.Event.IAMDecisionID == "" {
+					t.Fatal("Policy-version Audit fact changed actor, scope, target or result")
+				}
+			}
+			if page.NextCursor == "" {
+				break
+			}
+			query.Cursor = page.NextCursor
+		}
+		if matches != 1 {
+			t.Fatalf("Policy-version Audit action=%s request=%s matches=%d", action, requestID, matches)
+		}
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(created.Policy.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("Policy-version tenant Audit chain is incomplete: %#v", chain)
+	}
+	t.Log("one pure page lifecycle published an immutable nondefault DENY version without changing access, explicitly selected it so the same ordinary User Session changed from 200 to 403 on its next business request, retired only the old nondefault management row while preserving its immutable database history, and produced one POLICY-targeted created/default-set/deleted Audit fact each")
+	return []string{memberLogin.Credential}
 }
 
 func runIAMPolicyMutationRecoveryConsoleBrowser(
