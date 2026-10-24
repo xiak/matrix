@@ -44,6 +44,29 @@ func (client *edgeClient) authenticatorState(ctx context.Context, bearer []byte)
 	return result, nil
 }
 
+func (client *edgeClient) touchCurrentSession(
+	ctx context.Context,
+	bearer []byte,
+	accountID iamv1.AccountID,
+	userID iamv1.PrincipalID,
+	sessionID iamv1.SessionID,
+) (iamv1.SessionActivity, error) {
+	response, err := client.json(
+		ctx, http.MethodPost, "/api/iam/v1/auth/sessions/current:touch", bearer, nil, nil, http.StatusOK,
+	)
+	if err != nil {
+		return iamv1.SessionActivity{}, err
+	}
+	defer clear(response.body)
+	var result iamv1.SessionActivity
+	if response.header.Get("Cache-Control") != "no-store" || decodeOne(response.body, &result) != nil ||
+		iamv1.ValidateSessionActivity(result) != nil || result.AccountID != accountID ||
+		result.UserID != userID || result.SessionID != sessionID {
+		return iamv1.SessionActivity{}, errors.New("IAM session activity response failed")
+	}
+	return result, nil
+}
+
 func (client *edgeClient) authenticatorBearerRejected(ctx context.Context, bearer []byte) error {
 	response, err := client.json(
 		ctx, http.MethodGet, "/api/iam/v1/auth/authenticators", bearer, nil, nil, http.StatusUnauthorized,
@@ -301,7 +324,7 @@ func (value *gate) verifySignedMFA(
 		}
 		clear(notice)
 		result = mfaRetention{
-			User: user, Password: append([]byte(nil), password...), Seed: seed,
+			User: user, SessionID: authenticated.Session.ID, Password: append([]byte(nil), password...), Seed: seed,
 			Credential: credential, Contact: contact, State: bound, LastConsumedStep: loginStep,
 		}
 		return nil
@@ -331,6 +354,16 @@ func (value *gate) assertMFARetention(ctx context.Context, authenticationRecover
 	}
 	retained := &value.retainedIAM.MFA
 	if !authenticationRecovered {
+		// Ordinary authenticated reads intentionally do not advance the idle
+		// waterline. This long-running lifecycle client is still active at each
+		// release checkpoint, so exercise the same explicit foreground touch as
+		// the console before asserting that upgrade or rollback retained MFA.
+		_, err := value.edge.touchCurrentSession(
+			ctx, retained.Credential, retained.User.AccountID, retained.User.ID, retained.SessionID,
+		)
+		if err != nil {
+			return fail("signed-mfa-retained-session-touch")
+		}
 		state, err := value.edge.authenticatorState(ctx, retained.Credential)
 		if err != nil || !sameAuthenticatorState(state, retained.State) {
 			return fail("signed-mfa-retained-session")
@@ -378,7 +411,8 @@ func (value *gate) assertMFARetention(ctx context.Context, authenticationRecover
 }
 
 func validMFARetention(value mfaRetention) bool {
-	return iamv1.ValidateUser(value.User) == nil && len(value.Password) != 0 && len(value.Seed) != 0 &&
+	return iamv1.ValidateUser(value.User) == nil && iamv1.ValidateID("session ID", string(value.SessionID)) == nil &&
+		len(value.Password) != 0 && len(value.Seed) != 0 &&
 		len(value.Credential) != 0 && value.LastConsumedStep >= 0 &&
 		iamv1.ValidateNotificationContact(value.Contact) == nil && value.Contact.State == "VERIFIED" &&
 		value.Contact.AccountID == value.User.AccountID && value.Contact.UserID == value.User.ID &&

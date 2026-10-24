@@ -65,6 +65,7 @@ type policyAttachmentChangeRetention struct {
 // from database rows or a still-valid bearer.
 type mfaRetention struct {
 	User             iamv1.User
+	SessionID        iamv1.SessionID
 	Password         []byte
 	Seed             []byte
 	Credential       []byte

@@ -804,6 +804,60 @@ func TestEdgeClientChecksSuccessAndProblemMediaTypes(t *testing.T) {
 	}
 }
 
+func TestEdgeClientTouchesOnlyThePossessedCurrentSession(t *testing.T) {
+	now := time.Date(2026, time.October, 24, 1, 2, 3, 456000000, time.UTC)
+	want := iamv1.SessionActivity{
+		APIVersion: iamv1.APIVersion, Kind: "SessionActivity",
+		SessionID: "session-phase1", AccountID: "account-phase1", UserID: "principal-phase1",
+		LastActivityAt: now, IdleExpiresAt: now.Add(30 * time.Minute), AbsoluteExpiresAt: now.Add(8 * time.Hour),
+	}
+	for _, check := range []struct {
+		name              string
+		status            int
+		responseMediaType string
+		noStore           bool
+		body              iamv1.SessionActivity
+		valid             bool
+	}{
+		{name: "explicit foreground touch", status: http.StatusOK, responseMediaType: "application/json", noStore: true, body: want, valid: true},
+		{name: "revoked session rejected", status: http.StatusUnauthorized, responseMediaType: "application/problem+json"},
+		{name: "wrong session rejected", status: http.StatusOK, responseMediaType: "application/json", noStore: true,
+			body: func() iamv1.SessionActivity { result := want; result.SessionID = "session-other"; return result }()},
+		{name: "cacheable activity rejected", status: http.StatusOK, responseMediaType: "application/json", body: want},
+		{name: "invalid activity rejected", status: http.StatusOK, responseMediaType: "application/json", noStore: true, body: iamv1.SessionActivity{}},
+	} {
+		t.Run(check.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.Method != http.MethodPost || request.URL.Path != "/api/iam/v1/auth/sessions/current:touch" ||
+					request.Header.Get("Authorization") != "Bearer fixture-bearer" || request.ContentLength != 0 {
+					response.Header().Set("Content-Type", "application/problem+json")
+					response.WriteHeader(http.StatusBadRequest)
+					_, _ = response.Write([]byte(`{}`))
+					return
+				}
+				response.Header().Set("Content-Type", check.responseMediaType)
+				if check.noStore {
+					response.Header().Set("Cache-Control", "no-store")
+				}
+				response.WriteHeader(check.status)
+				_ = json.NewEncoder(response).Encode(check.body)
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			got, err := client.touchCurrentSession(
+				context.Background(), []byte("fixture-bearer"), want.AccountID, want.UserID, want.SessionID,
+			)
+			if (err == nil) != check.valid {
+				t.Fatalf("session touch accepted=%t, want %t", err == nil, check.valid)
+			}
+			if check.valid && got != want {
+				t.Fatalf("session activity = %#v, want %#v", got, want)
+			}
+		})
+	}
+}
+
 func TestEdgeClientReadsCurrentAccessAnalyzerDetail(t *testing.T) {
 	now := time.Date(2026, time.October, 23, 1, 2, 3, 456000000, time.UTC)
 	analyzer := iamv1.AccessAnalyzer{
