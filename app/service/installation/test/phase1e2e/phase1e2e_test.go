@@ -78,6 +78,11 @@ func TestOfflinePhase1Lifecycle(t *testing.T) {
 // This is a whole-run observation bound, not a product latency promise or a
 // replacement for the five-minute recovery bound after a real injected fault.
 // A slower acceptance host must opt in explicitly; no phase resets the budget.
+// The ceiling covers the gate's five real platform transitions plus its mail,
+// managed-product, retained-state, and support assertions while keeping one
+// bounded run below two hours; every existing operation-local bound remains.
+const maximumLifecycleObservationBudget = 90 * time.Minute
+
 func lifecycleObservationBudget(raw string, available time.Duration) (time.Duration, error) {
 	budget := 30 * time.Minute
 	if raw != "" {
@@ -87,7 +92,7 @@ func lifecycleObservationBudget(raw string, available time.Duration) (time.Durat
 			return 0, fail("lifecycle-observation-budget")
 		}
 	}
-	if budget < time.Minute || budget > time.Hour || available <= budget+time.Minute {
+	if budget < time.Minute || budget > maximumLifecycleObservationBudget || available <= budget+time.Minute {
 		return 0, fail("lifecycle-observation-budget")
 	}
 	return budget, nil
@@ -181,16 +186,17 @@ func TestLifecycleObservationBudget(t *testing.T) {
 	}{
 		{"default stays thirty minutes", "", 35 * time.Minute, 30 * time.Minute},
 		{"explicit slower-host budget", "50m", 55 * time.Minute, 50 * time.Minute},
-		{"maximum remains bounded", "1h", 65 * time.Minute, time.Hour},
+		{"explicit cold-host budget", "75m", 80 * time.Minute, 75 * time.Minute},
+		{"maximum remains bounded", "90m", 95 * time.Minute, 90 * time.Minute},
 		{"reject missing test deadline", "", 0, 0},
 		{"reject expired test deadline", "", -time.Second, 0},
 		{"reserve teardown time", "30m", 31 * time.Minute, 0},
 		{"cannot exceed caller deadline", "50m", 35 * time.Minute, 0},
-		{"reject invalid duration", "unlimited", 65 * time.Minute, 0},
-		{"reject zero", "0", 65 * time.Minute, 0},
-		{"reject negative", "-1m", 65 * time.Minute, 0},
-		{"reject subminute", "59s", 65 * time.Minute, 0},
-		{"reject above maximum", "61m", 65 * time.Minute, 0},
+		{"reject invalid duration", "unlimited", 95 * time.Minute, 0},
+		{"reject zero", "0", 95 * time.Minute, 0},
+		{"reject negative", "-1m", 95 * time.Minute, 0},
+		{"reject subminute", "59s", 95 * time.Minute, 0},
+		{"reject above maximum", "91m", 100 * time.Minute, 0},
 	} {
 		t.Run(scenario.name, func(t *testing.T) {
 			got, err := lifecycleObservationBudget(scenario.raw, scenario.available)
