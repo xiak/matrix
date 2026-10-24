@@ -13,6 +13,10 @@
 - UX/UI remains owned by the UX engineer. This branch consumes the frozen
   deterministic export; do not create a parallel frontend or infer LIVE browser
   acceptance from the signed package.
+- The UI owner has reconciled FEAT-007 and its adoption record to the current
+  four-product release and fixed the foreground-Session consumer at
+  `8fbf2fcc` plus deterministic export `3ec28ae6`. The formal release consumes
+  the identical `093b29dee` UI tree and `matrix-a88a124cebcd3748a05e` build ID.
 
 ## Accepted fixed evidence
 
@@ -36,6 +40,9 @@
 
 - FEAT-IAM-010 owns remaining non-Deferred LIVE UI journeys. Backend, component,
   CI and signed-lifecycle evidence do not mark an unexecuted browser path green.
+  The immediate IAM-UI-02 gap is a real-browser foreground-activity gate: one
+  trusted interaction touches the exact current Session, passive/background
+  events do not, and an untouched comparison Session still expires.
 - [Issue #6](https://github.com/xiak/matrix/issues/6) remains open: the current
   green four-product and signed runs do not retroactively establish the unique
   cause of the preserved Docker observation timeout.

@@ -1,4 +1,4 @@
-# FEAT-007: Control-plane console and PostgreSQL service activation
+# FEAT-007: Control-plane console and managed-service activation
 
 - Status: In progress
 - Target release: Matrix PaaS Phase 2
@@ -10,15 +10,18 @@
 
 Deliver an authenticated browser control plane in which an organization user
 can enter with a login name and password, inspect the platform, activate a
-bounded PostgreSQL quota, and install one PostgreSQL service into an
-operator-configured local region. The same accepted release must carry the UI,
-managed-service authority, fixed PostgreSQL artifact, local provisioner, and
-real-runtime evidence; a visual mock or browser-only order is not acceptance.
+bounded quota for one of the published managed products, and install that
+service into an operator-configured local region. The same accepted release
+must carry the UI, managed-service authority, fixed product artifacts, local
+provisioners, and real-runtime evidence; a visual mock or browser-only order is
+not acceptance.
 
 This is the smallest enterprise target for the requested public-cloud-style
-console. It contains one real offering and one thin infrastructure profile.
-It does not invent payment, invoices, public-cloud credentials, MySQL, ELK, or
-generic provider schemas before a real second implementation exists.
+console. The current release contains four code-owned offerings—PostgreSQL 18,
+MySQL 8.4, Elasticsearch 8.19 and RabbitMQ 4.1—on one thin infrastructure
+profile. It does not invent payment, invoices, public-cloud credentials,
+caller-selected images, provider-native specifications, or a generic provider
+schema beyond those real implementations.
 
 ## Product journey
 
@@ -50,18 +53,19 @@ generic provider schemas before a real second implementation exists.
 3. The authenticated console shows an overview, service catalog, quota,
    service installations, and local-region configuration allowed by the
    user's fixed IAM role.
-4. The catalog exposes one available offering, `POSTGRESQL`, with server-owned
-   artifact and installation policy. MySQL and ELK are absent, not disabled
-   fake products.
+4. The catalog exposes the four available offerings `postgresql-18`,
+   `mysql-8.4`, `elasticsearch-8.19` and `rabbitmq-4.1`, each with a
+   server-owned artifact and installation policy. Products without a real
+   implementation are absent rather than rendered as disabled promises.
 5. A user activates one allowed quota shape. This is a durable product
    entitlement, not a simulated monetary payment. The request accepts no
    caller price, currency, discount, invoice, or payment result.
 6. A user selects an active quota and an eligible local region, names the
    service, reviews the exact resources, and submits an idempotent installation
    command.
-7. The managed-service authority reserves quota atomically, provisions the
-   fixed PostgreSQL service asynchronously, and exposes normalized progress.
-   A failed installation cannot silently consume or duplicate quota.
+7. The managed-service authority reserves quota atomically, invokes the fixed
+   provisioner for the selected offering asynchronously, and exposes normalized
+   progress. A failed installation cannot silently consume or duplicate quota.
 8. The ready result exposes a stable service endpoint and an opaque
    platform-owned credential reference. Passwords, machine credentials,
    Docker details, host paths, and provider-native errors never enter the UI
@@ -189,18 +193,18 @@ generic provider schemas before a real second implementation exists.
 | User, password credential, session, organization, role, authorization decision | `iam` |
 | Offering, quota entitlement, quota consumption, service installation, provisioning state | `managedservice` |
 | Local region registration and normalized machine capability | `managedservice` through its local-infrastructure port |
-| PostgreSQL lifecycle effect and credential-file custody | managed-service local provisioner adapter |
+| Managed-product lifecycle effects and credential-file custody | fixed managed-service product provisioner adapters |
 | Application, ApplicationRevision, Deployment, application placement, and application execution | `apphosting` |
 | Browser composition, navigation, session memory, order draft, and result rendering | `app/ui/paas` |
 | Immutable accepted security and business facts | `audit` |
 | Offline artifact inventory, installation, upgrade, rollback, backup, and recovery | `installation` |
 
 `managedservice` is a distinct bounded context and API inside the Phase 2
-modular monolith. It does not add PostgreSQL, MySQL, ELK, volumes, credentials,
-or arbitrary native specifications to the Application PaaS workload contract.
-Its use cases own transactions; its domain stays provider-independent except
-for the one code-owned PostgreSQL offering; persistence and local execution
-remain adapters.
+modular monolith. It does not add PostgreSQL, MySQL, Elasticsearch, RabbitMQ,
+volumes, credentials, or arbitrary native specifications to the Application
+PaaS workload contract. Its use cases own transactions; its shared domain
+stays provider-independent while each of the four code-owned offerings has a
+fixed adapter; persistence and local execution remain adapters.
 
 The UI imports only versioned public contracts. It never imports a service
 `internal` package, receives an internal service credential, proxies a user
@@ -220,9 +224,10 @@ credential through its Go process, or calls the APISIX Admin API.
 - server-owned installation profile version;
 - availability state.
 
-Phase 2 initially admits exactly one available entry: PostgreSQL. The browser
-cannot submit an image, digest, command, Compose document, port, volume,
-environment value, extension, superuser name, or provider-native option.
+The current release admits exactly four available entries: PostgreSQL 18,
+MySQL 8.4, Elasticsearch 8.19 and RabbitMQ 4.1. The browser cannot submit an
+image, digest, command, Compose document, port, volume, environment value,
+extension, superuser name, or provider-native option.
 
 ### Quota entitlement
 
@@ -269,14 +274,14 @@ transaction, then returns `202 Accepted`. The worker acquires a bounded lease
 and fencing token, reconciles uncertain effects before retry, and records a
 sanitized Audit outbox fact in the owning transaction.
 
-The local PostgreSQL provisioner uses only the release-owned digest-pinned
+Each local product provisioner uses only its release-owned digest-pinned
 artifact and server-generated restrictive credential material. It performs no
 pull or build, never executes caller input, and owns only objects labeled with
 the exact installation identity. Persistent storage is installation-owned and
-must survive process restart and compatible platform upgrade. The outer
-installation-owned directory remains restrictive while its PostgreSQL 18 bind
-mount root preserves the fixed image's sticky traversal contract; PGDATA below
-that root remains owned and confined by PostgreSQL. A terminal
+must survive process restart and compatible platform upgrade. Product-specific
+filesystem and process constraints stay inside the corresponding adapter; for
+PostgreSQL 18 the bind-mount root preserves the fixed image's sticky traversal
+contract and PGDATA remains owned and confined by PostgreSQL. A terminal
 provisioning failure releases only the reservation proven to belong to that
 installation; retry or equal command replay cannot create a second instance.
 
@@ -2057,11 +2062,11 @@ request.
    selection, installation submit, and bounded Operation polling against the
    real services without a mock or privileged browser path.
 
-### Gate C: local PostgreSQL and release consumption
+### Gate C: local managed products and release consumption
 
-1. From an empty owned local region, the worker installs the fixed PostgreSQL
-   artifact with no registry, pull, build, arbitrary command, plaintext
-   manifest secret, host-path selector, or unrelated Docker mutation.
+1. From an empty owned local region, the worker installs each admitted product
+   from its fixed artifact with no registry, pull, build, arbitrary command,
+   plaintext manifest secret, host-path selector, or unrelated Docker mutation.
 2. Readiness proves the exact engine/version, durable storage, quota identity,
    endpoint reference, credential reference, and Audit facts. Restart preserves
    data and reconciles an interrupted or uncertain create without duplication.
@@ -2082,6 +2087,27 @@ stale-term, donor-dependency, tenant-authority, secret/path-leakage, browser,
 and `git diff --check` gates must pass on the same committed worktree.
 
 ## Implementation status
+
+### Current release-consumer milestone
+
+The current release consumes the frozen UX/UI source
+`8fbf2fcc049244cb719ae902f26127c69b87fdf6` plus the deterministic-export fix
+`3ec28ae6a7ed225423c8e89ef56827127adf76e2`. Its `app/ui/paas` tree is
+`093b29dee4deefcb673117d1ed65afc718e3d123`, with static build ID
+`matrix-a88a124cebcd3748a05e`; that tree is byte-identical in production source
+`95a343ae2f4efb4c9845c9af25d0225e722f870c`. Consumer commits
+`bf54ba789` and `e64ed025b` preserve the same owner rather than introducing a
+second frontend. A 2026-10-24 owner recheck of the frozen tree passed all three
+production-export Node tests, including the negative locale-collation case.
+
+The exact production source passed Verification
+[40085311144](https://github.com/xiak/matrix/actions/runs/40085311144) with all
+nineteen jobs successful and the signed four-product cold/upgrade/rollback/
+recovery lifecycle owned by FEAT-005. That release evidence accepts the frozen
+build and runtime composition; it does not convert unexecuted LIVE browser
+journeys into page acceptance. Those remaining paths stay owned by
+[FEAT-IAM-010](../../IAM/FEAT-IAM-010-console.md), while the isolated 4317 MOCK
+remains an independently inspectable UX surface.
 
 ### Current shared-navigation development evidence
 

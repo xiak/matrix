@@ -1,7 +1,7 @@
-# FEAT-007 adoption review: Control-plane console and PostgreSQL service activation
+# FEAT-007 adoption review: Control-plane console and managed-service activation
 
 - Status: In progress
-- Target: [`FEAT-007 Control-plane console and PostgreSQL service activation`](../features/FEAT-007-control-plane-console.md)
+- Target: [`FEAT-007 Control-plane console and managed-service activation`](../features/FEAT-007-control-plane-console.md)
 - Review date: 2026-08-26
 - Direct donor dependency allowed: No
 
@@ -13,6 +13,8 @@
 | IAM self-service password replacement | `94cabe999378b7fdae9b5074546aab156e1d7553` | `ADAPT` only the public current-password/new-password command, default-true `revokeOtherSessions` rule, required-replacement override and closed success receipt. `REUSE` this console's existing Session provider, password form, public controls and leave/focus owner. `REJECT` caller Account/Session selectors, password persistence or automatic secret replay, invented completion APIs, donor UI/backend/WIP and inherited acceptance. |
 | PaaS product-design record | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Product-boundary reference only; it is not a second UI architecture or style donor. |
 | Matrix shared interaction fixes | `21b469b343d83a190acc0a3bb34a29b5294191ad` | This repository, fixed Git objects; backport bounded behavior to the existing cloud UI owner, not its replacement shell. |
+| Foreground Session activity UX | `8fbf2fcc049244cb719ae902f26127c69b87fdf6` | `ADAPT` only the current-bearer foreground activity boundary: trusted visible `pointerdown`, meaningful `keydown` and `popstate`, one in-flight request and a 60-second attempt interval. `REUSE` the existing Session owner and expiry path. `REJECT` focus/visibility/timer/polling/synthetic activity, background refresh as user presence, client-side expiry truth, selectors, persistent activity state and inherited runtime acceptance. |
+| Cross-platform static build identity | `3ec28ae6a7ed225423c8e89ef56827127adf76e2` | `ADAPT` deterministic UTF-16 code-unit ordering at the existing build-ID owner and its negative locale-collation test. `REUSE` the existing static export and exact embedded-inventory gate. `REJECT` locale-dependent ordering, per-host IDs, runtime aliases, generated-diff waivers and donor acceptance. Consumer commits `bf54ba789` and `e64ed025b` retain the same `093b29dee4deefcb673117d1ed65afc718e3d123` UI tree and `matrix-a88a124cebcd3748a05e` build ID. |
 | IAM account-access capability contract | `25202188f33ca5892880b72d6f6831e476c0bfb1` | Same repository, fixed after verification run `34797635592`. Selectively adapt its public IAM wire/domain semantics and boundary tests into the existing console; do not cherry-pick its generated UI, styles or backend runtime. |
 | IAM group authority and management contract | `0bd6dd9dd8166fe31c67edb8cd49cd523606a401` | Same repository, fixed after verification run `34805149946`. Selectively adapt its group, membership, policy-source and relation-command contracts into the existing console; do not cherry-pick its backend, generated assets, UI shell or styles. |
 | Group Membership original-command recovery | `ffb305f859338cd8954f1476374b0d7d61c774b9` | `ADAPT` only the public create/remove wire and fixed exact-replay boundary into the existing LIVE Group workspace. `REUSE` public forms, selection, owner/leave guards and independent membership reads. `REJECT` donor UI/backend/WIP, automatic write replay, new completion endpoints, current rows as original completion, client-derived membership IDs, invented impact counts and clearing a prior UNKNOWN on a later 401/403/409. |
