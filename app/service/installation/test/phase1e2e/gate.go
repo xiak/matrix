@@ -196,6 +196,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	emit("application-generation-two")
+	if err := value.touchActiveRetainedPrimarySessions(ctx, "after-application-generation-two"); err != nil {
+		return err
+	}
 
 	baselineReport, err := value.createSecurityReportSnapshot(ctx, bearer, "phase1-security-report-before-backup")
 	if err != nil {
@@ -245,9 +248,6 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 
 	if err := value.failedUpgrade(ctx, secret, newPassword, bearer); err != nil {
-		return err
-	}
-	if err := value.touchActiveRetainedPrimarySessions(ctx, "after-failed-upgrade"); err != nil {
 		return err
 	}
 	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
