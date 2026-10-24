@@ -1,10 +1,12 @@
-import { policyDisplayNameValid, type AccountPolicy, type PolicyMutationIntent } from "../domain/accounts";
+import { policyDisplayNameValid, type AccountPolicy, type PolicyMetadataMutationIntent, type PolicyMutationIntent,
+  type PolicyVersionMutationRecoveryIntent } from "../domain/accounts";
 
 export type PolicyMutationOwner = Pick<PolicyMutationIntent, "accountId" | "actorPrincipalId">;
 export const policyMutationStorageEvent = "matrix:iam-policy-mutation";
 const identifier = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const fields = ["format", "kind", "accountId", "actorPrincipalId", "policy", "contentDigest", "requestId", "createdAt", "state"];
 const policyFields = ["id", "management", "accountId", "displayName", "scope", "status", "defaultVersionId", "resourceVersion", "createdAt", "updatedAt"];
+const maxStoredPolicyMutationBytes = 96 * 1024;
 
 function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
@@ -27,8 +29,11 @@ export function policyMutationStorageKey(owner: PolicyMutationOwner): string {
 
 export function parsePolicyMutationIntent(value: unknown): PolicyMutationIntent | null {
   const wire = object(value);
-  if (!wire || !exact(wire, wire.kind === "update" ? [...fields, "displayName"] : fields) ||
-      wire.format !== 1 || wire.state !== "UNKNOWN" || (wire.kind !== "update" && wire.kind !== "retire")) return null;
+  const mutationFields = wire?.kind === "update" ? [...fields, "displayName"] :
+    wire?.kind === "publish-version" ? [...fields, "documentJSON"] :
+    wire?.kind === "set-default-version" || wire?.kind === "retire-version" ? [...fields, "versionId"] : fields;
+  if (!wire || !exact(wire, mutationFields) || wire.format !== 1 || wire.state !== "UNKNOWN" ||
+      !["update", "retire", "publish-version", "set-default-version", "retire-version"].includes(String(wire.kind))) return null;
   for (const key of ["accountId", "actorPrincipalId", "requestId"]) {
     if (typeof wire[key] !== "string" || !identifier.test(wire[key])) return null;
   }
@@ -41,21 +46,47 @@ export function parsePolicyMutationIntent(value: unknown): PolicyMutationIntent 
       !timestamp(policy.createdAt) || !timestamp(policy.updatedAt) || !timestamp(wire.createdAt) ||
       typeof wire.contentDigest !== "string" || !/^sha256:[a-f0-9]{64}$/.test(wire.contentDigest)) return null;
   if (wire.kind === "update" && (!text(wire.displayName) || wire.displayName === policy.displayName)) return null;
-  // Reconstruct only the closed metadata projection. No policy document,
-  // credential, Session ID, decision or transferable proof is admitted.
+  if ((wire.kind === "set-default-version" || wire.kind === "retire-version") &&
+      (typeof wire.versionId !== "string" || !identifier.test(wire.versionId) ||
+        wire.kind === "set-default-version" && wire.versionId === policy.defaultVersionId ||
+        wire.kind === "retire-version" && wire.versionId === policy.defaultVersionId)) return null;
+  if (wire.kind === "publish-version") {
+    if (typeof wire.documentJSON !== "string" || new TextEncoder().encode(wire.documentJSON).length > 64 * 1024) return null;
+    try {
+      const document = JSON.parse(wire.documentJSON);
+      if (!object(document) || JSON.stringify(document) !== wire.documentJSON) return null;
+    } catch { return null; }
+  }
+  // Reconstruct only the closed original-command projection. Credentials,
+  // Session IDs, decisions and transferable authorization proofs are never
+  // admitted. A version publication keeps its exact non-secret document
+  // because an equal replay cannot be reconstructed from a later read.
   const source: AccountPolicy = { id: policy.id, accountId: wire.accountId as string, management: "CUSTOMER", scope: "TENANT", status: "ACTIVE",
     displayName: policy.displayName, defaultVersionId: policy.defaultVersionId, resourceVersion: Number(policy.resourceVersion),
     createdAt: policy.createdAt, updatedAt: policy.updatedAt };
   const base = { format: 1 as const, accountId: wire.accountId as string, actorPrincipalId: wire.actorPrincipalId as string,
     policy: source, contentDigest: wire.contentDigest, requestId: wire.requestId as string, createdAt: wire.createdAt, state: "UNKNOWN" as const };
   Object.freeze(source);
-  return Object.freeze(wire.kind === "update" ? { ...base, kind: "update", displayName: wire.displayName as string } : { ...base, kind: "retire" });
+  if (wire.kind === "update") return Object.freeze({ ...base, kind: "update", displayName: wire.displayName as string });
+  if (wire.kind === "publish-version") return Object.freeze({ ...base, kind: "publish-version", documentJSON: wire.documentJSON as string });
+  if (wire.kind === "set-default-version" || wire.kind === "retire-version") {
+    return Object.freeze({ ...base, kind: wire.kind, versionId: wire.versionId as string });
+  }
+  return Object.freeze({ ...base, kind: "retire" });
+}
+
+export function isPolicyMetadataMutationIntent(intent: PolicyMutationIntent | null): intent is PolicyMetadataMutationIntent {
+  return intent?.kind === "update" || intent?.kind === "retire";
+}
+
+export function isPolicyVersionMutationIntent(intent: PolicyMutationIntent | null): intent is PolicyVersionMutationRecoveryIntent {
+  return intent?.kind === "publish-version" || intent?.kind === "set-default-version" || intent?.kind === "retire-version";
 }
 
 export function readPolicyMutationIntent(storage: Storage, owner: PolicyMutationOwner): PolicyMutationIntent | null {
   const raw = storage.getItem(policyMutationStorageKey(owner));
   if (raw === null) return null;
-  if (raw.length > 16_384) throw new Error("INVALID_POLICY_MUTATION_STORAGE");
+  if (raw.length > maxStoredPolicyMutationBytes) throw new Error("INVALID_POLICY_MUTATION_STORAGE");
   const intent = parsePolicyMutationIntent(JSON.parse(raw));
   if (!intent || intent.accountId !== owner.accountId || intent.actorPrincipalId !== owner.actorPrincipalId) {
     throw new Error("INVALID_POLICY_MUTATION_STORAGE");

@@ -585,6 +585,9 @@ func TestIAMPolicyMutationRecoveryConsoleBrowser(t *testing.T) {
 // and only a fresh explicit review may publish the preserved draft. CAPACITY
 // fills all five management slots, proves the full-state affordance, retires
 // one nondefault version through the page, and publishes into the freed slot.
+// PUBLISH_RESPONSE_LOSS and RETIRE_RESPONSE_LOSS prove that the corresponding
+// version command survives a committed truncated response and is recovered
+// only by an explicit byte-identical replay from the same actor.
 func TestIAMPolicyVersionLifecycleConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_POLICY_VERSION_LIFECYCLE_BROWSER=1 for the bounded LIVE Policy-version lifecycle browser fixture")
@@ -4743,6 +4746,9 @@ func runIAMPolicyVersionLifecycleConsoleBrowser(
 	case "CAPACITY":
 		return runIAMPolicyVersionCapacityConsoleBrowser(t, ctx, database, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, start)
+	case "PUBLISH_RESPONSE_LOSS", "RETIRE_RESPONSE_LOSS":
+		return runIAMPolicyVersionResponseLossConsoleBrowser(t, ctx, database, root, temporary,
+			iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer, start, flow)
 	default:
 		t.Fatalf("unsupported MATRIX_IAM_POLICY_VERSION_BROWSER_FLOW=%q", flow)
 	}
@@ -5300,6 +5306,288 @@ func runIAMPolicyVersionConflictConsoleBrowser(
 		t.Fatalf("Policy-version conflict tenant Audit chain is incomplete: %#v", chain)
 	}
 	t.Log("one real page held a DENY draft while a controlled writer advanced the Policy, sent the stale revision exactly once, preserved the draft through 409, aligned PolicyAccess and the version directory on revision 2, then used a new request ID only after explicit re-review to publish one immutable nondefault version; the rejected command created no version, completion or Audit fact")
+	return nil
+}
+
+func runIAMPolicyVersionResponseLossConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	ownerBearer string,
+	start func(string, []string) *childProcess,
+	operation string,
+) []string {
+	t.Helper()
+	if operation != "PUBLISH_RESPONSE_LOSS" && operation != "RETIRE_RESPONSE_LOSS" {
+		t.Fatalf("unsupported Policy-version response-loss operation %q", operation)
+	}
+
+	operationName := strings.ToLower(strings.TrimSuffix(operation, "_RESPONSE_LOSS"))
+	initialDocument := iamv1.PolicyDocument{
+		LanguageVersion: iamv1.PolicyLanguageVersion,
+		Scope:           iamv1.AuthorityScopeTenant,
+		Statements: []iamv1.PolicyStatement{{
+			SID:       "response-loss-read-applications",
+			Effect:    iamv1.PolicyAllow,
+			Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
+			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}},
+		}},
+	}
+	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer,
+		iamv1.CreatePolicyRequest{
+			DisplayName: "Browser Policy version " + operationName + " response loss",
+			Document:    initialDocument,
+			RequestID:   "browser-policy-version-response-loss-create-" + operationName,
+		})
+	var created iamv1.PolicyDetail
+	if createdResponse.Status != http.StatusCreated || json.Unmarshal(createdResponse.Body, &created) != nil ||
+		iamv1.ValidatePolicyDetail(created) != nil || created.Policy.AccountID != "organization-process" ||
+		created.Policy.ResourceVersion != 1 || created.Policy.DefaultVersionID != created.Version.ID {
+		t.Fatalf("prepare Policy-version %s response-loss target status=%d body=%s",
+			operationName, createdResponse.Status, createdResponse.Body)
+	}
+
+	requestedDocument := initialDocument
+	requestedDocument.Statements = append([]iamv1.PolicyStatement(nil), initialDocument.Statements...)
+	requestedDocument.Statements[0].Effect = iamv1.PolicyDeny
+	preparedPolicy := created.Policy
+	retireTarget := iamv1.PolicyVersion{}
+	if operation == "RETIRE_RESPONSE_LOSS" {
+		preparedResponse := performJSON(t, http.MethodPost,
+			iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions", ownerBearer,
+			iamv1.CreatePolicyVersionRequest{
+				Document: requestedDocument, ResourceVersion: created.Policy.ResourceVersion,
+				RequestID: "browser-policy-version-response-loss-prepare-retirement",
+			})
+		var prepared iamv1.PolicyVersionDetail
+		if preparedResponse.Status != http.StatusCreated || json.Unmarshal(preparedResponse.Body, &prepared) != nil ||
+			iamv1.ValidatePolicyVersionDetail(prepared) != nil || prepared.Policy.ID != created.Policy.ID ||
+			prepared.Policy.ResourceVersion != 2 || prepared.Policy.DefaultVersionID != created.Version.ID ||
+			prepared.Version.ID == created.Version.ID || prepared.Version.Document.Statements[0].Effect != iamv1.PolicyDeny {
+			t.Fatalf("prepare Policy-version retirement target status=%d body=%s", preparedResponse.Status, preparedResponse.Body)
+		}
+		preparedPolicy, retireTarget = prepared.Policy, prepared.Version
+	}
+
+	policyPath := "/api/iam/v1/policies/" + string(created.Policy.ID)
+	loss := newPolicyVersionBrowserResponseLoss(operation, policyPath, retireTarget.ID)
+	server, ui, closeBrowser := startIAMConsoleBrowserWithResponseLoss(
+		t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start, loss,
+	)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-policy-version-"+operationName+"-response-loss-finished")
+	browserPath := "/console/access/policies/?id=" + url.QueryEscape(string(created.Policy.ID))
+	if operation == "PUBLISH_RESPONSE_LOSS" {
+		t.Logf("POLICY_VERSION_RESPONSE_LOSS operation=%s url=%s%s finish=%s policy=%s resource_version=%d default=%s realm=admin; use the existing changed admin password, open 策略版本, publish exactly one cloned version by changing only ALLOW to DENY, observe 版本变更结果未确认 after the committed response is truncated, reload or reopen the same origin, use 查看目标策略 if current authority must be re-established, explicitly 按原请求重试 once, independently reload the two-row version directory, then create the marker",
+			operation, server.URL, browserPath, finish, created.Policy.ID, preparedPolicy.ResourceVersion, created.Version.ID)
+	} else {
+		t.Logf("POLICY_VERSION_RESPONSE_LOSS operation=%s url=%s%s finish=%s policy=%s target=%s resource_version=%d default=%s realm=admin; use the existing changed admin password, open 策略版本, retire only the named nondefault version once, observe 版本变更结果未确认 after the committed response is truncated, reload or reopen the same origin, use 查看目标策略 if current authority must be re-established, explicitly 按原请求重试 once, independently reload the one-row active directory and verify the retired target is absent, then create the marker",
+			operation, server.URL, browserPath, finish, created.Policy.ID, retireTarget.ID,
+			preparedPolicy.ResourceVersion, created.Version.ID)
+	}
+	waitForBrowserMarker(t, ctx, ui, finish, "Policy-version response-loss recovery completion")
+
+	observation := loss.snapshot()
+	defer clear(observation.RequestBody)
+	wantStatus := http.StatusCreated
+	wantAction := auditv1.ActionIAMPolicyVersionCreated
+	requestID := ""
+	if operation == "PUBLISH_RESPONSE_LOSS" {
+		var request iamv1.CreatePolicyVersionRequest
+		if iamv1.DecodeRequest(bytes.NewReader(observation.RequestBody), &request) != nil ||
+			iamv1.ValidateCreatePolicyVersionRequestSyntax(request) != nil ||
+			request.ResourceVersion != preparedPolicy.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-policy-version-") {
+			t.Fatal("browser replayed an invalid Policy-version publication")
+		}
+		wanted, _, wantedErr := iamv1.CanonicalizePolicyDocument(requestedDocument)
+		actual, _, actualErr := iamv1.CanonicalizePolicyDocument(request.Document)
+		if wantedErr != nil || actualErr != nil || wanted != actual {
+			t.Fatal("browser Policy-version publication changed more than the reviewed ALLOW to DENY effect")
+		}
+		requestID = request.RequestID
+	} else {
+		wantStatus = http.StatusOK
+		wantAction = auditv1.ActionIAMPolicyVersionDeleted
+		var request iamv1.DeletePolicyVersionRequest
+		if iamv1.DecodeRequest(bytes.NewReader(observation.RequestBody), &request) != nil ||
+			iamv1.ValidateDeletePolicyVersionRequest(request) != nil ||
+			request.ResourceVersion != preparedPolicy.ResourceVersion ||
+			!strings.HasPrefix(request.RequestID, "ui-policy-version-") {
+			t.Fatal("browser replayed an invalid Policy-version retirement")
+		}
+		requestID = request.RequestID
+	}
+
+	if observation.Attempts != 2 || observation.SelectedAttempt != 1 || observation.MutationOverflow ||
+		!observation.ResponseLost || observation.BackendStatus != wantStatus || observation.IdempotencyKey != "" ||
+		observation.PartialHoldEntered || observation.PartialHoldReleased || observation.PartialHoldClientClosed ||
+		observation.PartialHoldTimedOut || observation.PartialHoldInvalid ||
+		observation.RecoveryReads != 0 || len(observation.RecoveryAttempts) != 0 ||
+		observation.PostLossWrites != 1 || observation.PostLossMethod != loss.method ||
+		observation.PostLossPath != loss.path || observation.PostLossHost != observation.MutationHost ||
+		len(observation.MutationAttempts) != 2 {
+		t.Fatalf("Policy-version %s response-loss boundary was not exact: attempts=%d selected=%d overflow=%t lost=%t backend=%d key_present=%t hold=%t/%t/%t/%t/%t recovery_reads=%d post_loss_writes=%d method=%q path=%q same_host=%t ledger=%d",
+			operationName, observation.Attempts, observation.SelectedAttempt, observation.MutationOverflow,
+			observation.ResponseLost, observation.BackendStatus, observation.IdempotencyKey != "",
+			observation.PartialHoldEntered, observation.PartialHoldReleased, observation.PartialHoldClientClosed,
+			observation.PartialHoldTimedOut, observation.PartialHoldInvalid, observation.RecoveryReads,
+			observation.PostLossWrites, observation.PostLossMethod, observation.PostLossPath,
+			observation.PostLossHost == observation.MutationHost, len(observation.MutationAttempts))
+	}
+	for index, attempt := range observation.MutationAttempts {
+		if attempt.Sequence != index+1 || attempt.Method != loss.method || attempt.Host != observation.MutationHost ||
+			attempt.RequestURI != loss.path || !attempt.BackendCalled || attempt.BackendStatus != wantStatus ||
+			!attempt.RequestBodyCompared || !attempt.RequestBodyMatchesSelected ||
+			!attempt.IdempotencyKeyCompared || !attempt.IdempotencyKeyMatchesSelected ||
+			attempt.SelectedForLoss != (index == 0) {
+			t.Fatalf("Policy-version %s attempt %d changed the frozen command: %#v", operationName, index, attempt)
+		}
+	}
+
+	finalRevision := preparedPolicy.ResourceVersion + 1
+	var storedDefault, storedStatus string
+	var storedRevision uint64
+	if err := database.QueryRow(ctx, `SELECT default_version_id,status,resource_version FROM iam.policies
+		WHERE owner_tenant_id=$1 AND id=$2`, created.Policy.AccountID, created.Policy.ID).
+		Scan(&storedDefault, &storedStatus, &storedRevision); err != nil ||
+		storedDefault != string(created.Version.ID) || storedStatus != string(iamv1.PolicyActive) || storedRevision != finalRevision {
+		t.Fatalf("Policy-version %s replay changed Policy state: default=%q status=%q revision=%d err=%v",
+			operationName, storedDefault, storedStatus, storedRevision, err)
+	}
+	wantActive, wantRetired := 2, 0
+	if operation == "RETIRE_RESPONSE_LOSS" {
+		wantActive, wantRetired = 1, 1
+	}
+	var totalVersions, activeVersions, retiredVersions, defaultChanges int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$1),
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$1 AND retired_at IS NULL),
+		(SELECT count(*) FROM iam.policy_versions WHERE policy_id=$1 AND retired_at IS NOT NULL),
+		(SELECT count(*) FROM iam.policy_default_version_changes WHERE policy_id=$1)`, created.Policy.ID).
+		Scan(&totalVersions, &activeVersions, &retiredVersions, &defaultChanges); err != nil ||
+		totalVersions != 2 || activeVersions != wantActive || retiredVersions != wantRetired || defaultChanges != 0 {
+		t.Fatalf("Policy-version %s replay versions=%d active=%d retired=%d default_changes=%d err=%v",
+			operationName, totalVersions, activeVersions, retiredVersions, defaultChanges, err)
+	}
+
+	currentResponse := performJSON(t, http.MethodGet,
+		iamEndpoint+"/v1/policies/"+string(created.Policy.ID), ownerBearer, nil)
+	var current iamv1.PolicyAccess
+	if currentResponse.Status != http.StatusOK || json.Unmarshal(currentResponse.Body, &current) != nil ||
+		iamv1.ValidatePolicyAccess(current) != nil || current.Detail.Policy.ResourceVersion != finalRevision ||
+		current.Detail.Policy.DefaultVersionID != created.Version.ID || current.Detail.Version.ID != created.Version.ID ||
+		current.Detail.Version.ContentDigest != created.Version.ContentDigest {
+		t.Fatalf("read recovered Policy-version %s current state status=%d body=%s",
+			operationName, currentResponse.Status, currentResponse.Body)
+	}
+	directoryResponse := performJSON(t, http.MethodGet,
+		iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions", ownerBearer, nil)
+	var directory iamv1.PolicyVersionList
+	if directoryResponse.Status != http.StatusOK || json.Unmarshal(directoryResponse.Body, &directory) != nil ||
+		iamv1.ValidatePolicyVersionList(directory) != nil || directory.Policy.ResourceVersion != finalRevision ||
+		directory.Policy.DefaultVersionID != created.Version.ID || len(directory.Items) != wantActive {
+		t.Fatalf("read recovered Policy-version %s directory status=%d body=%s",
+			operationName, directoryResponse.Status, directoryResponse.Body)
+	}
+
+	if operation == "PUBLISH_RESPONSE_LOSS" {
+		var published *iamv1.PolicyVersion
+		for index := range directory.Items {
+			if directory.Items[index].ID != created.Version.ID {
+				published = &directory.Items[index]
+			}
+		}
+		if published == nil || published.Document.Statements[0].Effect != iamv1.PolicyDeny {
+			t.Fatal("recovered Policy-version publication is absent from the active directory")
+		}
+		wanted, _, wantedErr := iamv1.CanonicalizePolicyDocument(requestedDocument)
+		actual, _, actualErr := iamv1.CanonicalizePolicyDocument(published.Document)
+		if wantedErr != nil || actualErr != nil || wanted != actual {
+			t.Fatal("recovered Policy-version publication changed its immutable document")
+		}
+		exactResponse := performJSON(t, http.MethodGet,
+			iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions/"+string(published.ID), ownerBearer, nil)
+		var exact iamv1.PolicyVersionDetail
+		if exactResponse.Status != http.StatusOK || json.Unmarshal(exactResponse.Body, &exact) != nil ||
+			iamv1.ValidatePolicyVersionDetail(exact) != nil || exact.Version.ID != published.ID ||
+			exact.Version.ContentDigest != published.ContentDigest || exact.Policy.ResourceVersion != finalRevision ||
+			exact.Policy.DefaultVersionID != created.Version.ID {
+			t.Fatalf("read exact recovered Policy version status=%d body=%s", exactResponse.Status, exactResponse.Body)
+		}
+	} else {
+		for _, item := range directory.Items {
+			if item.ID == retireTarget.ID {
+				t.Fatal("retired Policy version remained in the active directory")
+			}
+		}
+		var retainedDigest string
+		var retired bool
+		if err := database.QueryRow(ctx, `SELECT content_digest,retired_at IS NOT NULL FROM iam.policy_versions
+			WHERE policy_id=$1 AND id=$2`, created.Policy.ID, retireTarget.ID).
+			Scan(&retainedDigest, &retired); err != nil || !retired || retainedDigest != retireTarget.ContentDigest {
+			t.Fatalf("retired Policy version lost immutable history: digest=%q retired=%t err=%v",
+				retainedDigest, retired, err)
+		}
+		exactResponse := performJSON(t, http.MethodGet,
+			iamEndpoint+"/v1/policies/"+string(created.Policy.ID)+"/versions/"+string(retireTarget.ID), ownerBearer, nil)
+		if exactResponse.Status != http.StatusForbidden {
+			t.Fatalf("retired Policy version remained management-readable: status=%d body=%s",
+				exactResponse.Status, exactResponse.Body)
+		}
+	}
+
+	var outboxFacts, requestFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		count(*) FILTER(WHERE event_document#>>'{target,kind}'='POLICY' AND event_document#>>'{target,id}'=$4),
+		count(*) FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document->>'action'=$2
+		AND event_document->>'requestId'=$3`, created.Policy.AccountID, wantAction, requestID, created.Policy.ID).
+		Scan(&outboxFacts, &requestFacts); err != nil || outboxFacts != 1 || requestFacts != 1 {
+		t.Fatalf("Policy-version %s replay outbox target=%d request=%d err=%v",
+			operationName, outboxFacts, requestFacts, err)
+	}
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	query := auditv1.QueryRecordsRequest{PageSize: 100, Action: wantAction}
+	auditMatches, auditRequestMatches := 0, 0
+	for {
+		page := queryAudit(t, auditEndpoint, ownerBearer, query, http.StatusOK)
+		for _, record := range page.Records {
+			if record.Event.RequestID != requestID {
+				continue
+			}
+			auditRequestMatches++
+			if record.Event.Target.ID != string(created.Policy.ID) {
+				continue
+			}
+			auditMatches++
+			if record.Source != auditv1.SourceIAM || record.Event.TenantID != auditv1.TenantID(created.Policy.AccountID) ||
+				record.Event.InstallationID != "" || record.Event.Actor.Type != auditv1.ActorUser ||
+				record.Event.Actor.ID != "principal-admin" || record.Event.Target.Kind != auditv1.TargetPolicy ||
+				record.Event.Action != wantAction || record.Event.Result != auditv1.ResultSucceeded ||
+				record.Event.IAMDecisionID == "" {
+				t.Fatal("Policy-version replay Audit fact changed its actor, scope, target or result")
+			}
+		}
+		if page.NextCursor == "" {
+			break
+		}
+		query.Cursor = page.NextCursor
+	}
+	if auditMatches != 1 || auditRequestMatches != 1 {
+		t.Fatalf("Policy-version %s replay Audit facts target=%d request=%d",
+			operationName, auditMatches, auditRequestMatches)
+	}
+	chain := verifyAudit(t, auditEndpoint, ownerBearer)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(created.Policy.AccountID) || chain.InstallationID != "" {
+		t.Fatalf("Policy-version %s tenant Audit chain is incomplete: %#v", operationName, chain)
+	}
+	t.Logf("one committed Policy-version %s survived a truncated success response and one explicit byte-identical replay; the unchanged default, exact revision, immutable version history, unique decision-bound Audit fact and verified tenant chain all matched", operationName)
 	return nil
 }
 
@@ -11476,6 +11764,58 @@ func newPolicyMutationBrowserResponseLoss(operation, policyPath string) *browser
 		loss.holdTimeout = 5 * time.Minute
 	}
 	return loss
+}
+
+// Policy version publication and retirement are separate resources from
+// Policy metadata. Keep their exact method/path boundary explicit so a fault
+// cannot accidentally intercept another Policy write.
+func newPolicyVersionBrowserResponseLoss(operation, policyPath string, versionID iamv1.PolicyVersionID) *browserResponseLoss {
+	loss := &browserResponseLoss{postLossWritePrefix: "/api/iam/v1/policies"}
+	switch operation {
+	case "PUBLISH_RESPONSE_LOSS":
+		loss.method = http.MethodPost
+		loss.path = policyPath + "/versions"
+	case "RETIRE_RESPONSE_LOSS":
+		loss.method = http.MethodDelete
+		loss.path = policyPath + "/versions/" + string(versionID)
+	default:
+		panic("unknown Policy-version browser response-loss operation")
+	}
+	return loss
+}
+
+func TestPolicyVersionBrowserResponseLossUsesExactResource(t *testing.T) {
+	t.Parallel()
+	const policyPath = "/api/iam/v1/policies/policy-one"
+	for _, test := range []struct {
+		name, operation, method, path string
+		versionID                     iamv1.PolicyVersionID
+	}{
+		{name: "publish", operation: "PUBLISH_RESPONSE_LOSS", method: http.MethodPost,
+			path: policyPath + "/versions"},
+		{name: "retire", operation: "RETIRE_RESPONSE_LOSS", method: http.MethodDelete,
+			path: policyPath + "/versions/version-two", versionID: "version-two"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			loss := newPolicyVersionBrowserResponseLoss(test.operation, policyPath, test.versionID)
+			matching := httptest.NewRequest(test.method, "http://browser.test"+test.path, nil)
+			if !loss.matches(matching) || loss.method != test.method || loss.path != test.path ||
+				loss.postLossWritePrefix != "/api/iam/v1/policies" || loss.holdAfterPartialResponse ||
+				loss.recoveryPath != "" || loss.recoveryPathPrefix != "" {
+				t.Fatalf("Policy-version loss boundary=%#v", loss)
+			}
+			for _, adjacent := range []*http.Request{
+				httptest.NewRequest(http.MethodGet, "http://browser.test"+test.path, nil),
+				httptest.NewRequest(test.method, "http://browser.test"+policyPath, nil),
+				httptest.NewRequest(test.method, "http://browser.test"+test.path+"/adjacent", nil),
+			} {
+				if loss.matches(adjacent) {
+					t.Fatalf("Policy-version loss boundary intercepted adjacent request %s %s", adjacent.Method, adjacent.URL.Path)
+				}
+			}
+		})
+	}
 }
 
 func TestBrowserResponseLossPreservesHeaderlessPolicyMutationAttempts(t *testing.T) {

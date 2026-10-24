@@ -32,6 +32,7 @@ import type {
   PolicyAttachmentChange,
   PolicyAttachmentChangeExpectation,
   PolicyAttachmentChangeOperationExpectation,
+  PolicyVersionMutationRecoveryIntent,
   PolicyAttachmentRevocation,
   RolePolicyAttachment,
   RecoverAccountRootCredentialsCommand,
@@ -55,6 +56,9 @@ import { accessKeyNetworkRestrictionsEqual, accessKeyNetworkRestrictionsValid, t
 import { httpAccountRepository } from "../repositories/httpIamRepository";
 import { clearAccountLifecycleIntent, parseAccountLifecycleIntent, readAccountLifecycleIntent, sameAccountLifecycleActor, writeAccountLifecycleIntent } from "../repositories/accountLifecycleRecoveryStorage";
 import { clearUserDeletionIntent, readUserDeletionIntents, writeUserDeletionIntent } from "../repositories/userDeletionRecoveryStorage";
+import { clearPolicyMutationIntent, isPolicyVersionMutationIntent, parsePolicyMutationIntent, policyMutationStorageEvent,
+  policyMutationStorageKey, readPolicyMutationIntent, withPolicyMutationLock, writePolicyMutationIntent,
+  type PolicyMutationOwner } from "../repositories/policyMutationRecoveryStorage";
 import { buildAccountAccessScene, buildAccountPolicyScene, buildAccountTenantScene, buildAccountUserScene, findActionCapability, type AccountAccessScene, type AccountUserScene, type AccountDirectoryKind, type AccountDirectoryFailures } from "../scenes/accountAccessScene";
 import { userBatchDisabledReason, type UserBatchCommand } from "../domain/userBatch";
 import type { CreateRoleCommand, CreateRolePolicyAttachmentCommand, DeleteRoleCommand, RemoveRolePermissionBoundaryCommand, Role, RoleAccess, RoleDeletion, RoleDirectory, RolePermissionBoundary, RoleSessionAccess, RoleSessionDirectory, RoleSessionFilter, RoleSessionListing, RoleSessionRevocation, RoleTrustVersionDirectory, SetRolePermissionBoundaryCommand, SetRoleStatusCommand, SetRoleTrustPolicyCommand, UpdateRoleCommand } from "../domain/roles";
@@ -222,6 +226,7 @@ export type PolicyVersionMutationIntent = PolicyVersionMutationBase & (
   | { kind: "set-default" | "retire"; versionId: string }
 ) & {
   accountId: string;
+  actorPrincipalId: string;
   requestId: string;
   phase: "submitting" | "unknown" | "observing";
   observation: { resourceVersion: number; defaultVersionId: string; versionIds: string[] } | null;
@@ -237,12 +242,34 @@ export type PolicyVersionMutationClient = {
   pending: PolicyVersionMutationIntent | null;
   blockedByMetadata: boolean;
   blockedByAuthority: boolean;
+  retryBlockedByAuthority: boolean;
+  recoveryError: "unavailable" | null;
   canPublish: boolean;
   begin(input: PolicyVersionMutationInput): Promise<PolicyVersionMutationResult>;
   retry(): Promise<PolicyVersionMutationResult>;
   observe(): Promise<boolean>;
-  acknowledge(): boolean;
+  acknowledge(): Promise<boolean>;
 };
+
+function samePolicyMutationOwner(left: PolicyMutationOwner | null, right: PolicyMutationOwner | null): boolean {
+  return Boolean(left && right && left.accountId === right.accountId && left.actorPrincipalId === right.actorPrincipalId);
+}
+
+function recoverPolicyVersionMutation(intent: PolicyVersionMutationRecoveryIntent): PolicyVersionMutationIntent {
+  const base = { accountId: intent.accountId, actorPrincipalId: intent.actorPrincipalId, policyId: intent.policy.id,
+    expectedDefaultVersionId: intent.policy.defaultVersionId, resourceVersion: intent.policy.resourceVersion,
+    requestId: intent.requestId, phase: "unknown" as const, observation: null, observationError: null };
+  if (intent.kind === "publish-version") return { ...base, kind: "publish", documentJSON: intent.documentJSON };
+  return { ...base, kind: intent.kind === "set-default-version" ? "set-default" : "retire", versionId: intent.versionId };
+}
+
+function samePolicyVersionMutationCommand(left: PolicyVersionMutationIntent, right: PolicyVersionMutationIntent): boolean {
+  return left.accountId === right.accountId && left.actorPrincipalId === right.actorPrincipalId &&
+    left.policyId === right.policyId && left.expectedDefaultVersionId === right.expectedDefaultVersionId &&
+    left.resourceVersion === right.resourceVersion && left.requestId === right.requestId && left.kind === right.kind &&
+    (left.kind === "publish" && right.kind === "publish" ? left.documentJSON === right.documentJSON :
+      left.kind !== "publish" && right.kind !== "publish" ? left.versionId === right.versionId : false);
+}
 
 export type AccountSecuritySettingsLoad =
   | { status: "ready"; settings: AccountSecuritySettings }
@@ -1204,30 +1231,77 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
     setStoredPolicyCreate(updated);
     return true;
   }, [tenantId, viewSession]);
-  const versionMutationRef = useRef<{ session: typeof viewSession; intent: PolicyVersionMutationIntent } | null>(null);
+  const versionMutationOwner = useMemo<PolicyMutationOwner | null>(() => active && tenantId && principalId
+    ? { accountId: tenantId, actorPrincipalId: principalId } : null, [active, principalId, tenantId]);
+  const versionMutationRef = useRef<{ owner: PolicyMutationOwner; intent: PolicyVersionMutationIntent } | null>(null);
   const [storedVersionMutation, setStoredVersionMutation] = useState<typeof versionMutationRef.current>(null);
-  const versionMutationIntent = storedVersionMutation?.session === viewSession ? storedVersionMutation.intent : null;
+  const [versionMutationRecovery, setVersionMutationRecovery] = useState<{ owner: PolicyMutationOwner; error: "unavailable" | null } | null>(null);
+  const versionMutationIntent = samePolicyMutationOwner(storedVersionMutation?.owner ?? null, versionMutationOwner)
+    ? storedVersionMutation!.intent : null;
   const rememberVersionMutation = useCallback((expectedRequestId: string | null, next: PolicyVersionMutationIntent | null): boolean => {
-    if (currentViewSession.current !== viewSession) return false;
+    if (!versionMutationOwner) return false;
     const stored = versionMutationRef.current;
-    const current = stored?.session === viewSession ? stored.intent : null;
+    const current = samePolicyMutationOwner(stored?.owner ?? null, versionMutationOwner) ? stored!.intent : null;
     if (expectedRequestId === null) {
-      if (current || !next || next.accountId !== tenantId) return false;
+      if (current || !next || next.accountId !== versionMutationOwner.accountId ||
+          next.actorPrincipalId !== versionMutationOwner.actorPrincipalId) return false;
     } else {
       if (!current || current.requestId !== expectedRequestId) return false;
       if (next && (
-        next.requestId !== current.requestId || next.accountId !== current.accountId || next.policyId !== current.policyId ||
+        next.requestId !== current.requestId || next.accountId !== current.accountId ||
+        next.actorPrincipalId !== current.actorPrincipalId || next.policyId !== current.policyId ||
         next.kind !== current.kind || next.resourceVersion !== current.resourceVersion ||
         (next.kind === "publish" && current.kind === "publish" ? next.documentJSON !== current.documentJSON :
           next.kind !== "publish" && current.kind !== "publish" ? next.versionId !== current.versionId : true) ||
         next.expectedDefaultVersionId !== current.expectedDefaultVersionId
       )) return false;
     }
-    const updated = next ? { session: viewSession, intent: next } : null;
+    const updated = next ? { owner: versionMutationOwner, intent: next } : null;
     versionMutationRef.current = updated;
     setStoredVersionMutation(updated);
     return true;
-  }, [tenantId, viewSession]);
+  }, [versionMutationOwner]);
+  useEffect(() => {
+    if (!versionMutationOwner) return;
+    const observe = () => {
+      let stored: PolicyVersionMutationRecoveryIntent | null = null;
+      try {
+        const candidate = readPolicyMutationIntent(window.localStorage, versionMutationOwner);
+        stored = isPolicyVersionMutationIntent(candidate) ? candidate : null;
+        setVersionMutationRecovery({ owner: versionMutationOwner, error: null });
+      } catch {
+        setVersionMutationRecovery({ owner: versionMutationOwner, error: "unavailable" });
+        return;
+      }
+      const current = versionMutationRef.current;
+      if (!stored) {
+        if (samePolicyMutationOwner(current?.owner ?? null, versionMutationOwner)) {
+          versionMutationRef.current = null;
+          setStoredVersionMutation(null);
+        }
+        return;
+      }
+      const recovered = recoverPolicyVersionMutation(stored);
+      if (samePolicyMutationOwner(current?.owner ?? null, versionMutationOwner) && current &&
+          samePolicyVersionMutationCommand(current.intent, recovered)) return;
+      const updated = { owner: versionMutationOwner, intent: recovered };
+      versionMutationRef.current = updated;
+      setStoredVersionMutation(updated);
+    };
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === policyMutationStorageKey(versionMutationOwner)) observe();
+    };
+    const onLocal = (event: Event) => {
+      if ((event as CustomEvent<unknown>).detail === policyMutationStorageKey(versionMutationOwner)) observe();
+    };
+    queueMicrotask(observe);
+    window.addEventListener("storage", onStorage);
+    window.addEventListener(policyMutationStorageEvent, onLocal);
+    return () => {
+      window.removeEventListener("storage", onStorage);
+      window.removeEventListener(policyMutationStorageEvent, onLocal);
+    };
+  }, [versionMutationOwner]);
   const changeRoleSessionRevokeIntent = useCallback((expectedRequestId: string | null, next: RoleSessionRevokeIntent | null) => {
     setStoredRoleSessionRevokeIntent((stored) => {
       const current = stored?.session === viewSession ? stored.intent : null;
@@ -2075,100 +2149,191 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
 
   const policyVersionAction = useCallback((intent: Pick<PolicyVersionMutationInput, "kind">) => intent.kind === "publish"
     ? "iam.policy-version.create" as const : intent.kind === "set-default" ? "iam.policy.set-default-version" as const : "iam.policy-version.delete" as const, []);
-  const authorizePolicyVersionBegin = useCallback((input: PolicyVersionMutationInput) => {
+  const recoveryPolicyVersionAction = useCallback((intent: PolicyVersionMutationRecoveryIntent) => intent.kind === "publish-version"
+    ? "iam.policy-version.create" as const : intent.kind === "set-default-version" ? "iam.policy.set-default-version" as const : "iam.policy-version.delete" as const, []);
+  const policyVersionBeginAccess = useCallback((input: PolicyVersionMutationInput) => {
     const current = currentExactPolicyAccess(input.policyId, policyVersionAction(input));
-    return Boolean(current && current.detail.policy.resourceVersion === input.resourceVersion &&
-      current.detail.policy.defaultVersionId === input.expectedDefaultVersionId);
+    return current && current.detail.policy.resourceVersion === input.resourceVersion &&
+      current.detail.policy.defaultVersionId === input.expectedDefaultVersionId ? current : null;
   }, [currentExactPolicyAccess, policyVersionAction]);
   void policyAuthorityRevision;
   const policyVersionMutation = useMemo<PolicyVersionMutationClient | null>(() => {
-    if (!active || !credential || !scene || scene.accountId !== tenantId || repository.workspace ||
+    if (!active || !credential || !scene || scene.accountId !== tenantId || !versionMutationOwner || repository.workspace ||
         !repository.setDefaultPolicyVersion || !repository.retirePolicyVersion || !repository.readPolicy || !repository.listPolicyVersions) return null;
     const accountId = scene.accountId;
-    const owned = (intent: PolicyVersionMutationIntent) => {
-      const stored = versionMutationRef.current;
-      return stored?.session === viewSession && stored.intent.requestId === intent.requestId;
+    const clientSession = viewSession;
+    const storageReady = samePolicyMutationOwner(versionMutationRecovery?.owner ?? null, versionMutationOwner) &&
+      versionMutationRecovery?.error === null && policyMutation?.recoveryError !== "unavailable";
+    const currentStored = () => {
+      const stored = readPolicyMutationIntent(window.localStorage, versionMutationOwner);
+      return isPolicyVersionMutationIntent(stored) ? stored : null;
+    };
+    const ownsSession = () => currentViewSession.current === clientSession &&
+      currentViewSession.current.tenantId === versionMutationOwner.accountId &&
+      currentViewSession.current.principalId === versionMutationOwner.actorPrincipalId;
+    const ownsIntent = (intent: PolicyVersionMutationIntent) => {
+      const current = versionMutationRef.current;
+      return ownsSession() && samePolicyMutationOwner(current?.owner ?? null, versionMutationOwner) &&
+        Boolean(current && samePolicyVersionMutationCommand(current.intent, intent));
     };
     const expire = () => {
-      if (expireSession(credential, sessionRevision)) {
+      if (ownsSession() && expireSession(credential, sessionRevision)) {
         setScene(null); setWorkspace(null); setWorkspaceError(null); setSuccess(null); setError("expired");
       }
     };
-    const attempt = async (intent: PolicyVersionMutationIntent, retrying: boolean): Promise<PolicyVersionMutationResult> => {
-      try {
-        const detail = intent.kind === "publish"
-          ? await repository.createPolicyVersion!(credential, accountId, intent.policyId, {
-            document: JSON.parse(intent.documentJSON) as AccountPolicyDocument,
-            resourceVersion: intent.resourceVersion, expectedDefaultVersionId: intent.expectedDefaultVersionId, requestId: intent.requestId
-          })
-          : intent.kind === "set-default" ? await repository.setDefaultPolicyVersion!(credential, accountId, intent.policyId, {
-            versionId: intent.versionId, resourceVersion: intent.resourceVersion, requestId: intent.requestId
-          })
-          : await repository.retirePolicyVersion!(credential, accountId, intent.policyId, intent.versionId, {
-            resourceVersion: intent.resourceVersion, expectedDefaultVersionId: intent.expectedDefaultVersionId, requestId: intent.requestId
-          });
-        if (!rememberVersionMutation(intent.requestId, null)) return { status: "blocked" };
-        const exact = exactPolicies.accesses.get(intent.policyId);
-        if (currentExactPolicies.current === exactPolicies && exact) {
+    const projectApplied = (intent: PolicyVersionMutationIntent, detail: AccountPolicyDetail) => {
+      const exact = exactPolicies.accesses.get(intent.policyId);
+      if (currentExactPolicies.current === exactPolicies && exact) {
+        if (detail.version.versionId === detail.policy.defaultVersionId) {
           exactPolicies.accesses.set(intent.policyId, { detail: structuredClone(detail), capabilities: exact.capabilities });
-          setPolicyAuthorityRevision((current) => current + 1);
+        } else {
+          exactPolicies.accesses.delete(intent.policyId);
         }
-        setScene((current) => current?.accountId === accountId ? { ...current,
-          policies: current.policies.map((policy) => policy.id === intent.policyId ? { ...policy, ...detail.policy } : policy)
-        } : current);
+        setPolicyAuthorityRevision((current) => current + 1);
+      }
+      setScene((current) => current?.accountId === accountId ? { ...current,
+        policies: current.policies.map((policy) => policy.id === intent.policyId ? { ...policy, ...detail.policy } : policy)
+      } : current);
+    };
+    const resultMatches = (stored: PolicyVersionMutationRecoveryIntent, detail: AccountPolicyDetail) => {
+      const policy = detail.policy;
+      if (policy.id !== stored.policy.id || policy.accountId !== stored.accountId || policy.management !== "CUSTOMER" ||
+          policy.scope !== "TENANT" || policy.status !== "ACTIVE" || policy.displayName !== stored.policy.displayName ||
+          policy.createdAt !== stored.policy.createdAt || policy.resourceVersion !== stored.policy.resourceVersion + 1 ||
+          detail.version.policyId !== stored.policy.id) return false;
+      if (stored.kind === "publish-version") {
+        return policy.defaultVersionId === stored.policy.defaultVersionId && detail.version.versionId !== stored.policy.defaultVersionId;
+      }
+      if (stored.kind === "set-default-version") {
+        return policy.defaultVersionId === stored.versionId && detail.version.versionId === stored.versionId;
+      }
+      return policy.defaultVersionId === stored.policy.defaultVersionId && detail.version.versionId === stored.policy.defaultVersionId &&
+        detail.version.contentDigest === stored.contentDigest;
+    };
+    const publishUnknown = (intent: PolicyVersionMutationIntent) => {
+      rememberVersionMutation(intent.requestId, { ...intent, phase: "unknown", observation: null, observationError: null });
+    };
+    const attempt = async (stored: PolicyVersionMutationRecoveryIntent, retrying: boolean): Promise<PolicyVersionMutationResult> => {
+      const intent = { ...recoverPolicyVersionMutation(stored), phase: "submitting" as const };
+      try {
+        const detail = await protectedMutation(() => stored.kind === "publish-version"
+          ? repository.createPolicyVersion!(credential, accountId, stored.policy.id, {
+            document: JSON.parse(stored.documentJSON) as AccountPolicyDocument,
+            resourceVersion: stored.policy.resourceVersion, expectedDefaultVersionId: stored.policy.defaultVersionId, requestId: stored.requestId
+          })
+          : stored.kind === "set-default-version" ? repository.setDefaultPolicyVersion!(credential, accountId, stored.policy.id, {
+            versionId: stored.versionId, resourceVersion: stored.policy.resourceVersion, requestId: stored.requestId
+          })
+          : repository.retirePolicyVersion!(credential, accountId, stored.policy.id, stored.versionId, {
+            resourceVersion: stored.policy.resourceVersion, expectedDefaultVersionId: stored.policy.defaultVersionId, requestId: stored.requestId
+          }));
+        if (!ownsIntent(intent) || !resultMatches(stored, detail)) {
+          if (ownsIntent(intent)) publishUnknown(intent);
+          return ownsIntent(intent) ? { status: "unknown" } : { status: "blocked" };
+        }
+        try { clearPolicyMutationIntent(window.localStorage, stored); }
+        catch { publishUnknown(intent); return { status: "unknown" }; }
+        projectApplied(intent, detail);
         return { status: "applied", detail };
       } catch (failure) {
-        if (!owned(intent)) return { status: "blocked" };
+        if (!ownsIntent(intent)) return { status: "blocked" };
+        if (failure instanceof AccessWorkspaceError) {
+          try { clearPolicyMutationIntent(window.localStorage, stored); } catch { publishUnknown(intent); return { status: "unknown" }; }
+          return { status: "blocked" };
+        }
         if (!retrying && failure instanceof HttpProblem && [400, 401, 403, 404, 409, 413, 415, 422].includes(failure.status)) {
-          rememberVersionMutation(intent.requestId, null);
+          try { clearPolicyMutationIntent(window.localStorage, stored); }
+          catch { publishUnknown(intent); if (failure.status === 401) expire(); return { status: "unknown" }; }
           if (failure.status === 401) expire();
           return { status: "rejected", reason: failure.status === 401 ? "expired" : failure.status === 403 ? "forbidden" : failure.status === 404 ? "notFound" : failure.status === 409 ? "conflict" : "invalid" };
         }
-        rememberVersionMutation(intent.requestId, { ...intent, phase: "unknown", observation: null, observationError: null });
+        publishUnknown(intent);
         if (failure instanceof HttpProblem && failure.status === 401) expire();
         return { status: "unknown" };
       }
     };
+    const coordinate = async <T,>(run: () => Promise<T>, blocked: T): Promise<T> => {
+      if (!ownsSession() || !storageReady) return blocked;
+      try {
+        return await withPolicyMutationLock(versionMutationOwner, async () => ownsSession() ? run() : blocked);
+      } catch {
+        if (ownsSession()) setVersionMutationRecovery({ owner: versionMutationOwner, error: "unavailable" });
+        return blocked;
+      }
+    };
+    // This is presentation state, so derive it from the current render's exact
+    // authority snapshot. The retry handler independently revalidates the
+    // journal and the current ref-owned snapshot under the cross-tab lock.
+    void policyAuthorityRevision;
+    const retryAccess = versionMutationIntent ? exactPolicies.accesses.get(versionMutationIntent.policyId) : null;
+    const retryBlockedByAuthority = Boolean(versionMutationIntent && (authorityPending || !retryAccess ||
+      findActionCapability(retryAccess.capabilities, policyVersionAction(versionMutationIntent), "POLICY", versionMutationIntent.policyId)?.available !== true));
     return {
       pending: versionMutationIntent,
-      blockedByMetadata: Boolean(policyMutation && (!policyMutation.ready || policyMutation.pending)),
+      blockedByMetadata: Boolean(policyMutation?.pending),
       blockedByAuthority: authorityPending,
-      canPublish: Boolean(repository.createPolicyVersion),
+      retryBlockedByAuthority,
+      recoveryError: storageReady ? null : "unavailable",
+      canPublish: Boolean(repository.createPolicyVersion) && storageReady,
       begin(input) {
-        if (!authorizePolicyVersionBegin(input) || policyMutation && (!policyMutation.ready || policyMutation.pending) ||
-            input.kind === "publish" && !repository.createPolicyVersion ||
+        const initial = policyVersionBeginAccess(input);
+        if (!initial || policyMutation?.pending || !storageReady || input.kind === "publish" && !repository.createPolicyVersion ||
             input.kind === "retire" && input.versionId === input.expectedDefaultVersionId ||
             input.kind === "set-default" && input.versionId === input.expectedDefaultVersionId ||
             !scene.policies.some((policy) => policy.id === input.policyId && policy.management === "CUSTOMER" && policy.accountId === accountId && policy.scope === "TENANT" && policy.status === "ACTIVE")) {
           return Promise.resolve({ status: "blocked" });
         }
-        const subject = input.kind === "publish" ? { kind: "publish" as const, documentJSON: JSON.stringify(input.document) } :
-          { kind: input.kind, versionId: input.versionId };
-        const intent: PolicyVersionMutationIntent = { ...subject, policyId: input.policyId,
-          expectedDefaultVersionId: input.expectedDefaultVersionId, resourceVersion: input.resourceVersion,
-          accountId, requestId: requestToken("ui-policy-version-"),
-          phase: "submitting", observation: null, observationError: null };
-        if (!rememberVersionMutation(null, intent)) return Promise.resolve({ status: "blocked" });
-        return attempt(intent, false);
+        return coordinate(async () => {
+          const access = policyVersionBeginAccess(input);
+          if (!access || currentStored() || readPolicyMutationIntent(window.localStorage, versionMutationOwner)) return { status: "blocked" };
+          const subject = input.kind === "publish"
+            ? { kind: "publish-version" as const, documentJSON: JSON.stringify(input.document) }
+            : { kind: input.kind === "set-default" ? "set-default-version" as const : "retire-version" as const, versionId: input.versionId };
+          const stored = parsePolicyMutationIntent({ format: 1, ...subject, accountId, actorPrincipalId: versionMutationOwner.actorPrincipalId,
+            policy: structuredClone(access.detail.policy), contentDigest: access.detail.version.contentDigest,
+            requestId: requestToken("ui-policy-version-"), createdAt: new Date().toISOString(), state: "UNKNOWN" });
+          if (!isPolicyVersionMutationIntent(stored)) return { status: "blocked" };
+          writePolicyMutationIntent(window.localStorage, stored);
+          const intent = { ...recoverPolicyVersionMutation(stored), phase: "submitting" as const };
+          // The local storage event is synchronous in this document, so it may
+          // already have rehydrated the just-journaled command. Promote that
+          // exact command to submitting; never interpret it as a competing
+          // mutation and leave a write that was never dispatched.
+          const observed = versionMutationRef.current;
+          const expectedRequestId = samePolicyMutationOwner(observed?.owner ?? null, versionMutationOwner) && observed &&
+            samePolicyVersionMutationCommand(observed.intent, intent) ? intent.requestId : null;
+          if (!rememberVersionMutation(expectedRequestId, intent)) return { status: "blocked" };
+          return attempt(stored, false);
+        }, { status: "blocked" });
       },
       retry() {
         const current = versionMutationRef.current;
-        if (authorityRefreshPending.current || !current || policyMutation && (!policyMutation.ready || policyMutation.pending) ||
-            current?.session !== viewSession || current.intent.phase !== "unknown") return Promise.resolve({ status: "blocked" });
-        const intent = { ...current.intent, phase: "submitting" as const, observation: null, observationError: null };
-        if (!rememberVersionMutation(intent.requestId, intent)) return Promise.resolve({ status: "blocked" });
-        return attempt(intent, true);
+        if (authorityRefreshPending.current || retryBlockedByAuthority || !current ||
+            !samePolicyMutationOwner(current.owner, versionMutationOwner) || current.intent.phase !== "unknown") {
+          return Promise.resolve({ status: "blocked" });
+        }
+        return coordinate(async () => {
+          const stored = currentStored();
+          if (!stored || !currentExactPolicyAccess(stored.policy.id, recoveryPolicyVersionAction(stored)) ||
+              !samePolicyVersionMutationCommand(current.intent, recoverPolicyVersionMutation(stored))) return { status: "blocked" };
+          const submitting = { ...current.intent, phase: "submitting" as const, observation: null, observationError: null };
+          if (!rememberVersionMutation(submitting.requestId, submitting)) return { status: "blocked" };
+          return attempt(stored, true);
+        }, { status: "blocked" });
       },
       async observe() {
         const current = versionMutationRef.current;
-        if (authorityRefreshPending.current || current?.session !== viewSession || current.intent.phase !== "unknown") return false;
+        if (authorityRefreshPending.current || !current || !samePolicyMutationOwner(current.owner, versionMutationOwner) ||
+            current.intent.phase !== "unknown") return false;
+        const stored = currentStored();
+        if (!stored || !samePolicyVersionMutationCommand(current.intent, recoverPolicyVersionMutation(stored))) return false;
         const intent = { ...current.intent, phase: "observing" as const, observation: null, observationError: null };
         if (!rememberVersionMutation(intent.requestId, intent)) return false;
         try {
           const access = await repository.readPolicy!(credential, accountId, intent.policyId);
           const detail = access.detail;
           const directory = await repository.listPolicyVersions!(credential, accountId, intent.policyId);
-          if (detail.policy.id !== intent.policyId || directory.policy.id !== intent.policyId ||
+          if (!ownsIntent(intent) || detail.policy.id !== intent.policyId || directory.policy.id !== intent.policyId ||
               detail.policy.accountId !== accountId || directory.policy.accountId !== accountId ||
               detail.policy.management !== "CUSTOMER" || directory.policy.management !== "CUSTOMER" ||
               detail.policy.scope !== "TENANT" || directory.policy.scope !== "TENANT" ||
@@ -2182,6 +2347,7 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
             versionIds: directory.items.map((item) => item.versionId)
           }, observationError: null });
         } catch (failure) {
+          if (!ownsIntent(intent)) return false;
           const observationError = failure instanceof HttpProblem && failure.status === 403 ? "forbidden" :
             failure instanceof HttpProblem && failure.status === 401 ? "expired" : "unavailable";
           rememberVersionMutation(intent.requestId, { ...intent, phase: "unknown", observation: null, observationError });
@@ -2191,11 +2357,18 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       },
       acknowledge() {
         const current = versionMutationRef.current;
-        if (current?.session !== viewSession || current.intent.phase !== "unknown" || !current.intent.observation) return false;
-        return rememberVersionMutation(current.intent.requestId, null);
+        if (!current || !samePolicyMutationOwner(current.owner, versionMutationOwner) ||
+            current.intent.phase !== "unknown" || !current.intent.observation) return Promise.resolve(false);
+        return coordinate(async () => {
+          const stored = currentStored();
+          if (!stored || !samePolicyVersionMutationCommand(current.intent, recoverPolicyVersionMutation(stored))) return false;
+          try { clearPolicyMutationIntent(window.localStorage, stored); return true; } catch { return false; }
+        }, false);
       }
     };
-  }, [active, authorityPending, authorizePolicyVersionBegin, credential, exactPolicies, expireSession, policyMutation, rememberVersionMutation, repository, scene, sessionRevision, tenantId, versionMutationIntent, viewSession]);
+  }, [active, authorityPending, credential, currentExactPolicyAccess, exactPolicies, expireSession, policyAuthorityRevision,
+    policyMutation, policyVersionAction, policyVersionBeginAccess, protectedMutation, recoveryPolicyVersionAction, rememberVersionMutation,
+    repository, scene, sessionRevision, tenantId, versionMutationIntent, versionMutationOwner, versionMutationRecovery, viewSession]);
 
   const accountSecuritySettings = useMemo<AccountSecuritySettingsClient | null>(() => {
     const reader = repository.accountSecuritySettings;

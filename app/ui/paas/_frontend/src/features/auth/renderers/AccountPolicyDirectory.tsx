@@ -169,13 +169,13 @@ function PolicyVersionRecovery({ mutation, onApplied, onInspect }: { mutation: P
     {pending.observationError ? <Alert status="danger">{t(`observationErrors.${pending.observationError}`)}</Alert> : null}
     {feedback ? <Alert status="warning">{feedback}</Alert> : null}
     <div className={styles.actions}>
-      <Button variant="secondary" disabled={busy || mutation.blockedByAuthority} onClick={() => void handleRetry()}>{t("retryOriginal")}</Button>
+      <Button variant="secondary" disabled={busy || mutation.blockedByAuthority || mutation.retryBlockedByAuthority} onClick={() => void handleRetry()}>{t("retryOriginal")}</Button>
       <Button variant="secondary" disabled={busy || mutation.blockedByAuthority} onClick={() => { setFeedback(null); setAcknowledged(false); void mutation.observe(); }}>{t("rereadCurrent")}</Button>
       <Button variant="ghost" onClick={() => onInspect(pending.policyId)}>{t("inspectAffectedPolicy")}</Button>
     </div>
     {pending.observation ? <div className={styles.policyVersionAcknowledge}>
       <label><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /> {t("acknowledgeUnknown")}</label>
-      <Button variant="secondary" disabled={!acknowledged || busy} onClick={() => { if (mutation.acknowledge()) onApplied(); }}>{t("endOldIntent")}</Button>
+      <Button variant="secondary" disabled={!acknowledged || busy} onClick={() => void mutation.acknowledge().then((cleared) => { if (cleared) onApplied(); })}>{t("endOldIntent")}</Button>
     </div> : null}
   </section>;
 }

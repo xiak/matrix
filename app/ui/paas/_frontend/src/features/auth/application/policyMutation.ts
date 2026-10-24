@@ -2,9 +2,11 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
-import { policyMetadataResultMatches, type AccountPolicy, type AccountPolicyDetail, type PolicyMutationIntent } from "../domain/accounts";
+import { policyMetadataResultMatches, type AccountPolicy, type AccountPolicyDetail, type PolicyMetadataMutationIntent,
+  type PolicyMutationIntent } from "../domain/accounts";
 import type { AccountRepository } from "../repositories/iamRepository";
-import { clearPolicyMutationIntent, parsePolicyMutationIntent, policyMutationStorageEvent, policyMutationStorageKey, readPolicyMutationIntent, withPolicyMutationLock, writePolicyMutationIntent } from "../repositories/policyMutationRecoveryStorage";
+import { clearPolicyMutationIntent, isPolicyMetadataMutationIntent, parsePolicyMutationIntent, policyMutationStorageEvent,
+  policyMutationStorageKey, readPolicyMutationIntent, withPolicyMutationLock, writePolicyMutationIntent } from "../repositories/policyMutationRecoveryStorage";
 
 type MutationError = "expired" | "forbidden" | "conflict" | "invalid" | "notFound" | "unavailable";
 export type PolicyMutationResult = { status: "applied"; policy: AccountPolicy } |
@@ -13,7 +15,8 @@ export type PolicyMutationClient = {
   identity: object;
   ready: boolean;
   recoveryError: "unavailable" | null;
-  pending: PolicyMutationIntent | null;
+  pending: PolicyMetadataMutationIntent | null;
+  occupied: PolicyMutationIntent | null;
   busy: boolean;
   lastError: MutationError | "busy" | null;
   begin(detail: AccountPolicyDetail, input: { kind: "update"; displayName: string } | { kind: "retire" }): Promise<PolicyMutationResult>;
@@ -97,7 +100,7 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
       const next = { owner, pending, lastError, recoveryError, ready: recoveryError === null };
       observation.current = next; setView(next);
     };
-    const dispatch = async (intent: PolicyMutationIntent, retrying: boolean): Promise<PolicyMutationResult> => {
+    const dispatch = async (intent: PolicyMetadataMutationIntent, retrying: boolean): Promise<PolicyMutationResult> => {
       if (currentOwner.current !== owner) return { status: "blocked" };
       try {
         let policy: AccountPolicy;
@@ -160,7 +163,9 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
     return {
       identity: owner.identity,
       ready: Boolean(snapshot?.ready && !authorityPending),
-      recoveryError: snapshot?.recoveryError ?? null, pending: snapshot?.pending ?? null,
+      recoveryError: snapshot?.recoveryError ?? null,
+      pending: isPolicyMetadataMutationIntent(snapshot?.pending ?? null) ? snapshot!.pending as PolicyMetadataMutationIntent : null,
+      occupied: snapshot?.pending ?? null,
       busy: busyOwner === owner, lastError: snapshot?.lastError ?? null,
       begin(detail, input) {
         const frozen = structuredClone({ detail, input });
@@ -174,24 +179,28 @@ export function useLivePolicyMutation({ enabled, accountId, actorPrincipalId, cr
           const intent = parsePolicyMutationIntent({ format: 1, ...frozen.input, accountId: owner.accountId, actorPrincipalId: owner.actorPrincipalId,
             policy: frozen.detail.policy, contentDigest: frozen.detail.version.contentDigest, requestId: requestToken("ui-policy-metadata-"),
             createdAt: new Date().toISOString(), state: "UNKNOWN" });
-          if (!intent) return { status: "blocked" };
+          if (!isPolicyMetadataMutationIntent(intent)) return { status: "blocked" };
           writePolicyMutationIntent(window.localStorage, intent);
           publish(intent);
           return dispatch(intent, false);
         }, { status: "blocked" });
       },
       retry() {
-        const expected = observation.current?.owner === owner ? observation.current.pending : null;
+        const candidate = observation.current?.owner === owner ? observation.current.pending : null;
+        const expected = isPolicyMetadataMutationIntent(candidate) ? candidate : null;
         if (authorityPendingRef.current || !expected) return Promise.resolve({ status: "blocked" });
         return coordinate(async () => {
           if (authorityPendingRef.current) return { status: "blocked" };
           const stored = readPolicyMutationIntent(window.localStorage, owner);
-          if (!stored || JSON.stringify(stored) !== JSON.stringify(expected)) { publish(stored); return { status: "blocked" }; }
+          if (!isPolicyMetadataMutationIntent(stored) || JSON.stringify(stored) !== JSON.stringify(expected)) {
+            publish(stored); return { status: "blocked" };
+          }
           return dispatch(stored, true);
         }, { status: "blocked" });
       },
       abandon() {
-        const expected = observation.current?.owner === owner ? observation.current.pending : null;
+        const candidate = observation.current?.owner === owner ? observation.current.pending : null;
+        const expected = isPolicyMetadataMutationIntent(candidate) ? candidate : null;
         if (!expected) return Promise.resolve(false);
         return coordinate(async () => {
           clearPolicyMutationIntent(window.localStorage, expected);
