@@ -9,7 +9,14 @@ const project = dirname(fileURLToPath(import.meta.url));
 const uxPreviewMode = process.env.NEXT_PUBLIC_MATRIX_UX_PREVIEW === "1" ? "1" : "0";
 
 function addTree(digest, target) {
-  for (const entry of readdirSync(target, { withFileTypes: true }).sort((left, right) => left.name.localeCompare(right.name))) {
+  // ECMAScript string comparison is a stable UTF-16 code-unit order. Do not
+  // use localeCompare here: its ICU collation differs across build hosts and
+  // would make an identical source tree produce a different static build ID.
+  const entries = readdirSync(target, { withFileTypes: true }).sort((left, right) => {
+    if (left.name === right.name) return 0;
+    return left.name < right.name ? -1 : 1;
+  });
+  for (const entry of entries) {
     const path = join(target, entry.name);
     if (entry.isDirectory()) {
       addTree(digest, path);
