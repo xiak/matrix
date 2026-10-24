@@ -1569,9 +1569,12 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 	if err != nil {
 		t.Fatal("connect restored access analysis worker", err)
 	}
+	var closeRestoredAnalysisOnce sync.Once
+	closeRestoredAnalysis := func() { closeRestoredAnalysisOnce.Do(restoredAnalysisPool.Close) }
+	t.Cleanup(closeRestoredAnalysis)
 	restoredAnalysisRepository, err := iampostgres.NewAccessAnalysisRepository(restoredAnalysisPool)
 	if err != nil {
-		restoredAnalysisPool.Close()
+		closeRestoredAnalysis()
 		t.Fatal("construct restored access analysis repository", err)
 	}
 	restoredAnalysisSequence := 0
@@ -1580,19 +1583,31 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 		return fmt.Sprintf("auth-recovery-restored-analysis-%d", restoredAnalysisSequence), nil
 	}, "auth-recovery-restored-access-analysis")
 	if err != nil {
-		restoredAnalysisPool.Close()
+		closeRestoredAnalysis()
 		t.Fatal("construct restored access analysis scanner", err)
 	}
 	if _, err := restoredAdmin.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
 		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, sourceAnalyzer.ID); err != nil {
-		restoredAnalysisPool.Close()
+		closeRestoredAnalysis()
 		t.Fatal("make restored access analysis eligible", err)
 	}
 	if scanned, err := restoredScanner.ScanOnce(ctx); err != nil || !scanned.Claimed || scanned.Detections != 0 {
-		restoredAnalysisPool.Close()
+		closeRestoredAnalysis()
 		t.Fatal("restored analysis did not fail closed during the new observation window", scanned, err)
 	}
-	restoredAnalysisPool.Close()
+	// A subsequent current-epoch scan must retain the recovery provenance until
+	// the complete configured observation window has elapsed. Advancing merely
+	// from the epoch-transition scan to the ordinary scan cadence must not
+	// relabel the gap as an ordinary newly-created-analyzer window.
+	if _, err := restoredAdmin.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()
+		WHERE tenant_id=$1 AND analyzer_id=$2`, document.Organization.ID, sourceAnalyzer.ID); err != nil {
+		closeRestoredAnalysis()
+		t.Fatal("make restored access analysis eligible for its next cycle", err)
+	}
+	if scanned, err := restoredScanner.ScanOnce(ctx); err != nil || !scanned.Claimed || scanned.Detections != 0 {
+		closeRestoredAnalysis()
+		t.Fatal("subsequent restored analysis did not keep the recovery window closed", scanned, err)
+	}
 	recoveryFindings, err := restoredAPI.ListAccessFindings(ctx, login.Credential, sourceAnalyzer.ID,
 		iamv1.AccessFindingFilter{Status: iamv1.AccessFindingStatusAll}, "", "auth-recovery-epoch-one-findings")
 	if err != nil || len(recoveryFindings.Items) != 0 {
@@ -1607,6 +1622,7 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 			t.Fatal("reopened authority did not restart the observation window at its trusted recovery floor")
 		}
 	}
+	closeRestoredAnalysis()
 	if _, err := restoredAPI.AccessFinding(ctx, login.Credential, sourceAnalyzer.ID, sourceFinding.ID,
 		"auth-recovery-epoch-zero-finding"); !errors.Is(err, identityaccess.ErrAccessFindingNotFound) {
 		t.Fatal("reopened authority revived an epoch-0 finding", err)
@@ -1673,7 +1689,87 @@ func TestIAMAuthenticationRecoveryPostgres(t *testing.T) {
 		document.Organization.ID, sourceAnalyzer.ID).Scan(&repeatedEpochBoundary); err != nil || !repeatedEpochBoundary {
 		t.Fatal("second restored finding epoch storage boundary differs", err)
 	}
+	assertPostRecoveryAnalyzerUsesCreationWindow(t, ctx, repeatedAPI, repeatedAdmin, repeatedDSN, repeatedLogin.Credential)
 	closeRepeatedAPI()
+}
+
+func assertPostRecoveryAnalyzerUsesCreationWindow(t *testing.T, ctx context.Context, api *identityaccess.Authority,
+	database *pgx.Conn, dsn string, operator iamv1.Secret) {
+	t.Helper()
+	initialPassword := iamHTTPSecret(t, "Post-Recovery-Analyzer-Initial-739!")
+	account, err := api.CreateAccount(ctx, operator, iamv1.CreateAccountRequest{
+		ID: "auth-recovery-post-account", DisplayName: "Post recovery analyzer account", RootLoginName: "post-recovery-root",
+		RootDisplayName: "Post recovery root", InitialPassword: initialPassword, RequestID: "auth-recovery-post-account-create",
+	})
+	if err != nil {
+		t.Fatal("create post-recovery analyzer account", err)
+	}
+	root, err := api.Login(ctx, iamv1.LoginRequest{LoginName: account.RootIdentity.LoginName,
+		Password: initialPassword, RequestID: "auth-recovery-post-account-login"})
+	if err != nil || !root.MustChangePassword {
+		t.Fatal("login post-recovery analyzer root", err)
+	}
+	if _, err := api.ChangePassword(ctx, root.Credential, iamv1.ChangePasswordRequest{
+		CurrentPassword: initialPassword, NewPassword: iamHTTPSecret(t, "Post-Recovery-Analyzer-Current-853!"),
+		RequestID: "auth-recovery-post-account-password",
+	}); err != nil {
+		t.Fatal("change post-recovery analyzer root password", err)
+	}
+	analyzer, err := api.CreateAccessAnalyzer(ctx, root.Credential, iamv1.CreateAccessAnalyzerRequest{
+		Type: iamv1.AccessAnalyzerUnusedAccess, RequestID: "auth-recovery-post-analyzer-create",
+	})
+	if err != nil {
+		t.Fatal("create post-recovery access analyzer", err)
+	}
+	assertWindow := func(phase string) {
+		t.Helper()
+		page, err := api.ListAccessFindings(ctx, root.Credential, analyzer.ID,
+			iamv1.AccessFindingFilter{Status: iamv1.AccessFindingStatusAll}, "", "auth-recovery-post-analyzer-"+phase)
+		if err != nil || len(page.Items) != 0 || len(page.Coverage) != len(iamv1.AccessObservationCoverageSources()) {
+			t.Fatal("post-recovery analyzer exposed a premature finding", phase, err)
+		}
+		for index, coverage := range page.Coverage {
+			if index >= 4 {
+				break
+			}
+			if coverage.State != iamv1.AccessObservationInsufficientCoverage ||
+				coverage.Reason != iamv1.AccessObservationWindowIncomplete || coverage.ObservedFrom == nil ||
+				coverage.ObservedFrom.Before(analyzer.CreatedAt) {
+				t.Fatal("new post-recovery analyzer was mislabeled as restored coverage", phase)
+			}
+		}
+	}
+	assertWindow("before-scan")
+	if _, err := database.Exec(ctx, `UPDATE iam.access_analysis_scan_state SET next_scan_at=clock_timestamp()+interval '1 hour'`); err != nil {
+		t.Fatal("isolate post-recovery analyzer scan", err)
+	}
+	config, err := pgxpool.ParseConfig(dsn)
+	if err != nil {
+		t.Fatal("parse post-recovery analyzer database", err)
+	}
+	config.ConnConfig.User, config.ConnConfig.Password = iamAccessAnalysisLogin, iamAccessAnalysisPass
+	config.MaxConns, config.MinConns = 2, 0
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		t.Fatal("connect post-recovery analyzer worker", err)
+	}
+	defer pool.Close()
+	repository, err := iampostgres.NewAccessAnalysisRepository(pool)
+	if err != nil {
+		t.Fatal("construct post-recovery analyzer repository", err)
+	}
+	sequence := 0
+	scanner, err := accessanalysis.NewScanner(repository, func(string) (string, error) {
+		sequence++
+		return fmt.Sprintf("auth-recovery-post-analysis-%d", sequence), nil
+	}, "auth-recovery-post-access-analysis")
+	if err != nil {
+		t.Fatal("construct post-recovery analyzer scanner", err)
+	}
+	if scanned, err := scanner.ScanOnce(ctx); err != nil || !scanned.Claimed || scanned.Detections != 0 {
+		t.Fatal("scan post-recovery analyzer", scanned, err)
+	}
+	assertWindow("after-scan")
 }
 
 func assertAuthenticationRecoveryFloorCarry(t *testing.T, ctx context.Context, config *pgx.ConnConfig, database *pgx.Conn,

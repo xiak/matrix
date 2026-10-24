@@ -611,6 +611,9 @@ BEGIN
         RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='authentication recovery completion is unavailable'; END IF;
     END IF;
 
+    -- An analyzer that existed before recovery keeps its recovery-gap lineage
+    -- across current-epoch scans until the full configured window is covered.
+    -- An analyzer created after recovery starts an ordinary observation window.
     SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('source',o.source,
       'state',CASE WHEN o.source IN ('PAAS_RESULTS','EXTERNAL_FEDERATION') THEN 'NOT_INCLUDED'
         WHEN GREATEST(o.observed_from,CASE WHEN o.recovery_epoch<>current_recovery_epoch THEN recovery_completed END)<=window_start THEN 'COMPLETE'
@@ -620,7 +623,12 @@ BEGIN
       'observedThrough',CASE WHEN o.source IN ('PAAS_RESULTS','EXTERNAL_FEDERATION') THEN NULL ELSE observed END,
       'reason',CASE WHEN o.source IN ('PAAS_RESULTS','EXTERNAL_FEDERATION') THEN 'SOURCE_NOT_IMPLEMENTED'
         WHEN GREATEST(o.observed_from,CASE WHEN o.recovery_epoch<>current_recovery_epoch THEN recovery_completed END)<=window_start THEN ''
-        WHEN o.recovery_epoch<>current_recovery_epoch THEN 'RESTORE_GAP' ELSE 'OBSERVATION_WINDOW_INCOMPLETE' END))
+        WHEN current_recovery_epoch>0 AND (analyzer_document->>'createdAt')::timestamptz<recovery_completed
+          AND (o.recovery_epoch<>current_recovery_epoch OR (o.recovery_epoch=current_recovery_epoch
+            AND o.recovery_command_id IS NOT DISTINCT FROM recovery_command
+            AND o.recovery_completed_at IS NOT DISTINCT FROM recovery_completed
+            AND (o.reason='RESTORE_GAP' OR o.observed_from=recovery_completed))) THEN 'RESTORE_GAP'
+        ELSE 'OBSERVATION_WINDOW_INCOMPLETE' END))
       ORDER BY array_position(ARRAY['IAM_PASSWORD_SESSIONS','IAM_ACCESS_KEY_AUTHORIZATIONS','IAM_ROLE_SESSIONS',
         'IAM_ROLE_AUTHORIZATIONS','PAAS_RESULTS','EXTERNAL_FEDERATION'],o.source)) INTO coverage
       FROM iam.access_analyzer_observations o WHERE o.tenant_id=tenant AND o.analyzer_id=analyzer;
@@ -720,14 +728,15 @@ END $function$;
 
 CREATE OR REPLACE FUNCTION iam.list_access_findings(tenant text,actor text,actor_session text,decision text,analyzer text,after_id text,status_filter text)
 RETURNS jsonb LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,pg_temp AS $function$
-DECLARE analyzer_status text; effective_now timestamptz(6):=transaction_timestamp(); coverage jsonb; items jsonb;
+DECLARE analyzer_status text; analyzer_created timestamptz(6); effective_now timestamptz(6):=transaction_timestamp(); coverage jsonb; items jsonb;
     current_recovery_epoch bigint; recovery_state text; recovery_command text; recovery_completed timestamptz;
 BEGIN
     PERFORM iam.assert_access_analyzer_actor(tenant,actor,actor_session,decision,'iam.access-finding.list',analyzer);
     IF (COALESCE(after_id,'')<>'' AND after_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
       OR status_filter NOT IN ('ALL','ACTIVE','ARCHIVED','RESOLVED') THEN
       RAISE EXCEPTION USING ERRCODE='22023',MESSAGE='access finding page is invalid'; END IF;
-    SELECT a.status INTO analyzer_status FROM iam.access_analyzers a WHERE a.tenant_id=tenant AND a.analyzer_id=analyzer;
+    SELECT a.status,a.created_at INTO analyzer_status,analyzer_created FROM iam.access_analyzers a
+      WHERE a.tenant_id=tenant AND a.analyzer_id=analyzer;
     IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='P0002',MESSAGE='access analyzer not found'; END IF;
     SELECT s.state,s.epoch INTO recovery_state,current_recovery_epoch FROM iam.authentication_recovery_state s WHERE s.singleton;
     IF NOT FOUND OR recovery_state<>'OPEN' THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='authentication recovery is not open'; END IF;
@@ -738,16 +747,24 @@ BEGIN
         WHERE c.epoch=current_recovery_epoch;
       IF NOT FOUND THEN RAISE EXCEPTION USING ERRCODE='55000',MESSAGE='authentication recovery completion is unavailable'; END IF;
     END IF;
+    -- Preserve the same recovery lineage in the public projection as in the
+    -- worker snapshot; an epoch match alone does not close a recovery gap.
     SELECT jsonb_agg(jsonb_strip_nulls(jsonb_build_object('source',o.source,
       'state',CASE WHEN o.source IN ('PAAS_RESULTS','EXTERNAL_FEDERATION') THEN 'NOT_INCLUDED'
         WHEN o.recovery_epoch<>current_recovery_epoch THEN 'INSUFFICIENT_COVERAGE' ELSE o.state END,
       'observedFrom',CASE WHEN o.source IN ('PAAS_RESULTS','EXTERNAL_FEDERATION') THEN NULL
-        WHEN o.recovery_epoch<>current_recovery_epoch THEN recovery_completed ELSE o.observed_from END,
+        WHEN o.recovery_epoch<>current_recovery_epoch THEN GREATEST(o.observed_from,recovery_completed) ELSE o.observed_from END,
       'observedThrough',CASE WHEN o.source IN ('PAAS_RESULTS','EXTERNAL_FEDERATION') THEN NULL
-        WHEN o.recovery_epoch<>current_recovery_epoch THEN recovery_completed
+        WHEN o.recovery_epoch<>current_recovery_epoch THEN GREATEST(o.observed_from,recovery_completed)
         WHEN analyzer_status='ACTIVE' THEN LEAST(effective_now,o.observed_through) ELSE o.observed_through END,
       'reason',CASE WHEN o.source IN ('PAAS_RESULTS','EXTERNAL_FEDERATION') THEN 'SOURCE_NOT_IMPLEMENTED'
-        WHEN o.recovery_epoch<>current_recovery_epoch THEN 'RESTORE_GAP' ELSE o.reason END))
+        WHEN current_recovery_epoch>0 AND analyzer_created<recovery_completed
+          AND (o.recovery_epoch<>current_recovery_epoch OR (o.recovery_epoch=current_recovery_epoch
+            AND o.state='INSUFFICIENT_COVERAGE'
+            AND o.recovery_command_id IS NOT DISTINCT FROM recovery_command
+            AND o.recovery_completed_at IS NOT DISTINCT FROM recovery_completed
+            AND (o.reason='RESTORE_GAP' OR o.observed_from=recovery_completed))) THEN 'RESTORE_GAP'
+        WHEN o.recovery_epoch<>current_recovery_epoch THEN 'OBSERVATION_WINDOW_INCOMPLETE' ELSE o.reason END))
       ORDER BY array_position(ARRAY['IAM_PASSWORD_SESSIONS','IAM_ACCESS_KEY_AUTHORIZATIONS','IAM_ROLE_SESSIONS',
         'IAM_ROLE_AUTHORIZATIONS','PAAS_RESULTS','EXTERNAL_FEDERATION'],o.source)) INTO coverage
       FROM iam.access_analyzer_observations o WHERE o.tenant_id=tenant AND o.analyzer_id=analyzer;
