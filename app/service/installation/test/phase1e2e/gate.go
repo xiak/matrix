@@ -240,8 +240,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("protected-backup")
 	}
 	emit("protected-backup")
+	if err := value.touchActiveRetainedPrimarySessions(ctx, "before-failed-upgrade"); err != nil {
+		return err
+	}
 
 	if err := value.failedUpgrade(ctx, secret, newPassword, bearer); err != nil {
+		return err
+	}
+	if err := value.touchActiveRetainedPrimarySessions(ctx, "after-failed-upgrade"); err != nil {
 		return err
 	}
 	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
@@ -500,7 +506,13 @@ func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
 			runtimeDirectory: "managed-rabbitmq", credentialFile: "rabbitmq-password", credentialMode: 0o600},
 	}
 	for index := range products {
+		if err := value.touchActiveRetainedPrimarySessions(ctx, "before-managed-product-"+products[index].component); err != nil {
+			return err
+		}
 		if err := value.verifySignedManagedProduct(ctx, tenant, products[index]); err != nil {
+			return err
+		}
+		if err := value.touchActiveRetainedPrimarySessions(ctx, "after-managed-product-"+products[index].component); err != nil {
 			return err
 		}
 	}
@@ -2497,6 +2509,11 @@ func (value *gate) assertTenantRetention(
 	if err := value.assertPlatformAuditRetention(ctx, operator); err != nil {
 		return err
 	}
+	if !authenticationRecovered {
+		if err := value.touchActiveRetainedPrimarySessions(ctx, "checkpoint-"+checkpoint); err != nil {
+			return err
+		}
+	}
 	for index := range value.retainedIAM.Tenants {
 		tenant := &value.retainedIAM.Tenants[index]
 		id := tenant.Account.ID
@@ -2553,16 +2570,6 @@ func (value *gate) assertTenantRetention(
 				return fail("tenant-valid-password-session-survived-recovery")
 			}
 		} else {
-			// Ordinary authenticated reads intentionally do not advance the idle
-			// waterline. The lifecycle client is active at every release
-			// checkpoint, so record that foreground interaction before asserting
-			// that the same password-retained Session survived replacement.
-			if _, err := value.edge.touchCurrentSession(
-				ctx, tenant.RetainedPrimaryCredential, id,
-				account.RootIdentity.PrincipalID, tenant.RetainedPrimarySessionID,
-			); err != nil {
-				return fail("tenant-valid-password-session-touch")
-			}
 			var retainedIdentity iamv1.CurrentIdentity
 			if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential, &retainedIdentity); err != nil ||
 				iamv1.ValidateCurrentIdentity(retainedIdentity) != nil || retainedIdentity.User.ID != account.RootIdentity.PrincipalID ||
@@ -2653,6 +2660,35 @@ func (value *gate) assertTenantRetention(
 		if err := value.edge.logout(ctx, bearer); err != nil {
 			return fail("tenant-retained-primary-logout")
 		}
+	}
+	return nil
+}
+
+func (value *gate) touchActiveRetainedPrimarySessions(ctx context.Context, label string) error {
+	if value.retainedIAM == nil || len(value.retainedIAM.Tenants) != 2 || label == "" ||
+		!validRetainedPrimarySessions(value.retainedIAM.Tenants) {
+		return fail("tenant-session-activity-fixture")
+	}
+	touched := 0
+	for index := range value.retainedIAM.Tenants {
+		tenant := &value.retainedIAM.Tenants[index]
+		if tenant.Account.Status != iamv1.AccountActive {
+			continue
+		}
+		// Product reads deliberately do not renew IAM idle expiry. Around each
+		// potentially long foreground product or release operation, this fixture
+		// records an explicit interaction by the exact possessed Session. It is
+		// not a timer-driven keepalive and cannot revive an already idle Session.
+		if _, err := value.edge.touchCurrentSession(
+			ctx, tenant.RetainedPrimaryCredential, tenant.Account.ID,
+			tenant.Account.RootIdentity.PrincipalID, tenant.RetainedPrimarySessionID,
+		); err != nil {
+			return fail("tenant-session-activity-" + label)
+		}
+		touched++
+	}
+	if touched != 1 {
+		return fail("tenant-session-activity-fixture")
 	}
 	return nil
 }

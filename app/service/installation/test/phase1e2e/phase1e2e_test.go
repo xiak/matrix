@@ -823,6 +823,10 @@ func TestEdgeClientTouchesOnlyThePossessedCurrentSession(t *testing.T) {
 		{name: "revoked session rejected", status: http.StatusUnauthorized, responseMediaType: "application/problem+json"},
 		{name: "wrong session rejected", status: http.StatusOK, responseMediaType: "application/json", noStore: true,
 			body: func() iamv1.SessionActivity { result := want; result.SessionID = "session-other"; return result }()},
+		{name: "wrong account rejected", status: http.StatusOK, responseMediaType: "application/json", noStore: true,
+			body: func() iamv1.SessionActivity { result := want; result.AccountID = "account-other"; return result }()},
+		{name: "wrong user rejected", status: http.StatusOK, responseMediaType: "application/json", noStore: true,
+			body: func() iamv1.SessionActivity { result := want; result.UserID = "principal-other"; return result }()},
 		{name: "cacheable activity rejected", status: http.StatusOK, responseMediaType: "application/json", body: want},
 		{name: "invalid activity rejected", status: http.StatusOK, responseMediaType: "application/json", noStore: true, body: iamv1.SessionActivity{}},
 	} {
