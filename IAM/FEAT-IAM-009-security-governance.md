@@ -1,6 +1,6 @@
 # FEAT-IAM-009：登录保护与安全治理
 
-- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据。S4b当前访问诊断已固定于`ef4483e2`；S4c-a账号级闲置访问分析器已固定于`bbb2f7ee`；S4c-b真实观测扫描和Finding生命周期已固定于`91649497`并通过独立CI；S4c-c显式自动处置后端及其签名恢复组合已由`ed2835db`的独立CI最终确认。当前发布组合已由011接受；009剩余本轮缺口为完整LIVE UI。旧失败不回填，修复与证据见所属段落及011；以下设计不等于整个产品发布可用性。
+- 状态：S1会话自管理、S2 TOTP MFA/安全通知/恢复、S3密码与共享尝试治理及S4a账号安全报告均已有固定实现和所属段落的真实证据。S4b当前访问诊断已固定于`ef4483e2`；S4c-a账号级闲置访问分析器已固定于`bbb2f7ee`；S4c-b真实观测扫描和Finding生命周期已固定于`91649497`并通过独立CI；S4c-c显式自动处置后端及其签名恢复组合已由`ed2835db`的独立CI最终确认。固定`95a343ae`进一步接受当前前台Session活动契约和恢复后Analyzer缺口谱系，并由011/FEAT-005拥有组合CI与签名运行证据；009剩余本轮缺口为010拥有的完整LIVE UI。旧失败不回填，修复与证据见所属段落及011；以下设计不等于整个产品发布可用性。
 - 依赖：003、005、007。
 - Owner：IAM 身份/凭据/会话治理，Audit evidence。
 
@@ -1320,13 +1320,13 @@ S3b正在实施，尚未完整验收。最小可验收结果是：管理员按�
 
 #### 会话闲置期限（后继执行片）
 
-此片的后端源码候选已实现，完整009、独立CI、LIVE消费者和发布组合仍未验收。最小目标为同一Account两名USER在两个IAM副本上获得各自LOGIN_SESSION：一个客户端仅在显式交互时更新自己的服务器活动水位，另一个没有活动的会话在真实闲置截止后的下一次IAM/PaaS受保护请求被拒；重启、后台安装轮询或另一个凭据的活动都不能复活它。Session绝对期限现有默认8小时、发行配置最多24小时，仍在发行时封存且不滑动；密码到期可进一步缩短它。闲置不是人类在场证明，也不是MFA或step-up。
+此片的后端与冻结控制台消费者已经进入固定`95a343ae`的签名组合；010仍独立拥有完整LIVE页面验收。最小目标为同一Account两名USER在两个IAM副本上获得各自LOGIN_SESSION：一个客户端仅在显式交互时更新自己的服务器活动水位，另一个没有活动的会话在真实闲置截止后的下一次IAM/PaaS受保护请求被拒；重启、后台安装轮询或另一个凭据的活动都不能复活它。Session绝对期限现有默认8小时、发行配置最多24小时，仍在发行时封存且不滑动；密码到期可进一步缩短它。闲置不是人类在场证明，也不是MFA或step-up。
 
 Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默认30分钟、允许5–60分钟；有未撤销安装级平台附件或原root身份的有效上限为30分钟。更新继续使用现有Account权限、目标限定step-up、版本CAS、不可变完成、通知和outbox事务；旧完成仍只读原字节，缺字段的旧未完成proof不能凭默认值变成写许可。设置改变沿既有安全设置屏障使旧会话/挑战失效，不能通过调大阈值挽回已过期会话。每个新Session封存发行时实际适用的idle秒数和由数据库产生的初始活动时间，不从客户端、当前策略或今天的角色关系倒填旧Session。升级前缺活动水位的旧Session失败关闭并重新登录，不用`issued_at`猜测其后是否有活动。
 
 唯一续闲置入口拟为`POST /v1/auth/sessions/current:touch`：只收当前有效LOGIN_SESSION bearer，不收Account/User/Session selector、时间戳、阈值或RoleSession；返回当前Session的非秘密服务器`lastActivityAt/idleExpiresAt/absoluteExpiresAt`。服务器在原Account→USER→credential→Session锁序中验证身份、代际、状态、MFA及`clock_timestamp()<min(原absolute,上次活动+封存idle)`，然后至多每60秒提交一次活动水位；更频繁的请求只返回原已记录水位，不给额外有效期。窗口是数据库时间和同一Session行的原子比较，双副本竞争只产生一次推进。后端可以验证请求持有者的有效bearer，但不能证明实际真人进行了鼠标/键盘操作；本入口不得被描述为强认证。无效、已到期或在等待锁期间过期的Session不能touch，任何失败都不改变活动水位。
 
-普通IAM/PaaS受保护请求、`/ready`及安装进度后台轮询只检查当前闲置资格，不续期；RoleSession、AccessKey、服务、worker和后台Operation均不触碰来源LOGIN_SESSION。UX owner只读核对发现控制台当前唯一周期性带bearer后端请求是PENDING/PROVISIONING安装阶段每4秒读取进度；IAM账号工作区无周期刷新，亦无通用交互活动上报。UI未来只能在明确的前台交互下调用已冻结的touch入口，不借轮询、页面可见性或客户端倒计时取得权威期限。该接口及字段在实现/生成/门禁固定前不可称LIVE；当前UX只做显式MOCK。跨服务查询仍以IAM当前会话为权威，业务服务不得缓存一次Allow当作持续有效。
+普通IAM/PaaS受保护请求、`/ready`及安装进度后台轮询只检查当前闲置资格，不续期；RoleSession、AccessKey、服务、worker和后台Operation均不触碰来源LOGIN_SESSION。冻结控制台只在可见页面中的可信`pointerdown`、有意义的`keydown`和`popstate`前台交互调用touch，并按60秒客户端合并窗口抑制重复提交；`focus`、定时轮询、普通请求、合成事件、MOCK和仅页面可见均不续期，也不使用客户端倒计时取得权威期限。跨服务查询仍以IAM当前会话为权威，业务服务不得缓存一次Allow当作持续有效。真实浏览器是否准确消费这些边界继续由010判定，签名包和组件测试不代替该结论。
 
 底层`Session`水位归现有IAM Session表/读取函数，不增SessionStore、Redis或后台扫描服务。lookup、本人目录、RoleSession来源资格及各最终写事务必须按服务端当前时间检查`min(absolute,idle)`；历史已过期记录可留存但不得作为ACTIVE资格或被后续touch复活。活动水位不是每次业务请求的Audit事实；它只能支持IAM已知的最近认证活动，不能填补S4所需的Key、Role和各产品业务结果水位。按两个真实IAM副本、有效/迟到并发touch、最低合法5分钟自然闲置、管理员延长设置、密码/状态/撤权交错、重启与旧行升级，以及PaaS跨进程拒绝实跑；不修改时钟或缩短生产配置假装到期。设计依据是[NIST 800-63B会话管理](https://pages.nist.gov/800-63-4/sp800-63b/session/)的总体/闲置双期限与[OWASP Session Management](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)的服务端执行原则；30分钟是MATRIX产品默认，不宣称获得NIST等级认证。
 
@@ -1341,6 +1341,8 @@ Account的`security-settings`增加明确的`session.idleTimeoutMinutes`，默�
 固定`139e1322730186cc555bec305ba3889edd59b10c`的[Verification36559683247](https://github.com/xiak/matrix/actions/runs/36559683247)在`authority-storage`失败，不能算作本片独立CI成功。失败先暴露Audit存储门禁写死IAM51；改为读取未初始化时的有效版本并证明bootstrap只让同一版本就绪，不把IAM内部schema号交给Audit测试拥有。随后同一门禁还暴露旧测试通过直接改写Session发行/到期时间制造过期，已删除该重复路径；真实自然absolute/idle到期仍由IAM所属门禁证明，跨authority测试继续证明服务器封存期限、撤销过滤和失败outbox原子性。修正后的`TestPostgresAuthorityIntegration`在新独立PG18.6上串行race-p1通过18.961s；后继固定SHA及独立CI仍待确认，旧失败不回填。
 
 同轮测试所有权审计确认，认证schema破坏矩阵只依赖同一最终schema，不依赖恢复、替换、移除或设置仪式的mode。当前仅在`TestIAMTOTPEnrollmentPostgres`执行这一完整矩阵，其他入口继续执行各自真实事务，不再重复相同catalog攻击。相同独立PG18容器、Go race-p1下，唯一攻击矩阵及enrollment业务96.561s通过，非enrollment的真实认证器移除事务82.423s通过；没有删除任何模式特有测试、readiness断言或安全攻击项。
+
+**当前固定组合证据（2026-10-24）。** 固定`95a343ae2f4efb4c9845c9af25d0225e722f870c`保留上述服务端Session水位、锁内重验和60秒合并契约；同源签名门禁在真实登录、MFA、安全设置、恢复及发布检查点显式touch保留会话，普通后台请求仍不续期。其[Verification 40085311144](https://github.com/xiak/matrix/actions/runs/40085311144)的精确SHA、整轮及十九项job全部`completed/success`；FEAT-005另记录4197.458秒冷启动A/B生命周期及435.593秒容器级重启后复验。该组合接受后端和签名消费者，不把尚未执行的010 LIVE浏览器路径标为通过。
 
 #### S3验收与衔接
 
@@ -1470,6 +1472,8 @@ S4c-a不可变事实只有用户管理动作`iam.access-analyzer.created/updated
 Linux权限测试修复提交`4f53122b44be26036ef27b5ec56c245d799a159e`的[Verification 37102922494](https://github.com/xiak/matrix/actions/runs/37102922494)中，`go`、`node-process`、`authority-storage`、恢复存储和Role/STS分片均成功；`authority-runtime`的实际会话/TOTP步骤成功后，`TestIAMTOTPBackupProcesses`因沿用旧迁移文件清单、未提供新增scanner专用DSN而失败。完整CI日志确认唯一失败为一次性备份fixture的`actual backup-capability migration failed`；同一固定源码的独立IAM/Audit/PaaS多进程门禁在本任务PG18通过315.66秒。现有备份测试owner已补入`MATRIX_MIGRATION_IAM_ACCESS_ANALYSIS_DSN_FILE`，不改变备份、迁移或scanner生产权限；修复后的聚焦门禁和新独立CI仍待完成。
 
 最终修复提交`91649497a0c53be1174d8835326a2df51fe74a55`只为上述既有备份迁移fixture提供实际`matrix_iam_access_analysis_worker_login`专用DSN，不改变公开API、OpenAPI、生产SQL或worker权限。其[Verification 37106511260](https://github.com/xiak/matrix/actions/runs/37106511260)已由GitHub API按精确SHA核实：`go`、`node-process`、`authority-process`汇总及十二项拆分authority门禁共十五个job全部`completed/success`，无失败、取消、超时或跳过。S4c-b后端据此接受；UX/UI的LIVE组合、自动处置和完整009发布仍分别验收，不能继承本结论。
+
+后继固定`95a343ae2f4efb4c9845c9af25d0225e722f870c`收紧恢复后的公开投影和扫描快照：恢复前已存在的Analyzer即使完成一次当前epoch扫描，也持续返回`INSUFFICIENT_COVERAGE/RESTORE_GAP`，直至完整配置窗口覆盖；恢复完成后才创建的Analyzer仍只返回普通`OBSERVATION_WINDOW_INCOMPLETE`。新增真实PostgreSQL恢复回归同时覆盖两类Analyzer，签名生命周期又以选定备份恢复、旧Session拒绝、新Session发行和实际Analyzer查询证明原缺口。该固定源码的独立CI十九项全部成功，FEAT-005记录同源A/B及重启证据；没有缩短阈值、伪造时间或把epoch相等当成覆盖完整。
 
 当前扫描事务继续只重试可证明已回滚的`40001/40P01`，并复用同一claim attempt、completion及处置意图；陈旧租约、权限/形状校验失败、提交未知和取消仍立即失败关闭。持续读Finding的真实副本可能连续与completion形成SSI冲突，因此生产上限为八次全新事务、带有界随机退避，总等待预算仍远小于单次90秒cycle和120秒租约；不能用无限重试、延长租约或重新claim掩盖竞争。原三次上限在本任务真实双worker门禁中连续命中三个`40001`，没有部分结果但留下待过期租约并于110.38s明确失败；不是延长等待可以接受的结果。最终单元race 3.075s证明原三次冲突后仍以同一意图提交一次、八次耗尽无结果且取消即时停止；另一全新PostgreSQL 18数据库上的独立双worker/双Account进程race 252.514s完成完整周期、后继业务与审计链，未遗留租约或重复事实。
 

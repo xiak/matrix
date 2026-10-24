@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted signed release consumer at fixed `5935fa5005529b2c4e1da943b98f49300430ba10`, IAM/Audit/PaaS `87/39/7+r37`, after the 2627.90-second native-Linux A/B lifecycle and 282.28-second post-restart gate. Its sole rolling development predecessor remains fixed `86/39/7+r36`. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by this result
+- Status: Accepted signed release consumer at fixed `95a343ae2f4efb4c9845c9af25d0225e722f870c`, IAM/Audit/PaaS `87/39/7+r37`, after the 4197.458-second native-Linux A/B lifecycle and 435.593-second post-restart gate. Its sole rolling development predecessor remains fixed `86/39/7+r36`. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by this result
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `87/39/7` revision 37 and its sole rolling data predecessor is fixed `86/39/7` revision 36; a signed upgrade still requires an immediate same-profile release predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -899,10 +899,103 @@ paths. It does not admit a cross-profile transition, arbitrary historical
 N-1 operation, database HA or browser interaction with the installed release.
 FEAT-IAM-010 continues to own that final browser path.
 
-### Current IAM87 User-management-completion release-consumer gate
+### Current IAM87 foreground-session and recovery-gap release-consumer gate
 
 Fixed production and test source
-`5935fa5005529b2c4e1da943b98f49300430ba10` is the accepted current
+`95a343ae2f4efb4c9845c9af25d0225e722f870c` is the accepted current
+same-profile signed consumer, IAM/Audit/PaaS `87/39/7+r37`. It supersedes the
+signed consumer `5935fa5005529b2c4e1da943b98f49300430ba10`, not the sole rolling
+data predecessor `08e1dc4a6ce81386ea7223e62d03356f82aeee58`
+(`86/39/7+r36`). The source includes the frozen console export consumed from
+the UX owner, but this lifecycle does not turn component or static-export
+evidence into installed-browser acceptance.
+
+The clean fixed source assembled and independently authenticated this pair:
+
+| Release | Manifest SHA-256 |
+| --- | --- |
+| A: `matrix-v0.1.0-iam.r37.35-95a343ae2f4e` | `818248032a6dfe9f553230237407b5334045b25366aefe0f1028a54072c5d55d` |
+| B: `matrix-v0.1.0-iam.r37.36-95a343ae2f4e` | `a9aa20017e43647180af72f758d3fe41e38e650511bf2456a5aaaa190f8b413e` |
+
+B names A as its exact immediate predecessor. Both contain twelve signed
+payloads, ten pinned images and topology digest
+`sha256:ca31ccec97d52776d61c8bdcea0be04b2d5a6fe7fc28d9d0055c4d2a3ff75c30`.
+The separate 296-byte public trust document has SHA-256
+`8030f29743135aeaf097d514c4b20a1e226c2815f91ba63d78ceb98d9b6e3d3f`.
+The one-time signing private key was removed after assembly and is absent from
+the releases and delivery archives.
+
+On 2026-10-24 (Asia/Shanghai), a task-owned Docker 27.5.1 engine with no
+external route, a private cgroup namespace and limits of 2 CPU/4 GiB/PIDs1024
+was emptied object-by-object to zero inner containers, images and volumes. It
+then ran the existing gate from the exact source for 4197.458 seconds. The
+unmodified signed binaries proved restricted runtime database identities,
+real STARTTLS/SASL mail and TOTP, Account/root/member and foreground-session
+activity boundaries, all four managed products, two application generations,
+tenant and installation Audit chains, a protected backup, injected failed
+upgrade and automatic A recovery, normal B upgrade, explicit A rollback and
+selected-backup recovery. Recovery rejected old Sessions, issued a new Session,
+permanently fenced the old AccessKey, retained the workload and Audit history,
+preserved the Analyzer's `RESTORE_GAP`, excluded the post-backup security report
+and resource, then completed application rollback, stop/capacity release and
+bounded support zero-leakage.
+
+The preceding `e64ed025b58713ea359d41da469b10b3e394dd409` lifecycle was rejected
+at the Analyzer recovery assertion: current-epoch scans had prematurely
+changed a pre-recovery Analyzer from `RESTORE_GAP` to ordinary window
+incompleteness. Fixed `95a343ae` preserves that lineage until the configured
+window is fully covered while a post-recovery Analyzer still starts with
+`OBSERVATION_WINDOW_INCOMPLETE`. The owning real PostgreSQL recovery tests and
+the full signed gate cover both cases; no timing relaxation or compatibility
+branch was added.
+
+After the cold gate passed, only the task-owned outer engine container was
+stopped and started. Its exact ID
+`f97abe2dcb75511b33407d945cb9d9ae3b4fa8a4da1525e4fc4ee9519e32a850`,
+volume, bind mount, no-route mode and resource limits remained unchanged;
+OOM was false and the restart count remained zero. The first read-only runner
+attempt failed before compiling the gate because it omitted the already
+prepared offline Go cache variables and therefore tried the unavailable public
+proxy. It made no product request or state change and its nonzero record is
+retained. The corrected invocation set the original cache paths and
+`GOPROXY=off`; it passed in 435.593 seconds. All eleven platform containers
+became healthy without restaging private mail input, and the gate proved two
+read-only status/verify cycles, retained AccessKey retirement, fresh MFA login,
+primary recovery and revocation, absent stopped workload, zero capacity claims
+and a sanitized support bundle, ending in `complete-offline-lifecycle`. No
+remote host or shared Docker service was restarted.
+
+Fixed source `95a343ae2f4efb4c9845c9af25d0225e722f870c` independently passed
+[Verification 40085311144](https://github.com/xiak/matrix/actions/runs/40085311144),
+attempt 1: the exact head SHA, overall run and all nineteen jobs are
+`completed/success`. This accepts the fixed source and signed consumer; it does
+not inherit an unexecuted browser journey, production fairness SLO or database
+HA claim.
+
+The authenticated Linux trees were archived in a separate `network=none`,
+read-only-root packaging container limited to 1 CPU/1 GiB/PIDs128. Each archive
+was independently extracted and compared with its source for bytes, object
+type, uid/gid and mode; no links or special objects are present and `bin/mx`
+remains `0700 root:root`. The packager exited0 without OOM and its temporary
+extraction trees and container were removed. These distribution identities do
+not replace the release signatures:
+
+| Archive | Bytes | SHA-256 |
+| --- | --- | --- |
+| `matrix-v0.1.0-iam.r37.35-95a343ae2f4e-linux-amd64.tar.gz` | 1561914479 | `c95462ae3be7f45bb3be544454dcce5aa53b296e9824e13cd90a357e718049ce` |
+| `matrix-v0.1.0-iam.r37.36-95a343ae2f4e-linux-amd64.tar.gz` | 1561915196 | `0783019d3fc254984a2f35b86f08713e35c8f077a45530b5189a3440c9d56586` |
+
+The two archives and public trust document were copied to the Windows delivery
+directory and independently rehashed there; all byte lengths and SHA-256 values
+match the Linux originals. A is the tested fresh-installation base and B is its
+tested same-profile upgrade/rollback counterpart. Neither package admits a
+cross-profile transition, arbitrary historical N-1 operation, installed UI
+journey or production availability claim.
+
+### Historical IAM87 User-management-completion release-consumer gate
+
+Fixed production and test source
+`5935fa5005529b2c4e1da943b98f49300430ba10` was the prior accepted
 same-profile signed consumer, IAM/Audit/PaaS `87/39/7+r37`. On 2026-10-20
 (Asia/Shanghai), the existing native-Linux lifecycle passed in 2627.90 seconds
 and its separate post-restart gate passed in 282.28 seconds. This replaces
