@@ -913,16 +913,18 @@ function parseNotificationDelivery(value: unknown, issuedAt: string): Notificati
 }
 
 function parseNotificationVerification(value: unknown): NotificationContactVerification;
+function parseNotificationVerification(value: unknown, expected: "CHALLENGE_FIRST_ADDRESS"): NotificationContactVerification;
 function parseNotificationVerification(value: unknown, expected: NotificationContactReplacementIntent & { requestId: string }): NotificationContactReplacementVerification;
-function parseNotificationVerification(value: unknown, expected?: NotificationContactReplacementIntent & { requestId: string }): NotificationContactVerification | NotificationContactReplacementVerification {
+function parseNotificationVerification(value: unknown, expected?: "CHALLENGE_FIRST_ADDRESS" | (NotificationContactReplacementIntent & { requestId: string })): NotificationContactVerification | NotificationContactReplacementVerification {
   const wire = accountRecord(value);
   exactKeys(wire, ["apiVersion", "kind", "id", "accountId", "userId", "requestId", "purpose", "expectedResourceVersion", "email", "state", "issuedAt", "expiresAt", "delivery"], ["completedAt"]);
   requireAccountKind(wire, "NotificationContactVerification");
   const requestId = accountIdentifier(wire.requestId);
   const email = securityMailAddress(wire.email);
+  const challengeScoped = expected === "CHALLENGE_FIRST_ADDRESS";
   let replacement: { purpose: "REPLACEMENT"; expectedResourceVersion: number } | undefined;
-  if (!expected && (wire.purpose !== "FIRST_ADDRESS" || wire.expectedResourceVersion !== 0)) throw new Error("INVALID_IAM_RESPONSE");
-  if (expected) {
+  if ((!expected || challengeScoped) && (wire.purpose !== "FIRST_ADDRESS" || wire.expectedResourceVersion !== 0)) throw new Error("INVALID_IAM_RESPONSE");
+  if (expected && !challengeScoped) {
     const expectedResourceVersion = accountVersion(wire.expectedResourceVersion);
     if (expectedResourceVersion > 9_007_199_254_740_990 || wire.purpose !== "REPLACEMENT" ||
         expectedResourceVersion !== expected.expectedResourceVersion || requestId !== expected.requestId || email !== expected.email) {
@@ -933,7 +935,11 @@ function parseNotificationVerification(value: unknown, expected?: NotificationCo
   if (wire.state !== "PENDING" && wire.state !== "VERIFIED" && wire.state !== "CANCELLED" && wire.state !== "EXPIRED") throw new Error("INVALID_IAM_RESPONSE");
   const issuedAt = accountTimestamp(wire.issuedAt);
   const expiresAt = accountTimestamp(wire.expiresAt);
-  if (timestampMicros(expiresAt) - timestampMicros(issuedAt) !== 10n * 60n * 1_000_000n) throw new Error("INVALID_IAM_RESPONSE");
+  const lifetimeMicros = timestampMicros(expiresAt) - timestampMicros(issuedAt);
+  const maximumLifetimeMicros = 10n * 60n * 1_000_000n;
+  if (challengeScoped ? lifetimeMicros <= 0n || lifetimeMicros > maximumLifetimeMicros : lifetimeMicros !== maximumLifetimeMicros) {
+    throw new Error("INVALID_IAM_RESPONSE");
+  }
   const completedAt = wire.completedAt === undefined ? null : accountTimestamp(wire.completedAt);
   if (wire.state === "PENDING") {
     if (completedAt !== null) throw new Error("INVALID_IAM_RESPONSE");
@@ -4105,7 +4111,7 @@ export const httpIamRepository: IamRepository = {
         body: JSON.stringify({ email: command.email, requestId: accountIdentifier(command.requestId),
           challengeCredential: responseSecret(command.challengeCredential) })
       });
-      const verification = parseNotificationVerification(wire);
+      const verification = parseNotificationVerification(wire, "CHALLENGE_FIRST_ADDRESS");
       if (verification.requestId !== command.requestId || verification.email !== command.email || verification.state !== "PENDING") {
         throw new Error("INVALID_IAM_RESPONSE");
       }
@@ -4118,7 +4124,7 @@ export const httpIamRepository: IamRepository = {
         body: JSON.stringify({ code: command.code, requestId: accountIdentifier(command.requestId),
           challengeCredential: responseSecret(command.challengeCredential) })
       });
-      const verification = parseNotificationVerification(wire);
+      const verification = parseNotificationVerification(wire, "CHALLENGE_FIRST_ADDRESS");
       if (verification.id !== command.verificationId || verification.state !== "VERIFIED") throw new Error("INVALID_IAM_RESPONSE");
       return verification;
     },

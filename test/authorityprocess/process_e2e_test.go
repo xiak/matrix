@@ -76,6 +76,7 @@ const (
 	accountLifecycleRecoveredPassword = "Recovered-Browser-Root-Password-86!"
 	browserAccountID                  = "browser-live-account"
 	browserRootLoginName              = "browser.live.root"
+	browserForcedEnrollmentRootName   = "browser.first.enrollment.root"
 	browserUserLoginName              = "browser.live.user"
 	browserSecurityEmail              = "browser.live.user@matrix.test"
 
@@ -404,6 +405,28 @@ const (
 
 const authorityProcessBrowserObservation = 30 * time.Minute
 
+type personalSecurityBrowserFlow string
+
+const (
+	personalSecurityBrowserFlowLifecycle        personalSecurityBrowserFlow = "LIFECYCLE"
+	personalSecurityBrowserFlowForcedEnrollment personalSecurityBrowserFlow = "FORCED_ENROLLMENT"
+)
+
+func selectedPersonalSecurityBrowserFlow(t *testing.T) personalSecurityBrowserFlow {
+	t.Helper()
+	flow := personalSecurityBrowserFlow(strings.ToUpper(strings.TrimSpace(os.Getenv("MATRIX_IAM_PERSONAL_SECURITY_BROWSER_FLOW"))))
+	if flow == "" {
+		return personalSecurityBrowserFlowLifecycle
+	}
+	switch flow {
+	case personalSecurityBrowserFlowLifecycle, personalSecurityBrowserFlowForcedEnrollment:
+		return flow
+	default:
+		t.Fatalf("unsupported MATRIX_IAM_PERSONAL_SECURITY_BROWSER_FLOW=%q", flow)
+		return ""
+	}
+}
+
 // This single opt-in journey observes current permission projection, exact
 // reads, partial service access and grant/revoke through the real console.
 // Setup and authority changes use public IAM commands, never direct grants.
@@ -452,9 +475,11 @@ func TestIAMPersonalSecurityConsoleBrowser(t *testing.T) {
 	if os.Getenv("MATRIX_IAM_PERSONAL_SECURITY_CONSOLE_BROWSER") != "1" {
 		t.Skip("set MATRIX_IAM_PERSONAL_SECURITY_CONSOLE_BROWSER=1 for the bounded LIVE personal-security browser fixture")
 	}
+	flow := selectedPersonalSecurityBrowserFlow(t)
 	if deadline, ok := t.Deadline(); ok && time.Until(deadline) < authorityProcessBrowserObservation+time.Minute {
 		t.Fatalf("personal-security browser fixture requires a go test timeout longer than %s; use -timeout=35m", authorityProcessBrowserObservation)
 	}
+	t.Logf("personal-security browser flow=%s", flow)
 	testIndependentAuthorityProcesses(t, authorityProcessPersonalSecurityBrowser)
 }
 
@@ -1144,9 +1169,16 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		return
 	}
 	if mode == authorityProcessPersonalSecurityBrowser {
-		homeHomonym := prepareIAMPersonalSecurityBrowser(t, iamEndpoint, adminLogin.Credential)
-		runIAMPersonalSecurityConsoleBrowser(t, ctx, admin, root, temporary, bootstrap,
-			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, homeHomonym, start)
+		switch selectedPersonalSecurityBrowserFlow(t) {
+		case personalSecurityBrowserFlowLifecycle:
+			homeHomonym := prepareIAMPersonalSecurityBrowser(t, iamEndpoint, adminLogin.Credential)
+			runIAMPersonalSecurityConsoleBrowser(t, ctx, admin, root, temporary, bootstrap,
+				iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, homeHomonym, start)
+		case personalSecurityBrowserFlowForcedEnrollment:
+			target, homeHomonym := prepareIAMForcedEnrollmentBrowser(t, ctx, admin, iamEndpoint, adminLogin.Credential)
+			runIAMForcedEnrollmentConsoleBrowser(t, ctx, admin, root, temporary, bootstrap,
+				iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, target, homeHomonym, start)
+		}
 		return
 	}
 	if mode == authorityProcessBrowser {
@@ -8689,12 +8721,7 @@ func runIAMIdentityConsoleBrowser(
 
 func prepareIAMPersonalSecurityBrowser(t *testing.T, iamEndpoint, platformBearer string) iamv1.User {
 	t.Helper()
-	homeHomonym := createIAMUser(t, iamEndpoint, platformBearer, browserUserLoginName,
-		"Home Account homonym", initialDeveloperPassword, "personal-security-home-homonym-create")
-	homeLogin := loginIAM(t, iamEndpoint, browserUserLoginName+"@organization-process",
-		initialDeveloperPassword, "personal-security-home-homonym-login")
-	changePasswordIAM(t, iamEndpoint, homeLogin.Credential, initialDeveloperPassword,
-		changedDeveloperPassword, "personal-security-home-homonym-password")
+	homeHomonym := createBrowserRealmHomonym(t, iamEndpoint, platformBearer, "personal-security")
 
 	response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/accounts", platformBearer, map[string]any{
 		"id": browserAccountID, "displayName": "Browser Live Account", "rootLoginName": browserRootLoginName,
@@ -8722,6 +8749,161 @@ func prepareIAMPersonalSecurityBrowser(t *testing.T, iamEndpoint, platformBearer
 	changePasswordIAM(t, iamEndpoint, memberInitial.Credential, initialDeveloperPassword,
 		changedDeveloperPassword, "personal-security-user-password")
 	return homeHomonym
+}
+
+func createBrowserRealmHomonym(
+	t *testing.T,
+	iamEndpoint string,
+	platformBearer string,
+	requestPrefix string,
+) iamv1.User {
+	t.Helper()
+	homeHomonym := createIAMUser(t, iamEndpoint, platformBearer, browserUserLoginName,
+		"Home Account homonym", initialDeveloperPassword, requestPrefix+"-home-homonym-create")
+	homeLogin := loginIAM(t, iamEndpoint, browserUserLoginName+"@organization-process",
+		initialDeveloperPassword, requestPrefix+"-home-homonym-login")
+	changePasswordIAM(t, iamEndpoint, homeLogin.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, requestPrefix+"-home-homonym-password")
+	return homeHomonym
+}
+
+func prepareIAMForcedEnrollmentBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	iamEndpoint string,
+	platformBearer string,
+) (iamv1.User, iamv1.User) {
+	t.Helper()
+	const (
+		operatorName  = "browser.first.enrollment.operator"
+		operatorEmail = "browser.first.enrollment.operator@matrix.test"
+	)
+	call := func(method, path, bearer string, body any, want int, result any) processResponse {
+		t.Helper()
+		response := performJSON(t, method, iamEndpoint+path, bearer, body)
+		if response.Status != want {
+			t.Fatalf("forced-enrollment preparation %s %s status=%d want=%d body=%s", method, path, response.Status, want, response.Body)
+		}
+		if result != nil && iamv1.DecodeRequest(bytes.NewReader(response.Body), result) != nil {
+			t.Fatalf("forced-enrollment preparation returned an invalid %s response", path)
+		}
+		return response
+	}
+
+	homeHomonym := createBrowserRealmHomonym(t, iamEndpoint, platformBearer, "forced-enrollment")
+	var account iamv1.Account
+	call(http.MethodPost, "/v1/accounts", platformBearer, map[string]any{
+		"id": browserAccountID, "displayName": "Browser forced-enrollment Account", "rootLoginName": browserForcedEnrollmentRootName,
+		"rootDisplayName": "Browser forced-enrollment Root", "initialPassword": initialReaderPassword,
+		"requestId": "forced-enrollment-account-create",
+	}, http.StatusCreated, &account)
+	if iamv1.ValidateAccount(account) != nil || account.ID != browserAccountID {
+		t.Fatal("forced-enrollment preparation created the wrong Account")
+	}
+	rootInitial := loginIAM(t, iamEndpoint, browserForcedEnrollmentRootName, initialReaderPassword, "forced-enrollment-root-initial")
+	changePasswordIAM(t, iamEndpoint, rootInitial.Credential, initialReaderPassword,
+		changedReaderPassword, "forced-enrollment-root-password")
+	root := loginIAM(t, iamEndpoint, browserForcedEnrollmentRootName, changedReaderPassword, "forced-enrollment-root-login")
+	target := createIAMUser(t, iamEndpoint, root.Credential, browserUserLoginName,
+		"Browser forced-enrollment User", initialDeveloperPassword, "forced-enrollment-user-create")
+	if target.AccountID != browserAccountID || !target.MustChangePassword {
+		t.Fatalf("forced-enrollment target is not an initial-password USER: %#v", target)
+	}
+	targetInitial := loginIAM(t, iamEndpoint, browserUserLoginName+"@"+browserAccountID,
+		initialDeveloperPassword, "forced-enrollment-target-initial")
+	changePasswordIAM(t, iamEndpoint, targetInitial.Credential, initialDeveloperPassword,
+		changedDeveloperPassword, "forced-enrollment-target-password")
+	operator := createIAMUser(t, iamEndpoint, root.Credential, operatorName,
+		"Browser forced-enrollment security operator", initialReaderPassword, "forced-enrollment-operator-create")
+	var settingsPolicy iamv1.PolicyDetail
+	call(http.MethodPost, "/v1/policies", root.Credential, iamv1.CreatePolicyRequest{
+		DisplayName: "Browser forced-enrollment security settings", RequestID: "forced-enrollment-settings-policy-create",
+		Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+			Statements: []iamv1.PolicyStatement{{SID: "settings", Effect: iamv1.PolicyAllow,
+				Actions: []iamv1.Action{iamv1.ActionIAMSecuritySettingsRead, iamv1.ActionIAMSecuritySettingsUpdate},
+				Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceAccount, Match: iamv1.PolicyResourceExact,
+					ID: browserAccountID}}}}},
+	}, http.StatusCreated, &settingsPolicy)
+	createIAMPolicyAttachment(t, iamEndpoint, root.Credential, operator.ID, settingsPolicy.Policy.ID,
+		"forced-enrollment-settings-policy-attach")
+	operatorRealm := operatorName + "@" + browserAccountID
+	operatorInitial := loginIAM(t, iamEndpoint, operatorRealm, initialReaderPassword, "forced-enrollment-operator-initial")
+	changePasswordIAM(t, iamEndpoint, operatorInitial.Credential, initialReaderPassword,
+		changedReaderPassword, "forced-enrollment-operator-password")
+
+	var contact iamv1.NotificationContactVerification
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications", operatorInitial.Credential,
+		map[string]string{"email": operatorEmail, "password": changedReaderPassword, "requestId": "forced-enrollment-operator-contact"},
+		http.StatusOK, &contact)
+	contactCode := readProcessContactCode(t, ctx, database, contact)
+	call(http.MethodPost, "/v1/auth/notification-contact/verifications/"+contact.ID+":confirm", operatorInitial.Credential,
+		map[string]string{"requestId": "forced-enrollment-operator-contact-confirm", "code": contactCode}, http.StatusOK, nil)
+
+	var enrollment iamv1.StartTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments", operatorInitial.Credential,
+		map[string]any{"requestId": "forced-enrollment-operator-totp-start", "password": changedReaderPassword,
+			"expectedFactorRevision": 1}, http.StatusOK, &enrollment)
+	if enrollment.Provisioning == nil {
+		t.Fatal("forced-enrollment settings operator lacks TOTP provisioning")
+	}
+	seedBytes := enrollment.Provisioning.Seed.CopyBytes()
+	defer clear(seedBytes)
+	seed := string(seedBytes)
+	bindingCode, _ := processTOTPCode(t, ctx, database, seed, -1, true)
+	var bound iamv1.ConfirmTOTPEnrollmentResponse
+	call(http.MethodPost, "/v1/auth/totp/enrollments/"+enrollment.Enrollment.ID+":confirm", operatorInitial.Credential,
+		map[string]string{"requestId": "forced-enrollment-operator-totp-confirm", "code": bindingCode}, http.StatusOK, &bound)
+	if iamv1.ValidateConfirmTOTPEnrollmentResponse(bound) != nil || bound.Enrollment.State != "CONFIRMED" || len(bound.RecoveryCodes) != 10 {
+		t.Fatal("forced-enrollment settings operator returned an invalid TOTP completion")
+	}
+	clear(bound.RecoveryCodes)
+	qualified := loginIAMWithTOTP(t, ctx, database, iamEndpoint, operatorRealm, changedReaderPassword,
+		operator.ID, seed, "forced-enrollment-operator-qualified")
+
+	var settings iamv1.AccountSecuritySettings
+	call(http.MethodGet, "/v1/account/security-settings", qualified.Credential, nil, http.StatusOK, &settings)
+	if iamv1.ValidateAccountSecuritySettings(settings) != nil || settings.AccountID != browserAccountID || settings.ResourceVersion != 1 ||
+		settings.Password == nil || settings.Session == nil || settings.AccessKeyNetwork == nil || settings.MFA.RequiredForUsers {
+		t.Fatal("forced-enrollment preparation lacks the default complete Account security settings")
+	}
+	intent := iamv1.SecuritySettingsUpdateIntent{
+		ExpectedResourceVersion: settings.ResourceVersion,
+		MFA:                     iamv1.AccountMFASettings{RequiredForUsers: true},
+		Password:                settings.Password,
+		Session:                 settings.Session,
+		AccessKeyNetwork:        settings.AccessKeyNetwork,
+	}
+	var proof iamv1.StepUp
+	call(http.MethodPost, "/v1/auth/step-up", qualified.Credential, iamv1.StartStepUpRequest{
+		RequestID: "forced-enrollment-settings-update", Operation: iamv1.StepUpUpdateSecuritySettings,
+		ExpectedFactorRevision: 2, SecuritySettings: &intent,
+	}, http.StatusOK, &proof)
+	var consumed int64
+	if err := database.QueryRow(ctx, `SELECT last_consumed_step FROM iam.totp_authenticators
+		WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND state='ACTIVE'`,
+		browserAccountID, operator.ID, enrollment.Enrollment.ID).Scan(&consumed); err != nil {
+		t.Fatalf("read forced-enrollment settings operator TOTP watermark: %v", err)
+	}
+	proofCode, _ := processTOTPCode(t, ctx, database, seed, consumed, false)
+	call(http.MethodPost, "/v1/auth/step-up/"+proof.ID+":verify", qualified.Credential,
+		map[string]string{"requestId": "forced-enrollment-settings-proof", "password": changedReaderPassword, "code": proofCode},
+		http.StatusOK, &proof)
+	if proof.State != "PROVED" {
+		t.Fatal("forced-enrollment Account settings proof was not established")
+	}
+	var applied iamv1.UpdateAccountSecuritySettingsResponse
+	call(http.MethodPut, "/v1/account/security-settings", qualified.Credential, iamv1.UpdateAccountSecuritySettingsRequest{
+		RequestID: "forced-enrollment-settings-update", StepUpID: proof.ID,
+		ExpectedResourceVersion: settings.ResourceVersion, MFA: intent.MFA,
+		Password: *settings.Password, Session: *settings.Session, AccessKeyNetwork: *settings.AccessKeyNetwork,
+	}, http.StatusOK, &applied)
+	if applied.Outcome != "APPLIED" || applied.Change.Settings.ResourceVersion != 2 ||
+		!applied.Change.Settings.MFA.RequiredForUsers || !applied.Change.CallerSessionEnded {
+		t.Fatal("forced-enrollment preparation did not apply the exact required-MFA Account setting")
+	}
+	call(http.MethodGet, "/v1/auth/me", qualified.Credential, nil, http.StatusUnauthorized, nil)
+	return target, homeHomonym
 }
 
 func runIAMPersonalSecurityConsoleBrowser(
@@ -8767,6 +8949,280 @@ func runIAMPersonalSecurityConsoleBrowser(
 	assertBrowserPersonalSecurityFlow(t, ctx, database, iamEndpoint, auditEndpoint, paasEndpoint,
 		platformBearer, homeHomonym, material.finalSeed)
 	t.Log("personal-security browser fixture finished with a verified notification contact, TOTP binding/replacement/removal/rebinding, purpose-limited recovery-code rotation, four MFA logins, authoritative cross-browser session revocation, realm isolation, zero implicit grants and a verified Account Audit chain; the protected synthetic code handoff is not SMTP or an external authenticator")
+}
+
+func runIAMForcedEnrollmentConsoleBrowser(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	root string,
+	temporary string,
+	bootstrap iamv1.BootstrapDocument,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	target iamv1.User,
+	homeHomonym iamv1.User,
+	start func(string, []string) *childProcess,
+) {
+	t.Helper()
+	server, ui, closeBrowser := startIAMConsoleBrowser(t, ctx, root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, start)
+	defer closeBrowser()
+	finish := filepath.Join(temporary, "browser-forced-enrollment-finished")
+	material := forcedEnrollmentBrowserMaterial{
+		contactCodePath: filepath.Join(temporary, "browser-forced-enrollment-contact-code"),
+		bindingCodePath: filepath.Join(temporary, "browser-forced-enrollment-binding-code"),
+		loginCodePath:   filepath.Join(temporary, "browser-forced-enrollment-login-code"),
+		userID:          target.ID,
+		codeSteps:       make(map[string]int64, 2),
+	}
+	t.Logf("FORCED_ENROLLMENT_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s@%s email=%s contactCode=%s bindingCode=%s loginCode=%s; sign in with the changed developer password, verify the challenge-scoped email, bind the authenticator, save and acknowledge all ten recovery codes, reauthenticate with the changed password and complete the normal TOTP login before creating the marker",
+		server.URL, finish, browserUserLoginName, browserAccountID, browserSecurityEmail,
+		material.contactCodePath, material.bindingCodePath, material.loginCodePath)
+	waitForForcedEnrollmentBrowserCompletion(t, ctx, database, ui, finish, bootstrap, &material)
+	assertBrowserForcedEnrollmentFlow(t, ctx, database, iamEndpoint, auditEndpoint, paasEndpoint,
+		platformBearer, target, homeHomonym, material.finalSeed)
+	t.Log("forced-enrollment browser fixture finished with an Account-policy-forced enrollment challenge, challenge-scoped contact verification and TOTP binding, one-time recovery-code acknowledgement, mandatory reauthentication, normal MFA login, realm isolation, zero implicit grants and a verified Account Audit chain; the preceding initial-password replacement remained a separate real API boundary")
+}
+
+type forcedEnrollmentBrowserMaterial struct {
+	contactCodePath string
+	bindingCodePath string
+	loginCodePath   string
+	userID          iamv1.PrincipalID
+	finalSeed       string
+	contactWritten  bool
+	bindingWritten  bool
+	loginWritten    bool
+	codeSteps       map[string]int64
+}
+
+func waitForForcedEnrollmentBrowserCompletion(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	ui *childProcess,
+	finish string,
+	bootstrap iamv1.BootstrapDocument,
+	material *forcedEnrollmentBrowserMaterial,
+) {
+	t.Helper()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("forced-enrollment browser completion timed out")
+		case <-ticker.C:
+			if exited, _ := ui.poll(); exited {
+				t.Fatal("browser UI exited during forced-enrollment observation")
+			}
+			observeForcedEnrollmentBrowserMaterial(t, ctx, database, bootstrap, material)
+			info, err := os.Lstat(finish)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil || !info.Mode().IsRegular() || !material.contactWritten || !material.bindingWritten ||
+				!material.loginWritten || material.finalSeed == "" {
+				t.Fatal("invalid or premature forced-enrollment browser completion marker")
+			}
+			return
+		}
+	}
+}
+
+func observeForcedEnrollmentBrowserMaterial(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	bootstrap iamv1.BootstrapDocument,
+	material *forcedEnrollmentBrowserMaterial,
+) {
+	t.Helper()
+	if !material.contactWritten {
+		var verificationID string
+		err := database.QueryRow(ctx, `SELECT id FROM iam.notification_contact_verifications
+			WHERE tenant_id=$1 AND user_id=$2 AND state='PENDING'
+			ORDER BY issued_at DESC,id DESC LIMIT 1`, browserAccountID, material.userID).Scan(&verificationID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			t.Fatalf("observe forced-enrollment contact verification: %v", err)
+		}
+		if err == nil {
+			code := readProcessContactCode(t, ctx, database, iamv1.NotificationContactVerification{
+				ID: verificationID, AccountID: browserAccountID, UserID: material.userID,
+			})
+			writePersonalSecurityBrowserCode(t, material.contactCodePath, code)
+			material.contactWritten = true
+		}
+	}
+	factors := readProcessBrowserTOTPFactors(t, ctx, database, bootstrap, material.userID)
+	for _, factor := range factors {
+		if factor.state == "PENDING" && !material.bindingWritten {
+			code, step := processTOTPCode(t, ctx, database, factor.seed, -1, true)
+			refreshBrowserSecurityCode(t, material.codeSteps, material.bindingCodePath, code, step)
+			material.bindingWritten = true
+			return
+		}
+		if factor.state == "ACTIVE" {
+			material.finalSeed = factor.seed
+		}
+	}
+	if material.finalSeed == "" {
+		return
+	}
+	var challengeID, factorID string
+	err := database.QueryRow(ctx, `SELECT id,factor_id FROM iam.authentication_challenges
+		WHERE tenant_id=$1 AND user_id=$2 AND purpose='LOGIN' AND next_step='TOTP'
+		  AND state='PENDING' AND expires_at>clock_timestamp()
+		ORDER BY created_at DESC,id DESC LIMIT 1`, browserAccountID, material.userID).Scan(&challengeID, &factorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("observe forced-enrollment login challenge: %v", err)
+	}
+	for _, factor := range factors {
+		if factor.id != factorID || factor.state != "ACTIVE" {
+			continue
+		}
+		code, step := processTOTPCode(t, ctx, database, factor.seed, factor.lastStep, false)
+		refreshBrowserSecurityCode(t, material.codeSteps, material.loginCodePath, code, step)
+		material.loginWritten = challengeID != ""
+		return
+	}
+	t.Fatal("forced-enrollment LOGIN challenge did not reference the active factor")
+}
+
+func assertBrowserForcedEnrollmentFlow(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	iamEndpoint string,
+	auditEndpoint string,
+	paasEndpoint string,
+	platformBearer string,
+	target iamv1.User,
+	homeHomonym iamv1.User,
+	totpSeed string,
+) {
+	t.Helper()
+	if totpSeed == "" {
+		t.Fatal("forced-enrollment browser TOTP seed observation is absent")
+	}
+	response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/accounts/"+browserAccountID, platformBearer, nil)
+	var account iamv1.AccountAccess
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &account) != nil ||
+		iamv1.ValidateAccountAccess(account) != nil || account.Account.RootIdentity.LoginName != browserForcedEnrollmentRootName ||
+		account.Account.ID != browserAccountID || account.Account.Status != iamv1.AccountActive {
+		t.Fatalf("forced-enrollment Account is not authoritative: status=%d body=%s", response.Status, response.Body)
+	}
+
+	var contactEmail, enrollmentState, factorState string
+	var contactRevision, factorRevision uint64
+	var contactVerifiedAt time.Time
+	var factorID string
+	if err := database.QueryRow(ctx, `SELECT c.email,c.resource_version,c.verified_at,m.enrollment_state,m.revision,
+		f.id,f.state FROM iam.notification_contacts c JOIN iam.user_mfa_states m
+		  ON (m.tenant_id,m.user_id)=(c.tenant_id,c.user_id)
+		JOIN iam.totp_authenticators f ON (f.tenant_id,f.user_id,f.id)=(m.tenant_id,m.user_id,m.factor_id)
+		WHERE c.tenant_id=$1 AND c.user_id=$2`, browserAccountID, target.ID).Scan(
+		&contactEmail, &contactRevision, &contactVerifiedAt, &enrollmentState, &factorRevision, &factorID, &factorState,
+	); err != nil || contactEmail != browserSecurityEmail || contactRevision != 1 || contactVerifiedAt.IsZero() ||
+		enrollmentState != "BOUND" || factorRevision != 2 || factorState != "ACTIVE" {
+		t.Fatalf("forced-enrollment contact/factor is not authoritative: email=%q contactRevision=%d enrollment=%q factorRevision=%d factor=%q state=%q err=%v",
+			contactEmail, contactRevision, enrollmentState, factorRevision, factorID, factorState, err)
+	}
+	var activeBatches, recoveryCodes, consumedCodes int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2 AND factor_id=$3 AND revoked_at IS NULL),
+		(SELECT count(*) FROM iam.mfa_recovery_codes c JOIN iam.mfa_recovery_batches b
+		  ON (b.tenant_id,b.id)=(c.tenant_id,c.batch_id) WHERE b.tenant_id=$1 AND b.user_id=$2 AND b.factor_id=$3),
+		(SELECT count(*) FROM iam.mfa_recovery_codes c JOIN iam.mfa_recovery_batches b
+		  ON (b.tenant_id,b.id)=(c.tenant_id,c.batch_id) WHERE b.tenant_id=$1 AND b.user_id=$2 AND b.factor_id=$3 AND c.consumed_at IS NOT NULL)`,
+		browserAccountID, target.ID, factorID).Scan(&activeBatches, &recoveryCodes, &consumedCodes); err != nil ||
+		activeBatches != 1 || recoveryCodes != 10 || consumedCodes != 0 {
+		t.Fatalf("forced-enrollment recovery batch active=%d codes=%d consumed=%d err=%v", activeBatches, recoveryCodes, consumedCodes, err)
+	}
+	var passwordChallenges, enrollmentChallenges, loginChallenges, activeSessions, currentPasswordSessions, stalePasswordSessions int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND purpose='ENROLLMENT' AND next_step='PASSWORD_CHANGE' AND state='CONSUMED'),
+		(SELECT count(*) FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND purpose='ENROLLMENT' AND next_step='ENROLLMENT' AND state='CONSUMED'),
+		(SELECT count(*) FROM iam.authentication_challenges WHERE tenant_id=$1 AND user_id=$2 AND purpose='LOGIN' AND next_step='TOTP' AND state='CONSUMED'),
+		(SELECT count(*) FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND status='ACTIVE' AND revoked_at IS NULL AND authentication_method='PASSWORD_TOTP' AND mfa_revision=2 AND security_settings_version=2),
+		(SELECT count(*) FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND status='ACTIVE' AND revoked_at IS NULL AND authentication_method='PASSWORD' AND security_settings_version=2),
+		(SELECT count(*) FROM iam.sessions WHERE tenant_id=$1 AND principal_id=$2 AND status='ACTIVE' AND revoked_at IS NULL AND authentication_method='PASSWORD' AND security_settings_version=1)`,
+		browserAccountID, target.ID).Scan(&passwordChallenges, &enrollmentChallenges, &loginChallenges, &activeSessions, &currentPasswordSessions, &stalePasswordSessions); err != nil ||
+		passwordChallenges != 0 || enrollmentChallenges != 1 || loginChallenges != 1 || activeSessions != 1 || currentPasswordSessions != 0 || stalePasswordSessions != 0 {
+		t.Fatalf("forced-enrollment restricted challenges password=%d enrollment=%d login=%d activeMFA=%d currentPassword=%d stalePassword=%d err=%v",
+			passwordChallenges, enrollmentChallenges, loginChallenges, activeSessions, currentPasswordSessions, stalePasswordSessions, err)
+	}
+	var setupPasswordFacts, contactFacts, factorFacts int
+	if err := database.QueryRow(ctx, `SELECT
+		count(*) FILTER(WHERE event_document->>'action'='iam.user.password-changed' AND event_document->>'requestId'='forced-enrollment-target-password'),
+		count(*) FILTER(WHERE event_document->>'action'='iam.notification-contact.verified' AND event_document->>'requestId' LIKE 'ui-first-contact-confirm-%'),
+		count(*) FILTER(WHERE event_document->>'action'='iam.authenticator.bound' AND event_document->>'requestId' LIKE 'ui-first-factor-confirm-%')
+		FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{target,id}'=$2`, browserAccountID, target.ID).Scan(
+		&setupPasswordFacts, &contactFacts, &factorFacts); err != nil || setupPasswordFacts != 1 || contactFacts != 1 || factorFacts != 1 {
+		t.Fatalf("forced-enrollment facts setupPassword=%d UIContact=%d UIFactor=%d err=%v", setupPasswordFacts, contactFacts, factorFacts, err)
+	}
+
+	for loginName, password := range map[string]string{
+		browserUserLoginName + "@" + browserAccountID: initialDeveloperPassword,
+		browserUserLoginName:                          changedDeveloperPassword,
+	} {
+		rejected := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/login", "", map[string]string{
+			"loginName": loginName, "password": password, "requestId": "forced-enrollment-rejected-login",
+		})
+		if rejected.Status != http.StatusUnauthorized {
+			t.Fatalf("forced-enrollment retained an old or ambiguous login: login=%s status=%d", loginName, rejected.Status)
+		}
+	}
+	member := loginIAMWithTOTP(t, ctx, database, iamEndpoint, browserUserLoginName+"@"+browserAccountID,
+		changedDeveloperPassword, target.ID, totpSeed, "forced-enrollment-authoritative-login")
+	response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", member.Credential, nil)
+	var identity iamv1.CurrentIdentity
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &identity) != nil ||
+		iamv1.ValidateCurrentIdentity(identity) != nil || identity.IdentityKind != iamv1.IdentityUser ||
+		identity.Account.ID != browserAccountID || identity.User.ID != target.ID || identity.User.MustChangePassword ||
+		len(identity.PolicySources) != 0 || identity.PermissionBoundary.Policy != nil {
+		t.Fatalf("forced-enrollment User identity was widened or mis-scoped: status=%d body=%s", response.Status, response.Body)
+	}
+	getPaaSApplication(t, paasEndpoint, member.Credential, "application-process", http.StatusForbidden)
+	logout := performJSON(t, http.MethodPost, iamEndpoint+"/v1/auth/logout", member.Credential,
+		iamv1.LogoutRequest{RequestID: "forced-enrollment-authoritative-logout"})
+	if logout.Status != http.StatusOK {
+		t.Fatalf("close forced-enrollment assertion Session: status=%d body=%s", logout.Status, logout.Body)
+	}
+	home := loginIAM(t, iamEndpoint, browserUserLoginName+"@organization-process", changedDeveloperPassword,
+		"forced-enrollment-home-homonym-login")
+	response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", home.Credential, nil)
+	var homeIdentity iamv1.CurrentIdentity
+	if response.Status != http.StatusOK || iamv1.DecodeRequest(bytes.NewReader(response.Body), &homeIdentity) != nil ||
+		iamv1.ValidateCurrentIdentity(homeIdentity) != nil || homeIdentity.Account.ID != "organization-process" ||
+		homeIdentity.User.ID != homeHomonym.ID || homeIdentity.User.ID == target.ID {
+		t.Fatalf("forced-enrollment same-name realm isolation failed: status=%d body=%s", response.Status, response.Body)
+	}
+
+	rootSession := loginIAM(t, iamEndpoint, browserForcedEnrollmentRootName,
+		changedReaderPassword, "forced-enrollment-root-audit-login")
+	waitAllIAMOutboxDelivered(t, ctx, database)
+	page := queryAudit(t, auditEndpoint, rootSession.Credential,
+		auditv1.QueryRecordsRequest{PageSize: 100, Action: auditv1.ActionIAMAuthenticatorBound}, http.StatusOK)
+	matches := 0
+	for _, record := range page.Records {
+		if record.Event.Target.ID == string(target.ID) {
+			matches++
+		}
+	}
+	if matches != 1 {
+		t.Fatalf("forced-enrollment authenticator Audit facts=%d", matches)
+	}
+	chain := verifyAudit(t, auditEndpoint, rootSession.Credential)
+	if chain.State != auditv1.VerificationVerified || !chain.Complete ||
+		chain.TenantID != auditv1.TenantID(browserAccountID) || chain.InstallationID != "" {
+		t.Fatalf("forced-enrollment Account Audit chain is incomplete: %#v", chain)
+	}
 }
 
 // personalSecurityBrowserMaterial is a test-only handoff between the real IAM
@@ -8901,7 +9357,7 @@ func observePersonalSecurityBrowserMaterial(
 		}
 		if path != "" {
 			code, step := processTOTPCode(t, ctx, database, factor.seed, -1, true)
-			refreshPersonalSecurityBrowserCode(t, material, path, code, step)
+			refreshBrowserSecurityCode(t, material.codeSteps, path, code, step)
 			return
 		}
 	}
@@ -8946,7 +9402,7 @@ func observePersonalSecurityBrowserMaterial(
 		}
 		if path != "" {
 			code, step := processTOTPCode(t, ctx, database, factor.seed, factor.lastStep, false)
-			refreshPersonalSecurityBrowserCode(t, material, path, code, step)
+			refreshBrowserSecurityCode(t, material.codeSteps, path, code, step)
 			return
 		}
 	}
@@ -9002,7 +9458,7 @@ func observePersonalSecurityBrowserMaterial(
 			material.loginChallenges[challenge.challengeID] = index
 		}
 		code, step := processTOTPCode(t, ctx, database, factor.seed, factor.lastStep, false)
-		refreshPersonalSecurityBrowserCode(t, material, material.loginCodePaths[index], code, step)
+		refreshBrowserSecurityCode(t, material.codeSteps, material.loginCodePaths[index], code, step)
 		// The next code must use the watermark committed by this challenge,
 		// never the speculative step generated for the current one.
 		break
@@ -9126,19 +9582,19 @@ func writePersonalSecurityBrowserCode(t *testing.T, path, value string) {
 	writeProtectedFile(t, filepath.Dir(path), filepath.Base(path), []byte(value))
 }
 
-func refreshPersonalSecurityBrowserCode(
+func refreshBrowserSecurityCode(
 	t *testing.T,
-	material *personalSecurityBrowserMaterial,
+	codeSteps map[string]int64,
 	path string,
 	value string,
 	step int64,
 ) {
 	t.Helper()
-	if previous, ok := material.codeSteps[path]; ok && previous == step {
+	if previous, ok := codeSteps[path]; ok && previous == step {
 		return
 	}
 	writePersonalSecurityBrowserCode(t, path, value)
-	material.codeSteps[path] = step
+	codeSteps[path] = step
 }
 
 type browserResponseLoss struct {
