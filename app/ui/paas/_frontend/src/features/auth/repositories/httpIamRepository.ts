@@ -77,6 +77,7 @@ import type {
   OtherSessionsRevocation,
   OwnSessionPage,
   OwnSessionRevocation,
+  SessionActivity,
   SessionSummary
 } from "../domain/session";
 import type { AccessKeyAccess, AccessKeyCreation, AccessKeyDeletion, AccessKeyDirectory, AccessKeyNetworkChange, AccessKeyStatus, AccessKeyStatusChange, ManagedAccessKey } from "../domain/accessKeys";
@@ -1721,6 +1722,31 @@ function parseOwnSession(value: unknown): SessionSummary {
     status: "ACTIVE",
     issuedAt,
     expiresAt
+  };
+}
+
+function parseSessionActivity(value: unknown, expected: SessionSummary): SessionActivity {
+  const wire = accountRecord(value);
+  exactKeys(wire, ["apiVersion", "kind", "sessionId", "accountId", "userId", "lastActivityAt", "idleExpiresAt", "absoluteExpiresAt"]);
+  requireAccountKind(wire, "SessionActivity");
+  const lastActivityAt = accountTimestamp(wire.lastActivityAt);
+  const idleExpiresAt = accountTimestamp(wire.idleExpiresAt);
+  const absoluteExpiresAt = accountTimestamp(wire.absoluteExpiresAt);
+  const idleMilliseconds = Date.parse(idleExpiresAt) - Date.parse(lastActivityAt);
+  if (accountIdentifier(wire.sessionId) !== expected.id ||
+      accountIdentifier(wire.accountId) !== expected.organizationId ||
+      accountIdentifier(wire.userId) !== expected.principalId ||
+      timestampOrder(absoluteExpiresAt) !== timestampOrder(expected.expiresAt) ||
+      timestampOrder(lastActivityAt) < timestampOrder(expected.issuedAt) ||
+      idleMilliseconds < 5 * 60_000 || idleMilliseconds > 60 * 60_000 || idleMilliseconds % 60_000 !== 0 ||
+      timestampOrder(lastActivityAt) >= timestampOrder(absoluteExpiresAt)) throw new Error("INVALID_IAM_RESPONSE");
+  return {
+    sessionId: expected.id,
+    accountId: expected.organizationId,
+    userId: expected.principalId,
+    lastActivityAt,
+    idleExpiresAt,
+    absoluteExpiresAt
   };
 }
 
@@ -4571,6 +4597,14 @@ export const httpIamRepository: IamRepository = {
     }
   },
   sessions: {
+    async touchCurrent(credential: string, expected: SessionSummary): Promise<SessionActivity> {
+      const response = await requestJSONResponse<unknown>("/api/iam/v1/auth/sessions/current:touch", {
+        method: "POST",
+        headers: accountHeaders(credential)
+      });
+      if (response.headers.get("Cache-Control")?.trim().toLowerCase() !== "no-store") throw new Error("INVALID_IAM_RESPONSE");
+      return parseSessionActivity(response.body, expected);
+    },
     async list(credential: string, after?: string): Promise<OwnSessionPage> {
       return parseOwnSessionPage(await requestJSON<unknown>(
         `/api/iam/v1/auth/sessions${pageQuery(after)}`,

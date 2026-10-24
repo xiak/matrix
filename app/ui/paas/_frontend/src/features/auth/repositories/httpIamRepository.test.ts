@@ -3466,7 +3466,7 @@ describe("IAM HTTP own-session boundary", () => {
     id: "session-001",
     organizationId: account.id,
     principalId: user.id,
-    status: "ACTIVE",
+    status: "ACTIVE" as const,
     issuedAt: "2026-09-11T07:00:00.000001Z",
     expiresAt: "2026-09-11T09:00:00.000001Z"
   };
@@ -3479,6 +3479,70 @@ describe("IAM HTTP own-session boundary", () => {
     observedAt: timestamp,
     items: [session]
   };
+
+  it("touches only the possessed current Session and verifies its nonsecret server deadlines", async () => {
+    const response = {
+      apiVersion,
+      kind: "SessionActivity",
+      sessionId: session.id,
+      accountId: account.id,
+      userId: user.id,
+      lastActivityAt: "2026-09-11T08:00:00.000001Z",
+      idleExpiresAt: "2026-09-11T08:30:00.000001Z",
+      absoluteExpiresAt: session.expiresAt
+    };
+    const fetcher = vi.fn().mockResolvedValue(new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { "Content-Type": "application/json", "Cache-Control": "no-store" }
+    }));
+    vi.stubGlobal("fetch", fetcher);
+
+    await expect(httpIamRepository.sessions!.touchCurrent!("transient-bearer", session)).resolves.toEqual({
+      sessionId: session.id,
+      accountId: account.id,
+      userId: user.id,
+      lastActivityAt: response.lastActivityAt,
+      idleExpiresAt: response.idleExpiresAt,
+      absoluteExpiresAt: response.absoluteExpiresAt
+    });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/sessions/current:touch");
+    expect(firstRequest(fetcher)[1]).toEqual({
+      method: "POST",
+      cache: "no-store",
+      headers: { Accept: "application/json", Authorization: "Bearer transient-bearer" }
+    });
+  });
+
+  it("fails closed on a cacheable, foreign, malformed or drifted Session activity response", async () => {
+    const valid = {
+      apiVersion,
+      kind: "SessionActivity",
+      sessionId: session.id,
+      accountId: account.id,
+      userId: user.id,
+      lastActivityAt: "2026-09-11T08:00:00.000001Z",
+      idleExpiresAt: "2026-09-11T08:30:00.000001Z",
+      absoluteExpiresAt: session.expiresAt
+    };
+    const cases = [
+      { body: { ...valid, sessionId: "session-other" }, cacheControl: "no-store" },
+      { body: { ...valid, accountId: "account-other" }, cacheControl: "no-store" },
+      { body: { ...valid, userId: "user-other" }, cacheControl: "no-store" },
+      { body: { ...valid, lastActivityAt: "2026-09-11T06:59:59Z" }, cacheControl: "no-store" },
+      { body: { ...valid, idleExpiresAt: "2026-09-11T08:04:00.000001Z" }, cacheControl: "no-store" },
+      { body: { ...valid, idleExpiresAt: "2026-09-11T09:01:00.000001Z" }, cacheControl: "no-store" },
+      { body: { ...valid, absoluteExpiresAt: "2026-09-11T09:00:01.000001Z" }, cacheControl: "no-store" },
+      { body: { ...valid, selector: session.id }, cacheControl: "no-store" },
+      { body: valid, cacheControl: "public, max-age=60" }
+    ];
+    for (const candidate of cases) {
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(candidate.body), {
+        status: 200,
+        headers: { "Content-Type": "application/json", "Cache-Control": candidate.cacheControl }
+      })));
+      await expect(httpIamRepository.sessions!.touchCurrent!("transient-bearer", session)).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+  });
 
   it("lists only the authenticated user's canonical live session projection", async () => {
     const fetcher = reply(observation);
