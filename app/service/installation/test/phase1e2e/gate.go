@@ -2173,7 +2173,7 @@ func (value *gate) verifyBrowserSignedAccessKeyEdge(
 	}
 	clear(response.body)
 	replay, replayErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
-		forgedEdgeHeaders(string(authorizationBytes)), http.StatusUnauthorized)
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusConflict)
 	clear(replay.body)
 	if replayErr != nil {
 		clear(authorizationBytes)
@@ -2209,7 +2209,7 @@ func (value *gate) verifyBrowserSignedAccessKeyEdge(
 		return accessKeyRetention{}, fail("signed-access-key-browser-disabled-admitted")
 	}
 	replayedAfterDisable, replayAfterDisableErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
-		forgedEdgeHeaders(string(authorizationBytes)), http.StatusUnauthorized)
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusConflict)
 	clear(authorizationBytes)
 	clear(replayedAfterDisable.body)
 	if replayAfterDisableErr != nil {
