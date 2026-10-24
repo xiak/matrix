@@ -1221,10 +1221,10 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		return
 	}
 	if mode == authorityProcessPolicyMutationRecoveryBrowser {
-		runIAMPolicyMutationRecoveryConsoleBrowser(
+		sensitive = append(sensitive, runIAMPolicyMutationRecoveryConsoleBrowser(
 			t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start,
-		)
+		)...)
 		return
 	}
 	if mode == authorityProcessUserManagementRecoveryBrowser {
@@ -4602,7 +4602,7 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 	paasEndpoint string,
 	ownerBearer string,
 	start func(string, []string) *childProcess,
-) {
+) []string {
 	t.Helper()
 	operation := strings.ToUpper(strings.TrimSpace(os.Getenv("MATRIX_IAM_POLICY_MUTATION_RECOVERY_OPERATION")))
 	if operation == "" {
@@ -4610,6 +4610,16 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 	}
 	if operation != "UPDATE" && operation != "RETIRE" && operation != "SET_DEFAULT" {
 		t.Fatal("MATRIX_IAM_POLICY_MUTATION_RECOVERY_OPERATION must be UPDATE, RETIRE or SET_DEFAULT")
+	}
+	consumer := strings.ToUpper(strings.TrimSpace(os.Getenv("MATRIX_IAM_POLICY_MUTATION_RECOVERY_CONSUMER")))
+	if consumer == "" {
+		consumer = "UNREFERENCED"
+	}
+	if consumer != "UNREFERENCED" && consumer != "USER_BOUNDARY" {
+		t.Fatal("MATRIX_IAM_POLICY_MUTATION_RECOVERY_CONSUMER must be UNREFERENCED or USER_BOUNDARY")
+	}
+	if consumer == "USER_BOUNDARY" && operation != "SET_DEFAULT" {
+		t.Fatal("the USER_BOUNDARY Policy mutation consumer is only valid for SET_DEFAULT")
 	}
 
 	const (
@@ -4625,6 +4635,15 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 			Actions:   []iamv1.Action{iamv1.ActionPaaSApplicationRead},
 			Resources: []iamv1.PolicyResourceSelector{{Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceAnyInAuthority}},
 		}},
+	}
+	const (
+		boundarySelectedApplication paasv1.ResourceID = "browser-policy-boundary-selected"
+		boundaryOtherApplication    paasv1.ResourceID = "browser-policy-boundary-other"
+	)
+	if consumer == "USER_BOUNDARY" {
+		document.Statements[0].Resources = []iamv1.PolicyResourceSelector{{
+			Kind: iamv1.ResourceApplication, Match: iamv1.PolicyResourceExact, ID: string(boundarySelectedApplication),
+		}}
 	}
 	createdResponse := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer,
 		iamv1.CreatePolicyRequest{DisplayName: originalName, Document: document,
@@ -4662,19 +4681,125 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 		preparedPolicy, selectedVersion = published.Policy, published.Version
 		expectedVersions = append(expectedVersions, published.Version)
 	}
-	assertUnreferenced := func() {
+	type boundaryPolicyEvidence struct {
+		AttachmentID iamv1.PolicyAttachmentID     `json:"attachmentId"`
+		Version      iamv1.PolicyVersionReference `json:"version"`
+	}
+	type boundaryLimitEvidence struct {
+		State               string                        `json:"state"`
+		UserResourceVersion uint64                        `json:"userResourceVersion"`
+		BoundaryID          string                        `json:"boundaryId"`
+		ResourceVersion     uint64                        `json:"resourceVersion"`
+		Version             *iamv1.PolicyVersionReference `json:"version"`
+	}
+	var (
+		boundaryUser               iamv1.User
+		boundaryMember             loginResult
+		boundaryGrant              iamv1.PolicyAttachment
+		boundaryBeforeIdentity     iamv1.CurrentIdentity
+		boundaryAuthoritySnapshot  string
+		boundaryAllowDecisionID    string
+		boundaryAllowDocument      string
+		boundaryAllowPolicyProof   string
+		boundaryAllowBoundaryProof string
+		sensitive                  []string
+	)
+	snapshotBoundaryAuthority := func() string {
+		t.Helper()
+		var snapshot string
+		if err := database.QueryRow(ctx, `SELECT jsonb_build_object(
+			'principal',(SELECT to_jsonb(p) FROM iam.principals p WHERE p.tenant_id=$1 AND p.id=$2),
+			'session',(SELECT to_jsonb(s) FROM iam.sessions s WHERE s.tenant_id=$1 AND s.id=$3),
+			'attachment',(SELECT to_jsonb(a) FROM iam.policy_attachments a WHERE a.tenant_id=$1 AND a.id=$4),
+			'boundary',(SELECT to_jsonb(b) FROM iam.user_permission_boundaries b WHERE b.tenant_id=$1 AND b.user_id=$2 AND b.policy_id=$5)
+		)::text`, created.Policy.AccountID, boundaryUser.ID, boundaryMember.Session.ID, boundaryGrant.ID, created.Policy.ID).Scan(&snapshot); err != nil {
+			t.Fatal("snapshot boundary consumer authority", err)
+		}
+		return snapshot
+	}
+	if consumer == "USER_BOUNDARY" {
+		createPaaSApplication(t, paasEndpoint, ownerBearer, boundarySelectedApplication,
+			string(boundarySelectedApplication), "browser-policy-boundary-selected-create", http.StatusCreated)
+		createPaaSApplication(t, paasEndpoint, ownerBearer, boundaryOtherApplication,
+			string(boundaryOtherApplication), "browser-policy-boundary-other-create", http.StatusCreated)
+		boundaryUser = createIAMUser(t, iamEndpoint, ownerBearer, "browser.policy.boundary",
+			"Browser Policy boundary member", initialDeveloperPassword, "browser-policy-boundary-user-create")
+		boundaryMember = loginIAM(t, iamEndpoint, boundaryUser.LoginName+"@"+string(boundaryUser.AccountID),
+			initialDeveloperPassword, "browser-policy-boundary-user-initial-login")
+		changePasswordIAM(t, iamEndpoint, boundaryMember.Credential, initialDeveloperPassword,
+			changedDeveloperPassword, "browser-policy-boundary-user-password")
+		sensitive = append(sensitive, boundaryMember.Credential)
+		boundaryGrant = createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, boundaryUser.ID,
+			iamv1.SystemPolicyPaaSDeveloper, "browser-policy-boundary-positive-grant")
+
+		boundaryPath := iamEndpoint + "/v1/users/" + string(boundaryUser.ID) + "/permission-boundary"
+		var emptyBoundary, setBoundary iamv1.UserPermissionBoundary
+		response := performJSON(t, http.MethodGet, boundaryPath, ownerBearer, nil)
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &emptyBoundary) != nil ||
+			iamv1.ValidateUserPermissionBoundary(emptyBoundary) != nil || emptyBoundary.Policy != nil ||
+			emptyBoundary.UserID != boundaryUser.ID || emptyBoundary.AccountID != boundaryUser.AccountID {
+			t.Fatalf("read empty browser Policy boundary status=%d body=%s", response.Status, response.Body)
+		}
+		response = performJSON(t, http.MethodPut, boundaryPath, ownerBearer, iamv1.SetUserPermissionBoundaryRequest{
+			PolicyID: created.Policy.ID, PolicyResourceVersion: preparedPolicy.ResourceVersion,
+			ResourceVersion: emptyBoundary.ResourceVersion, RequestID: "browser-policy-boundary-set",
+		})
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &setBoundary) != nil ||
+			iamv1.ValidateUserPermissionBoundary(setBoundary) != nil || setBoundary.Policy == nil ||
+			*setBoundary.Policy != (iamv1.PolicyVersionReference{PolicyID: created.Policy.ID,
+				VersionID: created.Version.ID, ContentDigest: created.Version.ContentDigest}) {
+			t.Fatalf("set browser Policy boundary status=%d body=%s", response.Status, response.Body)
+		}
+
+		response = performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", boundaryMember.Credential, nil)
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &boundaryBeforeIdentity) != nil ||
+			iamv1.ValidateCurrentIdentity(boundaryBeforeIdentity) != nil ||
+			boundaryBeforeIdentity.User.ID != boundaryUser.ID || boundaryBeforeIdentity.PermissionBoundary.Policy == nil ||
+			*boundaryBeforeIdentity.PermissionBoundary.Policy != (iamv1.PolicyVersionReference{PolicyID: created.Policy.ID,
+				VersionID: created.Version.ID, ContentDigest: created.Version.ContentDigest}) ||
+			len(boundaryBeforeIdentity.PolicySources) != 1 ||
+			boundaryBeforeIdentity.PolicySources[0].Attachment.ID != boundaryGrant.ID {
+			t.Fatalf("prepared boundary identity status=%d body=%s", response.Status, response.Body)
+		}
+		getPaaSApplication(t, paasEndpoint, boundaryMember.Credential, boundarySelectedApplication, http.StatusOK)
+		getPaaSApplication(t, paasEndpoint, boundaryMember.Credential, boundaryOtherApplication, http.StatusForbidden)
+		if err := database.QueryRow(ctx, `SELECT id,document::text,policy_evidence::text,boundary_evidence::text
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND allowed
+			AND action_name=$3 AND target_kind=$4 AND target_id=$5 ORDER BY decided_at DESC,id DESC LIMIT 1`,
+			boundaryUser.AccountID, boundaryUser.ID, iamv1.ActionPaaSApplicationRead,
+			iamv1.ResourceApplication, boundarySelectedApplication).
+			Scan(&boundaryAllowDecisionID, &boundaryAllowDocument, &boundaryAllowPolicyProof, &boundaryAllowBoundaryProof); err != nil {
+			t.Fatal("read boundary Allow decision", err)
+		}
+		var grants []boundaryPolicyEvidence
+		var limit boundaryLimitEvidence
+		if json.Unmarshal([]byte(boundaryAllowPolicyProof), &grants) != nil ||
+			json.Unmarshal([]byte(boundaryAllowBoundaryProof), &limit) != nil || len(grants) != 1 ||
+			grants[0].AttachmentID != boundaryGrant.ID || grants[0].Version.PolicyID != iamv1.SystemPolicyPaaSDeveloper ||
+			limit.State != "BOUND" || limit.UserResourceVersion != boundaryBeforeIdentity.User.ResourceVersion ||
+			limit.Version == nil || *limit.Version != *boundaryBeforeIdentity.PermissionBoundary.Policy {
+			t.Fatal("prepared boundary Allow decision lost its independent grant or v1 ceiling evidence")
+		}
+		boundaryAuthoritySnapshot = snapshotBoundaryAuthority()
+	}
+
+	assertConsumers := func() {
 		t.Helper()
 		var attachments, userBoundaries, roleBoundaries int
+		wantUserBoundaries := 0
+		if consumer == "USER_BOUNDARY" {
+			wantUserBoundaries = 1
+		}
 		if err := database.QueryRow(ctx, `SELECT
 			(SELECT count(*) FROM iam.policy_attachments WHERE policy_id=$1),
 			(SELECT count(*) FROM iam.user_permission_boundaries WHERE policy_id=$1),
 			(SELECT count(*) FROM iam.role_permission_boundaries WHERE policy_id=$1)`, created.Policy.ID).
-			Scan(&attachments, &userBoundaries, &roleBoundaries); err != nil || attachments != 0 || userBoundaries != 0 || roleBoundaries != 0 {
-			t.Fatalf("browser Policy unexpectedly has authorization consumers: attachments=%d userBoundaries=%d roleBoundaries=%d err=%v",
-				attachments, userBoundaries, roleBoundaries, err)
+			Scan(&attachments, &userBoundaries, &roleBoundaries); err != nil || attachments != 0 || userBoundaries != wantUserBoundaries || roleBoundaries != 0 {
+			t.Fatalf("browser Policy authorization consumers changed: attachments=%d userBoundaries=%d want_user_boundaries=%d roleBoundaries=%d err=%v",
+				attachments, userBoundaries, wantUserBoundaries, roleBoundaries, err)
 		}
 	}
-	assertUnreferenced()
+	assertConsumers()
 
 	policyPath := "/api/iam/v1/policies/" + string(created.Policy.ID)
 	loss := newPolicyMutationBrowserResponseLoss(operation, policyPath)
@@ -4686,8 +4811,8 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 	finish := filepath.Join(temporary, "browser-policy-mutation-recovery-finished")
 	browserPath := "/console/access/policies/?id=" + url.QueryEscape(string(created.Policy.ID))
 	if operation == "SET_DEFAULT" {
-		t.Logf("POLICY_MUTATION_RECOVERY_BROWSER_FIXTURE operation=%s url=%s%s finish=%s policy=%s from_version=%s to_version=%s resource_version=%d realm=admin; review the unreferenced Policy's ALLOW and DENY versions, select the DENY default once, observe UNKNOWN after the committed response is lost, explicitly retry the exact original request once, then independently read the version table before creating the completion marker; use the existing changed admin password",
-			operation, server.URL, browserPath, finish, created.Policy.ID, created.Version.ID, selectedVersion.ID, preparedPolicy.ResourceVersion)
+		t.Logf("POLICY_MUTATION_RECOVERY_BROWSER_FIXTURE operation=%s consumer=%s url=%s%s finish=%s policy=%s from_version=%s to_version=%s resource_version=%d realm=admin; review the Policy's ALLOW and DENY versions, select the DENY default once, observe UNKNOWN after the committed response is lost, explicitly retry the exact original request once, then independently read the version table before creating the completion marker; USER_BOUNDARY means an unchanged ordinary User Session currently reads only the selected application through an independent positive grant and this boundary; use the existing changed admin password",
+			operation, consumer, server.URL, browserPath, finish, created.Policy.ID, created.Version.ID, selectedVersion.ID, preparedPolicy.ResourceVersion)
 	} else {
 		t.Logf("POLICY_MUTATION_RECOVERY_BROWSER_FIXTURE operation=%s browserA=%s%s browserB=%s%s finish=%s policy=%s realm=admin; open two same-origin tabs, submit the mutation in A, attempt the pending retry in B while A is still busy, close A, then retry the unchanged intent in B with the current or newly authenticated admin Session; use the existing changed admin password",
 			operation, server.URL, browserPath, server.URL, browserPath, finish, created.Policy.ID)
@@ -4798,7 +4923,7 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 			}
 		}
 	}
-	assertUnreferenced()
+	assertConsumers()
 	if wantStatus == iamv1.PolicyActive {
 		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/policies/"+string(created.Policy.ID), ownerBearer, nil)
 		var current iamv1.PolicyAccess
@@ -4807,6 +4932,55 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 			current.Detail.Policy.ResourceVersion != preparedPolicy.ResourceVersion+1 || current.Detail.Version.ID != selectedVersion.ID ||
 			current.Detail.Version.ContentDigest != selectedVersion.ContentDigest {
 			t.Fatalf("read replayed Policy update status=%d body=%s", response.Status, response.Body)
+		}
+	}
+	if consumer == "USER_BOUNDARY" {
+		getPaaSApplication(t, paasEndpoint, boundaryMember.Credential, boundarySelectedApplication, http.StatusForbidden)
+		getPaaSApplication(t, paasEndpoint, boundaryMember.Credential, boundaryOtherApplication, http.StatusForbidden)
+		var current iamv1.CurrentIdentity
+		response := performJSON(t, http.MethodGet, iamEndpoint+"/v1/auth/me", boundaryMember.Credential, nil)
+		if response.Status != http.StatusOK || json.Unmarshal(response.Body, &current) != nil ||
+			iamv1.ValidateCurrentIdentity(current) != nil || current.Account.ID != boundaryBeforeIdentity.Account.ID ||
+			current.User.ID != boundaryBeforeIdentity.User.ID || current.User.ResourceVersion != boundaryBeforeIdentity.User.ResourceVersion ||
+			current.PermissionBoundary.Policy == nil ||
+			*current.PermissionBoundary.Policy != (iamv1.PolicyVersionReference{PolicyID: created.Policy.ID,
+				VersionID: selectedVersion.ID, ContentDigest: selectedVersion.ContentDigest}) ||
+			len(current.PolicySources) != 1 || current.PolicySources[0].Attachment.ID != boundaryGrant.ID {
+			t.Fatalf("current identity retained a stale boundary or changed its positive grant status=%d body=%s", response.Status, response.Body)
+		}
+		if snapshotBoundaryAuthority() != boundaryAuthoritySnapshot {
+			t.Fatal("default-version recovery changed the ordinary User, Session, positive attachment or boundary relationship")
+		}
+		var retainedDocument, retainedPolicyProof, retainedBoundaryProof string
+		if err := database.QueryRow(ctx, `SELECT document::text,policy_evidence::text,boundary_evidence::text
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND id=$2`,
+			boundaryUser.AccountID, boundaryAllowDecisionID).
+			Scan(&retainedDocument, &retainedPolicyProof, &retainedBoundaryProof); err != nil ||
+			retainedDocument != boundaryAllowDocument || retainedPolicyProof != boundaryAllowPolicyProof ||
+			retainedBoundaryProof != boundaryAllowBoundaryProof {
+			t.Fatal("default-version recovery rewrote the historical Allow decision or its evidence")
+		}
+		var deniedDecisionID, deniedBoundaryProof string
+		if err := database.QueryRow(ctx, `SELECT id,boundary_evidence::text FROM iam.authorization_decisions
+			WHERE tenant_id=$1 AND principal_id=$2 AND NOT allowed AND action_name=$3 AND target_kind=$4 AND target_id=$5
+			AND id<>$6 ORDER BY decided_at DESC,id DESC LIMIT 1`, boundaryUser.AccountID, boundaryUser.ID,
+			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication, boundarySelectedApplication,
+			boundaryAllowDecisionID).Scan(&deniedDecisionID, &deniedBoundaryProof); err != nil {
+			t.Fatal("read post-switch boundary Deny decision", err)
+		}
+		var deniedLimit boundaryLimitEvidence
+		if deniedDecisionID == boundaryAllowDecisionID || json.Unmarshal([]byte(deniedBoundaryProof), &deniedLimit) != nil ||
+			deniedLimit.State != "BOUND" || deniedLimit.UserResourceVersion != current.User.ResourceVersion ||
+			deniedLimit.Version == nil || *deniedLimit.Version != *current.PermissionBoundary.Policy {
+			t.Fatal("post-switch Deny did not bind the unchanged User to the v2 boundary evidence")
+		}
+		var decisions, allows, denies int
+		if err := database.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE allowed),count(*) FILTER(WHERE NOT allowed)
+			FROM iam.authorization_decisions WHERE tenant_id=$1 AND principal_id=$2 AND action_name=$3
+			AND target_kind=$4 AND target_id=$5`, boundaryUser.AccountID, boundaryUser.ID,
+			iamv1.ActionPaaSApplicationRead, iamv1.ResourceApplication, boundarySelectedApplication).
+			Scan(&decisions, &allows, &denies); err != nil || decisions != 2 || allows != 1 || denies != 1 {
+			t.Fatalf("boundary selected application decisions=%d allows=%d denies=%d err=%v", decisions, allows, denies, err)
 		}
 	}
 
@@ -4850,11 +5024,14 @@ func runIAMPolicyMutationRecoveryConsoleBrowser(
 		chain.TenantID != auditv1.TenantID(created.Policy.AccountID) || chain.InstallationID != "" {
 		t.Fatalf("Policy replay tenant Audit chain is incomplete: %#v", chain)
 	}
-	if operation == "SET_DEFAULT" {
+	if operation == "SET_DEFAULT" && consumer == "USER_BOUNDARY" {
+		t.Log("one committed Policy default-version change for an active USER permission boundary was recovered by one explicit byte-identical replay after response loss; the unchanged ordinary User Session and positive attachment lost access on the next request, CurrentIdentity projected the new default version, the old Allow evidence stayed immutable, and one decision-bound outbox/Audit fact matched the verified tenant chain")
+	} else if operation == "SET_DEFAULT" {
 		t.Log("one committed Policy default-version change was recovered by one explicit byte-identical replay after response loss; only the default pointer and one Policy revision changed, both immutable versions and zero authorization consumers were preserved, and one decision-bound outbox/Audit fact matched the verified tenant chain")
 	} else {
 		t.Logf("two same-origin tabs recovered one committed Policy %s after the first tab closed a held partial response; the competing tab produced no queued write, the surviving tab replayed exactly one byte-identical command, and the authoritative Policy, immutable version, unique outbox fact and verified tenant Audit chain all matched", operation)
 	}
+	return sensitive
 }
 
 func runIAMUserManagementRecoveryConsoleBrowser(
