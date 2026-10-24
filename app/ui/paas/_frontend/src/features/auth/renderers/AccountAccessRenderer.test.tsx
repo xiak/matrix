@@ -4285,8 +4285,33 @@ describe("account access", () => {
     expect(publish).toHaveProperty("disabled", true);
     await user.click(publish);
     expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
+
+    const readCurrent = fixture.readPolicy.getMockImplementation()!;
+    const listCurrent = fixture.listPolicyVersions.getMockImplementation()!;
+    let finishExact!: (value: AccountPolicyAccess) => void;
+    const pendingExact = new Promise<AccountPolicyAccess>((resolve) => { finishExact = resolve; });
+    let finishDirectory!: (value: AccountPolicyVersionDirectory) => void;
+    const pendingDirectory = new Promise<AccountPolicyVersionDirectory>((resolve) => { finishDirectory = resolve; });
+    fixture.readPolicy.mockImplementationOnce(() => pendingExact);
+    fixture.listPolicyVersions.mockImplementationOnce(() => pendingDirectory);
     await user.click(within(table).getByRole("button", { name: "版本 version-a 的操作" }));
     expect((await screen.findByRole("menuitem", { name: "退休版本" })).getAttribute("aria-disabled")).not.toBe("true");
+    await user.click(screen.getByRole("menuitem", { name: "退休版本" }));
+    await user.click(screen.getByRole("button", { name: "确认退休" }));
+    await waitFor(() => expect(fixture.retirePolicyVersion).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(fixture.listPolicyVersions).toHaveBeenCalledTimes(2));
+    expect(screen.getByText("当前可管理版本：4 / 5")).toBeTruthy();
+    expect(screen.queryByText(/已达到 5 个可管理版本上限/)).toBeNull();
+    expect(screen.getByRole("button", { name: "发布新版本" })).toHaveProperty("disabled", true);
+
+    const nextDirectory = await listCurrent();
+    await act(async () => { finishDirectory(nextDirectory); await pendingDirectory; });
+    expect(screen.getByRole("button", { name: "发布新版本" })).toHaveProperty("disabled", true);
+    const nextAccess = await readCurrent();
+    await act(async () => { finishExact(nextAccess); await pendingExact; });
+    await waitFor(() => expect(screen.getByRole("button", { name: "发布新版本" })).toHaveProperty("disabled", false));
+    expect(fixture.createPolicyVersion).not.toHaveBeenCalled();
   });
 
   it("renames live Policy metadata inline with old/new review, byte validation and a stable target", async () => {
@@ -4628,9 +4653,13 @@ describe("account access", () => {
       document: structuredClone(proposed),
       contentDigest: `sha256:${"d".repeat(64)}`
     };
+    const publishedDirectory: AccountPolicyVersionDirectory = {
+      policy: { ...refreshedDirectory.policy, resourceVersion: 6 },
+      items: [...refreshedDirectory.items, publishedVersion].sort((left, right) => left.versionId.localeCompare(right.versionId))
+    };
     fixture.createPolicyVersion
       .mockRejectedValueOnce(new HttpProblem(409, "IAM_CONFLICT"))
-      .mockResolvedValueOnce({ policy: { ...refreshedDirectory.policy, resourceVersion: 6 }, version: publishedVersion });
+      .mockResolvedValueOnce({ policy: structuredClone(publishedDirectory.policy), version: structuredClone(publishedVersion) });
 
     await user.click(screen.getByRole("button", { name: "发布新版本" }));
     fireEvent.change(screen.getByRole("textbox", { name: "待发布声明 JSON" }), { target: { value: draftText } });
@@ -4650,6 +4679,11 @@ describe("account access", () => {
     await act(async () => { finishRefresh(); });
     await waitFor(() => expect(review).toHaveProperty("disabled", false));
     expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(1);
+    fixture.readPolicy.mockResolvedValueOnce(policyAccess({
+      policy: structuredClone(publishedDirectory.policy),
+      version: structuredClone(publishedDirectory.items.find((item) => item.versionId === publishedDirectory.policy.defaultVersionId)!)
+    }));
+    fixture.listPolicyVersions.mockResolvedValueOnce(structuredClone(publishedDirectory));
     await user.click(review);
     await user.click(screen.getByRole("button", { name: "确认发布新版本" }));
     await waitFor(() => expect(fixture.createPolicyVersion).toHaveBeenCalledTimes(2));
@@ -4660,6 +4694,8 @@ describe("account access", () => {
       requestId: expect.stringMatching(/^ui-policy-version-/)
     });
     expect(fixture.createPolicyVersion.mock.calls[1]![3].requestId).not.toBe(firstRequestId);
+    await waitFor(() => expect(fixture.readPolicy).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(fixture.listPolicyVersions).toHaveBeenCalledTimes(3));
     expect(await screen.findByRole("heading", { name: "版本 version-after-conflict 已发布" })).toBeTruthy();
   });
 

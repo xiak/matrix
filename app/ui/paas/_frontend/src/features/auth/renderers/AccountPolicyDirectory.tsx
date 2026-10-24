@@ -370,7 +370,7 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
   readVersion: NonNullable<AccountPolicyReadClient["readVersion"]>;
   mutation: PolicyVersionMutationClient | null;
   authorizationReady: boolean;
-  onApplied(detail: AccountPolicyDetail): void;
+  onApplied(): void;
   onConflictRefresh(): void;
   refreshRevision: number;
 }) {
@@ -407,7 +407,10 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
     return () => { current = false; };
   }, [listVersions, policy.id, revision, refreshRevision]);
   const writesAuthorized = authorizationReady && directoryAuthority?.listVersions === listVersions &&
-    directoryAuthority.refreshRevision === refreshRevision && directoryAuthority.revision === revision && state.status === "ready";
+    directoryAuthority.refreshRevision === refreshRevision && directoryAuthority.revision === revision && state.status === "ready" &&
+    state.directory.policy.id === policy.id && state.directory.policy.accountId === policy.accountId &&
+    state.directory.policy.resourceVersion === policy.resourceVersion &&
+    state.directory.policy.defaultVersionId === policy.defaultVersionId;
   useEffect(() => {
     if (!selectedId || !canReadVersion) return;
     let current = true;
@@ -452,7 +455,7 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
       setReview(null);
       setState({ status: "ready", directory: { policy: result.detail.policy,
         items: review.kind === "retire" ? snapshot.items.filter((item) => item.versionId !== review.versionId) : snapshot.items } });
-      setRevision((value) => value + 1); onApplied(result.detail);
+      setRevision((value) => value + 1); onApplied();
     } else if (result.status === "unknown") {
       setReview(null);
     } else if (result.status === "rejected" && result.reason === "conflict") {
@@ -475,6 +478,8 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
           items: [...state.directory.items, detail.version].sort((left, right) => left.versionId.localeCompare(right.versionId)) } });
         setPublished({ versionId: detail.version.versionId, defaultVersionId: detail.policy.defaultVersionId });
         setPublisherOpen(false);
+        setRevision((value) => value + 1);
+        onApplied();
       }} onConflict={onConflictRefresh}
       onClose={() => { returnToPublish.current = true; setPublisherOpen(false); }} />;
   }
@@ -583,11 +588,7 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
       disabledReason: sharedDisabledReason ?? (!canRetire ? t("metadata.noAuthority") : undefined),
       onSelect: () => { if (detail && canRetire) setWorkflow({ identity: metadataMutation.identity, detail: structuredClone(detail), kind: "retire" }); } }
   ] } : undefined;
-  const onVersionApplied = (next: AccountPolicyDetail) => {
-    setSnapshot((current) => current?.client === client && current.state.status === "ready"
-      ? { ...current, state: { status: "ready", access: { ...current.state.access, detail: next } } }
-      : current);
-  };
+  const onVersionApplied = () => setRevision((value) => value + 1);
   return <WorkspaceDetail title={source?.displayName ?? policyId} onBack={onBack} actionFocusRef={actionFocus} actions={metadataActions}>
     <p className={styles.note}>{t("detailNotice")}</p>
     <dl className={styles.catalogFacts}>
