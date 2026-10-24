@@ -1166,6 +1166,32 @@ func TestSignedManagedProductServiceRoleAuthorityIsExplicitlyDelegated(t *testin
 	}
 }
 
+func TestRetainedPrimarySessionFixtureRequiresCredentialAndSessionIdentity(t *testing.T) {
+	valid := []tenantRetention{
+		{RetainedPrimaryCredential: []byte("first-bearer"), RetainedPrimarySessionID: "first-session"},
+		{RetainedPrimaryCredential: []byte("second-bearer"), RetainedPrimarySessionID: "second-session"},
+	}
+	if !validRetainedPrimarySessions(valid) {
+		t.Fatal("complete retained primary sessions were rejected")
+	}
+	for name, mutate := range map[string]func([]tenantRetention){
+		"missing tenant":     func(value []tenantRetention) { value[1] = tenantRetention{} },
+		"missing credential": func(value []tenantRetention) { value[0].RetainedPrimaryCredential = nil },
+		"missing session":    func(value []tenantRetention) { value[0].RetainedPrimarySessionID = "" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			candidate := append([]tenantRetention(nil), valid...)
+			mutate(candidate)
+			if validRetainedPrimarySessions(candidate) {
+				t.Fatal("incomplete retained primary session was accepted")
+			}
+		})
+	}
+	if validRetainedPrimarySessions(valid[:1]) {
+		t.Fatal("incomplete account set was accepted")
+	}
+}
+
 func TestPhase1AccessKeySignerBindsExactNorthboundRequest(t *testing.T) {
 	createdAt := time.Date(2026, time.October, 7, 1, 2, 3, 456000000, time.UTC)
 	material := bytes.Repeat([]byte{0x2a}, 32)

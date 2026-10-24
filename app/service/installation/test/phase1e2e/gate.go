@@ -1553,6 +1553,7 @@ func (value *gate) prepareTenantRetention(ctx context.Context, operator, adminis
 			return fail("tenant-primary-retained-login-" + label)
 		}
 		tenant.RetainedPrimaryCredential = retained.Credential.CopyBytes()
+		tenant.RetainedPrimarySessionID = retained.Session.ID
 		value.edge.addForbidden(tenant.RetainedPrimaryCredential)
 		if err := value.edge.changePassword(ctx, tenant.OldPrimaryCredential, tenant.PreviousPrimaryPassword, tenant.PrimaryPassword, false, &keepOtherSessions); err != nil {
 			return fail("tenant-primary-retain-valid-session-" + label)
@@ -2367,6 +2368,7 @@ func (value *gate) persistTenantRetention() error {
 		value.retainedIAM.AdministratorContact.State != "VERIFIED" || !validMFARetention(value.retainedIAM.MFA) ||
 		!validPreBackupPolicyAttachmentChanges(value.retainedIAM.PolicyChanges) ||
 		iamv1.ValidateAccessAnalyzer(value.retainedIAM.AccessAnalyzer) != nil ||
+		!validRetainedPrimarySessions(value.retainedIAM.Tenants) ||
 		!validDelegatedAuthorityFixtures(value.retainedIAM.Tenants) {
 		return fail("tenant-retention-contact")
 	}
@@ -2402,7 +2404,8 @@ func (value *gate) readTenantRetention(installationID string) error {
 	if decodeOne(content, &retained) != nil || retained.InstallationID != installationID || len(retained.Tenants) != 2 || len(retained.AdministratorPassword) == 0 ||
 		iamv1.ValidateNotificationContact(retained.AdministratorContact) != nil || retained.AdministratorContact.State != "VERIFIED" ||
 		!validMFARetention(retained.MFA) || !validPreBackupPolicyAttachmentChanges(retained.PolicyChanges) ||
-		iamv1.ValidateAccessAnalyzer(retained.AccessAnalyzer) != nil || !validDelegatedAuthorityFixtures(retained.Tenants) {
+		iamv1.ValidateAccessAnalyzer(retained.AccessAnalyzer) != nil || !validRetainedPrimarySessions(retained.Tenants) ||
+		!validDelegatedAuthorityFixtures(retained.Tenants) {
 		return fail("tenant-retention-fixture-identity")
 	}
 	value.retainedIAM = &retained
@@ -2419,6 +2422,18 @@ func (value *gate) readTenantRetention(installationID string) error {
 		}
 	}
 	return nil
+}
+
+func validRetainedPrimarySessions(tenants []tenantRetention) bool {
+	if len(tenants) != 2 {
+		return false
+	}
+	for index := range tenants {
+		if len(tenants[index].RetainedPrimaryCredential) == 0 || tenants[index].RetainedPrimarySessionID == "" {
+			return false
+		}
+	}
+	return true
 }
 
 func validDelegatedAuthorityFixtures(tenants []tenantRetention) bool {
@@ -2538,6 +2553,16 @@ func (value *gate) assertTenantRetention(
 				return fail("tenant-valid-password-session-survived-recovery")
 			}
 		} else {
+			// Ordinary authenticated reads intentionally do not advance the idle
+			// waterline. The lifecycle client is active at every release
+			// checkpoint, so record that foreground interaction before asserting
+			// that the same password-retained Session survived replacement.
+			if _, err := value.edge.touchCurrentSession(
+				ctx, tenant.RetainedPrimaryCredential, id,
+				account.RootIdentity.PrincipalID, tenant.RetainedPrimarySessionID,
+			); err != nil {
+				return fail("tenant-valid-password-session-touch")
+			}
 			var retainedIdentity iamv1.CurrentIdentity
 			if _, err := value.edge.get(ctx, "/api/iam/v1/auth/me", tenant.RetainedPrimaryCredential, &retainedIdentity); err != nil ||
 				iamv1.ValidateCurrentIdentity(retainedIdentity) != nil || retainedIdentity.User.ID != account.RootIdentity.PrincipalID ||

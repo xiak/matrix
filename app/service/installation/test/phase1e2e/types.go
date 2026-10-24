@@ -90,6 +90,7 @@ type tenantRetention struct {
 	TemporaryPrimaryCredential []byte
 	TemporaryChildCredential   []byte
 	RetainedPrimaryCredential  []byte
+	RetainedPrimarySessionID   iamv1.SessionID
 	Operations                 []paasv1.Operation
 	Quota                      managedservicev1.QuotaEntitlement
 	AuditHashes                map[string]struct{}
