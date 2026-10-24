@@ -6486,7 +6486,7 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 	root, temporary, iamEndpoint, auditEndpoint, paasEndpoint, ownerBearer string,
 	start func(string, []string) *childProcess) []string {
 	t.Helper()
-	const loginName, roleName = "browser.role.lifecycle", "Browser lifecycle role"
+	const loginName, roleName, updatedRoleName = "browser.role.lifecycle", "Browser lifecycle role", "Browser lifecycle role managed"
 	user := createIAMUser(t, iamEndpoint, ownerBearer, loginName, "Browser Role member", initialDeveloperPassword, "browser-role-member")
 	initial := loginIAM(t, iamEndpoint, loginName+"@"+string(user.AccountID), initialDeveloperPassword, "browser-role-first-login")
 	changePasswordIAM(t, iamEndpoint, initial.Credential, initialDeveloperPassword, changedDeveloperPassword, "browser-role-first-password")
@@ -6530,6 +6530,14 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 					key = "boundary"
 				case r.Method == http.MethodPost && r.URL.Path == "/api/iam/v1/policy-attachments":
 					key = "attachment"
+				case r.Method == http.MethodPatch && strings.HasPrefix(r.URL.Path, "/api/iam/v1/roles/"):
+					key = "metadata"
+				case r.Method == http.MethodPut && strings.HasPrefix(r.URL.Path, "/api/iam/v1/roles/") && strings.HasSuffix(r.URL.Path, "/trust-policy"):
+					key = "trust"
+				case r.Method == http.MethodPost && strings.HasPrefix(r.URL.Path, "/api/iam/v1/roles/") && strings.HasSuffix(r.URL.Path, ":set-status"):
+					key = "status"
+				case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/iam/v1/roles/"):
+					key = "delete"
 				}
 				if key != "" {
 					setupMu.Lock()
@@ -6621,7 +6629,7 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 	}
 	queryAudit(t, auditEndpoint, siblingBearer, auditv1.QueryRecordsRequest{PageSize: 10}, http.StatusForbidden)
 	finished := filepath.Join(temporary, "browser-role-lifecycle-finished")
-	t.Logf("ROLE_LIFECYCLE_REVOKE url=%s/console/access/roles/?id=%s role_session=%s sibling=%s marker=%s; administrator revokes only the exact browser Session through its existing session workspace; member then observes Role401/BLOCKED, explicitly validates/returns to original USER and sees applications403",
+	t.Logf("ROLE_LIFECYCLE_REVOKE url=%s/console/access/roles/?id=%s role_session=%s sibling=%s marker=%s; keep the member Role tab alive and use a separate administrator tab to revoke only the exact browser Session through its existing session workspace; member then observes Role401/BLOCKED, explicitly validates/returns to original USER and sees applications403",
 		server.URL, roleID, issued.ID, sibling.Session.ID, finished)
 	waitForBrowserMarker(t, ctx, ui, finished, "exact administrative RoleSession revocation")
 	if err := journey.check(); err != nil {
@@ -6649,6 +6657,38 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 		!reflect.DeepEqual(access.PolicyAttachments, unchanged.PolicyAttachments) {
 		t.Fatal("exact Session revocation altered Role, trust or attachments")
 	}
+	managed := filepath.Join(temporary, "browser-role-lifecycle-managed")
+	t.Logf("ROLE_LIFECYCLE_MANAGEMENT url=%s/console/access/roles/?id=%s marker=%s; administrator logs in again, updates metadata to name=%q description=%q duration=30 minutes, replaces trust with an empty version, disables then re-enables the Role, deletes it by entering the updated exact name and leaves the authoritative deletion receipt visible",
+		server.URL, roleID, managed, updatedRoleName, "Browser managed lifecycle")
+	waitForBrowserMarker(t, ctx, ui, managed, "page-managed Role metadata, trust, status and deletion")
+	setupMu.Lock()
+	managedExactly := setupWrites["metadata"] == 1 && setupWrites["trust"] == 1 && setupWrites["status"] == 2 && setupWrites["delete"] == 1
+	setupMu.Unlock()
+	if !managedExactly {
+		t.Fatal("Role management did not come from one metadata update, one trust change, disable/enable and one delete")
+	}
+	response = performJSON(t, http.MethodGet, iamEndpoint+rolePath, ownerBearer, nil)
+	if response.Status != http.StatusForbidden {
+		t.Fatal("page-deleted Role remained readable")
+	}
+	var storedName, storedDescription, storedStatus string
+	var storedDuration, storedVersion, revokedAttachments int64
+	var deleted bool
+	var trustVersions int
+	if err := database.QueryRow(ctx, `SELECT metadata->>'name',metadata->>'description',(metadata->>'maxSessionDurationSeconds')::bigint,
+		status,resource_version,deleted_at IS NOT NULL,COALESCE(revoked_attachments_count,-1),
+		(SELECT count(*) FROM iam.role_trust_versions version WHERE version.tenant_id=role_value.tenant_id AND version.role_id=role_value.id)
+		FROM iam.roles role_value WHERE tenant_id=$1 AND id=$2`, user.AccountID, roleID).
+		Scan(&storedName, &storedDescription, &storedDuration, &storedStatus, &storedVersion, &deleted, &revokedAttachments, &trustVersions); err != nil ||
+		storedName != updatedRoleName || storedDescription != "Browser managed lifecycle" || storedDuration != 1800 || storedStatus != string(iamv1.RoleActive) ||
+		storedVersion != 7 || !deleted || revokedAttachments != 1 || trustVersions != 2 {
+		t.Fatal("page-managed Role did not retain its exact metadata, immutable trust history, status transitions and deletion tombstone", err)
+	}
+	for _, endpoint := range []string{iamEndpoint + "/v1/auth/role-session", paasEndpoint + "/v1/applications"} {
+		if response := performJSON(t, http.MethodGet, endpoint, siblingBearer, nil); response.Status != http.StatusUnauthorized {
+			t.Fatal("Role lifecycle management revived or retained an old sibling RoleSession")
+		}
+	}
 	targets := []struct {
 		action    auditv1.Action
 		kind      auditv1.TargetKind
@@ -6659,6 +6699,11 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 		{auditv1.ActionIAMPolicyAttachmentCreated, auditv1.TargetPolicyAttachment, string(access.PolicyAttachments[0].ID), "principal-admin"},
 		{auditv1.ActionIAMRoleSessionIssued, auditv1.TargetRoleSession, string(issued.ID), string(user.ID)},
 		{auditv1.ActionIAMRoleSessionAdminRevoked, auditv1.TargetRoleSession, string(issued.ID), "principal-admin"},
+		{auditv1.ActionIAMRoleUpdated, auditv1.TargetRole, string(roleID), "principal-admin"},
+		{auditv1.ActionIAMRoleTrustSet, auditv1.TargetRole, string(roleID), "principal-admin"},
+		{auditv1.ActionIAMRoleDisabled, auditv1.TargetRole, string(roleID), "principal-admin"},
+		{auditv1.ActionIAMRoleEnabled, auditv1.TargetRole, string(roleID), "principal-admin"},
+		{auditv1.ActionIAMRoleDeleted, auditv1.TargetRole, string(roleID), "principal-admin"},
 	}
 	waitAllIAMOutboxDelivered(t, ctx, database)
 	for _, target := range targets {
@@ -6697,7 +6742,7 @@ func runIAMRoleLifecycleConsoleBrowser(t *testing.T, ctx context.Context, databa
 	if chain.State != auditv1.VerificationVerified || !chain.Complete || chain.TenantID != auditv1.TenantID(user.AccountID) {
 		t.Fatal("browser Role lifecycle lacks a complete tenant Audit chain")
 	}
-	t.Log("page-created Role/trust/boundary/positive attachment, real member assumption, allow/deny and exact administrative Session revocation retained the sibling and complete Audit chain")
+	t.Log("page-created Role/trust/boundary/positive attachment, real member assumption, allow/deny, exact Session revocation, metadata/trust/status lifecycle and deletion retained immutable history and a complete Audit chain")
 	return []string{initial.Credential, member.Credential, siblingBearer}
 }
 

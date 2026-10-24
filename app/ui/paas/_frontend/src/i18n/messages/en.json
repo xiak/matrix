@@ -4553,7 +4553,7 @@
     "permissionsHint": "Role sessions use these policies and the mandatory permission boundary, not the caller's own permissions. You may create the role first, but assumption stays closed until a ceiling is set.",
     "noPermissions": "No policies attached · resource access is denied",
     "searchAttachedPolicies": "Search attached role policies",
-    "nameHint": "1–64 characters. The role name cannot be changed after creation.",
+    "nameHint": "1–64 characters. The display name can change after creation; the stable role ID does not.",
     "invalidTrust": "Select at least one current-tenant user.",
     "invalidName": "Enter a name of 1–64 characters without angle brackets or control characters.",
     "duplicate": "A role with this name already exists.",
