@@ -6,11 +6,11 @@ import { runInNewContext } from "node:vm";
 import ts from "typescript";
 
 const configURL = new URL("../next.config.mjs", import.meta.url).href;
-function configuration(mode, nodeEnv = "production") {
+function configuration(mode, nodeEnv = "production", beforeImport = "") {
   const env = { ...process.env, NODE_ENV: nodeEnv };
   if (mode === undefined) delete env.NEXT_PUBLIC_MATRIX_UX_PREVIEW;
   else env.NEXT_PUBLIC_MATRIX_UX_PREVIEW = mode;
-  const source = `const {default: config} = await import(${JSON.stringify(configURL)}); console.log(JSON.stringify({env:config.env,id:await config.generateBuildId(),nodeEnv:process.env.NODE_ENV,original:process.env.NEXT_PUBLIC_MATRIX_UX_PREVIEW??null}));`;
+  const source = `${beforeImport}\nconst {default: config} = await import(${JSON.stringify(configURL)}); console.log(JSON.stringify({env:config.env,id:await config.generateBuildId(),nodeEnv:process.env.NODE_ENV,original:process.env.NEXT_PUBLIC_MATRIX_UX_PREVIEW??null}));`;
   return JSON.parse(execFileSync(process.execPath, ["--input-type=module", "--eval", source], { env, encoding: "utf8" }));
 }
 
@@ -24,6 +24,16 @@ test("canonicalizes unset, zero and non-enabled preview modes without mutating t
   }
   assert.equal(missing.env.NEXT_PUBLIC_MATRIX_UX_PREVIEW, "0");
   assert.equal(missing.original, null);
+});
+
+test("generates the same build ID without locale-dependent collation", () => {
+  const canonical = configuration("0");
+  const withoutLocaleCollation = configuration(
+    "0",
+    "production",
+    'String.prototype.localeCompare = () => { throw new Error("static build ID must not use locale collation"); };',
+  );
+  assert.equal(withoutLocaleCollation.id, canonical.id);
 });
 
 test("keeps explicit preview distinct and preserves the actual DEV runtime branch", () => {
