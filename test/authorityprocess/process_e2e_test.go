@@ -444,8 +444,8 @@ func TestIAMIdentityConsoleBrowser(t *testing.T) {
 
 // This opt-in fixture starts from a real API-created Account, Root and User so
 // the browser can focus on the separate personal-security boundary: verified
-// contact, TOTP binding/replacement/removal/rebinding, MFA sessions and
-// authoritative cross-browser session revocation.
+// contact, TOTP binding/replacement/removal/rebinding, recovery-code rotation,
+// MFA sessions and authoritative cross-browser session revocation.
 // TestIAMIdentityConsoleBrowser remains the owner of browser Account/User
 // creation and is deliberately not weakened or repeated here.
 func TestIAMPersonalSecurityConsoleBrowser(t *testing.T) {
@@ -8749,6 +8749,7 @@ func runIAMPersonalSecurityConsoleBrowser(
 		replacementBindingCodePath: filepath.Join(temporary, "browser-totp-replacement-binding-code"),
 		removalProofCodePath:       filepath.Join(temporary, "browser-totp-removal-proof-code"),
 		rebindBindingCodePath:      filepath.Join(temporary, "browser-totp-rebind-binding-code"),
+		regenerationProofCodePath:  filepath.Join(temporary, "browser-recovery-codes-regeneration-proof-code"),
 		loginCodePaths: [4]string{
 			filepath.Join(temporary, "browser-totp-login-one-code"),
 			filepath.Join(temporary, "browser-totp-login-two-code"),
@@ -8756,16 +8757,16 @@ func runIAMPersonalSecurityConsoleBrowser(
 			filepath.Join(temporary, "browser-totp-login-after-rebind-code"),
 		},
 	}
-	t.Logf("PERSONAL_SECURITY_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s@%s email=%s contactCode=%s initialBindingCode=%s loginOneCode=%s loginTwoCode=%s replacementProofCode=%s replacementBindingCode=%s replacementLoginCode=%s removalProofCode=%s rebindBindingCode=%s finalLoginCode=%s; use the changed developer password",
+	t.Logf("PERSONAL_SECURITY_BROWSER_FIXTURE url=%s/console/access/settings/ finish=%s realm=%s@%s email=%s contactCode=%s initialBindingCode=%s loginOneCode=%s loginTwoCode=%s replacementProofCode=%s replacementBindingCode=%s replacementLoginCode=%s removalProofCode=%s rebindBindingCode=%s finalLoginCode=%s regenerationProofCode=%s; use the changed developer password; after the final MFA login regenerate the recovery-code batch through its purpose-limited proof, save the ten one-time codes, and only then create the marker",
 		server.URL, finish, browserUserLoginName, browserAccountID,
 		browserSecurityEmail,
 		material.contactCodePath, material.initialBindingCodePath, material.loginCodePaths[0], material.loginCodePaths[1],
 		material.replacementProofCodePath, material.replacementBindingCodePath, material.loginCodePaths[2],
-		material.removalProofCodePath, material.rebindBindingCodePath, material.loginCodePaths[3])
+		material.removalProofCodePath, material.rebindBindingCodePath, material.loginCodePaths[3], material.regenerationProofCodePath)
 	waitForPersonalSecurityBrowserCompletion(t, ctx, database, ui, finish, bootstrap, &material)
 	assertBrowserPersonalSecurityFlow(t, ctx, database, iamEndpoint, auditEndpoint, paasEndpoint,
 		platformBearer, homeHomonym, material.finalSeed)
-	t.Log("personal-security browser fixture finished with a verified notification contact, TOTP binding/replacement/removal/rebinding, four MFA logins, authoritative cross-browser session revocation, realm isolation, zero implicit grants and a verified Account Audit chain; the protected synthetic code handoff is not SMTP or an external authenticator")
+	t.Log("personal-security browser fixture finished with a verified notification contact, TOTP binding/replacement/removal/rebinding, purpose-limited recovery-code rotation, four MFA logins, authoritative cross-browser session revocation, realm isolation, zero implicit grants and a verified Account Audit chain; the protected synthetic code handoff is not SMTP or an external authenticator")
 }
 
 // personalSecurityBrowserMaterial is a test-only handoff between the real IAM
@@ -8781,6 +8782,7 @@ type personalSecurityBrowserMaterial struct {
 	replacementBindingCodePath string
 	removalProofCodePath       string
 	rebindBindingCodePath      string
+	regenerationProofCodePath  string
 	loginCodePaths             [4]string
 	userID                     iamv1.PrincipalID
 	finalSeed                  string
@@ -8790,6 +8792,7 @@ type personalSecurityBrowserMaterial struct {
 	replacementBindingWritten  bool
 	removalProofWritten        bool
 	rebindBindingWritten       bool
+	regenerationProofWritten   bool
 	loginCodesWritten          int
 	loginChallenges            map[string]int
 	codeSteps                  map[string]int64
@@ -8827,7 +8830,7 @@ func waitForPersonalSecurityBrowserCompletion(
 			}
 			if !material.contactWritten || !material.initialBindingWritten ||
 				!material.replacementProofWritten || !material.replacementBindingWritten ||
-				!material.removalProofWritten || !material.rebindBindingWritten ||
+				!material.removalProofWritten || !material.rebindBindingWritten || !material.regenerationProofWritten ||
 				material.loginCodesWritten != len(material.loginCodePaths) || material.finalSeed == "" {
 				t.Fatal("browser completion marker preceded notification or complete TOTP lifecycle evidence")
 			}
@@ -8905,7 +8908,7 @@ func observePersonalSecurityBrowserMaterial(
 
 	type pendingStepUp struct{ operation, factorID string }
 	rows, err := database.Query(ctx, `SELECT operation,factor_id FROM iam.step_ups
-		WHERE tenant_id=$1 AND user_id=$2 AND state='PENDING' AND operation IN ('TOTP_REPLACE','TOTP_REMOVE')
+		WHERE tenant_id=$1 AND user_id=$2 AND state='PENDING' AND operation IN ('TOTP_REPLACE','TOTP_REMOVE','RECOVERY_CODES_REGENERATE')
 		ORDER BY created_at,id`, browserAccountID, material.userID)
 	if err != nil {
 		t.Fatalf("observe browser TOTP factor-change proofs: %v", err)
@@ -8937,6 +8940,9 @@ func observePersonalSecurityBrowserMaterial(
 		case "TOTP_REMOVE":
 			path = material.removalProofCodePath
 			material.removalProofWritten = true
+		case "RECOVERY_CODES_REGENERATE":
+			path = material.regenerationProofCodePath
+			material.regenerationProofWritten = true
 		}
 		if path != "" {
 			code, step := processTOTPCode(t, ctx, database, factor.seed, factor.lastStep, false)
@@ -10842,10 +10848,49 @@ func assertBrowserPersonalSecurityFlow(
 		platformBearer, homeHomonym, func(created iamv1.User) loginResult {
 			waitAllIAMOutboxDelivered(t, ctx, database)
 			assertBrowserMFAAndSessionRevocation(t, ctx, database, created.ID)
+			waitForBrowserTOTPBudgetReopen(t, ctx, database, created.AccountID, created.ID)
 			return loginIAMWithTOTP(t, ctx, database, iamEndpoint,
 				browserUserLoginName+"@"+browserAccountID, changedDeveloperPassword,
 				created.ID, totpSeed, "browser-user-authoritative-login")
 		})
+}
+
+// The browser lifecycle deliberately consumes the fifth shared TOTP attempt
+// when it proves recovery-code regeneration. The authoritative postcondition
+// then needs one independent MFA login. Wait for the real ten-minute budget
+// window instead of changing the database clock, resetting the budget row or
+// weakening the production limit.
+func waitForBrowserTOTPBudgetReopen(
+	t *testing.T,
+	ctx context.Context,
+	database *pgx.Conn,
+	accountID iamv1.AccountID,
+	userID iamv1.PrincipalID,
+) {
+	t.Helper()
+	ticker := time.NewTicker(250 * time.Millisecond)
+	defer ticker.Stop()
+	logged := false
+	for {
+		var available bool
+		err := database.QueryRow(ctx, `SELECT used_attempts<5 OR window_started_at+interval '10 minutes'<=clock_timestamp()
+			FROM iam.totp_attempts WHERE tenant_id=$1 AND user_id=$2`, accountID, userID).Scan(&available)
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && available {
+			return
+		}
+		if err != nil {
+			t.Fatalf("read browser TOTP attempt budget: %v", err)
+		}
+		if !logged {
+			t.Log("browser recovery-code rotation consumed the shared TOTP budget; waiting for the real ten-minute window before the independent authoritative login")
+			logged = true
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("browser TOTP attempt budget did not reopen before the process deadline")
+		case <-ticker.C:
+		}
+	}
 }
 
 func assertBrowserIdentityFlowWithMemberLogin(
@@ -10988,8 +11033,18 @@ func assertBrowserMFAAndSessionRevocation(
 	if err := database.QueryRow(ctx, `SELECT count(*),count(*) FILTER(WHERE revoked_at IS NULL),count(*) FILTER(WHERE revoked_at IS NOT NULL)
 		FROM iam.mfa_recovery_batches WHERE tenant_id=$1 AND user_id=$2`, browserAccountID, userID).Scan(
 		&batches, &activeBatches, &revokedBatches,
-	); err != nil || batches != 3 || activeBatches != 1 || revokedBatches != 2 {
+	); err != nil || batches != 4 || activeBatches != 1 || revokedBatches != 3 {
 		t.Fatalf("browser recovery lifecycle batches=%d active=%d revoked=%d err=%v", batches, activeBatches, revokedBatches, err)
+	}
+	var regenerations, consumedRegenerationProofs, regenerationNotices int
+	if err := database.QueryRow(ctx, `SELECT
+		(SELECT count(*) FROM iam.recovery_code_regenerations WHERE tenant_id=$1 AND user_id=$2),
+		(SELECT count(*) FROM iam.step_ups WHERE tenant_id=$1 AND user_id=$2 AND operation='RECOVERY_CODES_REGENERATE' AND state='CONSUMED'),
+		(SELECT count(*) FROM iam.security_notifications WHERE tenant_id=$1 AND user_id=$2 AND kind='RECOVERY_CODES_REGENERATED')`,
+		browserAccountID, userID).Scan(&regenerations, &consumedRegenerationProofs, &regenerationNotices); err != nil ||
+		regenerations != 1 || consumedRegenerationProofs != 1 || regenerationNotices != 1 {
+		t.Fatalf("browser recovery-code rotation regenerations=%d consumedProofs=%d notices=%d err=%v",
+			regenerations, consumedRegenerationProofs, regenerationNotices, err)
 	}
 	var activeMFA, revokedSessions, allActive, activePassword int
 	if err := database.QueryRow(ctx, `SELECT
@@ -11003,7 +11058,7 @@ func assertBrowserMFAAndSessionRevocation(
 		t.Fatalf("browser session revocation activeMFA=%d revoked=%d allActive=%d activePassword=%d err=%v",
 			activeMFA, revokedSessions, allActive, activePassword, err)
 	}
-	var contactFacts, boundFacts, replacedFacts, removedFacts, sessionFacts int
+	var contactFacts, boundFacts, replacedFacts, removedFacts, regenerationFacts, sessionFacts int
 	if err := database.QueryRow(ctx, `SELECT
 		count(*) FILTER (WHERE event_document->>'action'='iam.notification-contact.verified'
 		  AND event_document->>'requestId' LIKE 'ui-security-contact-confirm-%'),
@@ -11013,13 +11068,15 @@ func assertBrowserMFAAndSessionRevocation(
 		  AND event_document->>'requestId' LIKE 'ui-totp-confirm-%'),
 		count(*) FILTER (WHERE event_document->>'action'='iam.authenticator.removed'
 		  AND event_document->>'requestId' LIKE 'ui-totp-change-%'),
+		count(*) FILTER (WHERE event_document->>'action'='iam.recovery-codes.regenerated'
+		  AND event_document->>'requestId' LIKE 'ui-recovery-codes-regenerate-%'),
 		count(*) FILTER (WHERE event_document->>'action'='iam.session.others-revoked'
 		  AND event_document->>'requestId' LIKE 'ui-session-revoke-others-%')
 		FROM iam.audit_outbox WHERE tenant_id=$1 AND event_document#>>'{target,id}'=$2`,
-		browserAccountID, userID).Scan(&contactFacts, &boundFacts, &replacedFacts, &removedFacts, &sessionFacts); err != nil ||
-		contactFacts != 1 || boundFacts != 2 || replacedFacts != 1 || removedFacts != 1 || sessionFacts != 1 {
-		t.Fatalf("browser security facts contact=%d bound=%d replaced=%d removed=%d sessions=%d err=%v",
-			contactFacts, boundFacts, replacedFacts, removedFacts, sessionFacts, err)
+		browserAccountID, userID).Scan(&contactFacts, &boundFacts, &replacedFacts, &removedFacts, &regenerationFacts, &sessionFacts); err != nil ||
+		contactFacts != 1 || boundFacts != 2 || replacedFacts != 1 || removedFacts != 1 || regenerationFacts != 1 || sessionFacts != 1 {
+		t.Fatalf("browser security facts contact=%d bound=%d replaced=%d removed=%d regenerated=%d sessions=%d err=%v",
+			contactFacts, boundFacts, replacedFacts, removedFacts, regenerationFacts, sessionFacts, err)
 	}
 }
 
