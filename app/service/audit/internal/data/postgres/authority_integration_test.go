@@ -1385,7 +1385,7 @@ func appendAcceptedAuditRecord(
 	submission := prepareAuditSubmission(t, ctx, tx, source, event)
 	outcome, storedSequence, storedRecordHash, err := submitAuditRecord(ctx, tx, submission)
 	if err != nil {
-		t.Fatalf("append Audit record: %v", err)
+		t.Fatalf("append Audit record for %s: %v", event.Action, err)
 	}
 	if outcome != "ACCEPTED" || storedSequence != submission.Record.Sequence ||
 		storedRecordHash != submission.Record.RecordHash {

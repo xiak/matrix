@@ -487,6 +487,9 @@ BEGIN
         ('paas.execution-target.drained', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true, false, false),
         ('paas.execution-target.activated', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true, false, false),
         ('paas.execution-target.removed', 'PAAS', 'EXECUTION_TARGET', 'SUCCEEDED', true, true, true, false, false),
+        ('paas.terminal-session.created', 'PAAS', 'TERMINAL_SESSION', 'ACCEPTED', true, true, false, false, false),
+        ('paas.terminal-session.started', 'PAAS', 'TERMINAL_SESSION', 'SUCCEEDED', true, true, false, false, false),
+        ('paas.terminal-session.ended', 'PAAS', 'TERMINAL_SESSION', NULL, true, true, false, false, false),
         ('audit.platform-records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false, false, false),
         ('audit.platform-integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false, false, false)
       ) AS contract(
@@ -497,6 +500,14 @@ BEGIN
      WHERE contract.action = action_name;
     IF action_name = 'iam.authorization.decided' THEN
         IF submitted_event->>'result' IN ('ALLOWED', 'DENIED') THEN
+            expected_result := submitted_event->>'result';
+        END IF;
+    END IF;
+    IF action_name = 'paas.terminal-session.ended' THEN
+        IF submitted_event->>'result' IN (
+            'COMPLETED', 'UNSUPPORTED', 'EXPIRED', 'DISCONNECTED',
+            'REVOKED', 'REPLACED', 'FAILED'
+        ) THEN
             expected_result := submitted_event->>'result';
         END IF;
     END IF;
@@ -1081,6 +1092,7 @@ BEGIN
             'audit.integrity.verified',
             'paas.execution-pool.created', 'paas.execution-target.registered',
             'paas.execution-target.drained', 'paas.execution-target.activated', 'paas.execution-target.removed',
+            'paas.terminal-session.created', 'paas.terminal-session.started', 'paas.terminal-session.ended',
             'audit.platform-records.read', 'audit.platform-integrity.verified'
        ))
        OR (submitted_actor IS NOT NULL AND NOT audit.actor_reference_valid(submitted_actor)) THEN
