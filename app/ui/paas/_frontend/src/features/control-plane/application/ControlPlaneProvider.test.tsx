@@ -140,7 +140,7 @@ function Probe() {
       <span data-testid="session-phase">{session.phase}</span>
       <span data-testid="phase">{installation?.phase ?? "none"}</span>
       <span data-testid="section">{controlPlane.scene?.section ?? "none"}</span>
-      <span data-testid="error">{controlPlane.error ?? "none"}</span>
+      <span data-testid="error">{controlPlane.error?.kind ?? "none"}</span>
       <span data-testid="loading">{String(controlPlane.loading)}</span>
       <span data-testid="command-phase">{controlPlane.managedServiceCommand?.phase ?? "none"}</span>
       <span data-testid="command-request">{controlPlane.managedServiceCommand?.intent.requestId ?? "none"}</span>

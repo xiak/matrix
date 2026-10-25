@@ -1,13 +1,14 @@
 "use client";
 
-import { useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import { Button, EmptyState } from "@ui/xiak";
+import { ReadBoundary, type ReadStatus } from "@ui/xiak";
 import type { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountDirectoryKind } from "../scenes/accountAccessScene";
 
-export type AccountReadStatus = "loading" | "ready" | "empty" | "forbidden" | "notFound" | "routeUnavailable" | "unavailable" | "expired";
+export type AccountReadStatus = ReadStatus;
+type AccountFailureStatus = Exclude<AccountReadStatus, "loading" | "ready" | "empty">;
 
 type StateCopy = { title: string; description: string; action?: ReactNode };
 
@@ -23,44 +24,15 @@ type AccountReadBoundaryProps = {
   status: AccountReadStatus;
 };
 
-function safeDiagnostic(problem: HttpProblem): string {
-  return JSON.stringify({ requestId: problem.requestId, status: problem.status, code: problem.code }, null, 2);
-}
-
 export function AccountReadBoundary({ children, empty, failure, loading, onRetry, problem, retryDisabled = false, retryLabel, status }: AccountReadBoundaryProps) {
   const t = useTranslations("AccountReadBoundary");
-  const copyKey = `${status}:${problem?.requestId ?? ""}`;
-  const [copyView, setCopyView] = useState<{ key: string; state: "copied" | "failed" } | null>(null);
-  const copyState = copyView?.key === copyKey ? copyView.state : "idle";
-
-  if (status === "loading") return <>{loading}</>;
-  if (status === "ready") return <>{children}</>;
-  if (status === "empty") return empty ? <EmptyState title={empty.title} description={empty.description} action={empty.action} /> : null;
-
-  const canRetry = status === "unavailable" && onRetry;
-  const canCopy = (status === "forbidden" || status === "notFound" || status === "routeUnavailable" || status === "unavailable") && problem?.requestId;
-  const copyDiagnostic = async () => {
-    if (!problem || !navigator.clipboard?.writeText) {
-      setCopyView({ key: copyKey, state: "failed" });
-      return;
-    }
-    try {
-      await navigator.clipboard.writeText(safeDiagnostic(problem));
-      setCopyView({ key: copyKey, state: "copied" });
-    } catch {
-      setCopyView({ key: copyKey, state: "failed" });
-    }
-  };
-  const actions = canRetry || canCopy ? <>
-    {canRetry ? <Button disabled={retryDisabled} variant="secondary" onClick={onRetry}>{retryLabel ?? t("retry")}</Button> : null}
-    {canCopy ? <Button variant="secondary" onClick={() => void copyDiagnostic()}>{t(copyState === "copied" ? "copied" : copyState === "failed" ? "copyFailed" : "copyDiagnostic")}</Button> : null}
-  </> : undefined;
-  const description = failure?.description ?? t(`descriptions.${status}`);
-
-  return <section aria-label={failure?.title} role="alert">
-    <EmptyState title={failure?.title ?? t(`titles.${status}`)}
-      description={status === "forbidden" ? `${description} ${t("forbiddenRecovery")}` : description} action={actions} />
-  </section>;
+  const failureStatus: AccountFailureStatus = status === "loading" || status === "ready" || status === "empty" ? "unavailable" : status;
+  const description = failure?.description ?? t(`descriptions.${failureStatus}`);
+  return <ReadBoundary status={status} loading={loading} empty={empty}
+    failure={{ ...failure, title: failure?.title ?? t(`titles.${failureStatus}`), description: status === "forbidden" ? `${description} ${t("forbiddenRecovery")}` : description }}
+    labels={{ retry: retryLabel ?? t("retry"), copyDiagnostic: t("copyDiagnostic"), copied: t("copied"), copyFailed: t("copyFailed") }}
+    diagnostic={problem ? { requestId: problem.requestId, status: problem.status, code: problem.code } : undefined}
+    retryDisabled={retryDisabled} onRetry={status === "unavailable" ? onRetry : undefined}>{children}</ReadBoundary>;
 }
 
 export function AccountDirectoryReadFailure({ kind, onRetry }: { kind: AccountDirectoryKind; onRetry?(): void }) {

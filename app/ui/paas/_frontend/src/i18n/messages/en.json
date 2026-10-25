@@ -3483,6 +3483,7 @@
     "errors": {
       "expired": "Your IAM session has expired. Sign out, then sign in again.",
       "forbidden": "Your role cannot view the managed-service control plane.",
+      "routeUnavailable": "This runtime does not provide the service data route. This does not mean that the service is inactive or the current identity was denied.",
       "unavailable": "The managed-service control plane is temporarily unavailable. No mock resources have been substituted."
     },
     "pages": {

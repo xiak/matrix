@@ -56,13 +56,13 @@ import type { AccountRepository } from "@/features/auth/repositories/iamReposito
 import {
   App,
   Alert,
-  EmptyState,
   Button,
   ContentPage,
   Layout,
   Sider,
   PageSkeleton,
   Progress,
+  ReadBoundary,
   useLeaveConfirmation
 } from "@ui/xiak";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
@@ -143,6 +143,26 @@ function ShellFrame({ children }: { children: React.ReactNode }) {
       <App.Layers><App.Layer>{children}</App.Layer></App.Layers>
     </App.Frame>
   );
+}
+
+function ConsoleReadFailure({ failure, loading, onRetry }: {
+  failure: NonNullable<ReturnType<typeof useControlPlane>["error"]>;
+  loading: boolean;
+  onRetry(): Promise<void>;
+}) {
+  const t = useTranslations("Console");
+  const read = useTranslations("AccountReadBoundary");
+  const status = failure.kind;
+  const diagnostic = failure.problem ? {
+    code: failure.problem.code,
+    requestId: failure.problem.requestId,
+    status: failure.problem.status
+  } : undefined;
+  const action = status === "forbidden" ? <Button asChild variant="secondary"><Link href="/console/access/">{t("openAccess")}</Link></Button> : undefined;
+  return <ReadBoundary status={status} loading={null}
+    failure={{ title: read(`titles.${status}`), description: `${t(`errors.${status}`)}${status === "forbidden" ? ` ${read("forbiddenRecovery")}` : ""}`, action }}
+    labels={{ retry: read("retry"), copyDiagnostic: read("copyDiagnostic"), copied: read("copied"), copyFailed: read("copyFailed") }}
+    diagnostic={diagnostic} retryDisabled={loading} onRetry={status === "unavailable" ? () => { void onRetry(); } : undefined} />;
 }
 
 // Header state must not invalidate the service page, its forms or sidebars.
@@ -435,11 +455,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
   const pageContent = content ? <ConsoleContentRenderer accountId={activationAccountId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={pendingSelection ?? navigation.selection} /> : null;
   const resourceContent = <Fragment key={dataOwnerKey}>
-    {controlPlane.error ? scene ? <Alert className={styles.feedback} status="danger">{t(`errors.${controlPlane.error}`)}</Alert> : <div role="alert"><EmptyState title={t("loadFailed")} description={t(`errors.${controlPlane.error}`)} icon={<ServerCog />} action={<div className={styles.recoveryActions}>
-      <Button onClick={() => void controlPlane.reload()} variant="secondary"><RefreshCcw aria-hidden="true" />{t("retry")}</Button>
-      <Button asChild variant="ghost"><Link href="/console/access/">{t("openAccess")}</Link></Button>
-    </div>} /></div> : null}
-    {pageContent}
+    {controlPlane.error ? <ConsoleReadFailure failure={controlPlane.error} loading={controlPlane.loading} onRetry={controlPlane.reload} /> : pageContent}
   </Fragment>;
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {

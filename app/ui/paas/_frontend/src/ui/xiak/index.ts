@@ -26,6 +26,7 @@ export { TableToolbar, type TableFilter, type TableToolbarLabels } from "./table
 export { EmptyState } from "./empty-state/EmptyState";
 export { SearchInput } from "./input/SearchInput";
 export { Alert } from "./feedback/Alert";
+export { ReadBoundary, type ReadBoundaryLabels, type ReadDiagnostic, type ReadStatus } from "./read-boundary/ReadBoundary";
 export { Radio, RadioGroup, Checkbox } from "./choice/Choice";
 export { Dialog } from "./dialog/Dialog";
 export { Statistic } from "./statistic/Statistic";

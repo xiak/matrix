@@ -67,7 +67,10 @@ import {
   writeManagedServiceCommand
 } from "./managedServiceCommandStorage";
 
-type ControlPlaneError = "expired" | "forbidden" | "unavailable";
+type ControlPlaneReadFailure = {
+  kind: "expired" | "forbidden" | "routeUnavailable" | "unavailable";
+  problem: HttpProblem | null;
+};
 
 type MutationKind = "quota" | "installation" | null;
 
@@ -76,7 +79,7 @@ type ControlPlaneContextValue = {
   projectScene(selection: ControlPlaneRouteSelection): ConsoleScene | null;
   prepare(selection: ControlPlaneRouteSelection): Promise<void>;
   loading: boolean;
-  error: ControlPlaneError | null;
+  error: ControlPlaneReadFailure | null;
   mutation: MutationKind;
   readServiceDefinitions(): Promise<ServiceDefinitionDirectory>;
   managedServiceCommand: ManagedServiceCommandState | null;
@@ -177,14 +180,12 @@ function mergeResources(
   return next;
 }
 
-function loadMessage(error: unknown): ControlPlaneError {
-  if (error instanceof HttpProblem && error.status === 401) {
-    return "expired";
-  }
-  if (error instanceof HttpProblem && error.status === 403) {
-    return "forbidden";
-  }
-  return "unavailable";
+function loadFailure(error: unknown): ControlPlaneReadFailure {
+  if (!(error instanceof HttpProblem)) return { kind: "unavailable", problem: null };
+  if (error.status === 401) return { kind: "expired", problem: error };
+  if (error.status === 403) return { kind: "forbidden", problem: error };
+  if (error.status === 404) return { kind: "routeUnavailable", problem: error };
+  return { kind: "unavailable", problem: error };
 }
 
 function installationTerminationMutationError(error: unknown): InstallationTerminationMutationError {
@@ -222,7 +223,7 @@ export function ControlPlaneProvider({
   const isAccess = selection.section === "access";
   const [cache, setCache] = useState<ControlPlaneCache | null>(null);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<ControlPlaneError | null>(null);
+  const [error, setError] = useState<ControlPlaneReadFailure | null>(null);
   const [mutation, setMutation] = useState<MutationKind>(null);
   const [installationTerminationIntent, setInstallationTerminationIntent] = useState<InstallationTerminationIntent | null>(null);
   const [serviceAuthorizationIntent, setServiceAuthorizationIntent] = useState<ManagedServiceAuthorizationIntent | null>(null);
@@ -517,7 +518,7 @@ export function ControlPlaneProvider({
         readEnrichments(enrichments, false);
       }
     } catch (loadError) {
-      if (revision === prepareRevision.current) setError(loadMessage(loadError));
+      if (revision === prepareRevision.current) setError(loadFailure(loadError));
     } finally {
       if (revision === prepareRevision.current) setLoading(false);
     }
@@ -541,7 +542,7 @@ export function ControlPlaneProvider({
         readEnrichments(enrichments, true);
       }
     } catch (loadError) {
-      if (revision === prepareRevision.current) setError(loadMessage(loadError));
+      if (revision === prepareRevision.current) setError(loadFailure(loadError));
     } finally {
       if (revision === prepareRevision.current) setLoading(false);
     }
@@ -626,7 +627,7 @@ export function ControlPlaneProvider({
         } catch (pollError: unknown) {
           if (active) {
             expireUnauthorizedCredential(pollError, owner);
-            setError(loadMessage(pollError));
+            setError(loadFailure(pollError));
           }
         }
       })();
@@ -1091,7 +1092,7 @@ export function ControlPlaneProvider({
         try {
           await readResources(["entitlements"], true, isCurrent);
         } catch (readError) {
-          if (isCurrent() && revision === prepareRevision.current) setError(loadMessage(readError));
+          if (isCurrent() && revision === prepareRevision.current) setError(loadFailure(readError));
         } finally {
           if (isCurrent()) {
             commitManagedServiceCommand({ ...settled, checking: false });

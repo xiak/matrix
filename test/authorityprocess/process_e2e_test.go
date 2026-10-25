@@ -15168,6 +15168,8 @@ type browserPermissionReadObservation struct {
 	status      int
 }
 
+const browserSessionTouchPath = "/api/iam/v1/auth/sessions/current:touch"
+
 // Store only bounded, configured path/status counters, including the one
 // intended update. Every real request still reaches the original authority;
 // no credentials, bodies, arbitrary URLs or user diagnostics survive. A
@@ -15252,6 +15254,7 @@ func (value *browserPermissionProbe) wrap(upstream http.Handler) http.Handler {
 		update := r.Method == http.MethodPost && path == value.updatePath && stage == "granted"
 		login := r.Method == http.MethodPost && path == "/api/iam/v1/auth/login"
 		logout := r.Method == http.MethodPost && path == "/api/iam/v1/auth/logout"
+		sessionTouch := r.Method == http.MethodPost && path == browserSessionTouchPath && r.URL.RawQuery == ""
 		if tracked || update {
 			authorization := r.Header.Get("Authorization")
 			digest := sha256.Sum256([]byte(authorization))
@@ -15287,8 +15290,11 @@ func (value *browserPermissionProbe) wrap(upstream http.Handler) http.Handler {
 		if logout {
 			value.logouts++
 		}
+		// Foreground activity legitimately advances the current Session's idle
+		// deadline. A dedicated browser gate owns that contract; this probe only
+		// rejects unplanned IAM business mutations during permission refresh.
 		if strings.HasPrefix(path, "/api/iam/") && r.Method != http.MethodGet && !update &&
-			!login && !logout {
+			!login && !logout && !sessionTouch {
 			value.writes++
 		}
 		value.mu.Unlock()
@@ -15409,6 +15415,17 @@ func TestPermissionBrowserProbePreservesAuthority(t *testing.T) {
 	upstreamStatus = http.StatusOK
 	perform(http.MethodGet, analyzerPath, http.StatusOK)
 	perform(http.MethodPost, "/api/iam/v1/auth/login", http.StatusOK)
+	unexpectedBeforeTouch := probe.unexpectedWrites()
+	perform(http.MethodPost, browserSessionTouchPath, http.StatusOK)
+	if probe.unexpectedWrites() != unexpectedBeforeTouch {
+		t.Fatal("foreground Session activity was mistaken for an IAM business mutation")
+	}
+	perform(http.MethodPost, browserSessionTouchPath+"?source=browser", http.StatusOK)
+	perform(http.MethodPost, browserSessionTouchPath+"-neighbor", http.StatusOK)
+	perform(http.MethodPost, "/api/iam/v1/permission-browser-unexpected", http.StatusOK)
+	if probe.unexpectedWrites() != unexpectedBeforeTouch+3 {
+		t.Fatal("Session touch exclusion accepted a query, adjacent route or unknown IAM write")
+	}
 	upstreamStatus = http.StatusForbidden
 	probe.setStage("revoked")
 	perform(http.MethodGet, reportPath, http.StatusForbidden)
@@ -15416,14 +15433,14 @@ func TestPermissionBrowserProbePreservesAuthority(t *testing.T) {
 	perform(http.MethodPost, "/api/iam/v1/auth/logout", http.StatusForbidden)
 	attempts, accepted := probe.updateCounts()
 	loginAttempts, acceptedLogins, logouts := probe.sessionCounts()
-	if calls != 15 || attempts != 2 || accepted != 1 || loginAttempts != 2 || acceptedLogins != 1 || logouts != 1 ||
+	if calls != 19 || attempts != 2 || accepted != 1 || loginAttempts != 2 || acceptedLogins != 1 || logouts != 1 ||
 		probe.count("initial", keyPath, http.StatusServiceUnavailable) != 1 ||
 		probe.count("initial", keyPath, http.StatusForbidden) != 1 ||
 		probe.count("granted", reportPath, http.StatusForbidden) != 1 ||
 		probe.count("granted", analyzerPath, http.StatusServiceUnavailable) != 1 ||
 		probe.count("granted", analyzerPath, http.StatusForbidden) != 2 ||
 		!probe.updatedReadRecovered() ||
-		probe.count("revoked", reportPath, http.StatusForbidden) != 1 || probe.unexpectedWrites() != 2 {
+		probe.count("revoked", reportPath, http.StatusForbidden) != 1 || probe.unexpectedWrites() != 5 {
 		t.Fatal("permission probe lost its bounded faults, exact-route, stage or write-attempt boundary")
 	}
 	if !probe.sameRefreshSession() {

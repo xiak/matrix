@@ -1431,13 +1431,60 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: /我已阅读开通说明/ }));
     await user.click(screen.getByRole("button", { name: "同意并开通 · MOCK" }));
-    expect(await screen.findByRole("heading", { name: "控制面未能加载" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "暂时无法读取" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "重试读取" })).toBeTruthy();
     expect(localStorage.getItem(previewServiceActivationStorageKey)).toContain('"serviceKey":"postgresql"');
     expect(screen.queryByRole("button", { name: "重试开通 · MOCK" })).toBeNull();
     await user.click(screen.getByText("开通场景与重置"));
     await user.click(screen.getByRole("button", { name: "重置此服务开通" }));
     expect(screen.getByRole("button", { name: "同意并开通 · MOCK" })).toBeTruthy();
     expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("presents a managed-service denial as a permission state without a blind retry or stale product data", async () => {
+    const load = vi.fn<ControlPlaneRepository["load"]>().mockRejectedValue(
+      new HttpProblem(403, "managedservice.authorization.forbidden", "request-product-forbidden")
+    );
+    const { user } = await renderConsole({ section: "catalog", load });
+
+    expect(await screen.findByRole("heading", { name: "当前身份无权读取" })).toBeTruthy();
+    expect(screen.getByText(/联系账号管理员核对授权，授权后重新检查权限/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "PostgreSQL 18" })).toBeNull();
+    expect(screen.getByRole("link", { name: "进入访问管理" }).getAttribute("href")).toBe("/console/access/");
+
+    await user.click(screen.getByRole("button", { name: "复制诊断信息" }));
+    expect(await navigator.clipboard.readText()).toBe(JSON.stringify({
+      requestId: "request-product-forbidden",
+      status: 403,
+      code: "managedservice.authorization.forbidden"
+    }, null, 2));
+  });
+
+  it("distinguishes a missing managed-service route from denial and service activation", async () => {
+    const load = vi.fn<ControlPlaneRepository["load"]>().mockRejectedValue(
+      new HttpProblem(404, "managedservice.route.notfound", "request-route-missing")
+    );
+    await renderConsole({ section: "regions", load });
+
+    expect(await screen.findByRole("heading", { name: "当前功能不可用" })).toBeTruthy();
+    expect(screen.getByText(/不代表服务未开通或当前身份被拒绝/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
+    expect(screen.queryByRole("link", { name: "进入访问管理" })).toBeNull();
+  });
+
+  it("retries only a temporary managed-service read and replaces the failure with authoritative content", async () => {
+    const load = vi.fn<ControlPlaneRepository["load"]>()
+      .mockRejectedValueOnce(new HttpProblem(503, "managedservice.temporarily-unavailable", "request-product-retry"))
+      .mockImplementation(async (_credential, resources) => Object.fromEntries(resources.map((resource) => [resource, snapshot[resource]])));
+    const { user } = await renderConsole({ section: "catalog", load });
+
+    expect(await screen.findByRole("heading", { name: "暂时无法读取" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重试读取" }));
+
+    expect(await screen.findByRole("heading", { name: "PostgreSQL 18" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "暂时无法读取" })).toBeNull();
+    expect(load).toHaveBeenCalledTimes(2);
   });
 
   it("guards product subroutes and keeps enablement separate from IAM grants and resource authority", async () => {
