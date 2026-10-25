@@ -478,6 +478,11 @@ describe("branded sign-in flows", () => {
     expect(navigation.replace).not.toHaveBeenCalled();
     expect(localStorage.length + sessionStorage.length).toBe(0);
     expect(document.body.textContent).not.toContain("preview-recovery-secret-");
+    await user.click(screen.getByRole("checkbox", { name: "我已安全保存全部恢复码" }));
+    await user.click(screen.getByRole("button", { name: "完成并重新登录" }));
+    expect(await screen.findByRole("heading", { name: "身份验证器已绑定" })).toBe(document.activeElement);
+    expect(screen.getByText("一次性恢复码已交付。请重新登录并使用新绑定的身份验证器。")).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "密码已更新" })).toBeNull();
   });
   it("requires a fresh login after challenge-bound password replacement", async () => {
     const { user } = open(previewIamRepository);

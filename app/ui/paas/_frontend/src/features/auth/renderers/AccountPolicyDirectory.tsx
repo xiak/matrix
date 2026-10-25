@@ -7,7 +7,7 @@ import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, FormFi
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad, type AccountPolicyVersionReadLoad, type PolicyVersionMutationClient, type PolicyVersionMutationResult } from "../application/AccountAccessProvider";
 import type { PolicyMutationClient } from "../application/policyMutation";
-import { policyDisplayNameValid } from "../domain/accounts";
+import { policyDisplayNameValid, policyVersionLimit } from "../domain/accounts";
 import type { AccountPolicy, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, ActionCapability, AuthorizationProfileDirectory, IamAction } from "../domain/accounts";
 import { visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAuthoring";
 import { findActionCapability, type AccountAccessScene } from "../scenes/accountAccessScene";
@@ -169,13 +169,13 @@ function PolicyVersionRecovery({ mutation, onApplied, onInspect }: { mutation: P
     {pending.observationError ? <Alert status="danger">{t(`observationErrors.${pending.observationError}`)}</Alert> : null}
     {feedback ? <Alert status="warning">{feedback}</Alert> : null}
     <div className={styles.actions}>
-      <Button variant="secondary" disabled={busy || mutation.blockedByAuthority} onClick={() => void handleRetry()}>{t("retryOriginal")}</Button>
+      <Button variant="secondary" disabled={busy || mutation.blockedByAuthority || mutation.retryBlockedByAuthority} onClick={() => void handleRetry()}>{t("retryOriginal")}</Button>
       <Button variant="secondary" disabled={busy || mutation.blockedByAuthority} onClick={() => { setFeedback(null); setAcknowledged(false); void mutation.observe(); }}>{t("rereadCurrent")}</Button>
       <Button variant="ghost" onClick={() => onInspect(pending.policyId)}>{t("inspectAffectedPolicy")}</Button>
     </div>
     {pending.observation ? <div className={styles.policyVersionAcknowledge}>
       <label><input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} /> {t("acknowledgeUnknown")}</label>
-      <Button variant="secondary" disabled={!acknowledged || busy} onClick={() => { if (mutation.acknowledge()) onApplied(); }}>{t("endOldIntent")}</Button>
+      <Button variant="secondary" disabled={!acknowledged || busy} onClick={() => void mutation.acknowledge().then((cleared) => { if (cleared) onApplied(); })}>{t("endOldIntent")}</Button>
     </div> : null}
   </section>;
 }
@@ -288,6 +288,7 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, authorizatio
   // incoming view.
   useLayoutEffect(() => { heading.current?.focus(); }, [reviewing]);
   const openReview = () => {
+    if (!authorizationReady || busy) return;
     setError(null);
     if (new TextEncoder().encode(text).length > 64 * 1024) { setError(t("publishTooLarge")); return; }
     if (editorMode === "visual") {
@@ -320,7 +321,11 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, authorizatio
         resourceVersion: review.resourceVersion, expectedDefaultVersionId: review.defaultVersionId });
       if (result.status === "applied") onPublished(result.detail);
       else if (result.status === "unknown") onClose();
-      else if (result.status === "rejected" && result.reason === "conflict") onConflict();
+      else if (result.status === "rejected" && result.reason === "conflict") {
+        setReview(null);
+        setError(t("mutationErrors.conflict"));
+        onConflict();
+      }
       else if (result.status === "rejected") setError(t(`mutationErrors.${result.reason}`));
       else setError(t("mutationBlocked"));
     } finally { setBusy(false); }
@@ -351,13 +356,13 @@ function PolicyVersionPublisher({ policy, defaultVersion, mutation, authorizatio
     <div className={styles.actions}>
       {review ? <><Button disabled={busy || !authorizationReady || mutation.blockedByMetadata || mutation.blockedByAuthority || Boolean(error)} onClick={() => void publish()}>{t("confirmPublish")}</Button>
         <Button variant="secondary" disabled={busy} onClick={() => { setReview(null); setError(null); }}>{t("editDraft")}</Button></> :
-        <Button disabled={busy} onClick={openReview}>{t("reviewDraft")}</Button>}
+        <Button disabled={busy || !authorizationReady} onClick={openReview}>{t("reviewDraft")}</Button>}
       <Button variant="ghost" disabled={busy} onClick={() => requestLeave(onClose)}>{t("cancel")}</Button>
     </div>
   </section>;
 }
 
-function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, listVersions, readVersion, mutation, authorizationReady, onApplied, refreshRevision }: {
+function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, listVersions, readVersion, mutation, authorizationReady, onApplied, onConflictRefresh, refreshRevision }: {
   policy: AccountPolicy;
   capabilities: ActionCapability[];
   authorizedCapabilities: ActionCapability[];
@@ -365,12 +370,13 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
   readVersion: NonNullable<AccountPolicyReadClient["readVersion"]>;
   mutation: PolicyVersionMutationClient | null;
   authorizationReady: boolean;
-  onApplied(detail: AccountPolicyDetail): void;
+  onApplied(): void;
+  onConflictRefresh(): void;
   refreshRevision: number;
 }) {
   const t = useTranslations("AccountPolicyDirectory");
   const [state, setState] = useState<PolicyVersionDirectoryState>({ status: "loading" });
-  const [directoryAuthority, setDirectoryAuthority] = useState<{ listVersions: typeof listVersions; refreshRevision: number } | null>(null);
+  const [directoryAuthority, setDirectoryAuthority] = useState<{ listVersions: typeof listVersions; refreshRevision: number; revision: number } | null>(null);
   const [revision, setRevision] = useState(0);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [selected, setSelected] = useState<PolicyVersionDetailState>({ status: "loading" });
@@ -394,13 +400,17 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
   const publishAuthorized = policyCapability(authorizedCapabilities, "iam.policy-version.create", policy.id)?.available === true;
   const setDefaultAuthorized = policyCapability(authorizedCapabilities, "iam.policy.set-default-version", policy.id)?.available === true;
   const retireAuthorized = policyCapability(authorizedCapabilities, "iam.policy-version.delete", policy.id)?.available === true;
+  const versionLimitReached = state.status === "ready" && state.directory.items.length >= policyVersionLimit;
   useEffect(() => {
     let current = true;
-    void listVersions(policy.id).then((result) => { if (current) { setState(result); setDirectoryAuthority({ listVersions, refreshRevision }); } });
+    void listVersions(policy.id).then((result) => { if (current) { setState(result); setDirectoryAuthority({ listVersions, refreshRevision, revision }); } });
     return () => { current = false; };
   }, [listVersions, policy.id, revision, refreshRevision]);
   const writesAuthorized = authorizationReady && directoryAuthority?.listVersions === listVersions &&
-    directoryAuthority.refreshRevision === refreshRevision && state.status === "ready";
+    directoryAuthority.refreshRevision === refreshRevision && directoryAuthority.revision === revision && state.status === "ready" &&
+    state.directory.policy.id === policy.id && state.directory.policy.accountId === policy.accountId &&
+    state.directory.policy.resourceVersion === policy.resourceVersion &&
+    state.directory.policy.defaultVersionId === policy.defaultVersionId;
   useEffect(() => {
     if (!selectedId || !canReadVersion) return;
     let current = true;
@@ -445,7 +455,7 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
       setReview(null);
       setState({ status: "ready", directory: { policy: result.detail.policy,
         items: review.kind === "retire" ? snapshot.items.filter((item) => item.versionId !== review.versionId) : snapshot.items } });
-      setRevision((value) => value + 1); onApplied(result.detail);
+      setRevision((value) => value + 1); onApplied();
     } else if (result.status === "unknown") {
       setReview(null);
     } else if (result.status === "rejected" && result.reason === "conflict") {
@@ -468,7 +478,9 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
           items: [...state.directory.items, detail.version].sort((left, right) => left.versionId.localeCompare(right.versionId)) } });
         setPublished({ versionId: detail.version.versionId, defaultVersionId: detail.policy.defaultVersionId });
         setPublisherOpen(false);
-      }} onConflict={() => { setPublisherOpen(false); setMutationError(t("mutationErrors.conflict")); setState({ status: "loading" }); setRevision((value) => value + 1); }}
+        setRevision((value) => value + 1);
+        onApplied();
+      }} onConflict={onConflictRefresh}
       onClose={() => { returnToPublish.current = true; setPublisherOpen(false); }} />;
   }
   if (selectedId) return <div className={styles.catalogNotice}>
@@ -486,9 +498,10 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
     {state.status === "loading" ? <TableSkeleton label={t("loadingVersions")} rows={3} header={false} /> :
       state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${state.status}`)}</Alert>
         {state.status !== "expired" && state.status !== "notFound" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> : <>
-        <div className={styles.catalogDetailHeading}><p>{t("versionCount", { count: state.directory.items.length })}</p>
-          {mutation?.canPublish && canPublish && state.directory.items.length < 5 ? <Button ref={publishButton} variant="secondary" disabled={!writesAuthorized || !publishAuthorized || Boolean(mutation.pending) || mutation.blockedByMetadata || mutation.blockedByAuthority} onClick={() => { setPublished(null); setMutationError(null); setPublisherOpen(true); }}>{t("publishVersion")}</Button> : null}
+        <div className={styles.catalogDetailHeading}><p>{t("versionCount", { count: state.directory.items.length, limit: policyVersionLimit })}</p>
+          {mutation?.canPublish && canPublish ? <Button ref={publishButton} variant="secondary" disabled={versionLimitReached || !writesAuthorized || !publishAuthorized || Boolean(mutation.pending) || mutation.blockedByMetadata || mutation.blockedByAuthority} onClick={() => { setPublished(null); setMutationError(null); setPublisherOpen(true); }}>{t("publishVersion")}</Button> : null}
         </div>
+        {versionLimitReached ? <Alert status="warning">{t("versionLimitReached", { limit: policyVersionLimit })}</Alert> : null}
         <Table aria-label={t("versionTable")} mobileLayout="stack" className={styles.policyVersionTable}>
           <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th></tr></thead>
           <tbody>{state.directory.items.map((item) => <tr key={item.versionId}>
@@ -507,9 +520,9 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
   </div>;
 }
 
-function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataMutation, authorityPending, refreshRevision, onMetadataApplied, onBack }: {
+function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataMutation, authorityPending, refreshRevision, onMetadataApplied, onVersionConflict, onBack }: {
   policyId: string; policy?: AccountPolicy; client: AccountPolicyReadClient | null; mutation: PolicyVersionMutationClient | null;
-  metadataMutation: PolicyMutationClient | null; authorityPending: boolean; refreshRevision: number; onMetadataApplied(kind: "update" | "retire"): void; onBack(): void;
+  metadataMutation: PolicyMutationClient | null; authorityPending: boolean; refreshRevision: number; onMetadataApplied(kind: "update" | "retire"): void; onVersionConflict(): void; onBack(): void;
 }) {
   const t = useTranslations("AccountPolicyDirectory");
   const [snapshot, setSnapshot] = useState<{ client: AccountPolicyReadClient; revision: number; refreshRevision: number; state: PolicyDetailState } | null>(null);
@@ -575,11 +588,7 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
       disabledReason: sharedDisabledReason ?? (!canRetire ? t("metadata.noAuthority") : undefined),
       onSelect: () => { if (detail && canRetire) setWorkflow({ identity: metadataMutation.identity, detail: structuredClone(detail), kind: "retire" }); } }
   ] } : undefined;
-  const onVersionApplied = (next: AccountPolicyDetail) => {
-    setSnapshot((current) => current?.client === client && current.state.status === "ready"
-      ? { ...current, state: { status: "ready", access: { ...current.state.access, detail: next } } }
-      : current);
-  };
+  const onVersionApplied = () => setRevision((value) => value + 1);
   return <WorkspaceDetail title={source?.displayName ?? policyId} onBack={onBack} actionFocusRef={actionFocus} actions={metadataActions}>
     <p className={styles.note}>{t("detailNotice")}</p>
     <dl className={styles.catalogFacts}>
@@ -593,7 +602,7 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
       <Tabs.Root value={section} onValueChange={(next) => { setSection(next); if (next === "versions") setVersionsMounted(true); }}>
         <Tabs.List aria-label={t("detailSections")}><Tabs.Trigger value="document">{t("defaultDocument")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versionsTab")}</Tabs.Trigger></Tabs.List>
         <Tabs.Content value="document">{documentRegion}</Tabs.Content>
-        <Tabs.Content value="versions" forceMount={versionsMounted || undefined}>{versionsMounted ? <AccountPolicyVersions policy={source} capabilities={displayAccess!.capabilities} authorizedCapabilities={access?.capabilities ?? []} listVersions={client.listVersions} readVersion={client.readVersion} mutation={mutation} authorizationReady={!authorityPending && Boolean(access)} refreshRevision={refreshRevision} onApplied={onVersionApplied} /> : null}</Tabs.Content>
+        <Tabs.Content value="versions" forceMount={versionsMounted || undefined}>{versionsMounted ? <AccountPolicyVersions policy={source} capabilities={displayAccess!.capabilities} authorizedCapabilities={access?.capabilities ?? []} listVersions={client.listVersions} readVersion={client.readVersion} mutation={mutation} authorizationReady={!authorityPending && Boolean(access)} refreshRevision={refreshRevision} onApplied={onVersionApplied} onConflictRefresh={onVersionConflict} /> : null}</Tabs.Content>
       </Tabs.Root> : documentRegion}
   </WorkspaceDetail>;
 }
@@ -647,7 +656,7 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
   if (entityId) return <>{metadataRecovery}{recovery}{createRecovery}
     <AccountPolicyDetailView key={`${client?.accountId ?? scene.accountId}:${client?.sessionRevision ?? "none"}:${entityId}`}
       policyId={entityId} policy={selected ?? undefined} client={client} mutation={mutation} metadataMutation={metadataMutation}
-      authorityPending={access.authorityPending} refreshRevision={refreshRevision} onMetadataApplied={onMetadataApplied} onBack={() => onOpen()} /></>;
+      authorityPending={access.authorityPending} refreshRevision={refreshRevision} onMetadataApplied={onMetadataApplied} onVersionConflict={onApplied} onBack={() => onOpen()} /></>;
 
   return <>{metadataRecovery}{recovery}{createRecovery}<Card>
     <ContentPage.Heading title={t("title")} scrollKey="policy-directory" actions={access.policyCreate ?

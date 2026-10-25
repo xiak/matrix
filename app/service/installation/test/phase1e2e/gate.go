@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -19,6 +20,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -1979,6 +1981,9 @@ func (value *gate) verifySignedAccessKeyEdge(
 		len(directory.Capabilities) != 1 || !directory.Capabilities[0].Available {
 		return accessKeyRetention{}, fail("signed-access-key-directory")
 	}
+	if value.config.accessKeyBrowser {
+		return value.verifyBrowserSignedAccessKeyEdge(ctx, tenant, installationID, sourceCIDR, grant, directory)
+	}
 	var created iamv1.CreateAccessKeyResponse
 	if err := value.edge.mutateIAM(ctx, path, tenant.OldPrimaryCredential, iamv1.CreateAccessKeyRequest{
 		UserResourceVersion: directory.UserResourceVersion,
@@ -2079,6 +2084,312 @@ func (value *gate) verifySignedAccessKeyEdge(
 	return accessKeyRetention{
 		Key: retained.Key, Secret: append([]byte(nil), secret...), CustodianGrant: grant,
 	}, nil
+}
+
+func (value *gate) verifyBrowserSignedAccessKeyEdge(
+	ctx context.Context,
+	tenant *tenantRetention,
+	installationID, sourceCIDR string,
+	grant iamv1.PolicyAttachment,
+	directory iamv1.AccessKeyList,
+) (accessKeyRetention, error) {
+	loginPath, createdMarker, disabledMarker, err := prepareAccessKeyBrowserHandoff(value.config.accessKeyBrowserDir)
+	if err != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-handoff")
+	}
+	defer removeAccessKeyBrowserHandoff(loginPath, createdMarker, disabledMarker)
+	if err := writeAccessKeyBrowserLogin(loginPath, tenant.Account.RootIdentity.LoginName, tenant.PrimaryPassword); err != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-login")
+	}
+
+	observer := newAccessKeyBrowserObserver(tenant.Account.ID, tenant.Child.ID, sourceCIDR)
+	defer observer.clear()
+	proxy, err := startAccessKeyBrowserProxy(value.config.edge, observer)
+	if err != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-relay")
+	}
+	defer proxy.close()
+	fmt.Printf("BROWSER phase1-access-key-create url=%s/console/access/users/?id=%s&tab=keys login_file=%s created_marker=%s source_cidr=%s; use the protected two-line login file, create exactly one key for this User with the exact source CIDR, acknowledge and close the one-time Secret, then create the empty 0600 marker; never copy the Secret to a marker, log, screenshot or file\n",
+		proxy.URL(), tenant.Child.ID, loginPath, createdMarker, sourceCIDR)
+	if err := waitAccessKeyBrowserStage(ctx, observer.createReady, createdMarker); err != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-create-wait")
+	}
+	createRequest, created, err := observer.takeCreate()
+	if err != nil || iamv1.ValidateCreateAccessKeyResponse(created) != nil ||
+		created.Key.AccountID != tenant.Account.ID || created.Key.UserID != tenant.Child.ID ||
+		createRequest.UserResourceVersion != directory.UserResourceVersion {
+		created.Secret = iamv1.Secret{}
+		return accessKeyRetention{}, fail("signed-access-key-browser-create")
+	}
+	if err := os.Remove(loginPath); err != nil {
+		created.Secret = iamv1.Secret{}
+		return accessKeyRetention{}, fail("signed-access-key-browser-login-cleanup")
+	}
+	browserSecret := created.Secret.CopyBytes()
+	created.Secret = iamv1.Secret{}
+	defer clear(browserSecret)
+	value.edge.addForbidden(browserSecret)
+	browserSecretValue, err := iamv1.NewSecret(string(browserSecret))
+	if err != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-secret")
+	}
+
+	wrong, err := signAccessKeyMaterial(created.Key, browserSecretValue, installationID, value.config.edge,
+		"/api/paas/v1/applications/not-the-requested-directory")
+	if err != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-wrong-target-signature")
+	}
+	wrongBytes := wrong.CopyBytes()
+	value.edge.addForbidden(wrongBytes)
+	wrongResponse, wrongErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(wrongBytes)), http.StatusUnauthorized)
+	clear(wrongBytes)
+	clear(wrongResponse.body)
+	if wrongErr != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-target-binding")
+	}
+
+	authorization, err := signAccessKeyMaterial(created.Key, browserSecretValue, installationID, value.config.edge,
+		"/api/paas/v1/applications")
+	if err != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-signature")
+	}
+	authorizationBytes := authorization.CopyBytes()
+	value.edge.addForbidden(authorizationBytes)
+	response, requestErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusOK)
+	if requestErr != nil {
+		clear(authorizationBytes)
+		clear(response.body)
+		return accessKeyRetention{}, fail("signed-access-key-browser-edge-request")
+	}
+	var applications paasv1.ApplicationList
+	if decodeOne(response.body, &applications) != nil || paasv1.ValidateApplicationList(applications) != nil ||
+		len(applications.Items) != 1 || applications.Items[0].Metadata.ID != tenantApplicationID ||
+		applications.Items[0].Metadata.Scope.TenantID != paasv1.TenantID(tenant.Account.ID) || applications.NextAfter != "" {
+		clear(authorizationBytes)
+		clear(response.body)
+		return accessKeyRetention{}, fail("signed-access-key-browser-tenant-directory")
+	}
+	clear(response.body)
+	replay, replayErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusConflict)
+	clear(replay.body)
+	if replayErr != nil {
+		clear(authorizationBytes)
+		return accessKeyRetention{}, fail("signed-access-key-browser-nonce-replay")
+	}
+	fmt.Printf("PASS phase1-access-key-browser-signed-allow key=%s; return to the same key detail, disable it once, confirm the page shows DISABLED, then create the empty 0600 marker %s\n",
+		created.Key.ID, disabledMarker)
+	if err := waitAccessKeyBrowserStage(ctx, observer.disableReady, disabledMarker); err != nil {
+		clear(authorizationBytes)
+		return accessKeyRetention{}, fail("signed-access-key-browser-disable-wait")
+	}
+	disableRequest, disabled, err := observer.takeDisable()
+	if err != nil || iamv1.ValidateSetAccessKeyStatusResponse(disabled) != nil || disabled.Key.ID != created.Key.ID ||
+		disabled.Key.Status != iamv1.AccessKeyDisabled || disableRequest.AccessKeyResourceVersion != created.Key.ResourceVersion {
+		clear(authorizationBytes)
+		return accessKeyRetention{}, fail("signed-access-key-browser-disable")
+	}
+
+	disabledAuthorization, err := signAccessKeyMaterial(created.Key, browserSecretValue, installationID,
+		value.config.edge, "/api/paas/v1/applications")
+	if err != nil {
+		clear(authorizationBytes)
+		return accessKeyRetention{}, fail("signed-access-key-browser-disabled-signature")
+	}
+	disabledBytes := disabledAuthorization.CopyBytes()
+	value.edge.addForbidden(disabledBytes)
+	disabledResponse, disabledErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(disabledBytes)), http.StatusForbidden)
+	clear(disabledBytes)
+	clear(disabledResponse.body)
+	if disabledErr != nil {
+		clear(authorizationBytes)
+		return accessKeyRetention{}, fail("signed-access-key-browser-disabled-admitted")
+	}
+	replayedAfterDisable, replayAfterDisableErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(authorizationBytes)), http.StatusConflict)
+	clear(authorizationBytes)
+	clear(replayedAfterDisable.body)
+	if replayAfterDisableErr != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-disabled-replay")
+	}
+	if err := value.assertBrowserAccessKeyAudit(ctx, tenant, created.Key.ID,
+		createRequest.RequestID, disableRequest.RequestID); err != nil {
+		return accessKeyRetention{}, err
+	}
+
+	path := "/users/" + string(tenant.Child.ID) + "/access-keys/" + string(created.Key.ID)
+	var deleted iamv1.DeleteAccessKeyResponse
+	if err := value.edge.mutateIAM(ctx, path+":delete", tenant.OldPrimaryCredential,
+		iamv1.DeleteAccessKeyRequest{AccessKeyResourceVersion: disabled.Key.ResourceVersion,
+			RequestID: "phase1-browser-access-key-cleanup"}, &deleted, http.StatusOK); err != nil ||
+		iamv1.ValidateDeleteAccessKeyResponse(deleted) != nil || deleted.Deletion.ID != created.Key.ID {
+		return accessKeyRetention{}, fail("signed-access-key-browser-cleanup")
+	}
+	browserSecretValue = iamv1.Secret{}
+	clear(browserSecret)
+
+	collection := "/users/" + string(tenant.Child.ID) + "/access-keys"
+	var after iamv1.AccessKeyList
+	if _, err := value.edge.get(ctx, "/api/iam/v1"+collection, tenant.OldPrimaryCredential, &after); err != nil ||
+		iamv1.ValidateAccessKeyList(after) != nil || len(after.Items) != 0 {
+		return accessKeyRetention{}, fail("signed-access-key-browser-cleanup-directory")
+	}
+	retainedNetwork := iamv1.AccessKeyNetworkRestrictions{AllowedSourceCIDRs: []string{"0.0.0.0/0"}}
+	var retained iamv1.CreateAccessKeyResponse
+	if err := value.edge.mutateIAM(ctx, collection, tenant.OldPrimaryCredential, iamv1.CreateAccessKeyRequest{
+		UserResourceVersion: after.UserResourceVersion, NetworkRestrictions: retainedNetwork,
+		RequestID: "phase1-access-key-retained-create",
+	}, &retained, http.StatusCreated); err != nil || iamv1.ValidateCreateAccessKeyResponse(retained) != nil ||
+		retained.Key.AccountID != tenant.Account.ID || retained.Key.UserID != tenant.Child.ID ||
+		len(retained.Key.NetworkRestrictions.AllowedSourceCIDRs) != 1 ||
+		retained.Key.NetworkRestrictions.AllowedSourceCIDRs[0] != "0.0.0.0/0" {
+		retained.Secret = iamv1.Secret{}
+		return accessKeyRetention{}, fail("signed-access-key-browser-retained-create")
+	}
+	retainedSecret := retained.Secret.CopyBytes()
+	retained.Secret = iamv1.Secret{}
+	defer clear(retainedSecret)
+	value.edge.addForbidden(retainedSecret)
+	retainedSecretValue, err := iamv1.NewSecret(string(retainedSecret))
+	if err != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-retained-secret")
+	}
+	retainedAuthorization, err := signAccessKeyMaterial(retained.Key, retainedSecretValue, installationID,
+		value.config.edge, "/api/paas/v1/applications")
+	if err != nil {
+		return accessKeyRetention{}, fail("signed-access-key-browser-retained-signature")
+	}
+	retainedBytes := retainedAuthorization.CopyBytes()
+	value.edge.addForbidden(retainedBytes)
+	retainedResponse, retainedErr := value.edge.json(ctx, http.MethodGet, "/api/paas/v1/applications", nil, nil,
+		forgedEdgeHeaders(string(retainedBytes)), http.StatusOK)
+	clear(retainedBytes)
+	if retainedErr != nil || decodeOne(retainedResponse.body, &applications) != nil ||
+		!validRetainedApplicationDirectory(applications, paasv1.TenantID(tenant.Account.ID)) {
+		clear(retainedResponse.body)
+		return accessKeyRetention{}, fail("signed-access-key-browser-retained-request")
+	}
+	clear(retainedResponse.body)
+	retainedSecretValue = iamv1.Secret{}
+	emit("signed-access-key-browser-create-allow-disable-deny")
+	return accessKeyRetention{Key: retained.Key, Secret: append([]byte(nil), retainedSecret...), CustodianGrant: grant}, nil
+}
+
+func (value *gate) assertBrowserAccessKeyAudit(
+	ctx context.Context,
+	tenant *tenantRetention,
+	keyID iamv1.AccessKeyID,
+	createRequestID, disableRequestID string,
+) error {
+	records, err := value.edge.waitAuditActions(ctx, tenant.OldPrimaryCredential, tenant.Account.ID,
+		map[auditv1.Action]string{
+			auditv1.ActionIAMAccessKeyCreated:  string(keyID),
+			auditv1.ActionIAMAccessKeyDisabled: string(keyID),
+		})
+	if err != nil {
+		return fail("signed-access-key-browser-audit-delivery")
+	}
+	want := map[auditv1.Action]string{
+		auditv1.ActionIAMAccessKeyCreated:  createRequestID,
+		auditv1.ActionIAMAccessKeyDisabled: disableRequestID,
+	}
+	counts := make(map[auditv1.Action]int, len(want))
+	for _, record := range records {
+		requestID, found := want[record.Event.Action]
+		if !found || record.Event.Target.ID != string(keyID) {
+			continue
+		}
+		event := record.Event
+		if record.Source != auditv1.SourceIAM || event.TenantID != auditv1.TenantID(tenant.Account.ID) ||
+			event.RequestID != requestID || event.Actor.Type != auditv1.ActorUser ||
+			event.Actor.ID != auditv1.ActorID(tenant.Account.RootIdentity.PrincipalID) ||
+			event.Actor.RoleSession != nil || event.Actor.AccessKeyID != "" ||
+			event.Target.Kind != auditv1.TargetAccessKey || event.Result != auditv1.ResultSucceeded ||
+			event.IAMDecisionID == "" || event.AuthorityEvidenceDigest != "" {
+			return fail("signed-access-key-browser-audit-evidence")
+		}
+		counts[event.Action]++
+	}
+	for action := range want {
+		if counts[action] != 1 {
+			return fail("signed-access-key-browser-audit-uniqueness")
+		}
+	}
+	if _, err := value.edge.verifyAuditChain(ctx, tenant.OldPrimaryCredential, tenant.Account.ID, ""); err != nil {
+		return fail("signed-access-key-browser-audit-integrity")
+	}
+	return nil
+}
+
+func prepareAccessKeyBrowserHandoff(directory string) (string, string, string, error) {
+	information, err := os.Lstat(directory)
+	if err != nil || !information.IsDir() || information.Mode()&os.ModeSymlink != 0 ||
+		runtime.GOOS != "windows" && information.Mode().Perm() != 0o700 {
+		return "", "", "", errors.New("browser AccessKey handoff directory is invalid")
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil || len(entries) != 0 {
+		return "", "", "", errors.New("browser AccessKey handoff directory is not empty")
+	}
+	return filepath.Join(directory, "login.secret"), filepath.Join(directory, "created.marker"),
+		filepath.Join(directory, "disabled.marker"), nil
+}
+
+func writeAccessKeyBrowserLogin(path string, loginName string, password []byte) error {
+	if loginName == "" || len(password) == 0 || strings.ContainsAny(loginName, "\r\n") || bytes.ContainsAny(password, "\r\n") {
+		return errors.New("browser AccessKey login handoff is invalid")
+	}
+	content := append([]byte(loginName+"\n"), password...)
+	content = append(content, '\n')
+	defer clear(content)
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	written, writeErr := file.Write(content)
+	syncErr := file.Sync()
+	closeErr := file.Close()
+	if writeErr != nil || written != len(content) || syncErr != nil || closeErr != nil {
+		_ = os.Remove(path)
+		return errors.New("browser AccessKey login handoff write failed")
+	}
+	return nil
+}
+
+func waitAccessKeyBrowserStage(ctx context.Context, ready <-chan struct{}, marker string) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-ready:
+	}
+	for ctx.Err() == nil {
+		information, err := os.Lstat(marker)
+		if err == nil {
+			if !information.Mode().IsRegular() || information.Mode()&os.ModeSymlink != 0 ||
+				runtime.GOOS != "windows" && information.Mode().Perm() != 0o600 || information.Size() != 0 {
+				return errors.New("browser AccessKey marker is invalid")
+			}
+			return nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		if !waitPoll(ctx, 250*time.Millisecond) {
+			break
+		}
+	}
+	return ctx.Err()
+}
+
+func removeAccessKeyBrowserHandoff(paths ...string) {
+	for _, path := range paths {
+		if path != "" {
+			_ = os.Remove(path)
+		}
+	}
 }
 
 func (value *gate) assertRetainedAccessKey(ctx context.Context, tenant *tenantRetention, installationID string) error {
@@ -3145,7 +3456,7 @@ func (value *gate) assertFreshHost(ctx context.Context) error {
 func (value *gate) pathLeakage() [][]byte {
 	result := [][]byte{
 		[]byte(value.config.root), []byte(value.config.releaseA), []byte(value.config.releaseB),
-		[]byte(value.config.trustKey), []byte(value.config.securityMail),
+		[]byte(value.config.trustKey), []byte(value.config.securityMail), []byte(value.config.accessKeyBrowserDir),
 	}
 	if value.retainedIAM != nil {
 		result = append(result, value.retainedIAM.AdministratorPassword, value.retainedIAM.MFA.Password,

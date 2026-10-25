@@ -141,6 +141,14 @@ func validStaticQuery(request *http.Request, assetName string) bool {
 			default:
 				return false
 			}
+		case "resource":
+			// Application detail is a client-owned workspace reached from the
+			// permission-filtered directory. The value selects only client view
+			// state; the PaaS detail API still validates the identifier and
+			// independently authorizes the exact resource on every request.
+			if route != "console/applications" {
+				return false
+			}
 		case "tab":
 			// User detail tabs are client-owned view state, not authority
 			// selectors. Keep them bound to one exact User workspace.

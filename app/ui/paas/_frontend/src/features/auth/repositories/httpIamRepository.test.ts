@@ -2100,12 +2100,26 @@ describe("IAM HTTP account boundary", () => {
     expect(requestBody(fetcher)).toEqual({ challengeCredential });
     expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
 
-    fetcher = reply({ ...notificationVerification, requestId: "first-contact-1", email: "alex@example.com" });
+    const challengeScopedVerification = { ...notificationVerification, requestId: "first-contact-1", email: "alex@example.com",
+      expiresAt };
+    fetcher = reply(challengeScopedVerification);
     await httpIamRepository.authenticationChallenges!.startFirstContact!({ challengeId: challenge.id, challengeCredential,
       email: "alex@example.com", requestId: "first-contact-1" });
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/challenges/${challenge.id}/notification-contact/verifications`);
     expect(requestBody(fetcher)).toEqual({ challengeCredential, email: "alex@example.com", requestId: "first-contact-1" });
     expect(firstRequest(fetcher)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
+
+    fetcher = reply({ ...challengeScopedVerification, state: "VERIFIED", completedAt: "2026-09-11T08:02:00Z" });
+    await expect(httpIamRepository.authenticationChallenges!.confirmFirstContact!({ challengeId: challenge.id, challengeCredential,
+      verificationId: challengeScopedVerification.id, code: "12345678", requestId: "confirm-first-contact-1" }))
+      .resolves.toMatchObject({ state: "VERIFIED", expiresAt });
+    expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/auth/challenges/${challenge.id}/notification-contact/verifications/${challengeScopedVerification.id}:confirm`);
+
+    for (const invalidExpiry of [challengeScopedVerification.issuedAt, "2026-09-11T08:10:01Z"]) {
+      reply({ ...challengeScopedVerification, expiresAt: invalidExpiry });
+      await expect(httpIamRepository.authenticationChallenges!.startFirstContact!({ challengeId: challenge.id, challengeCredential,
+        email: "alex@example.com", requestId: "first-contact-1" })).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
 
     const enrollment = { ...pendingEnrollment, requestId: "first-factor-1", purpose: "INITIAL", createdAt: "2026-09-11T08:01:00Z",
       expiresAt: "2026-09-11T08:04:00Z" };

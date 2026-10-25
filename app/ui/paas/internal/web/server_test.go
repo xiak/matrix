@@ -108,6 +108,8 @@ func TestContentSecurityPolicyAllowsOnlyExactInlineScripts(t *testing.T) {
 func TestHandlerServesBoundedClientWorkspaceQueriesWithoutSelectingContent(t *testing.T) {
 	handler := NewHandler()
 	for _, target := range []string{
+		"/console/applications/?resource=application-member",
+		"/console/applications/__next.console.applications.__PAGE__.txt?resource=application-member&_rsc=probe",
 		"/console/access/users/?id=principal-member",
 		"/console/access/groups/?id=group%2Fexample",
 		"/console/access/policies/?id=policy-reviewer",
@@ -142,6 +144,9 @@ func TestHandlerServesBoundedClientWorkspaceQueriesWithoutSelectingContent(t *te
 func TestHandlerRejectsAuthoritySelectorsAndAmbiguousWorkspaceQueries(t *testing.T) {
 	handler := NewHandler()
 	for _, target := range []string{
+		"/console/applications/?resource=",
+		"/console/applications/?resource=application-a&resource=application-b",
+		"/console/access/users/?resource=application-member",
 		"/console/access/users/?accountId=other",
 		"/console/access/users/?id=member&tenantId=other",
 		"/console/access/users/?id=member&authorization=secret",

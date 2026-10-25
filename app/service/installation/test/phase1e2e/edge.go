@@ -11,8 +11,12 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -35,6 +39,438 @@ type httpResult struct {
 	status int
 	header http.Header
 	body   []byte
+}
+
+type accessKeyBrowserRequestKind uint8
+
+const (
+	accessKeyBrowserRequestNone accessKeyBrowserRequestKind = iota
+	accessKeyBrowserRequestCreate
+	accessKeyBrowserRequestDisable
+)
+
+type accessKeyBrowserAttempt struct {
+	kind          accessKeyBrowserRequestKind
+	keyID         iamv1.AccessKeyID
+	authorization [sha256.Size]byte
+	create        iamv1.CreateAccessKeyRequest
+	disable       iamv1.SetAccessKeyStatusRequest
+}
+
+type accessKeyBrowserAttemptContextKey struct{}
+
+// accessKeyBrowserObserver is a test-only same-origin relay observation. It
+// never supplies a bearer, Account selector, Matrix identity header or
+// authorization result. Only the two exact management responses needed by
+// the opt-in browser gate are decoded; their bytes continue unchanged to the
+// browser and the one-time Secret never enters a marker or persisted fixture.
+type accessKeyBrowserObserver struct {
+	mu             sync.Mutex
+	accountID      iamv1.AccountID
+	userID         iamv1.PrincipalID
+	sourceCIDR     string
+	created        *iamv1.CreateAccessKeyResponse
+	createdKey     iamv1.AccessKey
+	createRequest  iamv1.CreateAccessKeyRequest
+	disabled       *iamv1.SetAccessKeyStatusResponse
+	disableRequest iamv1.SetAccessKeyStatusRequest
+	authorization  [sha256.Size]byte
+	createCount    int
+	disableCount   int
+	invalid        bool
+	createReady    chan struct{}
+	disableReady   chan struct{}
+}
+
+type accessKeyBrowserProxy struct {
+	server    *httptest.Server
+	transport *http.Transport
+}
+
+type clearingResponseBody struct {
+	reader  *bytes.Reader
+	content []byte
+}
+
+type clearingReplayBody struct {
+	reader    *bytes.Reader
+	content   []byte
+	remainder io.ReadCloser
+}
+
+func (body *clearingResponseBody) Read(destination []byte) (int, error) {
+	if body == nil || body.reader == nil {
+		return 0, io.EOF
+	}
+	count, err := body.reader.Read(destination)
+	if errors.Is(err, io.EOF) {
+		clear(body.content)
+		body.content = nil
+	}
+	return count, err
+}
+
+func (body *clearingResponseBody) Close() error {
+	if body != nil {
+		clear(body.content)
+		body.content = nil
+		body.reader = nil
+	}
+	return nil
+}
+
+func (body *clearingReplayBody) Read(destination []byte) (int, error) {
+	if body == nil {
+		return 0, io.EOF
+	}
+	if body.reader != nil {
+		count, err := body.reader.Read(destination)
+		if count != 0 {
+			return count, err
+		}
+		if !errors.Is(err, io.EOF) {
+			return 0, err
+		}
+		clear(body.content)
+		body.content = nil
+		body.reader = nil
+	}
+	if body.remainder == nil {
+		return 0, io.EOF
+	}
+	return body.remainder.Read(destination)
+}
+
+func (body *clearingReplayBody) Close() error {
+	if body == nil {
+		return nil
+	}
+	clear(body.content)
+	body.content = nil
+	body.reader = nil
+	if body.remainder == nil {
+		return nil
+	}
+	err := body.remainder.Close()
+	body.remainder = nil
+	return err
+}
+
+func newAccessKeyBrowserObserver(
+	accountID iamv1.AccountID,
+	userID iamv1.PrincipalID,
+	sourceCIDR string,
+) *accessKeyBrowserObserver {
+	return &accessKeyBrowserObserver{
+		accountID: accountID, userID: userID, sourceCIDR: sourceCIDR,
+		createReady: make(chan struct{}, 1), disableReady: make(chan struct{}, 1),
+	}
+}
+
+func startAccessKeyBrowserProxy(endpoint string, observer *accessKeyBrowserObserver) (*accessKeyBrowserProxy, error) {
+	target, err := url.Parse(endpoint)
+	if err != nil || target.Scheme != "http" || target.Host == "" || target.User != nil ||
+		target.Path != "" || target.RawQuery != "" || target.Fragment != "" || observer == nil {
+		return nil, errors.New("browser AccessKey relay input is invalid")
+	}
+	transport := &http.Transport{
+		Proxy: nil, DisableCompression: true, MaxIdleConns: 4,
+		IdleConnTimeout: 30 * time.Second, ResponseHeaderTimeout: 5 * time.Second,
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = transport
+	direct := proxy.Director
+	proxy.Director = func(request *http.Request) {
+		direct(request)
+		request.Host = target.Host
+		request.Header.Del("Accept-Encoding")
+		request.Header.Del("Forwarded")
+		request.Header.Del("X-Forwarded-Host")
+		request.Header.Del("X-Forwarded-Proto")
+		// A nil slice is the ReverseProxy contract for suppressing its
+		// otherwise automatic X-Forwarded-For injection.
+		request.Header["X-Forwarded-For"] = nil
+	}
+	proxy.ModifyResponse = observer.observeResponse
+	proxy.ErrorHandler = func(response http.ResponseWriter, _ *http.Request, _ error) {
+		observer.reject()
+		response.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		response.WriteHeader(http.StatusBadGateway)
+		_, _ = response.Write([]byte("browser relay upstream unavailable\n"))
+	}
+	server := httptest.NewUnstartedServer(observer.wrap(proxy))
+	server.Config.ReadHeaderTimeout = 5 * time.Second
+	server.Config.ReadTimeout = 15 * time.Second
+	server.Config.WriteTimeout = 15 * time.Second
+	server.Start()
+	return &accessKeyBrowserProxy{server: server, transport: transport}, nil
+}
+
+func (proxy *accessKeyBrowserProxy) URL() string {
+	if proxy == nil || proxy.server == nil {
+		return ""
+	}
+	return proxy.server.URL
+}
+
+func (proxy *accessKeyBrowserProxy) close() {
+	if proxy == nil {
+		return
+	}
+	if proxy.server != nil {
+		proxy.server.Close()
+	}
+	if proxy.transport != nil {
+		proxy.transport.CloseIdleConnections()
+	}
+}
+
+func (observer *accessKeyBrowserObserver) wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		attempt, observed := observer.readAttempt(request)
+		if observed {
+			request = request.WithContext(context.WithValue(request.Context(), accessKeyBrowserAttemptContextKey{}, attempt))
+		}
+		next.ServeHTTP(response, request)
+	})
+}
+
+func (observer *accessKeyBrowserObserver) readAttempt(
+	request *http.Request,
+) (*accessKeyBrowserAttempt, bool) {
+	kind, keyID := observer.requestKind(request)
+	if kind == accessKeyBrowserRequestNone {
+		return nil, false
+	}
+	if request.ContentLength > iamv1.MaxRequestBytes {
+		observer.reject()
+		return nil, false
+	}
+	content, err := io.ReadAll(io.LimitReader(request.Body, iamv1.MaxRequestBytes+1))
+	if int64(len(content)) > iamv1.MaxRequestBytes {
+		request.Body = &clearingReplayBody{
+			reader: bytes.NewReader(content), content: content, remainder: request.Body,
+		}
+		observer.reject()
+		return nil, false
+	}
+	closeErr := request.Body.Close()
+	forward := bytes.Clone(content)
+	request.Body = &clearingResponseBody{reader: bytes.NewReader(forward), content: forward}
+	request.ContentLength = int64(len(content))
+	if err != nil || closeErr != nil ||
+		!strings.HasPrefix(request.Header.Get("Authorization"), "Bearer ") {
+		clear(content)
+		observer.reject()
+		return nil, false
+	}
+	defer clear(content)
+	attempt := &accessKeyBrowserAttempt{
+		kind: kind, keyID: keyID,
+		authorization: sha256.Sum256([]byte(request.Header.Get("Authorization"))),
+	}
+	switch kind {
+	case accessKeyBrowserRequestCreate:
+		if decodeOne(content, &attempt.create) != nil || iamv1.ValidateCreateAccessKeyRequest(attempt.create) != nil ||
+			!validAccessKeyBrowserRequestID(attempt.create.RequestID, "ui-access-key-create-") ||
+			len(attempt.create.NetworkRestrictions.AllowedSourceCIDRs) != 1 ||
+			attempt.create.NetworkRestrictions.AllowedSourceCIDRs[0] != observer.sourceCIDR {
+			observer.reject()
+			return nil, false
+		}
+	case accessKeyBrowserRequestDisable:
+		if decodeOne(content, &attempt.disable) != nil || iamv1.ValidateSetAccessKeyStatusRequest(attempt.disable) != nil ||
+			attempt.disable.Status != iamv1.AccessKeyDisabled ||
+			!validAccessKeyBrowserRequestID(attempt.disable.RequestID, "ui-access-key-status-") {
+			observer.reject()
+			return nil, false
+		}
+	default:
+		observer.reject()
+		return nil, false
+	}
+	return attempt, true
+}
+
+func validAccessKeyBrowserRequestID(value, prefix string) bool {
+	// This is evidence that the request came through the frozen page intent
+	// format; it is deliberately not treated as an IAM HTTP API contract.
+	if len(value) != len(prefix)+32 || !strings.HasPrefix(value, prefix) {
+		return false
+	}
+	_, err := hex.DecodeString(value[len(prefix):])
+	return err == nil && value[len(prefix):] == strings.ToLower(value[len(prefix):])
+}
+
+func (observer *accessKeyBrowserObserver) requestKind(request *http.Request) (accessKeyBrowserRequestKind, iamv1.AccessKeyID) {
+	if observer == nil || request == nil || request.Method != http.MethodPost {
+		return accessKeyBrowserRequestNone, ""
+	}
+	collection := "/api/iam/v1/users/" + url.PathEscape(string(observer.userID)) + "/access-keys"
+	if request.URL.Path == collection {
+		return accessKeyBrowserRequestCreate, ""
+	}
+	if !strings.HasPrefix(request.URL.Path, collection+"/") || !strings.HasSuffix(request.URL.Path, ":set-status") {
+		return accessKeyBrowserRequestNone, ""
+	}
+	encoded := strings.TrimSuffix(strings.TrimPrefix(request.URL.Path, collection+"/"), ":set-status")
+	decoded, err := url.PathUnescape(encoded)
+	if err != nil || iamv1.ValidateID("accessKeyId", decoded) != nil {
+		observer.reject()
+		return accessKeyBrowserRequestNone, ""
+	}
+	return accessKeyBrowserRequestDisable, iamv1.AccessKeyID(decoded)
+}
+
+func (observer *accessKeyBrowserObserver) observeResponse(response *http.Response) error {
+	attempt, _ := response.Request.Context().Value(accessKeyBrowserAttemptContextKey{}).(*accessKeyBrowserAttempt)
+	if attempt == nil {
+		return nil
+	}
+	content, err := io.ReadAll(io.LimitReader(response.Body, maximumHTTPBody+1))
+	closeErr := response.Body.Close()
+	response.Body = &clearingResponseBody{reader: bytes.NewReader(content), content: content}
+	response.ContentLength = int64(len(content))
+	response.Header.Set("Content-Length", strconv.Itoa(len(content)))
+	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if err != nil || closeErr != nil || len(content) > maximumHTTPBody || mediaErr != nil ||
+		mediaType != "application/json" || response.Header.Get("Content-Encoding") != "" {
+		observer.reject()
+		return nil
+	}
+	switch attempt.kind {
+	case accessKeyBrowserRequestCreate:
+		var created iamv1.CreateAccessKeyResponse
+		if response.StatusCode != http.StatusCreated || response.Header.Get("Cache-Control") != "no-store" ||
+			decodeOne(content, &created) != nil || iamv1.ValidateCreateAccessKeyResponse(created) != nil ||
+			created.Outcome != "APPLIED" || !created.Secret.Present() || created.Key.ResourceVersion != 1 ||
+			created.Key.AccountID != observer.accountID || created.Key.UserID != observer.userID ||
+			created.Key.Status != iamv1.AccessKeyEnabled || created.Key.CredentialState != iamv1.AccessKeyCredentialCurrent ||
+			len(created.Key.NetworkRestrictions.AllowedSourceCIDRs) != 1 ||
+			created.Key.NetworkRestrictions.AllowedSourceCIDRs[0] != observer.sourceCIDR {
+			created.Secret = iamv1.Secret{}
+			observer.reject()
+			return nil
+		}
+		observer.recordCreate(attempt, created)
+	case accessKeyBrowserRequestDisable:
+		var disabled iamv1.SetAccessKeyStatusResponse
+		if response.StatusCode != http.StatusOK || decodeOne(content, &disabled) != nil ||
+			iamv1.ValidateSetAccessKeyStatusResponse(disabled) != nil || disabled.Outcome != "APPLIED" ||
+			disabled.Key.AccountID != observer.accountID ||
+			disabled.Key.UserID != observer.userID || disabled.Key.ID != attempt.keyID ||
+			disabled.Key.Status != iamv1.AccessKeyDisabled ||
+			disabled.Key.CredentialState != iamv1.AccessKeyCredentialCurrent ||
+			disabled.Key.ResourceVersion != attempt.disable.AccessKeyResourceVersion+1 ||
+			len(disabled.Key.NetworkRestrictions.AllowedSourceCIDRs) != 1 ||
+			disabled.Key.NetworkRestrictions.AllowedSourceCIDRs[0] != observer.sourceCIDR {
+			observer.reject()
+			return nil
+		}
+		observer.recordDisable(attempt, disabled)
+	default:
+		observer.reject()
+	}
+	return nil
+}
+
+func (observer *accessKeyBrowserObserver) recordCreate(
+	attempt *accessKeyBrowserAttempt,
+	created iamv1.CreateAccessKeyResponse,
+) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.createCount++
+	if observer.invalid || observer.createCount != 1 || observer.created != nil || observer.disabled != nil {
+		created.Secret = iamv1.Secret{}
+		observer.invalid = true
+		return
+	}
+	observer.created = &created
+	observer.createdKey = created.Key
+	observer.createRequest = attempt.create
+	observer.authorization = attempt.authorization
+	select {
+	case observer.createReady <- struct{}{}:
+	default:
+		observer.invalid = true
+	}
+}
+
+func (observer *accessKeyBrowserObserver) recordDisable(
+	attempt *accessKeyBrowserAttempt,
+	disabled iamv1.SetAccessKeyStatusResponse,
+) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	observer.disableCount++
+	if observer.invalid || observer.disableCount != 1 || observer.createdKey.ID == "" || observer.disabled != nil ||
+		attempt.keyID != observer.createdKey.ID || attempt.disable.AccessKeyResourceVersion != observer.createdKey.ResourceVersion ||
+		attempt.authorization != observer.authorization {
+		observer.invalid = true
+		return
+	}
+	observer.disabled = &disabled
+	observer.disableRequest = attempt.disable
+	select {
+	case observer.disableReady <- struct{}{}:
+	default:
+		observer.invalid = true
+	}
+}
+
+func (observer *accessKeyBrowserObserver) reject() {
+	if observer == nil {
+		return
+	}
+	observer.mu.Lock()
+	observer.invalid = true
+	observer.mu.Unlock()
+}
+
+func (observer *accessKeyBrowserObserver) takeCreate() (
+	iamv1.CreateAccessKeyRequest,
+	iamv1.CreateAccessKeyResponse,
+	error,
+) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if observer.invalid || observer.createCount != 1 || observer.created == nil {
+		return iamv1.CreateAccessKeyRequest{}, iamv1.CreateAccessKeyResponse{}, errors.New("browser AccessKey create observation is incomplete")
+	}
+	created := *observer.created
+	observer.created.Secret = iamv1.Secret{}
+	observer.created = nil
+	return observer.createRequest, created, nil
+}
+
+func (observer *accessKeyBrowserObserver) takeDisable() (
+	iamv1.SetAccessKeyStatusRequest,
+	iamv1.SetAccessKeyStatusResponse,
+	error,
+) {
+	observer.mu.Lock()
+	defer observer.mu.Unlock()
+	if observer.invalid || observer.createCount != 1 || observer.disableCount != 1 || observer.disabled == nil {
+		return iamv1.SetAccessKeyStatusRequest{}, iamv1.SetAccessKeyStatusResponse{}, errors.New("browser AccessKey disable observation is incomplete")
+	}
+	disabled := *observer.disabled
+	observer.disabled = nil
+	return observer.disableRequest, disabled, nil
+}
+
+func (observer *accessKeyBrowserObserver) clear() {
+	if observer == nil {
+		return
+	}
+	observer.mu.Lock()
+	if observer.created != nil {
+		observer.created.Secret = iamv1.Secret{}
+	}
+	observer.created = nil
+	observer.createdKey = iamv1.AccessKey{}
+	observer.disabled = nil
+	observer.mu.Unlock()
 }
 
 func newEdgeClient(endpoint string) *edgeClient {

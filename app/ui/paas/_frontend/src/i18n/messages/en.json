@@ -2344,7 +2344,8 @@
       "pendingPublishIntent": "Original request: publish a new version · policy {policy}",
     "loadingVersions": "Loading policy versions…",
     "loadingVersion": "Loading the exact version…",
-    "versionCount": "Manageable versions: {count} / 5",
+    "versionCount": "Manageable versions: {count} / {limit}",
+    "versionLimitReached": "The limit of {limit} manageable versions has been reached. Before publishing, confirm which version should remain the default, then retire a non-default version. Historical content and audit evidence remain available.",
     "versionTable": "Policy version directory",
     "versionId": "Version ID",
     "versionContract": "Content contract",
@@ -2374,7 +2375,7 @@
       "mutationBlocked": "Another version change is unresolved. Resolve the original request before starting a new one.",
       "mutationErrors": {
         "forbidden": "This identity cannot perform that operation.",
-        "conflict": "The policy resource version changed. The directory has been refreshed; review the latest state before trying again.",
+        "conflict": "The policy resource version changed. The directory is being refreshed and the current draft is preserved; review it against the latest state before trying again.",
         "notFound": "IAM reported that the policy, version, or route was not found; no success was confirmed. Read the directory again.",
         "invalid": "The request failed validation. Review the current version and declaration.",
         "expired": "The login session expired. Sign in again and read the latest state."
@@ -4553,7 +4554,7 @@
     "permissionsHint": "Role sessions use these policies and the mandatory permission boundary, not the caller's own permissions. You may create the role first, but assumption stays closed until a ceiling is set.",
     "noPermissions": "No policies attached · resource access is denied",
     "searchAttachedPolicies": "Search attached role policies",
-    "nameHint": "1–64 characters. The role name cannot be changed after creation.",
+    "nameHint": "1–64 characters. The display name can change after creation; the stable role ID does not.",
     "invalidTrust": "Select at least one current-tenant user.",
     "invalidName": "Enter a name of 1–64 characters without angle brackets or control characters.",
     "duplicate": "A role with this name already exists.",

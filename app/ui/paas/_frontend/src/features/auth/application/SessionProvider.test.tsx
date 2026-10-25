@@ -36,6 +36,7 @@ function Probe() {
       <span data-testid="recovery">{session.enrollmentRecovery?.recoveryCodes.join("|") ?? "none"}</span>
       <span data-testid="first-enrollment">{session.firstEnrollment?.status ?? "none"}</span>
       <span data-testid="authenticator-recovery">{session.authenticatorRecovery?.state ?? "none"}</span>
+      <span data-testid="reauthentication-reason">{session.reauthenticationReason ?? "none"}</span>
       <span data-testid="sign-in-notice">{session.signInNotice ? `${session.signInNotice.kind}:${session.signInNotice.requestId}` : "none"}</span>
       <span data-testid="code-regeneration">{security?.recoveryCodeRegenerationIntent?.state ?? "none"}</span>
       <span data-testid="returned-codes">{returnedCodes.join("|") || "none"}</span>
@@ -612,6 +613,10 @@ describe("SessionProvider", () => {
     expect(screen.getByTestId("challenge").textContent).toBe("none");
     expect(screen.getByTestId("authenticator-recovery").textContent).toBe("none");
     expect(screen.getByTestId("recovery").textContent).toContain("NEW-RECOVERY-9");
+    expect(screen.getByTestId("reauthentication-reason").textContent).toBe("FACTOR");
+    await act(async () => fireEvent.click(screen.getByText("acknowledge-recovery")));
+    expect(screen.getByTestId("phase").textContent).toBe("reauthentication-required");
+    expect(screen.getByTestId("reauthentication-reason").textContent).toBe("FACTOR");
   });
 
   it("never auto-retries an unknown recovery start and inspects the original request after a fresh login", async () => {

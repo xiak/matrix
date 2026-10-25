@@ -4,6 +4,7 @@ export type PolicyScope = "TENANT" | "INSTALLATION";
 export type PolicyManagement = "SYSTEM" | "CUSTOMER";
 export type PolicyStatus = "ACTIVE" | "RETIRED";
 export type IdentityKind = "ROOT_IDENTITY" | "USER";
+export const policyVersionLimit = 5;
 
 export type IamAction =
   | "iam.account.create"
@@ -350,7 +351,16 @@ export type PolicyMutationIntent = Readonly<{
   requestId: string;
   createdAt: string;
   state: "UNKNOWN";
-} & ({ kind: "update"; displayName: string } | { kind: "retire" })>;
+} & (
+  | { kind: "update"; displayName: string }
+  | { kind: "retire" }
+  | { kind: "publish-version"; documentJSON: string }
+  | { kind: "set-default-version" | "retire-version"; versionId: string }
+)>;
+
+export type PolicyMetadataMutationIntent = Extract<PolicyMutationIntent, { kind: "update" | "retire" }>;
+export type PolicyVersionMutationRecoveryIntent = Extract<PolicyMutationIntent,
+  { kind: "publish-version" | "set-default-version" | "retire-version" }>;
 
 export function policyDisplayNameValid(value: string): boolean {
   return Boolean(value) && value.trim() === value && !/\p{Cc}/u.test(value) && new TextEncoder().encode(value).length <= 128;

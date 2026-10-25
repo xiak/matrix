@@ -2344,7 +2344,8 @@
       "pendingPublishIntent": "原请求：发布新版本 · 策略 {policy}",
     "loadingVersions": "正在读取策略版本…",
     "loadingVersion": "正在读取精确版本…",
-    "versionCount": "当前可管理版本：{count} / 5",
+    "versionCount": "当前可管理版本：{count} / {limit}",
+    "versionLimitReached": "已达到 {limit} 个可管理版本上限。要发布新版本，请先确认要保留的默认版本，再退休一个非默认版本；历史内容和审计证据仍会保留。",
     "versionTable": "策略版本目录",
     "versionId": "版本 ID",
     "versionContract": "内容契约",
@@ -2374,7 +2375,7 @@
       "mutationBlocked": "仍有一项版本变更未决。请先处理原请求，再发起新操作。",
       "mutationErrors": {
         "forbidden": "当前身份无权执行此操作。",
-        "conflict": "策略资源版本已变化。已重新读取版本目录，请基于最新状态重新审阅。",
+        "conflict": "策略资源版本已变化。正在重新读取版本目录；当前草稿已保留，请基于最新状态重新审阅。",
         "notFound": "IAM 返回未找到策略、版本或接口；未收到成功确认。请重新读取目录。",
         "invalid": "提交未通过校验；请核对当前版本与声明。",
         "expired": "登录会话已失效；请重新登录后读取最新状态。"
@@ -4553,7 +4554,7 @@
     "permissionsHint": "角色会话仅使用这里的策略和强制权限边界，不叠加调用者自身的权限。可以先创建角色，但不设置权限上限时角色承担关闭。",
     "noPermissions": "未关联策略 · 默认拒绝资源访问",
     "searchAttachedPolicies": "搜索角色关联策略",
-    "nameHint": "1–64 个字符。创建后角色名称不可修改。",
+    "nameHint": "1–64 个字符。创建后可修改显示名称；稳定角色 ID 不变。",
     "invalidTrust": "请至少选择一名当前租户用户。",
     "invalidName": "请输入 1–64 个字符的名称，不含尖括号或控制字符。",
     "duplicate": "已存在同名角色。",
