@@ -416,6 +416,7 @@ func TestIAMUserManagementCompletionPredecessorProcess(t *testing.T) {
 	predecessorBinary := buildAuthorityBinary(t, ctx, predecessorRoot, temporary, "iam-user-management-predecessor", "./app/service/iam/cmd/matrix-iam")
 	currentMigrator := buildAuthorityBinary(t, ctx, root, temporary, "iam-user-management-current-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
 	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-user-management-current", "./app/service/iam/cmd/matrix-iam")
+	bootstrap := processBootstrap(t)
 
 	const apiLogin = "matrix_iam_api_login"
 	var migrationEnvironment []string
@@ -446,11 +447,14 @@ func TestIAMUserManagementCompletionPredecessorProcess(t *testing.T) {
 	}
 	migrationEnvironment = append(migrationEnvironment,
 		installationv1.IAMProductAuthorizationMigrationFileEnvironment+"="+
-			writeProtectedFile(t, temporary, "iam-user-management-product-authorization.json", productAuthorization))
+			writeProtectedFile(t, temporary, "iam-user-management-product-authorization.json", productAuthorization),
+		"MATRIX_MIGRATION_INSTALLATION_ID="+bootstrap.InstallationID,
+		"MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE="+
+			writeProtectedFile(t, temporary, "iam-user-management-platform-credential", []byte(platformServiceCredential)))
 	clear(productAuthorization)
 
 	var children []*childProcess
-	sensitive := []string{initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword, processDBPassword}
+	sensitive := []string{initialAdminPassword, changedAdminPassword, initialReaderPassword, changedReaderPassword, processDBPassword, platformServiceCredential}
 	defer func() {
 		for _, child := range children {
 			child.stop()
@@ -469,8 +473,14 @@ func TestIAMUserManagementCompletionPredecessorProcess(t *testing.T) {
 	}
 	runMigration(predecessorRoot, predecessorMigrator, "IAM86 predecessor")
 
-	bootstrap := processBootstrap(t)
-	encodedBootstrap, err := iamv1.EncodeBootstrapDocument(bootstrap)
+	legacyServices := make([]iamv1.BootstrapServiceCredential, 0, len(bootstrap.Services)-1)
+	for _, service := range bootstrap.Services {
+		if service.Purpose != iamv1.ServicePlatform {
+			legacyServices = append(legacyServices, service)
+		}
+	}
+	bootstrap.Services = legacyServices
+	encodedBootstrap, err := iamv1.EncodeBootstrapReplayDocument(bootstrap)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -537,14 +547,18 @@ func TestIAMUserManagementCompletionPredecessorProcess(t *testing.T) {
 		t.Fatalf("IAM86 did not disable retained User: status=%d", disabledResponse.Status)
 	}
 
-	canonicalOutbox := func() map[string]string {
+	type canonicalAuditFact struct {
+		canonical string
+		event     auditv1.Event
+	}
+	canonicalOutbox := func() map[string]canonicalAuditFact {
 		t.Helper()
 		rows, err := admin.Query(ctx, "SELECT event_document FROM iam.audit_outbox ORDER BY event_id")
 		if err != nil {
 			t.Fatal(err)
 		}
 		defer rows.Close()
-		result := make(map[string]string)
+		result := make(map[string]canonicalAuditFact)
 		for rows.Next() {
 			var encoded []byte
 			var event auditv1.Event
@@ -553,10 +567,10 @@ func TestIAMUserManagementCompletionPredecessorProcess(t *testing.T) {
 			}
 			document, contentDigest, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
 			eventID := string(event.EventID)
-			if err != nil || result[eventID] != "" {
+			if _, duplicate := result[eventID]; err != nil || duplicate {
 				t.Fatal("canonicalize retained IAM outbox fact", err)
 			}
-			result[eventID] = document + "\x00" + contentDigest
+			result[eventID] = canonicalAuditFact{canonical: document + "\x00" + contentDigest, event: event}
 		}
 		if rows.Err() != nil || len(result) == 0 {
 			t.Fatal("retained IAM outbox facts are unavailable", rows.Err())
@@ -578,13 +592,31 @@ func TestIAMUserManagementCompletionPredecessorProcess(t *testing.T) {
 	}
 	current := start(root, currentBinary, installationrelease.CurrentDatabaseProfile().Authorities.IAM)
 	currentFacts := canonicalOutbox()
-	if len(currentFacts) != len(predecessorFacts) {
-		t.Fatal("IAM87 migration or equal bootstrap changed retained Audit fact count")
+	if len(currentFacts) != len(predecessorFacts)+1 {
+		t.Fatal("IAM87 migration did not add exactly one PLATFORM enrollment fact")
 	}
 	for eventID, before := range predecessorFacts {
-		if currentFacts[eventID] != before {
+		if currentFacts[eventID].canonical != before.canonical {
 			t.Fatal("IAM87 migration or equal bootstrap rewrote retained Audit canonical bytes")
 		}
+	}
+	added := 0
+	for eventID, after := range currentFacts {
+		if _, retained := predecessorFacts[eventID]; retained {
+			continue
+		}
+		event := after.event
+		if event.Action != auditv1.ActionIAMBootstrapApplied || event.Actor.Type != auditv1.ActorSystem ||
+			event.Actor.ID != "iam-migration" || event.Target.Kind != auditv1.TargetInstallation ||
+			event.Target.ID != bootstrap.InstallationID || event.TenantID != auditv1.TenantID(bootstrap.Organization.ID) ||
+			event.InstallationID != "" || event.Result != auditv1.ResultSucceeded ||
+			!strings.HasPrefix(event.RequestID, "migration-platform-") || event.CorrelationID != event.RequestID {
+			t.Fatalf("IAM87 migration added an unexpected Audit fact: %#v", event)
+		}
+		added++
+	}
+	if added != 1 {
+		t.Fatal("IAM87 migration PLATFORM enrollment fact is unavailable")
 	}
 
 	readUser := func() iamv1.User {

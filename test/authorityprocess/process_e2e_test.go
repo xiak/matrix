@@ -270,9 +270,17 @@ func TestManagedWorkerInputArchiveIsPrivateAndClosed(t *testing.T) {
 	worker := writeProtectedFile(t, root, "source-worker", []byte("test executable"))
 	dsn := writeProtectedFile(t, root, "source-dsn", []byte("test-only-dsn"))
 	catalog := writeProtectedFile(t, root, "source-catalog", []byte("test-only-catalog"))
+	nodeConnections := writeProtectedFile(t, root, "source-node-connections", []byte("test-only-node-connections"))
+	controllerCertificate := writeProtectedFile(t, root, "source-controller-certificate", []byte("test-only-controller-certificate"))
+	controllerPrivateKey := writeProtectedFile(t, root, "source-controller-private-key", []byte("test-only-controller-private-key"))
+	controllerTrust := writeProtectedFile(t, root, "source-controller-trust", []byte("test-only-controller-trust"))
+	inputs := managedWorkerPrivateInputs{
+		worker: worker, databaseDSN: dsn, artifactCatalog: catalog, nodeConnections: nodeConnections,
+		controllerCertificate: controllerCertificate, controllerPrivateKey: controllerPrivateKey, controllerTrust: controllerTrust,
+	}
 	writeProtectedFile(t, root, "unrelated-authority-material", []byte("must not be copied"))
 	var archive bytes.Buffer
-	if err := writeManagedWorkerInputArchive(&archive, worker, dsn, catalog); err != nil {
+	if err := writeManagedWorkerInputArchive(&archive, inputs); err != nil {
 		t.Fatal(err)
 	}
 	reader := tar.NewReader(&archive)
@@ -280,10 +288,14 @@ func TestManagedWorkerInputArchiveIsPrivateAndClosed(t *testing.T) {
 		mode int64
 		body string
 	}{
-		"fixture/":                 {0o700, ""},
-		"fixture/worker":           {0o700, "test executable"},
-		"fixture/database-dsn":     {0o600, "test-only-dsn"},
-		"fixture/artifact-catalog": {0o600, "test-only-catalog"},
+		"fixture/":                       {0o700, ""},
+		"fixture/worker":                 {0o700, "test executable"},
+		"fixture/database-dsn":           {0o600, "test-only-dsn"},
+		"fixture/artifact-catalog":       {0o600, "test-only-catalog"},
+		"fixture/node-connections":       {0o600, "test-only-node-connections"},
+		"fixture/controller-certificate": {0o600, "test-only-controller-certificate"},
+		"fixture/controller-private-key": {0o600, "test-only-controller-private-key"},
+		"fixture/controller-trust":       {0o600, "test-only-controller-trust"},
 	}
 	for {
 		header, err := reader.Next()
@@ -306,7 +318,9 @@ func TestManagedWorkerInputArchiveIsPrivateAndClosed(t *testing.T) {
 		t.Fatal("worker transfer omitted a required private input")
 	}
 	for _, invalid := range []string{root, filepath.Join(root, "missing")} {
-		if err := writeManagedWorkerInputArchive(io.Discard, invalid, dsn, catalog); err == nil {
+		invalidInputs := inputs
+		invalidInputs.worker = invalid
+		if err := writeManagedWorkerInputArchive(io.Discard, invalidInputs); err == nil {
 			t.Fatal("worker transfer accepted a non-file input")
 		}
 	}
@@ -315,12 +329,12 @@ func TestManagedWorkerInputArchiveIsPrivateAndClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = writer.Close()
-	if err := writeManagedWorkerInputArchive(writer, worker, dsn, catalog); err == nil {
+	if err := writeManagedWorkerInputArchive(writer, inputs); err == nil {
 		t.Fatal("worker transfer ignored an unavailable destination")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := copyManagedWorkerInputs(ctx, "unused-cancelled-input-gate", worker, dsn, catalog); err == nil {
+	if err := copyManagedWorkerInputs(ctx, "unused-cancelled-input-gate", inputs); err == nil {
 		t.Fatal("cancelled worker transfer was accepted")
 	}
 }
@@ -338,9 +352,22 @@ func TestManagedWorkerPrivateInputsContainer(t *testing.T) {
 		"test \"$(stat -c %u:%g:%a /run/matrix/matrix-paas-worker)\" = 0:0:700\n"+
 		"test \"$(stat -c %u:%g:%a /run/matrix/paas-worker-dsn)\" = 0:0:600\n"+
 		"test \"$(stat -c %u:%g:%a /run/matrix/artifact-catalog.json)\" = 0:0:600\n"+
+		"test \"$(stat -c %u:%g:%a /run/matrix/node-connections.json)\" = 0:0:600\n"+
+		"test \"$(stat -c %u:%g:%a /run/matrix/enrollment-controller.crt)\" = 0:0:600\n"+
+		"test \"$(stat -c %u:%g:%a /run/matrix/enrollment-controller.key)\" = 0:0:600\n"+
+		"test \"$(stat -c %u:%g:%a /run/matrix/enrollment-controller-trust.crt)\" = 0:0:600\n"+
 		"printf '%s\\n' MATRIX_MANAGED_WORKER_INPUTS_READY\n"))
 	dsn := writeProtectedFile(t, root, "dsn", []byte("test-only-dsn"))
 	catalog := writeProtectedFile(t, root, "catalog", []byte("test-only-catalog"))
+	inputs := managedWorkerPrivateInputs{
+		worker:                worker,
+		databaseDSN:           dsn,
+		artifactCatalog:       catalog,
+		nodeConnections:       writeProtectedFile(t, root, "node-connections", []byte("test-only-node-connections")),
+		controllerCertificate: writeProtectedFile(t, root, "controller-certificate", []byte("test-only-controller-certificate")),
+		controllerPrivateKey:  writeProtectedFile(t, root, "controller-private-key", []byte("test-only-controller-private-key")),
+		controllerTrust:       writeProtectedFile(t, root, "controller-trust", []byte("test-only-controller-trust")),
+	}
 	name := "matrix-iam-managed-inputs-" + newManagedHexSuffix(t)
 	imageID := resolveManagedWorkerImage(t, ctx)
 	created, err := exec.CommandContext(ctx, "docker", "create", "--name", name,
@@ -367,7 +394,7 @@ func TestManagedWorkerPrivateInputsContainer(t *testing.T) {
 			t.Error("remove isolated worker input gate")
 		}
 	})
-	if err := copyManagedWorkerInputs(ctx, id, worker, dsn, catalog); err != nil {
+	if err := copyManagedWorkerInputs(ctx, id, inputs); err != nil {
 		t.Fatal(err)
 	}
 	output, err := exec.CommandContext(ctx, "docker", "start", "--attach", id).CombinedOutput()
@@ -1299,7 +1326,9 @@ func runAuthorityProcessMode(
 	managedRuntime := managedProductRuntime{}
 	if mode == authorityProcessBrowser || mode == authorityProcessCommandRecoveryBrowser || mode == authorityProcessManagedProducts {
 		managedRuntime = startManagedProductWorker(
-			t, ctx, admin, adminConfig, root, temporary, startWithArguments,
+			t, ctx, admin, adminConfig, root, temporary,
+			bootstrap.InstallationID, node.configurationPath, enrollmentAuthority,
+			startWithArguments,
 		)
 	}
 	// The source authorities now form the published release composition. Prove
@@ -16123,6 +16152,9 @@ func startManagedProductWorker(
 	adminConfig *pgx.ConnConfig,
 	root string,
 	temporary string,
+	installationID string,
+	nodeConnections string,
+	enrollmentAuthority processEnrollmentAuthority,
 	startWithArguments func(string, []string, ...string) *childProcess,
 ) managedProductRuntime {
 	t.Helper()
@@ -16182,7 +16214,8 @@ func startManagedProductWorker(
 	containerDSNFile := "/run/matrix/paas-worker-dsn"
 	containerCatalogFile := "/run/matrix/artifact-catalog.json"
 	workerEnvironment := managedProductWorkerEnvironment(
-		containerDSNFile, bindingRoot, secretRoot, containerCatalogFile, containerAddress, images,
+		containerDSNFile, bindingRoot, secretRoot, containerCatalogFile,
+		installationID, containerAddress, images,
 	)
 	arguments := []string{
 		"create", "--name", workerContainer,
@@ -16202,7 +16235,14 @@ func startManagedProductWorker(
 	if _, err := exec.CommandContext(ctx, "docker", arguments...).Output(); err != nil {
 		t.Fatal("create bounded managed worker container")
 	}
-	if err := copyManagedWorkerInputs(ctx, workerContainer, workerBinary, containerDSNPath, catalogPath); err != nil {
+	inputs := managedWorkerPrivateInputs{
+		worker: workerBinary, databaseDSN: containerDSNPath, artifactCatalog: catalogPath,
+		nodeConnections:       nodeConnections,
+		controllerCertificate: enrollmentAuthority.controllerCertificatePath,
+		controllerPrivateKey:  enrollmentAuthority.controllerPrivateKeyPath,
+		controllerTrust:       enrollmentAuthority.controllerTrustPath,
+	}
+	if err := copyManagedWorkerInputs(ctx, workerContainer, inputs); err != nil {
 		t.Fatal(err)
 	}
 	workerReservation.release(t)
@@ -16227,16 +16267,33 @@ func managedWorkerBootstrapScript() string {
 		"chmod 700 \"$MATRIX_PAAS_WORKER_BINDING_ROOT\" \"$MATRIX_PAAS_WORKER_SECRET_ROOT\"; stage=INPUTS; " +
 		"cp /tmp/fixture/worker /run/matrix/matrix-paas-worker; " +
 		"cp /tmp/fixture/database-dsn /run/matrix/paas-worker-dsn; " +
-		"cp /tmp/fixture/artifact-catalog /run/matrix/artifact-catalog.json; stage=MODES; " +
-		"chmod 700 /run/matrix/matrix-paas-worker; chmod 600 /run/matrix/paas-worker-dsn /run/matrix/artifact-catalog.json; stage=CLEANUP; " +
-		"rm /tmp/fixture/worker /tmp/fixture/database-dsn /tmp/fixture/artifact-catalog; rmdir /tmp/fixture; " +
+		"cp /tmp/fixture/artifact-catalog /run/matrix/artifact-catalog.json; " +
+		"cp /tmp/fixture/node-connections /run/matrix/node-connections.json; " +
+		"cp /tmp/fixture/controller-certificate /run/matrix/enrollment-controller.crt; " +
+		"cp /tmp/fixture/controller-private-key /run/matrix/enrollment-controller.key; " +
+		"cp /tmp/fixture/controller-trust /run/matrix/enrollment-controller-trust.crt; stage=MODES; " +
+		"chmod 700 /run/matrix/matrix-paas-worker; " +
+		"chmod 600 /run/matrix/paas-worker-dsn /run/matrix/artifact-catalog.json /run/matrix/node-connections.json " +
+		"/run/matrix/enrollment-controller.crt /run/matrix/enrollment-controller.key /run/matrix/enrollment-controller-trust.crt; stage=CLEANUP; " +
+		"rm /tmp/fixture/worker /tmp/fixture/database-dsn /tmp/fixture/artifact-catalog /tmp/fixture/node-connections " +
+		"/tmp/fixture/controller-certificate /tmp/fixture/controller-private-key /tmp/fixture/controller-trust; rmdir /tmp/fixture; " +
 		"stage=EXEC; exec /run/matrix/matrix-paas-worker"
 }
 
 // Docker can retain the source directory's uid even without --archive. Encode
-// only the three owned inputs with explicit container ownership; never chmod or
+// only the closed owned input set with explicit container ownership; never chmod or
 // chown host files, grant CHOWN to the worker, or copy the surrounding secrets.
-func writeManagedWorkerInputArchive(destination io.Writer, worker, dsn, catalog string) error {
+type managedWorkerPrivateInputs struct {
+	worker                string
+	databaseDSN           string
+	artifactCatalog       string
+	nodeConnections       string
+	controllerCertificate string
+	controllerPrivateKey  string
+	controllerTrust       string
+}
+
+func writeManagedWorkerInputArchive(destination io.Writer, inputs managedWorkerPrivateInputs) error {
 	writer := tar.NewWriter(destination)
 	if err := writer.WriteHeader(&tar.Header{Name: "fixture/", Typeflag: tar.TypeDir, Mode: 0o700}); err != nil {
 		return err
@@ -16245,7 +16302,13 @@ func writeManagedWorkerInputArchive(destination io.Writer, worker, dsn, catalog 
 		name, path string
 		mode       int64
 	}{
-		{"worker", worker, 0o700}, {"database-dsn", dsn, 0o600}, {"artifact-catalog", catalog, 0o600},
+		{"worker", inputs.worker, 0o700},
+		{"database-dsn", inputs.databaseDSN, 0o600},
+		{"artifact-catalog", inputs.artifactCatalog, 0o600},
+		{"node-connections", inputs.nodeConnections, 0o600},
+		{"controller-certificate", inputs.controllerCertificate, 0o600},
+		{"controller-private-key", inputs.controllerPrivateKey, 0o600},
+		{"controller-trust", inputs.controllerTrust, 0o600},
 	} {
 		file, err := os.Open(input.path)
 		if err != nil {
@@ -16268,11 +16331,11 @@ func writeManagedWorkerInputArchive(destination io.Writer, worker, dsn, catalog 
 	return writer.Close()
 }
 
-func copyManagedWorkerInputs(ctx context.Context, container, worker, dsn, catalog string) error {
+func copyManagedWorkerInputs(ctx context.Context, container string, inputs managedWorkerPrivateInputs) error {
 	reader, writer := io.Pipe()
 	completed := make(chan error, 1)
 	go func() {
-		err := writeManagedWorkerInputArchive(writer, worker, dsn, catalog)
+		err := writeManagedWorkerInputArchive(writer, inputs)
 		_ = writer.CloseWithError(err)
 		completed <- err
 	}()
@@ -16375,6 +16438,7 @@ func assertManagedWorkerContainer(t *testing.T, ctx context.Context, name, image
 		container.HostConfig.Privileged || !slices.Contains(container.HostConfig.CapDrop, "ALL") ||
 		!slices.Contains(container.HostConfig.SecurityOpt, "no-new-privileges:true") ||
 		!slices.Contains(container.Config.Env, "GOMAXPROCS=2") || !slices.Contains(container.Config.Env, "GOMEMLIMIT=512MiB") ||
+		!slices.Contains(container.Config.Env, "MATRIX_PAAS_WORKER_INSTALLATION_ID=installation-process") ||
 		!slices.Contains(container.Config.Env, "MATRIX_PAAS_WORKER_LISTEN_ADDRESS="+listen) {
 		t.Fatal("real managed worker image or runtime limits differ from the bounded fixture")
 	}
@@ -16413,6 +16477,10 @@ func assertManagedWorkerContainer(t *testing.T, ctx context.Context, name, image
 		`test "$(stat -c %a /run/matrix/matrix-paas-worker)" = 700 && ` +
 		`test "$(stat -c %a /run/matrix/paas-worker-dsn)" = 600 && ` +
 		`test "$(stat -c %a /run/matrix/artifact-catalog.json)" = 600 && ` +
+		`test "$(stat -c %a /run/matrix/node-connections.json)" = 600 && ` +
+		`test "$(stat -c %a /run/matrix/enrollment-controller.crt)" = 600 && ` +
+		`test "$(stat -c %a /run/matrix/enrollment-controller.key)" = 600 && ` +
+		`test "$(stat -c %a /run/matrix/enrollment-controller-trust.crt)" = 600 && ` +
 		`test "$(stat -c %a "$MATRIX_PAAS_WORKER_BINDING_ROOT")" = 700 && ` +
 		`test "$(stat -c %a "$MATRIX_PAAS_WORKER_SECRET_ROOT")" = 700`
 	if err := exec.CommandContext(ctx, "docker", "exec", name, "sh", "-c", check).Run(); err != nil {
@@ -16425,6 +16493,7 @@ func managedProductWorkerEnvironment(
 	bindingRoot string,
 	secretRoot string,
 	catalogPath string,
+	installationID string,
 	workerAddress string,
 	images managedProductImages,
 ) []string {
@@ -16437,6 +16506,11 @@ func managedProductWorkerEnvironment(
 		"MATRIX_PAAS_WORKER_BINDING_ROOT=" + bindingRoot,
 		"MATRIX_PAAS_WORKER_SECRET_ROOT=" + secretRoot,
 		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE=" + catalogPath,
+		"MATRIX_PAAS_WORKER_INSTALLATION_ID=" + installationID,
+		"MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE=/run/matrix/node-connections.json",
+		"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE=/run/matrix/enrollment-controller.crt",
+		"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE=/run/matrix/enrollment-controller.key",
+		"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE=/run/matrix/enrollment-controller-trust.crt",
 		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID=organization-process",
 		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF=local-machine-browser-v1",
 		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS=" + workerAddress,

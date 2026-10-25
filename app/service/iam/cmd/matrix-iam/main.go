@@ -65,7 +65,12 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	document, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(bootstrapBytes))
+	// The running authority replays the installer-owned bootstrap receipt. A
+	// retained v0.1 installation can therefore use its exact four-service
+	// document after PLATFORM is enrolled by the release migration; accepting
+	// that fixed legacy shape must not weaken the strict decoder used to create
+	// a new installation.
+	document, err := iamv1.DecodeBootstrapReplayDocument(bytes.NewReader(bootstrapBytes))
 	clear(bootstrapBytes)
 	if err != nil {
 		return errors.New("IAM bootstrap document is invalid")
