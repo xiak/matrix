@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted signed release consumer at fixed `95a343ae2f4efb4c9845c9af25d0225e722f870c`, IAM/Audit/PaaS `87/39/7+r37`, after the 4197.458-second native-Linux A/B lifecycle and 435.593-second post-restart gate. Its sole rolling development predecessor remains fixed `86/39/7+r36`. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. Installed-release browser acceptance remains owned by FEAT-IAM-010 and is not implied by this result
+- Status: Accepted signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. Its sole rolling development predecessor remains fixed `86/39/7+r36`. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `87/39/7` revision 37 and its sole rolling data predecessor is fixed `86/39/7` revision 36; a signed upgrade still requires an immediate same-profile release predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -902,125 +902,85 @@ FEAT-IAM-010 continues to own that final browser path.
 ### Current IAM87 foreground-session and recovery-gap release-consumer gate
 
 Fixed production and test source
-`95a343ae2f4efb4c9845c9af25d0225e722f870c` is the accepted current
+`a45f6abf8ec7d532dd56ff707d8989eb2dc6d441` is the accepted current
 same-profile signed consumer, IAM/Audit/PaaS `87/39/7+r37`. It supersedes the
-signed consumer `5935fa5005529b2c4e1da943b98f49300430ba10`, not the sole rolling
+signed consumer `95a343ae2f4efb4c9845c9af25d0225e722f870c`, not the sole rolling
 data predecessor `08e1dc4a6ce81386ea7223e62d03356f82aeee58`
-(`86/39/7+r36`). The source includes the frozen console export consumed from
-the UX owner, but this lifecycle does not turn component or static-export
-evidence into installed-browser acceptance.
+(`86/39/7+r36`). It includes the current console, Policy-version recovery and
+USER/ROLE/GROUP source-invalidation gates; only the browser actions actually
+executed below count as installed-browser evidence.
 
 The clean fixed source assembled and independently authenticated this pair:
 
 | Release | Manifest SHA-256 |
 | --- | --- |
-| A: `matrix-v0.1.0-iam.r37.35-95a343ae2f4e` | `818248032a6dfe9f553230237407b5334045b25366aefe0f1028a54072c5d55d` |
-| B: `matrix-v0.1.0-iam.r37.36-95a343ae2f4e` | `a9aa20017e43647180af72f758d3fe41e38e650511bf2456a5aaaa190f8b413e` |
+| A: `matrix-v0.1.0-iam.r37.37-a45f6abf8ec7` | `0efc01690d01b3d160f688cce916a68e93df5e64c6ba6d7cc90cb2a8104445f0` |
+| B: `matrix-v0.1.0-iam.r37.38-a45f6abf8ec7` | `52ea15d393599e2c8d6af57bd19d7b8591d9eeaffd1ccdeca1949a3dcebe14c0` |
 
-B names A as its exact immediate predecessor. Both contain twelve signed
-payloads, ten pinned images and topology digest
+B names A as its exact immediate predecessor. Both use topology digest
 `sha256:ca31ccec97d52776d61c8bdcea0be04b2d5a6fe7fc28d9d0055c4d2a3ff75c30`.
-The separate 296-byte public trust document has SHA-256
-`8030f29743135aeaf097d514c4b20a1e226c2815f91ba63d78ceb98d9b6e3d3f`.
-The one-time signing private key was removed after assembly and is absent from
-the releases and delivery archives.
+The public trust root has SHA-256
+`eb2196fa3fc1374b9541836e085ecfe17586a839acbd6c3b4a3ba7b1981cc5ac`.
+The one-time signing private key was removed after assembly and was absent from
+the releases and acceptance runtime.
 
-On 2026-10-24 (Asia/Shanghai), a task-owned Docker 27.5.1 engine with no
-external route, a private cgroup namespace and limits of 2 CPU/4 GiB/PIDs1024
-was emptied object-by-object to zero inner containers, images and volumes. It
-then ran the existing gate from the exact source for 4197.458 seconds. The
-unmodified signed binaries proved restricted runtime database identities,
-real STARTTLS/SASL mail and TOTP, Account/root/member and foreground-session
-activity boundaries, all four managed products, two application generations,
-tenant and installation Audit chains, a protected backup, injected failed
-upgrade and automatic A recovery, normal B upgrade, explicit A rollback and
-selected-backup recovery. Recovery rejected old Sessions, issued a new Session,
-permanently fenced the old AccessKey, retained the workload and Audit history,
-preserved the Analyzer's `RESTORE_GAP`, excluded the post-backup security report
-and resource, then completed application rollback, stop/capacity release and
-bounded support zero-leakage.
+On 2026-10-25 (Asia/Shanghai), the Linux/amd64 gate binary had SHA-256
+`9f20c84036586d8e8f39096fbb2399b4cfea3e6aaf7bca3b7a20d3844e8e5c94`.
+The task-only Postfix fixture archive had SHA-256
+`7add1234632c029444df63c3a689bc00e7bb9726ee69847bde0418e6cf96d446`
+and portable image identity
+`sha256:9216a2a36f6a962d8d558b0439e74626cb7e7c1e0d9237f10ddac155fe9225a6`.
+It proved authenticated STARTTLS/SASL submission, real Maildir receipt,
+bad-credential rejection and external-relay rejection; it does not prove an
+external mail-provider SLA or recipient reading.
 
-The preceding `e64ed025b58713ea359d41da469b10b3e394dd409` lifecycle was rejected
-at the Analyzer recovery assertion: current-epoch scans had prematurely
-changed a pre-recovery Analyzer from `RESTORE_GAP` to ordinary window
-incompleteness. Fixed `95a343ae` preserves that lineage until the configured
-window is fully covered while a post-recovery Analyzer still starts with
-`OBSERVATION_WINDOW_INCOMPLETE`. The owning real PostgreSQL recovery tests and
-the full signed gate cover both cases; no timing relaxation or compatibility
-branch was added.
+The clean effectful `TestOfflinePhase1Lifecycle` passed in 2250.65 seconds.
+Its named checks covered the browser-created AccessKey allow/disable/deny
+sequence through signed APISIX, restricted runtime identities, verified email,
+TOTP and fresh MFA login, Account primary/member revocation, Access Analyzer,
+all four managed-product protocol lifecycles, two application generations,
+tenant and installation Audit chains, a protected backup, failed-candidate
+automatic rollback, B upgrade preservation, explicit A rollback,
+selected-backup recovery, old-Session rejection, AccessKey recovery fencing,
+application rollback and stop/capacity release, and bounded support
+zero-leakage. The browser acknowledged the one-time Secret without copying it
+to screenshots, Git, markers or ordinary logs; the exact page semantics remain
+owned by FEAT-IAM-010.
 
-After the cold gate passed, only the task-owned outer engine container was
-stopped and started. Its exact ID
-`f97abe2dcb75511b33407d945cb9d9ae3b4fa8a4da1525e4fc4ee9519e32a850`,
-volume, bind mount, no-route mode and resource limits remained unchanged;
-OOM was false and the restart count remained zero. The first read-only runner
-attempt failed before compiling the gate because it omitted the already
-prepared offline Go cache variables and therefore tried the unavailable public
-proxy. It made no product request or state change and its nonzero record is
-retained. The corrected invocation set the original cache paths and
-`GOPROXY=off`; it passed in 435.593 seconds. All eleven platform containers
-became healthy without restaging private mail input, and the gate proved two
-read-only status/verify cycles, retained AccessKey retirement, fresh MFA login,
-primary recovery and revocation, absent stopped workload, zero capacity claims
-and a sanitized support bundle, ending in `complete-offline-lifecycle`. No
-remote host or shared Docker service was restarted.
+After the effectful gate, the operator-private mail configuration was removed.
+Only the task-owned outer engine
+`750793a9e4ed42d40997c85ae49c8f7060dc84518c1fc5c017fe20df275b829f`
+was stopped and started; its identity remained unchanged, OOM was false and
+restart count remained zero. All eleven product containers recovered healthy.
+The first post-restart run failed at `repeated-verify` after 209.02 seconds.
+The failure was retained and diagnosed rather than retried blindly: the
+acceptance isolation command had removed the DIND private-bridge connected
+routes together with the external default route, so the containers remained
+healthy while `127.0.0.1:8080` reset connections and verification failed closed
+as `DEPENDENCY_UNAVAILABLE`. No release pointer changed.
 
-Fixed source `95a343ae2f4efb4c9845c9af25d0225e722f870c` independently passed
-[Verification 40085311144](https://github.com/xiak/matrix/actions/runs/40085311144),
-attempt 1: the exact head SHA, overall run and all nineteen jobs are
-`completed/success`. This accepts the fixed source and signed consumer; it does
-not inherit an unexecuted browser journey, production fairness SLO or database
-HA claim.
+The acceptance environment restored only the exact private connected routes;
+the external default route remained absent. An in-flight verify immediately
+completed `SUCCEEDED`, and the complete post-restart gate then passed in 99.26
+seconds. It proved retained AccessKey retirement, fresh MFA login, tenant
+primary/recovery/revocation state, two status and two active no-secret
+application-probe verify cycles, and `complete-offline-lifecycle`. The
+connected-route repair changes no product binary or supported `verify`
+semantics: FEAT-005 requires one active no-secret application probe per verify,
+while `status` alone is read-only.
 
-On 2026-10-25, test-owner-only source
-`024ff4d0c5ea56aa65f103392f901deb783bb619` reran the same authenticated A/B
-archives while adding the installed-browser AccessKey observation owned by
-FEAT-IAM-010. The Linux/amd64 test executable was built from that source with
-SHA-256 `a11e8d68a7a3ecc472e0291510d0c759cedc4e51e6d3fee5cde18d431b1662d3`;
-the signed runtime bytes, profile and trust document were unchanged. A fresh
-task-owned Docker 27.5.1 engine again had no external route, a private cgroup
-namespace, limits of 2 CPU/4 GiB/PIDs1024, and zero inner containers, images
-and volumes. Its host prerequisite `vm.max_map_count=1048576` matched the
-Verification worker contract; an earlier attempt at the host default 262144
-failed at Elasticsearch provider readiness before a product request and was
-discarded with its entire installation namespace rather than hidden by retry
-or a weakened readiness check.
+The private mail input remained absent after restart. The task engine, its
+artifact and Docker-data volumes, and its three labeled networks were removed;
+`vm.max_map_count` was restored from the gate prerequisite to 262144. The
+separate 4317 MOCK runtime remained available and returned HTTP 200. No shared
+engine, unrelated Docker object or remote service was restarted or deleted.
 
-The clean effectful gate then passed in 993.40 seconds: fresh A installation,
-status/verify, APISIX IAM, the browser slice, SMTP/TOTP, Access Analyzer, four
-real managed-product protocol lifecycles, two application generations, Audit,
-protected backup, injected upgrade rollback, B preservation, explicit A
-rollback, selected recovery, AccessKey recovery fence, application rollback,
-capacity release and bounded support evidence all reached their named PASS
-points. The private mail configuration was removed, only that outer engine was
-stopped and started, and the read-only gate passed in 95.96 seconds with
-retained AccessKey retirement, fresh MFA login, tenant primary/revocation
-state, status/verify and `complete-offline-lifecycle`. The exact task engine,
-its inner installation and three task volumes were then removed; the separate
-4317 MOCK runtime was not touched. Browser interaction and its 401/403/409
-meaning are recorded only in FEAT-IAM-010. This supplemental run strengthens
-the current signed consumer evidence but still admits no new release bytes,
-cross-profile transition, arbitrary N-1, production HA or latency SLO.
-
-The authenticated Linux trees were archived in a separate `network=none`,
-read-only-root packaging container limited to 1 CPU/1 GiB/PIDs128. Each archive
-was independently extracted and compared with its source for bytes, object
-type, uid/gid and mode; no links or special objects are present and `bin/mx`
-remains `0700 root:root`. The packager exited0 without OOM and its temporary
-extraction trees and container were removed. These distribution identities do
-not replace the release signatures:
-
-| Archive | Bytes | SHA-256 |
-| --- | --- | --- |
-| `matrix-v0.1.0-iam.r37.35-95a343ae2f4e-linux-amd64.tar.gz` | 1561914479 | `c95462ae3be7f45bb3be544454dcce5aa53b296e9824e13cd90a357e718049ce` |
-| `matrix-v0.1.0-iam.r37.36-95a343ae2f4e-linux-amd64.tar.gz` | 1561915196 | `0783019d3fc254984a2f35b86f08713e35c8f077a45530b5189a3440c9d56586` |
-
-The two archives and public trust document were copied to the Windows delivery
-directory and independently rehashed there; all byte lengths and SHA-256 values
-match the Linux originals. A is the tested fresh-installation base and B is its
-tested same-profile upgrade/rollback counterpart. Neither package admits a
-cross-profile transition, arbitrary historical N-1 operation, installed UI
-journey or production availability claim.
+Fixed source `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441` independently passed
+[Verification 40143754826](https://github.com/xiak/matrix/actions/runs/40143754826):
+the official API reports the exact head SHA, overall run and all nineteen jobs
+as `completed/success`. This accepts the fixed source and signed consumer. It
+does not admit a cross-profile transition, arbitrary historical N-1 operation,
+unexecuted browser journey, production fairness SLO or database HA claim.
 
 ### IAM86 Account-lifecycle release-consumer evidence
 
