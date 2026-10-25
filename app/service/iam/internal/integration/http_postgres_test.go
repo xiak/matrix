@@ -62,6 +62,7 @@ const (
 	changedAdminPassword     = "Changed-Admin-Password-73!"
 	initialDeveloperPassword = "Initial-Developer-Password-84!"
 	changedDeveloperPassword = "Changed-Developer-Password-95!"
+	platformCredential       = "mx1.PlatformHTTPIntegrationCredential000000001"
 	paasCredential           = "mx1.PaaSHTTPIntegrationCredential000000000000001"
 	auditCredential          = "mx1.AuditHTTPIntegrationCredential00000000000001"
 	verifierCredential       = "mx1.VerifierHTTPIntegrationCredential0000000001"
@@ -37023,6 +37024,7 @@ func iamHTTPBootstrap(t *testing.T) iamv1.BootstrapDocument {
 		},
 		Services: []iamv1.BootstrapServiceCredential{
 			service(iamv1.ServiceIAM, "service-iam", iamProducerCredential),
+			service(iamv1.ServicePlatform, "service-platform", platformCredential),
 			service(iamv1.ServicePaaS, "service-paas", paasCredential),
 			service(iamv1.ServiceAudit, "service-audit", auditCredential),
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", verifierCredential),
