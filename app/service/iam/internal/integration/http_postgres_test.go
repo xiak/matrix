@@ -21590,7 +21590,7 @@ func provePolicyDirectories(t *testing.T, ctx context.Context, handler http.Hand
 		if requestID == "caller-cannot-select-request" || iamv1.ValidateID("requestId", requestID) != nil {
 			t.Fatal("directory audit correlation was selected by the caller")
 		}
-		if response.Header().Get("Cache-Control") != "no-store" || int64(response.Body.Len()) > iamv1.MaxRequestBytes {
+		if response.Header().Get("Cache-Control") != "no-store" || int64(response.Body.Len()) > iamv1.MaxAuthorizationProfileListBytes {
 			t.Fatal("product discovery became a cacheable or unbounded authority response")
 		}
 		result, err := iamv1.DecodeAuthorizationProfileList(response.Body)
