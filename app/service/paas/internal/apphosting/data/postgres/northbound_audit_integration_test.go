@@ -16,11 +16,15 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	apphttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 	"github.com/xiak/matrix/app/service/paas/internal/audit"
 	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
@@ -461,6 +465,10 @@ func newIntegrationHTTPHandler(
 	handler, err := apphttp.NewHandler(
 		integrationHTTPAuthorizer{tenantID: tenantID},
 		workflow,
+		integrationExecutionWorkflow{},
+		integrationEnrollmentWorkflow{},
+		integrationTerminalWorkflow{},
+		integrationTerminalConnector{},
 		integrationInstallationVerifier{},
 		apphttp.Config{
 			InstallationID: "installation-integration", CursorKey: []byte("0123456789abcdef0123456789abcdef"),
@@ -484,6 +492,87 @@ func newIntegrationHTTPHandler(
 }
 
 type integrationInstallationVerifier struct{}
+
+type integrationExecutionWorkflow struct{}
+
+func (integrationExecutionWorkflow) CreatePool(context.Context, executionadmission.CreatePoolCommand) (paasv1.ExecutionPool, paasv1.Operation, bool, error) {
+	return paasv1.ExecutionPool{}, paasv1.Operation{}, false, errors.New("unexpected CreatePool")
+}
+func (integrationExecutionWorkflow) RegisterTarget(context.Context, executionadmission.RegisterTargetCommand) (paasv1.ExecutionTarget, paasv1.Operation, bool, error) {
+	return paasv1.ExecutionTarget{}, paasv1.Operation{}, false, errors.New("unexpected RegisterTarget")
+}
+func (integrationExecutionWorkflow) TransitionTarget(context.Context, executionadmission.TransitionTargetCommand) (executionadmission.TransitionTargetResult, error) {
+	return executionadmission.TransitionTargetResult{}, errors.New("unexpected TransitionTarget")
+}
+func (integrationExecutionWorkflow) GetPool(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionPool, error) {
+	return paasv1.ExecutionPool{}, errors.New("unexpected GetPool")
+}
+func (integrationExecutionWorkflow) ListPools(context.Context, port.Authorization) (paasv1.ExecutionPoolList, error) {
+	return paasv1.ExecutionPoolList{}, errors.New("unexpected ListPools")
+}
+func (integrationExecutionWorkflow) GetTarget(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionTarget, error) {
+	return paasv1.ExecutionTarget{}, errors.New("unexpected GetTarget")
+}
+func (integrationExecutionWorkflow) ListTargets(context.Context, port.Authorization) (paasv1.ExecutionTargetList, error) {
+	return paasv1.ExecutionTargetList{}, errors.New("unexpected ListTargets")
+}
+func (integrationExecutionWorkflow) GetOperation(context.Context, port.Authorization, paasv1.OperationID) (paasv1.Operation, error) {
+	return paasv1.Operation{}, errors.New("unexpected platform GetOperation")
+}
+
+type integrationEnrollmentWorkflow struct{}
+
+func (integrationEnrollmentWorkflow) Create(context.Context, nodeenrollment.CreateCommand) (nodeenrollment.CreateResult, error) {
+	return nodeenrollment.CreateResult{}, errors.New("unexpected enrollment Create")
+}
+func (integrationEnrollmentWorkflow) Exchange(context.Context, nodeenrollment.ExchangeCommand) (nodeenrollment.ExchangeResult, error) {
+	return nodeenrollment.ExchangeResult{}, errors.New("unexpected enrollment Exchange")
+}
+func (integrationEnrollmentWorkflow) Complete(context.Context, nodeenrollment.CompleteCommand) (nodeenrollment.CompleteResult, error) {
+	return nodeenrollment.CompleteResult{}, errors.New("unexpected enrollment Complete")
+}
+func (integrationEnrollmentWorkflow) CreateRecoveryChallenge(context.Context, nodeenrollment.RecoveryChallengeCommand) (nodeenrollment.RecoveryChallengeResult, error) {
+	return nodeenrollment.RecoveryChallengeResult{}, errors.New("unexpected enrollment CreateRecoveryChallenge")
+}
+func (integrationEnrollmentWorkflow) RecoverExchange(context.Context, nodeenrollment.RecoverExchangeCommand) (nodeenrollment.ExchangeResult, error) {
+	return nodeenrollment.ExchangeResult{}, errors.New("unexpected enrollment RecoverExchange")
+}
+func (integrationEnrollmentWorkflow) Get(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.NodeEnrollment, error) {
+	return paasv1.NodeEnrollment{}, errors.New("unexpected enrollment Get")
+}
+func (integrationEnrollmentWorkflow) List(context.Context, port.Authorization) (paasv1.NodeEnrollmentList, error) {
+	return paasv1.NodeEnrollmentList{}, errors.New("unexpected enrollment List")
+}
+func (integrationEnrollmentWorkflow) Revoke(context.Context, nodeenrollment.RevokeCommand) (nodeenrollment.RevokeResult, error) {
+	return nodeenrollment.RevokeResult{}, errors.New("unexpected enrollment Revoke")
+}
+func (integrationEnrollmentWorkflow) Regenerate(context.Context, nodeenrollment.RegenerateCommand) (nodeenrollment.CreateResult, error) {
+	return nodeenrollment.CreateResult{}, errors.New("unexpected enrollment Regenerate")
+}
+
+type integrationTerminalWorkflow struct{}
+
+func (integrationTerminalWorkflow) Create(context.Context, terminalsession.CreateCommand) (terminalsession.CreateResult, error) {
+	return terminalsession.CreateResult{}, errors.New("unexpected terminal Create")
+}
+func (integrationTerminalWorkflow) Consume(context.Context, paasv1.ResourceID, string) (terminalsession.StoredSession, error) {
+	return terminalsession.StoredSession{}, errors.New("unexpected terminal Consume")
+}
+func (integrationTerminalWorkflow) Activate(context.Context, terminalsession.StoredSession) (terminalsession.StoredSession, error) {
+	return terminalsession.StoredSession{}, errors.New("unexpected terminal Activate")
+}
+func (integrationTerminalWorkflow) End(context.Context, paasv1.TenantID, paasv1.ResourceID, paasv1.TerminalSessionOutcome) (terminalsession.StoredSession, bool, error) {
+	return terminalsession.StoredSession{}, false, errors.New("unexpected terminal End")
+}
+func (integrationTerminalWorkflow) Close(context.Context, terminalsession.CloseCommand) (terminalsession.StoredSession, bool, error) {
+	return terminalsession.StoredSession{}, false, errors.New("unexpected terminal Close")
+}
+
+type integrationTerminalConnector struct{}
+
+func (integrationTerminalConnector) OpenTerminal(context.Context, string, nodev1.TerminalOpenRequest) (port.TerminalConnection, error) {
+	return nil, port.ErrTerminalUnavailable
+}
 
 func (integrationInstallationVerifier) VerifyInstallation(
 	context.Context,

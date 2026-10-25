@@ -9,32 +9,44 @@ import (
 
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 )
 
 // Effects is the concrete Phase 1 Linux local-machine provider behind mx.
 // It owns no lifecycle policy; every method delegates one journaled phase to
 // its existing idempotent effect boundary.
 type Effects struct {
-	runtime          dockerRuntime
-	entropy          io.Reader
-	verifier         installationVerifier
-	readinessWait    platformReadinessWait
-	readinessTimeout time.Duration
-	readinessPoll    time.Duration
-	projectInspector RecoveryProjectInspector
-	runnerSystem     runnerNodeSystem
+	runtime            dockerRuntime
+	entropy            io.Reader
+	verifier           installationVerifier
+	readinessWait      platformReadinessWait
+	readinessTimeout   time.Duration
+	readinessPoll      time.Duration
+	projectInspector   RecoveryProjectInspector
+	managedInventory   func(string) (string, error)
+	runnerSystem       runnerNodeSystem
+	validateController func(nodeconfig.ControllerConfiguration) error
 }
 
-func NewEffects(projectInspector RecoveryProjectInspector) *Effects {
-	return &Effects{
+func NewEffects(
+	projectInspector RecoveryProjectInspector,
+	managedInventory func(string) (string, error),
+	controllerValidators ...func(nodeconfig.ControllerConfiguration) error,
+) *Effects {
+	effects := &Effects{
 		runtime: localDockerRuntime{}, entropy: rand.Reader,
 		verifier:         newHTTPInstallationVerifier(nil),
 		readinessWait:    waitForPlatformReadiness,
 		readinessTimeout: platformVerificationReadinessTimeout,
 		readinessPoll:    platformVerificationReadinessPollInterval,
 		projectInspector: projectInspector,
+		managedInventory: managedInventory,
 		runnerSystem:     newRunnerNodeSystem(),
 	}
+	if len(controllerValidators) == 1 {
+		effects.validateController = controllerValidators[0]
+	}
+	return effects
 }
 
 func (effects *Effects) ApplyInstallPhase(
@@ -187,7 +199,7 @@ func (effects *Effects) ApplyRecoveryPhase(
 	phase lifecycle.Phase,
 ) error {
 	if effects == nil || effects.runtime == nil || effects.verifier == nil ||
-		effects.projectInspector == nil || ctx == nil {
+		effects.projectInspector == nil || effects.managedInventory == nil || ctx == nil {
 		return errors.Join(
 			platformcommand.ErrEffectUnavailable,
 			errors.New("local-machine recovery effects are unavailable"),
@@ -206,7 +218,7 @@ func (effects *Effects) ApplyRecoveryPhase(
 			)
 		}
 		return recoverBackup(
-			ctx, effects, effects.runtime, streaming, effects.projectInspector, plan,
+			ctx, effects, effects.runtime, streaming, effects.projectInspector, effects.managedInventory, plan,
 		)
 	case lifecycle.PhaseStarting:
 		current, target, _, err := authenticateRecoveryPlan(plan)

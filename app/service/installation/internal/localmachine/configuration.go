@@ -134,6 +134,8 @@ func replaceReleaseConfiguration(
 	}
 	beforeRoutes := installedAPISIXStandaloneConfig(before, plan.NorthboundOrigin)
 	afterRoutes := installedAPISIXStandaloneConfig(after, plan.NorthboundOrigin)
+	beforeMainConfig := installedAPISIXMainConfig(before)
+	afterMainConfig := installedAPISIXMainConfig(after)
 	for _, replacement := range []struct {
 		path          string
 		before, after []byte
@@ -141,6 +143,7 @@ func replaceReleaseConfiguration(
 		{layout.Compose, beforeTopology.ComposeJSON, afterTopology.ComposeJSON},
 		{layout.ArtifactCatalog, beforeCatalog, afterCatalog},
 		{layout.APISIXRoutes, beforeRoutes, afterRoutes},
+		{layout.APISIXConfig, beforeMainConfig, afterMainConfig},
 	} {
 		if err := replaceManagedExpected(
 			plan.Root, filepath.FromSlash(replacement.path),
@@ -156,8 +159,6 @@ func replaceReleaseConfiguration(
 		path    string
 		content []byte
 	}{
-		{layout.APISIXRoutes, apisixStandaloneConfig(plan.NorthboundOrigin)},
-		{layout.APISIXConfig, apisixMainConfig()},
 		{layout.APISIXUID, []byte(afterTopology.ProjectName)},
 	} {
 		if err := writeManagedOnce(
@@ -184,6 +185,13 @@ func installedAPISIXStandaloneConfig(
 	return apisixStandaloneConfig(northboundOrigin)
 }
 
+func installedAPISIXMainConfig(manifest release.Manifest) []byte {
+	if release.IsLegacyProductlessManifest(manifest) {
+		return legacyProductlessAPISIXMainConfig()
+	}
+	return apisixMainConfig()
+}
+
 func publishInstallationConfiguration(
 	plan platformcommand.InstallPlan,
 	manifest release.Manifest,
@@ -206,12 +214,13 @@ func publishInstallationConfiguration(
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 	if err := writeManagedOnce(
-		root, filepath.FromSlash(layout.APISIXRoutes), apisixStandaloneConfig(plan.NorthboundOrigin),
+		root, filepath.FromSlash(layout.APISIXRoutes),
+		installedAPISIXStandaloneConfig(manifest, plan.NorthboundOrigin),
 	); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 	if err := writeManagedOnce(
-		root, filepath.FromSlash(layout.APISIXConfig), apisixMainConfig(),
+		root, filepath.FromSlash(layout.APISIXConfig), installedAPISIXMainConfig(manifest),
 	); err != nil {
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
@@ -256,7 +265,15 @@ func artifactCatalogConfig(manifest release.Manifest) ([]byte, error) {
 }
 
 func apisixMainConfig() []byte {
-	return []byte(`deployment:
+	return []byte(fmt.Sprintf(`apisix:
+  node_listen:
+    - ip: 0.0.0.0
+      port: 9080
+    - ip: 127.0.0.1
+      port: %d
+  ssl:
+    enable: false
+deployment:
   role: data_plane
   role_data_plane:
     config_provider: yaml
@@ -276,7 +293,43 @@ nginx_config:
     fastcgi_temp_path /tmp/fastcgi_temp;
     uwsgi_temp_path /tmp/uwsgi_temp;
     scgi_temp_path /tmp/scgi_temp;
-`)
+    server {
+      listen 0.0.0.0:%d ssl;
+      server_name _;
+      ssl_certificate %s;
+      ssl_certificate_key %s;
+      ssl_protocols TLSv1.3;
+      ssl_session_cache off;
+      ssl_session_tickets off;
+      location ~ "^(?:/ready|/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/(?:exchange|recovery-challenge|recover|complete))$" {
+        client_max_body_size 64k;
+        client_body_timeout 10s;
+        proxy_http_version 1.1;
+        proxy_connect_timeout 3s;
+        proxy_send_timeout 10s;
+        proxy_read_timeout 10s;
+        proxy_set_header Host $host;
+        proxy_set_header Authorization "";
+        proxy_set_header Cookie "";
+        proxy_set_header Idempotency-Key "";
+        proxy_set_header If-Match "";
+        proxy_set_header Matrix-Subject-Credential "";
+        proxy_set_header X-Matrix-Public-Origin "";
+        proxy_set_header X-Matrix-Observed-Peer "";
+        proxy_set_header X-Matrix-Transport-Scheme "";
+        proxy_set_header X-Matrix-TLS-Peer $remote_addr;
+        proxy_pass http://127.0.0.1:%d;
+      }
+      location / {
+        return 404;
+      }
+    }
+`, topology.NodeEnrollmentIngressLoopbackPort,
+		topology.NodeEnrollmentIngressTargetPort,
+		topology.NodeEnrollmentIngressCertificateTarget,
+		topology.NodeEnrollmentIngressPrivateKeyTarget,
+		topology.NodeEnrollmentIngressLoopbackPort,
+	))
 }
 
 func apisixStandaloneConfig(northboundOrigin string) []byte {
@@ -313,6 +366,9 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
             - X-Matrix-External-Origin
             - X-Matrix-External-Request-Target
             - X-Matrix-External-Source-IP
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer
     upstream:
       type: roundrobin
       nodes:
@@ -331,6 +387,9 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer
             - X-Matrix-External-Origin
             - X-Matrix-External-Request-Target
             - X-Matrix-External-Source-IP
@@ -401,6 +460,87 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
       nodes:
         "platform-api:8080": 1
   -
+    id: matrix-paas-node-enrollment-bootstrap
+    uris:
+      - /api/paas/v1/node-enrollments/*/exchange
+      - /api/paas/v1/node-enrollments/*/recovery-challenge
+      - /api/paas/v1/node-enrollments/*/recover
+      - /api/paas/v1/node-enrollments/*/complete
+    methods:
+      - POST
+    priority: 300
+    timeout:
+      connect: 3
+      send: 10
+      read: 10
+    vars:
+      -
+        - uri
+        - "~~"
+        - "^/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/(?:exchange|recovery-challenge|recover|complete)$"
+      -
+        - server_port
+        - "=="
+        - "%d"
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/paas/(.*)"
+          - "/$1"
+        headers:
+          set:
+            X-Matrix-Observed-Peer: "$http_x_matrix_tls_peer"
+            X-Matrix-Transport-Scheme: "https"
+          remove:
+            - Authorization
+            - Cookie
+            - Forwarded
+            - Idempotency-Key
+            - If-Match
+            - Matrix-Subject-Credential
+            - X-Matrix-Edge-Assertion
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target
+            - X-Matrix-External-Source-IP
+            - X-Forwarded-For
+            - X-Matrix-Public-Origin
+            - X-Matrix-TLS-Peer
+            - X-Real-IP
+    upstream:
+      type: roundrobin
+      nodes:
+        "paas-api:8080": 1
+  -
+    id: matrix-paas-terminal
+    uri: /api/paas/v1/terminal-sessions/*
+    methods:
+      - GET
+    priority: 200
+    vars:
+      -
+        - uri
+        - "~~"
+        - "^/api/paas/v1/terminal-sessions/terminal-session-[0-9a-f]{32}/connect$"
+    enable_websocket: true
+    timeout:
+      connect: 5
+      send: 10
+      read: 130
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/paas/(.*)"
+          - "/$1"
+        headers:
+          remove:
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer
+    upstream:
+      type: roundrobin
+      nodes:
+        "paas-api:8080": 1
+  -
     id: matrix-paas-installation-verification
     uri: /api/paas/v1/installation:verify
     priority: 100
@@ -417,6 +557,9 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
             - X-Matrix-External-Origin
             - X-Matrix-External-Request-Target
             - X-Matrix-External-Source-IP
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer
     upstream:
       type: roundrobin
       nodes:
@@ -436,6 +579,9 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
             - Forwarded
             - X-Forwarded-For
             - X-Real-IP
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer
           # proxy-rewrite applies removals after mutations. Setting these
           # edge-owned facts already overwrites caller input; listing the
           # same names under remove would erase the trusted replacements.
@@ -505,5 +651,5 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
       nodes:
         "matrix-ui:8080": 1
 #END
-`, northboundOrigin, northboundOrigin))
+`, northboundOrigin, topology.NodeEnrollmentIngressLoopbackPort, northboundOrigin))
 }

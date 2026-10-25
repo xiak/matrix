@@ -62,6 +62,243 @@ type ExecutionPool struct {
 	Status     ExecutionPoolStatus `json:"status"`
 }
 
+type CreateExecutionPoolRequest struct {
+	ID     ResourceID        `json:"id"`
+	Name   string            `json:"name"`
+	Labels map[string]string `json:"labels,omitempty"`
+	Spec   ExecutionPoolSpec `json:"spec"`
+}
+
+// ExecutionPoolList is the bounded installation-scoped set available to the
+// host-enrollment form. It contains no provider or credential material.
+type ExecutionPoolList struct {
+	APIVersion string          `json:"apiVersion"`
+	Kind       string          `json:"kind"`
+	Items      []ExecutionPool `json:"items"`
+}
+
+type NodeEnrollmentDiagnostic struct {
+	Code       NodeEnrollmentDiagnosticCode `json:"code"`
+	Retryable  bool                         `json:"retryable"`
+	OccurredAt time.Time                    `json:"occurredAt"`
+}
+
+// NodeEnrollment owns only the short-lived admission ceremony. A READY value
+// points at the existing ExecutionTarget, which owns all subsequent host state.
+type NodeEnrollment struct {
+	APIVersion           string                    `json:"apiVersion"`
+	Kind                 string                    `json:"kind"`
+	Metadata             ResourceMetadata          `json:"metadata"`
+	ExecutionTargetID    ResourceID                `json:"executionTargetId"`
+	ExecutionPoolID      ResourceID                `json:"executionPoolId"`
+	OperationID          OperationID               `json:"operationId"`
+	State                NodeEnrollmentState       `json:"state"`
+	ExpiresAt            time.Time                 `json:"expiresAt"`
+	CredentialConsumedAt *time.Time                `json:"credentialConsumedAt,omitempty"`
+	ReadyAt              *time.Time                `json:"readyAt,omitempty"`
+	ReplacedByID         ResourceID                `json:"replacedById,omitempty"`
+	Diagnostic           *NodeEnrollmentDiagnostic `json:"diagnostic,omitempty"`
+}
+
+type NodeEnrollmentList struct {
+	APIVersion string           `json:"apiVersion"`
+	Kind       string           `json:"kind"`
+	Items      []NodeEnrollment `json:"items"`
+}
+
+// CreateNodeEnrollmentRequest contains only operator intent and an ephemeral
+// browser wrapping key. It never accepts a target address, host path, shell,
+// provider option, certificate, private key, or raw join credential.
+type CreateNodeEnrollmentRequest struct {
+	Name              string            `json:"name"`
+	Labels            map[string]string `json:"labels,omitempty"`
+	ExecutionPoolID   ResourceID        `json:"executionPoolId"`
+	WrappingPublicKey string            `json:"wrappingPublicKey"`
+}
+
+type RegenerateNodeEnrollmentRequest struct {
+	WrappingPublicKey string `json:"wrappingPublicKey"`
+}
+
+// NodeEnrollmentJoin is public integrity-bound metadata used to assemble the
+// offline join file. Its URL never contains the one-time credential.
+type NodeEnrollmentJoin struct {
+	APIVersion         string                     `json:"apiVersion"`
+	Kind               string                     `json:"kind"`
+	EnrollmentID       ResourceID                 `json:"enrollmentId"`
+	InstallationID     string                     `json:"installationId"`
+	ExecutionTargetID  ResourceID                 `json:"executionTargetId"`
+	ControlPlaneURL    string                     `json:"controlPlaneUrl"`
+	CredentialDigest   string                     `json:"credentialDigest"`
+	ExpiresAt          time.Time                  `json:"expiresAt"`
+	IssuerCertificate  string                     `json:"issuerCertificate"`
+	SignatureAlgorithm NodeJoinSignatureAlgorithm `json:"signatureAlgorithm"`
+	Signature          string                     `json:"signature"`
+}
+
+// WrappedJoinCredential is the only creation-time representation of the join
+// credential in an HTTP response. Ciphertext is RSA-3072 OAEP-SHA256 output
+// using NodeEnrollmentCredentialWrappingLabel; the raw credential is never
+// returned or persisted by this contract.
+type WrappedJoinCredential struct {
+	Algorithm  JoinCredentialWrappingAlgorithm `json:"algorithm"`
+	Ciphertext string                          `json:"ciphertext"`
+}
+
+type CreateNodeEnrollmentResponse struct {
+	Enrollment        NodeEnrollment        `json:"enrollment"`
+	Join              NodeEnrollmentJoin    `json:"join"`
+	WrappedCredential WrappedJoinCredential `json:"wrappedCredential"`
+}
+
+// NodeEnrollmentListenerClaim is the provider-neutral network surface that
+// the locally installed node intends to bind. The control plane supplies the
+// addresses from trusted installation policy and the observed TLS peer; a
+// caller can select neither a host name nor an arbitrary endpoint.
+type NodeEnrollmentListenerClaim struct {
+	ManagementPort uint16 `json:"managementPort"`
+	CollectorPort  uint16 `json:"collectorPort"`
+}
+
+// ExchangeNodeEnrollmentRequest is the one bounded bootstrap message that may
+// carry the raw one-time credential. Both private keys remain on the target;
+// only signed PKCS#10 public-key requests cross the node boundary.
+type ExchangeNodeEnrollmentRequest struct {
+	APIVersion                  string                      `json:"apiVersion"`
+	Kind                        string                      `json:"kind"`
+	EnrollmentID                ResourceID                  `json:"enrollmentId"`
+	InstallationID              string                      `json:"installationId"`
+	ExecutionTargetID           ResourceID                  `json:"executionTargetId"`
+	ExchangeID                  string                      `json:"exchangeId"`
+	Credential                  string                      `json:"credential"`
+	MachineFingerprint          string                      `json:"machineFingerprint"`
+	RuntimeContractDigest       string                      `json:"runtimeContractDigest"`
+	Listener                    NodeEnrollmentListenerClaim `json:"listener"`
+	NodeCertificateRequest      string                      `json:"nodeCertificateRequest"`
+	CollectorCertificateRequest string                      `json:"collectorCertificateRequest"`
+}
+
+func (ExchangeNodeEnrollmentRequest) String() string {
+	return "node enrollment exchange request <redacted>"
+}
+
+func (ExchangeNodeEnrollmentRequest) GoString() string {
+	return "node enrollment exchange request <redacted>"
+}
+
+// NodeEnrollmentExchangeResponse is public certificate material returned only
+// by the bootstrap exchange route. It contains no join credential or private
+// key and is sealed before persistence for exact lost-response recovery.
+type NodeEnrollmentExchangeResponse struct {
+	APIVersion            string     `json:"apiVersion"`
+	Kind                  string     `json:"kind"`
+	EnrollmentID          ResourceID `json:"enrollmentId"`
+	InstallationID        string     `json:"installationId"`
+	ExecutionTargetID     ResourceID `json:"executionTargetId"`
+	ExchangeID            string     `json:"exchangeId"`
+	MachineFingerprint    string     `json:"machineFingerprint"`
+	RuntimeContractDigest string     `json:"runtimeContractDigest"`
+	ControllerID          string     `json:"controllerId"`
+	BindingRef            string     `json:"bindingRef"`
+	NodeListenAddress     string     `json:"nodeListenAddress"`
+	CollectorEndpoint     string     `json:"collectorEndpoint"`
+	NodeCertificate       string     `json:"nodeCertificate"`
+	CollectorCertificate  string     `json:"collectorCertificate"`
+	IssuerCertificate     string     `json:"issuerCertificate"`
+	CertificateNotBefore  time.Time  `json:"certificateNotBefore"`
+	CertificateNotAfter   time.Time  `json:"certificateNotAfter"`
+}
+
+// CreateNodeEnrollmentRecoveryChallengeRequest identifies the exact local
+// exchange intent whose success response was lost. It contains neither the
+// consumed join credential nor either target-host private key.
+type CreateNodeEnrollmentRecoveryChallengeRequest struct {
+	APIVersion                    string     `json:"apiVersion"`
+	Kind                          string     `json:"kind"`
+	EnrollmentID                  ResourceID `json:"enrollmentId"`
+	InstallationID                string     `json:"installationId"`
+	ExecutionTargetID             ResourceID `json:"executionTargetId"`
+	ExchangeID                    string     `json:"exchangeId"`
+	MachineFingerprint            string     `json:"machineFingerprint"`
+	RuntimeContractDigest         string     `json:"runtimeContractDigest"`
+	NodePublicKeyFingerprint      string     `json:"nodePublicKeyFingerprint"`
+	CollectorPublicKeyFingerprint string     `json:"collectorPublicKeyFingerprint"`
+}
+
+// NodeEnrollmentRecoveryChallenge is a short-lived, installation-authenticated
+// public challenge. It is safe to replay within its bounded lifetime because
+// recovery is read-only and can return only the already sealed exchange result.
+type NodeEnrollmentRecoveryChallenge struct {
+	APIVersion                    string     `json:"apiVersion"`
+	Kind                          string     `json:"kind"`
+	EnrollmentID                  ResourceID `json:"enrollmentId"`
+	InstallationID                string     `json:"installationId"`
+	ExecutionTargetID             ResourceID `json:"executionTargetId"`
+	ExchangeID                    string     `json:"exchangeId"`
+	MachineFingerprint            string     `json:"machineFingerprint"`
+	RuntimeContractDigest         string     `json:"runtimeContractDigest"`
+	NodePublicKeyFingerprint      string     `json:"nodePublicKeyFingerprint"`
+	CollectorPublicKeyFingerprint string     `json:"collectorPublicKeyFingerprint"`
+	Challenge                     string     `json:"challenge"`
+	IssuedAt                      time.Time  `json:"issuedAt"`
+	ExpiresAt                     time.Time  `json:"expiresAt"`
+	Authenticator                 string     `json:"authenticator"`
+}
+
+// RecoverNodeEnrollmentExchangeRequest proves simultaneous possession of the
+// two distinct private keys fixed by the consumed exchange. The signatures
+// cover the complete authenticated challenge and never disclose either key.
+type RecoverNodeEnrollmentExchangeRequest struct {
+	APIVersion         string                          `json:"apiVersion"`
+	Kind               string                          `json:"kind"`
+	Challenge          NodeEnrollmentRecoveryChallenge `json:"challenge"`
+	NodeSignature      string                          `json:"nodeSignature"`
+	CollectorSignature string                          `json:"collectorSignature"`
+}
+
+func (RecoverNodeEnrollmentExchangeRequest) String() string {
+	return "node enrollment recovery proof <redacted>"
+}
+
+func (RecoverNodeEnrollmentExchangeRequest) GoString() string {
+	return "node enrollment recovery proof <redacted>"
+}
+
+// CompleteNodeEnrollmentRequest repeats only the exact public commitments
+// fixed by the consumed exchange. It cannot select a pool, labels, endpoint,
+// identity or provider; the control plane compares every field before probing
+// the already fixed node over mutually authenticated TLS.
+type CompleteNodeEnrollmentRequest struct {
+	APIVersion                    string     `json:"apiVersion"`
+	Kind                          string     `json:"kind"`
+	EnrollmentID                  ResourceID `json:"enrollmentId"`
+	InstallationID                string     `json:"installationId"`
+	ExecutionTargetID             ResourceID `json:"executionTargetId"`
+	ExchangeID                    string     `json:"exchangeId"`
+	MachineFingerprint            string     `json:"machineFingerprint"`
+	RuntimeContractDigest         string     `json:"runtimeContractDigest"`
+	ControllerID                  string     `json:"controllerId"`
+	BindingRef                    string     `json:"bindingRef"`
+	NodeListenAddress             string     `json:"nodeListenAddress"`
+	CollectorEndpoint             string     `json:"collectorEndpoint"`
+	NodePublicKeyFingerprint      string     `json:"nodePublicKeyFingerprint"`
+	CollectorPublicKeyFingerprint string     `json:"collectorPublicKeyFingerprint"`
+}
+
+func (CompleteNodeEnrollmentRequest) String() string {
+	return "node enrollment completion request <redacted>"
+}
+
+func (CompleteNodeEnrollmentRequest) GoString() string {
+	return "node enrollment completion request <redacted>"
+}
+
+type CompleteNodeEnrollmentResponse struct {
+	Enrollment      NodeEnrollment  `json:"enrollment"`
+	ExecutionTarget ExecutionTarget `json:"executionTarget"`
+	Operation       Operation       `json:"operation"`
+}
+
 type AdapterRef struct {
 	Kind            AdapterKind `json:"kind"`
 	Name            string      `json:"name"`
@@ -195,6 +432,25 @@ type ExecutionTarget struct {
 	Metadata   ResourceMetadata      `json:"metadata"`
 	Spec       ExecutionTargetSpec   `json:"spec"`
 	Status     ExecutionTargetStatus `json:"status"`
+}
+
+// ExecutionTargetList is the bounded installation-scoped platform inventory.
+// Its items are normalized target documents; connection bindings and provider
+// credentials never enter this contract.
+type ExecutionTargetList struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Items      []ExecutionTarget `json:"items"`
+}
+
+// RegisterExecutionTargetRequest selects one protected installation binding.
+// Endpoints, identity pins, certificates and host paths are never caller input.
+type RegisterExecutionTargetRequest struct {
+	ID              ResourceID        `json:"id"`
+	Name            string            `json:"name"`
+	Labels          map[string]string `json:"labels,omitempty"`
+	ExecutionPoolID ResourceID        `json:"executionPoolId"`
+	BindingRef      string            `json:"bindingRef"`
 }
 
 type PlacementPolicySpec struct {
@@ -398,6 +654,275 @@ type Deployment struct {
 	Status     DeploymentStatus `json:"status"`
 }
 
+// DeploymentList is one bounded tenant-scoped page ordered by stable resource
+// identity. When present, NextAfter is exactly the final returned identity;
+// callers cannot select a target, binding or host.
+type DeploymentList struct {
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Scope      ResourceScope `json:"scope"`
+	Items      []Deployment  `json:"items"`
+	NextAfter  ResourceID    `json:"nextAfter,omitempty"`
+}
+
+const (
+	MaximumDeploymentListItems        = 100
+	MaximumDeploymentRuntimeInstances = 64
+)
+
+// DeploymentRuntimeInstance is deliberately provider neutral. ID is derived
+// by the node from the exact tenant, Deployment generation, application
+// revision, execution target and provider instance; it is not a Docker ID and
+// cannot be used as a provider selector.
+type DeploymentRuntimeInstance struct {
+	ID            ResourceID               `json:"id"`
+	ComponentName string                   `json:"componentName"`
+	State         DeploymentInstanceState  `json:"state"`
+	Health        DeploymentInstanceHealth `json:"health"`
+	ExitCode      *uint32                  `json:"exitCode,omitempty"`
+}
+
+// DeploymentRuntimeObservation is one source-timestamped node proof. The
+// control plane persists it independently of Operations and never restamps it.
+type DeploymentRuntimeObservation struct {
+	DeploymentID          ResourceID                  `json:"deploymentId"`
+	Generation            uint64                      `json:"generation"`
+	ApplicationRevisionID ResourceID                  `json:"applicationRevisionId"`
+	ExecutionTargetID     ResourceID                  `json:"executionTargetId"`
+	Instances             []DeploymentRuntimeInstance `json:"instances"`
+	ObservedAt            time.Time                   `json:"observedAt"`
+}
+
+type DeploymentInstanceCPUUsage struct {
+	State MeasurementState                 `json:"state"`
+	Value *DeploymentInstanceCPUUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceCPUUsageValue struct {
+	WindowMillis   int64   `json:"windowMillis"`
+	UsedCores      float64 `json:"usedCores"`
+	LimitCPUMillis int64   `json:"limitCpuMillis"`
+}
+
+type DeploymentInstanceMemoryUsage struct {
+	State MeasurementState                    `json:"state"`
+	Value *DeploymentInstanceMemoryUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceMemoryUsageValue struct {
+	UsedBytes  int64 `json:"usedBytes"`
+	LimitBytes int64 `json:"limitBytes"`
+}
+
+type DeploymentInstanceNetworkUsage struct {
+	State MeasurementState                     `json:"state"`
+	Value *DeploymentInstanceNetworkUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceNetworkUsageValue struct {
+	ReceivedBytes    int64 `json:"receivedBytes"`
+	TransmittedBytes int64 `json:"transmittedBytes"`
+	ReceiveErrors    int64 `json:"receiveErrors"`
+	TransmitErrors   int64 `json:"transmitErrors"`
+	ReceiveDrops     int64 `json:"receiveDrops"`
+	TransmitDrops    int64 `json:"transmitDrops"`
+}
+
+type DeploymentInstanceBlockIOUsage struct {
+	State MeasurementState                     `json:"state"`
+	Value *DeploymentInstanceBlockIOUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceBlockIOUsageValue struct {
+	ReadBytes       int64 `json:"readBytes"`
+	WriteBytes      int64 `json:"writeBytes"`
+	ReadOperations  int64 `json:"readOperations"`
+	WriteOperations int64 `json:"writeOperations"`
+}
+
+type DeploymentInstanceVolumeUsage struct {
+	Count       uint32 `json:"count"`
+	Bytes       int64  `json:"bytes"`
+	SharedCount uint32 `json:"sharedCount"`
+	SharedBytes int64  `json:"sharedBytes"`
+}
+
+type DeploymentInstanceStorageUsage struct {
+	State MeasurementState                     `json:"state"`
+	Value *DeploymentInstanceStorageUsageValue `json:"value,omitempty"`
+}
+
+type DeploymentInstanceStorageUsageValue struct {
+	ObservedAt         time.Time                      `json:"observedAt"`
+	ValidUntil         time.Time                      `json:"validUntil"`
+	WritableLayerBytes int64                          `json:"writableLayerBytes"`
+	ImageTotalBytes    int64                          `json:"imageTotalBytes"`
+	ImageSharedBytes   int64                          `json:"imageSharedBytes"`
+	ImageUniqueBytes   int64                          `json:"imageUniqueBytes"`
+	VolumesState       MeasurementState               `json:"volumesState"`
+	Volumes            *DeploymentInstanceVolumeUsage `json:"volumes,omitempty"`
+}
+
+// DeploymentResourceInstance uses the same opaque identity as the lifecycle
+// observation. Provider identifiers and storage names never enter this model.
+type DeploymentResourceInstance struct {
+	ID      ResourceID                     `json:"id"`
+	CPU     DeploymentInstanceCPUUsage     `json:"cpu"`
+	Memory  DeploymentInstanceMemoryUsage  `json:"memory"`
+	Network DeploymentInstanceNetworkUsage `json:"network"`
+	BlockIO DeploymentInstanceBlockIOUsage `json:"blockIo"`
+	Storage DeploymentInstanceStorageUsage `json:"storage"`
+}
+
+// DeploymentResourceObservation is persisted separately from the immutable
+// lifecycle observation so each proof can retain its own validity and rollback
+// boundary.
+type DeploymentResourceObservation struct {
+	DeploymentID          ResourceID                   `json:"deploymentId"`
+	Generation            uint64                       `json:"generation"`
+	ApplicationRevisionID ResourceID                   `json:"applicationRevisionId"`
+	ExecutionTargetID     ResourceID                   `json:"executionTargetId"`
+	Instances             []DeploymentResourceInstance `json:"instances"`
+	ObservedAt            time.Time                    `json:"observedAt"`
+}
+
+type DeploymentResourceValue struct {
+	Observation DeploymentResourceObservation `json:"observation"`
+	ValidUntil  time.Time                     `json:"validUntil"`
+}
+
+// DeploymentResourceSnapshot is joined by the control plane after loading the
+// lifecycle snapshot. UNAVAILABLE contains no fabricated zero values.
+type DeploymentResourceSnapshot struct {
+	State MeasurementState         `json:"state"`
+	Value *DeploymentResourceValue `json:"value,omitempty"`
+}
+
+func (snapshot DeploymentResourceSnapshot) Snapshot(now time.Time) DeploymentResourceSnapshot {
+	if snapshot.Value == nil {
+		return snapshot
+	}
+	value := *snapshot.Value
+	value.Observation.Instances = slices.Clone(value.Observation.Instances)
+	for index := range value.Observation.Instances {
+		instance := &value.Observation.Instances[index]
+		if instance.CPU.Value != nil {
+			copy := *instance.CPU.Value
+			instance.CPU.Value = &copy
+		}
+		if instance.Memory.Value != nil {
+			copy := *instance.Memory.Value
+			instance.Memory.Value = &copy
+		}
+		if instance.Network.Value != nil {
+			copy := *instance.Network.Value
+			instance.Network.Value = &copy
+		}
+		if instance.BlockIO.Value != nil {
+			copy := *instance.BlockIO.Value
+			instance.BlockIO.Value = &copy
+		}
+		if instance.Storage.Value != nil {
+			copy := *instance.Storage.Value
+			if copy.Volumes != nil {
+				volumes := *copy.Volumes
+				copy.Volumes = &volumes
+			}
+			if now.Before(copy.ObservedAt) || !now.Before(copy.ValidUntil) {
+				instance.Storage.State = MeasurementStale
+			}
+			instance.Storage.Value = &copy
+		}
+	}
+	snapshot.Value = &value
+	if snapshot.State == MeasurementAvailable &&
+		(now.Before(value.Observation.ObservedAt) || !now.Before(value.ValidUntil)) {
+		snapshot.State = MeasurementStale
+	}
+	return snapshot
+}
+
+// DeploymentRuntimeValue adds the control-plane freshness boundary to the
+// immutable node observation.
+type DeploymentRuntimeValue struct {
+	Observation DeploymentRuntimeObservation `json:"observation"`
+	ValidUntil  time.Time                    `json:"validUntil"`
+}
+
+// DeploymentRuntimeSnapshot is the tenant read model. AVAILABLE and STALE
+// retain the exact source value; UNAVAILABLE has no value.
+type DeploymentRuntimeSnapshot struct {
+	APIVersion string                     `json:"apiVersion"`
+	Kind       string                     `json:"kind"`
+	Scope      ResourceScope              `json:"scope"`
+	State      MeasurementState           `json:"state"`
+	Value      *DeploymentRuntimeValue    `json:"value,omitempty"`
+	Resources  DeploymentResourceSnapshot `json:"resources"`
+}
+
+// Snapshot returns an independent value and projects expiry to STALE without
+// changing source timestamps.
+func (snapshot DeploymentRuntimeSnapshot) Snapshot(now time.Time) DeploymentRuntimeSnapshot {
+	if snapshot.Value == nil {
+		return snapshot
+	}
+	value := *snapshot.Value
+	value.Observation.Instances = slices.Clone(value.Observation.Instances)
+	snapshot.Value = &value
+	if snapshot.State == MeasurementAvailable &&
+		(now.Before(value.Observation.ObservedAt) || !now.Before(value.ValidUntil)) {
+		snapshot.State = MeasurementStale
+	}
+	snapshot.Resources = snapshot.Resources.Snapshot(now)
+	return snapshot
+}
+
+const (
+	MinimumTerminalColumns         = 2
+	MaximumTerminalColumns         = 512
+	MinimumTerminalRows            = 2
+	MaximumTerminalRows            = 256
+	MaximumTerminalFrameBytes      = 64 * 1024
+	TerminalSessionConnectTimeout  = 30 * time.Second
+	TerminalSessionIdleTimeout     = 2 * time.Minute
+	MaximumTerminalSessionDuration = 15 * time.Minute
+)
+
+type TerminalSize struct {
+	Columns uint16 `json:"columns"`
+	Rows    uint16 `json:"rows"`
+}
+
+// CreateTerminalSessionRequest contains no provider selector, command, user,
+// environment or host identity. InstanceID is the opaque node-derived value
+// from the current Deployment runtime snapshot.
+type CreateTerminalSessionRequest struct {
+	InstanceID ResourceID   `json:"instanceId"`
+	Size       TerminalSize `json:"size"`
+}
+
+// TerminalSession is a sanitized, tenant-scoped lifecycle resource. The
+// one-time connection ticket is delivered only by an HttpOnly cookie and is
+// never part of this document.
+type TerminalSession struct {
+	APIVersion            string                 `json:"apiVersion"`
+	Kind                  string                 `json:"kind"`
+	ID                    ResourceID             `json:"id"`
+	Scope                 ResourceScope          `json:"scope"`
+	DeploymentID          ResourceID             `json:"deploymentId"`
+	Generation            uint64                 `json:"generation"`
+	ApplicationRevisionID ResourceID             `json:"applicationRevisionId"`
+	InstanceID            ResourceID             `json:"instanceId"`
+	Size                  TerminalSize           `json:"size"`
+	State                 TerminalSessionState   `json:"state"`
+	Outcome               TerminalSessionOutcome `json:"outcome,omitempty"`
+	CreatedAt             time.Time              `json:"createdAt"`
+	ConnectBefore         time.Time              `json:"connectBefore"`
+	ExpiresAt             time.Time              `json:"expiresAt"`
+	ConnectedAt           *time.Time             `json:"connectedAt,omitempty"`
+	EndedAt               *time.Time             `json:"endedAt,omitempty"`
+}
+
 type CreateDeploymentRequest struct {
 	ID   ResourceID     `json:"id"`
 	Name string         `json:"name"`
@@ -430,6 +955,8 @@ type SubjectRef struct {
 	AccessKeyID string                `json:"accessKeyId,omitempty"`
 }
 
+// RoleSessionReference is public delegation lineage. It contains no session
+// credential, source login session, policy, trust, or private IAM evidence.
 type RoleSessionReference struct {
 	SessionID                string `json:"sessionId"`
 	SourceUserID             string `json:"sourceUserId,omitempty"`
@@ -522,6 +1049,7 @@ type Operation struct {
 	Kind                   string          `json:"kind"`
 	ID                     OperationID     `json:"id"`
 	Scope                  ResourceScope   `json:"scope"`
+	InstallationID         string          `json:"installationId,omitempty"`
 	Action                 OperationAction `json:"action"`
 	Target                 ResourceRef     `json:"target"`
 	RequestedBy            SubjectRef      `json:"requestedBy"`
@@ -599,6 +1127,20 @@ type ObserveDeploymentRequest struct {
 	Command               AdapterCommandEnvelope `json:"command"`
 	Generation            uint64                 `json:"generation"`
 	ExpectedContentDigest string                 `json:"expectedContentDigest"`
+}
+
+// ObserveDeploymentRuntimeRequest is a read-only, Operation-independent node
+// request. The worker resolves every identity from persisted placement state;
+// callers cannot supply a host or binding selector.
+type ObserveDeploymentRuntimeRequest struct {
+	RequestID             CommandID     `json:"requestId"`
+	Scope                 ResourceScope `json:"scope"`
+	DeploymentID          ResourceID    `json:"deploymentId"`
+	Generation            uint64        `json:"generation"`
+	ApplicationRevisionID ResourceID    `json:"applicationRevisionId"`
+	ExecutionTargetID     ResourceID    `json:"executionTargetId"`
+	ExpectedContentDigest string        `json:"expectedContentDigest"`
+	Deadline              time.Time     `json:"deadline"`
 }
 
 type DeploymentEndpointObservation struct {

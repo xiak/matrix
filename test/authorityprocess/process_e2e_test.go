@@ -131,7 +131,7 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 	}
 	dsn := runtimeDSN(t, admin, paasAPILogin, "runtime-password-with-&?#-characters")
 	parsed, err := pgxpool.ParseConfig(dsn)
-	if err != nil || parsed.ConnConfig.User != paasAPILogin || parsed.ConnConfig.Password != "runtime-password-with-&?#-characters" || parsed.ConnConfig.Database != admin.Database || parsed.ConnConfig.Host != admin.Host || parsed.ConnConfig.Port != admin.Port || parsed.MaxConns != 2 || parsed.ConnConfig.RuntimeParams["application_name"] != "matrix-authority-process:"+paasAPILogin {
+	if err != nil || parsed.ConnConfig.User != paasAPILogin || parsed.ConnConfig.Password != "runtime-password-with-&?#-characters" || parsed.ConnConfig.Database != admin.Database || parsed.ConnConfig.Host != admin.Host || parsed.ConnConfig.Port != admin.Port || parsed.MaxConns != 2 || parsed.ConnConfig.RuntimeParams["application_name"] != authorityProcessApplicationName(paasAPILogin) {
 		t.Fatal("process DSN retained a migration credential or lost its bounded target")
 	}
 	if admin.User != "postgres" || admin.Password != "query-admin" {
@@ -804,6 +804,32 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	} else if mode == authorityProcessManagedProducts {
 		variable, prefix = "MATRIX_IAM_MANAGED_PRODUCTS_TEST_DSN", "matrix_authority_process_managed_products_"
 	}
+	runAuthorityProcessMode(t, mode, variable, prefix, newProcessNodeFixture)
+}
+
+// runAuthorityProcesses lets the Linux-only gate reuse the complete authority
+// journey with physical node/collector processes instead of a second, weaker
+// copy. Ordinary and browser lanes use the bounded TLS wire peer.
+func runAuthorityProcesses(
+	t *testing.T,
+	dsnVariable string,
+	nodeFixture func(*testing.T, string, string) *processNodeFixture,
+) {
+	t.Helper()
+	runAuthorityProcessMode(t, authorityProcessFull, dsnVariable, "matrix_authority_process_", nodeFixture)
+}
+
+func runAuthorityProcessMode(
+	t *testing.T,
+	mode authorityProcessMode,
+	variable string,
+	prefix string,
+	nodeFixture func(*testing.T, string, string) *processNodeFixture,
+) {
+	t.Helper()
+	if nodeFixture == nil {
+		t.Fatal("authority process node fixture is unavailable")
+	}
 	dsn := os.Getenv(variable)
 	if dsn == "" {
 		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", variable)
@@ -882,6 +908,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	sourceTrustRoot := devopsRuntimeRoots["devops-source-trust"]
 	binaries := buildAuthorityBinaries(t, ctx, root, temporary, mode == authorityProcessFull)
 	bootstrap := processBootstrap(t)
+	enrollmentAuthority := writeProcessEnrollmentAuthority(t, temporary, bootstrap.InstallationID)
+	node := nodeFixture(t, temporary, bootstrap.InstallationID)
 	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(bootstrap)
 	if err != nil {
 		t.Fatalf("encode authority process bootstrap: %v", err)
@@ -1103,6 +1131,12 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"MATRIX_PAAS_RELEASE_ID=matrix-v0.1.0-process",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST=sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		"MATRIX_PAAS_CURSOR_KEY_FILE=" + paasCursorKeyPath,
+		"MATRIX_PAAS_NODE_CONNECTIONS_FILE=" + node.configurationPath,
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE=" + enrollmentAuthority.issuerCertificatePath,
+		"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE=" + enrollmentAuthority.issuerPrivateKeyPath,
+		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE=" + enrollmentAuthority.controllerCertificatePath,
+		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE=" + enrollmentAuthority.controllerPrivateKeyPath,
+		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE=" + enrollmentAuthority.controllerTrustPath,
 	}
 	paasDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
@@ -1706,7 +1740,11 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			t.Fatal("invalid process startup changed permanent key custody")
 		}
 	}
-	platformAuditRecord := ingestPlatformAuditFixture(t, auditEndpoint, platformDecisions[0])
+	adminLogin = loginIAM(t, iamEndpoint, "admin", changedAdminPassword, "request-admin-platform-host-login")
+	sensitive = append(sensitive, adminLogin.Credential)
+	platformAuditRecord := createPlatformHost(
+		t, ctx, admin, paasEndpoint, auditEndpoint, adminLogin.Credential, node,
+	)
 	platformAuditRecords := []auditv1.AuditRecord{platformAuditRecord}
 	for index, mapping := range []struct {
 		action iamv1.Action
@@ -1714,7 +1752,6 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		mode   iamv1.AuthorizationResourceMode
 		usage  iamv1.AuthorizationCollectionUsage
 	}{
-		{iamv1.ActionPaaSNodeEnrollmentCreate, auditv1.ActionPaaSExecutionTargetRegistered, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate},
 		{iamv1.ActionPaaSExecutionTargetDrain, auditv1.ActionPaaSExecutionTargetDrained, iamv1.AuthorizationResourceInstance, ""},
 		{iamv1.ActionPaaSExecutionTargetActivate, auditv1.ActionPaaSExecutionTargetActivated, iamv1.AuthorizationResourceInstance, ""},
 		{iamv1.ActionPaaSExecutionTargetRemove, auditv1.ActionPaaSExecutionTargetRemoved, iamv1.AuthorizationResourceInstance, ""},
@@ -18527,7 +18564,7 @@ func runIAMCapacityStage(t *testing.T, ctx context.Context, database *pgx.Conn, 
 			SELECT count(*),count(*) FILTER (WHERE state='active'),
 			count(*) FILTER (WHERE state='active' AND wait_event_type='Lock'),COALESCE(max(per_login),0),
 			(SELECT count(*) FROM iam.audit_outbox WHERE status <> 'DELIVERED') FROM observed`,
-			[]string{"matrix-authority-process:" + iamAPILogin, "matrix-authority-process:matrix_authority_process_iam_replica"}).Scan(&connections, &active, &locked, &perLogin, &backlog)
+			[]string{authorityProcessApplicationName(iamAPILogin), authorityProcessApplicationName("matrix_authority_process_iam_replica")}).Scan(&connections, &active, &locked, &perLogin, &backlog)
 		if err != nil || perLogin > 2 || connections > 4 {
 			t.Fatal("capacity database observation failed or runtime connection ceiling was exceeded")
 		}
@@ -18799,24 +18836,34 @@ func startChild(
 	arguments ...string,
 ) *childProcess {
 	t.Helper()
-	child := &childProcess{done: make(chan error, 1)}
-	child.command = exec.Command(binary, arguments...)
-	child.command.Dir = root
-	child.command.Env = append(append(os.Environ(), environment...), "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
-	child.command.Stdout = &child.stdout
-	child.command.Stderr = &child.stderr
+	command := exec.Command(binary, arguments...)
+	command.Dir = root
+	command.Env = append(os.Environ(), environment...)
+	return startChildCommand(t, command)
+}
+
+func startChildCommand(t *testing.T, command *exec.Cmd) *childProcess {
+	t.Helper()
+	child := &childProcess{command: command, done: make(chan error, 1)}
+	if command.Env == nil {
+		command.Env = os.Environ()
+	}
+	command.Env = append(command.Env, "GOMAXPROCS=2", "GOMEMLIMIT=512MiB")
+	command.Stdout = &child.stdout
+	command.Stderr = &child.stderr
 	child.startRequestedAt = time.Now()
-	if err := child.command.Start(); err != nil {
+	if err := command.Start(); err != nil {
 		t.Fatalf("start authority process: %v", err)
 	}
 	child.startReturnedAt = time.Now()
 	go func() {
-		err := child.command.Wait()
+		err := command.Wait()
 		// Publish the observation with the terminal result. This is when Wait
 		// returned, not the kernel's exact exit time or a Docker CLI duration.
 		child.waitReturnedAt = time.Now()
 		child.done <- err
 	}()
+	t.Cleanup(child.stop)
 	return child
 }
 
@@ -19264,24 +19311,6 @@ func assertPlatformActionAuthorization(t *testing.T, endpoint, credential, princ
 	return decision
 }
 
-func ingestPlatformAuditFixture(t *testing.T, endpoint string, decision iamv1.AuthorizationDecision) auditv1.AuditRecord {
-	t.Helper()
-	// This tests the authenticated producer/Audit boundary, not host admission
-	// or a PaaS Operation; those effects have their own real-runtime gates.
-	requestDigest := sha256.Sum256([]byte("platform-audit-fixture-request"))
-	event := auditv1.Event{
-		APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-platform-process",
-		InstallationID: decision.InstallationID,
-		Actor:          auditv1.ActorReference{Type: auditv1.ActorUser, ID: auditv1.ActorID(decision.Subject.ID)},
-		IAMDecisionID:  auditv1.DecisionID(decision.ID), Action: auditv1.ActionPaaSExecutionTargetRegistered,
-		Target: auditv1.TargetReference{Kind: auditv1.TargetExecutionTarget, ID: decision.Resource.ID},
-		Result: auditv1.ResultSucceeded, RequestDigest: "sha256:" + hex.EncodeToString(requestDigest[:]),
-		RequestID: decision.RequestID, CorrelationID: decision.RequestID,
-		OperationID: "operation-platform-audit-fixture", OccurredAt: decision.DecidedAt,
-	}
-	return ingestPlatformAuditEvent(t, endpoint, event)
-}
-
 func ingestPlatformAuditEvent(t *testing.T, endpoint string, event auditv1.Event) auditv1.AuditRecord {
 	t.Helper()
 	response := performJSON(t, http.MethodPost, endpoint+"/v1/events", paasServiceCredential, event)
@@ -19301,6 +19330,44 @@ func ingestPlatformAuditEvent(t *testing.T, endpoint string, event auditv1.Event
 	return result.Record
 }
 
+func performPlatformAuditObservation(
+	t *testing.T,
+	endpoint, credential string,
+	body any,
+) processResponse {
+	t.Helper()
+	var path string
+	switch body.(type) {
+	case auditv1.QueryRecordsRequest:
+		path = "/v1/platform/records:query"
+	case auditv1.VerifyChainRequest:
+		path = "/v1/platform/integrity:verify"
+	default:
+		t.Fatal("unsupported platform Audit observation")
+	}
+	for attempt := 0; ; attempt++ {
+		response := performJSON(t, http.MethodPost, endpoint+path, credential, body)
+		if response.Status != http.StatusServiceUnavailable || attempt == 4 {
+			return response
+		}
+		var problem auditv1.Problem
+		if auditv1.DecodeRequest(bytes.NewReader(response.Body), &problem) != nil ||
+			auditv1.ValidateProblem(problem) != nil ||
+			problem.Status != http.StatusServiceUnavailable || problem.Code != "audit.unavailable" ||
+			problem.Type != "https://matrix.xiak.com/problems/audit.unavailable" {
+			return response
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-t.Context().Done():
+			timer.Stop()
+			return response
+		case <-timer.C:
+			clear(response.Body)
+		}
+	}
+}
+
 func assertPlatformAuditAccess(t *testing.T, endpoint, credential string, status int) {
 	t.Helper()
 	for _, query := range []struct {
@@ -19310,7 +19377,12 @@ func assertPlatformAuditAccess(t *testing.T, endpoint, credential string, status
 		{"/v1/platform/records:query", auditv1.QueryRecordsRequest{PageSize: 20}},
 		{"/v1/platform/integrity:verify", auditv1.VerifyChainRequest{FromSequence: 1, MaximumRecords: 20}},
 	} {
-		response := performJSON(t, http.MethodPost, endpoint+query.path, credential, query.body)
+		var response processResponse
+		if status == http.StatusOK {
+			response = performPlatformAuditObservation(t, endpoint, credential, query.body)
+		} else {
+			response = performJSON(t, http.MethodPost, endpoint+query.path, credential, query.body)
+		}
 		if response.Status != status {
 			t.Fatalf("platform Audit %s status=%d want=%d", query.path, response.Status, status)
 		}
@@ -26974,20 +27046,21 @@ func readPaaSOperationAuthorities(
 }
 
 type storedPaaSAuditEvent struct {
-	SchemaVersion string             `json:"schemaVersion"`
-	EventID       auditv1.EventID    `json:"eventId"`
-	TenantID      paasv1.TenantID    `json:"tenantId"`
-	Actor         paasv1.SubjectRef  `json:"actor"`
-	IAMDecisionID auditv1.DecisionID `json:"iamDecisionId"`
-	Action        auditv1.Action     `json:"action"`
-	Target        paasv1.ResourceRef `json:"target"`
-	OperationID   paasv1.OperationID `json:"operationId,omitempty"`
-	RequestDigest string             `json:"requestDigest"`
-	Result        auditv1.Result     `json:"result"`
-	RequestID     string             `json:"requestId"`
-	AuditID       string             `json:"auditId,omitempty"`
-	TraceParent   string             `json:"traceparent,omitempty"`
-	OccurredAt    time.Time          `json:"occurredAt"`
+	SchemaVersion  string             `json:"schemaVersion"`
+	EventID        auditv1.EventID    `json:"eventId"`
+	TenantID       paasv1.TenantID    `json:"tenantId,omitempty"`
+	InstallationID string             `json:"installationId,omitempty"`
+	Actor          paasv1.SubjectRef  `json:"actor"`
+	IAMDecisionID  auditv1.DecisionID `json:"iamDecisionId"`
+	Action         auditv1.Action     `json:"action"`
+	Target         paasv1.ResourceRef `json:"target"`
+	OperationID    paasv1.OperationID `json:"operationId,omitempty"`
+	RequestDigest  string             `json:"requestDigest"`
+	Result         auditv1.Result     `json:"result"`
+	RequestID      string             `json:"requestId"`
+	AuditID        string             `json:"auditId,omitempty"`
+	TraceParent    string             `json:"traceparent,omitempty"`
+	OccurredAt     time.Time          `json:"occurredAt"`
 }
 
 func paasOperationStructuralLowEntropy(
@@ -27093,7 +27166,8 @@ func storedPaaSEventToPublic(stored storedPaaSAuditEvent) (auditv1.Event, error)
 	}
 	public := auditv1.Event{
 		APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: stored.EventID,
-		TenantID: auditv1.TenantID(stored.TenantID), Actor: actor, IAMDecisionID: stored.IAMDecisionID,
+		TenantID: auditv1.TenantID(stored.TenantID), InstallationID: stored.InstallationID,
+		Actor: actor, IAMDecisionID: stored.IAMDecisionID,
 		Action:      stored.Action,
 		Target:      auditv1.TargetReference{Kind: targetKind, ID: string(stored.Target.ID)},
 		OperationID: auditv1.OperationID(stored.OperationID), RequestDigest: stored.RequestDigest,
@@ -27118,6 +27192,12 @@ func storedPaaSAuditTargetKind(kind string) (auditv1.TargetKind, bool) {
 		return auditv1.TargetApplicationRevision, true
 	case "Deployment":
 		return auditv1.TargetDeployment, true
+	case "ExecutionPool":
+		return auditv1.TargetExecutionPool, true
+	case "ExecutionTarget":
+		return auditv1.TargetExecutionTarget, true
+	case "TerminalSession":
+		return auditv1.TargetTerminalSession, true
 	case "QuotaEntitlement":
 		return auditv1.TargetQuotaEntitlement, true
 	case "ServiceActivation":
@@ -27674,6 +27754,64 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 					t.Fatal("Role structural identity copied to request escaped plaintext inspection")
 				}
 			})
+		}
+	})
+	t.Run("installation-scoped-stored-paas-event", func(t *testing.T) {
+		stored := storedPaaSAuditEvent{
+			SchemaVersion:  "v1",
+			EventID:        "audit-installation-operation-one",
+			InstallationID: "installation-one",
+			Actor:          paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "principal-admin"},
+			IAMDecisionID:  "decision-installation-operation-one",
+			Action:         auditv1.ActionPaaSExecutionPoolCreated,
+			Target:         paasv1.ResourceRef{Kind: "ExecutionPool", ID: "execution-pool-one"},
+			OperationID:    "operation-installation-one",
+			RequestDigest:  "sha256:" + strings.Repeat("a", 64),
+			Result:         auditv1.ResultSucceeded,
+			RequestID:      "request-installation-operation-one",
+			OccurredAt:     time.Date(2026, 10, 25, 1, 2, 3, 0, time.UTC),
+		}
+		document, err := json.Marshal(stored)
+		decoded, decodeErr := decodeStoredPaaSAuditEvent(string(document))
+		structural, structuralErr := paasOperationStructuralLowEntropy(
+			"paas.outbox", string(document), "", nil,
+		)
+		if err != nil || decodeErr != nil || structuralErr != nil ||
+			decoded.InstallationID != stored.InstallationID || decoded.TenantID != "" || len(structural) != 0 {
+			t.Fatalf("valid installation-scoped PaaS event was rejected: marshal=%v decode=%v scan=%v", err, decodeErr, structuralErr)
+		}
+		for name, changed := range map[string]storedPaaSAuditEvent{
+			"dual-authority": func() storedPaaSAuditEvent {
+				value := stored
+				value.TenantID = "account-one"
+				return value
+			}(),
+			"missing-authority": func() storedPaaSAuditEvent {
+				value := stored
+				value.InstallationID = ""
+				return value
+			}(),
+			"tenant-action-under-installation": func() storedPaaSAuditEvent {
+				value := stored
+				value.Action = auditv1.ActionPaaSDeploymentCreated
+				value.Target = paasv1.ResourceRef{Kind: "Deployment", ID: "deployment-one"}
+				value.Result = auditv1.ResultAccepted
+				return value
+			}(),
+		} {
+			t.Run(name, func(t *testing.T) {
+				changedDocument, marshalErr := json.Marshal(changed)
+				if marshalErr != nil {
+					t.Fatal(marshalErr)
+				}
+				if _, err := decodeStoredPaaSAuditEvent(string(changedDocument)); err == nil {
+					t.Fatal("invalid stored PaaS authority was accepted")
+				}
+			})
+		}
+		unknownFieldDocument := strings.TrimSuffix(string(document), "}") + `,"unexpected":true}`
+		if _, err := decodeStoredPaaSAuditEvent(unknownFieldDocument); err == nil {
+			t.Fatal("unknown stored PaaS Audit field was accepted")
 		}
 	})
 	t.Run("authority-derived-paas-operation-identities", func(t *testing.T) {
@@ -28566,8 +28704,8 @@ func seedProcessExecutionProfile(
 		}
 		var reconciled bool
 		if err := transaction.QueryRow(ctx,
-			`SELECT paas.reconcile_local_execution_profile($1, $2::jsonb, $1, $3::jsonb, 0, $4::jsonb)`,
-			index, poolDocument, targetDocument, policyDocument,
+			`SELECT paas.reconcile_local_execution_profile($1, $2, $3::jsonb, $2, $4::jsonb, 0, $5::jsonb)`,
+			"installation-process", index, poolDocument, targetDocument, policyDocument,
 		).Scan(&reconciled); err != nil || !reconciled {
 			t.Fatalf("reconcile PaaS execution-profile fixture for %s: reconciled=%t err=%v", tenantID, reconciled, err)
 		}
@@ -28631,10 +28769,14 @@ func quoteLiteral(value string) string {
 
 func runtimeDSN(t *testing.T, admin *pgx.ConnConfig, user string, password string) string {
 	t.Helper()
-	return runtimeDSNWithApplication(t, admin, user, password, "matrix-authority-process:"+user)
+	return runtimeDSNWithApplication(t, admin, user, password, authorityProcessApplicationName(user))
 }
 
 const iamAccessAnalysisApplicationName = "matrix-iam-analysis-worker"
+
+func authorityProcessApplicationName(user string) string {
+	return "matrix-authority:" + user
+}
 
 func runtimeDSNWithApplication(
 	t *testing.T,
@@ -28678,7 +28820,7 @@ func assertRuntimeProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Co
 
 func assertRuntimeProcessLogin(t *testing.T, ctx context.Context, admin *pgx.Conn, user string, maximumConnections int) {
 	t.Helper()
-	assertRuntimeProcessApplicationLogin(t, ctx, admin, user, "matrix-authority-process:"+user, maximumConnections)
+	assertRuntimeProcessApplicationLogin(t, ctx, admin, user, authorityProcessApplicationName(user), maximumConnections)
 }
 
 func assertRuntimeProcessApplicationLogin(

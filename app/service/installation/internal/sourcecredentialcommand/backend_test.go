@@ -186,7 +186,7 @@ func TestSourceCredentialCommandRejectsUnsafeInputAndStoredMaterial(t *testing.T
 
 func newBackend(t *testing.T) *sourcecredentialcommand.Backend {
 	t.Helper()
-	backend, err := sourcecredentialcommand.NewBackend(localmachine.NewEffects(nil))
+	backend, err := sourcecredentialcommand.NewBackend(localmachine.NewEffects(nil, nil))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -18,23 +18,38 @@ func TestAppHostingAuthorizationUsesRegisteredPaaSProfile(t *testing.T) {
 		mode     iamv1.AuthorizationResourceMode
 		usage    iamv1.AuthorizationCollectionUsage
 		id       paasv1.ResourceID
+		network  bool
 	}{
-		{"application create", AuthorizeApplicationCreate, ResourceApplication, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
-		{"application read", AuthorizeApplicationRead, ResourceApplication, iamv1.AuthorizationResourceInstance, "", "application-one"},
-		{"application label set", AuthorizeApplicationLabelSet, ResourceApplication, iamv1.AuthorizationResourceInstance, "", "application-one"},
-		{"application label delete", AuthorizeApplicationLabelDelete, ResourceApplication, iamv1.AuthorizationResourceInstance, "", "application-one"},
-		{"configuration create", AuthorizeConfigurationCreate, ResourceConfiguration, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
-		{"configuration read", AuthorizeConfigurationRead, ResourceConfiguration, iamv1.AuthorizationResourceInstance, "", "configuration-one"},
-		{"configuration revision create", AuthorizeConfigurationRevisionCreate, ResourceConfigurationRevision, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
-		{"configuration revision read", AuthorizeConfigurationRevisionRead, ResourceConfigurationRevision, iamv1.AuthorizationResourceInstance, "", "configuration-revision-one"},
-		{"application revision create", AuthorizeApplicationRevisionCreate, ResourceApplicationRevision, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
-		{"application revision read", AuthorizeApplicationRevisionRead, ResourceApplicationRevision, iamv1.AuthorizationResourceInstance, "", "application-revision-one"},
-		{"deployment create", AuthorizeDeploymentCreate, ResourceDeployment, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection"},
-		{"deployment update", AuthorizeDeploymentUpdate, ResourceDeployment, iamv1.AuthorizationResourceInstance, "", "deployment-one"},
-		{"deployment stop", AuthorizeDeploymentStop, ResourceDeployment, iamv1.AuthorizationResourceInstance, "", "deployment-one"},
-		{"deployment rollback", AuthorizeDeploymentRollback, ResourceDeployment, iamv1.AuthorizationResourceInstance, "", "deployment-one"},
-		{"deployment read", AuthorizeDeploymentRead, ResourceDeployment, iamv1.AuthorizationResourceInstance, "", "deployment-one"},
-		{"operation read", AuthorizeOperationRead, ResourceOperation, iamv1.AuthorizationResourceInstance, "", "operation-one"},
+		{"execution pool create", AuthorizeExecutionPoolCreate, ResourceExecutionPool, iamv1.AuthorizationResourceInstance, "", "pool-one", false},
+		{"execution pool read", AuthorizeExecutionPoolRead, ResourceExecutionPool, iamv1.AuthorizationResourceInstance, "", "pool-one", false},
+		{"execution target register", AuthorizeExecutionTargetRegister, ResourceExecutionTarget, iamv1.AuthorizationResourceInstance, "", "target-one", false},
+		{"execution target read", AuthorizeExecutionTargetRead, ResourceExecutionTarget, iamv1.AuthorizationResourceInstance, "", "target-one", false},
+		{"execution target drain", AuthorizeExecutionTargetDrain, ResourceExecutionTarget, iamv1.AuthorizationResourceInstance, "", "target-one", false},
+		{"execution target activate", AuthorizeExecutionTargetActivate, ResourceExecutionTarget, iamv1.AuthorizationResourceInstance, "", "target-one", false},
+		{"execution target remove", AuthorizeExecutionTargetRemove, ResourceExecutionTarget, iamv1.AuthorizationResourceInstance, "", "target-one", false},
+		{"node enrollment create", AuthorizeNodeEnrollmentCreate, ResourceNodeEnrollment, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection", false},
+		{"node enrollment read", AuthorizeNodeEnrollmentRead, ResourceNodeEnrollment, iamv1.AuthorizationResourceInstance, "", "enrollment-one", false},
+		{"node enrollment revoke", AuthorizeNodeEnrollmentRevoke, ResourceNodeEnrollment, iamv1.AuthorizationResourceInstance, "", "enrollment-one", false},
+		{"node enrollment regenerate", AuthorizeNodeEnrollmentRegenerate, ResourceNodeEnrollment, iamv1.AuthorizationResourceInstance, "", "enrollment-one", false},
+		{"platform operation read", AuthorizePlatformOperationRead, ResourceOperation, iamv1.AuthorizationResourceInstance, "", "operation-one", false},
+		{"application create", AuthorizeApplicationCreate, ResourceApplication, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection", true},
+		{"application read", AuthorizeApplicationRead, ResourceApplication, iamv1.AuthorizationResourceInstance, "", "application-one", true},
+		{"application label set", AuthorizeApplicationLabelSet, ResourceApplication, iamv1.AuthorizationResourceInstance, "", "application-one", true},
+		{"application label delete", AuthorizeApplicationLabelDelete, ResourceApplication, iamv1.AuthorizationResourceInstance, "", "application-one", true},
+		{"configuration create", AuthorizeConfigurationCreate, ResourceConfiguration, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection", true},
+		{"configuration read", AuthorizeConfigurationRead, ResourceConfiguration, iamv1.AuthorizationResourceInstance, "", "configuration-one", true},
+		{"configuration revision create", AuthorizeConfigurationRevisionCreate, ResourceConfigurationRevision, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection", true},
+		{"configuration revision read", AuthorizeConfigurationRevisionRead, ResourceConfigurationRevision, iamv1.AuthorizationResourceInstance, "", "configuration-revision-one", true},
+		{"application revision create", AuthorizeApplicationRevisionCreate, ResourceApplicationRevision, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection", true},
+		{"application revision read", AuthorizeApplicationRevisionRead, ResourceApplicationRevision, iamv1.AuthorizationResourceInstance, "", "application-revision-one", true},
+		{"deployment create", AuthorizeDeploymentCreate, ResourceDeployment, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection", true},
+		{"deployment update", AuthorizeDeploymentUpdate, ResourceDeployment, iamv1.AuthorizationResourceInstance, "", "deployment-one", true},
+		{"deployment stop", AuthorizeDeploymentStop, ResourceDeployment, iamv1.AuthorizationResourceInstance, "", "deployment-one", true},
+		{"deployment rollback", AuthorizeDeploymentRollback, ResourceDeployment, iamv1.AuthorizationResourceInstance, "", "deployment-one", true},
+		{"deployment read", AuthorizeDeploymentRead, ResourceDeployment, iamv1.AuthorizationResourceInstance, "", "deployment-one", true},
+		{"operation read", AuthorizeOperationRead, ResourceOperation, iamv1.AuthorizationResourceInstance, "", "operation-one", true},
+		{"terminal create", AuthorizeTerminalSessionCreate, ResourceTerminalSession, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionCreate, "collection", true},
+		{"terminal close", AuthorizeTerminalSessionClose, ResourceTerminalSession, iamv1.AuthorizationResourceInstance, "", "terminal-one", true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -50,9 +65,11 @@ func TestAppHostingAuthorizationUsesRegisteredPaaSProfile(t *testing.T) {
 			}
 			profile, known := iamv1.LookupAuthorizationProfile(iamv1.ProductPaaS)
 			if !known || iamv1.CheckAuthorizationProfileReference(profile, iamRequest.Profile) != nil ||
-				iamRequest.Action != test.action || iamRequest.NetworkContext == nil ||
-				iamRequest.NetworkContext.SourceIP != "192.0.2.23" {
+				iamRequest.Action != test.action || (iamRequest.NetworkContext != nil) != test.network {
 				t.Fatalf("request did not bind the current PaaS profile: %#v", iamRequest)
+			}
+			if test.network && iamRequest.NetworkContext.SourceIP != "192.0.2.23" {
+				t.Fatalf("request did not bind its trusted source IP: %#v", iamRequest)
 			}
 		})
 	}
@@ -438,11 +455,6 @@ func TestAppHostingAuthorizationRejectsOtherPEPSurfacesAndChangedShapes(t *testi
 		SourceIP:     "2001:db8::23", RequestID: "request-one",
 	}
 	attacks := map[string]func(*AuthorizationRequest){
-		"platform action from same product": func(value *AuthorizationRequest) {
-			value.Action = iamv1.ActionPaaSPlatformOperationRead
-			value.Resource.Kind = ResourceOperation
-			value.Resource.ID = "operation-one"
-		},
 		"other product": func(value *AuthorizationRequest) {
 			value.Action = iamv1.ActionManagedServiceInstallationRead
 		},

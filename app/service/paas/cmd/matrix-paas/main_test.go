@@ -57,6 +57,10 @@ func TestPaaSConfigurationRequiresCursorCustodyAndProcessIdentity(t *testing.T) 
 		cursorKeyFileEnvironment, listenAddressEnvironment, installationIDEnvironment,
 		northboundOriginEnvironment, edgeAssertionFileEnvironment,
 		releaseIDEnvironment, verificationDigestEnvironment,
+		nodeConnectionsFileEnvironment,
+		enrollmentIssuerCertEnvironment, enrollmentIssuerKeyEnvironment,
+		enrollmentControllerCertEnvironment, enrollmentControllerKeyEnvironment,
+		enrollmentControllerTrustEnvironment,
 	}
 	for _, field := range required {
 		t.Setenv(field, "fixture")

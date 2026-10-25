@@ -24,7 +24,8 @@ func (planner *Planner) Plan(input Input) (Result, error) {
 		return Result{}, err
 	}
 	consuming := consumingCapacityClaims(input.Snapshot.CapacityClaims, input.DecidedAt)
-	reservedByTarget, err := aggregateCapacityClaims(consuming)
+	planningClaims := replacementCapacityClaims(consuming, input.Snapshot.ActivePlacement)
+	reservedByTarget, err := aggregateCapacityClaims(planningClaims)
 	if err != nil {
 		return Result{}, err
 	}
@@ -60,7 +61,7 @@ func (planner *Planner) Plan(input Input) (Result, error) {
 			target,
 			pool,
 			reserved,
-			capacityClaimsForTarget(consuming, target.Metadata.ID),
+			capacityClaimsForTarget(planningClaims, target.Metadata.ID),
 			requirements,
 		)
 		evaluations = append(evaluations, evaluation)
@@ -106,6 +107,10 @@ func (planner *Planner) evaluateCandidate(
 	claims []CapacityClaim,
 	requirements Resources,
 ) RejectionCode {
+	if active := input.Snapshot.ActivePlacement; active != nil &&
+		target.Metadata.ID != active.ExecutionTargetID {
+		return RejectTargetNotCurrent
+	}
 	if _, eligible := eligiblePools[pool.Metadata.ID]; !eligible {
 		return RejectPoolNotEligible
 	}
@@ -199,6 +204,22 @@ func consumingCapacityClaims(values []CapacityClaim, decidedAt time.Time) []Capa
 	sort.Slice(result, func(left, right int) bool {
 		return capacityClaimLess(result[left], result[right])
 	})
+	return result
+}
+
+func replacementCapacityClaims(
+	values []CapacityClaim,
+	active *ActivePlacement,
+) []CapacityClaim {
+	if active == nil {
+		return values
+	}
+	result := make([]CapacityClaim, 0, len(values)-1)
+	for _, claim := range values {
+		if claim.ID != active.CapacityClaimID {
+			result = append(result, claim)
+		}
+	}
 	return result
 }
 

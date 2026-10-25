@@ -358,6 +358,160 @@ func (executor *Executor) ObserveDeployment(
 	return observation, nil
 }
 
+// ObserveDeploymentRuntime returns only the current generation's normalized
+// instances. It does not advance an Operation, write provider state or expose
+// provider-native identifiers.
+func (executor *Executor) ObserveDeploymentRuntime(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) (paasv1.DeploymentRuntimeObservation, error) {
+	var observation paasv1.DeploymentRuntimeObservation
+	err := executor.withCurrentRuntime(
+		ctx,
+		request,
+		func(
+			_ context.Context,
+			state projectState,
+			_ RuntimeProject,
+			containers []inspectedRuntimeContainer,
+			observedAt time.Time,
+		) error {
+			var normalizeErr error
+			observation, normalizeErr = normalizeInspectedRuntimeObservation(
+				state, request.ExecutionTargetID, containers, observedAt,
+			)
+			if normalizeErr != nil {
+				return providerRejectedFault()
+			}
+			return nil
+		},
+	)
+	return observation, err
+}
+
+// ObserveDeploymentTelemetry obtains lifecycle and resources under one project
+// lock. Resource collection can select only provider instances already proved
+// to belong to the exact sealed current generation.
+func (executor *Executor) ObserveDeploymentTelemetry(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) (
+	paasv1.DeploymentRuntimeObservation,
+	paasv1.DeploymentResourceObservation,
+	error,
+) {
+	var runtimeObservation paasv1.DeploymentRuntimeObservation
+	var resourceObservation paasv1.DeploymentResourceObservation
+	err := executor.withCurrentRuntime(
+		ctx,
+		request,
+		func(
+			operationContext context.Context,
+			state projectState,
+			runtimeProject RuntimeProject,
+			containers []inspectedRuntimeContainer,
+			observedAt time.Time,
+		) error {
+			var normalizeErr error
+			runtimeObservation, normalizeErr = normalizeInspectedRuntimeObservation(
+				state, request.ExecutionTargetID, containers, observedAt,
+			)
+			if normalizeErr != nil {
+				return providerRejectedFault()
+			}
+			current := make([]RuntimeContainer, 0, len(runtimeObservation.Instances))
+			for _, container := range containers {
+				if container.current {
+					current = append(current, container.value)
+				}
+			}
+			resources := unsupportedRuntimeResources(current)
+			if observer, supported := executor.runtime.(RuntimeResourceObserver); supported {
+				resources, normalizeErr = observer.ObserveResources(
+					operationContext, runtimeProject, current,
+				)
+				if normalizeErr != nil {
+					if errors.Is(normalizeErr, ErrRuntimeOutputInvalid) {
+						return providerRejectedFault()
+					}
+					return unavailableFault()
+				}
+			}
+			resourceObservation, normalizeErr = normalizeResourceObservation(
+				state, request.ExecutionTargetID, current, resources, executor.now(),
+			)
+			if normalizeErr != nil {
+				return providerRejectedFault()
+			}
+			return nil
+		},
+	)
+	return runtimeObservation, resourceObservation, err
+}
+
+type currentRuntimeConsumer func(
+	context.Context,
+	projectState,
+	RuntimeProject,
+	[]inspectedRuntimeContainer,
+	time.Time,
+) error
+
+func (executor *Executor) withCurrentRuntime(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+	consume currentRuntimeConsumer,
+) error {
+	if executor == nil || executor.compiler == nil || ctx == nil || consume == nil ||
+		paasv1.ValidateObserveDeploymentRuntimeRequest(request) != nil {
+		return invalidRequestFault()
+	}
+	operationContext, cancel := context.WithDeadline(ctx, request.Deadline)
+	defer cancel()
+	project := projectName(request.Scope.TenantID, request.DeploymentID)
+	lock, err := acquireProjectLock(operationContext, executor.root, project)
+	if err != nil {
+		return boundaryFault(err)
+	}
+	defer lock.Close()
+	directory, composePath, observePath, statePath, err := existingProjectPaths(executor.root, project)
+	if err != nil {
+		return notFoundFault()
+	}
+	state, err := loadProjectState(executor.root, statePath)
+	if err != nil {
+		return notFoundFault()
+	}
+	if state.ProjectName != project || state.TenantID != request.Scope.TenantID ||
+		state.DeploymentID != request.DeploymentID || state.Generation != request.Generation ||
+		state.ApplicationRevisionID != request.ApplicationRevisionID ||
+		state.ContentDigest != request.ExpectedContentDigest ||
+		state.DesiredState != paasv1.DeploymentDesiredRunning {
+		return conflictFault()
+	}
+	if _, err := readManagedFile(executor.root, observePath, maxManagedStateBytes); err != nil {
+		return internalFault()
+	}
+	runtimeProject, err := executor.runtimeProject(
+		request.Deadline, directory, composePath, observePath, project,
+	)
+	if err != nil {
+		return boundaryFault(err)
+	}
+	containers, err := executor.runtime.Observe(operationContext, runtimeProject)
+	if err != nil {
+		if errors.Is(err, ErrRuntimeOutputInvalid) {
+			return providerRejectedFault()
+		}
+		return unavailableFault()
+	}
+	inspected, err := inspectRuntimeContainers(state, containers)
+	if err != nil {
+		return providerRejectedFault()
+	}
+	return consume(operationContext, state, runtimeProject, inspected, executor.now())
+}
+
 type secretMaterial struct {
 	relative string
 	content  []byte
@@ -688,28 +842,30 @@ func stoppedProjectState(
 	return current, receipt, nil
 }
 
-func normalizeObservation(
+type inspectedRuntimeContainer struct {
+	value   RuntimeContainer
+	service projectService
+	current bool
+}
+
+func inspectRuntimeContainers(
 	state projectState,
 	containers []RuntimeContainer,
-	now time.Time,
-) (paasv1.DeploymentObservation, error) {
+) ([]inspectedRuntimeContainer, error) {
 	services := make(map[string]projectService, len(state.Services))
 	for _, service := range state.Services {
 		services[service.Name] = service
 	}
 	seenContainers := make(map[string]struct{}, len(containers))
-	currentCount := make(map[string]uint32, len(services))
-	readyCount := make(map[string]uint32, len(services))
-	stale := uint32(0)
-	failed := false
+	result := make([]inspectedRuntimeContainer, 0, len(containers))
 	for _, container := range containers {
 		service, known := services[container.Service]
 		if !known || container.ID == "" || len(container.ID) > 128 ||
 			container.Project != state.ProjectName || container.OneOff || container.PublishedPorts != 0 {
-			return paasv1.DeploymentObservation{}, errors.New("provider returned an unsafe container declaration")
+			return nil, errors.New("provider returned an unsafe container declaration")
 		}
 		if _, duplicate := seenContainers[container.ID]; duplicate {
-			return paasv1.DeploymentObservation{}, errors.New("provider returned a duplicated container")
+			return nil, errors.New("provider returned a duplicated container")
 		}
 		seenContainers[container.ID] = struct{}{}
 		if container.Labels["com.docker.compose.project"] != state.ProjectName ||
@@ -717,19 +873,46 @@ func normalizeObservation(
 			container.Labels["com.xiak.matrix.component"] != service.Name ||
 			container.Labels["com.xiak.matrix.deployment-id"] != string(state.DeploymentID) ||
 			container.Labels["com.xiak.matrix.tenant-id"] != string(state.TenantID) {
-			return paasv1.DeploymentObservation{}, errors.New("provider container labels are invalid")
+			return nil, errors.New("provider container labels are invalid")
 		}
 		if !slices.Contains([]string{"created", "running", "restarting", "removing", "paused", "exited", "dead"}, container.State) ||
 			!slices.Contains([]string{"", "healthy", "unhealthy", "starting"}, container.Health) {
-			return paasv1.DeploymentObservation{}, errors.New("provider container state is unknown")
+			return nil, errors.New("provider container state is unknown")
 		}
+		result = append(result, inspectedRuntimeContainer{
+			value: container, service: service,
+			current: container.Labels["com.xiak.matrix.generation"] == strconv.FormatUint(state.Generation, 10) &&
+				container.Labels["com.xiak.matrix.content-digest"] == state.ContentDigest &&
+				container.Labels["com.xiak.matrix.application-revision-id"] == string(state.ApplicationRevisionID),
+		})
+	}
+	return result, nil
+}
+
+func normalizeObservation(
+	state projectState,
+	containers []RuntimeContainer,
+	now time.Time,
+) (paasv1.DeploymentObservation, error) {
+	inspected, err := inspectRuntimeContainers(state, containers)
+	if err != nil {
+		return paasv1.DeploymentObservation{}, err
+	}
+	services := make(map[string]projectService, len(state.Services))
+	for _, service := range state.Services {
+		services[service.Name] = service
+	}
+	currentCount := make(map[string]uint32, len(services))
+	readyCount := make(map[string]uint32, len(services))
+	stale := uint32(0)
+	failed := false
+	for _, item := range inspected {
+		container := item.value
+		service := item.service
 		if state.DesiredState == paasv1.DeploymentDesiredStopped {
 			continue
 		}
-		current := container.Labels["com.xiak.matrix.generation"] == strconv.FormatUint(state.Generation, 10) &&
-			container.Labels["com.xiak.matrix.content-digest"] == state.ContentDigest &&
-			container.Labels["com.xiak.matrix.application-revision-id"] == string(state.ApplicationRevisionID)
-		if !current {
+		if !item.current {
 			stale++
 			continue
 		}
@@ -791,6 +974,213 @@ func normalizeObservation(
 		return paasv1.DeploymentObservation{}, err
 	}
 	return observation, nil
+}
+
+func normalizeRuntimeObservation(
+	state projectState,
+	executionTargetID paasv1.ResourceID,
+	containers []RuntimeContainer,
+	now time.Time,
+) (paasv1.DeploymentRuntimeObservation, error) {
+	inspected, err := inspectRuntimeContainers(state, containers)
+	if err != nil {
+		return paasv1.DeploymentRuntimeObservation{}, err
+	}
+	return normalizeInspectedRuntimeObservation(state, executionTargetID, inspected, now)
+}
+
+func normalizeInspectedRuntimeObservation(
+	state projectState,
+	executionTargetID paasv1.ResourceID,
+	inspected []inspectedRuntimeContainer,
+	now time.Time,
+) (paasv1.DeploymentRuntimeObservation, error) {
+	observation := paasv1.DeploymentRuntimeObservation{
+		DeploymentID:          state.DeploymentID,
+		Generation:            state.Generation,
+		ApplicationRevisionID: state.ApplicationRevisionID,
+		ExecutionTargetID:     executionTargetID,
+		Instances:             make([]paasv1.DeploymentRuntimeInstance, 0, len(inspected)),
+		ObservedAt:            now,
+	}
+	for _, item := range inspected {
+		if !item.current {
+			continue
+		}
+		if len(observation.Instances) == paasv1.MaximumDeploymentRuntimeInstances {
+			return paasv1.DeploymentRuntimeObservation{}, errors.New("provider returned too many current instances")
+		}
+		instance, err := normalizedRuntimeInstance(state, executionTargetID, item.value)
+		if err != nil {
+			return paasv1.DeploymentRuntimeObservation{}, err
+		}
+		observation.Instances = append(observation.Instances, instance)
+	}
+	slices.SortFunc(observation.Instances, func(left, right paasv1.DeploymentRuntimeInstance) int {
+		if compared := strings.Compare(left.ComponentName, right.ComponentName); compared != 0 {
+			return compared
+		}
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	if err := paasv1.ValidateDeploymentRuntimeObservation(observation); err != nil {
+		return paasv1.DeploymentRuntimeObservation{}, err
+	}
+	return observation, nil
+}
+
+func unsupportedRuntimeResources(
+	containers []RuntimeContainer,
+) map[string]RuntimeContainerResources {
+	result := make(map[string]RuntimeContainerResources, len(containers))
+	for _, container := range containers {
+		result[container.ID] = RuntimeContainerResources{
+			CPU:     paasv1.DeploymentInstanceCPUUsage{State: paasv1.MeasurementUnsupported},
+			Memory:  paasv1.DeploymentInstanceMemoryUsage{State: paasv1.MeasurementUnsupported},
+			Network: paasv1.DeploymentInstanceNetworkUsage{State: paasv1.MeasurementUnsupported},
+			BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
+			Storage: paasv1.DeploymentInstanceStorageUsage{State: paasv1.MeasurementUnsupported},
+		}
+	}
+	return result
+}
+
+func normalizeResourceObservation(
+	state projectState,
+	executionTargetID paasv1.ResourceID,
+	containers []RuntimeContainer,
+	resources map[string]RuntimeContainerResources,
+	now time.Time,
+) (paasv1.DeploymentResourceObservation, error) {
+	if len(resources) != len(containers) {
+		return paasv1.DeploymentResourceObservation{}, errors.New("provider resource set is incomplete")
+	}
+	observation := paasv1.DeploymentResourceObservation{
+		DeploymentID:          state.DeploymentID,
+		Generation:            state.Generation,
+		ApplicationRevisionID: state.ApplicationRevisionID,
+		ExecutionTargetID:     executionTargetID,
+		Instances:             make([]paasv1.DeploymentResourceInstance, 0, len(containers)),
+		ObservedAt:            now,
+	}
+	seen := make(map[string]struct{}, len(containers))
+	for _, container := range containers {
+		if _, duplicate := seen[container.ID]; duplicate {
+			return paasv1.DeploymentResourceObservation{}, errors.New("provider resource instance is duplicated")
+		}
+		seen[container.ID] = struct{}{}
+		value, found := resources[container.ID]
+		if !found {
+			return paasv1.DeploymentResourceObservation{}, errors.New("provider resource instance is missing")
+		}
+		observation.Instances = append(observation.Instances, paasv1.DeploymentResourceInstance{
+			ID:      opaqueDeploymentInstanceID(state, executionTargetID, container.ID),
+			CPU:     cloneCPUUsage(value.CPU),
+			Memory:  cloneMemoryUsage(value.Memory),
+			Network: cloneNetworkUsage(value.Network),
+			BlockIO: cloneBlockIOUsage(value.BlockIO),
+			Storage: cloneStorageUsage(value.Storage),
+		})
+	}
+	slices.SortFunc(observation.Instances, func(left, right paasv1.DeploymentResourceInstance) int {
+		return strings.Compare(string(left.ID), string(right.ID))
+	})
+	if err := paasv1.ValidateDeploymentResourceObservation(observation); err != nil {
+		return paasv1.DeploymentResourceObservation{}, err
+	}
+	return observation, nil
+}
+
+func cloneCPUUsage(value paasv1.DeploymentInstanceCPUUsage) paasv1.DeploymentInstanceCPUUsage {
+	if value.Value != nil {
+		copy := *value.Value
+		value.Value = &copy
+	}
+	return value
+}
+
+func cloneMemoryUsage(value paasv1.DeploymentInstanceMemoryUsage) paasv1.DeploymentInstanceMemoryUsage {
+	if value.Value != nil {
+		copy := *value.Value
+		value.Value = &copy
+	}
+	return value
+}
+
+func cloneNetworkUsage(value paasv1.DeploymentInstanceNetworkUsage) paasv1.DeploymentInstanceNetworkUsage {
+	if value.Value != nil {
+		copy := *value.Value
+		value.Value = &copy
+	}
+	return value
+}
+
+func cloneBlockIOUsage(value paasv1.DeploymentInstanceBlockIOUsage) paasv1.DeploymentInstanceBlockIOUsage {
+	if value.Value != nil {
+		copy := *value.Value
+		value.Value = &copy
+	}
+	return value
+}
+
+func cloneStorageUsage(value paasv1.DeploymentInstanceStorageUsage) paasv1.DeploymentInstanceStorageUsage {
+	if value.Value != nil {
+		copy := *value.Value
+		if copy.Volumes != nil {
+			volumes := *copy.Volumes
+			copy.Volumes = &volumes
+		}
+		value.Value = &copy
+	}
+	return value
+}
+
+func normalizedRuntimeInstance(
+	state projectState,
+	executionTargetID paasv1.ResourceID,
+	container RuntimeContainer,
+) (paasv1.DeploymentRuntimeInstance, error) {
+	states := map[string]paasv1.DeploymentInstanceState{
+		"created":    paasv1.DeploymentInstanceCreated,
+		"running":    paasv1.DeploymentInstanceRunning,
+		"restarting": paasv1.DeploymentInstanceRestarting,
+		"removing":   paasv1.DeploymentInstanceRemoving,
+		"paused":     paasv1.DeploymentInstancePaused,
+		"exited":     paasv1.DeploymentInstanceExited,
+		"dead":       paasv1.DeploymentInstanceDead,
+	}
+	health := map[string]paasv1.DeploymentInstanceHealth{
+		"":          paasv1.DeploymentInstanceHealthNone,
+		"starting":  paasv1.DeploymentInstanceHealthStarting,
+		"healthy":   paasv1.DeploymentInstanceHealthHealthy,
+		"unhealthy": paasv1.DeploymentInstanceHealthUnhealthy,
+	}
+	value := paasv1.DeploymentRuntimeInstance{
+		ID:            opaqueDeploymentInstanceID(state, executionTargetID, container.ID),
+		ComponentName: container.Service,
+		State:         states[container.State],
+		Health:        health[container.Health],
+	}
+	if value.State == paasv1.DeploymentInstanceExited || value.State == paasv1.DeploymentInstanceDead {
+		if container.ExitCode < 0 || uint64(container.ExitCode) > 4294967295 {
+			return paasv1.DeploymentRuntimeInstance{}, errors.New("provider exit code is invalid")
+		}
+		exitCode := uint32(container.ExitCode)
+		value.ExitCode = &exitCode
+	}
+	return value, nil
+}
+
+func opaqueDeploymentInstanceID(
+	state projectState,
+	executionTargetID paasv1.ResourceID,
+	providerID string,
+) paasv1.ResourceID {
+	digest := sha256.Sum256([]byte(
+		"matrix-deployment-instance-v1\x00" + string(state.TenantID) + "\x00" +
+			string(state.DeploymentID) + "\x00" + strconv.FormatUint(state.Generation, 10) + "\x00" +
+			string(state.ApplicationRevisionID) + "\x00" + string(executionTargetID) + "\x00" + providerID,
+	))
+	return paasv1.ResourceID("instance-" + hex.EncodeToString(digest[:16]))
 }
 
 func sumCounts(values map[string]uint32) uint32 {

@@ -37,6 +37,8 @@ func verifyManagedPermissions(path string, directory bool) error {
 	return nil
 }
 
+func verifyNodeExecutableOwner(path string) error { return verifyManagedPermissions(path, false) }
+
 func syncManagedDirectory(string) error { return nil }
 
 func durableReplaceManaged(temporary, target, _ string) error {

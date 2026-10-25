@@ -171,7 +171,7 @@ func TestSourceTrustCommandRejectsUnsafeInputAndStoredStateWithoutDisclosure(t *
 
 func newTrustBackend(t *testing.T) *sourcetrustcommand.Backend {
 	t.Helper()
-	backend, err := sourcetrustcommand.NewBackend(localmachine.NewEffects(nil))
+	backend, err := sourcetrustcommand.NewBackend(localmachine.NewEffects(nil, nil))
 	if err != nil {
 		t.Fatal(err)
 	}

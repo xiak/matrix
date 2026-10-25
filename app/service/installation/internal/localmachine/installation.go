@@ -180,6 +180,14 @@ func authenticatedInstallationConfiguration(
 	if err != nil {
 		return verifiedInstallation{}, err
 	}
+	if compiled.ContractDigest == topology.ContractDigest() {
+		if err := ensureEnrollmentIngress(plan.Root, plan.InstallationID, nil); err != nil {
+			return verifiedInstallation{}, errors.New("node enrollment ingress authority is unsafe")
+		}
+		if err := ensureEnrollmentController(plan.Root, plan.InstallationID, nil); err != nil {
+			return verifiedInstallation{}, errors.New("node enrollment controller authority is unsafe")
+		}
+	}
 	catalog, err := artifactCatalogConfig(plan.Bundle.Manifest)
 	if err != nil {
 		return verifiedInstallation{}, errors.New("generated artifact catalog is invalid")
@@ -190,8 +198,8 @@ func authenticatedInstallationConfiguration(
 	}{
 		{layout.Compose, compiled.ComposeJSON},
 		{layout.ArtifactCatalog, catalog},
-		{layout.APISIXRoutes, apisixStandaloneConfig(plan.NorthboundOrigin)},
-		{layout.APISIXConfig, apisixMainConfig()},
+		{layout.APISIXRoutes, installedAPISIXStandaloneConfig(plan.Bundle.Manifest, plan.NorthboundOrigin)},
+		{layout.APISIXConfig, installedAPISIXMainConfig(plan.Bundle.Manifest)},
 		{layout.APISIXUID, []byte(compiled.ProjectName)},
 	}
 	for _, expected := range expectedFiles {

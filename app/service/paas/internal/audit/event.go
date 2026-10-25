@@ -20,8 +20,15 @@ var (
 type Result string
 
 const (
-	Accepted  Result = "ACCEPTED"
-	Succeeded Result = "SUCCEEDED"
+	Accepted     Result = "ACCEPTED"
+	Succeeded    Result = "SUCCEEDED"
+	Completed    Result = "COMPLETED"
+	Unsupported  Result = "UNSUPPORTED"
+	Expired      Result = "EXPIRED"
+	Disconnected Result = "DISCONNECTED"
+	Revoked      Result = "REVOKED"
+	Replaced     Result = "REPLACED"
+	Failed       Result = "FAILED"
 )
 
 const (
@@ -35,6 +42,14 @@ const (
 	DeploymentUpdated                       = "paas.deployment.updated"
 	DeploymentStopped                       = "paas.deployment.stopped"
 	DeploymentRolledBack                    = "paas.deployment.rolled-back"
+	ExecutionPoolCreated                    = "paas.execution-pool.created"
+	ExecutionTargetRegistered               = "paas.execution-target.registered"
+	ExecutionTargetDrained                  = "paas.execution-target.drained"
+	ExecutionTargetActivated                = "paas.execution-target.activated"
+	ExecutionTargetRemoved                  = "paas.execution-target.removed"
+	TerminalSessionCreated                  = "paas.terminal-session.created"
+	TerminalSessionStarted                  = "paas.terminal-session.started"
+	TerminalSessionEnded                    = "paas.terminal-session.ended"
 	QuotaEntitlementActivated               = "managedservice.quota-entitlement.activated"
 	ServiceActivationActivated              = "managedservice.service-activation.activated"
 	ServiceInstallationCreated              = "managedservice.service-installation.created"
@@ -47,10 +62,12 @@ const (
 	TargetQuotaEntitlement    = "QuotaEntitlement"
 	TargetServiceActivation   = "ServiceActivation"
 	TargetServiceInstallation = "ServiceInstallation"
+	TargetTerminalSession     = "TerminalSession"
 )
 
 const (
 	ActorUser           = paasv1.SubjectUser
+	ActorRole           = paasv1.SubjectRole
 	ActorServiceAccount = paasv1.SubjectServiceAccount
 )
 
@@ -65,20 +82,21 @@ type ResourceID = paasv1.ResourceID
 // into which configuration, credentials, secrets, or provider payloads could
 // leak. The persisted JSON shape remains stable across PaaS contexts.
 type Event struct {
-	SchemaVersion string             `json:"schemaVersion"`
-	EventID       string             `json:"eventId"`
-	TenantID      paasv1.TenantID    `json:"tenantId"`
-	Actor         paasv1.SubjectRef  `json:"actor"`
-	IAMDecisionID string             `json:"iamDecisionId"`
-	Action        string             `json:"action"`
-	Target        paasv1.ResourceRef `json:"target"`
-	OperationID   paasv1.OperationID `json:"operationId,omitempty"`
-	RequestDigest string             `json:"requestDigest"`
-	Result        Result             `json:"result"`
-	RequestID     string             `json:"requestId"`
-	AuditID       string             `json:"auditId,omitempty"`
-	TraceParent   string             `json:"traceparent,omitempty"`
-	OccurredAt    time.Time          `json:"occurredAt"`
+	SchemaVersion  string             `json:"schemaVersion"`
+	EventID        string             `json:"eventId"`
+	TenantID       paasv1.TenantID    `json:"tenantId,omitempty"`
+	InstallationID string             `json:"installationId,omitempty"`
+	Actor          paasv1.SubjectRef  `json:"actor"`
+	IAMDecisionID  string             `json:"iamDecisionId"`
+	Action         string             `json:"action"`
+	Target         paasv1.ResourceRef `json:"target"`
+	OperationID    paasv1.OperationID `json:"operationId,omitempty"`
+	RequestDigest  string             `json:"requestDigest"`
+	Result         Result             `json:"result"`
+	RequestID      string             `json:"requestId"`
+	AuditID        string             `json:"auditId,omitempty"`
+	TraceParent    string             `json:"traceparent,omitempty"`
+	OccurredAt     time.Time          `json:"occurredAt"`
 }
 
 // Ingestor must deduplicate EventID and treat an equal replay as success.
@@ -118,21 +136,26 @@ func ToV1(value Event) (auditv1.Event, error) {
 		correlationID = value.RequestID
 	}
 	actor := auditv1.ActorReference{
-		Type: actorType, ID: auditv1.ActorID(value.Actor.ID), AccessKeyID: value.Actor.AccessKeyID,
+		Type:        actorType,
+		ID:          auditv1.ActorID(value.Actor.ID),
+		AccessKeyID: value.Actor.AccessKeyID,
 	}
 	if value.Actor.RoleSession != nil {
-		actor.RoleSession = &auditv1.RoleSessionReference{SessionID: value.Actor.RoleSession.SessionID,
+		actor.RoleSession = &auditv1.RoleSessionReference{
+			SessionID:                value.Actor.RoleSession.SessionID,
 			SourceUserID:             auditv1.ActorID(value.Actor.RoleSession.SourceUserID),
-			SourceServicePrincipalID: auditv1.ActorID(value.Actor.RoleSession.SourceServicePrincipalID)}
+			SourceServicePrincipalID: auditv1.ActorID(value.Actor.RoleSession.SourceServicePrincipalID),
+		}
 	}
 	return auditv1.Event{
 		APIVersion: auditv1.APIVersion, Kind: "AuditEvent",
 		EventID: auditv1.EventID(value.EventID), TenantID: auditv1.TenantID(value.TenantID),
-		Actor:         actor,
-		IAMDecisionID: auditv1.DecisionID(value.IAMDecisionID),
-		Action:        auditv1.Action(value.Action),
-		Target:        auditv1.TargetReference{Kind: targetKind, ID: string(value.Target.ID)},
-		Result:        auditv1.Result(value.Result), RequestDigest: value.RequestDigest,
+		InstallationID: value.InstallationID,
+		Actor:          actor,
+		IAMDecisionID:  auditv1.DecisionID(value.IAMDecisionID),
+		Action:         auditv1.Action(value.Action),
+		Target:         auditv1.TargetReference{Kind: targetKind, ID: string(value.Target.ID)},
+		Result:         auditv1.Result(value.Result), RequestDigest: value.RequestDigest,
 		RequestID: value.RequestID, CorrelationID: correlationID,
 		OperationID: auditv1.OperationID(value.OperationID), TraceParent: value.TraceParent,
 		OccurredAt: value.OccurredAt,
@@ -166,6 +189,12 @@ func targetKindToV1(value string) (auditv1.TargetKind, error) {
 		return auditv1.TargetApplicationRevision, nil
 	case "Deployment":
 		return auditv1.TargetDeployment, nil
+	case TargetTerminalSession:
+		return auditv1.TargetTerminalSession, nil
+	case "ExecutionPool":
+		return auditv1.TargetExecutionPool, nil
+	case "ExecutionTarget":
+		return auditv1.TargetExecutionTarget, nil
 	case TargetQuotaEntitlement:
 		return auditv1.TargetQuotaEntitlement, nil
 	case TargetServiceActivation:

@@ -16,6 +16,7 @@ const (
 	// canonical bytes remain valid, but its scalar is not a new schema profile.
 	LegacyManifestAPIVersion = "installation.matrix.xiak.com/v1"
 	ManifestKind             = "OfflineRelease"
+	NodeManifestKind         = "OfflineNodeRelease"
 	TrustAPIVersion          = "installation.matrix.xiak.com/v1"
 	TrustKind                = "ReleaseTrustRoot"
 	SignatureAlgorithm       = "Ed25519"
@@ -64,11 +65,12 @@ type Manifest struct {
 	Signer           Signer          `json:"signer"`
 	Host             HostProfile     `json:"host"`
 	MinimumFreeBytes uint64          `json:"minimumFreeBytes"`
-	Database         DatabaseProfile `json:"database"`
-	Products         []Product       `json:"products"`
+	Database         DatabaseProfile `json:"database,omitzero"`
+	Products         []Product       `json:"products,omitempty"`
+	Node             *NodeProfile    `json:"node,omitempty"`
 	TopologyDigest   string          `json:"topologyDigest"`
 	Files            []File          `json:"files"`
-	Images           []Image         `json:"images"`
+	Images           []Image         `json:"images,omitempty"`
 }
 
 // legacyProductlessManifest preserves the exact canonical wire shape emitted
@@ -108,6 +110,13 @@ type HostProfile struct {
 	MinimumDocker   string `json:"minimumDocker"`
 	MinimumCompose  string `json:"minimumCompose"`
 	CommandContract string `json:"commandContract"`
+	MinimumSystemd  uint64 `json:"minimumSystemd,omitempty"`
+}
+
+type NodeProfile struct {
+	ProtocolAPIVersion string `json:"protocolApiVersion"`
+	RuntimeRevision    uint64 `json:"runtimeRevision"`
+	CollectorVersion   string `json:"collectorVersion"`
 }
 
 type DatabaseProfile struct {
@@ -132,8 +141,8 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 7},
-		ContractRevision: 38,
+		Authorities:      AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8},
+		ContractRevision: 40,
 	}
 }
 

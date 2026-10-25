@@ -16,12 +16,18 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
+	"github.com/xiak/matrix/app/service/paas/cmd/internal/nodeconnections"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/data/enrollmentissuer"
 	iamhttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/iamhttp"
 	paaspostgres "github.com/xiak/matrix/app/service/paas/internal/apphosting/data/postgres"
 	paashttp "github.com/xiak/matrix/app/service/paas/internal/apphosting/service/nethttp"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 	managedserviceiam "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/iamhttp"
 	managedservicepostgres "github.com/xiak/matrix/app/service/paas/internal/managedservice/data/postgres"
@@ -31,29 +37,45 @@ import (
 )
 
 const (
-	databaseDSNFileEnvironment       = "MATRIX_PAAS_DATABASE_DSN_FILE"
-	iamEndpointEnvironment           = "MATRIX_PAAS_IAM_ENDPOINT"
-	serviceCredentialFileEnvironment = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE"
-	cursorKeyFileEnvironment         = "MATRIX_PAAS_CURSOR_KEY_FILE"
-	listenAddressEnvironment         = "MATRIX_PAAS_LISTEN_ADDRESS"
-	installationIDEnvironment        = "MATRIX_PAAS_INSTALLATION_ID"
-	northboundOriginEnvironment      = "MATRIX_PAAS_NORTHBOUND_ORIGIN"
-	edgeAssertionFileEnvironment     = "MATRIX_PAAS_EDGE_ASSERTION_FILE"
-	releaseIDEnvironment             = "MATRIX_PAAS_RELEASE_ID"
-	verificationDigestEnvironment    = "MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST"
+	databaseDSNFileEnvironment           = "MATRIX_PAAS_DATABASE_DSN_FILE"
+	iamEndpointEnvironment               = "MATRIX_PAAS_IAM_ENDPOINT"
+	serviceCredentialFileEnvironment     = "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE"
+	cursorKeyFileEnvironment             = "MATRIX_PAAS_CURSOR_KEY_FILE"
+	listenAddressEnvironment             = "MATRIX_PAAS_LISTEN_ADDRESS"
+	installationIDEnvironment            = "MATRIX_PAAS_INSTALLATION_ID"
+	northboundOriginEnvironment          = "MATRIX_PAAS_NORTHBOUND_ORIGIN"
+	edgeAssertionFileEnvironment         = "MATRIX_PAAS_EDGE_ASSERTION_FILE"
+	releaseIDEnvironment                 = "MATRIX_PAAS_RELEASE_ID"
+	verificationDigestEnvironment        = "MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST"
+	nodeConnectionsFileEnvironment       = "MATRIX_PAAS_NODE_CONNECTIONS_FILE"
+	publicBasePathEnvironment            = "MATRIX_PAAS_PUBLIC_BASE_PATH"
+	terminalCookieSecureEnvironment      = "MATRIX_PAAS_TERMINAL_COOKIE_SECURE"
+	enrollmentIssuerCertEnvironment      = "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"
+	enrollmentIssuerKeyEnvironment       = "MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"
+	enrollmentControllerCertEnvironment  = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
+	enrollmentControllerKeyEnvironment   = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
+	enrollmentControllerTrustEnvironment = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE"
 )
 
 type configuration struct {
-	databaseDSNFile       string
-	iamEndpoint           string
-	serviceCredentialFile string
-	cursorKeyFile         string
-	listenAddress         string
-	installationID        string
-	northboundOrigin      string
-	edgeAssertionFile     string
-	releaseID             string
-	verificationDigest    string
+	databaseDSNFile           string
+	iamEndpoint               string
+	serviceCredentialFile     string
+	cursorKeyFile             string
+	listenAddress             string
+	installationID            string
+	northboundOrigin          string
+	edgeAssertionFile         string
+	releaseID                 string
+	verificationDigest        string
+	nodeConnectionsFile       string
+	publicBasePath            string
+	terminalCookieSecure      bool
+	enrollmentIssuerCert      string
+	enrollmentIssuerKey       string
+	enrollmentControllerCert  string
+	enrollmentControllerKey   string
+	enrollmentControllerTrust string
 }
 
 func main() {
@@ -110,7 +132,7 @@ func run(ctx context.Context) error {
 	}
 	defer clear(edgeAssertion)
 	authorizer, err := iamhttp.NewClient(iamhttp.Config{
-		Endpoint: config.iamEndpoint, ServiceCredential: credential,
+		Endpoint: config.iamEndpoint, ServiceCredential: credential, InstallationID: config.installationID,
 	})
 	if err != nil {
 		return err
@@ -144,22 +166,113 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	apphostingHandler, err := paashttp.NewHandler(authorizer, workflow, installationVerifier, paashttp.Config{
-		NorthboundOrigin: config.northboundOrigin,
-		InstallationID:   config.installationID,
-		EdgeAssertion:    edgeAssertion,
-		CursorKey:        cursorKey,
-		Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
-			readiness, err := repository.Readiness(readinessContext)
-			if err != nil || readiness.State != paasv1.ReadinessReady {
-				return readiness, err
-			}
-			if err := authorizer.Ready(readinessContext); err != nil {
-				readiness.State = paasv1.ReadinessNotReady
-			}
-			return readiness, nil
-		},
+	bindings, closeBindings, err := loadNodeBindings(config.nodeConnectionsFile, config.installationID)
+	if err != nil {
+		return err
+	}
+	defer closeBindings()
+	connectionRepository, err := paaspostgres.NewEnrolledNodeConnectionRepository(pool)
+	if err != nil {
+		return err
+	}
+	dynamicConnections, err := nodeconnections.NewDynamic(connectionRepository, nodeconnections.DynamicConfig{
+		InstallationID: config.installationID, ControllerID: nodeconfig.DefaultControllerID,
+		CertificateFile: config.enrollmentControllerCert,
+		PrivateKeyFile:  config.enrollmentControllerKey,
+		TrustFile:       config.enrollmentControllerTrust,
 	})
+	if err != nil {
+		return err
+	}
+	terminalConnector, err := terminalRouter(config.installationID, bindings, dynamicConnections)
+	if err != nil {
+		return err
+	}
+	executionRepository, err := paaspostgres.NewExecutionAdmissionRepository(pool)
+	if err != nil {
+		return err
+	}
+	execution, err := executionadmission.New(executionRepository, executionadmission.Config{
+		InstallationID: config.installationID, Bindings: bindings, DynamicBindings: dynamicConnections,
+		ObservationTimeout: 5 * time.Second, MaximumObservationAge: 15 * time.Second,
+		MaxTransactionAttempts: 5,
+	})
+	if err != nil {
+		return err
+	}
+	issuerCertificate, err := processconfig.ReadFile(config.enrollmentIssuerCert, 64*1024, true)
+	if err != nil {
+		return err
+	}
+	defer clear(issuerCertificate)
+	issuerPrivateKey, err := processconfig.ReadFile(config.enrollmentIssuerKey, 16*1024, true)
+	if err != nil {
+		return err
+	}
+	defer clear(issuerPrivateKey)
+	enrollmentIssuer, err := enrollmentissuer.New(config.installationID, issuerCertificate, issuerPrivateKey)
+	if err != nil {
+		return err
+	}
+	enrollmentRepository, err := paaspostgres.NewNodeEnrollmentRepository(pool)
+	if err != nil {
+		return err
+	}
+	enrollmentWorkflow, err := nodeenrollment.New(enrollmentRepository, enrollmentIssuer, nodeenrollment.Config{
+		InstallationID: config.installationID, Lifetime: 15 * time.Minute,
+		CertificateLifetime: 30 * 24 * time.Hour, RecoveryChallengeLifetime: 2 * time.Minute,
+		SupportedRuntimeContractDigest: nodeconfig.ContractDigest(), ControllerID: nodeconfig.DefaultControllerID,
+		ManagementPort: nodeconfig.DefaultManagementPort, CollectorPort: nodeconfig.DefaultCollectorPort,
+		CompletionProbeTimeout: 5 * time.Second, CompletionProbe: dynamicConnections,
+		CompletionAdmission: execution, MaxTransactionAttempts: 5,
+	})
+	if err != nil {
+		return err
+	}
+	terminalRepository, err := paaspostgres.NewTerminalSessionRepository(pool)
+	if err != nil {
+		return err
+	}
+	terminalWorkflow, err := terminalsession.New(terminalRepository, terminalsession.Config{MaxTransactionAttempts: 5})
+	if err != nil {
+		return err
+	}
+	refreshContext, stopRefresh := context.WithCancel(ctx)
+	refreshDone := make(chan struct{})
+	go func() {
+		defer close(refreshDone)
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		for {
+			_ = execution.Refresh(refreshContext)
+			select {
+			case <-refreshContext.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer func() { stopRefresh(); <-refreshDone }()
+	apphostingHandler, err := paashttp.NewHandler(
+		authorizer, workflow, execution, enrollmentWorkflow, terminalWorkflow, terminalConnector, installationVerifier,
+		paashttp.Config{
+			NorthboundOrigin:       config.northboundOrigin,
+			InstallationID:         config.installationID,
+			EdgeAssertion:          edgeAssertion,
+			CursorKey:              cursorKey,
+			TerminalPublicBasePath: config.publicBasePath,
+			TerminalCookieSecure:   config.terminalCookieSecure,
+			Readiness: func(readinessContext context.Context) (paasv1.Readiness, error) {
+				readiness, err := repository.Readiness(readinessContext)
+				if err != nil || readiness.State != paasv1.ReadinessReady {
+					return readiness, err
+				}
+				if err := authorizer.Ready(readinessContext); err != nil {
+					readiness.State = paasv1.ReadinessNotReady
+				}
+				return readiness, nil
+			},
+		})
 	clear(cursorKey)
 	clear(edgeAssertion)
 	if err != nil {
@@ -202,23 +315,41 @@ func run(ctx context.Context) error {
 }
 
 func loadConfiguration() (configuration, error) {
+	terminalCookieSecure := false
+	switch os.Getenv(terminalCookieSecureEnvironment) {
+	case "", "false":
+	case "true":
+		terminalCookieSecure = true
+	default:
+		return configuration{}, errors.New("PaaS terminal cookie security configuration is invalid")
+	}
 	config := configuration{
-		databaseDSNFile:       os.Getenv(databaseDSNFileEnvironment),
-		iamEndpoint:           os.Getenv(iamEndpointEnvironment),
-		serviceCredentialFile: os.Getenv(serviceCredentialFileEnvironment),
-		cursorKeyFile:         os.Getenv(cursorKeyFileEnvironment),
-		listenAddress:         os.Getenv(listenAddressEnvironment),
-		installationID:        os.Getenv(installationIDEnvironment),
-		northboundOrigin:      os.Getenv(northboundOriginEnvironment),
-		edgeAssertionFile:     os.Getenv(edgeAssertionFileEnvironment),
-		releaseID:             os.Getenv(releaseIDEnvironment),
-		verificationDigest:    os.Getenv(verificationDigestEnvironment),
+		databaseDSNFile:           os.Getenv(databaseDSNFileEnvironment),
+		iamEndpoint:               os.Getenv(iamEndpointEnvironment),
+		serviceCredentialFile:     os.Getenv(serviceCredentialFileEnvironment),
+		cursorKeyFile:             os.Getenv(cursorKeyFileEnvironment),
+		listenAddress:             os.Getenv(listenAddressEnvironment),
+		installationID:            os.Getenv(installationIDEnvironment),
+		northboundOrigin:          os.Getenv(northboundOriginEnvironment),
+		edgeAssertionFile:         os.Getenv(edgeAssertionFileEnvironment),
+		releaseID:                 os.Getenv(releaseIDEnvironment),
+		verificationDigest:        os.Getenv(verificationDigestEnvironment),
+		nodeConnectionsFile:       os.Getenv(nodeConnectionsFileEnvironment),
+		publicBasePath:            os.Getenv(publicBasePathEnvironment),
+		terminalCookieSecure:      terminalCookieSecure,
+		enrollmentIssuerCert:      os.Getenv(enrollmentIssuerCertEnvironment),
+		enrollmentIssuerKey:       os.Getenv(enrollmentIssuerKeyEnvironment),
+		enrollmentControllerCert:  os.Getenv(enrollmentControllerCertEnvironment),
+		enrollmentControllerKey:   os.Getenv(enrollmentControllerKeyEnvironment),
+		enrollmentControllerTrust: os.Getenv(enrollmentControllerTrustEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.iamEndpoint == "" ||
 		config.serviceCredentialFile == "" || config.cursorKeyFile == "" || config.listenAddress == "" ||
 		config.installationID == "" || config.northboundOrigin == "" || config.edgeAssertionFile == "" ||
-		config.releaseID == "" ||
-		config.verificationDigest == "" {
+		config.releaseID == "" || config.verificationDigest == "" ||
+		config.nodeConnectionsFile == "" || config.enrollmentIssuerCert == "" ||
+		config.enrollmentIssuerKey == "" || config.enrollmentControllerCert == "" ||
+		config.enrollmentControllerKey == "" || config.enrollmentControllerTrust == "" {
 		return configuration{}, errors.New("PaaS process configuration is incomplete")
 	}
 	return config, nil

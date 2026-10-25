@@ -39,6 +39,7 @@ AS $function$
     SELECT CASE
         WHEN current_setting('matrix.tenant_id', true)
             COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND COALESCE(current_setting('matrix.installation_id', true), '') = ''
         THEN current_setting('matrix.tenant_id', true)
         ELSE NULL
     END
@@ -46,6 +47,83 @@ $function$;
 
 REVOKE ALL ON FUNCTION paas.current_tenant_id() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.current_tenant_id()
+    TO matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.current_installation_id()
+RETURNS text
+LANGUAGE sql
+STABLE
+PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT CASE
+        WHEN current_setting('matrix.installation_id', true)
+            COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND COALESCE(current_setting('matrix.tenant_id', true), '') = ''
+        THEN current_setting('matrix.installation_id', true)
+        ELSE NULL
+    END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.current_installation_id() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.current_installation_id()
+    TO matrix_paas_api, matrix_paas_worker;
+
+-- A subject reference is immutable public lineage, not a credential or a
+-- caller-selected authorization shortcut. Keep its closed JSON shape in the
+-- database so an API role cannot smuggle unverified fields through a
+-- SECURITY DEFINER mutation.
+CREATE OR REPLACE FUNCTION paas.subject_reference_valid(subject jsonb)
+RETURNS boolean
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT COALESCE(CASE
+        WHEN jsonb_typeof(subject) IS DISTINCT FROM 'object'
+          OR jsonb_typeof(subject->'type') IS DISTINCT FROM 'string'
+          OR jsonb_typeof(subject->'id') IS DISTINCT FROM 'string'
+          OR COALESCE(subject->>'id', '') COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        THEN false
+        WHEN subject->>'type' = 'USER' THEN
+            (subject - ARRAY['type', 'id', 'accessKeyId']) = '{}'::jsonb
+            AND (NOT (subject ? 'accessKeyId') OR (
+                jsonb_typeof(subject->'accessKeyId') = 'string'
+                AND subject->>'accessKeyId' COLLATE "C"
+                    ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            ))
+        WHEN subject->>'type' = 'ROLE' THEN
+            (subject - ARRAY['type', 'id', 'roleSession']) = '{}'::jsonb
+            AND jsonb_typeof(subject->'roleSession') = 'object'
+            AND (subject->'roleSession') ? 'sessionId'
+            AND ((subject->'roleSession') ? 'sourceUserId') <>
+                ((subject->'roleSession') ? 'sourceServicePrincipalId')
+            AND ((subject->'roleSession') - ARRAY[
+                'sessionId', 'sourceUserId', 'sourceServicePrincipalId'
+            ]) = '{}'::jsonb
+            AND jsonb_typeof(subject#>'{roleSession,sessionId}') = 'string'
+            AND subject#>>'{roleSession,sessionId}' COLLATE "C"
+                ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND CASE
+                WHEN (subject->'roleSession') ? 'sourceUserId' THEN
+                    jsonb_typeof(subject#>'{roleSession,sourceUserId}') = 'string'
+                    AND subject#>>'{roleSession,sourceUserId}' COLLATE "C"
+                        ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+                ELSE
+                    jsonb_typeof(subject#>'{roleSession,sourceServicePrincipalId}') = 'string'
+                    AND subject#>>'{roleSession,sourceServicePrincipalId}' COLLATE "C"
+                        ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            END
+        WHEN subject->>'type' IN ('SERVICE_ACCOUNT', 'AGENT', 'SYSTEM_USER') THEN
+            (subject - ARRAY['type', 'id']) = '{}'::jsonb
+        ELSE false
+    END, false)
+$function$;
+
+REVOKE ALL ON FUNCTION paas.subject_reference_valid(jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.subject_reference_valid(jsonb)
     TO matrix_paas_api, matrix_paas_worker;
 
 CREATE TABLE IF NOT EXISTS paas.applications (
@@ -289,40 +367,62 @@ CREATE TABLE IF NOT EXISTS paas.deployment_generations (
     )
 );
 
--- A ROLE is a virtual identity plus the exact session and exactly one
--- original USER or service principal. This is lineage, not authority.
--- This validates persisted lineage; it never grants permission or looks up IAM.
-CREATE OR REPLACE FUNCTION paas.subject_reference_valid(subject jsonb)
-RETURNS boolean LANGUAGE sql IMMUTABLE PARALLEL SAFE SET search_path=pg_catalog,pg_temp AS $function$
-    SELECT COALESCE(jsonb_typeof(subject)='object' AND subject ?& ARRAY['type','id']
-      AND jsonb_typeof(subject->'id')='string' AND subject->>'id' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-      AND CASE WHEN subject->>'type'='ROLE' THEN
-        subject ? 'roleSession' AND subject-ARRAY['type','id','roleSession']='{}'::jsonb
-        AND jsonb_typeof(subject->'roleSession')='object'
-        AND (subject->'roleSession') ? 'sessionId'
-        AND ((subject->'roleSession') ? 'sourceUserId') <> ((subject->'roleSession') ? 'sourceServicePrincipalId')
-        AND (subject->'roleSession')-ARRAY['sessionId','sourceUserId','sourceServicePrincipalId']='{}'::jsonb
-        AND jsonb_typeof(subject#>'{roleSession,sessionId}')='string'
-        AND subject#>>'{roleSession,sessionId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND CASE WHEN (subject->'roleSession') ? 'sourceUserId' THEN
-          jsonb_typeof(subject#>'{roleSession,sourceUserId}')='string'
-          AND subject#>>'{roleSession,sourceUserId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        ELSE jsonb_typeof(subject#>'{roleSession,sourceServicePrincipalId}')='string'
-          AND subject#>>'{roleSession,sourceServicePrincipalId}' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' END
-      ELSE CASE WHEN subject->>'type'='USER' THEN
-        subject-ARRAY['type','id','accessKeyId']='{}'::jsonb
-        AND CASE WHEN subject ? 'accessKeyId' THEN
-          jsonb_typeof(subject->'accessKeyId')='string'
-          AND subject->>'accessKeyId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        ELSE true END
-      ELSE subject->>'type' IN ('SERVICE_ACCOUNT','AGENT','SYSTEM_USER')
-        AND subject-ARRAY['type','id']='{}'::jsonb END END,false)
-$function$;
-REVOKE ALL ON FUNCTION paas.subject_reference_valid(jsonb) FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION paas.subject_reference_valid(jsonb) TO matrix_paas_api,matrix_paas_worker;
+-- Change only authority metadata; retained tenant Operations and outbox facts
+-- keep their documents and identities. Existing tenant foreign keys remain
+-- tenant-only and cannot reference an installation Operation.
+DO $matrix_operation_authority_upgrade$
+BEGIN
+    IF to_regclass('paas.operations') IS NOT NULL AND NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+         WHERE table_schema = 'paas' AND table_name = 'operations'
+           AND column_name = 'installation_id'
+    ) THEN
+        ALTER TABLE paas.audit_outbox DROP CONSTRAINT audit_outbox_operation_fk;
+        ALTER TABLE paas.deployment_generations DROP CONSTRAINT IF EXISTS deployment_generations_operation_fk;
+        IF to_regclass('paas.adapter_commands') IS NOT NULL THEN
+            ALTER TABLE paas.adapter_commands DROP CONSTRAINT adapter_commands_operation_fk;
+        END IF;
+        ALTER TABLE paas.operations
+            DROP CONSTRAINT operations_pkey,
+            DROP CONSTRAINT operations_idempotency_uq,
+            ALTER COLUMN tenant_id DROP NOT NULL,
+            ADD COLUMN installation_id text COLLATE "C",
+            ADD COLUMN authority_key text COLLATE "C" GENERATED ALWAYS AS (
+                CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+                     ELSE 'tenant:' || tenant_id END
+            ) STORED,
+            ADD PRIMARY KEY (authority_key, id),
+            ADD CONSTRAINT operations_tenant_identity_uq UNIQUE (tenant_id, id),
+            ADD CONSTRAINT operations_idempotency_uq UNIQUE (authority_key, idempotency_fingerprint);
+        -- ACCESS EXCLUSIVE remains held through COMMIT. Validate retained FKs
+        -- as owner, then restore forced RLS in the shared policy section below.
+        ALTER TABLE paas.operations NO FORCE ROW LEVEL SECURITY;
+        ALTER TABLE paas.audit_outbox
+            DROP CONSTRAINT audit_outbox_pkey,
+            ALTER COLUMN tenant_id DROP NOT NULL,
+            ADD COLUMN installation_id text COLLATE "C",
+            ADD COLUMN authority_key text COLLATE "C" GENERATED ALWAYS AS (
+                CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+                     ELSE 'tenant:' || tenant_id END
+            ) STORED,
+            ADD PRIMARY KEY (authority_key, event_id),
+            ADD CONSTRAINT audit_outbox_operation_fk FOREIGN KEY (authority_key, operation_id)
+                REFERENCES paas.operations (authority_key, id);
+        IF to_regclass('paas.adapter_commands') IS NOT NULL THEN
+            ALTER TABLE paas.adapter_commands ADD CONSTRAINT adapter_commands_operation_fk
+                FOREIGN KEY (tenant_id, operation_id) REFERENCES paas.operations (tenant_id, id);
+        END IF;
+    END IF;
+END
+$matrix_operation_authority_upgrade$;
 
 CREATE TABLE IF NOT EXISTS paas.operations (
-    tenant_id text COLLATE "C" NOT NULL,
+    tenant_id text COLLATE "C",
+    installation_id text COLLATE "C",
+    authority_key text COLLATE "C" GENERATED ALWAYS AS (
+        CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+             ELSE 'tenant:' || tenant_id END
+    ) STORED,
     id text COLLATE "C" NOT NULL,
     action text COLLATE "C" NOT NULL,
     target_kind text COLLATE "C" NOT NULL,
@@ -340,32 +440,12 @@ CREATE TABLE IF NOT EXISTS paas.operations (
     updated_at timestamptz(6) NOT NULL,
     terminal_at timestamptz(6),
     document jsonb NOT NULL,
-    PRIMARY KEY (tenant_id, id),
-    CONSTRAINT operations_idempotency_uq UNIQUE (tenant_id, idempotency_fingerprint),
-    CONSTRAINT operations_ids_valid CHECK (
-        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND (lease_owner IS NULL OR lease_owner COLLATE "C"
-            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
-    ),
+    PRIMARY KEY (authority_key, id),
+    CONSTRAINT operations_tenant_identity_uq UNIQUE (tenant_id, id),
+    CONSTRAINT operations_idempotency_uq UNIQUE (authority_key, idempotency_fingerprint),
     CONSTRAINT operations_digests_valid CHECK (
         idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
         AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-    ),
-    CONSTRAINT operations_action_valid CHECK (
-        action IN (
-            'CREATE_APPLICATION',
-            'CREATE_CONFIGURATION',
-            'CREATE_CONFIGURATION_REVISION',
-            'CREATE_APPLICATION_REVISION',
-            'SET_APPLICATION_LABEL',
-            'DELETE_APPLICATION_LABEL',
-            'DEPLOY',
-            'UPDATE',
-            'STOP',
-            'ROLLBACK'
-        )
     ),
     CONSTRAINT operations_state_valid CHECK (
         state IN (
@@ -409,38 +489,19 @@ CREATE TABLE IF NOT EXISTS paas.operations (
         updated_at >= created_at
         AND next_attempt_at >= created_at
         AND (terminal_at IS NULL OR terminal_at BETWEEN created_at AND updated_at)
-    ),
-    CONSTRAINT operations_document_identity CHECK (
-        document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
-        AND document->>'kind' = 'Operation'
-        AND document->>'id' = id
-        AND document#>>'{scope,kind}' = 'TENANT'
-        AND document#>>'{scope,tenantId}' = tenant_id
-        AND document->>'action' = action
-        AND document#>>'{target,kind}' = target_kind
-        AND document#>>'{target,id}' = target_id
-        AND document->>'idempotencyFingerprint' = idempotency_fingerprint
-        AND document->>'requestDigest' = request_digest
-        AND document->>'state' = state
-        AND document->'error' IS NOT DISTINCT FROM error
-        AND (document->>'createdAt')::timestamptz = created_at
-        AND (document->>'updatedAt')::timestamptz = updated_at
-        AND (
-            (terminal_at IS NULL AND NOT (document ? 'terminalAt'))
-            OR (document->>'terminalAt')::timestamptz = terminal_at
-        )
-        AND CASE
-            WHEN document->>'attempt' ~ '^[1-9][0-9]*$'
-            THEN (document->>'attempt')::numeric = attempt
-            ELSE false
-        END
     )
 );
 
 CREATE TABLE IF NOT EXISTS paas.audit_outbox (
-    tenant_id text COLLATE "C" NOT NULL,
+    tenant_id text COLLATE "C",
+    installation_id text COLLATE "C",
+    authority_key text COLLATE "C" GENERATED ALWAYS AS (
+        CASE WHEN installation_id IS NOT NULL THEN 'installation:' || installation_id
+             ELSE 'tenant:' || tenant_id END
+    ) STORED,
     event_id text COLLATE "C" NOT NULL,
-    operation_id text COLLATE "C" NOT NULL,
+    operation_id text COLLATE "C",
+    terminal_session_id text COLLATE "C",
     status text COLLATE "C" NOT NULL,
     available_at timestamptz(6) NOT NULL,
     attempts integer NOT NULL DEFAULT 0,
@@ -452,18 +513,9 @@ CREATE TABLE IF NOT EXISTS paas.audit_outbox (
     updated_at timestamptz(6) NOT NULL,
     delivered_at timestamptz(6),
     document jsonb NOT NULL,
-    PRIMARY KEY (tenant_id, event_id),
-    CONSTRAINT audit_outbox_operation_fk FOREIGN KEY (tenant_id, operation_id)
-        REFERENCES paas.operations (tenant_id, id),
-    CONSTRAINT audit_outbox_ids_valid CHECK (
-        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND operation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-        AND (lease_owner IS NULL OR lease_owner COLLATE "C"
-            ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
-        AND (last_error_code IS NULL OR last_error_code COLLATE "C"
-            ~ '^[A-Z][A-Z0-9_]{0,63}$')
-    ),
+    PRIMARY KEY (authority_key, event_id),
+    CONSTRAINT audit_outbox_operation_fk FOREIGN KEY (authority_key, operation_id)
+        REFERENCES paas.operations (authority_key, id),
     CONSTRAINT audit_outbox_status_valid CHECK (
         status IN ('PENDING', 'LEASED', 'RETRY', 'DELIVERED', 'DEAD_LETTER')
     ),
@@ -485,14 +537,6 @@ CREATE TABLE IF NOT EXISTS paas.audit_outbox (
         available_at >= created_at
         AND updated_at >= created_at
         AND (delivered_at IS NULL OR delivered_at BETWEEN created_at AND updated_at)
-    ),
-    CONSTRAINT audit_outbox_document_identity CHECK (
-        document->>'schemaVersion' = 'v1'
-        AND document->>'eventId' = event_id
-        AND document->>'tenantId' = tenant_id
-        AND document->>'operationId' = operation_id
-        AND document->>'requestDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
-        AND (document->>'occurredAt')::timestamptz = created_at
     )
 );
 
@@ -522,25 +566,113 @@ REVOKE ALL ON FUNCTION paas.role_subject_contract_ready() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.role_subject_contract_ready() TO matrix_paas_api,matrix_paas_worker;
 
 ALTER TABLE paas.operations
-    DROP CONSTRAINT IF EXISTS operations_action_valid;
+    DROP CONSTRAINT IF EXISTS operations_action_valid,
+    DROP CONSTRAINT IF EXISTS operations_ids_valid,
+    DROP CONSTRAINT IF EXISTS operations_document_identity;
 ALTER TABLE paas.operations
     ADD CONSTRAINT operations_action_valid CHECK (
-        action IN (
-            'CREATE_APPLICATION',
-            'CREATE_CONFIGURATION',
-            'CREATE_CONFIGURATION_REVISION',
-            'CREATE_APPLICATION_REVISION',
-            'SET_APPLICATION_LABEL',
-            'DELETE_APPLICATION_LABEL',
-            'DEPLOY',
-            'UPDATE',
-            'STOP',
-            'ROLLBACK'
-        )
-    );
+        (installation_id IS NULL AND action IN (
+            'CREATE_APPLICATION', 'CREATE_CONFIGURATION', 'CREATE_CONFIGURATION_REVISION',
+            'CREATE_APPLICATION_REVISION', 'SET_APPLICATION_LABEL',
+            'DELETE_APPLICATION_LABEL', 'DEPLOY', 'UPDATE', 'STOP', 'ROLLBACK'
+        )) OR (installation_id IS NOT NULL AND (
+            (action IN (
+                'CREATE_EXECUTION_POOL', 'DRAIN_EXECUTION_TARGET',
+                'ACTIVATE_EXECUTION_TARGET', 'REMOVE_EXECUTION_TARGET'
+            ) AND state = 'SUCCEEDED')
+            OR (action = 'REGISTER_EXECUTION_TARGET' AND state IN (
+                'ACCEPTED', 'VERIFYING', 'SUCCEEDED', 'FAILED', 'CANCELLED'
+            ))
+        ) AND lease_owner IS NULL AND attempt = 1)
+    ),
+    ADD CONSTRAINT operations_ids_valid CHECK (
+        (tenant_id IS NULL) <> (installation_id IS NULL)
+        AND (tenant_id IS NULL OR tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (installation_id IS NULL OR installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (lease_owner IS NULL OR lease_owner COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+    ),
+    ADD CONSTRAINT operations_document_identity CHECK ((
+        document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND document->>'kind' = 'Operation'
+        AND document->>'id' = id
+        AND paas.subject_reference_valid(document->'requestedBy')
+        AND ((tenant_id IS NOT NULL
+            AND document#>>'{scope,kind}' = 'TENANT'
+            AND document#>>'{scope,tenantId}' = tenant_id
+            AND NOT (document ? 'installationId'))
+          OR (installation_id IS NOT NULL
+            AND document#>>'{scope,kind}' = 'PLATFORM'
+            AND NOT (document#>'{scope}' ? 'tenantId')
+            AND document->>'installationId' = installation_id
+            AND document#>>'{requestedBy,type}' = 'USER'
+            AND ((document->'requestedBy') - ARRAY['type', 'id']) = '{}'::jsonb
+            AND target_kind = CASE action
+                WHEN 'CREATE_EXECUTION_POOL' THEN 'ExecutionPool'
+                WHEN 'REGISTER_EXECUTION_TARGET' THEN 'ExecutionTarget'
+                WHEN 'DRAIN_EXECUTION_TARGET' THEN 'ExecutionTarget'
+                WHEN 'ACTIVATE_EXECUTION_TARGET' THEN 'ExecutionTarget'
+                WHEN 'REMOVE_EXECUTION_TARGET' THEN 'ExecutionTarget' END))
+        AND document->>'action' = action
+        AND document#>>'{target,kind}' = target_kind
+        AND document#>>'{target,id}' = target_id
+        AND document->>'idempotencyFingerprint' = idempotency_fingerprint
+        AND document->>'requestDigest' = request_digest
+        AND document->>'state' = state
+        AND document->'error' IS NOT DISTINCT FROM error
+        AND (document->>'createdAt')::timestamptz = created_at
+        AND (document->>'updatedAt')::timestamptz = updated_at
+        AND ((terminal_at IS NULL AND NOT (document ? 'terminalAt'))
+             OR (document->>'terminalAt')::timestamptz = terminal_at)
+        AND CASE WHEN document->>'attempt' ~ '^[1-9][0-9]*$'
+            THEN (document->>'attempt')::numeric = attempt ELSE false END
+    ) IS TRUE);
 
-CREATE INDEX IF NOT EXISTS audit_outbox_claim_idx
-    ON paas.audit_outbox (available_at, created_at, tenant_id, event_id)
+ALTER TABLE paas.audit_outbox
+    ADD COLUMN IF NOT EXISTS terminal_session_id text COLLATE "C";
+ALTER TABLE paas.audit_outbox
+    ALTER COLUMN operation_id DROP NOT NULL,
+    DROP CONSTRAINT IF EXISTS audit_outbox_ids_valid,
+    DROP CONSTRAINT IF EXISTS audit_outbox_owner_valid,
+    DROP CONSTRAINT IF EXISTS audit_outbox_document_identity;
+ALTER TABLE paas.audit_outbox
+    ADD CONSTRAINT audit_outbox_ids_valid CHECK (
+        (tenant_id IS NULL) <> (installation_id IS NULL)
+        AND (tenant_id IS NULL OR tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (installation_id IS NULL OR installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (operation_id IS NULL OR operation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (terminal_session_id IS NULL OR terminal_session_id COLLATE "C"
+            ~ '^terminal-session-[0-9a-f]{32}$')
+        AND (lease_owner IS NULL OR lease_owner COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (last_error_code IS NULL OR last_error_code COLLATE "C" ~ '^[A-Z][A-Z0-9_]{0,63}$')
+    ),
+    ADD CONSTRAINT audit_outbox_owner_valid CHECK (
+        (operation_id IS NULL) <> (terminal_session_id IS NULL)
+        AND (terminal_session_id IS NULL OR (tenant_id IS NOT NULL AND installation_id IS NULL))
+    ),
+    ADD CONSTRAINT audit_outbox_document_identity CHECK ((
+        document->>'schemaVersion' = 'v1'
+        AND document->>'eventId' = event_id
+        AND (document->>'tenantId') IS NOT DISTINCT FROM tenant_id
+        AND (document->>'installationId') IS NOT DISTINCT FROM installation_id
+        AND (document ? 'tenantId') = (tenant_id IS NOT NULL)
+        AND (document ? 'installationId') = (installation_id IS NOT NULL)
+        AND ((operation_id IS NOT NULL
+                AND document->>'operationId' = operation_id
+                AND NOT (document ? 'terminalSessionId'))
+            OR (terminal_session_id IS NOT NULL
+                AND NOT (document ? 'operationId')
+                AND document#>>'{target,kind}' = 'TerminalSession'
+                AND document#>>'{target,id}' = terminal_session_id))
+        AND document->>'requestDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (document->>'occurredAt')::timestamptz = created_at
+    ) IS TRUE);
+
+DROP INDEX IF EXISTS paas.audit_outbox_claim_idx;
+CREATE INDEX audit_outbox_claim_idx
+    ON paas.audit_outbox (available_at, created_at, authority_key, event_id)
     WHERE status IN ('PENDING', 'RETRY', 'LEASED');
 
 CREATE INDEX IF NOT EXISTS operations_claim_idx
@@ -628,6 +760,357 @@ CREATE TABLE IF NOT EXISTS paas.execution_targets (
 
 CREATE INDEX IF NOT EXISTS execution_targets_pool_idx
     ON paas.execution_targets (execution_pool_id, id);
+
+-- The built-in local target and admitted nodes share one installation-owned
+-- pool. Only an admitted node carries a protected binding and certificate
+-- fingerprint; the local target remains worker-observed and cannot be claimed
+-- by the installation admission API.
+ALTER TABLE paas.execution_pools ADD COLUMN IF NOT EXISTS installation_id text COLLATE "C";
+ALTER TABLE paas.execution_targets
+    ADD COLUMN IF NOT EXISTS installation_id text COLLATE "C",
+    ADD COLUMN IF NOT EXISTS binding_ref text COLLATE "C",
+    ADD COLUMN IF NOT EXISTS identity_fingerprint text COLLATE "C";
+CREATE UNIQUE INDEX IF NOT EXISTS execution_pools_installation_identity_uq
+    ON paas.execution_pools (installation_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS execution_targets_binding_uq
+    ON paas.execution_targets (installation_id, binding_ref);
+CREATE UNIQUE INDEX IF NOT EXISTS execution_targets_fingerprint_uq
+    ON paas.execution_targets (installation_id, identity_fingerprint);
+CREATE UNIQUE INDEX IF NOT EXISTS execution_targets_installation_identity_uq
+    ON paas.execution_targets (installation_id, id);
+ALTER TABLE paas.execution_pools DROP CONSTRAINT IF EXISTS execution_pools_installation_valid;
+ALTER TABLE paas.execution_pools ADD CONSTRAINT execution_pools_installation_valid CHECK (
+    installation_id IS NULL OR installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+);
+ALTER TABLE paas.execution_targets
+    DROP CONSTRAINT IF EXISTS execution_targets_installation_identity_valid,
+    DROP CONSTRAINT IF EXISTS execution_targets_installation_pool_fk;
+ALTER TABLE paas.execution_targets
+    ADD CONSTRAINT execution_targets_installation_pool_fk FOREIGN KEY (installation_id, execution_pool_id)
+        REFERENCES paas.execution_pools (installation_id, id),
+    ADD CONSTRAINT execution_targets_installation_identity_valid CHECK ((
+        (installation_id IS NULL AND binding_ref IS NULL AND identity_fingerprint IS NULL
+            AND document#>>'{spec,infrastructureAdapter,name}' = 'localmachine')
+        OR (installation_id IS NOT NULL AND binding_ref IS NULL AND identity_fingerprint IS NULL
+            AND installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND id = 'execution-target-local'
+            AND execution_pool_id = 'execution-pool-local'
+            AND document#>>'{metadata,name}' = 'local'
+            AND document#>>'{metadata,labels,matrix-profile}' = 'local-compose'
+            AND document#>>'{metadata,labels,matrix-machine-fingerprint}' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND document#>>'{spec,infrastructureAdapter,name}' = 'localmachine')
+        OR (installation_id IS NOT NULL AND binding_ref IS NOT NULL AND identity_fingerprint IS NOT NULL
+            AND installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND binding_ref COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND identity_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND document#>>'{spec,infrastructureAdapter,name}' <> 'localmachine'
+            AND document#>>'{metadata,labels,matrix-machine-fingerprint}' = identity_fingerprint)
+    ) IS TRUE);
+
+ALTER TABLE paas.execution_pools ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.execution_pools FORCE ROW LEVEL SECURITY;
+ALTER TABLE paas.execution_targets ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.execution_targets FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS installation_read ON paas.execution_pools;
+DROP POLICY IF EXISTS installation_read ON paas.execution_targets;
+DROP POLICY IF EXISTS placement_read ON paas.execution_pools;
+DROP POLICY IF EXISTS placement_read ON paas.execution_targets;
+CREATE POLICY installation_read ON paas.execution_pools FOR SELECT TO matrix_paas_api
+    USING (installation_id = paas.current_installation_id());
+CREATE POLICY installation_read ON paas.execution_targets FOR SELECT TO matrix_paas_api
+    USING (installation_id = paas.current_installation_id());
+CREATE POLICY placement_read ON paas.execution_pools FOR SELECT TO matrix_paas_worker USING (true);
+CREATE POLICY placement_read ON paas.execution_targets FOR SELECT TO matrix_paas_worker USING (true);
+
+CREATE TABLE IF NOT EXISTS paas.node_enrollments (
+    installation_id text COLLATE "C" NOT NULL,
+    authority_key text COLLATE "C" GENERATED ALWAYS AS (
+        'installation:' || installation_id
+    ) STORED,
+    id text COLLATE "C" NOT NULL,
+    execution_target_id text COLLATE "C" NOT NULL,
+    execution_pool_id text COLLATE "C" NOT NULL,
+    operation_id text COLLATE "C" NOT NULL,
+    state text COLLATE "C" NOT NULL,
+    resource_version bigint NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    expires_at timestamptz(6) NOT NULL,
+    credential_salt bytea,
+    credential_verifier text COLLATE "C",
+    actor_type text COLLATE "C" NOT NULL,
+    actor_id text COLLATE "C" NOT NULL,
+    iam_decision_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    audit_id text COLLATE "C",
+    traceparent text COLLATE "C",
+    termination_idempotency_fingerprint text COLLATE "C",
+    termination_request_digest text COLLATE "C",
+    document jsonb NOT NULL,
+    join_document jsonb NOT NULL,
+    wrapped_credential_document jsonb,
+    exchange_document jsonb,
+    sealed_exchange_result_document jsonb,
+    replaced_by_id text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(document->>'replacedById', '')
+    ) STORED,
+    exchange_id text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(exchange_document->>'exchangeId', '')
+    ) STORED,
+    machine_fingerprint text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(exchange_document->>'machineFingerprint', '')
+    ) STORED,
+    node_public_key_fingerprint text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(exchange_document->>'nodePublicKeyFingerprint', '')
+    ) STORED,
+    collector_public_key_fingerprint text COLLATE "C" GENERATED ALWAYS AS (
+        NULLIF(exchange_document->>'collectorPublicKeyFingerprint', '')
+    ) STORED,
+    PRIMARY KEY (installation_id, id),
+    CONSTRAINT node_enrollments_target_uq UNIQUE (execution_target_id),
+    CONSTRAINT node_enrollments_operation_uq UNIQUE (authority_key, operation_id),
+    CONSTRAINT node_enrollments_termination_uq UNIQUE (
+        installation_id, termination_idempotency_fingerprint
+    ),
+    CONSTRAINT node_enrollments_exchange_uq UNIQUE (installation_id, exchange_id),
+    CONSTRAINT node_enrollments_machine_uq UNIQUE (installation_id, machine_fingerprint),
+    CONSTRAINT node_enrollments_node_key_uq UNIQUE (installation_id, node_public_key_fingerprint),
+    CONSTRAINT node_enrollments_collector_key_uq UNIQUE (installation_id, collector_public_key_fingerprint),
+    CONSTRAINT node_enrollments_pool_fk FOREIGN KEY (installation_id, execution_pool_id)
+        REFERENCES paas.execution_pools (installation_id, id),
+    CONSTRAINT node_enrollments_operation_fk FOREIGN KEY (authority_key, operation_id)
+        REFERENCES paas.operations (authority_key, id),
+    CONSTRAINT node_enrollments_replacement_fk FOREIGN KEY (installation_id, replaced_by_id)
+        REFERENCES paas.node_enrollments (installation_id, id)
+        DEFERRABLE INITIALLY DEFERRED,
+    CONSTRAINT node_enrollments_identity_valid CHECK (
+        installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^node-enrollment-[0-9a-f]{32}$'
+        AND execution_target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND execution_pool_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND operation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND actor_type = 'USER'
+        AND actor_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND iam_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (audit_id IS NULL OR audit_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (traceparent IS NULL OR (
+            octet_length(traceparent) BETWEEN 1 AND 55
+            AND traceparent !~ '[[:cntrl:]]'
+        ))
+    ),
+    CONSTRAINT node_enrollments_state_valid CHECK (
+        state IN ('WAITING_INSTALL', 'VERIFYING', 'READY', 'FAILED', 'EXPIRED', 'REVOKED')
+        AND resource_version BETWEEN 1 AND 9007199254740991
+        AND expires_at > created_at
+        AND expires_at <= created_at + interval '30 minutes'
+        AND ((state = 'REVOKED') = (termination_idempotency_fingerprint IS NOT NULL))
+        AND ((termination_idempotency_fingerprint IS NULL) = (termination_request_digest IS NULL))
+        AND (
+            termination_idempotency_fingerprint IS NULL OR (
+                termination_idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+                AND termination_request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            )
+        )
+        AND (replaced_by_id IS NULL OR (
+            state = 'REVOKED'
+            AND replaced_by_id COLLATE "C" ~ '^node-enrollment-[0-9a-f]{32}$'
+            AND replaced_by_id <> id
+        ))
+    ),
+    CONSTRAINT node_enrollments_credential_valid CHECK (
+        join_document->>'credentialDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (
+            (
+                state = 'WAITING_INSTALL'
+                AND credential_salt IS NOT NULL
+                AND octet_length(credential_salt) = 32
+                AND credential_verifier IS NOT NULL
+                AND credential_verifier COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+                AND credential_verifier <> join_document->>'credentialDigest'
+                AND wrapped_credential_document IS NOT NULL
+                AND wrapped_credential_document->>'algorithm' = 'RSA_OAEP_256'
+                AND length(wrapped_credential_document->>'ciphertext') = 512
+                AND wrapped_credential_document->>'ciphertext' COLLATE "C" ~ '^[A-Za-z0-9_-]+$'
+                AND (wrapped_credential_document - ARRAY['algorithm', 'ciphertext']) = '{}'::jsonb
+            ) OR (
+                state <> 'WAITING_INSTALL'
+                AND credential_salt IS NULL
+                AND credential_verifier IS NULL
+                AND wrapped_credential_document IS NULL
+            )
+        )
+    ),
+    CONSTRAINT node_enrollments_exchange_valid CHECK ((
+        (
+            state = 'WAITING_INSTALL'
+            AND NOT (document ? 'credentialConsumedAt')
+            AND exchange_document IS NULL
+            AND sealed_exchange_result_document IS NULL
+        ) OR (
+            state = 'VERIFYING'
+            AND document ? 'credentialConsumedAt'
+            AND exchange_document IS NOT NULL
+            AND sealed_exchange_result_document IS NOT NULL
+        ) OR (
+            state IN ('READY', 'FAILED')
+            AND document ? 'credentialConsumedAt'
+            AND exchange_document IS NOT NULL
+            AND sealed_exchange_result_document IS NULL
+        ) OR (
+            state IN ('EXPIRED', 'REVOKED')
+            AND sealed_exchange_result_document IS NULL
+            AND ((document ? 'credentialConsumedAt') = (exchange_document IS NOT NULL))
+        )
+    ) IS TRUE),
+    CONSTRAINT node_enrollments_exchange_document_valid CHECK ((
+        exchange_document IS NULL OR (
+            exchange_document->>'apiVersion' = 'node.enrollment.matrix.xiak.com/v1'
+            AND exchange_document->>'kind' = 'NodeEnrollmentExchange'
+            AND exchange_document->>'enrollmentId' = id
+            AND exchange_document->>'installationId' = installation_id
+            AND exchange_document->>'executionTargetId' = execution_target_id
+            AND exchange_id COLLATE "C" ~ '^node-exchange-[0-9a-f]{32}$'
+            AND machine_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND exchange_document->>'runtimeContractDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND exchange_document->>'controllerId' COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            AND exchange_document->>'bindingRef' COLLATE "C" ~ '^node-binding-[0-9a-f]{32}$'
+            AND octet_length(exchange_document->>'nodeListenAddress') BETWEEN 8 AND 64
+            AND exchange_document->>'nodeListenAddress' !~ '[/?#@[:space:][:cntrl:]]'
+            AND CASE
+                WHEN exchange_document->>'nodeListenAddress' COLLATE "C"
+                    ~ '^[0-9]{1,3}(\.[0-9]{1,3}){3}:[1-9][0-9]{3,4}$'
+                THEN split_part(exchange_document->>'nodeListenAddress', ':', 1)::inet <<= inet '10.0.0.0/8'
+                  OR split_part(exchange_document->>'nodeListenAddress', ':', 1)::inet <<= inet '172.16.0.0/12'
+                  OR split_part(exchange_document->>'nodeListenAddress', ':', 1)::inet <<= inet '192.168.0.0/16'
+                WHEN exchange_document->>'nodeListenAddress' COLLATE "C"
+                    ~ '^\[(fc|fd)[0-9a-f:]*\]:[1-9][0-9]{3,4}$'
+                THEN substring(exchange_document->>'nodeListenAddress' from '^\[([^]]+)\]')::inet <<= inet 'fc00::/7'
+                ELSE false
+            END
+            AND substring(exchange_document->>'nodeListenAddress' from ':([0-9]+)$')::integer
+                BETWEEN 1024 AND 65535
+            AND exchange_document->>'collectorEndpoint' COLLATE "C" ~ '^https://(127\.0\.0\.1|\[::1\]):[1-9][0-9]{3,4}$'
+            AND substring(exchange_document->>'collectorEndpoint' from ':([0-9]+)$')::integer
+                BETWEEN 1024 AND 65535
+            AND substring(exchange_document->>'nodeListenAddress' from ':([0-9]+)$')::integer
+                <> substring(exchange_document->>'collectorEndpoint' from ':([0-9]+)$')::integer
+            AND length(exchange_document->>'nodePublicKey') = 59
+            AND exchange_document->>'nodePublicKey' COLLATE "C" ~ '^[A-Za-z0-9_-]{59}$'
+            AND node_public_key_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND length(exchange_document->>'collectorPublicKey') = 59
+            AND exchange_document->>'collectorPublicKey' COLLATE "C" ~ '^[A-Za-z0-9_-]{59}$'
+            AND collector_public_key_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND node_public_key_fingerprint <> collector_public_key_fingerprint
+            AND exchange_document->>'resultDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND (exchange_document->>'consumedAt')::timestamptz
+                = (document->>'credentialConsumedAt')::timestamptz
+            AND (exchange_document - ARRAY[
+                'apiVersion', 'kind', 'enrollmentId', 'installationId',
+                'executionTargetId', 'exchangeId', 'machineFingerprint',
+                'runtimeContractDigest', 'controllerId', 'bindingRef',
+                'nodeListenAddress', 'collectorEndpoint', 'nodePublicKey',
+                'nodePublicKeyFingerprint', 'collectorPublicKey',
+                'collectorPublicKeyFingerprint', 'resultDigest', 'consumedAt'
+            ]) = '{}'::jsonb
+        )
+    ) IS TRUE),
+    CONSTRAINT node_enrollments_sealed_result_valid CHECK ((
+        sealed_exchange_result_document IS NULL OR (
+            sealed_exchange_result_document->>'algorithm' = 'AES_256_GCM'
+            AND sealed_exchange_result_document->>'keyId' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+            AND length(sealed_exchange_result_document->>'nonce') = 16
+            AND sealed_exchange_result_document->>'nonce' COLLATE "C" ~ '^[A-Za-z0-9_-]{16}$'
+            AND length(sealed_exchange_result_document->>'ciphertext') BETWEEN 43 AND 87382
+            AND sealed_exchange_result_document->>'ciphertext' COLLATE "C" ~ '^[A-Za-z0-9_-]+$'
+            AND (sealed_exchange_result_document - ARRAY[
+                'algorithm', 'keyId', 'nonce', 'ciphertext'
+            ]) = '{}'::jsonb
+        )
+    ) IS TRUE),
+    CONSTRAINT node_enrollments_document_identity CHECK ((
+        document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND document->>'kind' = 'NodeEnrollment'
+        AND document#>>'{metadata,id}' = id
+        AND document#>>'{metadata,scope,kind}' = 'PLATFORM'
+        AND NOT (document#>'{metadata,scope}' ? 'tenantId')
+        AND document#>>'{metadata,resourceVersion}' = resource_version::text
+        AND (document#>>'{metadata,createdAt}')::timestamptz = created_at
+        AND document->>'executionTargetId' = execution_target_id
+        AND document->>'executionPoolId' = execution_pool_id
+        AND document->>'operationId' = operation_id
+        AND document->>'state' = state
+        AND (document->>'expiresAt')::timestamptz = expires_at
+        AND NULLIF(document->>'replacedById', '') IS NOT DISTINCT FROM replaced_by_id
+        AND join_document->>'apiVersion' = 'node.enrollment.matrix.xiak.com/v1'
+        AND join_document->>'kind' = 'NodeEnrollmentJoin'
+        AND join_document->>'enrollmentId' = id
+        AND join_document->>'installationId' = installation_id
+        AND join_document->>'executionTargetId' = execution_target_id
+        AND (join_document->>'expiresAt')::timestamptz = expires_at
+        AND join_document->>'signatureAlgorithm' = 'ED25519'
+        AND join_document->>'signature' COLLATE "C" ~ '^[A-Za-z0-9_-]{86}$'
+        AND join_document->>'issuerCertificate' COLLATE "C" ~ '^[A-Za-z0-9_-]+$'
+    ) IS TRUE)
+);
+
+CREATE INDEX IF NOT EXISTS node_enrollments_recent_idx
+    ON paas.node_enrollments (installation_id, created_at DESC, id);
+
+ALTER TABLE paas.node_enrollments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.node_enrollments FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS installation_read ON paas.node_enrollments;
+CREATE POLICY installation_read ON paas.node_enrollments FOR SELECT TO matrix_paas_api
+    USING (installation_id = paas.current_installation_id());
+
+-- Self-enrollment publishes only a non-secret route. The installation-owned
+-- controller certificate, key, and trust bundle remain process inputs and are
+-- deliberately absent from this durable runtime connection.
+CREATE TABLE IF NOT EXISTS paas.enrolled_node_connections (
+    installation_id text COLLATE "C" NOT NULL,
+    execution_target_id text COLLATE "C" NOT NULL,
+    controller_id text COLLATE "C" NOT NULL,
+    binding_ref text COLLATE "C" NOT NULL,
+    endpoint text COLLATE "C" NOT NULL,
+    identity_fingerprint text COLLATE "C" NOT NULL,
+    enabled boolean NOT NULL,
+    created_at timestamptz(6) NOT NULL,
+    updated_at timestamptz(6) NOT NULL,
+    PRIMARY KEY (installation_id, execution_target_id),
+    CONSTRAINT enrolled_node_connections_target_fk
+        FOREIGN KEY (installation_id, execution_target_id)
+        REFERENCES paas.execution_targets (installation_id, id),
+    CONSTRAINT enrolled_node_connections_binding_uq
+        UNIQUE (installation_id, binding_ref),
+    CONSTRAINT enrolled_node_connections_fingerprint_uq
+        UNIQUE (installation_id, identity_fingerprint),
+    CONSTRAINT enrolled_node_connections_identity_valid CHECK ((
+        installation_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND execution_target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND controller_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND binding_ref COLLATE "C" ~ '^node-binding-[0-9a-f]{32}$'
+        AND identity_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND updated_at >= created_at
+        AND CASE
+            WHEN endpoint COLLATE "C" ~ '^https://[0-9]{1,3}(\.[0-9]{1,3}){3}:[1-9][0-9]{3,4}$'
+            THEN split_part(substring(endpoint from 9), ':', 1)::inet <<= inet '10.0.0.0/8'
+              OR split_part(substring(endpoint from 9), ':', 1)::inet <<= inet '172.16.0.0/12'
+              OR split_part(substring(endpoint from 9), ':', 1)::inet <<= inet '192.168.0.0/16'
+              OR split_part(substring(endpoint from 9), ':', 1)::inet = inet '127.0.0.1'
+            WHEN endpoint COLLATE "C" ~ '^https://\[((fc|fd)[0-9a-f:]*|::1)\]:[1-9][0-9]{3,4}$'
+            THEN substring(endpoint from '^https://\[([^]]+)\]')::inet <<= inet 'fc00::/7'
+              OR substring(endpoint from '^https://\[([^]]+)\]')::inet = inet '::1'
+            ELSE false
+        END
+        AND substring(endpoint from ':([0-9]+)$')::integer BETWEEN 1024 AND 65535
+    ) IS TRUE)
+);
+
+ALTER TABLE paas.enrolled_node_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.enrolled_node_connections FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS installation_read ON paas.enrolled_node_connections;
+CREATE POLICY installation_read ON paas.enrolled_node_connections FOR SELECT
+    TO matrix_paas_api, matrix_paas_worker
+    USING (installation_id = paas.current_installation_id());
 
 CREATE TABLE IF NOT EXISTS paas.execution_target_allocations (
     execution_target_id text COLLATE "C" PRIMARY KEY,
@@ -774,6 +1257,386 @@ CREATE TABLE IF NOT EXISTS paas.deployment_observations (
     )
 );
 
+CREATE TABLE IF NOT EXISTS paas.deployment_runtime_snapshots (
+    tenant_id text COLLATE "C" NOT NULL,
+    deployment_id text COLLATE "C" NOT NULL,
+    deployment_generation bigint NOT NULL,
+    application_revision_id text COLLATE "C" NOT NULL,
+    execution_target_id text COLLATE "C" NOT NULL,
+    placement_decision_id text COLLATE "C" NOT NULL,
+    observed_at timestamptz(6) NOT NULL,
+    valid_until timestamptz(6) NOT NULL,
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, deployment_id),
+    CONSTRAINT deployment_runtime_snapshots_deployment_fk FOREIGN KEY (
+        tenant_id, deployment_id
+    ) REFERENCES paas.deployments (tenant_id, id),
+    CONSTRAINT deployment_runtime_snapshots_generation_fk FOREIGN KEY (
+        tenant_id, deployment_id, deployment_generation
+    ) REFERENCES paas.deployment_generations (tenant_id, deployment_id, generation),
+    CONSTRAINT deployment_runtime_snapshots_revision_fk FOREIGN KEY (
+        tenant_id, application_revision_id
+    ) REFERENCES paas.application_revisions (tenant_id, id),
+    CONSTRAINT deployment_runtime_snapshots_target_fk FOREIGN KEY (execution_target_id)
+        REFERENCES paas.execution_targets (id),
+    CONSTRAINT deployment_runtime_snapshots_values_valid CHECK (
+        deployment_generation BETWEEN 1 AND 9007199254740991
+        AND valid_until > observed_at
+        AND valid_until <= observed_at + interval '1 minute'
+    ),
+    CONSTRAINT deployment_runtime_snapshots_document_identity CHECK (
+        jsonb_typeof(document) = 'object'
+        AND document ?& ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+        ]
+        AND document - ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+        ] = '{}'::jsonb
+        AND jsonb_typeof(document->'deploymentId') = 'string'
+        AND jsonb_typeof(document->'generation') = 'number'
+        AND jsonb_typeof(document->'applicationRevisionId') = 'string'
+        AND jsonb_typeof(document->'executionTargetId') = 'string'
+        AND jsonb_typeof(document->'observedAt') = 'string'
+        AND document->>'deploymentId' = deployment_id
+        AND document->>'applicationRevisionId' = application_revision_id
+        AND document->>'executionTargetId' = execution_target_id
+        AND (document->>'observedAt')::timestamptz = observed_at
+        AND CASE
+            WHEN document->>'generation' ~ '^[1-9][0-9]*$'
+            THEN (document->>'generation')::numeric = deployment_generation
+            ELSE false
+        END
+        AND jsonb_typeof(document->'instances') = 'array'
+        AND jsonb_array_length(document->'instances') <= 64
+    )
+);
+
+CREATE OR REPLACE FUNCTION paas.valid_deployment_resource_document(
+    resource_document jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+IMMUTABLE
+STRICT
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    instance jsonb;
+    measurement jsonb;
+    measurement_value jsonb;
+    measurement_state text;
+    volume_state text;
+BEGIN
+    IF jsonb_typeof(resource_document) <> 'object'
+       OR NOT resource_document ?& ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+       ]
+       OR resource_document - ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+       ] <> '{}'::jsonb
+       OR jsonb_typeof(resource_document->'deploymentId') <> 'string'
+       OR jsonb_typeof(resource_document->'generation') <> 'number'
+       OR resource_document->>'generation' !~ '^[1-9][0-9]*$'
+       OR (resource_document->>'generation')::numeric > 9007199254740991
+       OR jsonb_typeof(resource_document->'applicationRevisionId') <> 'string'
+       OR jsonb_typeof(resource_document->'executionTargetId') <> 'string'
+       OR jsonb_typeof(resource_document->'observedAt') <> 'string'
+       OR jsonb_typeof(resource_document->'instances') <> 'array'
+       OR jsonb_array_length(resource_document->'instances') > 64 THEN
+        RETURN false;
+    END IF;
+
+    FOR instance IN
+        SELECT item.value
+          FROM jsonb_array_elements(resource_document->'instances') AS item(value)
+    LOOP
+        IF jsonb_typeof(instance) <> 'object'
+           OR NOT instance ?& ARRAY['id', 'cpu', 'memory', 'network', 'blockIo', 'storage']
+           OR instance - ARRAY['id', 'cpu', 'memory', 'network', 'blockIo', 'storage'] <> '{}'::jsonb
+           OR jsonb_typeof(instance->'id') <> 'string'
+           OR instance->>'id' COLLATE "C" !~ '^instance-[0-9a-f]{32}$' THEN
+            RETURN false;
+        END IF;
+
+        measurement := instance->'cpu';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state = 'AVAILABLE' THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY['windowMillis', 'usedCores', 'limitCpuMillis']
+               OR measurement_value - ARRAY['windowMillis', 'usedCores', 'limitCpuMillis'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value->'windowMillis') <> 'number'
+               OR measurement_value->>'windowMillis' !~ '^[1-9][0-9]*$'
+               OR (measurement_value->>'windowMillis')::numeric > 60000
+               OR jsonb_typeof(measurement_value->'usedCores') <> 'number'
+               OR (measurement_value->>'usedCores')::numeric < 0
+               OR (measurement_value->>'usedCores')::numeric > 4096
+               OR jsonb_typeof(measurement_value->'limitCpuMillis') <> 'number'
+               OR measurement_value->>'limitCpuMillis' !~ '^[1-9][0-9]*$'
+               OR (measurement_value->>'limitCpuMillis')::numeric > 4096000 THEN
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('WARMING_UP', 'UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+
+        measurement := instance->'memory';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state = 'AVAILABLE' THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY['usedBytes', 'limitBytes']
+               OR measurement_value - ARRAY['usedBytes', 'limitBytes'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value->'usedBytes') <> 'number'
+               OR measurement_value->>'usedBytes' !~ '^(0|[1-9][0-9]*)$'
+               OR (measurement_value->>'usedBytes')::numeric > 9007199254740991
+               OR jsonb_typeof(measurement_value->'limitBytes') <> 'number'
+               OR measurement_value->>'limitBytes' !~ '^[1-9][0-9]*$'
+               OR (measurement_value->>'limitBytes')::numeric > 9007199254740991
+               OR (measurement_value->>'usedBytes')::numeric >
+                    (measurement_value->>'limitBytes')::numeric THEN
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+
+        measurement := instance->'network';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state = 'AVAILABLE' THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY[
+                    'receivedBytes', 'transmittedBytes', 'receiveErrors',
+                    'transmitErrors', 'receiveDrops', 'transmitDrops'
+               ]
+               OR measurement_value - ARRAY[
+                    'receivedBytes', 'transmittedBytes', 'receiveErrors',
+                    'transmitErrors', 'receiveDrops', 'transmitDrops'
+               ] <> '{}'::jsonb
+               OR EXISTS (
+                    SELECT 1
+                      FROM jsonb_each(measurement_value) AS field(name, value)
+                     WHERE jsonb_typeof(field.value) <> 'number'
+                        OR field.value#>>'{}' !~ '^(0|[1-9][0-9]*)$'
+                        OR (field.value#>>'{}')::numeric > 9007199254740991
+               ) THEN
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+
+        measurement := instance->'blockIo';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state = 'AVAILABLE' THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY[
+                    'readBytes', 'writeBytes', 'readOperations', 'writeOperations'
+               ]
+               OR measurement_value - ARRAY[
+                    'readBytes', 'writeBytes', 'readOperations', 'writeOperations'
+               ] <> '{}'::jsonb
+               OR EXISTS (
+                    SELECT 1
+                      FROM jsonb_each(measurement_value) AS field(name, value)
+                     WHERE jsonb_typeof(field.value) <> 'number'
+                        OR field.value#>>'{}' !~ '^(0|[1-9][0-9]*)$'
+                        OR (field.value#>>'{}')::numeric > 9007199254740991
+               ) THEN
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+
+        measurement := instance->'storage';
+        IF jsonb_typeof(measurement) <> 'object'
+           OR jsonb_typeof(measurement->'state') IS DISTINCT FROM 'string' THEN
+            RETURN false;
+        END IF;
+        measurement_state := measurement->>'state';
+        IF measurement_state IN ('AVAILABLE', 'STALE') THEN
+            measurement_value := measurement->'value';
+            IF measurement - ARRAY['state', 'value'] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value) IS DISTINCT FROM 'object'
+               OR NOT measurement_value ?& ARRAY[
+                    'observedAt', 'validUntil', 'writableLayerBytes',
+                    'imageTotalBytes', 'imageSharedBytes', 'imageUniqueBytes',
+                    'volumesState'
+               ]
+               OR measurement_value - ARRAY[
+                    'observedAt', 'validUntil', 'writableLayerBytes',
+                    'imageTotalBytes', 'imageSharedBytes', 'imageUniqueBytes',
+                    'volumesState', 'volumes'
+               ] <> '{}'::jsonb
+               OR jsonb_typeof(measurement_value->'observedAt') <> 'string'
+               OR jsonb_typeof(measurement_value->'validUntil') <> 'string'
+               OR (measurement_value->>'validUntil')::timestamptz <=
+                    (measurement_value->>'observedAt')::timestamptz
+               OR (measurement_value->>'validUntil')::timestamptz >
+                    (measurement_value->>'observedAt')::timestamptz + interval '5 minutes'
+               OR EXISTS (
+                    SELECT 1
+                      FROM jsonb_each(measurement_value) AS field(name, value)
+                     WHERE field.name IN (
+                            'writableLayerBytes', 'imageTotalBytes',
+                            'imageSharedBytes', 'imageUniqueBytes'
+                       )
+                       AND (
+                            jsonb_typeof(field.value) <> 'number'
+                            OR field.value#>>'{}' !~ '^(0|[1-9][0-9]*)$'
+                            OR (field.value#>>'{}')::numeric > 9007199254740991
+                       )
+               )
+               OR (measurement_value->>'imageSharedBytes')::numeric >
+                    (measurement_value->>'imageTotalBytes')::numeric
+               OR (measurement_value->>'imageUniqueBytes')::numeric <>
+                    (measurement_value->>'imageTotalBytes')::numeric -
+                    (measurement_value->>'imageSharedBytes')::numeric
+               OR jsonb_typeof(measurement_value->'volumesState') <> 'string' THEN
+                RETURN false;
+            END IF;
+            volume_state := measurement_value->>'volumesState';
+            IF volume_state = 'AVAILABLE' THEN
+                IF jsonb_typeof(measurement_value->'volumes') IS DISTINCT FROM 'object'
+                   OR NOT measurement_value->'volumes' ?& ARRAY[
+                        'count', 'bytes', 'sharedCount', 'sharedBytes'
+                   ]
+                   OR (measurement_value->'volumes') - ARRAY[
+                        'count', 'bytes', 'sharedCount', 'sharedBytes'
+                   ] <> '{}'::jsonb
+                   OR EXISTS (
+                        SELECT 1
+                          FROM jsonb_each(measurement_value->'volumes') AS field(name, value)
+                         WHERE jsonb_typeof(field.value) <> 'number'
+                            OR field.value#>>'{}' !~ '^(0|[1-9][0-9]*)$'
+                            OR (field.value#>>'{}')::numeric > 9007199254740991
+                   )
+                   OR (measurement_value#>>'{volumes,count}')::numeric > 4294967295
+                   OR (measurement_value#>>'{volumes,sharedCount}')::numeric > 4294967295
+                   OR (measurement_value#>>'{volumes,sharedCount}')::numeric >
+                        (measurement_value#>>'{volumes,count}')::numeric
+                   OR (measurement_value#>>'{volumes,sharedBytes}')::numeric >
+                        (measurement_value#>>'{volumes,bytes}')::numeric THEN
+                    RETURN false;
+                END IF;
+            ELSIF volume_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+                IF measurement_value ? 'volumes' THEN
+                    RETURN false;
+                END IF;
+            ELSE
+                RETURN false;
+            END IF;
+        ELSIF measurement_state IN ('UNAVAILABLE', 'UNSUPPORTED') THEN
+            IF measurement - 'state' <> '{}'::jsonb THEN
+                RETURN false;
+            END IF;
+        ELSE
+            RETURN false;
+        END IF;
+    END LOOP;
+
+    IF EXISTS (
+        SELECT 1
+          FROM (
+            SELECT item.value->>'id' AS id,
+                   lag(item.value->>'id') OVER (ORDER BY item.ordinality) AS previous_id
+              FROM jsonb_array_elements(resource_document->'instances')
+                   WITH ORDINALITY AS item(value, ordinality)
+          ) AS ordered
+         WHERE ordered.previous_id IS NOT NULL
+           AND ordered.id COLLATE "C" <= ordered.previous_id COLLATE "C"
+    ) THEN
+        RETURN false;
+    END IF;
+    RETURN true;
+EXCEPTION
+    WHEN OTHERS THEN
+        RETURN false;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.valid_deployment_resource_document(jsonb) FROM PUBLIC;
+
+CREATE TABLE IF NOT EXISTS paas.deployment_resource_snapshots (
+    tenant_id text COLLATE "C" NOT NULL,
+    deployment_id text COLLATE "C" NOT NULL,
+    deployment_generation bigint NOT NULL,
+    application_revision_id text COLLATE "C" NOT NULL,
+    execution_target_id text COLLATE "C" NOT NULL,
+    placement_decision_id text COLLATE "C" NOT NULL,
+    observed_at timestamptz(6) NOT NULL,
+    valid_until timestamptz(6) NOT NULL,
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, deployment_id),
+    CONSTRAINT deployment_resource_snapshots_deployment_fk FOREIGN KEY (
+        tenant_id, deployment_id
+    ) REFERENCES paas.deployments (tenant_id, id),
+    CONSTRAINT deployment_resource_snapshots_generation_fk FOREIGN KEY (
+        tenant_id, deployment_id, deployment_generation
+    ) REFERENCES paas.deployment_generations (tenant_id, deployment_id, generation),
+    CONSTRAINT deployment_resource_snapshots_revision_fk FOREIGN KEY (
+        tenant_id, application_revision_id
+    ) REFERENCES paas.application_revisions (tenant_id, id),
+    CONSTRAINT deployment_resource_snapshots_target_fk FOREIGN KEY (execution_target_id)
+        REFERENCES paas.execution_targets (id),
+    CONSTRAINT deployment_resource_snapshots_values_valid CHECK (
+        deployment_generation BETWEEN 1 AND 9007199254740991
+        AND valid_until > observed_at
+        AND valid_until <= observed_at + interval '1 minute'
+    ),
+    CONSTRAINT deployment_resource_snapshots_document_valid CHECK (
+        paas.valid_deployment_resource_document(document)
+        AND document->>'deploymentId' = deployment_id
+        AND document->>'applicationRevisionId' = application_revision_id
+        AND document->>'executionTargetId' = execution_target_id
+        AND (document->>'observedAt')::timestamptz = observed_at
+        AND (document->>'generation')::numeric = deployment_generation
+    )
+);
+
 CREATE TABLE IF NOT EXISTS paas.placement_decisions (
     tenant_id text COLLATE "C" NOT NULL,
     id text COLLATE "C" NOT NULL,
@@ -900,6 +1763,188 @@ CREATE TABLE IF NOT EXISTS paas.placement_decisions (
     )
 );
 
+DO $matrix_runtime_snapshot_decision_fk$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_constraint
+         WHERE conname = 'deployment_runtime_snapshots_decision_fk'
+           AND connamespace = 'paas'::regnamespace
+    ) THEN
+        ALTER TABLE paas.deployment_runtime_snapshots
+            ADD CONSTRAINT deployment_runtime_snapshots_decision_fk
+            FOREIGN KEY (tenant_id, placement_decision_id)
+            REFERENCES paas.placement_decisions (tenant_id, id);
+    END IF;
+END
+$matrix_runtime_snapshot_decision_fk$;
+
+DO $matrix_resource_snapshot_decision_fk$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_constraint
+         WHERE conname = 'deployment_resource_snapshots_decision_fk'
+           AND connamespace = 'paas'::regnamespace
+    ) THEN
+        ALTER TABLE paas.deployment_resource_snapshots
+            ADD CONSTRAINT deployment_resource_snapshots_decision_fk
+            FOREIGN KEY (tenant_id, placement_decision_id)
+            REFERENCES paas.placement_decisions (tenant_id, id);
+    END IF;
+END
+$matrix_resource_snapshot_decision_fk$;
+
+-- A terminal session is a short-lived authorization and runtime proof. The
+-- ticket digest is private persistence state and never appears in the public
+-- document, Audit fact, browser response or node request. Provider identities,
+-- terminal bytes and workload secrets are not represented by this table.
+CREATE TABLE IF NOT EXISTS paas.terminal_sessions (
+    tenant_id text COLLATE "C" NOT NULL,
+    id text COLLATE "C" NOT NULL,
+    deployment_id text COLLATE "C" NOT NULL,
+    deployment_generation bigint NOT NULL,
+    application_revision_id text COLLATE "C" NOT NULL,
+    content_digest text COLLATE "C" NOT NULL,
+    execution_target_id text COLLATE "C" NOT NULL,
+    placement_decision_id text COLLATE "C" NOT NULL,
+    binding_ref text COLLATE "C" NOT NULL,
+    instance_id text COLLATE "C" NOT NULL,
+    subject_type text COLLATE "C" NOT NULL,
+    subject_id text COLLATE "C" NOT NULL,
+    iam_decision_id text COLLATE "C" NOT NULL,
+    request_id text COLLATE "C" NOT NULL,
+    audit_id text COLLATE "C",
+    traceparent text COLLATE "C",
+    idempotency_fingerprint text COLLATE "C" NOT NULL,
+    request_digest text COLLATE "C" NOT NULL,
+    ticket_digest text COLLATE "C",
+    columns integer NOT NULL,
+    rows integer NOT NULL,
+    state text COLLATE "C" NOT NULL,
+    outcome text COLLATE "C",
+    created_at timestamptz(6) NOT NULL,
+    connect_before timestamptz(6) NOT NULL,
+    expires_at timestamptz(6) NOT NULL,
+    connected_at timestamptz(6),
+    ended_at timestamptz(6),
+    document jsonb NOT NULL,
+    PRIMARY KEY (tenant_id, id),
+    CONSTRAINT terminal_sessions_global_id_uq UNIQUE (id),
+    CONSTRAINT terminal_sessions_idempotency_uq UNIQUE (
+        tenant_id, idempotency_fingerprint
+    ),
+    CONSTRAINT terminal_sessions_deployment_fk FOREIGN KEY (
+        tenant_id, deployment_id
+    ) REFERENCES paas.deployments (tenant_id, id),
+    CONSTRAINT terminal_sessions_generation_fk FOREIGN KEY (
+        tenant_id, deployment_id, deployment_generation
+    ) REFERENCES paas.deployment_generations (tenant_id, deployment_id, generation),
+    CONSTRAINT terminal_sessions_revision_fk FOREIGN KEY (
+        tenant_id, application_revision_id
+    ) REFERENCES paas.application_revisions (tenant_id, id),
+    CONSTRAINT terminal_sessions_target_fk FOREIGN KEY (execution_target_id)
+        REFERENCES paas.execution_targets (id),
+    CONSTRAINT terminal_sessions_decision_fk FOREIGN KEY (
+        tenant_id, placement_decision_id
+    ) REFERENCES paas.placement_decisions (tenant_id, id),
+    CONSTRAINT terminal_sessions_ids_valid CHECK (
+        tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND id COLLATE "C" ~ '^terminal-session-[0-9a-f]{32}$'
+        AND deployment_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND application_revision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND execution_target_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND placement_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND binding_ref COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND instance_id COLLATE "C" ~ '^instance-[0-9a-f]{32}$'
+        AND subject_type = 'USER'
+        AND subject_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND iam_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (audit_id IS NULL OR audit_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (traceparent IS NULL OR octet_length(traceparent) BETWEEN 1 AND 55)
+    ),
+    CONSTRAINT terminal_sessions_values_valid CHECK (
+        deployment_generation BETWEEN 1 AND 9007199254740991
+        AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND idempotency_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND request_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (ticket_digest IS NULL OR ticket_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$')
+        AND columns BETWEEN 2 AND 512
+        AND rows BETWEEN 2 AND 256
+    ),
+    CONSTRAINT terminal_sessions_state_valid CHECK (
+        state IN ('PENDING', 'CONNECTING', 'ACTIVE', 'ENDED')
+        AND (state = 'PENDING') = (ticket_digest IS NOT NULL)
+        AND (
+            (state IN ('PENDING', 'CONNECTING')
+                AND outcome IS NULL AND connected_at IS NULL AND ended_at IS NULL)
+            OR (state = 'ACTIVE'
+                AND outcome IS NULL AND connected_at IS NOT NULL AND ended_at IS NULL)
+            OR (state = 'ENDED'
+                AND outcome IN (
+                    'COMPLETED', 'UNSUPPORTED', 'EXPIRED', 'DISCONNECTED',
+                    'REVOKED', 'REPLACED', 'FAILED'
+                )
+                AND ended_at IS NOT NULL)
+        )
+    ),
+    CONSTRAINT terminal_sessions_time_valid CHECK (
+        connect_before = created_at + interval '30 seconds'
+        AND expires_at = created_at + interval '15 minutes'
+        AND (connected_at IS NULL OR connected_at BETWEEN created_at AND expires_at)
+        AND (ended_at IS NULL OR ended_at >= created_at)
+        AND (connected_at IS NULL OR ended_at IS NULL OR ended_at >= connected_at)
+    ),
+    CONSTRAINT terminal_sessions_document_identity CHECK ((
+        document->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND document->>'kind' = 'TerminalSession'
+        AND document->>'id' = id
+        AND document#>>'{scope,kind}' = 'TENANT'
+        AND document#>>'{scope,tenantId}' = tenant_id
+        AND document->>'deploymentId' = deployment_id
+        AND document->>'applicationRevisionId' = application_revision_id
+        AND document->>'instanceId' = instance_id
+        AND document->>'state' = state
+        AND (document->>'outcome') IS NOT DISTINCT FROM outcome
+        AND (document->>'createdAt')::timestamptz = created_at
+        AND (document->>'connectBefore')::timestamptz = connect_before
+        AND (document->>'expiresAt')::timestamptz = expires_at
+        AND ((connected_at IS NULL AND NOT (document ? 'connectedAt'))
+            OR (document->>'connectedAt')::timestamptz = connected_at)
+        AND ((ended_at IS NULL AND NOT (document ? 'endedAt'))
+            OR (document->>'endedAt')::timestamptz = ended_at)
+        AND CASE WHEN document->>'generation' ~ '^[1-9][0-9]*$'
+            THEN (document->>'generation')::numeric = deployment_generation ELSE false END
+        AND CASE WHEN document#>>'{size,columns}' ~ '^[1-9][0-9]*$'
+            THEN (document#>>'{size,columns}')::numeric = columns ELSE false END
+        AND CASE WHEN document#>>'{size,rows}' ~ '^[1-9][0-9]*$'
+            THEN (document#>>'{size,rows}')::numeric = rows ELSE false END
+    ) IS TRUE)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS terminal_sessions_open_subject_instance_uq
+    ON paas.terminal_sessions (
+        tenant_id, subject_type, subject_id, deployment_id, instance_id
+    ) WHERE state <> 'ENDED';
+CREATE INDEX IF NOT EXISTS terminal_sessions_ticket_lookup_idx
+    ON paas.terminal_sessions (id, ticket_digest) WHERE state = 'PENDING';
+
+DO $matrix_terminal_outbox_fk$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE conname = 'audit_outbox_terminal_session_fk'
+           AND connamespace = 'paas'::regnamespace
+    ) THEN
+        ALTER TABLE paas.audit_outbox
+            ADD CONSTRAINT audit_outbox_terminal_session_fk
+            FOREIGN KEY (tenant_id, terminal_session_id)
+            REFERENCES paas.terminal_sessions (tenant_id, id);
+    END IF;
+END
+$matrix_terminal_outbox_fk$;
+
 CREATE TABLE IF NOT EXISTS paas.capacity_claims (
     id uuid NOT NULL DEFAULT gen_random_uuid(),
     execution_target_id text COLLATE "C" NOT NULL,
@@ -1011,6 +2056,12 @@ ALTER TABLE paas.adapter_receipts ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.adapter_receipts FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_observations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.deployment_observations FORCE ROW LEVEL SECURITY;
+ALTER TABLE paas.deployment_runtime_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.deployment_runtime_snapshots FORCE ROW LEVEL SECURITY;
+ALTER TABLE paas.deployment_resource_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.deployment_resource_snapshots FORCE ROW LEVEL SECURITY;
+ALTER TABLE paas.terminal_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paas.terminal_sessions FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.placement_decisions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE paas.placement_decisions FORCE ROW LEVEL SECURITY;
 ALTER TABLE paas.capacity_reservations ENABLE ROW LEVEL SECURITY;
@@ -1028,11 +2079,12 @@ BEGIN
         'placement_policies',
         'deployments',
         'deployment_generations',
-        'operations',
-        'audit_outbox',
         'adapter_commands',
         'adapter_receipts',
         'deployment_observations',
+        'deployment_runtime_snapshots',
+        'deployment_resource_snapshots',
+        'terminal_sessions',
         'placement_decisions',
         'capacity_reservations'
     ]
@@ -1055,6 +2107,30 @@ BEGIN
 END
 $matrix_policy$;
 
+DROP POLICY IF EXISTS tenant_isolation ON paas.operations;
+DROP POLICY IF EXISTS tenant_isolation ON paas.audit_outbox;
+DO $matrix_operation_authority_policies$
+DECLARE
+    table_name text;
+BEGIN
+    FOREACH table_name IN ARRAY ARRAY['operations', 'audit_outbox']
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_catalog.pg_policies
+             WHERE schemaname = 'paas' AND tablename = table_name
+               AND policyname = 'authority_isolation'
+        ) THEN
+            EXECUTE format(
+                'CREATE POLICY authority_isolation ON paas.%I '
+                'USING (tenant_id = paas.current_tenant_id() OR installation_id = paas.current_installation_id()) '
+                'WITH CHECK (tenant_id = paas.current_tenant_id() OR installation_id = paas.current_installation_id())',
+                table_name
+            );
+        END IF;
+    END LOOP;
+END
+$matrix_operation_authority_policies$;
+
 CREATE OR REPLACE FUNCTION paas.append_audit_outbox(
     submitted_operation jsonb,
     submitted_audit_event jsonb
@@ -1066,35 +2142,36 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
     effective_tenant_id text;
+    effective_installation_id text;
     effective_now timestamptz(6);
     expected_action text;
     expected_result text;
 BEGIN
     effective_tenant_id := paas.current_tenant_id();
+    effective_installation_id := paas.current_installation_id();
     effective_now := transaction_timestamp();
-    IF effective_tenant_id IS NULL THEN
+    IF effective_tenant_id IS NULL AND effective_installation_id IS NULL THEN
         RAISE EXCEPTION USING
             ERRCODE = '42501',
-            MESSAGE = 'valid transaction-local tenant context is required';
+            MESSAGE = 'exactly one transaction-local authority context is required';
     END IF;
-    IF jsonb_typeof(submitted_operation) <> 'object'
-       OR jsonb_typeof(submitted_audit_event) <> 'object'
-       OR jsonb_typeof(submitted_audit_event->'actor') <> 'object'
-       OR jsonb_typeof(submitted_audit_event->'target') <> 'object'
+    IF jsonb_typeof(submitted_operation) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event->'actor') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event->'target') IS DISTINCT FROM 'object'
        OR NOT (submitted_audit_event ?& ARRAY[
-            'schemaVersion', 'eventId', 'tenantId', 'actor',
+            'schemaVersion', 'eventId', 'actor',
             'iamDecisionId', 'action', 'target', 'operationId',
             'requestDigest', 'result', 'requestId', 'occurredAt'
        ])
-       OR NOT ((submitted_audit_event->'actor') ?& ARRAY['type', 'id'])
+       OR NOT paas.subject_reference_valid(submitted_audit_event->'actor')
        OR NOT ((submitted_audit_event->'target') ?& ARRAY['kind', 'id'])
        OR (submitted_audit_event - ARRAY[
-            'schemaVersion', 'eventId', 'tenantId', 'actor',
+            'schemaVersion', 'eventId', 'tenantId', 'installationId', 'actor',
             'iamDecisionId', 'action', 'target', 'operationId',
             'requestDigest', 'result', 'requestId', 'auditId',
             'traceparent', 'occurredAt'
        ]) <> '{}'::jsonb
-       OR NOT paas.subject_reference_valid(submitted_audit_event->'actor')
        OR ((submitted_audit_event->'target') - ARRAY['kind', 'id'])
             <> '{}'::jsonb THEN
         RAISE EXCEPTION USING
@@ -1115,6 +2192,11 @@ BEGIN
         WHEN 'UPDATE' THEN 'paas.deployment.updated'
         WHEN 'STOP' THEN 'paas.deployment.stopped'
         WHEN 'ROLLBACK' THEN 'paas.deployment.rolled-back'
+        WHEN 'CREATE_EXECUTION_POOL' THEN 'paas.execution-pool.created'
+        WHEN 'REGISTER_EXECUTION_TARGET' THEN 'paas.execution-target.registered'
+        WHEN 'DRAIN_EXECUTION_TARGET' THEN 'paas.execution-target.drained'
+        WHEN 'ACTIVATE_EXECUTION_TARGET' THEN 'paas.execution-target.activated'
+        WHEN 'REMOVE_EXECUTION_TARGET' THEN 'paas.execution-target.removed'
         ELSE NULL
     END;
     expected_result := CASE
@@ -1124,22 +2206,37 @@ BEGIN
             'CREATE_CONFIGURATION_REVISION',
             'CREATE_APPLICATION_REVISION',
             'SET_APPLICATION_LABEL',
-            'DELETE_APPLICATION_LABEL'
+            'DELETE_APPLICATION_LABEL',
+            'CREATE_EXECUTION_POOL',
+            'REGISTER_EXECUTION_TARGET',
+            'DRAIN_EXECUTION_TARGET',
+            'ACTIVATE_EXECUTION_TARGET',
+            'REMOVE_EXECUTION_TARGET'
         ) THEN 'SUCCEEDED'
         ELSE 'ACCEPTED'
     END;
     IF expected_action IS NULL
-       OR submitted_audit_event->>'schemaVersion' <> 'v1'
+       OR submitted_audit_event->>'schemaVersion' IS DISTINCT FROM 'v1'
        OR COALESCE(submitted_audit_event->>'eventId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_audit_event->>'tenantId' <> effective_tenant_id
+       OR submitted_audit_event->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_audit_event->>'installationId' IS DISTINCT FROM effective_installation_id
+       OR (submitted_audit_event ? 'tenantId') <> (effective_tenant_id IS NOT NULL)
+       OR (submitted_audit_event ? 'installationId') <> (effective_installation_id IS NOT NULL)
+       OR ((effective_installation_id IS NOT NULL) <> (submitted_operation->>'action' IN (
+            'CREATE_EXECUTION_POOL', 'REGISTER_EXECUTION_TARGET',
+            'DRAIN_EXECUTION_TARGET', 'ACTIVATE_EXECUTION_TARGET',
+            'REMOVE_EXECUTION_TARGET'
+       )))
+       OR (effective_installation_id IS NOT NULL
+            AND submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM 'USER')
        OR COALESCE(submitted_audit_event#>>'{actor,id}', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR submitted_audit_event->'actor'
             IS DISTINCT FROM submitted_operation->'requestedBy'
        OR COALESCE(submitted_audit_event->>'iamDecisionId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
-       OR submitted_audit_event->>'action' <> expected_action
+       OR submitted_audit_event->>'action' IS DISTINCT FROM expected_action
        OR submitted_audit_event->'target'
             IS DISTINCT FROM submitted_operation->'target'
        OR submitted_audit_event->>'operationId' <> submitted_operation->>'id'
@@ -1147,7 +2244,7 @@ BEGIN
             <> submitted_operation->>'requestDigest'
        OR submitted_audit_event->>'requestDigest' COLLATE "C"
             !~ '^sha256:[0-9a-f]{64}$'
-       OR submitted_audit_event->>'result' <> expected_result
+       OR submitted_audit_event->>'result' IS DISTINCT FROM expected_result
        OR COALESCE(submitted_audit_event->>'requestId', '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR (submitted_audit_event ? 'auditId'
@@ -1157,7 +2254,16 @@ BEGIN
             AND (jsonb_typeof(submitted_audit_event->'traceparent') <> 'string'
                 OR octet_length(submitted_audit_event->>'traceparent') > 55))
        OR (submitted_audit_event->>'occurredAt')::timestamptz <> effective_now
-       OR (submitted_operation->>'createdAt')::timestamptz <> effective_now THEN
+       OR NOT (
+            (submitted_operation->>'createdAt')::timestamptz = effective_now
+            OR (
+                submitted_operation->>'action' = 'REGISTER_EXECUTION_TARGET'
+                AND submitted_operation->>'state' = 'SUCCEEDED'
+                AND (submitted_operation->>'createdAt')::timestamptz < effective_now
+                AND (submitted_operation->>'updatedAt')::timestamptz = effective_now
+                AND (submitted_operation->>'terminalAt')::timestamptz = effective_now
+            )
+       ) THEN
         RAISE EXCEPTION USING
             ERRCODE = '22023',
             MESSAGE = 'Audit event identity or correlation is invalid';
@@ -1165,6 +2271,7 @@ BEGIN
 
     INSERT INTO paas.audit_outbox (
         tenant_id,
+        installation_id,
         event_id,
         operation_id,
         status,
@@ -1176,6 +2283,7 @@ BEGIN
         document
     ) VALUES (
         effective_tenant_id,
+        effective_installation_id,
         submitted_audit_event->>'eventId',
         submitted_operation->>'id',
         'PENDING',
@@ -1192,6 +2300,1780 @@ $function$;
 REVOKE ALL ON FUNCTION paas.append_audit_outbox(jsonb, jsonb) FROM PUBLIC;
 REVOKE ALL ON FUNCTION paas.append_audit_outbox(jsonb, jsonb)
     FROM matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.terminal_session_snapshot(
+    session_row paas.terminal_sessions
+)
+RETURNS jsonb
+LANGUAGE sql
+IMMUTABLE
+STRICT
+SET search_path = pg_catalog, pg_temp
+AS $function$
+    SELECT jsonb_build_object(
+        'session', session_row.document,
+        'binding', jsonb_build_object(
+            'deploymentId', session_row.deployment_id,
+            'generation', session_row.deployment_generation,
+            'applicationRevisionId', session_row.application_revision_id,
+            'contentDigest', session_row.content_digest,
+            'executionTargetId', session_row.execution_target_id,
+            'placementDecisionId', session_row.placement_decision_id,
+            'bindingRef', session_row.binding_ref,
+            'instanceId', session_row.instance_id
+        ),
+        'subject', jsonb_build_object(
+            'type', session_row.subject_type,
+            'id', session_row.subject_id
+        ),
+        'iamDecisionId', session_row.iam_decision_id,
+        'requestId', session_row.request_id,
+        'idempotencyFingerprint', session_row.idempotency_fingerprint,
+        'requestDigest', session_row.request_digest
+    )
+    || CASE WHEN session_row.audit_id IS NULL THEN '{}'::jsonb
+        ELSE jsonb_build_object('auditId', session_row.audit_id) END
+    || CASE WHEN session_row.traceparent IS NULL THEN '{}'::jsonb
+        ELSE jsonb_build_object('traceparent', session_row.traceparent) END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.terminal_session_snapshot(paas.terminal_sessions)
+    FROM PUBLIC, matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.lock_terminal_session_by_fingerprint(
+    requested_fingerprint text
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_fingerprint IS NULL
+       OR requested_fingerprint COLLATE "C" !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal fingerprint is invalid';
+    END IF;
+    RETURN QUERY
+    SELECT paas.terminal_session_snapshot(session)
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.idempotency_fingerprint = requested_fingerprint
+     FOR UPDATE OF session;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.lock_terminal_session(
+    requested_session_id text
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_session_id IS NULL
+       OR requested_session_id COLLATE "C" !~ '^terminal-session-[0-9a-f]{32}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal session identity is invalid';
+    END IF;
+    RETURN QUERY
+    SELECT paas.terminal_session_snapshot(session)
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+     FOR UPDATE OF session;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.lock_open_terminal_session(
+    requested_subject_type text,
+    requested_subject_id text,
+    requested_deployment_id text,
+    requested_instance_id text
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_subject_type IS DISTINCT FROM 'USER'
+       OR requested_subject_id IS NULL
+       OR requested_subject_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_deployment_id IS NULL
+       OR requested_deployment_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_instance_id IS NULL
+       OR requested_instance_id COLLATE "C" !~ '^instance-[0-9a-f]{32}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'open terminal selector is invalid';
+    END IF;
+    RETURN QUERY
+    SELECT paas.terminal_session_snapshot(session)
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.subject_type = requested_subject_type
+       AND session.subject_id = requested_subject_id
+       AND session.deployment_id = requested_deployment_id
+       AND session.instance_id = requested_instance_id
+       AND session.state <> 'ENDED'
+     FOR UPDATE OF session;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.lock_current_terminal_runtime(
+    requested_deployment_id text,
+    requested_instance_id text,
+    requested_now timestamptz
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_deployment_id IS NULL
+       OR requested_deployment_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_instance_id IS NULL
+       OR requested_instance_id COLLATE "C" !~ '^instance-[0-9a-f]{32}$'
+       OR requested_now IS DISTINCT FROM transaction_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal runtime selector is invalid';
+    END IF;
+    RETURN QUERY
+    SELECT jsonb_build_object(
+        'deploymentId', snapshot.deployment_id,
+        'generation', snapshot.deployment_generation,
+        'applicationRevisionId', snapshot.application_revision_id,
+        'contentDigest', generation.content_digest,
+        'executionTargetId', snapshot.execution_target_id,
+        'placementDecisionId', snapshot.placement_decision_id,
+        'bindingRef', target.binding_ref,
+        'instanceId', requested_instance_id
+    )
+      FROM paas.deployment_runtime_snapshots AS snapshot
+      JOIN paas.deployments AS deployment
+        ON deployment.tenant_id = snapshot.tenant_id
+       AND deployment.id = snapshot.deployment_id
+       AND deployment.generation = snapshot.deployment_generation
+       AND deployment.application_revision_id = snapshot.application_revision_id
+      JOIN paas.deployment_generations AS generation
+        ON generation.tenant_id = snapshot.tenant_id
+       AND generation.deployment_id = snapshot.deployment_id
+       AND generation.generation = snapshot.deployment_generation
+       AND generation.application_revision_id = snapshot.application_revision_id
+      JOIN paas.placement_decisions AS decision
+        ON decision.tenant_id = snapshot.tenant_id
+       AND decision.id = snapshot.placement_decision_id
+       AND decision.deployment_id = snapshot.deployment_id
+       AND decision.deployment_generation = snapshot.deployment_generation
+       AND decision.application_revision_id = snapshot.application_revision_id
+       AND decision.execution_target_id = snapshot.execution_target_id
+       AND decision.outcome = 'SCHEDULED'
+      JOIN paas.execution_targets AS target
+        ON target.id = snapshot.execution_target_id
+       AND target.binding_ref IS NOT NULL
+     WHERE snapshot.tenant_id = effective_tenant_id
+       AND snapshot.deployment_id = requested_deployment_id
+       AND snapshot.valid_until > requested_now
+       AND EXISTS (
+            SELECT 1
+              FROM jsonb_array_elements(snapshot.document->'instances') AS instance(value)
+             WHERE instance.value->>'id' = requested_instance_id
+       )
+     FOR UPDATE OF snapshot;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.lock_terminal_session_by_fingerprint(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.lock_terminal_session(text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.lock_open_terminal_session(text,text,text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.lock_current_terminal_runtime(text,text,timestamptz) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.lock_terminal_session_by_fingerprint(text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.lock_terminal_session(text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.lock_open_terminal_session(text,text,text,text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.lock_current_terminal_runtime(text,text,timestamptz) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.append_terminal_audit_outbox(
+    requested_session_id text,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    current_session paas.terminal_sessions%ROWTYPE;
+    expected_action text;
+    expected_result text;
+    expected_time timestamptz(6);
+    expected_event_id text;
+BEGIN
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id;
+    IF effective_tenant_id IS NULL OR NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'terminal Audit authority is invalid';
+    END IF;
+    IF jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event->'actor') IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event->'target') IS DISTINCT FROM 'object'
+       OR NOT (submitted_audit_event ?& ARRAY[
+            'schemaVersion', 'eventId', 'tenantId', 'actor', 'iamDecisionId',
+            'action', 'target', 'requestDigest', 'result', 'requestId', 'occurredAt'
+       ])
+       OR (submitted_audit_event - ARRAY[
+            'schemaVersion', 'eventId', 'tenantId', 'actor', 'iamDecisionId',
+            'action', 'target', 'requestDigest', 'result', 'requestId',
+            'auditId', 'traceparent', 'occurredAt'
+       ]) <> '{}'::jsonb
+       OR ((submitted_audit_event->'actor') - ARRAY['type', 'id']) <> '{}'::jsonb
+       OR ((submitted_audit_event->'target') - ARRAY['kind', 'id']) <> '{}'::jsonb THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal Audit event is invalid';
+    END IF;
+
+    expected_action := submitted_audit_event->>'action';
+    IF expected_action = 'paas.terminal-session.created'
+       AND current_session.state = 'PENDING' THEN
+        expected_result := 'ACCEPTED';
+        expected_time := current_session.created_at;
+    ELSIF expected_action = 'paas.terminal-session.started'
+       AND current_session.state = 'ACTIVE' THEN
+        expected_result := 'SUCCEEDED';
+        expected_time := current_session.connected_at;
+    ELSIF expected_action = 'paas.terminal-session.ended'
+       AND current_session.state = 'ENDED' THEN
+        expected_result := current_session.outcome;
+        expected_time := current_session.ended_at;
+    ELSE
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal Audit lifecycle is invalid';
+    END IF;
+    expected_event_id := 'terminal-event-'
+        || substring(current_session.id FROM char_length('terminal-session-') + 1)
+        || '-' || substring(expected_action FROM char_length('paas.terminal-session.') + 1);
+
+    IF submitted_audit_event->>'schemaVersion' IS DISTINCT FROM 'v1'
+       OR submitted_audit_event->>'eventId' IS DISTINCT FROM expected_event_id
+       OR submitted_audit_event->>'tenantId' IS DISTINCT FROM effective_tenant_id
+       OR submitted_audit_event#>>'{actor,type}' IS DISTINCT FROM current_session.subject_type
+       OR submitted_audit_event#>>'{actor,id}' IS DISTINCT FROM current_session.subject_id
+       OR submitted_audit_event->>'iamDecisionId' IS DISTINCT FROM current_session.iam_decision_id
+       OR submitted_audit_event#>>'{target,kind}' IS DISTINCT FROM 'TerminalSession'
+       OR submitted_audit_event#>>'{target,id}' IS DISTINCT FROM current_session.id
+       OR submitted_audit_event->>'requestDigest' IS DISTINCT FROM current_session.request_digest
+       OR submitted_audit_event->>'result' IS DISTINCT FROM expected_result
+       OR submitted_audit_event->>'requestId' IS DISTINCT FROM current_session.request_id
+       OR (submitted_audit_event->>'auditId') IS DISTINCT FROM current_session.audit_id
+       OR (submitted_audit_event->>'traceparent') IS DISTINCT FROM current_session.traceparent
+       OR (submitted_audit_event->>'occurredAt')::timestamptz IS DISTINCT FROM expected_time
+       OR expected_time IS DISTINCT FROM transaction_timestamp() THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal Audit identity is invalid';
+    END IF;
+
+    INSERT INTO paas.audit_outbox (
+        tenant_id, installation_id, event_id, operation_id, terminal_session_id,
+        status, available_at, attempts, fencing_token,
+        created_at, updated_at, document
+    ) VALUES (
+        effective_tenant_id, NULL, expected_event_id, NULL, current_session.id,
+        'PENDING', expected_time, 0, 0,
+        expected_time, expected_time, submitted_audit_event
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.append_terminal_audit_outbox(text,jsonb)
+    FROM PUBLIC, matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.create_terminal_session(
+    submitted_stored jsonb,
+    requested_ticket_digest text,
+    submitted_audit_event jsonb
+)
+RETURNS jsonb
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    effective_now timestamptz(6) := transaction_timestamp();
+    submitted_session jsonb := submitted_stored->'session';
+    submitted_binding jsonb := submitted_stored->'binding';
+    current_binding jsonb;
+    stored_session paas.terminal_sessions%ROWTYPE;
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_ticket_digest IS NULL
+       OR requested_ticket_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR jsonb_typeof(submitted_stored) IS DISTINCT FROM 'object'
+       OR NOT (submitted_stored ?& ARRAY[
+            'session', 'binding', 'subject', 'iamDecisionId', 'requestId',
+            'idempotencyFingerprint', 'requestDigest'
+       ])
+       OR (submitted_stored - ARRAY[
+            'session', 'binding', 'subject', 'iamDecisionId', 'requestId',
+            'auditId', 'traceparent', 'idempotencyFingerprint', 'requestDigest'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_session) IS DISTINCT FROM 'object'
+       OR NOT (submitted_session ?& ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'deploymentId', 'generation',
+            'applicationRevisionId', 'instanceId', 'size', 'state',
+            'createdAt', 'connectBefore', 'expiresAt'
+       ])
+       OR (submitted_session - ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'deploymentId', 'generation',
+            'applicationRevisionId', 'instanceId', 'size', 'state',
+            'createdAt', 'connectBefore', 'expiresAt'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_session->'scope') IS DISTINCT FROM 'object'
+       OR ((submitted_session->'scope') - ARRAY['kind', 'tenantId']) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_session->'size') IS DISTINCT FROM 'object'
+       OR ((submitted_session->'size') - ARRAY['columns', 'rows']) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_binding) IS DISTINCT FROM 'object'
+       OR NOT (submitted_binding ?& ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId', 'contentDigest',
+            'executionTargetId', 'placementDecisionId', 'bindingRef', 'instanceId'
+       ])
+       OR (submitted_binding - ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId', 'contentDigest',
+            'executionTargetId', 'placementDecisionId', 'bindingRef', 'instanceId'
+       ]) <> '{}'::jsonb
+       OR jsonb_typeof(submitted_stored->'subject') IS DISTINCT FROM 'object'
+       OR ((submitted_stored->'subject') - ARRAY['type', 'id']) <> '{}'::jsonb THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal session proof is invalid';
+    END IF;
+
+    -- Serialize session admission with terminal removal. Draining keeps
+    -- access to existing work; a removed tombstone cannot mint a new ticket.
+    PERFORM 1
+      FROM paas.execution_target_allocations AS allocation
+      JOIN paas.execution_targets AS target
+        ON target.id = allocation.execution_target_id
+     WHERE allocation.execution_target_id = submitted_binding->>'executionTargetId'
+       AND target.document#>>'{spec,desiredState}' <> 'REMOVED'
+     FOR UPDATE OF allocation, target;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal execution target is removed';
+    END IF;
+
+    SELECT runtime.document INTO current_binding
+      FROM paas.lock_current_terminal_runtime(
+        submitted_binding->>'deploymentId',
+        submitted_binding->>'instanceId',
+        effective_now
+      ) AS runtime;
+    IF NOT FOUND OR current_binding IS DISTINCT FROM submitted_binding
+       OR submitted_session#>>'{scope,kind}' IS DISTINCT FROM 'TENANT'
+       OR submitted_session#>>'{scope,tenantId}' IS DISTINCT FROM effective_tenant_id
+       OR submitted_session->>'deploymentId' IS DISTINCT FROM submitted_binding->>'deploymentId'
+       OR submitted_session->>'generation' IS DISTINCT FROM submitted_binding->>'generation'
+       OR submitted_session->>'applicationRevisionId' IS DISTINCT FROM submitted_binding->>'applicationRevisionId'
+       OR submitted_session->>'instanceId' IS DISTINCT FROM submitted_binding->>'instanceId'
+       OR submitted_session->>'state' IS DISTINCT FROM 'PENDING'
+       OR (submitted_session->>'createdAt')::timestamptz IS DISTINCT FROM effective_now
+       OR (submitted_session->>'connectBefore')::timestamptz IS DISTINCT FROM effective_now + interval '30 seconds'
+       OR (submitted_session->>'expiresAt')::timestamptz IS DISTINCT FROM effective_now + interval '15 minutes' THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal runtime proof conflicts';
+    END IF;
+
+    INSERT INTO paas.terminal_sessions (
+        tenant_id, id, deployment_id, deployment_generation,
+        application_revision_id, content_digest, execution_target_id,
+        placement_decision_id, binding_ref, instance_id,
+        subject_type, subject_id, iam_decision_id, request_id, audit_id,
+        traceparent, idempotency_fingerprint, request_digest, ticket_digest,
+        columns, rows, state, outcome, created_at, connect_before, expires_at,
+        connected_at, ended_at, document
+    ) VALUES (
+        effective_tenant_id,
+        submitted_session->>'id',
+        submitted_binding->>'deploymentId',
+        (submitted_binding->>'generation')::bigint,
+        submitted_binding->>'applicationRevisionId',
+        submitted_binding->>'contentDigest',
+        submitted_binding->>'executionTargetId',
+        submitted_binding->>'placementDecisionId',
+        submitted_binding->>'bindingRef',
+        submitted_binding->>'instanceId',
+        submitted_stored#>>'{subject,type}',
+        submitted_stored#>>'{subject,id}',
+        submitted_stored->>'iamDecisionId',
+        submitted_stored->>'requestId',
+        submitted_stored->>'auditId',
+        submitted_stored->>'traceparent',
+        submitted_stored->>'idempotencyFingerprint',
+        submitted_stored->>'requestDigest',
+        requested_ticket_digest,
+        (submitted_session#>>'{size,columns}')::integer,
+        (submitted_session#>>'{size,rows}')::integer,
+        'PENDING', NULL, effective_now,
+        effective_now + interval '30 seconds',
+        effective_now + interval '15 minutes',
+        NULL, NULL, submitted_session
+    ) RETURNING * INTO stored_session;
+    PERFORM paas.append_terminal_audit_outbox(stored_session.id, submitted_audit_event);
+    RETURN paas.terminal_session_snapshot(stored_session);
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.create_terminal_session(jsonb,text,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.create_terminal_session(jsonb,text,jsonb) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.rotate_terminal_session_ticket(
+    requested_session_id text,
+    requested_ticket_digest text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    current_session paas.terminal_sessions%ROWTYPE;
+BEGIN
+    IF effective_tenant_id IS NULL
+       OR requested_session_id IS NULL
+       OR requested_session_id COLLATE "C" !~ '^terminal-session-[0-9a-f]{32}$'
+       OR requested_ticket_digest IS NULL
+       OR requested_ticket_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal ticket rotation is invalid';
+    END IF;
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'terminal session was not found';
+    END IF;
+    IF current_session.state <> 'PENDING'
+       OR transaction_timestamp() >= current_session.connect_before
+       OR transaction_timestamp() >= current_session.expires_at THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal ticket cannot be rotated';
+    END IF;
+    UPDATE paas.terminal_sessions AS session
+       SET ticket_digest = requested_ticket_digest
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.open_terminal_session_ticket(
+    requested_session_id text,
+    requested_ticket_digest text
+)
+RETURNS TABLE (document jsonb)
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_session paas.terminal_sessions%ROWTYPE;
+    configured_tenant text;
+BEGIN
+    IF requested_session_id IS NULL
+       OR requested_session_id COLLATE "C" !~ '^terminal-session-[0-9a-f]{32}$'
+       OR requested_ticket_digest IS NULL
+       OR requested_ticket_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'terminal ticket is invalid';
+    END IF;
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.id = requested_session_id
+       AND session.ticket_digest = requested_ticket_digest
+       AND session.state = 'PENDING'
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RETURN;
+    END IF;
+    configured_tenant := set_config('matrix.tenant_id', current_session.tenant_id, true);
+    IF configured_tenant IS DISTINCT FROM current_session.tenant_id
+       OR paas.current_tenant_id() IS DISTINCT FROM current_session.tenant_id THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'terminal ticket tenant is invalid';
+    END IF;
+    RETURN QUERY SELECT paas.terminal_session_snapshot(current_session);
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.consume_terminal_session_ticket(
+    requested_session_id text,
+    submitted_session jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    current_session paas.terminal_sessions%ROWTYPE;
+    expected_document jsonb;
+BEGIN
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+     FOR UPDATE;
+    IF effective_tenant_id IS NULL OR NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'P0002', MESSAGE = 'terminal session was not found';
+    END IF;
+    expected_document := jsonb_set(current_session.document, '{state}', '"CONNECTING"'::jsonb);
+    IF current_session.state <> 'PENDING'
+       OR current_session.ticket_digest IS NULL
+       OR submitted_session IS DISTINCT FROM expected_document THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal ticket state conflicts';
+    END IF;
+    UPDATE paas.terminal_sessions AS session
+       SET state = 'CONNECTING', ticket_digest = NULL, document = submitted_session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id;
+END
+$function$;
+
+CREATE OR REPLACE FUNCTION paas.transition_terminal_session(
+    requested_session_id text,
+    submitted_session jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_tenant_id text := paas.current_tenant_id();
+    effective_now timestamptz(6) := transaction_timestamp();
+    current_session paas.terminal_sessions%ROWTYPE;
+    transitioned_session paas.terminal_sessions%ROWTYPE;
+    requested_state text;
+    requested_outcome text;
+    requested_connected_at timestamptz(6);
+    requested_ended_at timestamptz(6);
+BEGIN
+    SELECT * INTO current_session
+      FROM paas.terminal_sessions AS session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+     FOR UPDATE;
+    IF effective_tenant_id IS NULL OR NOT FOUND
+       OR jsonb_typeof(submitted_session) IS DISTINCT FROM 'object'
+       OR (submitted_session - ARRAY[
+            'apiVersion', 'kind', 'id', 'scope', 'deploymentId', 'generation',
+            'applicationRevisionId', 'instanceId', 'size', 'state', 'outcome',
+            'createdAt', 'connectBefore', 'expiresAt', 'connectedAt', 'endedAt'
+       ]) <> '{}'::jsonb
+       OR (submitted_session - ARRAY['state', 'outcome', 'connectedAt', 'endedAt'])
+            IS DISTINCT FROM
+          (current_session.document - ARRAY['state', 'outcome', 'connectedAt', 'endedAt']) THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal transition proof conflicts';
+    END IF;
+
+    requested_state := submitted_session->>'state';
+    requested_outcome := submitted_session->>'outcome';
+    requested_connected_at := (submitted_session->>'connectedAt')::timestamptz;
+    requested_ended_at := (submitted_session->>'endedAt')::timestamptz;
+    IF current_session.state = 'CONNECTING'
+       AND requested_state = 'ACTIVE'
+       AND requested_outcome IS NULL
+       AND requested_connected_at IS NOT DISTINCT FROM effective_now
+       AND requested_ended_at IS NULL THEN
+        NULL;
+    ELSIF current_session.state <> 'ENDED'
+       AND requested_state = 'ENDED'
+       AND requested_outcome IN (
+            'COMPLETED', 'UNSUPPORTED', 'EXPIRED', 'DISCONNECTED',
+            'REVOKED', 'REPLACED', 'FAILED'
+       )
+       AND requested_ended_at IS NOT DISTINCT FROM effective_now
+       AND requested_connected_at IS NOT DISTINCT FROM current_session.connected_at THEN
+        NULL;
+    ELSE
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'terminal lifecycle transition is invalid';
+    END IF;
+
+    UPDATE paas.terminal_sessions AS session
+       SET ticket_digest = NULL,
+           state = requested_state,
+           outcome = requested_outcome,
+           connected_at = requested_connected_at,
+           ended_at = requested_ended_at,
+           document = submitted_session
+     WHERE session.tenant_id = effective_tenant_id
+       AND session.id = requested_session_id
+    RETURNING * INTO transitioned_session;
+    PERFORM paas.append_terminal_audit_outbox(
+        transitioned_session.id, submitted_audit_event
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.rotate_terminal_session_ticket(text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.open_terminal_session_ticket(text,text) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.consume_terminal_session_ticket(text,jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION paas.transition_terminal_session(text,jsonb,jsonb) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.rotate_terminal_session_ticket(text,text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.open_terminal_session_ticket(text,text) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.consume_terminal_session_ticket(text,jsonb) TO matrix_paas_api;
+GRANT EXECUTE ON FUNCTION paas.transition_terminal_session(text,jsonb,jsonb) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.store_execution_pool_observation(
+    expected_resource_version bigint, submitted_pool jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_pool paas.execution_pools%ROWTYPE;
+    effective_installation_id text := paas.current_installation_id();
+    total_count bigint;
+    maximum_ready_count bigint;
+    degraded_count bigint;
+    ready_count bigint;
+    next_version bigint;
+BEGIN
+    IF effective_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'installation context is required';
+    END IF;
+    SELECT * INTO current_pool FROM paas.execution_pools
+     WHERE installation_id = effective_installation_id AND id = submitted_pool#>>'{metadata,id}' FOR UPDATE;
+    IF NOT FOUND OR current_pool.resource_version IS DISTINCT FROM expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'execution pool changed concurrently';
+    END IF;
+    SELECT count(*), count(*) FILTER (
+        WHERE document#>>'{status,health}' = 'READY' AND document#>>'{spec,desiredState}' = 'ACTIVE'
+          AND (document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - CASE
+              WHEN binding_ref IS NULL THEN interval '5 minutes' ELSE interval '15 seconds' END
+          AND (document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+    ), count(*) FILTER (
+        WHERE document#>>'{status,health}' = 'DEGRADED'
+          AND (document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - CASE
+              WHEN binding_ref IS NULL THEN interval '5 minutes' ELSE interval '15 seconds' END
+          AND (document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+    ) INTO total_count, maximum_ready_count, degraded_count FROM paas.execution_targets
+     WHERE installation_id = effective_installation_id
+       AND execution_pool_id = current_pool.id
+       AND document#>>'{spec,desiredState}' <> 'REMOVED';
+    ready_count := (submitted_pool#>>'{status,readyExecutionTargetCount}')::bigint;
+    next_version := expected_resource_version + CASE
+        WHEN ((current_pool.document->'status') - 'observedAt') IS DISTINCT FROM ((submitted_pool->'status') - 'observedAt') THEN 1 ELSE 0 END;
+    IF NOT ((
+        (((current_pool.document #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status')
+            = (((submitted_pool #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status')
+        AND submitted_pool#>>'{metadata,resourceVersion}' = next_version::text
+        AND (submitted_pool#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND (submitted_pool#>>'{status,observedAt}')::timestamptz = transaction_timestamp()
+        AND submitted_pool#>>'{status,executionTargetCount}' = total_count::text
+        AND ready_count BETWEEN 0 AND maximum_ready_count
+        AND submitted_pool#>>'{status,phase}' = CASE WHEN total_count = 0 THEN 'UNAVAILABLE'
+            WHEN ready_count = total_count THEN 'READY'
+            WHEN ready_count > 0 OR degraded_count > 0 THEN 'DEGRADED' ELSE 'UNAVAILABLE' END
+        AND ((submitted_pool->'status') - ARRAY['phase','executionTargetCount','readyExecutionTargetCount','observedAt']) = '{}'::jsonb
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution pool observation cannot change desired authority';
+    END IF;
+    UPDATE paas.execution_pools SET resource_version = next_version, document = submitted_pool WHERE id = current_pool.id;
+END
+$function$;
+REVOKE ALL ON FUNCTION paas.store_execution_pool_observation(bigint, jsonb) FROM PUBLIC, matrix_paas_api, matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.create_node_enrollment(
+    submitted_enrollment jsonb,
+    submitted_operation jsonb,
+    submitted_join jsonb,
+    submitted_wrapped_credential jsonb,
+    submitted_credential_salt bytea,
+    submitted_credential_verifier text,
+    submitted_actor_type text,
+    submitted_actor_id text,
+    submitted_iam_decision_id text,
+    submitted_request_id text,
+    submitted_audit_id text,
+    submitted_traceparent text
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    enrollment_id text := submitted_enrollment#>>'{metadata,id}';
+    execution_target_id text := submitted_enrollment->>'executionTargetId';
+    execution_pool_id text := submitted_enrollment->>'executionPoolId';
+    operation_id text := submitted_enrollment->>'operationId';
+    expires_at timestamptz(6) := (submitted_enrollment->>'expiresAt')::timestamptz;
+BEGIN
+    IF effective_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'installation context is required';
+    END IF;
+    PERFORM 1 FROM paas.execution_pools
+     WHERE installation_id = effective_installation_id AND id = execution_pool_id
+     FOR KEY SHARE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution pool is not registered';
+    END IF;
+    IF NOT ((
+        jsonb_typeof(submitted_enrollment) = 'object'
+        AND jsonb_typeof(submitted_operation) = 'object'
+        AND jsonb_typeof(submitted_join) = 'object'
+        AND jsonb_typeof(submitted_wrapped_credential) = 'object'
+        AND submitted_enrollment->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND submitted_enrollment->>'kind' = 'NodeEnrollment'
+        AND enrollment_id COLLATE "C" ~ '^node-enrollment-[0-9a-f]{32}$'
+        AND submitted_enrollment#>>'{metadata,scope,kind}' = 'PLATFORM'
+        AND NOT (submitted_enrollment#>'{metadata,scope}' ? 'tenantId')
+        AND submitted_enrollment#>>'{metadata,resourceVersion}' = '1'
+        AND (submitted_enrollment#>>'{metadata,createdAt}')::timestamptz = transaction_timestamp()
+        AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND submitted_enrollment->>'state' = 'WAITING_INSTALL'
+        AND NOT (submitted_enrollment ?| ARRAY[
+            'credentialConsumedAt', 'readyAt', 'replacedById', 'diagnostic'
+        ])
+        AND expires_at > transaction_timestamp()
+        AND expires_at <= transaction_timestamp() + interval '30 minutes'
+        AND submitted_operation->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND submitted_operation->>'kind' = 'Operation'
+        AND submitted_operation->>'id' = operation_id
+        AND submitted_operation#>>'{scope,kind}' = 'PLATFORM'
+        AND NOT (submitted_operation#>'{scope}' ? 'tenantId')
+        AND submitted_operation->>'installationId' = effective_installation_id
+        AND submitted_operation->>'action' = 'REGISTER_EXECUTION_TARGET'
+        AND submitted_operation#>>'{target,kind}' = 'ExecutionTarget'
+        AND submitted_operation#>>'{target,id}' = execution_target_id
+        AND submitted_operation->>'state' = 'ACCEPTED'
+        AND submitted_operation->>'attempt' = '1'
+        AND NOT (submitted_operation ?| ARRAY[
+            'error', 'leaseOwner', 'leaseExpiresAt', 'terminalAt'
+        ])
+        AND submitted_operation->>'idempotencyFingerprint' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND submitted_operation->>'requestDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (submitted_operation->>'createdAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND submitted_operation->'requestedBy' = jsonb_build_object(
+            'type', submitted_actor_type, 'id', submitted_actor_id
+        )
+        AND submitted_join->>'apiVersion' = 'node.enrollment.matrix.xiak.com/v1'
+        AND submitted_join->>'kind' = 'NodeEnrollmentJoin'
+        AND submitted_join->>'enrollmentId' = enrollment_id
+        AND submitted_join->>'installationId' = effective_installation_id
+        AND submitted_join->>'executionTargetId' = execution_target_id
+        AND (submitted_join->>'expiresAt')::timestamptz = expires_at
+        AND submitted_join->>'credentialDigest' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND submitted_join->>'signatureAlgorithm' = 'ED25519'
+        AND submitted_join->>'signature' COLLATE "C" ~ '^[A-Za-z0-9_-]{86}$'
+        AND submitted_join->>'issuerCertificate' COLLATE "C" ~ '^[A-Za-z0-9_-]+$'
+        AND (submitted_join - ARRAY[
+            'apiVersion', 'kind', 'enrollmentId', 'installationId',
+            'executionTargetId', 'controlPlaneUrl', 'credentialDigest',
+            'expiresAt', 'issuerCertificate', 'signatureAlgorithm', 'signature'
+        ]) = '{}'::jsonb
+        AND submitted_wrapped_credential->>'algorithm' = 'RSA_OAEP_256'
+        AND length(submitted_wrapped_credential->>'ciphertext') = 512
+        AND submitted_wrapped_credential->>'ciphertext' COLLATE "C" ~ '^[A-Za-z0-9_-]+$'
+        AND (submitted_wrapped_credential - ARRAY['algorithm', 'ciphertext']) = '{}'::jsonb
+        AND octet_length(submitted_credential_salt) = 32
+        AND submitted_credential_verifier COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND submitted_credential_verifier <> submitted_join->>'credentialDigest'
+        AND submitted_actor_type = 'USER'
+        AND submitted_actor_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND submitted_iam_decision_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND submitted_request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND (submitted_audit_id IS NULL OR submitted_audit_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+        AND (submitted_traceparent IS NULL OR (
+            octet_length(submitted_traceparent) BETWEEN 1 AND 55
+            AND submitted_traceparent !~ '[[:cntrl:]]'
+        ))
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment input is invalid';
+    END IF;
+    INSERT INTO paas.operations (
+        installation_id, id, action, target_kind, target_id,
+        idempotency_fingerprint, request_digest, state, attempt,
+        next_attempt_at, fencing_token, created_at, updated_at, document
+    ) VALUES (
+        effective_installation_id, operation_id, 'REGISTER_EXECUTION_TARGET',
+        'ExecutionTarget', execution_target_id,
+        submitted_operation->>'idempotencyFingerprint', submitted_operation->>'requestDigest',
+        'ACCEPTED', 1, expires_at, 0,
+        transaction_timestamp(), transaction_timestamp(), submitted_operation
+    );
+    INSERT INTO paas.node_enrollments (
+        installation_id, id, execution_target_id, execution_pool_id, operation_id,
+        state, resource_version, created_at, expires_at,
+        credential_salt, credential_verifier,
+        actor_type, actor_id, iam_decision_id, request_id, audit_id, traceparent,
+        document, join_document, wrapped_credential_document
+    ) VALUES (
+        effective_installation_id, enrollment_id, execution_target_id,
+        execution_pool_id, operation_id, 'WAITING_INSTALL', 1,
+        transaction_timestamp(), expires_at,
+        submitted_credential_salt, submitted_credential_verifier,
+        submitted_actor_type, submitted_actor_id, submitted_iam_decision_id,
+        submitted_request_id, submitted_audit_id, submitted_traceparent,
+        submitted_enrollment, submitted_join, submitted_wrapped_credential
+    );
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.create_node_enrollment(
+    jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text
+) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.create_node_enrollment(
+    jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text
+) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.exchange_node_enrollment(
+    requested_enrollment_id text,
+    expected_resource_version bigint,
+    expected_credential_verifier text,
+    submitted_enrollment jsonb,
+    submitted_operation jsonb,
+    submitted_exchange jsonb,
+    submitted_sealed_result jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_enrollment paas.node_enrollments%ROWTYPE;
+    current_operation paas.operations%ROWTYPE;
+    submitted_node_key_fingerprint text := submitted_exchange->>'nodePublicKeyFingerprint';
+    submitted_collector_key_fingerprint text := submitted_exchange->>'collectorPublicKeyFingerprint';
+BEGIN
+    IF effective_installation_id IS NULL
+       OR requested_enrollment_id COLLATE "C" !~ '^node-enrollment-[0-9a-f]{32}$'
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR expected_credential_verifier COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR jsonb_typeof(submitted_enrollment) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object'
+       OR jsonb_typeof(submitted_exchange) <> 'object'
+       OR jsonb_typeof(submitted_sealed_result) <> 'object' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment exchange input is invalid';
+    END IF;
+    -- Cross-role key uniqueness cannot be expressed by the two same-role
+    -- UNIQUE constraints. Serialize this rare ceremony per installation so
+    -- even a READ COMMITTED caller cannot race the closed cross-role check.
+    PERFORM pg_catalog.pg_advisory_xact_lock(
+        pg_catalog.hashtext('matrix-node-enrollment-exchange/v1'),
+        pg_catalog.hashtext(effective_installation_id)
+    );
+    SELECT * INTO current_enrollment FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id AND id = requested_enrollment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'node enrollment is not registered';
+    END IF;
+    SELECT * INTO current_operation FROM paas.operations
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    IF current_enrollment.resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX412', MESSAGE = 'node enrollment changed';
+    END IF;
+    IF current_enrollment.state <> 'WAITING_INSTALL'
+       OR current_operation.state <> 'ACCEPTED'
+       OR current_enrollment.credential_verifier <> expected_credential_verifier
+       OR transaction_timestamp() >= current_enrollment.expires_at THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment cannot exchange its credential';
+    END IF;
+    IF NOT ((
+        submitted_enrollment - 'metadata' - 'state' - 'credentialConsumedAt'
+            = current_enrollment.document - 'metadata' - 'state' - 'credentialConsumedAt'
+        AND (submitted_enrollment->'metadata') - 'resourceVersion' - 'updatedAt'
+            = (current_enrollment.document->'metadata') - 'resourceVersion' - 'updatedAt'
+        AND submitted_enrollment#>>'{metadata,resourceVersion}'
+            = (current_enrollment.resource_version + 1)::text
+        AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz
+            = transaction_timestamp()
+        AND submitted_enrollment->>'state' = 'VERIFYING'
+        AND (submitted_enrollment->>'credentialConsumedAt')::timestamptz
+            = transaction_timestamp()
+        AND NOT (submitted_enrollment ?| ARRAY['readyAt', 'replacedById', 'diagnostic'])
+        AND submitted_operation - 'state' - 'updatedAt'
+            = current_operation.document - 'state' - 'updatedAt'
+        AND submitted_operation->>'state' = 'VERIFYING'
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND NOT (submitted_operation ?| ARRAY['error', 'terminalAt'])
+        AND submitted_exchange->>'apiVersion' = 'node.enrollment.matrix.xiak.com/v1'
+        AND submitted_exchange->>'kind' = 'NodeEnrollmentExchange'
+        AND submitted_exchange->>'enrollmentId' = current_enrollment.id
+        AND submitted_exchange->>'installationId' = effective_installation_id
+        AND submitted_exchange->>'executionTargetId' = current_enrollment.execution_target_id
+        AND (submitted_exchange->>'consumedAt')::timestamptz = transaction_timestamp()
+        AND submitted_exchange->>'exchangeId' COLLATE "C" ~ '^node-exchange-[0-9a-f]{32}$'
+        AND submitted_exchange->>'machineFingerprint' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND submitted_node_key_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND submitted_collector_key_fingerprint COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND submitted_node_key_fingerprint <> submitted_collector_key_fingerprint
+        AND submitted_sealed_result->>'algorithm' = 'AES_256_GCM'
+        AND submitted_sealed_result->>'keyId' COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
+        AND (submitted_sealed_result - ARRAY['algorithm', 'keyId', 'nonce', 'ciphertext']) = '{}'::jsonb
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment exchange transition is invalid';
+    END IF;
+    PERFORM 1 FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id
+       AND id <> current_enrollment.id
+       AND (
+           exchange_id = submitted_exchange->>'exchangeId'
+           OR machine_fingerprint = submitted_exchange->>'machineFingerprint'
+           OR node_public_key_fingerprint IN (submitted_node_key_fingerprint, submitted_collector_key_fingerprint)
+           OR collector_public_key_fingerprint IN (submitted_node_key_fingerprint, submitted_collector_key_fingerprint)
+       )
+     FOR SHARE;
+    IF FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment exchange identity is already registered';
+    END IF;
+    UPDATE paas.operations
+       SET state = 'VERIFYING', updated_at = transaction_timestamp(),
+           next_attempt_at = transaction_timestamp(), document = submitted_operation
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    UPDATE paas.node_enrollments
+       SET state = 'VERIFYING', resource_version = current_enrollment.resource_version + 1,
+           credential_salt = NULL, credential_verifier = NULL,
+           wrapped_credential_document = NULL, exchange_document = submitted_exchange,
+           sealed_exchange_result_document = submitted_sealed_result,
+           document = submitted_enrollment
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.exchange_node_enrollment(
+    text,bigint,text,jsonb,jsonb,jsonb,jsonb
+) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.exchange_node_enrollment(
+    text,bigint,text,jsonb,jsonb,jsonb,jsonb
+) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.expire_node_enrollment(
+    requested_enrollment_id text,
+    expected_resource_version bigint,
+    submitted_enrollment jsonb,
+    submitted_operation jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_enrollment paas.node_enrollments%ROWTYPE;
+BEGIN
+    IF effective_installation_id IS NULL
+       OR requested_enrollment_id COLLATE "C" !~ '^node-enrollment-[0-9a-f]{32}$'
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment expiry input is invalid';
+    END IF;
+    SELECT * INTO current_enrollment FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id AND id = requested_enrollment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'node enrollment is not registered';
+    END IF;
+    IF current_enrollment.resource_version <> expected_resource_version
+       OR current_enrollment.state NOT IN ('WAITING_INSTALL', 'VERIFYING') THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX412', MESSAGE = 'node enrollment changed';
+    END IF;
+    IF transaction_timestamp() < current_enrollment.expires_at
+       OR NOT ((
+            submitted_enrollment#>>'{metadata,id}' = current_enrollment.id
+            AND submitted_enrollment#>>'{metadata,resourceVersion}' = (current_enrollment.resource_version + 1)::text
+            AND (submitted_enrollment#>>'{metadata,createdAt}')::timestamptz = current_enrollment.created_at
+            AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+            AND submitted_enrollment->>'executionTargetId' = current_enrollment.execution_target_id
+            AND submitted_enrollment->>'executionPoolId' = current_enrollment.execution_pool_id
+            AND submitted_enrollment->>'operationId' = current_enrollment.operation_id
+            AND submitted_enrollment->>'state' = 'EXPIRED'
+            AND (submitted_enrollment->>'expiresAt')::timestamptz = current_enrollment.expires_at
+            AND submitted_enrollment#>>'{diagnostic,code}' = 'ENROLLMENT_EXPIRED'
+            AND submitted_enrollment#>>'{diagnostic,retryable}' = 'false'
+            AND (submitted_enrollment#>>'{diagnostic,occurredAt}')::timestamptz = transaction_timestamp()
+            AND submitted_operation->>'id' = current_enrollment.operation_id
+            AND submitted_operation->>'installationId' = effective_installation_id
+            AND submitted_operation->>'action' = 'REGISTER_EXECUTION_TARGET'
+            AND submitted_operation#>>'{target,kind}' = 'ExecutionTarget'
+            AND submitted_operation#>>'{target,id}' = current_enrollment.execution_target_id
+            AND submitted_operation->>'state' = 'CANCELLED'
+            AND submitted_operation->>'attempt' = '1'
+            AND NOT (submitted_operation ?| ARRAY['error', 'leaseOwner', 'leaseExpiresAt'])
+            AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+            AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+       ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment expiry transition is invalid';
+    END IF;
+    UPDATE paas.operations
+       SET state = 'CANCELLED', updated_at = transaction_timestamp(),
+           terminal_at = transaction_timestamp(), next_attempt_at = transaction_timestamp(),
+           document = submitted_operation
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    UPDATE paas.node_enrollments
+       SET state = 'EXPIRED', resource_version = current_enrollment.resource_version + 1,
+           credential_salt = NULL, credential_verifier = NULL,
+           wrapped_credential_document = NULL,
+           sealed_exchange_result_document = NULL, document = submitted_enrollment
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.expire_node_enrollment(text,bigint,jsonb,jsonb)
+    FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.expire_node_enrollment(text,bigint,jsonb,jsonb)
+    TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.revoke_node_enrollment(
+    requested_enrollment_id text,
+    expected_resource_version bigint,
+    submitted_termination_fingerprint text,
+    submitted_termination_request_digest text,
+    submitted_enrollment jsonb,
+    submitted_operation jsonb,
+    submitted_replacement jsonb,
+    submitted_replacement_operation jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_enrollment paas.node_enrollments%ROWTYPE;
+    current_operation paas.operations%ROWTYPE;
+    replacement_id text := submitted_enrollment->>'replacedById';
+BEGIN
+    IF effective_installation_id IS NULL
+       OR requested_enrollment_id COLLATE "C" !~ '^node-enrollment-[0-9a-f]{32}$'
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR submitted_termination_fingerprint IS NULL
+       OR submitted_termination_fingerprint COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_termination_request_digest IS NULL
+       OR submitted_termination_request_digest COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR jsonb_typeof(submitted_enrollment) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object'
+       OR ((submitted_replacement IS NULL) <> (submitted_replacement_operation IS NULL)) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment revocation input is invalid';
+    END IF;
+    SELECT * INTO current_enrollment FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id AND id = requested_enrollment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'node enrollment is not registered';
+    END IF;
+    SELECT * INTO current_operation FROM paas.operations
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    IF current_enrollment.resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX412', MESSAGE = 'node enrollment changed';
+    END IF;
+    IF current_enrollment.state NOT IN ('WAITING_INSTALL', 'VERIFYING')
+       OR current_operation.state NOT IN ('ACCEPTED', 'VERIFYING') THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment cannot be revoked';
+    END IF;
+    IF NOT ((
+        submitted_enrollment - 'metadata' - 'state' - 'diagnostic' - 'replacedById'
+            = current_enrollment.document - 'metadata' - 'state' - 'diagnostic' - 'replacedById'
+        AND (submitted_enrollment->'metadata') - 'resourceVersion' - 'updatedAt'
+            = (current_enrollment.document->'metadata') - 'resourceVersion' - 'updatedAt'
+        AND submitted_enrollment#>>'{metadata,resourceVersion}'
+            = (current_enrollment.resource_version + 1)::text
+        AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz
+            = transaction_timestamp()
+        AND submitted_enrollment->>'state' = 'REVOKED'
+        AND submitted_enrollment#>>'{diagnostic,code}' = 'ENROLLMENT_REVOKED'
+        AND submitted_enrollment#>>'{diagnostic,retryable}' = 'false'
+        AND (submitted_enrollment#>>'{diagnostic,occurredAt}')::timestamptz
+            = transaction_timestamp()
+        AND (submitted_enrollment->'diagnostic') - 'code' - 'retryable' - 'occurredAt'
+            = '{}'::jsonb
+        AND submitted_operation - 'state' - 'updatedAt' - 'terminalAt'
+            = current_operation.document - 'state' - 'updatedAt' - 'terminalAt'
+        AND submitted_operation->>'state' = 'CANCELLED'
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+        AND (
+            (submitted_replacement IS NULL AND replacement_id IS NULL)
+            OR (
+                jsonb_typeof(submitted_replacement) = 'object'
+                AND jsonb_typeof(submitted_replacement_operation) = 'object'
+                AND replacement_id COLLATE "C" ~ '^node-enrollment-[0-9a-f]{32}$'
+                AND replacement_id <> current_enrollment.id
+                AND submitted_replacement#>>'{metadata,id}' = replacement_id
+                AND submitted_replacement#>>'{metadata,name}'
+                    = current_enrollment.document#>>'{metadata,name}'
+                AND submitted_replacement#>'{metadata,labels}'
+                    IS NOT DISTINCT FROM current_enrollment.document#>'{metadata,labels}'
+                AND submitted_replacement->>'executionPoolId' = current_enrollment.execution_pool_id
+                AND submitted_replacement->>'executionTargetId' <> current_enrollment.execution_target_id
+                AND submitted_replacement->>'state' = 'WAITING_INSTALL'
+                AND submitted_replacement_operation->>'id'
+                    = submitted_replacement->>'operationId'
+                AND submitted_replacement_operation->>'action' = 'REGISTER_EXECUTION_TARGET'
+                AND submitted_replacement_operation#>>'{target,kind}' = 'ExecutionTarget'
+                AND submitted_replacement_operation#>>'{target,id}'
+                    = submitted_replacement->>'executionTargetId'
+                AND submitted_replacement_operation->>'idempotencyFingerprint'
+                    = submitted_termination_fingerprint
+                AND submitted_replacement_operation->>'requestDigest'
+                    = submitted_termination_request_digest
+            )
+        )
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment revocation transition is invalid';
+    END IF;
+    UPDATE paas.operations
+       SET state = 'CANCELLED', updated_at = transaction_timestamp(),
+           terminal_at = transaction_timestamp(), next_attempt_at = transaction_timestamp(),
+           document = submitted_operation
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    UPDATE paas.node_enrollments
+       SET state = 'REVOKED', resource_version = current_enrollment.resource_version + 1,
+           termination_idempotency_fingerprint = submitted_termination_fingerprint,
+           termination_request_digest = submitted_termination_request_digest,
+           credential_salt = NULL, credential_verifier = NULL,
+           wrapped_credential_document = NULL,
+           sealed_exchange_result_document = NULL, document = submitted_enrollment
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.revoke_node_enrollment(
+    text,bigint,text,text,jsonb,jsonb,jsonb,jsonb
+) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.revoke_node_enrollment(
+    text,bigint,text,text,jsonb,jsonb,jsonb,jsonb
+) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.fail_node_enrollment(
+    requested_enrollment_id text,
+    expected_resource_version bigint,
+    submitted_enrollment jsonb,
+    submitted_operation jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_enrollment paas.node_enrollments%ROWTYPE;
+    current_operation paas.operations%ROWTYPE;
+    diagnostic_code text := submitted_enrollment#>>'{diagnostic,code}';
+BEGIN
+    IF effective_installation_id IS NULL
+       OR requested_enrollment_id COLLATE "C" !~ '^node-enrollment-[0-9a-f]{32}$'
+       OR expected_resource_version NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_enrollment) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment failure input is invalid';
+    END IF;
+    SELECT * INTO current_enrollment FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id AND id = requested_enrollment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'node enrollment is not registered';
+    END IF;
+    SELECT * INTO current_operation FROM paas.operations
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    IF current_enrollment.resource_version <> expected_resource_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'node enrollment changed concurrently';
+    END IF;
+    IF current_enrollment.state <> 'VERIFYING' OR current_operation.state <> 'VERIFYING' THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment cannot fail verification';
+    END IF;
+    IF NOT ((
+        submitted_enrollment - 'metadata' - 'state' - 'diagnostic'
+            = current_enrollment.document - 'metadata' - 'state' - 'diagnostic'
+        AND (submitted_enrollment->'metadata') - 'resourceVersion' - 'updatedAt'
+            = (current_enrollment.document->'metadata') - 'resourceVersion' - 'updatedAt'
+        AND submitted_enrollment#>>'{metadata,resourceVersion}'
+            = (current_enrollment.resource_version + 1)::text
+        AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz
+            = transaction_timestamp()
+        AND submitted_enrollment->>'state' = 'FAILED'
+        AND diagnostic_code IN (
+            'IDENTITY_CONFLICT', 'RUNTIME_UNSUPPORTED',
+            'MTLS_VERIFICATION_FAILED', 'RESOURCE_CONFLICT'
+        )
+        AND submitted_enrollment#>>'{diagnostic,retryable}' = 'false'
+        AND (submitted_enrollment#>>'{diagnostic,occurredAt}')::timestamptz
+            = transaction_timestamp()
+        AND (submitted_enrollment->'diagnostic') - ARRAY['code','retryable','occurredAt']
+            = '{}'::jsonb
+        AND submitted_operation - ARRAY['state','updatedAt','terminalAt','error']
+            = current_operation.document - ARRAY['state','updatedAt','terminalAt','error']
+        AND submitted_operation->>'state' = 'FAILED'
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+        AND submitted_operation->'error' = jsonb_build_object(
+            'type', '/problems/node-enrollment-verification-failed',
+            'title', 'Node enrollment verification failed',
+            'status', 409,
+            'code', 'OPERATION_FAILED',
+            'detail', 'The exchanged node could not be admitted with its fixed identity and runtime contract.',
+            'traceId', current_enrollment.request_id,
+            'retryable', false
+        )
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment failure transition is invalid';
+    END IF;
+    UPDATE paas.operations
+       SET state = 'FAILED', updated_at = transaction_timestamp(),
+           terminal_at = transaction_timestamp(), next_attempt_at = transaction_timestamp(),
+           error = submitted_operation->'error',
+           document = submitted_operation
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id;
+    UPDATE paas.node_enrollments
+       SET state = 'FAILED', resource_version = current_enrollment.resource_version + 1,
+           sealed_exchange_result_document = NULL, document = submitted_enrollment
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.fail_node_enrollment(text,bigint,jsonb,jsonb)
+    FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.fail_node_enrollment(text,bigint,jsonb,jsonb)
+    TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.complete_node_enrollment(
+    requested_enrollment_id text,
+    expected_enrollment_version bigint,
+    submitted_enrollment jsonb,
+    submitted_operation jsonb,
+    submitted_target jsonb,
+    submitted_binding_ref text,
+    submitted_identity_fingerprint text,
+    submitted_controller_id text,
+    submitted_endpoint text,
+    expected_pool_version bigint,
+    submitted_pool jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_enrollment paas.node_enrollments%ROWTYPE;
+    current_operation paas.operations%ROWTYPE;
+    target_id text := submitted_target#>>'{metadata,id}';
+    pool_id text := submitted_target#>>'{spec,executionPoolId}';
+BEGIN
+    IF effective_installation_id IS NULL
+       OR requested_enrollment_id COLLATE "C" !~ '^node-enrollment-[0-9a-f]{32}$'
+       OR expected_enrollment_version NOT BETWEEN 1 AND 9007199254740991
+       OR expected_pool_version NOT BETWEEN 1 AND 9007199254740991
+       OR jsonb_typeof(submitted_enrollment) <> 'object'
+       OR jsonb_typeof(submitted_operation) <> 'object'
+       OR jsonb_typeof(submitted_target) <> 'object'
+       OR jsonb_typeof(submitted_pool) <> 'object'
+       OR jsonb_typeof(submitted_audit_event) <> 'object'
+       OR submitted_binding_ref COLLATE "C" !~ '^node-binding-[0-9a-f]{32}$'
+       OR submitted_identity_fingerprint COLLATE "C" !~ '^sha256:[0-9a-f]{64}$'
+       OR submitted_controller_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment completion input is invalid';
+    END IF;
+    SELECT * INTO current_enrollment FROM paas.node_enrollments
+     WHERE installation_id = effective_installation_id AND id = requested_enrollment_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'node enrollment is not registered';
+    END IF;
+    SELECT * INTO current_operation FROM paas.operations
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment operation is missing';
+    END IF;
+    IF current_enrollment.resource_version <> expected_enrollment_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'node enrollment changed concurrently';
+    END IF;
+    IF current_enrollment.state <> 'VERIFYING' OR current_operation.state <> 'VERIFYING'
+       OR transaction_timestamp() >= current_enrollment.expires_at THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'node enrollment cannot be completed';
+    END IF;
+    PERFORM 1 FROM paas.execution_pools
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.execution_pool_id
+       AND resource_version = expected_pool_version
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'execution pool changed concurrently';
+    END IF;
+    IF NOT ((
+        current_enrollment.exchange_document IS NOT NULL
+        AND target_id = current_enrollment.execution_target_id
+        AND pool_id = current_enrollment.execution_pool_id
+        AND submitted_pool#>>'{metadata,id}' = pool_id
+        AND submitted_binding_ref = current_enrollment.exchange_document->>'bindingRef'
+        AND submitted_identity_fingerprint = current_enrollment.machine_fingerprint
+        AND submitted_controller_id = current_enrollment.exchange_document->>'controllerId'
+        AND submitted_endpoint = 'https://' || (current_enrollment.exchange_document->>'nodeListenAddress')
+        AND submitted_enrollment - 'metadata' - 'state' - 'readyAt'
+            = current_enrollment.document - 'metadata' - 'state' - 'readyAt'
+        AND (submitted_enrollment->'metadata') - 'resourceVersion' - 'updatedAt'
+            = (current_enrollment.document->'metadata') - 'resourceVersion' - 'updatedAt'
+        AND submitted_enrollment#>>'{metadata,resourceVersion}'
+            = (current_enrollment.resource_version + 1)::text
+        AND (submitted_enrollment#>>'{metadata,updatedAt}')::timestamptz
+            = transaction_timestamp()
+        AND submitted_enrollment->>'state' = 'READY'
+        AND (submitted_enrollment->>'readyAt')::timestamptz = transaction_timestamp()
+        AND NOT (submitted_enrollment ? 'diagnostic')
+        AND submitted_operation - ARRAY['state','updatedAt','terminalAt']
+            = current_operation.document - ARRAY['state','updatedAt','terminalAt']
+        AND submitted_operation->>'state' = 'SUCCEEDED'
+        AND NOT (submitted_operation ? 'error')
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+        AND submitted_target->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND submitted_target->>'kind' = 'ExecutionTarget'
+        AND submitted_target#>>'{metadata,name}' = current_enrollment.document#>>'{metadata,name}'
+        AND submitted_target#>'{metadata,scope}' = jsonb_build_object('kind', 'PLATFORM')
+        AND submitted_target#>'{metadata,labels}' =
+            COALESCE(current_enrollment.document#>'{metadata,labels}', '{}'::jsonb)
+            || jsonb_build_object('matrix-machine-fingerprint', submitted_identity_fingerprint)
+        AND submitted_target#>>'{metadata,resourceVersion}' = '1'
+        AND (submitted_target#>>'{metadata,createdAt}')::timestamptz = transaction_timestamp()
+        AND (submitted_target#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND submitted_target#>'{spec,infrastructureAdapter}' =
+            '{"kind":"INFRASTRUCTURE","name":"nodehttps","contractVersion":"v1"}'::jsonb
+        AND submitted_target#>'{spec,deploymentExecutor}' =
+            '{"kind":"DEPLOYMENT_EXECUTOR","name":"compose","contractVersion":"v1"}'::jsonb
+        AND submitted_target#>>'{spec,desiredState}' = 'ACTIVE'
+        AND submitted_target#>>'{status,health}' = 'READY'
+        AND jsonb_typeof(submitted_target#>'{status,usage}') = 'object'
+        AND (submitted_target#>>'{status,observedAt}')::timestamptz
+            > transaction_timestamp() - interval '15 seconds'
+        AND (submitted_target#>>'{status,observedAt}')::timestamptz
+            <= transaction_timestamp() + interval '2 seconds'
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node enrollment completion authority is invalid';
+    END IF;
+    IF (SELECT count(*) FROM paas.execution_targets
+         WHERE installation_id = effective_installation_id AND binding_ref IS NOT NULL) >= 128 THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'execution target admission limit reached';
+    END IF;
+    INSERT INTO paas.execution_targets (
+        id, installation_id, execution_pool_id, binding_ref,
+        identity_fingerprint, resource_version, document
+    ) VALUES (
+        target_id, effective_installation_id, pool_id, submitted_binding_ref,
+        submitted_identity_fingerprint, 1, submitted_target
+    );
+    INSERT INTO paas.execution_target_allocations (execution_target_id) VALUES (target_id);
+    INSERT INTO paas.enrolled_node_connections (
+        installation_id, execution_target_id, controller_id, binding_ref,
+        endpoint, identity_fingerprint, enabled, created_at, updated_at
+    ) VALUES (
+        effective_installation_id, target_id, submitted_controller_id, submitted_binding_ref,
+        submitted_endpoint, submitted_identity_fingerprint, true,
+        transaction_timestamp(), transaction_timestamp()
+    );
+    PERFORM paas.store_execution_pool_observation(expected_pool_version, submitted_pool);
+    UPDATE paas.operations
+       SET state = 'SUCCEEDED', updated_at = transaction_timestamp(),
+           terminal_at = transaction_timestamp(), next_attempt_at = transaction_timestamp(),
+           document = submitted_operation
+     WHERE authority_key = current_enrollment.authority_key
+       AND id = current_enrollment.operation_id;
+    UPDATE paas.node_enrollments
+       SET state = 'READY', resource_version = current_enrollment.resource_version + 1,
+           sealed_exchange_result_document = NULL, document = submitted_enrollment
+     WHERE installation_id = effective_installation_id AND id = current_enrollment.id;
+    PERFORM paas.append_audit_outbox(submitted_operation, submitted_audit_event);
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.complete_node_enrollment(
+    text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb
+) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.complete_node_enrollment(
+    text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb
+) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.admit_execution_resource(
+    submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb,
+    submitted_binding_ref text, submitted_identity_fingerprint text,
+    expected_pool_version bigint, submitted_pool jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    resource_kind text := submitted_resource->>'kind';
+    resource_id text := submitted_resource#>>'{metadata,id}';
+    expected_action text;
+BEGIN
+    IF effective_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'installation context is required';
+    END IF;
+    expected_action := CASE resource_kind WHEN 'ExecutionPool' THEN 'CREATE_EXECUTION_POOL'
+        WHEN 'ExecutionTarget' THEN 'REGISTER_EXECUTION_TARGET' END;
+    IF NOT ((
+        expected_action IS NOT NULL
+        AND jsonb_typeof(submitted_resource) = 'object'
+        AND jsonb_typeof(submitted_operation) = 'object'
+        AND submitted_resource->>'apiVersion' = 'paas.matrix.xiak.com/v1'
+        AND resource_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+        AND submitted_resource#>>'{metadata,scope,kind}' = 'PLATFORM'
+        AND NOT (submitted_resource#>'{metadata,scope}' ? 'tenantId')
+        AND submitted_resource#>>'{metadata,resourceVersion}' = '1'
+        AND (submitted_resource#>>'{metadata,createdAt}')::timestamptz = transaction_timestamp()
+        AND (submitted_resource#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND submitted_operation->>'installationId' = effective_installation_id
+        AND submitted_operation->>'action' = expected_action
+        AND submitted_operation#>>'{target,kind}' = resource_kind
+        AND submitted_operation#>>'{target,id}' = resource_id
+        AND submitted_operation->>'state' = 'SUCCEEDED'
+        AND submitted_operation->>'attempt' = '1'
+        AND NOT (submitted_operation ? 'error')
+        AND (submitted_operation->>'createdAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution admission identity or operation is invalid';
+    END IF;
+    IF resource_kind = 'ExecutionPool' THEN
+        IF resource_id = 'execution-pool-local'
+           OR submitted_binding_ref IS NOT NULL OR submitted_identity_fingerprint IS NOT NULL
+           OR expected_pool_version IS NOT NULL OR submitted_pool IS NOT NULL
+           OR submitted_resource->'status' IS DISTINCT FROM jsonb_build_object(
+               'phase', 'UNAVAILABLE', 'executionTargetCount', 0, 'readyExecutionTargetCount', 0,
+               'observedAt', submitted_resource#>'{metadata,createdAt}') THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'new execution pool must be empty';
+        END IF;
+        INSERT INTO paas.execution_pools (id, installation_id, resource_version, document)
+            VALUES (resource_id, effective_installation_id, 1, submitted_resource);
+    ELSE
+        -- Pool locking serializes registration and observation updates. Global
+        -- unique target IDs preserve existing placement FKs; installation and
+        -- binding constraints prevent borrowing another installation's node.
+        PERFORM 1 FROM paas.execution_pools WHERE installation_id = effective_installation_id
+            AND id = submitted_resource#>>'{spec,executionPoolId}' FOR UPDATE;
+        IF NOT FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution pool is not registered';
+        END IF;
+        IF resource_id = 'execution-target-local' OR NOT ((
+            submitted_binding_ref IS NOT NULL AND submitted_identity_fingerprint IS NOT NULL
+            AND submitted_resource#>>'{spec,desiredState}' = 'ACTIVE'
+            AND submitted_resource#>>'{status,health}' = 'READY'
+            AND submitted_resource#>>'{metadata,labels,matrix-machine-fingerprint}' = submitted_identity_fingerprint
+            AND (submitted_resource#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - interval '15 seconds'
+            AND (submitted_resource#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+            AND submitted_pool#>>'{metadata,id}' = submitted_resource#>>'{spec,executionPoolId}'
+        ) IS TRUE) THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node registration requires a fresh identity-bound observation';
+        END IF;
+        IF (SELECT count(*) FROM paas.execution_targets
+             WHERE installation_id = effective_installation_id AND binding_ref IS NOT NULL) >= 128 THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'execution target admission limit reached';
+        END IF;
+        INSERT INTO paas.execution_targets (id, installation_id, execution_pool_id, binding_ref, identity_fingerprint, resource_version, document)
+            VALUES (resource_id, effective_installation_id, submitted_resource#>>'{spec,executionPoolId}',
+                submitted_binding_ref, submitted_identity_fingerprint, 1, submitted_resource);
+        INSERT INTO paas.execution_target_allocations (execution_target_id) VALUES (resource_id);
+        PERFORM paas.store_execution_pool_observation(expected_pool_version, submitted_pool);
+    END IF;
+    INSERT INTO paas.operations (installation_id, id, action, target_kind, target_id, idempotency_fingerprint,
+        request_digest, state, attempt, next_attempt_at, fencing_token, created_at, updated_at, terminal_at, document)
+        VALUES (effective_installation_id, submitted_operation->>'id', expected_action, resource_kind, resource_id,
+            submitted_operation->>'idempotencyFingerprint', submitted_operation->>'requestDigest', 'SUCCEEDED', 1,
+            transaction_timestamp(), 0, transaction_timestamp(), transaction_timestamp(), transaction_timestamp(), submitted_operation);
+    PERFORM paas.append_audit_outbox(submitted_operation, submitted_audit_event);
+END
+$function$;
+REVOKE ALL ON FUNCTION paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb) TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.transition_execution_target(
+    expected_target_version bigint,
+    submitted_target jsonb,
+    expected_pool_version bigint,
+    submitted_pool jsonb,
+    submitted_operation jsonb,
+    submitted_audit_event jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_target paas.execution_targets%ROWTYPE;
+    operation_action text := submitted_operation->>'action';
+    expected_source_state text;
+    expected_target_state text;
+    effective_target_id text := submitted_target#>>'{metadata,id}';
+    effective_pool_id text := submitted_target#>>'{spec,executionPoolId}';
+BEGIN
+    IF effective_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'installation context is required';
+    END IF;
+    expected_source_state := CASE operation_action
+        WHEN 'DRAIN_EXECUTION_TARGET' THEN 'ACTIVE'
+        WHEN 'ACTIVATE_EXECUTION_TARGET' THEN 'DRAINING'
+        WHEN 'REMOVE_EXECUTION_TARGET' THEN 'DRAINING'
+        ELSE NULL
+    END;
+    expected_target_state := CASE operation_action
+        WHEN 'DRAIN_EXECUTION_TARGET' THEN 'DRAINING'
+        WHEN 'ACTIVATE_EXECUTION_TARGET' THEN 'ACTIVE'
+        WHEN 'REMOVE_EXECUTION_TARGET' THEN 'REMOVED'
+        ELSE NULL
+    END;
+    IF expected_source_state IS NULL
+       OR jsonb_typeof(submitted_target) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_pool) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_operation) IS DISTINCT FROM 'object'
+       OR jsonb_typeof(submitted_audit_event) IS DISTINCT FROM 'object'
+       OR expected_target_version NOT BETWEEN 1 AND 9007199254740991
+       OR expected_pool_version NOT BETWEEN 1 AND 9007199254740991 THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution target transition input is invalid';
+    END IF;
+
+    -- Pool then allocation is the stable operator lock order. Placement takes
+    -- the allocation lock before it reads target eligibility, so a completed
+    -- drain is an exact scheduling fence rather than an eventually-consistent
+    -- hint.
+    PERFORM 1 FROM paas.execution_pools
+     WHERE installation_id = effective_installation_id AND id = effective_pool_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution pool is not registered';
+    END IF;
+    PERFORM 1 FROM paas.execution_target_allocations
+     WHERE execution_target_id = effective_target_id
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution target allocation is not registered';
+    END IF;
+    SELECT * INTO current_target
+      FROM paas.execution_targets
+     WHERE installation_id = effective_installation_id
+       AND id = effective_target_id
+       AND binding_ref IS NOT NULL
+     FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'managed execution target is not registered';
+    END IF;
+    IF current_target.resource_version IS DISTINCT FROM expected_target_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'execution target changed concurrently';
+    END IF;
+    IF current_target.document#>>'{spec,desiredState}' IS DISTINCT FROM expected_source_state THEN
+        RAISE EXCEPTION USING ERRCODE = '55000', MESSAGE = 'execution target lifecycle transition is invalid';
+    END IF;
+    IF NOT ((
+        (((current_target.document #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') #- '{spec,desiredState}')
+            = (((submitted_target #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') #- '{spec,desiredState}')
+        AND submitted_target#>>'{metadata,resourceVersion}' = (expected_target_version + 1)::text
+        AND (submitted_target#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND submitted_target#>>'{spec,desiredState}' = expected_target_state
+        AND current_target.execution_pool_id = effective_pool_id
+        AND submitted_pool#>>'{metadata,id}' = effective_pool_id
+        AND submitted_operation->>'installationId' = effective_installation_id
+        AND submitted_operation->>'action' = operation_action
+        AND submitted_operation#>>'{target,kind}' = 'ExecutionTarget'
+        AND submitted_operation#>>'{target,id}' = effective_target_id
+        AND submitted_operation->>'state' = 'SUCCEEDED'
+        AND submitted_operation->>'attempt' = '1'
+        AND NOT (submitted_operation ? 'error')
+        AND (submitted_operation->>'createdAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'updatedAt')::timestamptz = transaction_timestamp()
+        AND (submitted_operation->>'terminalAt')::timestamptz = transaction_timestamp()
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'execution target transition changed protected authority';
+    END IF;
+
+    IF operation_action = 'REMOVE_EXECUTION_TARGET' THEN
+        PERFORM 1 FROM paas.capacity_claims AS claim
+         WHERE claim.execution_target_id = effective_target_id
+           AND claim.state IN ('PENDING', 'ACTIVE')
+         FOR UPDATE;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has consuming capacity';
+        END IF;
+
+        PERFORM 1
+          FROM paas.operations AS operation
+          JOIN paas.placement_decisions AS decision
+            ON decision.tenant_id = operation.tenant_id
+           AND decision.operation_id = operation.id
+         WHERE decision.execution_target_id = effective_target_id
+           AND operation.state NOT IN ('SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION')
+         FOR UPDATE OF operation;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has a non-terminal Operation';
+        END IF;
+
+        PERFORM 1
+          FROM paas.adapter_commands AS command
+          WHERE command.execution_target_id = effective_target_id
+           AND command.action <> 'OBSERVE_DEPLOYMENT'
+           AND NOT EXISTS (
+                SELECT 1 FROM paas.adapter_receipts AS receipt
+                 WHERE receipt.tenant_id = command.tenant_id
+                   AND receipt.command_id = command.id
+                   AND receipt.state IN ('SUCCEEDED', 'FAILED')
+           )
+         FOR UPDATE OF command;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has an unresolved adapter result';
+        END IF;
+
+        PERFORM 1 FROM paas.terminal_sessions AS session
+         WHERE session.execution_target_id = effective_target_id
+           AND session.state <> 'ENDED'
+         FOR UPDATE;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has an open terminal session';
+        END IF;
+
+        PERFORM 1
+          FROM paas.deployments AS deployment
+          JOIN paas.placement_decisions AS decision
+            ON decision.tenant_id = deployment.tenant_id
+           AND decision.id = deployment.document#>>'{status,placementDecisionId}'
+         WHERE decision.execution_target_id = effective_target_id
+           AND (deployment.document#>>'{spec,desiredState}' <> 'STOPPED'
+                OR deployment.document#>>'{status,phase}' <> 'STOPPED')
+         FOR UPDATE OF deployment;
+        IF FOUND THEN
+            RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'execution target still has a current Deployment';
+        END IF;
+    END IF;
+
+    UPDATE paas.execution_targets AS target
+       SET resource_version = expected_target_version + 1,
+           document = submitted_target
+     WHERE target.id = current_target.id;
+    IF operation_action = 'REMOVE_EXECUTION_TARGET' THEN
+        UPDATE paas.enrolled_node_connections AS connection
+           SET enabled = false, updated_at = transaction_timestamp()
+         WHERE connection.installation_id = effective_installation_id
+           AND connection.execution_target_id = effective_target_id;
+    END IF;
+    PERFORM paas.store_execution_pool_observation(expected_pool_version, submitted_pool);
+    INSERT INTO paas.operations (
+        installation_id, id, action, target_kind, target_id,
+        idempotency_fingerprint, request_digest, state, attempt,
+        next_attempt_at, fencing_token, created_at, updated_at, terminal_at,
+        document
+    ) VALUES (
+        effective_installation_id, submitted_operation->>'id', operation_action,
+        'ExecutionTarget', effective_target_id,
+        submitted_operation->>'idempotencyFingerprint',
+        submitted_operation->>'requestDigest', 'SUCCEEDED', 1,
+        transaction_timestamp(), 0, transaction_timestamp(),
+        transaction_timestamp(), transaction_timestamp(), submitted_operation
+    );
+    PERFORM paas.append_audit_outbox(submitted_operation, submitted_audit_event);
+END
+$function$;
+REVOKE ALL ON FUNCTION paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)
+    FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)
+    TO matrix_paas_api;
+
+CREATE OR REPLACE FUNCTION paas.refresh_execution_target(
+    expected_target_version bigint, submitted_target jsonb,
+    expected_pool_version bigint, submitted_pool jsonb
+)
+RETURNS void
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    effective_installation_id text := paas.current_installation_id();
+    current_target paas.execution_targets%ROWTYPE;
+    next_version bigint;
+BEGIN
+    IF effective_installation_id IS NULL THEN
+        RAISE EXCEPTION USING ERRCODE = '42501', MESSAGE = 'installation context is required';
+    END IF;
+    PERFORM 1 FROM paas.execution_pools WHERE installation_id = effective_installation_id
+        AND id = submitted_pool#>>'{metadata,id}' FOR UPDATE;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'execution pool is not registered';
+    END IF;
+    SELECT * INTO current_target FROM paas.execution_targets
+        WHERE installation_id = effective_installation_id AND id = submitted_target#>>'{metadata,id}' FOR UPDATE;
+    IF NOT FOUND OR current_target.resource_version IS DISTINCT FROM expected_target_version THEN
+        RAISE EXCEPTION USING ERRCODE = '40001', MESSAGE = 'execution target changed concurrently';
+    END IF;
+    next_version := expected_target_version + CASE
+        WHEN ((current_target.document->'status') - ARRAY['observedAt','usage'])
+            IS DISTINCT FROM ((submitted_target->'status') - ARRAY['observedAt','usage']) THEN 1 ELSE 0 END;
+    IF NOT ((
+        (((current_target.document #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status')
+            = (((submitted_target #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status')
+        AND submitted_target#>>'{metadata,resourceVersion}' = next_version::text
+        AND (submitted_target#>>'{metadata,updatedAt}')::timestamptz = transaction_timestamp()
+        AND current_target.execution_pool_id = submitted_pool#>>'{metadata,id}'
+        AND (submitted_target#>>'{status,observedAt}')::timestamptz >= (current_target.document#>>'{status,observedAt}')::timestamptz
+        AND (submitted_target#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+        AND (submitted_target#>>'{status,health}' = 'UNAVAILABLE'
+             OR (submitted_target#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - interval '15 seconds')
+    ) IS TRUE) THEN
+        RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'node refresh cannot change desired authority or identity';
+    END IF;
+    UPDATE paas.execution_targets SET resource_version = next_version, document = submitted_target WHERE id = current_target.id;
+    PERFORM paas.store_execution_pool_observation(expected_pool_version, submitted_pool);
+END
+$function$;
+REVOKE ALL ON FUNCTION paas.refresh_execution_target(bigint,jsonb,bigint,jsonb) FROM PUBLIC, matrix_paas_worker;
+GRANT EXECUTE ON FUNCTION paas.refresh_execution_target(bigint,jsonb,bigint,jsonb) TO matrix_paas_api;
 
 CREATE OR REPLACE FUNCTION paas.create_apphosting_resource(
     submitted_resource jsonb,
@@ -1808,12 +4690,14 @@ REVOKE ALL ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, jsonb, bigint
 GRANT EXECUTE ON FUNCTION paas.submit_deployment(jsonb, jsonb, jsonb, jsonb, bigint)
     TO matrix_paas_api;
 
-CREATE OR REPLACE FUNCTION paas.claim_audit_event(
+DROP FUNCTION IF EXISTS paas.claim_audit_event(text, integer);
+CREATE FUNCTION paas.claim_audit_event(
     requested_worker_id text,
     requested_lease_seconds integer
 )
 RETURNS TABLE (
     tenant_id text,
+    installation_id text,
     event_id text,
     attempts integer,
     fencing_token bigint,
@@ -1836,7 +4720,7 @@ BEGIN
     END IF;
     RETURN QUERY
     WITH candidate AS (
-        SELECT pending.tenant_id,
+        SELECT pending.authority_key,
                pending.event_id
           FROM paas.audit_outbox AS pending
          WHERE pending.attempts < 100
@@ -1848,7 +4732,7 @@ BEGIN
            )
          ORDER BY pending.available_at,
                   pending.created_at,
-                  pending.tenant_id COLLATE "C",
+                  pending.authority_key COLLATE "C",
                   pending.event_id COLLATE "C"
          LIMIT 1
          FOR UPDATE SKIP LOCKED
@@ -1863,9 +4747,10 @@ BEGIN
            last_error_code = NULL,
            updated_at = transaction_timestamp()
       FROM candidate
-     WHERE claimed.tenant_id = candidate.tenant_id
+     WHERE claimed.authority_key = candidate.authority_key
        AND claimed.event_id = candidate.event_id
     RETURNING claimed.tenant_id,
+              claimed.installation_id,
               claimed.event_id,
               claimed.attempts,
               claimed.fencing_token,
@@ -1878,8 +4763,10 @@ REVOKE ALL ON FUNCTION paas.claim_audit_event(text, integer) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.claim_audit_event(text, integer)
     TO matrix_paas_worker;
 
+DROP FUNCTION IF EXISTS paas.complete_audit_event(text, text, text, bigint, text, timestamptz, text);
 CREATE OR REPLACE FUNCTION paas.complete_audit_event(
     requested_tenant_id text,
+    requested_installation_id text,
     requested_event_id text,
     requested_worker_id text,
     expected_fencing_token bigint,
@@ -1894,10 +4781,15 @@ SET search_path = pg_catalog, pg_temp
 AS $function$
 DECLARE
     affected_rows bigint;
+    effective_authority_key text;
 BEGIN
-    IF requested_tenant_id IS NULL
-       OR requested_tenant_id COLLATE "C"
-            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+    requested_tenant_id := NULLIF(requested_tenant_id, '');
+    requested_installation_id := NULLIF(requested_installation_id, '');
+    IF (requested_tenant_id IS NULL) = (requested_installation_id IS NULL)
+       OR (requested_tenant_id IS NOT NULL AND requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
+       OR (requested_installation_id IS NOT NULL AND requested_installation_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$')
        OR requested_event_id IS NULL
        OR requested_event_id COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
@@ -1906,6 +4798,7 @@ BEGIN
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR expected_fencing_token IS NULL
        OR expected_fencing_token NOT BETWEEN 1 AND 9007199254740991
+       OR requested_outcome IS NULL
        OR requested_outcome NOT IN ('DELIVERED', 'RETRY', 'DEAD_LETTER')
        OR (requested_outcome = 'RETRY'
             AND (requested_retry_at IS NULL
@@ -1923,6 +4816,8 @@ BEGIN
             MESSAGE = 'Audit completion parameters are invalid';
     END IF;
 
+    effective_authority_key := CASE WHEN requested_installation_id IS NOT NULL
+        THEN 'installation:' || requested_installation_id ELSE 'tenant:' || requested_tenant_id END;
     UPDATE paas.audit_outbox AS event
        SET status = requested_outcome,
            available_at = CASE
@@ -1942,7 +4837,7 @@ BEGIN
                 ELSE NULL
            END,
            updated_at = transaction_timestamp()
-     WHERE event.tenant_id = requested_tenant_id
+     WHERE event.authority_key = effective_authority_key
        AND event.event_id = requested_event_id
        AND event.status = 'LEASED'
        AND event.lease_owner = requested_worker_id
@@ -1958,10 +4853,10 @@ END
 $function$;
 
 REVOKE ALL ON FUNCTION paas.complete_audit_event(
-    text, text, text, bigint, text, timestamptz, text
+    text, text, text, text, bigint, text, timestamptz, text
 ) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.complete_audit_event(
-    text, text, text, bigint, text, timestamptz, text
+    text, text, text, text, bigint, text, timestamptz, text
 ) TO matrix_paas_worker;
 
 CREATE OR REPLACE FUNCTION paas.audit_outbox_snapshot()
@@ -1995,6 +4890,504 @@ REVOKE ALL ON FUNCTION paas.audit_outbox_snapshot() FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.audit_outbox_snapshot()
     TO matrix_paas_worker;
 
+CREATE OR REPLACE FUNCTION paas.next_deployment_runtime_candidate(
+    requested_after_tenant_id text,
+    requested_after_deployment_id text
+)
+RETURNS TABLE (
+    tenant_id text,
+    deployment_id text,
+    deployment_generation bigint,
+    application_revision_id text,
+    execution_target_id text,
+    placement_decision_id text,
+    content_digest text
+)
+LANGUAGE plpgsql
+STABLE
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+BEGIN
+    IF (requested_after_tenant_id IS NULL)
+        <> (requested_after_deployment_id IS NULL)
+       OR requested_after_tenant_id IS NOT NULL AND (
+            requested_after_tenant_id COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+            OR requested_after_deployment_id COLLATE "C"
+                !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment runtime cursor is invalid';
+    END IF;
+
+    RETURN QUERY
+    SELECT deployment.tenant_id,
+           deployment.id,
+           deployment.generation,
+           deployment.application_revision_id,
+           decision.execution_target_id,
+           decision.id,
+           generation.content_digest
+      FROM paas.deployments AS deployment
+      JOIN paas.deployment_generations AS generation
+        ON generation.tenant_id = deployment.tenant_id
+       AND generation.deployment_id = deployment.id
+       AND generation.generation = deployment.generation
+       AND generation.application_revision_id = deployment.application_revision_id
+      JOIN paas.placement_decisions AS decision
+        ON decision.tenant_id = deployment.tenant_id
+       AND decision.id = deployment.document#>>'{status,placementDecisionId}'
+       AND decision.deployment_id = deployment.id
+       AND decision.deployment_generation = deployment.generation
+       AND decision.application_revision_id = deployment.application_revision_id
+       AND decision.outcome = 'SCHEDULED'
+       AND decision.execution_target_id IS NOT NULL
+     WHERE deployment.document#>>'{spec,desiredState}' = 'RUNNING'
+       AND (
+            requested_after_tenant_id IS NULL
+            OR deployment.tenant_id > requested_after_tenant_id COLLATE "C"
+            OR (
+                deployment.tenant_id = requested_after_tenant_id
+                AND deployment.id > requested_after_deployment_id COLLATE "C"
+            )
+       )
+     ORDER BY deployment.tenant_id COLLATE "C", deployment.id COLLATE "C"
+     LIMIT 1;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.next_deployment_runtime_candidate(text, text)
+    FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.next_deployment_runtime_candidate(text, text)
+    TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.store_deployment_runtime_snapshot(
+    requested_tenant_id text,
+    requested_deployment_id text,
+    requested_generation bigint,
+    requested_application_revision_id text,
+    requested_execution_target_id text,
+    requested_placement_decision_id text,
+    requested_observed_at timestamptz,
+    requested_valid_until timestamptz,
+    submitted_document jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    current_observed_at timestamptz;
+    current_valid_until timestamptz;
+    current_placement_decision_id text;
+    current_document jsonb;
+BEGIN
+    IF requested_tenant_id IS NULL
+       OR requested_tenant_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_deployment_id IS NULL
+       OR requested_deployment_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_generation IS NULL
+       OR requested_generation NOT BETWEEN 1 AND 9007199254740991
+       OR requested_application_revision_id IS NULL
+       OR requested_application_revision_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_execution_target_id IS NULL
+       OR requested_execution_target_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_placement_decision_id IS NULL
+       OR requested_placement_decision_id COLLATE "C"
+            !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR requested_observed_at IS NULL
+       OR requested_valid_until IS NULL
+       OR requested_observed_at > transaction_timestamp() + interval '2 seconds'
+       OR requested_observed_at <= transaction_timestamp() - interval '1 minute'
+       OR requested_valid_until <= requested_observed_at
+       OR requested_valid_until > requested_observed_at + interval '1 minute'
+       OR submitted_document IS NULL
+       OR jsonb_typeof(submitted_document) <> 'object'
+       OR NOT submitted_document ?& ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+       ]
+       OR submitted_document - ARRAY[
+            'deploymentId', 'generation', 'applicationRevisionId',
+            'executionTargetId', 'instances', 'observedAt'
+       ] <> '{}'::jsonb
+       OR jsonb_typeof(submitted_document->'deploymentId')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_document->'generation')
+            IS DISTINCT FROM 'number'
+       OR jsonb_typeof(submitted_document->'applicationRevisionId')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_document->'executionTargetId')
+            IS DISTINCT FROM 'string'
+       OR jsonb_typeof(submitted_document->'observedAt')
+            IS DISTINCT FROM 'string'
+       OR submitted_document->>'deploymentId'
+            IS DISTINCT FROM requested_deployment_id
+       OR submitted_document->>'applicationRevisionId'
+            IS DISTINCT FROM requested_application_revision_id
+       OR submitted_document->>'executionTargetId'
+            IS DISTINCT FROM requested_execution_target_id
+       OR submitted_document->>'generation'
+            IS DISTINCT FROM requested_generation::text
+       OR (submitted_document->>'observedAt')::timestamptz
+            IS DISTINCT FROM requested_observed_at
+       OR jsonb_typeof(submitted_document->'instances')
+            IS DISTINCT FROM 'array'
+       OR jsonb_array_length(submitted_document->'instances') > 64 THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment runtime snapshot is invalid';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+         FROM jsonb_array_elements(submitted_document->'instances') AS instance(value)
+         WHERE jsonb_typeof(instance.value) <> 'object'
+            OR NOT instance.value ?& ARRAY[
+                'id', 'componentName', 'state', 'health'
+            ]
+            OR instance.value - ARRAY[
+                'id', 'componentName', 'state', 'health', 'exitCode'
+            ] <> '{}'::jsonb
+            OR jsonb_typeof(instance.value->'id')
+                IS DISTINCT FROM 'string'
+            OR jsonb_typeof(instance.value->'componentName')
+                IS DISTINCT FROM 'string'
+            OR jsonb_typeof(instance.value->'state')
+                IS DISTINCT FROM 'string'
+            OR jsonb_typeof(instance.value->'health')
+                IS DISTINCT FROM 'string'
+            OR instance.value->>'id' COLLATE "C"
+                !~ '^instance-[0-9a-f]{32}$'
+            OR instance.value->>'componentName' COLLATE "C"
+                !~ '^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$'
+            OR instance.value->>'state' NOT IN (
+                'CREATED', 'RUNNING', 'RESTARTING', 'REMOVING',
+                'PAUSED', 'EXITED', 'DEAD'
+            )
+            OR instance.value->>'health' NOT IN (
+                'NONE', 'STARTING', 'HEALTHY', 'UNHEALTHY'
+            )
+            OR EXISTS (
+                SELECT 1
+                  FROM jsonb_object_keys(instance.value) AS key(name)
+                 WHERE key.name NOT IN (
+                    'id', 'componentName', 'state', 'health', 'exitCode'
+                 )
+            )
+            OR (
+                (instance.value ? 'exitCode')
+                <> (instance.value->>'state' IN ('EXITED', 'DEAD'))
+            )
+            OR CASE WHEN instance.value ? 'exitCode' THEN
+                jsonb_typeof(instance.value->'exitCode')
+                    IS DISTINCT FROM 'number'
+                OR instance.value->>'exitCode' !~ '^(0|[1-9][0-9]*)$'
+                OR CASE
+                    WHEN instance.value->>'exitCode' ~ '^(0|[1-9][0-9]*)$'
+                    THEN (instance.value->>'exitCode')::numeric > 4294967295
+                    ELSE true
+                END
+            ELSE false END
+    ) OR (
+        SELECT count(*) <> count(DISTINCT instance.value->>'id')
+          FROM jsonb_array_elements(submitted_document->'instances') AS instance(value)
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment runtime instances are invalid';
+    END IF;
+
+    PERFORM 1
+      FROM paas.deployments AS deployment
+      JOIN paas.deployment_generations AS generation
+        ON generation.tenant_id = deployment.tenant_id
+       AND generation.deployment_id = deployment.id
+       AND generation.generation = deployment.generation
+       AND generation.application_revision_id = deployment.application_revision_id
+      JOIN paas.placement_decisions AS decision
+        ON decision.tenant_id = deployment.tenant_id
+       AND decision.id = requested_placement_decision_id
+       AND decision.id = deployment.document#>>'{status,placementDecisionId}'
+       AND decision.deployment_id = deployment.id
+       AND decision.deployment_generation = deployment.generation
+       AND decision.application_revision_id = deployment.application_revision_id
+       AND decision.outcome = 'SCHEDULED'
+       AND decision.execution_target_id = requested_execution_target_id
+     WHERE deployment.tenant_id = requested_tenant_id
+       AND deployment.id = requested_deployment_id
+       AND deployment.generation = requested_generation
+       AND deployment.application_revision_id = requested_application_revision_id
+       AND deployment.document#>>'{spec,desiredState}' = 'RUNNING'
+     FOR UPDATE OF deployment;
+    IF NOT FOUND THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'Deployment runtime authority changed';
+    END IF;
+
+    SELECT snapshot.observed_at,
+           snapshot.valid_until,
+           snapshot.placement_decision_id,
+           snapshot.document
+      INTO current_observed_at,
+           current_valid_until,
+           current_placement_decision_id,
+           current_document
+      FROM paas.deployment_runtime_snapshots AS snapshot
+     WHERE snapshot.tenant_id = requested_tenant_id
+       AND snapshot.deployment_id = requested_deployment_id
+     FOR UPDATE;
+    IF FOUND THEN
+        IF requested_observed_at < current_observed_at THEN
+            RETURN false;
+        END IF;
+        IF requested_observed_at = current_observed_at THEN
+            IF requested_placement_decision_id = current_placement_decision_id
+               AND requested_valid_until = current_valid_until
+               AND submitted_document = current_document THEN
+                RETURN false;
+            END IF;
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'Deployment runtime observation conflicts';
+        END IF;
+        UPDATE paas.deployment_runtime_snapshots
+           SET deployment_generation = requested_generation,
+               application_revision_id = requested_application_revision_id,
+               execution_target_id = requested_execution_target_id,
+               placement_decision_id = requested_placement_decision_id,
+               observed_at = requested_observed_at,
+               valid_until = requested_valid_until,
+               document = submitted_document
+         WHERE tenant_id = requested_tenant_id
+           AND deployment_id = requested_deployment_id;
+        RETURN true;
+    END IF;
+
+    INSERT INTO paas.deployment_runtime_snapshots (
+        tenant_id,
+        deployment_id,
+        deployment_generation,
+        application_revision_id,
+        execution_target_id,
+        placement_decision_id,
+        observed_at,
+        valid_until,
+        document
+    ) VALUES (
+        requested_tenant_id,
+        requested_deployment_id,
+        requested_generation,
+        requested_application_revision_id,
+        requested_execution_target_id,
+        requested_placement_decision_id,
+        requested_observed_at,
+        requested_valid_until,
+        submitted_document
+    );
+    RETURN true;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.store_deployment_runtime_snapshot(
+    text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.store_deployment_runtime_snapshot(
+    text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb
+) TO matrix_paas_worker;
+
+CREATE OR REPLACE FUNCTION paas.store_deployment_telemetry_snapshot(
+    requested_tenant_id text,
+    requested_deployment_id text,
+    requested_generation bigint,
+    requested_application_revision_id text,
+    requested_execution_target_id text,
+    requested_placement_decision_id text,
+    requested_runtime_observed_at timestamptz,
+    requested_runtime_valid_until timestamptz,
+    submitted_runtime_document jsonb,
+    requested_resource_observed_at timestamptz,
+    requested_resource_valid_until timestamptz,
+    submitted_resource_document jsonb
+)
+RETURNS boolean
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    runtime_stored boolean;
+    current_runtime_observed_at timestamptz;
+    current_runtime_valid_until timestamptz;
+    current_runtime_placement_decision_id text;
+    current_runtime_document jsonb;
+    current_resource_observed_at timestamptz;
+    current_resource_valid_until timestamptz;
+    current_resource_placement_decision_id text;
+    current_resource_document jsonb;
+BEGIN
+    runtime_stored := paas.store_deployment_runtime_snapshot(
+        requested_tenant_id,
+        requested_deployment_id,
+        requested_generation,
+        requested_application_revision_id,
+        requested_execution_target_id,
+        requested_placement_decision_id,
+        requested_runtime_observed_at,
+        requested_runtime_valid_until,
+        submitted_runtime_document
+    );
+
+    IF requested_resource_observed_at IS NULL
+       OR requested_resource_valid_until IS NULL
+       OR requested_resource_observed_at > transaction_timestamp() + interval '2 seconds'
+       OR requested_resource_observed_at <= transaction_timestamp() - interval '1 minute'
+       OR requested_resource_valid_until <= requested_resource_observed_at
+       OR requested_resource_valid_until > requested_resource_observed_at + interval '1 minute'
+       OR submitted_resource_document IS NULL
+       OR NOT paas.valid_deployment_resource_document(submitted_resource_document)
+       OR submitted_resource_document->>'deploymentId'
+            IS DISTINCT FROM requested_deployment_id
+       OR submitted_resource_document->>'applicationRevisionId'
+            IS DISTINCT FROM requested_application_revision_id
+       OR submitted_resource_document->>'executionTargetId'
+            IS DISTINCT FROM requested_execution_target_id
+       OR submitted_resource_document->>'generation'
+            IS DISTINCT FROM requested_generation::text
+       OR (submitted_resource_document->>'observedAt')::timestamptz
+            IS DISTINCT FROM requested_resource_observed_at THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment resource snapshot is invalid';
+    END IF;
+
+    IF jsonb_array_length(submitted_runtime_document->'instances') <>
+            jsonb_array_length(submitted_resource_document->'instances')
+       OR EXISTS (
+            (SELECT runtime.value->>'id'
+               FROM jsonb_array_elements(submitted_runtime_document->'instances') AS runtime(value))
+            EXCEPT
+            (SELECT resource.value->>'id'
+               FROM jsonb_array_elements(submitted_resource_document->'instances') AS resource(value))
+       )
+       OR EXISTS (
+            (SELECT resource.value->>'id'
+               FROM jsonb_array_elements(submitted_resource_document->'instances') AS resource(value))
+            EXCEPT
+            (SELECT runtime.value->>'id'
+               FROM jsonb_array_elements(submitted_runtime_document->'instances') AS runtime(value))
+       ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'Deployment telemetry instances do not match';
+    END IF;
+
+    IF NOT runtime_stored THEN
+        SELECT snapshot.observed_at,
+               snapshot.valid_until,
+               snapshot.placement_decision_id,
+               snapshot.document
+          INTO current_runtime_observed_at,
+               current_runtime_valid_until,
+               current_runtime_placement_decision_id,
+               current_runtime_document
+          FROM paas.deployment_runtime_snapshots AS snapshot
+         WHERE snapshot.tenant_id = requested_tenant_id
+           AND snapshot.deployment_id = requested_deployment_id;
+        IF NOT FOUND
+           OR current_runtime_observed_at <> requested_runtime_observed_at
+           OR current_runtime_valid_until <> requested_runtime_valid_until
+           OR current_runtime_placement_decision_id <> requested_placement_decision_id
+           OR current_runtime_document <> submitted_runtime_document THEN
+            RETURN false;
+        END IF;
+    END IF;
+
+    SELECT snapshot.observed_at,
+           snapshot.valid_until,
+           snapshot.placement_decision_id,
+           snapshot.document
+      INTO current_resource_observed_at,
+           current_resource_valid_until,
+           current_resource_placement_decision_id,
+           current_resource_document
+      FROM paas.deployment_resource_snapshots AS snapshot
+     WHERE snapshot.tenant_id = requested_tenant_id
+       AND snapshot.deployment_id = requested_deployment_id
+     FOR UPDATE;
+    IF FOUND THEN
+        IF requested_resource_observed_at < current_resource_observed_at THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'Deployment resource observation is older than current proof';
+        END IF;
+        IF requested_resource_observed_at = current_resource_observed_at THEN
+            IF requested_placement_decision_id = current_resource_placement_decision_id
+               AND requested_resource_valid_until = current_resource_valid_until
+               AND submitted_resource_document = current_resource_document THEN
+                RETURN runtime_stored;
+            END IF;
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'Deployment resource observation conflicts';
+        END IF;
+        UPDATE paas.deployment_resource_snapshots
+           SET deployment_generation = requested_generation,
+               application_revision_id = requested_application_revision_id,
+               execution_target_id = requested_execution_target_id,
+               placement_decision_id = requested_placement_decision_id,
+               observed_at = requested_resource_observed_at,
+               valid_until = requested_resource_valid_until,
+               document = submitted_resource_document
+         WHERE tenant_id = requested_tenant_id
+           AND deployment_id = requested_deployment_id;
+        RETURN true;
+    END IF;
+
+    INSERT INTO paas.deployment_resource_snapshots (
+        tenant_id,
+        deployment_id,
+        deployment_generation,
+        application_revision_id,
+        execution_target_id,
+        placement_decision_id,
+        observed_at,
+        valid_until,
+        document
+    ) VALUES (
+        requested_tenant_id,
+        requested_deployment_id,
+        requested_generation,
+        requested_application_revision_id,
+        requested_execution_target_id,
+        requested_placement_decision_id,
+        requested_resource_observed_at,
+        requested_resource_valid_until,
+        submitted_resource_document
+    );
+    RETURN true;
+END
+$function$;
+
+REVOKE ALL ON FUNCTION paas.store_deployment_telemetry_snapshot(
+    text, text, bigint, text, text, text,
+    timestamptz, timestamptz, jsonb,
+    timestamptz, timestamptz, jsonb
+) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION paas.store_deployment_telemetry_snapshot(
+    text, text, bigint, text, text, text,
+    timestamptz, timestamptz, jsonb,
+    timestamptz, timestamptz, jsonb
+) TO matrix_paas_worker;
+
 CREATE OR REPLACE FUNCTION paas.readiness()
 RETURNS TABLE (ready boolean, schema_version bigint, checked_at timestamptz)
 LANGUAGE sql
@@ -2011,13 +5404,38 @@ AS $function$
         ) IS NOT NULL
         AND to_regprocedure('paas.load_application_for_update(text)') IS NOT NULL
         AND paas.role_subject_contract_ready()
+        AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
+        AND to_regclass('paas.deployment_resource_snapshots') IS NOT NULL
+        AND to_regclass('paas.terminal_sessions') IS NOT NULL
+        AND to_regclass('paas.enrolled_node_connections') IS NOT NULL
+        AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
+        AND to_regprocedure('paas.subject_reference_valid(jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.complete_audit_event(text,text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
+        AND to_regprocedure('paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.fail_node_enrollment(text,bigint,jsonb,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.complete_node_enrollment(text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.next_deployment_runtime_candidate(text,text)') IS NOT NULL
+        AND to_regprocedure('paas.store_deployment_runtime_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.valid_deployment_resource_document(jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.store_deployment_telemetry_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.lock_terminal_session_by_fingerprint(text)') IS NOT NULL
+        AND to_regprocedure('paas.lock_terminal_session(text)') IS NOT NULL
+        AND to_regprocedure('paas.lock_open_terminal_session(text,text,text,text)') IS NOT NULL
+        AND to_regprocedure('paas.lock_current_terminal_runtime(text,text,timestamp with time zone)') IS NOT NULL
+        AND to_regprocedure('paas.create_terminal_session(jsonb,text,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.rotate_terminal_session_ticket(text,text)') IS NOT NULL
+        AND to_regprocedure('paas.open_terminal_session_ticket(text,text)') IS NOT NULL
+        AND to_regprocedure('paas.consume_terminal_session_ticket(text,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.transition_terminal_session(text,jsonb,jsonb)') IS NOT NULL
         AND NOT EXISTS (
             SELECT 1
               FROM paas.audit_outbox AS outbox
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
         ),
-        7::bigint,
+        8::bigint,
         transaction_timestamp()
 $function$;
 
@@ -2034,13 +5452,28 @@ AS $function$
     SELECT
         to_regclass('paas.operations') IS NOT NULL
         AND to_regclass('paas.execution_targets') IS NOT NULL
+        AND to_regclass('paas.enrolled_node_connections') IS NOT NULL
         AND to_regclass('paas.adapter_commands') IS NOT NULL
         AND paas.role_subject_contract_ready()
+        AND to_regclass('paas.deployment_runtime_snapshots') IS NOT NULL
+        AND to_regclass('paas.deployment_resource_snapshots') IS NOT NULL
+        AND to_regprocedure('paas.current_installation_id()') IS NOT NULL
+        AND to_regprocedure('paas.subject_reference_valid(jsonb)') IS NOT NULL
         AND to_regprocedure('paas.claim_operation(text,integer)') IS NOT NULL
         AND to_regprocedure(
             'paas.advance_operation(text,text,bigint,text,jsonb,timestamptz,boolean)'
-        ) IS NOT NULL,
-        7::bigint,
+        ) IS NOT NULL
+        AND to_regprocedure(
+            'paas.reconcile_local_execution_profile(text,bigint,jsonb,bigint,jsonb,bigint,jsonb)'
+        ) IS NOT NULL
+        AND to_regprocedure('paas.next_deployment_runtime_candidate(text,text)') IS NOT NULL
+        AND to_regprocedure('paas.store_deployment_runtime_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.valid_deployment_resource_document(jsonb)') IS NOT NULL
+        AND to_regprocedure('paas.store_deployment_telemetry_snapshot(text,text,bigint,text,text,text,timestamp with time zone,timestamp with time zone,jsonb,timestamp with time zone,timestamp with time zone,jsonb)') IS NOT NULL
+        AND to_regprocedure(
+            'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
+        ) IS NULL,
+        8::bigint,
         transaction_timestamp()
 $function$;
 
@@ -2083,6 +5516,7 @@ BEGIN
          WHERE operation.state NOT IN (
                 'SUCCEEDED', 'FAILED', 'CANCELLED', 'MANUAL_INTERVENTION'
                )
+           AND operation.tenant_id IS NOT NULL
            AND operation.next_attempt_at <= transaction_timestamp()
            AND (
                 operation.lease_owner IS NULL
@@ -3563,7 +6997,12 @@ GRANT EXECUTE ON FUNCTION paas.transition_capacity_reservation(
 )
     TO matrix_paas_worker;
 
+DROP FUNCTION IF EXISTS paas.reconcile_local_execution_profile(
+    bigint, jsonb, bigint, jsonb, bigint, jsonb
+);
+
 CREATE OR REPLACE FUNCTION paas.reconcile_local_execution_profile(
+    requested_installation_id text,
     expected_pool_version bigint,
     submitted_pool jsonb,
     expected_target_version bigint,
@@ -3585,11 +7024,19 @@ DECLARE
     next_target_version bigint;
     next_policy_version bigint;
     affected_rows bigint;
+    current_pool jsonb;
+    current_pool_installation_id text;
     current_target jsonb;
+    current_target_installation_id text;
     current_policy jsonb;
+    total_count bigint;
+    ready_count bigint;
+    degraded_count bigint;
 BEGIN
     effective_tenant_id := paas.current_tenant_id();
     IF effective_tenant_id IS NULL
+       OR requested_installation_id IS NULL
+       OR requested_installation_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR jsonb_typeof(submitted_pool) <> 'object'
        OR jsonb_typeof(submitted_target) <> 'object'
        OR jsonb_typeof(submitted_policy) <> 'object'
@@ -3621,6 +7068,9 @@ BEGIN
     IF pool_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR target_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
        OR policy_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
+       OR pool_id <> 'execution-pool-local'
+       OR target_id <> 'execution-target-local'
+       OR policy_id <> 'placement-policy-local'
        OR next_pool_version NOT BETWEEN 1 AND 9007199254740991
        OR next_target_version NOT BETWEEN 1 AND 9007199254740991
        OR next_policy_version NOT BETWEEN 1 AND 9007199254740991
@@ -3683,15 +7133,54 @@ BEGIN
             MESSAGE = 'local execution profile document is invalid';
     END IF;
 
+    IF EXISTS (
+        SELECT 1
+          FROM paas.execution_targets AS target
+         WHERE target.execution_pool_id = pool_id
+           AND target.installation_id IS NULL
+           AND target.id <> target_id
+    ) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = 'MX409',
+            MESSAGE = 'local execution pool has ambiguous retained membership';
+    END IF;
+
+    SELECT pool.document, pool.installation_id
+      INTO current_pool, current_pool_installation_id
+      FROM paas.execution_pools AS pool
+     WHERE pool.id = pool_id
+     FOR UPDATE;
     IF expected_pool_version = 0 THEN
-        INSERT INTO paas.execution_pools (id, resource_version, document)
-        VALUES (pool_id, 1, submitted_pool)
+        IF FOUND THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '40001',
+                MESSAGE = 'local execution pool changed concurrently';
+        END IF;
+        INSERT INTO paas.execution_pools (
+            id, installation_id, resource_version, document
+        ) VALUES (pool_id, requested_installation_id, 1, submitted_pool)
         ON CONFLICT DO NOTHING;
     ELSE
+        IF NOT FOUND
+           OR current_pool_installation_id IS DISTINCT FROM requested_installation_id
+                AND current_pool_installation_id IS NOT NULL
+           OR (current_pool#>>'{metadata,resourceVersion}')::bigint <> expected_pool_version THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '40001',
+                MESSAGE = 'local execution pool changed concurrently';
+        END IF;
+        IF (((current_pool #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status') <>
+           (((submitted_pool #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status') THEN
+            RAISE EXCEPTION USING
+                ERRCODE = 'MX409',
+                MESSAGE = 'local execution pool authority conflicts';
+        END IF;
         UPDATE paas.execution_pools AS pool
-           SET resource_version = next_pool_version,
+           SET installation_id = requested_installation_id,
+               resource_version = next_pool_version,
                document = submitted_pool
          WHERE pool.id = pool_id
+           AND (pool.installation_id IS NULL OR pool.installation_id = requested_installation_id)
            AND pool.resource_version = expected_pool_version;
     END IF;
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
@@ -3701,33 +7190,42 @@ BEGIN
             MESSAGE = 'local execution pool changed concurrently';
     END IF;
 
+    SELECT target.document, target.installation_id
+      INTO current_target, current_target_installation_id
+      FROM paas.execution_targets AS target
+     WHERE target.id = target_id
+     FOR UPDATE;
     IF expected_target_version = 0 THEN
-        INSERT INTO paas.execution_targets (
-            id, execution_pool_id, resource_version, document
-        ) VALUES (target_id, pool_id, 1, submitted_target)
-        ON CONFLICT DO NOTHING;
-    ELSE
-        SELECT target.document
-          INTO current_target
-          FROM paas.execution_targets AS target
-         WHERE target.id = target_id
-           AND target.resource_version = expected_target_version
-         FOR UPDATE;
-        IF NOT FOUND THEN
+        IF FOUND THEN
             RAISE EXCEPTION USING
                 ERRCODE = '40001',
                 MESSAGE = 'local execution target changed concurrently';
         END IF;
-        IF current_target#>>'{metadata,labels,matrix-machine-fingerprint}' <>
-           submitted_target#>>'{metadata,labels,matrix-machine-fingerprint}' THEN
+        INSERT INTO paas.execution_targets (
+            id, installation_id, execution_pool_id, resource_version, document
+        ) VALUES (target_id, requested_installation_id, pool_id, 1, submitted_target)
+        ON CONFLICT DO NOTHING;
+    ELSE
+        IF NOT FOUND
+           OR current_target_installation_id IS DISTINCT FROM requested_installation_id
+                AND current_target_installation_id IS NOT NULL
+           OR (current_target#>>'{metadata,resourceVersion}')::bigint <> expected_target_version THEN
+            RAISE EXCEPTION USING
+                ERRCODE = '40001',
+                MESSAGE = 'local execution target changed concurrently';
+        END IF;
+        IF (((current_target #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status') <>
+           (((submitted_target #- '{metadata,resourceVersion}') #- '{metadata,updatedAt}') - 'status') THEN
             RAISE EXCEPTION USING
                 ERRCODE = 'MX409',
-                MESSAGE = 'local execution target identity changed';
+                MESSAGE = 'local execution target authority conflicts';
         END IF;
         UPDATE paas.execution_targets AS target
-           SET resource_version = next_target_version,
+           SET installation_id = requested_installation_id,
+               resource_version = next_target_version,
                document = submitted_target
          WHERE target.id = target_id
+           AND (target.installation_id IS NULL OR target.installation_id = requested_installation_id)
            AND target.resource_version = expected_target_version;
     END IF;
     GET DIAGNOSTICS affected_rows = ROW_COUNT;
@@ -3735,6 +7233,39 @@ BEGIN
         RAISE EXCEPTION USING
             ERRCODE = '40001',
             MESSAGE = 'local execution target changed concurrently';
+    END IF;
+
+    SELECT count(*), count(*) FILTER (
+        WHERE target.document#>>'{status,health}' = 'READY'
+          AND target.document#>>'{spec,desiredState}' = 'ACTIVE'
+          AND (target.document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - CASE
+              WHEN target.binding_ref IS NULL THEN interval '5 minutes' ELSE interval '15 seconds' END
+          AND (target.document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+    ), count(*) FILTER (
+        WHERE target.document#>>'{status,health}' = 'DEGRADED'
+          AND (target.document#>>'{status,observedAt}')::timestamptz > transaction_timestamp() - CASE
+              WHEN target.binding_ref IS NULL THEN interval '5 minutes' ELSE interval '15 seconds' END
+          AND (target.document#>>'{status,observedAt}')::timestamptz <= transaction_timestamp() + interval '2 seconds'
+    ) INTO total_count, ready_count, degraded_count
+      FROM paas.execution_targets AS target
+     WHERE target.installation_id = requested_installation_id
+       AND target.execution_pool_id = pool_id
+       AND target.document#>>'{spec,desiredState}' <> 'REMOVED';
+    IF total_count NOT BETWEEN 1 AND 129
+       OR submitted_pool#>>'{status,executionTargetCount}' <> total_count::text
+       OR submitted_pool#>>'{status,readyExecutionTargetCount}' <> ready_count::text
+       OR submitted_pool#>>'{status,phase}' <> (CASE WHEN ready_count = total_count THEN 'READY'
+            WHEN ready_count > 0 OR degraded_count > 0 THEN 'DEGRADED' ELSE 'UNAVAILABLE' END) THEN
+        RAISE EXCEPTION USING
+            ERRCODE = '22023',
+            MESSAGE = 'local execution pool status is inconsistent with installation targets',
+            DETAIL = format(
+                'stored total=%s ready=%s degraded=%s submitted total=%s ready=%s phase=%s',
+                total_count, ready_count, degraded_count,
+                submitted_pool#>>'{status,executionTargetCount}',
+                submitted_pool#>>'{status,readyExecutionTargetCount}',
+                submitted_pool#>>'{status,phase}'
+            );
     END IF;
 
     IF expected_policy_version = 0 THEN
@@ -3776,10 +7307,10 @@ END
 $function$;
 
 REVOKE ALL ON FUNCTION paas.reconcile_local_execution_profile(
-    bigint, jsonb, bigint, jsonb, bigint, jsonb
+    text, bigint, jsonb, bigint, jsonb, bigint, jsonb
 ) FROM PUBLIC;
 GRANT EXECUTE ON FUNCTION paas.reconcile_local_execution_profile(
-    bigint, jsonb, bigint, jsonb, bigint, jsonb
+    text, bigint, jsonb, bigint, jsonb, bigint, jsonb
 ) TO matrix_paas_worker;
 
 REVOKE ALL ON ALL TABLES IN SCHEMA paas FROM PUBLIC;
@@ -3791,8 +7322,14 @@ GRANT SELECT ON paas.configuration_revisions TO matrix_paas_api;
 GRANT SELECT ON paas.application_revisions TO matrix_paas_api;
 GRANT SELECT ON paas.placement_policies TO matrix_paas_api;
 GRANT SELECT ON paas.deployments TO matrix_paas_api;
+GRANT SELECT ON paas.deployment_runtime_snapshots TO matrix_paas_api;
+GRANT SELECT ON paas.deployment_resource_snapshots TO matrix_paas_api;
 GRANT SELECT ON paas.deployment_generations TO matrix_paas_api;
 GRANT SELECT ON paas.operations TO matrix_paas_api;
+GRANT SELECT ON paas.execution_pools TO matrix_paas_api;
+GRANT SELECT ON paas.execution_targets TO matrix_paas_api;
+GRANT SELECT ON paas.node_enrollments TO matrix_paas_api;
+GRANT SELECT ON paas.enrolled_node_connections TO matrix_paas_api;
 
 GRANT SELECT ON paas.applications TO matrix_paas_worker;
 GRANT SELECT ON paas.configurations TO matrix_paas_worker;
@@ -3804,11 +7341,13 @@ GRANT SELECT ON paas.deployment_generations TO matrix_paas_worker;
 GRANT SELECT ON paas.operations TO matrix_paas_worker;
 GRANT SELECT ON paas.execution_pools TO matrix_paas_worker;
 GRANT SELECT ON paas.execution_targets TO matrix_paas_worker;
+GRANT SELECT ON paas.enrolled_node_connections TO matrix_paas_worker;
 GRANT SELECT, UPDATE (lock_version)
     ON paas.execution_target_allocations TO matrix_paas_worker;
 GRANT SELECT ON paas.adapter_commands TO matrix_paas_worker;
 GRANT SELECT ON paas.adapter_receipts TO matrix_paas_worker;
 GRANT SELECT ON paas.deployment_observations TO matrix_paas_worker;
+GRANT SELECT ON paas.deployment_runtime_snapshots TO matrix_paas_worker;
 GRANT SELECT ON paas.placement_decisions TO matrix_paas_worker;
 GRANT SELECT ON paas.capacity_claims TO matrix_paas_worker;
 GRANT SELECT ON paas.capacity_reservations TO matrix_paas_worker;

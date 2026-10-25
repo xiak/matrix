@@ -99,7 +99,7 @@ func TestRunnerInstallationPreflightsHostBeforePublishingMaterials(t *testing.T)
 	if err := stageInstallation(platform, rand.Reader); err != nil {
 		t.Fatal(err)
 	}
-	effects := NewEffects(nil)
+	effects := NewEffects(nil, nil)
 	pins, err := readRunnerAuthorityPins(platform.Root, platform.InstallationID)
 	if err != nil {
 		t.Fatal(err)
@@ -162,7 +162,7 @@ func TestRunnerInstallationPublishesAuthenticOfflineMaterialsIntegration(t *test
 	if err := stageInstallation(platform, rand.Reader); err != nil {
 		t.Fatal(err)
 	}
-	effects := NewEffects(nil)
+	effects := NewEffects(nil, nil)
 	pins, err := readRunnerAuthorityPins(platform.Root, platform.InstallationID)
 	if err != nil {
 		t.Fatal(err)

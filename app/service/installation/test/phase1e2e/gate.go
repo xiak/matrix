@@ -36,6 +36,7 @@ import (
 	installationv1 "github.com/xiak/matrix/api/installation/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/release"
@@ -64,13 +65,16 @@ const (
 )
 
 type gate struct {
-	config          options
-	releases        releasePair
-	edge            *edgeClient
-	sensitive       [][]byte
-	workloadProject string
-	workloadRunning string
-	retainedIAM     *iamRetention
+	config                 options
+	releases               releasePair
+	edge                   *edgeClient
+	sensitive              [][]byte
+	workloadProject        string
+	workloadRunning        string
+	retainedIAM            *iamRetention
+	controllerConfigDigest string
+	releaseAPreviousID     string
+	nodes                  *nativeNodes
 }
 
 func newGate(config options, releases releasePair) *gate {
@@ -243,6 +247,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		auditv1.ActionIAMSecurityReportDownloadStarted:    string(baselineReport.metadata.ID),
 		auditv1.ActionIAMAccessAnalyzerCreated:            string(value.retainedIAM.AccessAnalyzer.ID),
 		auditv1.ActionIAMAccessAnalyzerDispositionUpdated: string(value.retainedIAM.AccessAnalyzer.ID),
+		auditv1.ActionIAMNotificationContactReplaced:      string(value.retainedIAM.MFA.User.ID),
 	}
 	recordsBeforeBackup, err := value.edge.waitAuditActions(ctx, bearer, "organization-default", wantInitialAudit)
 	if err != nil || !scanAuditForConfigurationValues(recordsBeforeBackup, settingOne, settingTwo) {
@@ -266,6 +271,12 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("protected-backup")
 	}
 	emit("protected-backup")
+	if err := value.assertManagedServiceRecoveryInventoryFence(
+		ctx, backup.BackupID, bearer, value.forbidden(secret, newPassword, bearer),
+	); err != nil {
+		return err
+	}
+	emit("managed-service-backup-inventory-fence")
 	if err := value.touchActiveRetainedPrimarySessions(ctx, "before-failed-upgrade"); err != nil {
 		return err
 	}
@@ -565,13 +576,8 @@ type signedManagedProduct struct {
 	credentialMode   os.FileMode
 }
 
-func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
-	if value.retainedIAM == nil || len(value.retainedIAM.Tenants) == 0 ||
-		len(value.retainedIAM.Tenants[0].RetainedPrimaryCredential) == 0 {
-		return fail("signed-managed-products-tenant")
-	}
-	tenant := &value.retainedIAM.Tenants[0]
-	products := []signedManagedProduct{
+func signedManagedProducts() []signedManagedProduct {
+	return []signedManagedProduct{
 		{name: "PostgreSQL 18", component: "postgres", serviceID: managedservicev1.PostgreSQLServiceID,
 			offeringID:   managedservicev1.PostgreSQLOfferingID,
 			quotaShapeID: "pg-small", engineVersion: "18", installationID: "phase1-managed-postgres",
@@ -589,6 +595,15 @@ func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
 			quotaShapeID: "rabbitmq-small", engineVersion: "4.1.8", installationID: "phase1-managed-rabbitmq",
 			runtimeDirectory: "managed-rabbitmq", credentialFile: "rabbitmq-password", credentialMode: 0o600},
 	}
+}
+
+func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
+	if value.retainedIAM == nil || len(value.retainedIAM.Tenants) == 0 ||
+		len(value.retainedIAM.Tenants[0].RetainedPrimaryCredential) == 0 {
+		return fail("signed-managed-products-tenant")
+	}
+	tenant := &value.retainedIAM.Tenants[0]
+	products := signedManagedProducts()
 	for index := range products {
 		if err := value.touchActiveRetainedPrimarySessions(ctx, "before-managed-product-"+products[index].component); err != nil {
 			return err
@@ -604,6 +619,195 @@ func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
 		return fail("signed-managed-products-audit-chain")
 	}
 	return nil
+}
+
+// assertManagedServiceRecoveryInventoryFence proves the recovery boundary with
+// a real provider project created after the selected backup. The rejected
+// command must not advance the journal, stop or restart the platform, or
+// disturb the new service. Terminating the project returns the inventory to
+// the backup witness before the normal recovery path continues.
+func (value *gate) assertManagedServiceRecoveryInventoryFence(
+	ctx context.Context,
+	backupID string,
+	bearer []byte,
+	forbidden [][]byte,
+) error {
+	if backupID == "" || len(bearer) == 0 {
+		return fail("managed-service-recovery-inventory-input")
+	}
+	products := signedManagedProducts()
+	if len(products) == 0 {
+		return fail("managed-service-recovery-inventory-product")
+	}
+	product := products[0]
+	product.name = "Recovery inventory PostgreSQL"
+	product.component = "postgres-recovery-inventory"
+	product.installationID = "phase1-managed-recovery-inventory"
+	base := "/api/managed-services/v1"
+	requestPrefix := "phase1-" + product.component
+
+	var definition managedservicev1.ServiceDefinition
+	if _, err := value.edge.get(ctx, base+"/services/"+product.serviceID, bearer, &definition); err != nil ||
+		managedservicev1.ValidateServiceDefinition(definition) != nil ||
+		definition.ID != product.serviceID || definition.State != managedservicev1.ServiceDefinitionAvailable {
+		return fail("managed-service-recovery-inventory-definition")
+	}
+	service := managedservicev1.ServiceDefinitionReference{
+		ID: definition.ID, Revision: definition.Revision, ContentDigest: definition.ContentDigest,
+	}
+	if err := value.ensureSignedManagedProductActivation(
+		ctx, bearer, base, requestPrefix, product.component, service,
+	); err != nil {
+		return fail("managed-service-recovery-inventory-activation")
+	}
+
+	quotaResponse, err := value.edge.json(ctx, http.MethodPost, base+"/quota-entitlements", bearer,
+		managedservicev1.ActivateQuotaRequest{
+			OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1,
+		}, map[string]string{"Idempotency-Key": requestPrefix + "-quota"}, http.StatusCreated)
+	if err != nil {
+		return fail("managed-service-recovery-inventory-quota")
+	}
+	var quota managedservicev1.QuotaEntitlement
+	decodeErr := decodeOne(quotaResponse.body, &quota)
+	clear(quotaResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateQuotaEntitlement(quota) != nil ||
+		quota.OfferingID != product.offeringID || quota.QuotaShapeID != product.quotaShapeID ||
+		quota.PurchasedCount != 1 || quota.ReservedCount != 0 || quota.ConsumedCount != 0 {
+		return fail("managed-service-recovery-inventory-quota")
+	}
+
+	createResponse, err := value.edge.json(ctx, http.MethodPost, base+"/service-installations", bearer,
+		managedservicev1.CreateInstallationRequest{
+			ID: product.installationID, Name: product.name,
+			OfferingID: product.offeringID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+		}, map[string]string{"Idempotency-Key": requestPrefix + "-create"}, http.StatusAccepted)
+	if err != nil {
+		return fail("managed-service-recovery-inventory-create")
+	}
+	var accepted managedservicev1.ServiceInstallation
+	decodeErr = decodeOne(createResponse.body, &accepted)
+	clear(createResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateServiceInstallation(accepted) != nil ||
+		accepted.ID != product.installationID || accepted.QuotaEntitlementID != quota.ID ||
+		accepted.Phase != managedservicev1.InstallationPending {
+		return fail("managed-service-recovery-inventory-create")
+	}
+	if _, err := value.waitSignedManagedProductPhase(
+		ctx, bearer, product, managedservicev1.InstallationReady,
+	); err != nil {
+		return err
+	}
+
+	beforeJournal, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, "")
+	if err != nil {
+		return err
+	}
+	beforeRuntime, err := inspectPlatformRuntime(ctx, beforeJournal.InstallationID)
+	if err != nil {
+		return fail("managed-service-recovery-inventory-platform-before")
+	}
+	if err := runMXClosedFailure(
+		ctx, value.releases.b, "recover",
+		[]string{"--root", value.config.root, "--backup", backupID}, forbidden,
+		cli.FaultPrecondition, "PREFLIGHT_FAILED", cli.ExitPrecondition,
+	); err != nil {
+		return fail("managed-service-recovery-inventory-rejection")
+	}
+	afterJournal, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, "")
+	if err != nil || !equalJSON(beforeJournal, afterJournal) {
+		return fail("managed-service-recovery-inventory-journal")
+	}
+	afterRuntime, err := inspectPlatformRuntime(ctx, afterJournal.InstallationID)
+	if err != nil || !samePlatformRuntime(beforeRuntime, afterRuntime) {
+		return fail("managed-service-recovery-inventory-platform-after")
+	}
+	if _, err := value.waitSignedManagedProductPhase(
+		ctx, bearer, product, managedservicev1.InstallationReady,
+	); err != nil {
+		return fail("managed-service-recovery-inventory-service-after")
+	}
+
+	terminationResponse, err := value.edge.json(
+		ctx, http.MethodPost,
+		base+"/service-installations/"+product.installationID+"/termination",
+		bearer, nil, map[string]string{"Idempotency-Key": requestPrefix + "-terminate"},
+		http.StatusAccepted,
+	)
+	if err != nil {
+		return fail("managed-service-recovery-inventory-termination")
+	}
+	var terminating managedservicev1.ServiceInstallation
+	decodeErr = decodeOne(terminationResponse.body, &terminating)
+	clear(terminationResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateServiceInstallation(terminating) != nil ||
+		terminating.ID != product.installationID ||
+		terminating.Phase != managedservicev1.InstallationTerminationPending {
+		return fail("managed-service-recovery-inventory-termination")
+	}
+	if _, err := value.waitSignedManagedProductPhase(
+		ctx, bearer, product, managedservicev1.InstallationTerminated,
+	); err != nil {
+		return err
+	}
+	quotaResponse, err = value.edge.json(
+		ctx, http.MethodGet, base+"/quota-entitlements/"+quota.ID,
+		bearer, nil, nil, http.StatusOK,
+	)
+	if err != nil {
+		return fail("managed-service-recovery-inventory-quota-release")
+	}
+	var released managedservicev1.QuotaEntitlement
+	decodeErr = decodeOne(quotaResponse.body, &released)
+	clear(quotaResponse.body)
+	if decodeErr != nil || managedservicev1.ValidateQuotaEntitlement(released) != nil ||
+		released.ID != quota.ID || released.ReservedCount != 0 || released.ConsumedCount != 0 {
+		return fail("managed-service-recovery-inventory-quota-release")
+	}
+	return nil
+}
+
+func inspectPlatformRuntime(ctx context.Context, installationID string) ([]containerInspection, error) {
+	if installationID == "" {
+		return nil, errors.New("platform installation identity is empty")
+	}
+	ids, err := dockerLines(
+		ctx, "container", "ls", "--all", "--quiet",
+		"--filter", "label=com.xiak.matrix.managed=true",
+		"--filter", "label=com.xiak.matrix.installation="+installationID,
+	)
+	if err != nil || len(ids) == 0 {
+		return nil, errors.New("platform runtime inventory is unavailable")
+	}
+	return inspectContainers(ctx, ids)
+}
+
+func samePlatformRuntime(before, after []containerInspection) bool {
+	if len(before) == 0 || len(before) != len(after) {
+		return false
+	}
+	byRole := make(map[string]containerInspection, len(after))
+	for _, current := range after {
+		role := current.Config.Labels["com.xiak.matrix.role"]
+		if role == "" {
+			return false
+		}
+		if _, duplicate := byRole[role]; duplicate {
+			return false
+		}
+		byRole[role] = current
+	}
+	for _, original := range before {
+		current, found := byRole[original.Config.Labels["com.xiak.matrix.role"]]
+		if !found || original.ID == "" || current.ID != original.ID ||
+			current.Image != original.Image || current.Config.Image != original.Config.Image ||
+			current.State.StartedAt == "" || current.State.StartedAt != original.State.StartedAt ||
+			current.RestartCount != original.RestartCount ||
+			!current.State.Running || current.State.Status != "running" {
+			return false
+		}
+	}
+	return true
 }
 
 func (value *gate) delegateSignedManagedProductServiceRoleAuthority(
@@ -3560,7 +3764,9 @@ func (value *gate) pathLeakage() [][]byte {
 	}
 	if value.retainedIAM != nil {
 		result = append(result, value.retainedIAM.AdministratorPassword, value.retainedIAM.MFA.Password,
-			value.retainedIAM.MFA.Seed, value.retainedIAM.MFA.Credential)
+			value.retainedIAM.MFA.Seed, value.retainedIAM.MFA.Credential,
+			[]byte(value.retainedIAM.AdministratorContact.Email), []byte(value.retainedIAM.MFA.Contact.Email),
+			[]byte(securityMailPreviousRecipient), []byte(securityMailCurrentRecipient))
 		for _, tenant := range value.retainedIAM.Tenants {
 			result = append(result, tenant.InitialPassword, tenant.PrimaryPassword, tenant.ChildPassword,
 				tenant.RecoveryPassword, tenant.FinalPrimaryPassword, tenant.OldPrimaryCredential, tenant.OldChildCredential,
@@ -3761,6 +3967,14 @@ func deploymentSpec(
 	configurationRevisionID paasv1.ResourceID,
 	desired paasv1.DeploymentDesiredState,
 ) paasv1.DeploymentSpec {
+	return deploymentSpecForApplication(applicationRevisionID, configurationRevisionID, desired)
+}
+
+func deploymentSpecForApplication(
+	applicationRevisionID paasv1.ResourceID,
+	configurationRevisionID paasv1.ResourceID,
+	desired paasv1.DeploymentDesiredState,
+) paasv1.DeploymentSpec {
 	return paasv1.DeploymentSpec{
 		ApplicationRevisionID: applicationRevisionID,
 		PlacementPolicyID:     placementPolicyID,
@@ -3774,6 +3988,25 @@ func deploymentSpec(
 				}},
 			},
 		}},
+	}
+}
+
+func verificationApplicationComponent(digest string) paasv1.ApplicationRevisionComponent {
+	return paasv1.ApplicationRevisionComponent{
+		Name: "web",
+		Artifact: paasv1.ArtifactRef{
+			Kind: paasv1.ArtifactOCIImage, Locator: "offline.matrix.invalid/verification",
+			Digest: digest,
+		},
+		Resources: paasv1.ResourceRequirements{CPUMillis: 100, MemoryBytes: 32 * 1024 * 1024},
+		Endpoints: []paasv1.ApplicationEndpoint{{
+			Name: "ready", Port: 8080, Protocol: paasv1.EndpointHTTP,
+			Visibility: paasv1.EndpointPrivate,
+		}},
+		Inputs: []paasv1.ComponentInput{
+			{Name: "settings", Kind: paasv1.InputConfiguration, Injection: paasv1.InjectionEnvironment, Required: true},
+			{Name: "credential", Kind: paasv1.InputSecret, Injection: paasv1.InjectionFile, Required: true},
+		},
 	}
 }
 
@@ -4129,17 +4362,39 @@ func (value *gate) assertWorkloadRemoved(ctx context.Context) error {
 	return nil
 }
 
-func (value *gate) activeCapacityClaims(ctx context.Context, installationID string) (int, error) {
+func (value *gate) activeCapacityClaims(
+	ctx context.Context,
+	installationID string,
+	deploymentIDs ...paasv1.ResourceID,
+) (int, error) {
+	if len(deploymentIDs) == 0 {
+		deploymentIDs = []paasv1.ResourceID{deploymentID}
+	}
+	if len(deploymentIDs) > 16 {
+		return 0, errors.New("capacity observation is invalid")
+	}
+	quoted := make([]string, 0, len(deploymentIDs))
+	seen := make(map[paasv1.ResourceID]struct{}, len(deploymentIDs))
+	for _, id := range deploymentIDs {
+		if paasv1.ValidateID("deploymentId", string(id)) != nil {
+			return 0, errors.New("capacity observation is invalid")
+		}
+		if _, duplicate := seen[id]; duplicate {
+			return 0, errors.New("capacity observation is invalid")
+		}
+		seen[id] = struct{}{}
+		quoted = append(quoted, "'"+string(id)+"'")
+	}
 	query := "SELECT count(*) FROM paas.capacity_reservations AS reservation " +
 		"JOIN paas.capacity_claims AS claim ON claim.id = reservation.capacity_claim_id " +
 		"WHERE reservation.tenant_id = 'organization-default' " +
-		"AND reservation.deployment_id = 'phase1-deployment' AND claim.state = 'ACTIVE'"
+		"AND reservation.deployment_id IN (" + strings.Join(quoted, ",") + ") AND claim.state = 'ACTIVE'"
 	content, err := value.postgresScalar(ctx, installationID, query)
 	if err != nil {
 		return 0, err
 	}
 	count, err := strconv.Atoi(content)
-	if err != nil || count < 0 || count > 1 {
+	if err != nil || count < 0 || count > len(deploymentIDs) {
 		return 0, errors.New("capacity observation is invalid")
 	}
 	return count, nil

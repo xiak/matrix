@@ -72,6 +72,7 @@ type runtimeReadiness func(context.Context) error
 
 type LocalRuntime struct {
 	readiness runtimeReadiness
+	resources *dockerResourceCollector
 }
 
 type runtimeReadinessContextKey struct{}
@@ -81,7 +82,10 @@ type runtimeReadinessProof struct {
 }
 
 func NewLocalRuntime() *LocalRuntime {
-	return &LocalRuntime{readiness: probeLocalRuntimeReadiness}
+	return &LocalRuntime{
+		readiness: probeLocalRuntimeReadiness,
+		resources: newDockerResourceCollector(),
+	}
 }
 
 // Ready proves that both the local Docker Engine and the Compose plugin can
@@ -120,11 +124,36 @@ func (runtime *LocalRuntime) ProveReady(ctx context.Context) (context.Context, e
 }
 
 func probeLocalRuntimeReadiness(ctx context.Context) error {
-	if _, err := runDocker(ctx, nil, "version", "--format", "{{.Server.Version}}"); err != nil {
+	return readyDockerRuntime(ctx, runDocker)
+}
+
+type dockerCommandRunner func(context.Context, io.Writer, ...string) (bool, error)
+
+func readyDockerRuntime(ctx context.Context, run dockerCommandRunner) error {
+	if ctx == nil || run == nil {
 		return ErrRuntimeUnavailable
 	}
-	if _, err := runDocker(ctx, nil, "compose", "version", "--short"); err != nil {
-		return ErrRuntimeUnavailable
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	probeContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	results := make(chan error, 2)
+	for _, arguments := range [][]string{
+		{"version", "--format", "{{.Server.Version}}"},
+		{"compose", "version", "--short"},
+	} {
+		arguments := arguments
+		go func() {
+			_, err := run(probeContext, nil, arguments...)
+			results <- err
+		}()
+	}
+	for range 2 {
+		if err := <-results; err != nil {
+			cancel()
+			return ErrRuntimeUnavailable
+		}
 	}
 	return nil
 }

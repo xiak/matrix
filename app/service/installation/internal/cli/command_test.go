@@ -14,20 +14,213 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 )
 
+func TestPlatformCredentialRecoveryHasExplicitResumeAndNoAuthoritySelectors(t *testing.T) {
+	var out, errOut bytes.Buffer
+	exit := Run(context.Background(), []string{"--format", "json", "platform", "recover-credentials", "--root", "/srv/platform", "--resume"},
+		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+		testBackends(backendFunc(func(_ context.Context, request Request) (Result, error) {
+			if request.Subject != SubjectPlatform || request.Action != lifecycle.ActionRecoverCredentials ||
+				!request.Resume || request.RecoveryInput != "" {
+				t.Fatal("credential recovery resume lost its closed intent")
+			}
+			return Result{State: "PASSWORD_CHANGE_REQUIRED", CorrelationID: "cmd-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, nil
+		})))
+	if exit != ExitSuccess || !strings.Contains(out.String(), `"action":"RECOVER_CREDENTIALS"`) ||
+		strings.Contains(out.String(), "/srv/") || errOut.Len() != 0 {
+		t.Fatal("credential recovery did not return a sanitized platform result")
+	}
+	for _, extra := range [][]string{
+		nil,
+		{"--recovery-input", " "},
+		{"--resume", "--recovery-input", "/private/recovery.json"},
+		{"--password", "raw-secret-value"},
+		{"--recovery-input", "/private/recovery.json", "--principal-id", "principal-other"},
+		{"--recovery-input", "/private/recovery.json", "--organization-id", "organization-other"},
+		{"--recovery-input", "/private/recovery.json", "--database-dsn", "postgres://secret@wrong-host/foreign"},
+		{"--recovery-input", "/private/recovery.json", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"--recovery-input", "/private/recovery.json", "--force"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		args := append([]string{"--format", "json", "platform", "recover-credentials", "--root", "/srv/platform"}, extra...)
+		exit := Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+			testBackends(backendFunc(func(context.Context, Request) (Result, error) {
+				t.Fatal("invalid recovery input reached the backend")
+				return Result{}, nil
+			})))
+		if exit != ExitInvalidInput || out.Len() != 0 || strings.Contains(errOut.String(), "raw-secret-value") ||
+			strings.Contains(errOut.String(), "wrong-host") || strings.Contains(errOut.String(), "/private/") {
+			t.Fatal("credential recovery accepted an unrelated authority selector or exposed raw input")
+		}
+	}
+	for _, args := range [][]string{
+		{"node", "recover-credentials", "--root", "/srv/node", "--resume"},
+		{"platform", "recover", "--root", "/srv/platform", "--recovery-input", "/private/recovery.json"},
+		{"platform", "status", "--root", "/srv/platform", "--resume"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		if Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+			testBackends(backendFunc(func(context.Context, Request) (Result, error) {
+				t.Fatal("credential recovery crossed a command purpose")
+				return Result{}, nil
+			}))) != ExitInvalidInput {
+			t.Fatal("credential recovery entered a different command purpose")
+		}
+	}
+}
+
+func TestNodeCommandsStaySeparateAndRequireProtectedEnrollment(t *testing.T) {
+	for _, action := range []string{"install", "start", "verify", "status", "rotate-credentials", "upgrade", "rollback", "support"} {
+		t.Run(action, func(t *testing.T) {
+			var request Request
+			backend := backendFunc(func(_ context.Context, value Request) (Result, error) {
+				request = value
+				return Result{State: "READY", ExecutionTargetID: "target-a"}, nil
+			})
+			args := []string{"--format", "json", "node", action, "--root", "/srv/node"}
+			if action == "install" {
+				args = append(args, "--bundle", "/media/node", "--trust-key", "/media/trust.json", "--join", "/private/join.json")
+			}
+			if action == "rotate-credentials" {
+				args = append(args, "--configuration", "/private/enrollment.json", "--expected-configuration-digest", "sha256:"+strings.Repeat("a", 64))
+			}
+			if action == "upgrade" {
+				args = append(args, "--bundle", "/media/node-successor")
+			}
+			if action == "support" {
+				args = append(args, "--output", "/srv/node/support/snapshot.json")
+			}
+			var out, errOut bytes.Buffer
+			exit := Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, testBackends(backend))
+			if exit != ExitSuccess || request.Subject != SubjectNode || request.Action != lifecycle.Action(strings.ReplaceAll(strings.ToUpper(action), "-", "_")) {
+				t.Fatalf("node request not routed: %d / %#v / %s", exit, request, errOut.String())
+			}
+			if action == "rotate-credentials" && !request.RevokePreviousCredentials {
+				t.Fatal("node rotation defaulted to retaining the previous trust set")
+			}
+			if action == "install" && request.Join != "/private/join.json" {
+				t.Fatal("node install lost its one-time join input")
+			}
+			if action == "support" && request.SupportOutput != "/srv/node/support/snapshot.json" {
+				t.Fatal("node support lost its explicit evidence destination")
+			}
+			var result successEnvelope
+			if json.Unmarshal(out.Bytes(), &result) != nil || result.Kind != "NodeCommandResult" || result.Result.ExecutionTargetID != "target-a" {
+				t.Fatal("node result lost its scope")
+			}
+		})
+	}
+	for _, args := range [][]string{
+		{"node", "install", "--root", "/srv/node", "--bundle", "/media/node", "--trust-key", "/media/trust.json"},
+		{"node", "install", "--root", "/srv/node", "--bundle", "/media/node", "--trust-key", "/media/trust.json", "--configuration", "/private/enrollment.json"},
+		{"node", "backup", "--root", "/srv/node"},
+		{"node", "recover", "--root", "/srv/node"},
+		{"node", "start", "--root", "/srv/node", "--configuration", "/private/other.json"},
+		{"platform", "install", "--root", "/srv/platform", "--configuration", "/private/enrollment.json"},
+		{"platform", "rotate-credentials", "--root", "/srv/platform"},
+		{"node", "rotate-credentials", "--root", "/srv/node", "--configuration", "/private/enrollment.json"},
+		{"node", "rotate-credentials", "--root", "/srv/node", "--configuration", "/private/enrollment.json", "--expected-configuration-digest", "../credentials"},
+		{"node", "upgrade", "--root", "/srv/node"},
+		{"node", "upgrade", "--root", "/srv/node", "--bundle", "/media/node", "--resume"},
+		{"node", "upgrade", "--root", "/srv/node", "--bundle", "/media/node", "--configuration", "/private/enrollment.json"},
+		{"node", "upgrade", "--root", "/srv/node", "--bundle", "/media/node", "--trust-key", "/private/other-trust"},
+		{"node", "rollback", "--root", "/srv/node", "--bundle", "/media/node"},
+		{"node", "rollback", "--root", "/srv/node", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{"node", "rollback", "--root", "/srv/node", "--force"},
+		{"node", "support", "--root", "/srv/node"},
+		{"node", "support", "--root", "/srv/node", "--output", "/srv/node/support/snapshot.json", "--configuration", "/private/other.json"},
+		{"node", "support", "--root", "/srv/node", "--output", "/srv/node/support/snapshot.json", "--bundle", "/media/other"},
+		{"node", "support", "--root", "/srv/node", "--output", "/srv/node/support/snapshot.json", "--force"},
+	} {
+		var out, errOut bytes.Buffer
+		exit := Run(context.Background(), append([]string{"--format", "json"}, args...), Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+			testBackends(backendFunc(func(context.Context, Request) (Result, error) {
+				t.Fatal("invalid command reached backend")
+				return Result{}, nil
+			})))
+		if exit != ExitInvalidInput || out.Len() != 0 {
+			t.Fatalf("invalid node input accepted: %v", args)
+		}
+	}
+}
+
+func TestNodeUpgradeResumeUsesOnlyItsSealedIntent(t *testing.T) {
+	var out, errOut bytes.Buffer
+	exit := Run(context.Background(), []string{"node", "upgrade", "--root", "/srv/node", "--resume"},
+		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+		testBackends(backendFunc(func(_ context.Context, request Request) (Result, error) {
+			if request != (Request{Subject: SubjectNode, Action: lifecycle.ActionUpgrade, Root: "/srv/node", Resume: true}) {
+				t.Fatal("node upgrade resume accepted another release selector")
+			}
+			return Result{State: "READY"}, nil
+		})))
+	if exit != ExitSuccess || errOut.Len() != 0 {
+		t.Fatal("node upgrade resume did not reach its purpose-bound backend")
+	}
+}
+
+func TestNodeSameTrustRenewalRequiresExplicitOptOut(t *testing.T) {
+	var out, errOut bytes.Buffer
+	expected := "sha256:" + strings.Repeat("a", 64)
+	exit := Run(context.Background(), []string{"node", "rotate-credentials", "--root", "/srv/node",
+		"--configuration", "/private/enrollment.json", "--expected-configuration-digest", expected, "--revoke-previous=false"},
+		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
+		testBackends(backendFunc(func(_ context.Context, request Request) (Result, error) {
+			if request.Action != lifecycle.ActionRotateCredentials || request.RevokePreviousCredentials || request.ExpectedConfigurationDigest != expected {
+				t.Fatal("explicit renewal policy was lost")
+			}
+			return Result{State: "READY", ConfigurationDigest: expected}, nil
+		})))
+	if exit != ExitSuccess || !strings.Contains(out.String(), expected) || strings.Contains(out.String(), "/private/") {
+		t.Fatal("node result omitted its usable commitment or exposed an input path")
+	}
+}
+
+func TestPlatformNodeConfigurationHasExplicitPurposeBoundResume(t *testing.T) {
+	var out, errOut bytes.Buffer
+	exit := Run(context.Background(), []string{"platform", "configure-nodes", "--root", "/srv/platform", "--resume"}, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, testBackends(backendFunc(func(_ context.Context, request Request) (Result, error) {
+		if request.Subject != SubjectPlatform || request.Action != lifecycle.ActionConfigureNodes || !request.Resume || request.Configuration != "" || request.ExpectedConfigurationDigest != "" {
+			t.Fatal("node configuration resume changed purpose")
+		}
+		return Result{State: "READY"}, nil
+	})))
+	if exit != ExitSuccess {
+		t.Fatal("valid resume rejected")
+	}
+	for _, args := range [][]string{
+		{"platform", "configure-nodes", "--root", "/srv/platform"},
+		{"platform", "configure-nodes", "--root", "/srv/platform", "--configuration", "/private/nodes.json"},
+		{"platform", "configure-nodes", "--root", "/srv/platform", "--resume", "--configuration", "/private/nodes.json"},
+		{"platform", "configure-nodes", "--root", "/srv/platform", "--resume", "--endpoint", "https://127.0.0.1:1"},
+		{"platform", "configure-nodes", "--root", "/srv/platform", "--resume", "--principal-id", "caller"},
+		{"node", "configure-nodes", "--root", "/srv/node", "--resume"},
+	} {
+		out.Reset()
+		errOut.Reset()
+		if Run(context.Background(), args, Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut}, testBackends(backendFunc(func(context.Context, Request) (Result, error) {
+			t.Fatal("unsafe node input reached backend")
+			return Result{}, nil
+		}))) != ExitInvalidInput {
+			t.Fatal("ambiguous node configuration input accepted")
+		}
+	}
+}
+
 func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 	tests := []struct {
 		name string
 		args []string
 		want Request
 	}{
-		{"install", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--security-mail-configuration", "/media/security-mail.json", "--northbound-origin", "http://matrix.example.test:8080"}, Request{Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json", SecurityMailConfiguration: "/media/security-mail.json", NorthboundOrigin: "http://matrix.example.test:8080"}},
-		{"verify", []string{"platform", "verify", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionVerify, Root: "/srv/matrix"}},
-		{"status", []string{"platform", "status", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionStatus, Root: "/srv/matrix"}},
-		{"backup", []string{"platform", "backup", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionBackup, Root: "/srv/matrix"}},
-		{"upgrade", []string{"platform", "upgrade", "--bundle", "/media/release-b", "--root", "/srv/matrix", "--security-mail-configuration", "/media/security-mail.json"}, Request{Action: lifecycle.ActionUpgrade, Root: "/srv/matrix", Bundle: "/media/release-b", SecurityMailConfiguration: "/media/security-mail.json"}},
-		{"rollback", []string{"platform", "rollback", "--root", "/srv/matrix"}, Request{Action: lifecycle.ActionRollback, Root: "/srv/matrix"}},
-		{"recover", []string{"platform", "recover", "--root", "/srv/matrix", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Request{Action: lifecycle.ActionRecover, Root: "/srv/matrix", BackupID: "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
-		{"support", []string{"platform", "support", "--root", "/srv/matrix", "--output", "/safe/support.json"}, Request{Action: lifecycle.ActionSupport, Root: "/srv/matrix", SupportOutput: "/safe/support.json"}},
+		{"install", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--security-mail-configuration", "/media/security-mail.json", "--northbound-origin", "http://matrix.example.test:8080"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json", SecurityMailConfiguration: "/media/security-mail.json", NorthboundOrigin: "http://matrix.example.test:8080"}},
+		{"verify", []string{"platform", "verify", "--root", "/srv/matrix"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionVerify, Root: "/srv/matrix"}},
+		{"status", []string{"platform", "status", "--root", "/srv/matrix"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionStatus, Root: "/srv/matrix"}},
+		{"backup", []string{"platform", "backup", "--root", "/srv/matrix"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionBackup, Root: "/srv/matrix"}},
+		{"upgrade", []string{"platform", "upgrade", "--bundle", "/media/release-b", "--root", "/srv/matrix", "--security-mail-configuration", "/media/security-mail.json"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionUpgrade, Root: "/srv/matrix", Bundle: "/media/release-b", SecurityMailConfiguration: "/media/security-mail.json"}},
+		{"rollback", []string{"platform", "rollback", "--root", "/srv/matrix"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionRollback, Root: "/srv/matrix"}},
+		{"recover", []string{"platform", "recover", "--root", "/srv/matrix", "--backup", "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionRecover, Root: "/srv/matrix", BackupID: "backup-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}},
+		{"support", []string{"platform", "support", "--root", "/srv/matrix", "--output", "/safe/support.json"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionSupport, Root: "/srv/matrix", SupportOutput: "/safe/support.json"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -80,7 +273,7 @@ func TestPlatformCommandNamesHaveNoCompatibilityAliases(t *testing.T) {
 		got = append(got, child.Name())
 	}
 	slices.Sort(got)
-	want := []string{"backup", "install", "recover", "rollback", "status", "support", "upgrade", "verify"}
+	want := []string{"backup", "configure-nodes", "install", "recover", "recover-credentials", "rollback", "status", "support", "upgrade", "verify"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("platform command surface = %v, want %v", got, want)
 	}
@@ -152,7 +345,7 @@ func TestSourceCredentialCommandSurfaceBuildsExactRequests(t *testing.T) {
 			var out, errOut bytes.Buffer
 			command, err := NewCommand(
 				Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
+				Backends{Platform: noopPlatformBackend(), Node: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
 			)
 			if err != nil {
 				t.Fatal(err)
@@ -214,7 +407,7 @@ func TestSourceCredentialJSONAndFailureNeverExposeNativeMaterial(t *testing.T) {
 	exit := Run(
 		context.Background(), requestArgs,
 		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
+		Backends{Platform: noopPlatformBackend(), Node: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
 	)
 	if exit != ExitSuccess || errOut.Len() != 0 ||
 		strings.Contains(out.String(), "/secure/report-token") {
@@ -242,7 +435,7 @@ func TestSourceCredentialJSONAndFailureNeverExposeNativeMaterial(t *testing.T) {
 	exit = Run(
 		context.Background(), requestArgs,
 		Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-		Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
+		Backends{Platform: noopPlatformBackend(), Node: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
 	)
 	if exit != ExitInternal || out.Len() != 0 ||
 		strings.Contains(errOut.String(), "report-secret-value") ||
@@ -275,7 +468,7 @@ func TestSourceCredentialUsageFailsBeforeBackend(t *testing.T) {
 			exit := Run(
 				context.Background(), args,
 				Streams{In: strings.NewReader(""), Out: &out, ErrOut: &errOut},
-				Backends{Platform: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
+				Backends{Platform: noopPlatformBackend(), Node: noopPlatformBackend(), SourceCredential: sourceBackend, SourceTrust: noopSourceTrustBackend(), RunnerNode: noopRunnerNodeBackend()},
 			)
 			if exit != ExitInvalidInput || out.Len() != 0 ||
 				!strings.Contains(errOut.String(), "INVALID_COMMAND_INPUT") {
@@ -725,6 +918,7 @@ func noopSourceTrustBackend() sourceTrustBackendFunc {
 func testBackends(platform PlatformBackend) Backends {
 	return Backends{
 		Platform: platform,
+		Node:     platform,
 		SourceCredential: sourceCredentialBackendFunc(func(
 			_ context.Context,
 			request SourceCredentialRequest,

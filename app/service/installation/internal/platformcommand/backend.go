@@ -15,6 +15,7 @@ import (
 	"time"
 
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
+	"github.com/xiak/matrix/api/contractjson"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/installedrelease"
@@ -23,11 +24,13 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 const (
-	defaultListener = "0.0.0.0"
-	defaultPort     = uint16(8080)
+	defaultListener                     = "0.0.0.0"
+	defaultPort                         = uint16(8080)
+	MaximumCredentialRecoveryInputBytes = 16 * 1024
 )
 
 var (
@@ -35,11 +38,93 @@ var (
 	ErrEffectConflict     = errors.New("platform effect ownership conflict")
 	ErrEffectVerification = errors.New("platform effect verification failed")
 	ErrEffectUnavailable  = errors.New("platform effect dependency is unavailable")
+	// ErrEffectRecoveryRequired means rollback has safely removed the failed
+	// candidate, but restoring the source runtime would cross an authenticated
+	// database contract boundary. Only recovery from the upgrade backup can
+	// restore that source profile.
+	ErrEffectRecoveryRequired = errors.New("platform effect requires authenticated recovery")
 	// ErrEffectOutcomeUnknown means a provider command started but completion
 	// was not established. The journal phase stays active so the next replay
 	// observes the owned effect before retrying it.
 	ErrEffectOutcomeUnknown = errors.New("platform effect outcome is unknown")
+	// Only a verified one-shot IAM result can establish these no-mutation
+	// rejections. Filesystem/provider failures cannot close an unknown recovery.
+	ErrCredentialRecoveryInvalid   = errors.New("local credential recovery input rejected")
+	ErrCredentialRecoveryForbidden = errors.New("local credential recovery is forbidden")
+	ErrCredentialRecoveryConflict  = errors.New("local credential recovery intent conflicts")
 )
+
+// RecoveryFailureBoundary is a closed, non-secret diagnostic classification
+// for destructive restore verification. It lets the CLI persist and return a
+// useful stable code without exposing adapter errors, paths, provider output,
+// database content, or recovery material.
+type RecoveryFailureBoundary string
+
+const (
+	RecoveryFailureSource                         RecoveryFailureBoundary = "SOURCE"
+	RecoveryFailureReleaseImages                  RecoveryFailureBoundary = "RELEASE_IMAGES"
+	RecoveryFailureProviderState                  RecoveryFailureBoundary = "PROVIDER_STATE"
+	RecoveryFailureDatabaseStart                  RecoveryFailureBoundary = "DATABASE_START"
+	RecoveryFailureDatabaseDump                   RecoveryFailureBoundary = "DATABASE_DUMP"
+	RecoveryFailureDatabaseRestore                RecoveryFailureBoundary = "DATABASE_RESTORE"
+	RecoveryFailureDatabaseRestoreObjectConflict  RecoveryFailureBoundary = "DATABASE_RESTORE_OBJECT_CONFLICT"
+	RecoveryFailureDatabaseRestoreMissingObject   RecoveryFailureBoundary = "DATABASE_RESTORE_MISSING_OBJECT"
+	RecoveryFailureDatabaseRestoreMissingRelation RecoveryFailureBoundary = "DATABASE_RESTORE_MISSING_RELATION"
+	RecoveryFailureDatabaseRestoreMissingSchema   RecoveryFailureBoundary = "DATABASE_RESTORE_MISSING_SCHEMA"
+	RecoveryFailureDatabaseRestoreAuthority       RecoveryFailureBoundary = "DATABASE_RESTORE_AUTHORITY"
+	RecoveryFailureDatabaseRestoreDependency      RecoveryFailureBoundary = "DATABASE_RESTORE_DEPENDENCY"
+	RecoveryFailureDatabaseRestoreIntegrity       RecoveryFailureBoundary = "DATABASE_RESTORE_INTEGRITY"
+	RecoveryFailureDatabaseRestoreTransaction     RecoveryFailureBoundary = "DATABASE_RESTORE_TRANSACTION"
+	RecoveryFailureDatabaseRestorePipeline        RecoveryFailureBoundary = "DATABASE_RESTORE_PIPELINE"
+	RecoveryFailureDatabaseRestoreClient          RecoveryFailureBoundary = "DATABASE_RESTORE_CLIENT"
+	RecoveryFailureDatabaseRestoreClientFatal     RecoveryFailureBoundary = "DATABASE_RESTORE_CLIENT_FATAL"
+	RecoveryFailureDatabaseRestoreConnection      RecoveryFailureBoundary = "DATABASE_RESTORE_CONNECTION"
+	RecoveryFailureDatabaseRestoreClientScript    RecoveryFailureBoundary = "DATABASE_RESTORE_CLIENT_SCRIPT"
+	RecoveryFailureSecretRestore                  RecoveryFailureBoundary = "SECRET_RESTORE"
+	RecoveryFailureMigration                      RecoveryFailureBoundary = "MIGRATION"
+	RecoveryFailureAuthenticationClose            RecoveryFailureBoundary = "AUTHENTICATION_CLOSE"
+	RecoveryFailureAuthenticationReconcile        RecoveryFailureBoundary = "AUTHENTICATION_RECONCILE"
+	RecoveryFailureAuthenticationReopen           RecoveryFailureBoundary = "AUTHENTICATION_REOPEN"
+)
+
+type recoveryFailureBoundaryError struct {
+	boundary RecoveryFailureBoundary
+	cause    error
+}
+
+func (failure *recoveryFailureBoundaryError) Error() string {
+	return "platform recovery failed at " + string(failure.boundary)
+}
+
+func (failure *recoveryFailureBoundaryError) Unwrap() error {
+	return failure.cause
+}
+
+func BindRecoveryFailure(boundary RecoveryFailureBoundary, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	switch boundary {
+	case RecoveryFailureSource, RecoveryFailureReleaseImages, RecoveryFailureProviderState,
+		RecoveryFailureDatabaseStart, RecoveryFailureDatabaseDump, RecoveryFailureDatabaseRestore,
+		RecoveryFailureDatabaseRestoreObjectConflict, RecoveryFailureDatabaseRestoreMissingObject,
+		RecoveryFailureDatabaseRestoreMissingRelation, RecoveryFailureDatabaseRestoreMissingSchema,
+		RecoveryFailureDatabaseRestoreAuthority, RecoveryFailureDatabaseRestoreDependency,
+		RecoveryFailureDatabaseRestoreIntegrity, RecoveryFailureDatabaseRestoreTransaction,
+		RecoveryFailureDatabaseRestorePipeline, RecoveryFailureDatabaseRestoreClient,
+		RecoveryFailureDatabaseRestoreClientFatal, RecoveryFailureDatabaseRestoreConnection,
+		RecoveryFailureDatabaseRestoreClientScript,
+		RecoveryFailureSecretRestore, RecoveryFailureMigration,
+		RecoveryFailureAuthenticationClose, RecoveryFailureAuthenticationReconcile,
+		RecoveryFailureAuthenticationReopen:
+		return &recoveryFailureBoundaryError{boundary: boundary, cause: cause}
+	default:
+		return errors.Join(
+			ErrEffectVerification,
+			errors.New("platform recovery failure boundary is invalid"),
+		)
+	}
+}
 
 // InstallPlan is authenticated input plus the installation-owned identity.
 // TrustBytes contains a public key document, never credential material.
@@ -51,6 +136,8 @@ type InstallPlan struct {
 	Listener         string
 	Port             uint16
 	NorthboundOrigin string
+	PreviousID       string
+	PreviousDigest   string
 	Bundle           release.VerifiedBundle
 	Trust            release.TrustRoot
 	TrustBytes       []byte
@@ -58,9 +145,9 @@ type InstallPlan struct {
 }
 
 // SecurityMailInput is the canonical private operator input admitted by the
-// local-machine boundary. Only its digest enters the lifecycle journal; SMTP
-// credentials remain in memory until staging writes the installation-scoped
-// purpose file.
+// local-machine boundary. Digest alone enters the lifecycle journal; encoded
+// SMTP credentials exist only in memory until the staging phase writes the
+// installation-scoped purpose file.
 type SecurityMailInput struct {
 	Digest        string
 	Configuration installationv1.SecurityMailConfiguration
@@ -84,11 +171,11 @@ type InstalledPlan struct {
 	Listener           string
 	Port               uint16
 	NorthboundOrigin   string
+	SecurityMailDigest string
 	ReleaseID          string
 	ReleaseDigest      string
 	PreviousID         string
 	PreviousDigest     string
-	SecurityMailDigest string
 	TrustKeyID         string
 	TrustFingerprint   string
 }
@@ -147,6 +234,65 @@ type RecoveryPlan struct {
 	AuthenticationIntent installationv1.AuthenticationRecoveryIntent
 }
 
+// SupportsRecoveryTarget is the recovery policy shared by the use case and
+// every destructive local-machine phase. Recovery may restore the current
+// release or its exact signed immediate predecessor. A cross-profile restore
+// is admitted only when that predecessor-to-current profile transition is the
+// one explicitly supported by this release composition.
+func SupportsRecoveryTarget(current, target release.Manifest) bool {
+	sameRelease := current.Release.ID == target.Release.ID &&
+		current.Release.Version == target.Release.Version
+	immediatePredecessor := current.Release.PreviousID == target.Release.ID &&
+		current.Release.PreviousVersion == target.Release.Version
+	return (sameRelease || immediatePredecessor) && sameOrAcceptedProductlessDatabasePair(target, current)
+}
+
+// CredentialRecoveryInput is the operator's private intent, not an IAM
+// authorization. Installation derives all authority and expected-state fields
+// from its sealed provenance and the restricted IAM inspection result.
+type CredentialRecoveryInput struct {
+	APIVersion string       `json:"apiVersion"`
+	Kind       string       `json:"kind"`
+	CommandID  string       `json:"commandId"`
+	Password   iamv1.Secret `json:"password"`
+}
+
+// The request is private transient material; only CommandID/InputCommitment
+// enter the ordinary journal. A receipt-only resume needs no password.
+type CredentialRecoveryPlan struct {
+	InstalledPlan
+	CommandID       string
+	InputCommitment string
+	Request         *iamv1.LocalCredentialRecoveryRequest
+}
+
+// This entrypoint is supported only by the exact composition that implements
+// the dedicated IAM transaction and closed offline Audit fact. A contract-only
+// consumer must not invoke it against the earlier running authority profile.
+func ValidateCredentialRecoveryProfile(profile release.DatabaseProfile) error {
+	if profile != release.CurrentDatabaseProfile() {
+		return ErrEffectPrecondition
+	}
+	return nil
+}
+
+func (CredentialRecoveryInput) String() string {
+	return "platform credential recovery input <redacted>"
+}
+func (CredentialRecoveryInput) GoString() string {
+	return "platform credential recovery input <redacted>"
+}
+
+func DecodeCredentialRecoveryInput(source []byte) (CredentialRecoveryInput, error) {
+	var input CredentialRecoveryInput
+	if contractjson.DecodeObjectBytes(source, MaximumCredentialRecoveryInputBytes, &input) != nil ||
+		input.APIVersion != lifecycle.APIVersion || input.Kind != "PlatformCredentialRecoveryInput" ||
+		lifecycle.ValidateCommandID(input.CommandID) != nil || !input.Password.Present() {
+		return CredentialRecoveryInput{}, errors.New("credential recovery input is invalid")
+	}
+	return input, nil
+}
+
 // Effects is the closed local-machine lifecycle boundary. Mutating phases are
 // idempotent; status remains observational. If a command may have taken effect
 // without a known result, it returns ErrEffectOutcomeUnknown and observes
@@ -161,6 +307,11 @@ type Effects interface {
 	InspectBackup(context.Context, InstalledPlan, string) (RecoverySource, error)
 	PreflightRecovery(context.Context, RecoveryPlan) error
 	ApplyRecoveryPhase(context.Context, RecoveryPlan, lifecycle.Phase) error
+	PrepareCredentialRecovery(context.Context, InstalledPlan, string, *lifecycle.Execution) (CredentialRecoveryPlan, error)
+	ApplyCredentialRecoveryPhase(context.Context, CredentialRecoveryPlan, lifecycle.Phase) error
+	NodeConnectionsDigest(context.Context, InstalledPlan) (string, error)
+	PrepareNodeConnections(context.Context, InstalledPlan, string, string, *lifecycle.Execution) (NodeConnectionsPlan, error)
+	ApplyNodeConnectionsPhase(context.Context, NodeConnectionsPlan, lifecycle.Phase) error
 	VerifyInstallation(context.Context, InstalledPlan) error
 	ObserveInstallation(context.Context, InstalledPlan) (bool, error)
 	CreateBackup(context.Context, BackupPlan) error
@@ -190,12 +341,8 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	if err := ctx.Err(); err != nil {
 		return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
 	}
-	if request.SecurityMailConfiguration != "" && request.Action != lifecycle.ActionInstall && request.Action != lifecycle.ActionUpgrade {
-		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_UNSUPPORTED")
-	}
-	if (request.Action == lifecycle.ActionInstall || request.Action == lifecycle.ActionUpgrade) &&
-		strings.TrimSpace(request.SecurityMailConfiguration) == "" {
-		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_REQUIRED")
+	if request.Join != "" {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "PLATFORM_JOIN_UNSUPPORTED")
 	}
 	if request.NorthboundOrigin != "" && request.Action != lifecycle.ActionInstall {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_UNSUPPORTED")
@@ -203,6 +350,13 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	if request.Action == lifecycle.ActionInstall &&
 		topology.ValidateNorthboundOrigin(request.NorthboundOrigin, defaultPort) != nil {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_INVALID")
+	}
+	if request.SecurityMailConfiguration != "" && request.Action != lifecycle.ActionInstall && request.Action != lifecycle.ActionUpgrade {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_UNSUPPORTED")
+	}
+	if (request.Action == lifecycle.ActionInstall || request.Action == lifecycle.ActionUpgrade) &&
+		strings.TrimSpace(request.SecurityMailConfiguration) == "" {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_REQUIRED")
 	}
 	switch request.Action {
 	case lifecycle.ActionInstall:
@@ -213,6 +367,10 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 		return backend.rollback(ctx, request)
 	case lifecycle.ActionRecover:
 		return backend.recover(ctx, request)
+	case lifecycle.ActionRecoverCredentials:
+		return backend.recoverCredentials(ctx, request)
+	case lifecycle.ActionConfigureNodes:
+		return backend.configureNodes(ctx, request)
 	case lifecycle.ActionStatus:
 		return backend.status(ctx, request)
 	case lifecycle.ActionVerify, lifecycle.ActionBackup, lifecycle.ActionSupport:
@@ -236,7 +394,7 @@ func (backend *Backend) status(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -261,6 +419,10 @@ func (backend *Backend) status(
 		result.State = "READY"
 	} else {
 		result.State = "NOT_READY"
+	}
+	result.ConfigurationDigest, err = backend.effects.NodeConnectionsDigest(ctx, installedPlan(session.Root(), state))
+	if err != nil {
+		return cli.Result{}, effectFault(lifecycle.PhaseVerifying, err)
 	}
 	return result, nil
 }
@@ -290,7 +452,7 @@ func (backend *Backend) operation(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -426,23 +588,25 @@ func supportOutputBinding(root, output string) (string, string, error) {
 func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
-		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: state.NorthboundOrigin,
-		ReleaseID: state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
-		PreviousID: state.PreviousRelease, PreviousDigest: state.PreviousReleaseDigest,
+		Listener: defaultListener, Port: defaultPort,
+		NorthboundOrigin:   state.NorthboundOrigin,
 		SecurityMailDigest: state.SecurityMailDigest,
-		TrustKeyID:         state.ReleaseTrust.KeyID,
-		TrustFingerprint:   state.ReleaseTrust.Fingerprint,
+		ReleaseID:          state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
+		PreviousID: state.PreviousRelease, PreviousDigest: state.PreviousReleaseDigest,
+		TrustKeyID:       state.ReleaseTrust.KeyID,
+		TrustFingerprint: state.ReleaseTrust.Fingerprint,
 	}
 }
 
 func previousInstalledPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
-		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: state.NorthboundOrigin,
-		ReleaseID: state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
+		Listener: defaultListener, Port: defaultPort,
+		NorthboundOrigin:   state.NorthboundOrigin,
 		SecurityMailDigest: state.SecurityMailDigest,
-		TrustKeyID:         state.ReleaseTrust.KeyID,
-		TrustFingerprint:   state.ReleaseTrust.Fingerprint,
+		ReleaseID:          state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
+		TrustKeyID:       state.ReleaseTrust.KeyID,
+		TrustFingerprint: state.ReleaseTrust.Fingerprint,
 	}
 }
 
@@ -470,6 +634,9 @@ func (backend *Backend) install(
 	ctx context.Context,
 	request cli.Request,
 ) (result cli.Result, returnErr error) {
+	if externalrequest.ValidateOrigin(request.NorthboundOrigin) != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_INVALID")
+	}
 	trustBytes, trust, err := release.ReadTrustRootFile(request.TrustKey)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "TRUST_ROOT_INVALID")
@@ -477,6 +644,9 @@ func (backend *Backend) install(
 	verified, err := release.VerifyDirectory(request.Bundle, trustBytes)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_BUNDLE_INVALID")
+	}
+	if verified.Manifest.Kind != release.ManifestKind {
+		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_PROFILE_UNSUPPORTED")
 	}
 	if verified.Manifest.TopologyDigest != topology.ContractDigest() {
 		return cli.Result{}, fault(cli.FaultVerification, "TOPOLOGY_CONTRACT_UNSUPPORTED")
@@ -508,7 +678,7 @@ func (backend *Backend) install(
 	}
 	var state lifecycle.Journal
 	if initialized {
-		state, err = session.Read()
+		state, err = readPlatformJournal(session)
 		if err != nil {
 			return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 		}
@@ -532,11 +702,11 @@ func (backend *Backend) install(
 		if state.CurrentReleaseDigest != verified.ManifestSHA256 {
 			return cli.Result{}, fault(cli.FaultConflict, "RELEASE_CONTENT_CONFLICT")
 		}
-		if state.SecurityMailDigest != securityMail.Digest {
-			return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
-		}
 		if state.NorthboundOrigin != request.NorthboundOrigin {
 			return cli.Result{}, fault(cli.FaultConflict, "NORTHBOUND_ORIGIN_CONFLICT")
+		}
+		if state.SecurityMailDigest != securityMail.Digest {
+			return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
 		}
 		correlationID := ""
 		if state.Last != nil {
@@ -564,8 +734,8 @@ func (backend *Backend) install(
 		Action:             lifecycle.ActionInstall,
 		InputDigest:        verified.ManifestSHA256,
 		TargetReleaseID:    verified.Manifest.Release.ID,
-		SecurityMailDigest: securityMail.Digest,
 		NorthboundOrigin:   request.NorthboundOrigin,
+		SecurityMailDigest: securityMail.Digest,
 		RequestedAt:        canonicalNow(backend.now()),
 	}
 	started, err := lifecycle.Start(state, command)
@@ -586,7 +756,8 @@ func (backend *Backend) install(
 	plan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
-		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: request.NorthboundOrigin, Bundle: verified,
+		Listener: defaultListener, Port: defaultPort,
+		NorthboundOrigin: started.Execution.Command.NorthboundOrigin, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 		SecurityMail: securityMail,
 	}
@@ -621,7 +792,7 @@ func (backend *Backend) upgrade(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -630,6 +801,10 @@ func (backend *Backend) upgrade(
 	}
 	if state.CurrentReleaseID == "" {
 		return cli.Result{}, fault(cli.FaultPrecondition, "PLATFORM_NOT_INSTALLED")
+	}
+	northboundOrigin := state.NorthboundOrigin
+	if externalrequest.ValidateOrigin(northboundOrigin) != nil {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_INVALID")
 	}
 
 	trustPath := filepath.Join(session.Root(), filepath.FromSlash(layout.ReleaseTrust))
@@ -640,7 +815,7 @@ func (backend *Backend) upgrade(
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	defer clear(trustBytes)
-	sourceBundle, err := installedrelease.Authenticate(
+	sourceBundle, err := authenticateJournalRelease(
 		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
 	)
 	if err != nil {
@@ -650,6 +825,9 @@ func (backend *Backend) upgrade(
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_BUNDLE_INVALID")
 	}
+	if targetBundle.Manifest.Kind != release.ManifestKind {
+		return cli.Result{}, fault(cli.FaultVerification, "RELEASE_PROFILE_UNSUPPORTED")
+	}
 	securityMail, err := backend.effects.ReadSecurityMailConfiguration(ctx, request.SecurityMailConfiguration)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "SECURITY_MAIL_CONFIGURATION_INVALID")
@@ -658,12 +836,15 @@ func (backend *Backend) upgrade(
 	if targetBundle.Manifest.TopologyDigest != topology.ContractDigest() {
 		return cli.Result{}, fault(cli.FaultVerification, "TOPOLOGY_CONTRACT_UNSUPPORTED")
 	}
-	if state.SecurityMailDigest != securityMail.Digest {
+	if state.SecurityMailDigest != "" && state.SecurityMailDigest != securityMail.Digest {
 		return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
 	}
 	if state.Active == nil && targetBundle.Manifest.Release.ID == state.CurrentReleaseID {
 		if targetBundle.ManifestSHA256 != state.CurrentReleaseDigest {
 			return cli.Result{}, fault(cli.FaultConflict, "RELEASE_CONTENT_CONFLICT")
+		}
+		if state.SecurityMailDigest != securityMail.Digest {
+			return cli.Result{}, fault(cli.FaultConflict, "SECURITY_MAIL_CONFIGURATION_CONFLICT")
 		}
 		correlationID := ""
 		backupID := ""
@@ -706,8 +887,8 @@ func (backend *Backend) upgrade(
 		ID: commandID, Action: lifecycle.ActionUpgrade,
 		InputDigest:        targetBundle.ManifestSHA256,
 		TargetReleaseID:    targetBundle.Manifest.Release.ID,
-		SecurityMailDigest: securityMail.Digest,
 		BackupID:           backupID,
+		SecurityMailDigest: securityMail.Digest,
 		RequestedAt:        canonicalNow(backend.now()),
 	})
 	if err != nil {
@@ -721,18 +902,21 @@ func (backend *Backend) upgrade(
 			return cli.Result{}, stateWriteFault(err)
 		}
 	}
+	sourcePlan := installedPlan(session.Root(), started.Journal)
+	sourcePlan.CorrelationID = commandID
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
-		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: targetBundle,
-		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		Listener: defaultListener, Port: defaultPort,
+		NorthboundOrigin: northboundOrigin,
+		PreviousID:       sourcePlan.ReleaseID, PreviousDigest: sourcePlan.ReleaseDigest,
+		Bundle: targetBundle,
+		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 		SecurityMail: securityMail,
 	}
 	securityMail = SecurityMailInput{}
 	defer targetPlan.SecurityMail.Clear()
 	defer clear(targetPlan.TrustBytes)
-	sourcePlan := installedPlan(session.Root(), started.Journal)
-	sourcePlan.CorrelationID = commandID
 	plan := UpgradePlan{
 		Source: sourcePlan, Target: targetPlan,
 		BackupID: backupID, CreatedAt: started.Execution.StartedAt,
@@ -762,7 +946,7 @@ func (backend *Backend) rollback(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -781,13 +965,13 @@ func (backend *Backend) rollback(
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	defer clear(trustBytes)
-	currentBundle, err := installedrelease.Authenticate(
+	currentBundle, err := authenticateJournalRelease(
 		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
 	)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
-	previousBundle, err := installedrelease.Authenticate(
+	previousBundle, err := authenticateJournalRelease(
 		session.Root(), state.PreviousRelease, state.PreviousReleaseDigest, trustBytes,
 	)
 	if err != nil {
@@ -800,7 +984,6 @@ func (backend *Backend) rollback(
 	if !sameOrAcceptedProductlessDatabasePair(previousBundle.Manifest, currentBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_SCHEMA_INCOMPATIBLE")
 	}
-
 	if state.Active == nil {
 		ready, observeErr := backend.effects.ObserveInstallation(
 			ctx, installedPlan(session.Root(), state),
@@ -842,9 +1025,13 @@ func (backend *Backend) rollback(
 	}
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: currentBundle,
-		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
+		Listener: defaultListener, Port: defaultPort,
+		NorthboundOrigin: started.Journal.NorthboundOrigin,
+		SecurityMail:     SecurityMailInput{Digest: started.Journal.SecurityMailDigest},
+		PreviousID:       started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
+		Bundle: currentBundle,
+		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(currentPlan.TrustBytes)
 	previousPlan := previousInstalledPlan(session.Root(), started.Journal)
@@ -878,7 +1065,7 @@ func (backend *Backend) recover(
 			returnErr = fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
 		}
 	}()
-	state, err := session.Read()
+	state, err := readPlatformJournal(session)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 	}
@@ -897,7 +1084,7 @@ func (backend *Backend) recover(
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	defer clear(trustBytes)
-	currentBundle, err := installedrelease.Authenticate(
+	currentBundle, err := authenticateJournalRelease(
 		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
 	)
 	if err != nil {
@@ -910,23 +1097,46 @@ func (backend *Backend) recover(
 		if ctx.Err() != nil {
 			return cli.Result{}, fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
 		}
-		return cli.Result{}, effectFault(lifecycle.PhaseRecovering, err)
+		return cli.Result{}, effectFault(
+			lifecycle.PhaseRecovering,
+			BindRecoveryFailure(RecoveryFailureSource, err),
+		)
 	}
 	if source.InstallationID != state.InstallationID || source.BackupID != request.BackupID ||
 		source.ReleaseID == "" || source.ReleaseDigest == "" || source.BackupDigest == "" ||
 		iamv1.ValidateDigest("TOTP custody digest", source.TOTPCustodyDigest) != nil ||
-		iamv1.ValidateDigest("authentication state digest", source.AuthenticationStateDigest) != nil ||
+		(source.Database == release.CurrentDatabaseProfile() && source.AuthenticationStateDigest == "") ||
+		(source.AuthenticationStateDigest != "" && iamv1.ValidateDigest("authentication state digest", source.AuthenticationStateDigest) != nil) ||
 		release.ValidateDatabaseProfile(source.Database) != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
 	}
-	targetBundle, err := installedrelease.Authenticate(
+	targetBundle, err := authenticateJournalRelease(
 		session.Root(), source.ReleaseID, source.ReleaseDigest, trustBytes,
 	)
 	if err != nil || targetBundle.Manifest.Database != source.Database {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
 	}
+	sameRelease := currentBundle.Manifest.Release.ID == targetBundle.Manifest.Release.ID &&
+		currentBundle.Manifest.Release.Version == targetBundle.Manifest.Release.Version
+	immediatePredecessor := currentBundle.Manifest.Release.PreviousID == targetBundle.Manifest.Release.ID &&
+		currentBundle.Manifest.Release.PreviousVersion == targetBundle.Manifest.Release.Version
+	if !sameRelease && !immediatePredecessor {
+		return cli.Result{}, fault(cli.FaultPrecondition, "RECOVERY_TARGET_UNSUPPORTED")
+	}
 	if !sameOrAcceptedProductlessDatabasePair(targetBundle.Manifest, currentBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "RECOVERY_SCHEMA_INCOMPATIBLE")
+	}
+	destinationOrigin, err := releaseNorthboundOrigin(
+		targetBundle.Manifest, state.NorthboundOrigin,
+	)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
+	}
+	// The installation-scoped SMTP and northbound commitments are independent
+	// of database contents and survive a protected backup restore.
+	targetSecurityMailDigest := state.SecurityMailDigest
+	if targetSecurityMailDigest == "" {
+		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
 	}
 
 	commandID := ""
@@ -959,7 +1169,7 @@ func (backend *Backend) recover(
 		AuthenticationStateDigest: source.AuthenticationStateDigest,
 	}
 	intentDigest, err := installationv1.AuthenticationRecoveryIntentDigest(intent)
-	if err != nil || installationv1.ValidateCurrentAuthenticationRecoveryIntent(intent) != nil {
+	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_AUTHENTICATION_INTENT_INVALID")
 	}
 	started, err := lifecycle.Start(state, lifecycle.Command{
@@ -977,16 +1187,23 @@ func (backend *Backend) recover(
 	}
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: currentBundle,
-		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
+		Listener: defaultListener, Port: defaultPort,
+		NorthboundOrigin: started.Journal.NorthboundOrigin,
+		SecurityMail:     SecurityMailInput{Digest: started.Journal.SecurityMailDigest},
+		PreviousID:       started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
+		Bundle: currentBundle,
+		Trust:  trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(currentPlan.TrustBytes)
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
-		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: targetBundle,
-		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
+		Listener: defaultListener, Port: defaultPort,
+		NorthboundOrigin: destinationOrigin,
+		SecurityMail:     SecurityMailInput{Digest: targetSecurityMailDigest},
+		Bundle:           targetBundle,
+		Trust:            trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(targetPlan.TrustBytes)
 	plan := RecoveryPlan{
@@ -1002,8 +1219,11 @@ func (backend *Backend) recover(
 			if errors.Is(err, ErrEffectOutcomeUnknown) {
 				return cli.Result{}, fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
 			}
-			return cli.Result{}, effectFault(lifecycle.PhasePreflight, err)
+			return cli.Result{}, effectFault(lifecycle.PhasePreflight,
+				BindRecoveryFailure(RecoveryFailureAuthenticationClose, err))
 		}
+	}
+	if started.Replay == lifecycle.ReplayNone {
 		if err := session.Write(started.Journal); err != nil {
 			return cli.Result{}, stateWriteFault(err)
 		}
@@ -1015,6 +1235,155 @@ func (backend *Backend) recover(
 		},
 		nil,
 	)
+}
+
+func releaseNorthboundOrigin(manifest release.Manifest, current string) (string, error) {
+	if strings.TrimSpace(current) == "" {
+		return "", errors.New("installed northbound origin is unavailable")
+	}
+	return current, nil
+}
+
+func (backend *Backend) recoverCredentials(ctx context.Context, request cli.Request) (result cli.Result, returnErr error) {
+	if (request.RecoveryInput == "") == !request.Resume || strings.TrimSpace(request.RecoveryInput) != request.RecoveryInput {
+		return cli.Result{}, fault(cli.FaultInvalidArgument, "CREDENTIAL_RECOVERY_INPUT_INVALID")
+	}
+	session, err := journal.AcquireExisting(ctx, request.Root)
+	if err != nil {
+		return cli.Result{}, acquireFault(err)
+	}
+	defer func() {
+		if closeErr := session.Close(); closeErr != nil && returnErr == nil {
+			result, returnErr = cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_LOCK_RELEASE_FAILED")
+		}
+	}()
+	state, err := readPlatformJournal(session)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
+	}
+	if state.Active != nil && state.Active.Command.Action != lifecycle.ActionRecoverCredentials {
+		return cli.Result{}, lifecycleFault(lifecycle.ErrCommandInProgress)
+	}
+	if state.CurrentReleaseID == "" {
+		return cli.Result{}, fault(cli.FaultPrecondition, "PLATFORM_NOT_INSTALLED")
+	}
+	trustBytes, trust, err := release.ReadTrustRootFile(filepath.Join(session.Root(), filepath.FromSlash(layout.ReleaseTrust)))
+	if err != nil || trust.KeyID != state.ReleaseTrust.KeyID || trust.PublicKeyFingerprint != state.ReleaseTrust.Fingerprint {
+		clear(trustBytes)
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	defer clear(trustBytes)
+	bundle, err := authenticateJournalRelease(session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes)
+	if err != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
+	}
+	if ValidateCredentialRecoveryProfile(bundle.Manifest.Database) != nil {
+		return cli.Result{}, fault(cli.FaultPrecondition, "CREDENTIAL_RECOVERY_PROFILE_UNSUPPORTED")
+	}
+	previous := state.Active
+	if previous == nil && state.Last != nil && state.Last.Command.Action == lifecycle.ActionRecoverCredentials {
+		previous = state.Last
+	}
+	if request.Resume && previous == nil {
+		return cli.Result{}, fault(cli.FaultPrecondition, "CREDENTIAL_RECOVERY_NOT_PENDING")
+	}
+	installed := installedPlan(session.Root(), state)
+	plan, err := backend.effects.PrepareCredentialRecovery(ctx, installed, request.RecoveryInput, previous)
+	if err != nil {
+		return cli.Result{}, credentialRecoveryFault(ctx, lifecycle.PhaseStaging, err)
+	}
+	if plan.InstalledPlan != installed || lifecycle.ValidateCommandID(plan.CommandID) != nil ||
+		iamv1.ValidateDigest("inputCommitment", plan.InputCommitment) != nil {
+		return cli.Result{}, fault(cli.FaultVerification, "CREDENTIAL_RECOVERY_PLAN_INVALID")
+	}
+	started, err := lifecycle.Start(state, lifecycle.Command{
+		ID: plan.CommandID, Action: lifecycle.ActionRecoverCredentials,
+		InputDigest: plan.InputCommitment, RequestedAt: canonicalNow(backend.now()),
+	})
+	if err != nil {
+		return cli.Result{}, lifecycleFault(err)
+	}
+	if started.Replay == lifecycle.ReplayCompleted {
+		return operationResult(started.Journal, started.Execution, false)
+	}
+	if started.Replay == lifecycle.ReplayNone {
+		if err := session.Write(started.Journal); err != nil {
+			return cli.Result{}, stateWriteFault(err)
+		}
+	}
+	plan.CorrelationID = plan.CommandID
+	return backend.driveCredentialRecovery(ctx, session, plan)
+}
+
+func (backend *Backend) driveCredentialRecovery(ctx context.Context, session *journal.Session, plan CredentialRecoveryPlan) (cli.Result, error) {
+	for {
+		state, err := readPlatformJournal(session)
+		if err != nil || state.Active == nil || state.Active.Command.Action != lifecycle.ActionRecoverCredentials ||
+			state.Active.Command.ID != plan.CommandID || state.Active.Command.InputDigest != plan.InputCommitment {
+			return cli.Result{}, fault(cli.FaultVerification, "CREDENTIAL_RECOVERY_STATE_INVALID")
+		}
+		execution := *state.Active
+		err = backend.effects.ApplyCredentialRecoveryPhase(ctx, plan, execution.Phase)
+		if err != nil {
+			normalized := credentialRecoveryFault(ctx, execution.Phase, err)
+			// A committed outcome is one-way. Cleanup failure retains COMMITTING;
+			// unknown/database/provider failures retain the exact pending intent.
+			definitive := errors.Is(err, ErrCredentialRecoveryInvalid) || errors.Is(err, ErrCredentialRecoveryForbidden) || errors.Is(err, ErrCredentialRecoveryConflict)
+			if ctx.Err() != nil || execution.Phase == lifecycle.PhaseCommitting || !definitive {
+				return cli.Result{}, normalized
+			}
+			failed, failErr := lifecycle.Fail(state, plan.CommandID, normalized.Code, nextJournalTime(backend.now(), execution.UpdatedAt))
+			if failErr != nil || session.Write(failed) != nil {
+				return cli.Result{}, fault(cli.FaultInternal, "CREDENTIAL_RECOVERY_STATE_COMMIT_FAILED")
+			}
+			continue
+		}
+		next, ok := lifecycle.NextJournalPhase(state)
+		if !ok {
+			return cli.Result{}, fault(cli.FaultInternal, "CREDENTIAL_RECOVERY_PHASE_INVALID")
+		}
+		advanced, err := lifecycle.Advance(state, plan.CommandID, next, nextJournalTime(backend.now(), execution.UpdatedAt))
+		if err != nil || session.Write(advanced) != nil {
+			return cli.Result{}, fault(cli.FaultInternal, "CREDENTIAL_RECOVERY_STATE_COMMIT_FAILED")
+		}
+		if advanced.Active == nil {
+			return operationResult(advanced, *advanced.Last, true)
+		}
+	}
+}
+
+func credentialRecoveryFault(ctx context.Context, phase lifecycle.Phase, err error) *cli.Fault {
+	switch {
+	case ctx.Err() != nil:
+		return fault(cli.FaultInterrupted, "COMMAND_INTERRUPTED")
+	case errors.Is(err, ErrCredentialRecoveryInvalid):
+		return fault(cli.FaultInvalidArgument, "CREDENTIAL_RECOVERY_INVALID")
+	case errors.Is(err, ErrCredentialRecoveryForbidden):
+		return fault(cli.FaultPrecondition, "CREDENTIAL_RECOVERY_FORBIDDEN")
+	case errors.Is(err, ErrCredentialRecoveryConflict):
+		return fault(cli.FaultConflict, "CREDENTIAL_RECOVERY_CONFLICT")
+	case errors.Is(err, ErrEffectOutcomeUnknown):
+		return fault(cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+	default:
+		return effectFault(phase, err)
+	}
+}
+
+func readPlatformJournal(session *journal.Session) (lifecycle.Journal, error) {
+	state, err := session.Read()
+	if err != nil || state.Node != nil {
+		return lifecycle.Journal{}, errors.New("installation root is not a sealed platform")
+	}
+	return state, nil
+}
+
+func authenticateJournalRelease(
+	root string,
+	releaseID string,
+	digest string,
+	trustBytes []byte,
+) (release.VerifiedBundle, error) {
+	return installedrelease.Authenticate(root, releaseID, digest, trustBytes)
 }
 
 func (backend *Backend) driveReleaseChange(
@@ -1030,7 +1399,7 @@ func (backend *Backend) driveReleaseChange(
 		return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_DRIVER_INVALID")
 	}
 	for {
-		state, err := session.Read()
+		state, err := readPlatformJournal(session)
 		if err != nil {
 			return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_STATE_INVALID")
 		}
@@ -1081,7 +1450,7 @@ func (backend *Backend) driveReleaseChange(
 			continue
 		}
 
-		next, ok := lifecycle.NextPhase(action, execution.Phase)
+		next, ok := lifecycle.NextJournalPhase(state)
 		if !ok {
 			return cli.Result{}, fault(cli.FaultInternal, "INSTALLATION_PHASE_INVALID")
 		}
@@ -1113,6 +1482,16 @@ func (backend *Backend) handleRollbackFailure(
 	}
 	if errors.Is(effectErr, ErrEffectUnavailable) {
 		return fault(cli.FaultUnavailable, "ROLLBACK_DEPENDENCY_UNAVAILABLE")
+	}
+	if errors.Is(effectErr, ErrEffectRecoveryRequired) {
+		manual, err := lifecycle.Fail(
+			state, execution.Command.ID, "AUTHENTICATED_RECOVERY_REQUIRED",
+			nextJournalTime(backend.now(), execution.UpdatedAt),
+		)
+		if err != nil || session.Write(manual) != nil {
+			return fault(cli.FaultInternal, "ROLLBACK_FAILURE_COMMIT_FAILED")
+		}
+		return fault(cli.FaultPrecondition, "AUTHENTICATED_RECOVERY_REQUIRED")
 	}
 	manual, err := lifecycle.Fail(
 		state, execution.Command.ID, "ROLLBACK_FAILED",
@@ -1149,7 +1528,15 @@ func storedFailure(execution *lifecycle.Execution) error {
 	}
 	class := cli.FaultInternal
 	switch {
+	case execution.FailureCode == "CREDENTIAL_RECOVERY_INVALID":
+		class = cli.FaultInvalidArgument
+	case execution.FailureCode == "CREDENTIAL_RECOVERY_FORBIDDEN":
+		class = cli.FaultPrecondition
+	case execution.FailureCode == "CREDENTIAL_RECOVERY_CONFLICT":
+		class = cli.FaultConflict
 	case execution.FailureCode == "PREFLIGHT_FAILED":
+		class = cli.FaultPrecondition
+	case execution.FailureCode == "AUTHENTICATED_RECOVERY_REQUIRED":
 		class = cli.FaultPrecondition
 	case execution.FailureCode == "OWNERSHIP_CONFLICT":
 		class = cli.FaultConflict
@@ -1173,12 +1560,36 @@ func effectFault(phase lifecycle.Phase, err error) *cli.Fault {
 		code = "OWNERSHIP_CONFLICT"
 	case errors.Is(err, ErrEffectVerification):
 		class = cli.FaultVerification
-		code = phaseFailureCode(phase, "VERIFICATION_FAILED")
+		code = recoveryVerificationFailureCode(phase, err)
 	case errors.Is(err, ErrEffectUnavailable):
 		class = cli.FaultUnavailable
 		code = "DEPENDENCY_UNAVAILABLE"
 	}
 	return fault(class, code)
+}
+
+func recoveryVerificationFailureCode(phase lifecycle.Phase, err error) string {
+	var failure *recoveryFailureBoundaryError
+	if !errors.As(err, &failure) {
+		return phaseFailureCode(phase, "VERIFICATION_FAILED")
+	}
+	switch failure.boundary {
+	case RecoveryFailureSource, RecoveryFailureReleaseImages, RecoveryFailureProviderState,
+		RecoveryFailureDatabaseStart, RecoveryFailureDatabaseDump, RecoveryFailureDatabaseRestore,
+		RecoveryFailureDatabaseRestoreObjectConflict, RecoveryFailureDatabaseRestoreMissingObject,
+		RecoveryFailureDatabaseRestoreMissingRelation, RecoveryFailureDatabaseRestoreMissingSchema,
+		RecoveryFailureDatabaseRestoreAuthority, RecoveryFailureDatabaseRestoreDependency,
+		RecoveryFailureDatabaseRestoreIntegrity, RecoveryFailureDatabaseRestoreTransaction,
+		RecoveryFailureDatabaseRestorePipeline, RecoveryFailureDatabaseRestoreClient,
+		RecoveryFailureDatabaseRestoreClientFatal, RecoveryFailureDatabaseRestoreConnection,
+		RecoveryFailureDatabaseRestoreClientScript,
+		RecoveryFailureSecretRestore, RecoveryFailureMigration,
+		RecoveryFailureAuthenticationClose, RecoveryFailureAuthenticationReconcile,
+		RecoveryFailureAuthenticationReopen:
+		return "RECOVERY_" + string(failure.boundary) + "_VERIFICATION_FAILED"
+	default:
+		return phaseFailureCode(phase, "VERIFICATION_FAILED")
+	}
 }
 
 func phaseFailureCode(phase lifecycle.Phase, suffix string) string {
@@ -1201,6 +1612,8 @@ func phaseFailureCode(phase lifecycle.Phase, suffix string) string {
 		return "PLATFORM_" + suffix
 	case lifecycle.PhaseRecovering:
 		return "RECOVERY_" + suffix
+	case lifecycle.PhaseRecoveringCredentials:
+		return "CREDENTIAL_RECOVERY_" + suffix
 	default:
 		return "INSTALLATION_" + suffix
 	}
@@ -1208,6 +1621,8 @@ func phaseFailureCode(phase lifecycle.Phase, suffix string) string {
 
 func lifecycleFault(err error) error {
 	switch {
+	case errors.Is(err, lifecycle.ErrManualIntervention):
+		return fault(cli.FaultPrecondition, "PLATFORM_MANUAL_INTERVENTION_REQUIRED")
 	case errors.Is(err, lifecycle.ErrPrecondition):
 		return fault(cli.FaultPrecondition, "INSTALLATION_PRECONDITION_FAILED")
 	case errors.Is(err, lifecycle.ErrCommandConflict),
@@ -1256,12 +1671,9 @@ func randomIdentity(entropy io.Reader, prefix string) (string, error) {
 	return prefix + "-" + hex.EncodeToString(random[:]), nil
 }
 
-// sameOrAcceptedProductlessDatabasePair keeps the release-profile fence exact
-// while preserving the one cross-profile lifecycle that has runtime evidence:
-// the authenticated c88a84f productless predecessor and its immediate current
-// product-foundation successor. It is deliberately symmetric because upgrade,
-// rollback, and protected-backup recovery traverse the same signed pair in
-// different directions.
+// sameOrAcceptedProductlessDatabasePair keeps the full authority profile
+// exact, apart from the one authenticated productless predecessor transition
+// that has retained-state runtime evidence in the current release owner.
 func sameOrAcceptedProductlessDatabasePair(left, right release.Manifest) bool {
 	if left.Database == right.Database {
 		return true

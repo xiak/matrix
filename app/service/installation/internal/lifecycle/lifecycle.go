@@ -13,42 +13,50 @@ import (
 
 const APIVersion = "installation.matrix.xiak.com/v1"
 
+const NodeEnrollmentRejectedFailureCode = "NODE_ENROLLMENT_REJECTED"
+
 var (
-	ErrCommandConflict   = errors.New("installation command identity conflicts with stored input")
-	ErrCommandInProgress = errors.New("another installation command is in progress")
-	ErrInvalidTransition = errors.New("installation phase transition is invalid")
-	ErrPrecondition      = errors.New("installation lifecycle precondition failed")
+	ErrCommandConflict    = errors.New("installation command identity conflicts with stored input")
+	ErrCommandInProgress  = errors.New("another installation command is in progress")
+	ErrInvalidTransition  = errors.New("installation phase transition is invalid")
+	ErrPrecondition       = errors.New("installation lifecycle precondition failed")
+	ErrManualIntervention = errors.New("installation requires explicit recovery")
 )
 
 type Action string
 
 const (
-	ActionInstall  Action = "INSTALL"
-	ActionVerify   Action = "VERIFY"
-	ActionStatus   Action = "STATUS"
-	ActionBackup   Action = "BACKUP"
-	ActionUpgrade  Action = "UPGRADE"
-	ActionRollback Action = "ROLLBACK"
-	ActionRecover  Action = "RECOVER"
-	ActionSupport  Action = "SUPPORT"
+	ActionInstall            Action = "INSTALL"
+	ActionVerify             Action = "VERIFY"
+	ActionStatus             Action = "STATUS"
+	ActionBackup             Action = "BACKUP"
+	ActionUpgrade            Action = "UPGRADE"
+	ActionRollback           Action = "ROLLBACK"
+	ActionRecover            Action = "RECOVER"
+	ActionSupport            Action = "SUPPORT"
+	ActionStart              Action = "START"
+	ActionRotateCredentials  Action = "ROTATE_CREDENTIALS"
+	ActionRecoverCredentials Action = "RECOVER_CREDENTIALS"
+	ActionConfigureNodes     Action = "CONFIGURE_NODES"
 )
 
 type Phase string
 
 const (
-	PhasePreflight          Phase = "PREFLIGHT"
-	PhaseBackingUp          Phase = "BACKING_UP"
-	PhaseStaging            Phase = "STAGING"
-	PhaseLoadingImages      Phase = "LOADING_IMAGES"
-	PhaseConfiguring        Phase = "CONFIGURING"
-	PhaseMigrating          Phase = "MIGRATING"
-	PhaseStarting           Phase = "STARTING"
-	PhaseVerifying          Phase = "VERIFYING"
-	PhaseCommitting         Phase = "COMMITTING"
-	PhaseRollingBack        Phase = "ROLLING_BACK"
-	PhaseRecovering         Phase = "RECOVERING"
-	PhaseReady              Phase = "READY"
-	PhaseManualIntervention Phase = "MANUAL_INTERVENTION"
+	PhasePreflight             Phase = "PREFLIGHT"
+	PhaseBackingUp             Phase = "BACKING_UP"
+	PhaseStaging               Phase = "STAGING"
+	PhaseLoadingImages         Phase = "LOADING_IMAGES"
+	PhaseConfiguring           Phase = "CONFIGURING"
+	PhaseMigrating             Phase = "MIGRATING"
+	PhaseStarting              Phase = "STARTING"
+	PhaseVerifying             Phase = "VERIFYING"
+	PhaseCommitting            Phase = "COMMITTING"
+	PhaseRollingBack           Phase = "ROLLING_BACK"
+	PhaseRecovering            Phase = "RECOVERING"
+	PhaseRecoveringCredentials Phase = "RECOVERING_CREDENTIALS"
+	PhaseReady                 Phase = "READY"
+	PhaseManualIntervention    Phase = "MANUAL_INTERVENTION"
 )
 
 type Outcome string
@@ -76,9 +84,11 @@ type Command struct {
 	AuthenticationRecoveryEpoch  uint64    `json:"authenticationRecoveryEpoch,omitempty"`
 	AuthenticationRecoveryDigest string    `json:"authenticationRecoveryDigest,omitempty"`
 	TargetReleaseID              string    `json:"targetReleaseId,omitempty"`
-	SecurityMailDigest           string    `json:"securityMailDigest,omitempty"`
 	NorthboundOrigin             string    `json:"northboundOrigin,omitempty"`
+	SecurityMailDigest           string    `json:"securityMailDigest,omitempty"`
 	BackupID                     string    `json:"backupId,omitempty"`
+	ExpectedConfigurationDigest  string    `json:"expectedConfigurationDigest,omitempty"`
+	RevokePreviousCredentials    bool      `json:"revokePreviousCredentials,omitempty"`
 	RequestedAt                  time.Time `json:"requestedAt"`
 }
 
@@ -100,16 +110,26 @@ type Journal struct {
 	APIVersion                  string       `json:"apiVersion"`
 	Version                     uint64       `json:"version"`
 	InstallationID              string       `json:"installationId"`
+	NorthboundOrigin            string       `json:"northboundOrigin,omitempty"`
+	SecurityMailDigest          string       `json:"securityMailDigest,omitempty"`
 	ReleaseTrust                ReleaseTrust `json:"releaseTrust"`
+	Node                        *NodeBinding `json:"node,omitempty"`
+	NodeCredentialRotation      *Command     `json:"nodeCredentialRotation,omitempty"`
+	NodeReleaseChange           *Execution   `json:"nodeReleaseChange,omitempty"`
 	CurrentReleaseID            string       `json:"currentReleaseId,omitempty"`
 	CurrentReleaseDigest        string       `json:"currentReleaseDigest,omitempty"`
 	PreviousRelease             string       `json:"previousReleaseId,omitempty"`
 	PreviousReleaseDigest       string       `json:"previousReleaseDigest,omitempty"`
-	SecurityMailDigest          string       `json:"securityMailDigest,omitempty"`
-	NorthboundOrigin            string       `json:"northboundOrigin,omitempty"`
 	AuthenticationRecoveryEpoch uint64       `json:"authenticationRecoveryEpoch,omitempty"`
 	Active                      *Execution   `json:"active,omitempty"`
 	Last                        *Execution   `json:"last,omitempty"`
+}
+
+// NodeBinding seals the purpose of this installation root and the complete
+// enrollment commitment. Platform journals omit it, preserving their bytes.
+type NodeBinding struct {
+	ExecutionTargetID   string `json:"executionTargetId"`
+	ConfigurationDigest string `json:"configurationDigest"`
 }
 
 // ReleaseTrust pins the out-of-band public trust root for the complete
@@ -147,6 +167,18 @@ func New(installationID string, trust ReleaseTrust) (Journal, error) {
 	return journal, nil
 }
 
+func NewNode(installationID string, trust ReleaseTrust, binding NodeBinding) (Journal, error) {
+	value, err := New(installationID, trust)
+	if err != nil {
+		return Journal{}, err
+	}
+	value.Node = &binding
+	if err := ValidateJournal(value); err != nil {
+		return Journal{}, err
+	}
+	return value, nil
+}
+
 func ValidateInstallationID(value string) error {
 	if !installationIDPattern.MatchString(value) {
 		return errors.New("installation identity is invalid")
@@ -172,7 +204,7 @@ func Start(journal Journal, command Command) (StartResult, error) {
 	if err := ValidateJournal(journal); err != nil {
 		return StartResult{}, fmt.Errorf("stored installation journal is invalid: %w", err)
 	}
-	if err := validateCommand(command); err != nil {
+	if err := validateCommand(command, journal.Node != nil); err != nil {
 		return StartResult{}, err
 	}
 	if journal.Active != nil {
@@ -195,7 +227,7 @@ func Start(journal Journal, command Command) (StartResult, error) {
 	}
 	execution := Execution{
 		Command:       command,
-		Phase:         workflow(command.Action)[0],
+		Phase:         workflow(command.Action, journal.Node != nil)[0],
 		StartedAt:     command.RequestedAt,
 		UpdatedAt:     command.RequestedAt,
 		SourceRelease: journal.CurrentReleaseID,
@@ -239,18 +271,26 @@ func Advance(journal Journal, commandID string, next Phase, at time.Time) (Journ
 		journal.Last = &execution
 		return journal, nil
 	}
-	sequence := workflow(execution.Command.Action)
+	sequence := workflow(execution.Command.Action, journal.Node != nil)
 	index := phaseIndex(sequence, execution.Phase)
 	if index < 0 || index+1 >= len(sequence) || sequence[index+1] != next {
 		return Journal{}, ErrInvalidTransition
 	}
 	execution.Phase = next
 	execution.UpdatedAt = at
+	if execution.Command.Action == ActionRotateCredentials || execution.Command.Action == ActionConfigureNodes {
+		execution.FailureCode = ""
+	}
 	journal.Version++
 	if next == PhaseReady {
 		execution.Outcome = OutcomeSucceeded
+		if execution.Command.Action == ActionRecoverCredentials && execution.FailureCode != "" {
+			execution.Outcome = OutcomeFailed
+		}
 		execution.CompletedAt = at
-		applySuccessfulPointerChange(&journal, execution)
+		if execution.Outcome == OutcomeSucceeded {
+			applySuccessfulPointerChange(&journal, execution)
+		}
 		journal.Active = nil
 		journal.Last = &execution
 		return journal, nil
@@ -277,8 +317,25 @@ func Fail(journal Journal, commandID, failureCode string, at time.Time) (Journal
 	execution.UpdatedAt = at
 	journal.Version++
 	switch execution.Command.Action {
+	case ActionRecoverCredentials:
+		if execution.Phase != PhaseStaging && execution.Phase != PhaseRecoveringCredentials {
+			return Journal{}, ErrInvalidTransition
+		}
+		// A definitive IAM rejection has no credential effect. Seal that
+		// result before removing its private input; cleanup can then resume
+		// without attempting the rejected recovery again.
+		execution.Phase = PhaseCommitting
+		journal.Active = &execution
+		return journal, nil
+	case ActionRotateCredentials, ActionConfigureNodes:
+		// Credential retirement is one-way. A failed attempt keeps the exact
+		// candidate intent for retry; it never restores the old trust set.
+		journal.Active = &execution
+		return journal, nil
 	case ActionInstall, ActionUpgrade:
-		if execution.Phase == PhaseCommitting || execution.Phase == PhaseRollingBack {
+		nodeEnrollmentRejected := journal.Node != nil && execution.Command.Action == ActionInstall &&
+			execution.Phase == PhaseCommitting && failureCode == NodeEnrollmentRejectedFailureCode
+		if (execution.Phase == PhaseCommitting && !nodeEnrollmentRejected) || execution.Phase == PhaseRollingBack {
 			return finishManual(journal, execution, at), nil
 		}
 		execution.Phase = PhaseRollingBack
@@ -286,7 +343,7 @@ func Fail(journal Journal, commandID, failureCode string, at time.Time) (Journal
 		return journal, nil
 	case ActionRollback, ActionRecover:
 		return finishManual(journal, execution, at), nil
-	case ActionVerify, ActionStatus, ActionBackup, ActionSupport:
+	case ActionVerify, ActionStatus, ActionBackup, ActionSupport, ActionStart:
 		execution.Outcome = OutcomeFailed
 		execution.CompletedAt = at
 		journal.Active = nil
@@ -307,6 +364,33 @@ func ValidateJournal(journal Journal) error {
 		!trustFingerprintPattern.MatchString(journal.ReleaseTrust.Fingerprint) {
 		problems = append(problems, errors.New("installation release trust is invalid"))
 	}
+	if (journal.Node == nil && ((journal.CurrentReleaseID == "") != (journal.NorthboundOrigin == "") ||
+		(journal.NorthboundOrigin != "" && externalrequest.ValidateOrigin(journal.NorthboundOrigin) != nil))) ||
+		(journal.Node != nil && journal.NorthboundOrigin != "") {
+		problems = append(problems, errors.New("installation northbound origin is invalid"))
+	}
+	if (journal.Node == nil && ((journal.CurrentReleaseID == "") != (journal.SecurityMailDigest == "") ||
+		(journal.SecurityMailDigest != "" && !digestPattern.MatchString(journal.SecurityMailDigest)))) ||
+		(journal.Node != nil && journal.SecurityMailDigest != "") {
+		problems = append(problems, errors.New("installation security mail commitment is invalid"))
+	}
+	if journal.Node != nil && (!trustKeyIDPattern.MatchString(journal.Node.ExecutionTargetID) ||
+		!digestPattern.MatchString(journal.Node.ConfigurationDigest)) {
+		problems = append(problems, errors.New("node installation binding is invalid"))
+	}
+	if rotation := journal.NodeCredentialRotation; rotation != nil {
+		if journal.Node == nil || journal.CurrentReleaseID == "" || rotation.Action != ActionRotateCredentials ||
+			validateCommand(*rotation, true) != nil || rotation.InputDigest != journal.Node.ConfigurationDigest {
+			problems = append(problems, errors.New("committed node credential rotation is invalid"))
+		}
+	}
+	if change := journal.NodeReleaseChange; change != nil {
+		if journal.Node == nil || (change.Command.Action != ActionUpgrade && change.Command.Action != ActionRollback) ||
+			change.Outcome != OutcomeSucceeded || validateExecution(*change, true, true) != nil ||
+			validateCompletedPointers(journal, *change) != nil {
+			problems = append(problems, errors.New("committed node release change is invalid"))
+		}
+	}
 	if (journal.CurrentReleaseID == "") != (journal.CurrentReleaseDigest == "") ||
 		(journal.CurrentReleaseID != "" && (!releaseIDPattern.MatchString(journal.CurrentReleaseID) ||
 			!digestPattern.MatchString(journal.CurrentReleaseDigest))) {
@@ -318,26 +402,23 @@ func ValidateJournal(journal Journal) error {
 			journal.PreviousRelease == journal.CurrentReleaseID || journal.CurrentReleaseID == "")) {
 		problems = append(problems, errors.New("previous release identity is invalid"))
 	}
-	if (journal.CurrentReleaseID == "") != (journal.SecurityMailDigest == "") ||
-		(journal.SecurityMailDigest != "" && !digestPattern.MatchString(journal.SecurityMailDigest)) {
-		problems = append(problems, errors.New("installation security mail commitment is invalid"))
-	}
-	if (journal.CurrentReleaseID == "") != (journal.NorthboundOrigin == "") ||
-		(journal.NorthboundOrigin != "" && externalrequest.ValidateOrigin(journal.NorthboundOrigin) != nil) {
-		problems = append(problems, errors.New("installation northbound origin is invalid"))
-	}
 	if journal.AuthenticationRecoveryEpoch > 9007199254740991 {
 		problems = append(problems, errors.New("authentication recovery epoch is invalid"))
 	}
 	if journal.Active != nil {
-		problems = append(problems, validateExecution(*journal.Active, false))
+		problems = append(problems, validateExecution(*journal.Active, false, journal.Node != nil))
 		if journal.CurrentReleaseID != journal.Active.SourceRelease ||
 			journal.CurrentReleaseDigest != journal.Active.SourceDigest {
 			problems = append(problems, errors.New("active command source does not match the current release"))
 		}
-		if journal.Active.Command.Action == ActionUpgrade &&
+		if journal.Node == nil && journal.Active.Command.Action == ActionUpgrade &&
+			journal.SecurityMailDigest != "" &&
 			journal.Active.Command.SecurityMailDigest != journal.SecurityMailDigest {
 			problems = append(problems, errors.New("active upgrade changed the security mail commitment"))
+		}
+		if journal.Active.Command.Action == ActionRotateCredentials &&
+			(journal.Node == nil || journal.Active.Command.ExpectedConfigurationDigest != journal.Node.ConfigurationDigest) {
+			problems = append(problems, errors.New("active rotation source does not match the node commitment"))
 		}
 		if journal.Active.Command.Action == ActionRecover &&
 			(journal.AuthenticationRecoveryEpoch >= 9007199254740991 ||
@@ -346,8 +427,13 @@ func ValidateJournal(journal Journal) error {
 		}
 	}
 	if journal.Last != nil {
-		problems = append(problems, validateExecution(*journal.Last, true))
+		problems = append(problems, validateExecution(*journal.Last, true, journal.Node != nil))
 		problems = append(problems, validateCompletedPointers(journal, *journal.Last))
+		if journal.Node != nil && journal.Last.Outcome == OutcomeSucceeded &&
+			(journal.Last.Command.Action == ActionUpgrade || journal.Last.Command.Action == ActionRollback) &&
+			!sameNodeReleaseChange(journal.NodeReleaseChange, journal.Last) {
+			problems = append(problems, errors.New("completed node release change lost its replay receipt"))
+		}
 	}
 	if journal.Active != nil && journal.Last != nil &&
 		journal.Active.Command.ID == journal.Last.Command.ID {
@@ -356,62 +442,201 @@ func ValidateJournal(journal Journal) error {
 	return errors.Join(problems...)
 }
 
-func validateCommand(command Command) error {
+// ValidateNodeTransition keeps the node's lifetime identity immutable while
+// admitting only the final transition of its already sealed installation command.
+// Persistence uses this boundary instead of treating any version increment as
+// permission to replace a credential commitment or its replay receipt.
+func ValidateNodeTransition(before, after Journal) error {
+	invalid := errors.New("node installation change lacks a sealed terminal transition")
+	if (before.Node == nil) != (after.Node == nil) {
+		return invalid
+	}
+	if before.Node == nil {
+		if after.NodeCredentialRotation != nil || after.NodeReleaseChange != nil {
+			return invalid
+		}
+		if before.NorthboundOrigin == after.NorthboundOrigin &&
+			before.SecurityMailDigest == after.SecurityMailDigest {
+			return nil
+		}
+		if before.Active == nil || after.Active != nil || after.Last == nil ||
+			(before.Active.Command.Action != ActionInstall && before.Active.Command.Action != ActionUpgrade &&
+				before.Active.Command.Action != ActionRollback && before.Active.Command.Action != ActionRecover) {
+			return invalid
+		}
+		expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
+		if err != nil || expected.NorthboundOrigin != after.NorthboundOrigin ||
+			expected.SecurityMailDigest != after.SecurityMailDigest || *expected.Last != *after.Last {
+			return invalid
+		}
+		return nil
+	}
+	if before.Node.ExecutionTargetID != after.Node.ExecutionTargetID {
+		return invalid
+	}
+	receiptEqual := before.NodeCredentialRotation == nil && after.NodeCredentialRotation == nil
+	if before.NodeCredentialRotation != nil && after.NodeCredentialRotation != nil {
+		receiptEqual = *before.NodeCredentialRotation == *after.NodeCredentialRotation
+	}
+	releaseEqual := sameNodeReleaseChange(before.NodeReleaseChange, after.NodeReleaseChange)
+	pointersEqual := before.CurrentReleaseID == after.CurrentReleaseID && before.CurrentReleaseDigest == after.CurrentReleaseDigest &&
+		before.PreviousRelease == after.PreviousRelease && before.PreviousReleaseDigest == after.PreviousReleaseDigest
+	if before.Node.ConfigurationDigest == after.Node.ConfigurationDigest && receiptEqual && releaseEqual && pointersEqual {
+		return nil
+	}
+	next, terminal := NextJournalPhase(before)
+	if before.Active == nil || !terminal || next != PhaseReady || after.Active != nil || after.Last == nil {
+		return invalid
+	}
+	switch before.Active.Command.Action {
+	case ActionInstall, ActionRotateCredentials, ActionUpgrade, ActionRollback:
+	default:
+		return invalid
+	}
+	expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
+	rotationEqual := expected.NodeCredentialRotation == nil && after.NodeCredentialRotation == nil
+	if expected.NodeCredentialRotation != nil && after.NodeCredentialRotation != nil {
+		rotationEqual = *expected.NodeCredentialRotation == *after.NodeCredentialRotation
+	}
+	if err != nil || expected.Node == nil || *expected.Node != *after.Node || !rotationEqual ||
+		!sameNodeReleaseChange(expected.NodeReleaseChange, after.NodeReleaseChange) ||
+		*expected.Last != *after.Last || expected.CurrentReleaseID != after.CurrentReleaseID ||
+		expected.CurrentReleaseDigest != after.CurrentReleaseDigest || expected.PreviousRelease != after.PreviousRelease ||
+		expected.PreviousReleaseDigest != after.PreviousReleaseDigest {
+		return invalid
+	}
+	return nil
+}
+
+func sameNodeReleaseChange(left, right *Execution) bool {
+	return left == nil && right == nil || left != nil && right != nil && *left == *right
+}
+
+// ValidateTransition prevents persistence from changing any sealed platform or
+// node identity outside the exact terminal workflow transition that owns it.
+// Node-specific credential and release receipts are checked first; platform
+// authentication recovery then additionally advances its monotonic epoch.
+func ValidateTransition(before, after Journal) error {
+	if err := ValidateNodeTransition(before, after); err != nil {
+		return err
+	}
+	if before.AuthenticationRecoveryEpoch == after.AuthenticationRecoveryEpoch {
+		return nil
+	}
+	if before.Node != nil || after.Node != nil || before.Active == nil ||
+		before.Active.Command.Action != ActionRecover || after.Active != nil || after.Last == nil {
+		return errors.New("authentication recovery epoch lacks a terminal recovery transition")
+	}
+	expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
+	if err != nil || expected.AuthenticationRecoveryEpoch != after.AuthenticationRecoveryEpoch ||
+		expected.Last == nil || *expected.Last != *after.Last {
+		return errors.New("authentication recovery epoch transition is invalid")
+	}
+	return nil
+}
+
+func validateCommand(command Command, node bool) error {
 	if !commandIDPattern.MatchString(command.ID) || !canonicalTime(command.RequestedAt) {
 		return errors.New("installation command identity or time is invalid")
 	}
+	if len(workflow(command.Action, node)) == 0 {
+		return errors.New("installation action is unsupported for this root")
+	}
+	if command.NorthboundOrigin != "" && (node || command.Action != ActionInstall ||
+		externalrequest.ValidateOrigin(command.NorthboundOrigin) != nil) {
+		return errors.New("installation command northbound origin is invalid")
+	}
+	if command.Action != ActionRotateCredentials && command.Action != ActionConfigureNodes &&
+		(command.ExpectedConfigurationDigest != "" || command.RevokePreviousCredentials) {
+		return errors.New("installation command contains unrelated credential input")
+	}
+	if command.Action != ActionRecover &&
+		(command.AuthenticationRecoveryEpoch != 0 || command.AuthenticationRecoveryDigest != "") {
+		return errors.New("installation command contains unrelated authentication recovery input")
+	}
+	if command.SecurityMailDigest != "" && (node ||
+		(command.Action != ActionInstall && command.Action != ActionUpgrade)) {
+		return errors.New("installation command contains unrelated security mail input")
+	}
+	if command.SecurityMailDigest != "" && !digestPattern.MatchString(command.SecurityMailDigest) {
+		return errors.New("installation command security mail input is invalid")
+	}
 	switch command.Action {
+	case ActionConfigureNodes:
+		if !digestPattern.MatchString(command.InputDigest) || !digestPattern.MatchString(command.ExpectedConfigurationDigest) ||
+			command.InputDigest == command.ExpectedConfigurationDigest || command.RevokePreviousCredentials || command.TargetReleaseID != "" || command.BackupID != "" || command.BackupDigest != "" {
+			return errors.New("node controller configuration input is invalid")
+		}
+	case ActionRecoverCredentials:
+		if !digestPattern.MatchString(command.InputDigest) || command.TargetReleaseID != "" ||
+			command.BackupID != "" || command.BackupDigest != "" {
+			return errors.New("platform credential recovery input is invalid")
+		}
+	case ActionRotateCredentials:
+		if !digestPattern.MatchString(command.InputDigest) || !digestPattern.MatchString(command.ExpectedConfigurationDigest) ||
+			command.InputDigest == command.ExpectedConfigurationDigest || command.TargetReleaseID != "" ||
+			command.BackupID != "" || command.BackupDigest != "" {
+			return errors.New("node credential rotation input is invalid")
+		}
 	case ActionInstall:
 		if !digestPattern.MatchString(command.InputDigest) ||
-			!releaseIDPattern.MatchString(command.TargetReleaseID) || !digestPattern.MatchString(command.SecurityMailDigest) ||
-			externalrequest.ValidateOrigin(command.NorthboundOrigin) != nil || command.BackupID != "" ||
-			command.BackupDigest != "" {
+			!releaseIDPattern.MatchString(command.TargetReleaseID) || command.BackupID != "" ||
+			command.BackupDigest != "" || (!node && (!digestPattern.MatchString(command.SecurityMailDigest) ||
+			externalrequest.ValidateOrigin(command.NorthboundOrigin) != nil)) ||
+			(node && (command.SecurityMailDigest != "" || command.NorthboundOrigin != "")) {
 			return errors.New("release-changing command input is invalid")
 		}
 	case ActionUpgrade:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
-			!backupIDPattern.MatchString(command.BackupID) || !digestPattern.MatchString(command.SecurityMailDigest) ||
-			command.NorthboundOrigin != "" || command.BackupDigest != "" {
+			(!node && (!backupIDPattern.MatchString(command.BackupID) || !digestPattern.MatchString(command.SecurityMailDigest) ||
+				command.NorthboundOrigin != "")) ||
+			(node && (command.BackupID != "" || command.SecurityMailDigest != "" || command.NorthboundOrigin != "")) ||
+			command.BackupDigest != "" {
 			return errors.New("upgrade command input is invalid")
 		}
 	case ActionRecover:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			!releaseIDPattern.MatchString(command.TargetReleaseID) ||
 			!backupIDPattern.MatchString(command.BackupID) ||
-			!digestPattern.MatchString(command.BackupDigest) || command.SecurityMailDigest != "" || command.NorthboundOrigin != "" ||
+			!digestPattern.MatchString(command.BackupDigest) ||
 			command.AuthenticationRecoveryEpoch == 0 || command.AuthenticationRecoveryEpoch > 9007199254740991 ||
 			!digestPattern.MatchString(command.AuthenticationRecoveryDigest) {
 			return errors.New("recovery command input is invalid")
 		}
 	case ActionBackup:
 		if command.InputDigest != "" || command.TargetReleaseID != "" ||
-			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" || command.SecurityMailDigest != "" || command.NorthboundOrigin != "" {
+			!backupIDPattern.MatchString(command.BackupID) || command.BackupDigest != "" {
 			return errors.New("backup command input is invalid")
 		}
 	case ActionSupport:
 		if !digestPattern.MatchString(command.InputDigest) ||
 			command.TargetReleaseID != "" || command.BackupID != "" ||
-			command.BackupDigest != "" || command.SecurityMailDigest != "" || command.NorthboundOrigin != "" {
+			command.BackupDigest != "" {
 			return errors.New("support command input is invalid")
 		}
-	case ActionVerify, ActionStatus, ActionRollback:
+	case ActionVerify, ActionStatus, ActionRollback, ActionStart:
 		if command.InputDigest != "" || command.TargetReleaseID != "" || command.BackupID != "" ||
-			command.BackupDigest != "" || command.SecurityMailDigest != "" || command.NorthboundOrigin != "" {
+			command.BackupDigest != "" {
 			return errors.New("installation command contains unrelated input")
 		}
 	default:
 		return errors.New("installation command action is unsupported")
 	}
-	if command.Action != ActionRecover &&
-		(command.AuthenticationRecoveryEpoch != 0 || command.AuthenticationRecoveryDigest != "") {
-		return errors.New("installation command contains unrelated authentication recovery input")
-	}
 	return nil
 }
 
 func validateActionPrecondition(journal Journal, command Command) error {
+	if journal.Last != nil && journal.Last.Outcome == OutcomeManualIntervention &&
+		command.Action != ActionRecover && command.Action != ActionStatus {
+		return ErrManualIntervention
+	}
 	switch command.Action {
+	case ActionRotateCredentials:
+		if journal.Node == nil || journal.CurrentReleaseID == "" ||
+			journal.Node.ConfigurationDigest != command.ExpectedConfigurationDigest {
+			return ErrPrecondition
+		}
 	case ActionInstall:
 		if journal.CurrentReleaseID != "" || journal.PreviousRelease != "" {
 			return ErrPrecondition
@@ -424,7 +649,7 @@ func validateActionPrecondition(journal Journal, command Command) error {
 		if journal.CurrentReleaseID == "" || journal.PreviousRelease == "" {
 			return ErrPrecondition
 		}
-	case ActionVerify, ActionStatus, ActionBackup, ActionSupport:
+	case ActionVerify, ActionStatus, ActionBackup, ActionSupport, ActionStart, ActionRecoverCredentials, ActionConfigureNodes:
 		if journal.CurrentReleaseID == "" {
 			return ErrPrecondition
 		}
@@ -437,9 +662,9 @@ func validateActionPrecondition(journal Journal, command Command) error {
 	return nil
 }
 
-func validateExecution(execution Execution, completed bool) error {
+func validateExecution(execution Execution, completed bool, node bool) error {
 	var problems []error
-	problems = append(problems, validateCommand(execution.Command))
+	problems = append(problems, validateCommand(execution.Command, node))
 	if !canonicalTime(execution.StartedAt) || !canonicalTime(execution.UpdatedAt) ||
 		execution.StartedAt != execution.Command.RequestedAt || execution.UpdatedAt.Before(execution.StartedAt) {
 		problems = append(problems, errors.New("installation execution time is invalid"))
@@ -492,7 +717,8 @@ func validateExecution(execution Execution, completed bool) error {
 				problems = append(problems, errors.New("successful installation execution is not ready"))
 			}
 		case OutcomeFailed:
-			if phaseIndex(workflow(execution.Command.Action), execution.Phase) < 0 || execution.Phase == PhaseReady {
+			credentialRecoveryCompleted := execution.Command.Action == ActionRecoverCredentials && execution.Phase == PhaseReady && execution.FailureCode != ""
+			if !credentialRecoveryCompleted && (phaseIndex(workflow(execution.Command.Action, node), execution.Phase) < 0 || execution.Phase == PhaseReady) {
 				problems = append(problems, errors.New("failed installation execution phase is invalid"))
 			}
 		case OutcomeManualIntervention:
@@ -504,7 +730,7 @@ func validateExecution(execution Execution, completed bool) error {
 			problems = append(problems, errors.New("completed installation time is invalid"))
 		}
 	} else {
-		if phaseIndex(workflow(execution.Command.Action), execution.Phase) < 0 &&
+		if phaseIndex(workflow(execution.Command.Action, node), execution.Phase) < 0 &&
 			execution.Phase != PhaseRollingBack {
 			problems = append(problems, errors.New("active installation execution phase is invalid"))
 		}
@@ -516,9 +742,24 @@ func validateExecution(execution Execution, completed bool) error {
 			execution.FailureCode == "" {
 			problems = append(problems, errors.New("installation rollback intent lacks a failure"))
 		}
+		if execution.Phase == PhaseRollingBack && execution.Command.Action != ActionInstall &&
+			execution.Command.Action != ActionUpgrade && execution.Command.Action != ActionRollback {
+			problems = append(problems, errors.New("installation action cannot roll back"))
+		}
 	}
 	if execution.FailureCode != "" && !failureCodePattern.MatchString(execution.FailureCode) {
 		problems = append(problems, errors.New("installation failure code is invalid"))
+	}
+	if execution.Command.Action == ActionRecoverCredentials {
+		if completed {
+			if execution.Phase != PhaseReady || (execution.Outcome != OutcomeSucceeded && execution.Outcome != OutcomeFailed) ||
+				(execution.Outcome == OutcomeSucceeded && execution.FailureCode != "") ||
+				(execution.Outcome == OutcomeFailed && execution.FailureCode == "") {
+				problems = append(problems, errors.New("credential recovery completion is invalid"))
+			}
+		} else if execution.FailureCode != "" && execution.Phase != PhaseCommitting {
+			problems = append(problems, errors.New("rejected credential recovery is not finalizing"))
+		}
 	}
 	return errors.Join(problems...)
 }
@@ -526,15 +767,37 @@ func validateExecution(execution Execution, completed bool) error {
 func sameCommandInput(left, right Command) bool {
 	return left.ID == right.ID && left.Action == right.Action &&
 		left.InputDigest == right.InputDigest && left.TargetReleaseID == right.TargetReleaseID &&
-		left.SecurityMailDigest == right.SecurityMailDigest &&
 		left.NorthboundOrigin == right.NorthboundOrigin &&
+		left.SecurityMailDigest == right.SecurityMailDigest &&
 		left.BackupID == right.BackupID && left.BackupDigest == right.BackupDigest &&
 		left.AuthenticationRecoveryEpoch == right.AuthenticationRecoveryEpoch &&
-		left.AuthenticationRecoveryDigest == right.AuthenticationRecoveryDigest
+		left.AuthenticationRecoveryDigest == right.AuthenticationRecoveryDigest &&
+		left.ExpectedConfigurationDigest == right.ExpectedConfigurationDigest &&
+		left.RevokePreviousCredentials == right.RevokePreviousCredentials
 }
 
-func workflow(action Action) []Phase {
+func workflow(action Action, node bool) []Phase {
+	if node {
+		switch action {
+		case ActionInstall, ActionUpgrade:
+			return []Phase{PhasePreflight, PhaseStaging, PhaseConfiguring, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+		case ActionRollback:
+			return []Phase{PhaseRollingBack, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+		case ActionRotateCredentials:
+			return []Phase{PhasePreflight, PhaseStaging, PhaseConfiguring, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+		case ActionStart:
+			return []Phase{PhaseStarting, PhaseVerifying, PhaseReady}
+		case ActionVerify, ActionStatus:
+			return []Phase{PhaseVerifying, PhaseReady}
+		default:
+			return nil
+		}
+	}
 	switch action {
+	case ActionConfigureNodes:
+		return []Phase{PhaseStaging, PhaseConfiguring, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
+	case ActionRecoverCredentials:
+		return []Phase{PhaseStaging, PhaseRecoveringCredentials, PhaseCommitting, PhaseReady}
 	case ActionInstall:
 		return []Phase{PhasePreflight, PhaseStaging, PhaseLoadingImages, PhaseConfiguring,
 			PhaseMigrating, PhaseStarting, PhaseVerifying, PhaseCommitting, PhaseReady}
@@ -554,10 +817,24 @@ func workflow(action Action) []Phase {
 	}
 }
 
-// NextPhase exposes only the next admitted transition in the closed lifecycle
-// workflow so orchestration does not duplicate the state machine sequence.
+// NextJournalPhase exposes the next admitted transition for a persisted
+// platform or node journal without making callers duplicate the root kind.
+func NextJournalPhase(journal Journal) (Phase, bool) {
+	if journal.Active == nil {
+		return "", false
+	}
+	sequence := workflow(journal.Active.Command.Action, journal.Node != nil)
+	index := phaseIndex(sequence, journal.Active.Phase)
+	if index < 0 || index+1 >= len(sequence) {
+		return "", false
+	}
+	return sequence[index+1], true
+}
+
+// NextPhase preserves the platform lifecycle boundary used by the existing
+// command backends. Node-aware orchestration must use NextJournalPhase.
 func NextPhase(action Action, current Phase) (Phase, bool) {
-	sequence := workflow(action)
+	sequence := workflow(action, false)
 	index := phaseIndex(sequence, current)
 	if index < 0 || index+1 >= len(sequence) {
 		return "", false
@@ -575,20 +852,34 @@ func phaseIndex(phases []Phase, phase Phase) int {
 }
 
 func applySuccessfulPointerChange(journal *Journal, execution Execution) {
+	if journal.Node != nil && (execution.Command.Action == ActionUpgrade || execution.Command.Action == ActionRollback) {
+		change := execution
+		journal.NodeReleaseChange = &change
+	}
 	switch execution.Command.Action {
+	case ActionRotateCredentials:
+		binding := *journal.Node
+		binding.ConfigurationDigest = execution.Command.InputDigest
+		journal.Node = &binding
+		command := execution.Command
+		journal.NodeCredentialRotation = &command
 	case ActionInstall:
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
 		journal.PreviousRelease = ""
 		journal.PreviousReleaseDigest = ""
-		journal.SecurityMailDigest = execution.Command.SecurityMailDigest
-		journal.NorthboundOrigin = execution.Command.NorthboundOrigin
+		if journal.Node == nil {
+			journal.NorthboundOrigin = execution.Command.NorthboundOrigin
+			journal.SecurityMailDigest = execution.Command.SecurityMailDigest
+		}
 	case ActionUpgrade:
 		journal.PreviousRelease = execution.SourceRelease
 		journal.PreviousReleaseDigest = execution.SourceDigest
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
-		journal.SecurityMailDigest = execution.Command.SecurityMailDigest
+		if journal.Node == nil {
+			journal.SecurityMailDigest = execution.Command.SecurityMailDigest
+		}
 	case ActionRollback:
 		journal.CurrentReleaseID = execution.Destination
 		journal.CurrentReleaseDigest = execution.DestinationDigest
@@ -606,6 +897,15 @@ func applySuccessfulPointerChange(journal *Journal, execution Execution) {
 func validateCompletedPointers(journal Journal, execution Execution) error {
 	switch execution.Outcome {
 	case OutcomeSucceeded:
+		if execution.Command.Action == ActionInstall &&
+			journal.NorthboundOrigin != execution.Command.NorthboundOrigin {
+			return errors.New("successful command lost its northbound origin")
+		}
+		if execution.Command.Action == ActionRotateCredentials &&
+			(journal.Node == nil || journal.Node.ConfigurationDigest != execution.Command.InputDigest ||
+				journal.NodeCredentialRotation == nil || !sameCommandInput(*journal.NodeCredentialRotation, execution.Command)) {
+			return errors.New("successful credential rotation is not current")
+		}
 		switch execution.Command.Action {
 		case ActionInstall, ActionUpgrade, ActionRollback, ActionRecover:
 			if journal.CurrentReleaseID != execution.Destination ||
@@ -624,12 +924,9 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 			return errors.New("successful upgrade did not retain its source release")
 		}
 		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionUpgrade) &&
+			execution.Command.SecurityMailDigest != "" &&
 			journal.SecurityMailDigest != execution.Command.SecurityMailDigest {
 			return errors.New("successful command lost its security mail commitment")
-		}
-		if execution.Command.Action == ActionInstall &&
-			journal.NorthboundOrigin != execution.Command.NorthboundOrigin {
-			return errors.New("successful installation lost its northbound origin")
 		}
 		if (execution.Command.Action == ActionInstall || execution.Command.Action == ActionRollback ||
 			execution.Command.Action == ActionRecover) && journal.PreviousRelease != "" {
@@ -644,35 +941,6 @@ func validateCompletedPointers(journal Journal, execution Execution) error {
 			journal.CurrentReleaseDigest != execution.SourceDigest {
 			return errors.New("failed command changed the current release")
 		}
-	}
-	return nil
-}
-
-// ValidateTransition prevents persistence from changing sealed installation
-// identity outside its exact terminal workflow transition.
-func ValidateTransition(before, after Journal) error {
-	if before.NorthboundOrigin != after.NorthboundOrigin {
-		if before.Active == nil || before.Active.Command.Action != ActionInstall ||
-			after.Active != nil || after.Last == nil {
-			return errors.New("northbound origin lacks a terminal installation transition")
-		}
-		expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
-		if err != nil || expected.NorthboundOrigin != after.NorthboundOrigin ||
-			expected.Last == nil || *expected.Last != *after.Last {
-			return errors.New("northbound origin transition is invalid")
-		}
-	}
-	if before.AuthenticationRecoveryEpoch == after.AuthenticationRecoveryEpoch {
-		return nil
-	}
-	if before.Active == nil || before.Active.Command.Action != ActionRecover ||
-		after.Active != nil || after.Last == nil {
-		return errors.New("authentication recovery epoch lacks a terminal recovery transition")
-	}
-	expected, err := Advance(before, before.Active.Command.ID, PhaseReady, after.Last.CompletedAt)
-	if err != nil || expected.AuthenticationRecoveryEpoch != after.AuthenticationRecoveryEpoch ||
-		expected.Last == nil || *expected.Last != *after.Last {
-		return errors.New("authentication recovery epoch transition is invalid")
 	}
 	return nil
 }

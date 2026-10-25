@@ -130,17 +130,19 @@ func preflightRelease(
 	}
 
 	if requireFreeListener {
-		listener, err := net.Listen(
-			"tcp4", net.JoinHostPort(plan.Listener, strconv.Itoa(int(plan.Port))),
-		)
-		if err != nil {
-			return errors.Join(
-				platformcommand.ErrEffectConflict,
-				errors.New("northbound listener is unavailable"),
+		for _, port := range []uint16{plan.Port, topology.NodeEnrollmentIngressPort} {
+			listener, err := net.Listen(
+				"tcp4", net.JoinHostPort(plan.Listener, strconv.Itoa(int(port))),
 			)
-		}
-		if err := listener.Close(); err != nil {
-			return errors.Join(platformcommand.ErrEffectUnavailable, err)
+			if err != nil {
+				return errors.Join(
+					platformcommand.ErrEffectConflict,
+					errors.New("northbound listener is unavailable"),
+				)
+			}
+			if err := listener.Close(); err != nil {
+				return errors.Join(platformcommand.ErrEffectUnavailable, err)
+			}
 		}
 	}
 	return nil

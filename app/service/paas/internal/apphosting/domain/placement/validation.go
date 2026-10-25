@@ -81,15 +81,15 @@ func (planner *Planner) validateInput(input Input) error {
 		}
 	}
 
-	claimIDs := make(map[paasv1.ResourceID]struct{}, len(input.Snapshot.CapacityClaims))
+	claims := make(map[paasv1.ResourceID]CapacityClaim, len(input.Snapshot.CapacityClaims))
 	for index, claim := range input.Snapshot.CapacityClaims {
 		if err := validateCapacityClaim(claim); err != nil {
 			problems = append(problems, fmt.Errorf("capacityClaims[%d]: %w", index, err))
 		}
-		if _, duplicate := claimIDs[claim.ID]; duplicate {
+		if _, duplicate := claims[claim.ID]; duplicate {
 			problems = append(problems, fmt.Errorf("capacityClaims[%d].id is duplicated", index))
 		}
-		claimIDs[claim.ID] = struct{}{}
+		claims[claim.ID] = claim
 		if claim.State != CapacityClaimReleased {
 			if _, found := targets[claim.ExecutionTargetID]; !found {
 				problems = append(
@@ -97,6 +97,33 @@ func (planner *Planner) validateInput(input Input) error {
 					fmt.Errorf("capacityClaims[%d] references a missing execution target", index),
 				)
 			}
+		}
+	}
+
+	active := input.Snapshot.ActivePlacement
+	activeDecisionID := input.Snapshot.Deployment.Status.PlacementDecisionID
+	if activeDecisionID == "" && active != nil {
+		problems = append(problems, errors.New("active placement exists without an observed Deployment placement"))
+	}
+	if activeDecisionID != "" && active == nil {
+		problems = append(problems, errors.New("observed Deployment placement has no active capacity binding"))
+	}
+	if active != nil {
+		problems = append(problems,
+			paasv1.ValidateID("activePlacement.decisionId", string(active.DecisionID)),
+			paasv1.ValidateID("activePlacement.executionTargetId", string(active.ExecutionTargetID)),
+			paasv1.ValidateID("activePlacement.capacityClaimId", string(active.CapacityClaimID)),
+		)
+		if active.DecisionID != activeDecisionID {
+			problems = append(problems, errors.New("active placement does not match Deployment status"))
+		}
+		if _, found := targets[active.ExecutionTargetID]; !found {
+			problems = append(problems, errors.New("active placement references a missing execution target"))
+		}
+		claim, found := claims[active.CapacityClaimID]
+		if !found || claim.State != CapacityClaimActive ||
+			claim.ExecutionTargetID != active.ExecutionTargetID {
+			problems = append(problems, errors.New("active placement does not identify its exact active capacity claim"))
 		}
 	}
 

@@ -2,11 +2,18 @@ package postgres
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"reflect"
 	"strings"
@@ -20,13 +27,18 @@ import (
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/data/enrollmentissuer"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/domain/placement"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/createplacement"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/operationqueue"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/refreshexecutionprofile"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/transitionreservation"
+	auditpostgres "github.com/xiak/matrix/app/service/paas/internal/audit/data/postgres"
+	"github.com/xiak/matrix/app/service/paas/internal/audit/usecase/auditdispatch"
 	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
 )
 
@@ -72,7 +84,7 @@ func TestPostgresIntegration(t *testing.T) {
 	defer workerPool.Close()
 
 	prefix := fmt.Sprintf("integration-%x", time.Now().UnixNano())
-	assertExecutionProfileRefresh(t, ctx, admin, workerPool, prefix)
+	assertExecutionProfileRefresh(t, ctx, admin, apiPool, workerPool, prefix)
 	fixture := seedIntegrationFixture(t, ctx, admin, prefix)
 	applicationResult := assertApplicationLifecycle(t, ctx, admin, apiPool, fixture, prefix)
 	assertRoleSubjectStorage(t, ctx, admin, applicationResult.Operation)
@@ -166,6 +178,16 @@ func TestPostgresIntegration(t *testing.T) {
 			t, ctx, admin, apiPool, workerPool, placementUsecase, fixture, prefix,
 		)
 	}
+	assertInPlaceReplacementWorkflow(
+		t,
+		ctx,
+		admin,
+		apiPool,
+		workerPool,
+		placementUsecase,
+		fixture,
+		prefix,
+	)
 	assertDeploymentWorkerWorkflow(
 		t,
 		ctx,
@@ -177,6 +199,9 @@ func TestPostgresIntegration(t *testing.T) {
 		prefix,
 	)
 	assertNorthboundIAMAudit(t, ctx, admin, apiPool, workerPool, fixture, prefix)
+	assertExecutionAdmission(t, ctx, admin, apiPool, workerPool, prefix)
+	assertTerminalSessionPersistence(t, ctx, admin, apiPool, workerPool, fixture, prefix)
+	assertExecutionTargetRemovalFencesCurrentWork(t, ctx, admin, apiPool, workerPool, prefix)
 }
 
 func assertApplicationDirectory(
@@ -408,7 +433,9 @@ func assertRoleSubjectStorage(t *testing.T, ctx context.Context, admin *pgx.Conn
 				}
 			} else {
 				var pgErr *pgconn.PgError
-				if !errors.As(err, &pgErr) || pgErr.Code != "23514" || pgErr.ConstraintName != target.constraint {
+				documentConstraint := strings.TrimSuffix(target.constraint, "_subject_valid") + "_document_identity"
+				if !errors.As(err, &pgErr) || pgErr.Code != "23514" ||
+					(pgErr.ConstraintName != target.constraint && pgErr.ConstraintName != documentConstraint) {
 					t.Fatal("malformed role lineage escaped its real storage constraint", target.constraint, err)
 				}
 			}
@@ -612,15 +639,17 @@ func assertExecutionProfileRefresh(
 	t *testing.T,
 	ctx context.Context,
 	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
 	workerPool *pgxpool.Pool,
 	prefix string,
 ) {
 	t.Helper()
+	installationID := prefix + "-profile-installation"
 	tenantID := paasv1.TenantID(prefix + "-profile-tenant")
 	ids := refreshexecutionprofile.IDs{
-		PoolID:   paasv1.ResourceID(prefix + "-profile-pool"),
-		TargetID: paasv1.ResourceID(prefix + "-profile-target"),
-		PolicyID: paasv1.ResourceID(prefix + "-profile-policy"),
+		PoolID:   "execution-pool-local",
+		TargetID: "execution-target-local",
+		PolicyID: "placement-policy-local",
 	}
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	adapter := &integrationExecutionTargetAdapter{observation: paasv1.ExecutionTargetObservation{
@@ -649,7 +678,8 @@ func assertExecutionProfileRefresh(
 		adapter,
 		repository,
 		refreshexecutionprofile.Config{
-			TenantID: tenantID, IDs: ids, MachineBindingRef: "local-machine-v1",
+			InstallationID: installationID,
+			TenantID:       tenantID, IDs: ids, MachineBindingRef: "local-machine-v1",
 			ObservationTimeout: 5 * time.Second, MaximumObservationAge: 5 * time.Minute,
 			MaxTransactionAttempts: 5,
 		},
@@ -663,14 +693,29 @@ func assertExecutionProfileRefresh(
 	if err := service.Ready(ctx); err != nil {
 		t.Fatalf("created execution profile readiness: %v", err)
 	}
+	if _, err := admin.Exec(ctx,
+		"UPDATE paas.execution_targets SET installation_id = NULL WHERE id = $1",
+		ids.TargetID,
+	); err != nil {
+		t.Fatalf("stage retained local target: %v", err)
+	}
+	if _, err := admin.Exec(ctx,
+		"UPDATE paas.execution_pools SET installation_id = NULL WHERE id = $1",
+		ids.PoolID,
+	); err != nil {
+		t.Fatalf("stage retained local pool: %v", err)
+	}
 	adapter.observation.ObservedAt = time.Now().UTC().Truncate(time.Microsecond)
 	if err := service.Refresh(ctx); err != nil {
 		t.Fatalf("refresh execution profile through worker boundary: %v", err)
 	}
+	var poolInstallation, targetInstallation string
 	var poolVersion, targetVersion, policyVersion uint64
 	if err := admin.QueryRow(
 		ctx,
-		`SELECT pool.resource_version,
+		`SELECT pool.installation_id,
+		        target.installation_id,
+		        pool.resource_version,
 		        target.resource_version,
 		        policy.resource_version
 		   FROM paas.execution_pools AS pool
@@ -685,7 +730,7 @@ func assertExecutionProfileRefresh(
 		ids.PolicyID,
 		ids.PoolID,
 		ids.TargetID,
-	).Scan(&poolVersion, &targetVersion, &policyVersion); err != nil {
+	).Scan(&poolInstallation, &targetInstallation, &poolVersion, &targetVersion, &policyVersion); err != nil {
 		t.Fatalf("read reconciled execution profile: %v", err)
 	}
 	if poolVersion != 2 || targetVersion != 2 || policyVersion != 1 {
@@ -695,6 +740,144 @@ func assertExecutionProfileRefresh(
 			targetVersion,
 			policyVersion,
 		)
+	}
+	if poolInstallation != installationID || targetInstallation != installationID {
+		t.Fatalf("retained local profile was not scoped: pool=%q target=%q", poolInstallation, targetInstallation)
+	}
+	enrolledTargetID := assertNodeEnrollmentPersistence(
+		t, ctx, admin, apiPool, workerPool, installationID, ids.PoolID, prefix,
+	)
+
+	managedTargetID := paasv1.ResourceID(prefix + "-profile-node")
+	managedAdapter := &admissionAdapter{
+		targetID:    managedTargetID,
+		fingerprint: integrationDigest(prefix + "-profile-node"),
+	}
+	admissionRepository, err := NewExecutionAdmissionRepository(apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := executionadmission.New(admissionRepository, executionadmission.Config{
+		InstallationID: installationID,
+		Bindings: []executionadmission.Binding{{
+			Ref: "node-binding", TargetID: managedTargetID,
+			IdentityFingerprint: managedAdapter.fingerprint, Adapter: managedAdapter,
+		}},
+		ObservationTimeout: time.Second, MaximumObservationAge: 15 * time.Second,
+		MaxTransactionAttempts: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := port.Authorization{
+		InstallationID: installationID,
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "profile-platform-user"},
+		DecisionID:     "profile-platform-decision", RequestID: "profile-platform-request",
+	}
+	registered, _, replayed, err := admission.RegisterTarget(ctx, executionadmission.RegisterTargetCommand{
+		Authorization: authorization, IdempotencyKey: "register-profile-node",
+		Request: paasv1.RegisterExecutionTargetRequest{
+			ID: managedTargetID, Name: "profile-node", ExecutionPoolID: ids.PoolID,
+			BindingRef: "node-binding",
+			Labels:     map[string]string{"matrix-profile": "local-compose"},
+		},
+	})
+	if err != nil || replayed || registered.Metadata.ID != managedTargetID {
+		t.Fatalf("register node in built-in pool: replay=%v target=%#v err=%v", replayed, registered, err)
+	}
+	pool, err := admission.GetPool(ctx, authorization, ids.PoolID)
+	if err != nil || pool.Status.ExecutionTargetCount != 3 || pool.Status.ReadyExecutionTargetCount != 3 {
+		t.Fatalf("built-in pool did not retain all targets: %#v err=%v", pool, err)
+	}
+	pools, err := admission.ListPools(ctx, authorization)
+	if err != nil || paasv1.ValidateExecutionPoolList(pools) != nil || len(pools.Items) != 1 ||
+		pools.Items[0].Metadata.ID != ids.PoolID || pools.Items[0].Status.ExecutionTargetCount != 3 ||
+		pools.Items[0].Status.ReadyExecutionTargetCount != 3 {
+		t.Fatalf("list installation execution pools: %#v err=%v", pools, err)
+	}
+	localTarget, err := admission.GetTarget(ctx, authorization, ids.TargetID)
+	if err != nil || localTarget.Spec.InfrastructureAdapter.Name != "localmachine" {
+		t.Fatalf("installation cannot read built-in target: %#v err=%v", localTarget, err)
+	}
+	managedCalls := managedAdapter.calls.Load()
+	inventory, err := admission.ListTargets(ctx, authorization)
+	if err != nil || paasv1.ValidateExecutionTargetList(inventory) != nil || len(inventory.Items) != 3 ||
+		string(inventory.Items[0].Metadata.ID) >= string(inventory.Items[1].Metadata.ID) ||
+		string(inventory.Items[1].Metadata.ID) >= string(inventory.Items[2].Metadata.ID) ||
+		managedAdapter.calls.Load() != managedCalls {
+		t.Fatalf("list built-in and managed targets: inventory=%#v calls=%d err=%v", inventory, managedAdapter.calls.Load(), err)
+	}
+	listed := map[paasv1.ResourceID]paasv1.ExecutionTarget{}
+	for _, item := range inventory.Items {
+		listed[item.Metadata.ID] = item
+	}
+	if listed[ids.TargetID].Status.ObservedAt != localTarget.Status.ObservedAt ||
+		listed[managedTargetID].Status.Usage == nil || registered.Status.Usage == nil ||
+		listed[managedTargetID].Status.Usage.ObservedAt != registered.Status.Usage.ObservedAt {
+		t.Fatal("inventory replaced persisted source timestamps")
+	}
+	encodedInventory, err := json.Marshal(inventory)
+	if err != nil || strings.Contains(string(encodedInventory), "node-binding") ||
+		strings.Contains(string(encodedInventory), "bindingRef") ||
+		strings.Contains(string(encodedInventory), "identityFingerprint") {
+		t.Fatalf("inventory leaked protected binding material: %s err=%v", encodedInventory, err)
+	}
+	adapter.observation.ObservedAt = time.Now().UTC().Truncate(time.Microsecond)
+	if err := service.Refresh(ctx); err != nil {
+		t.Fatalf("local refresh overwrote managed pool membership: %v", err)
+	}
+	pool, err = admission.GetPool(ctx, authorization, ids.PoolID)
+	if err != nil || pool.Status.ExecutionTargetCount != 3 || pool.Status.ReadyExecutionTargetCount != 3 {
+		t.Fatalf("local refresh changed managed pool membership: %#v err=%v", pool, err)
+	}
+	enrolledTarget, err := admission.GetTarget(ctx, authorization, enrolledTargetID)
+	if err != nil {
+		t.Fatalf("read enrolled target before removal: %v", err)
+	}
+	drained, err := admission.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+		Authorization: authorization, TargetID: enrolledTargetID,
+		Action:                  paasv1.OperationDrainExecutionTarget,
+		ExpectedResourceVersion: enrolledTarget.Metadata.ResourceVersion,
+		IdempotencyKey:          prefix + "-drain-enrolled-target",
+	})
+	if err != nil || drained.Target.Spec.DesiredState != paasv1.ExecutionTargetDraining {
+		t.Fatalf("drain enrolled target: result=%#v err=%v", drained, err)
+	}
+	removed, err := admission.TransitionTarget(ctx, executionadmission.TransitionTargetCommand{
+		Authorization: authorization, TargetID: enrolledTargetID,
+		Action:                  paasv1.OperationRemoveExecutionTarget,
+		ExpectedResourceVersion: drained.Target.Metadata.ResourceVersion,
+		IdempotencyKey:          prefix + "-remove-enrolled-target",
+	})
+	if err != nil || removed.Target.Spec.DesiredState != paasv1.ExecutionTargetRemoved {
+		t.Fatalf("remove enrolled target: result=%#v err=%v", removed, err)
+	}
+	connectionRepository, err := NewEnrolledNodeConnectionRepository(apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disabledConnection, found, err := connectionRepository.LoadEnrolledNodeConnection(
+		ctx, installationID, enrolledTargetID,
+	)
+	if err != nil || !found || disabledConnection.Enabled {
+		t.Fatalf("removed target connection = %#v found=%t err=%v", disabledConnection, found, err)
+	}
+	outbox, err := auditpostgres.NewAuditOutboxRepository(workerPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 4 {
+		claim, found, err := outbox.Claim(ctx, "profile-audit-worker", 30*time.Second)
+		if err != nil || !found || claim.InstallationID != installationID {
+			t.Fatalf("claim installation admission fact: found=%v claim=%#v err=%v", found, claim, err)
+		}
+		if err := outbox.Complete(ctx, auditdispatch.Completion{
+			InstallationID: claim.InstallationID, EventID: claim.EventID, Stream: claim.Stream,
+			WorkerID: "profile-audit-worker", FencingToken: claim.FencingToken,
+			Outcome: auditdispatch.OutcomeDelivered,
+		}); err != nil {
+			t.Fatalf("complete installation admission fact: %v", err)
+		}
 	}
 	if _, err := workerPool.Exec(
 		ctx,
@@ -717,6 +900,1174 @@ func assertExecutionProfileRefresh(
 	if err := service.Refresh(ctx); !errors.Is(err, refreshexecutionprofile.ErrConflict) {
 		t.Fatalf("execution target identity change error = %v", err)
 	}
+}
+
+func assertNodeEnrollmentPersistence(
+	t *testing.T,
+	ctx context.Context,
+	admin *pgx.Conn,
+	apiPool *pgxpool.Pool,
+	workerPool *pgxpool.Pool,
+	installationID string,
+	poolID paasv1.ResourceID,
+	prefix string,
+) paasv1.ResourceID {
+	t.Helper()
+	issuer, issuerPrivateKey := newIntegrationEnrollmentIssuer(t, installationID)
+	repository, err := NewNodeEnrollmentRepository(apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admissionRepository, err := NewExecutionAdmissionRepository(apiPool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admission, err := executionadmission.New(admissionRepository, executionadmission.Config{
+		InstallationID: installationID, ObservationTimeout: time.Second,
+		MaximumObservationAge: 15 * time.Second, MaxTransactionAttempts: 5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completionProbe := &integrationEnrollmentCompletionProbe{}
+	enrollmentConfig := nodeenrollment.Config{
+		InstallationID: installationID, Lifetime: 5 * time.Minute,
+		CertificateLifetime:            30 * 24 * time.Hour,
+		RecoveryChallengeLifetime:      2 * time.Minute,
+		SupportedRuntimeContractDigest: integrationDigest("node-runtime-contract"),
+		ControllerID:                   "paas-controller-v1", ManagementPort: 16443, CollectorPort: 19100,
+		CompletionProbeTimeout: 5 * time.Second, CompletionProbe: completionProbe,
+		CompletionAdmission:    admission,
+		MaxTransactionAttempts: 5,
+	}
+	service, err := nodeenrollment.New(repository, issuer, enrollmentConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrappingPrivateKey, err := rsa.GenerateKey(rand.Reader, 3072)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrappingPublicKey, err := x509.MarshalPKIXPublicKey(&wrappingPrivateKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := port.Authorization{
+		InstallationID: installationID,
+		Subject:        paasv1.SubjectRef{Type: paasv1.SubjectUser, ID: "enrollment-platform-user"},
+		DecisionID:     "enrollment-platform-decision",
+		RequestID:      "enrollment-platform-request",
+		AuditID:        "enrollment-platform-audit",
+	}
+	command := nodeenrollment.CreateCommand{
+		Authorization:       authorization,
+		IdempotencyKey:      prefix + "-enroll-node",
+		ControlPlaneBaseURL: "https://matrix.invalid/api/paas/v1",
+		Request: paasv1.CreateNodeEnrollmentRequest{
+			Name:              "enrollment-host",
+			ExecutionPoolID:   poolID,
+			Labels:            map[string]string{"matrix-zone": "integration"},
+			WrappingPublicKey: base64.RawURLEncoding.EncodeToString(wrappingPublicKey),
+		},
+	}
+	created, err := service.Create(ctx, command)
+	if err != nil || created.Replayed || paasv1.ValidateCreateNodeEnrollmentResponse(created.Response) != nil ||
+		created.Operation.State != paasv1.OperationAccepted {
+		t.Fatalf("create persisted node enrollment: result=%#v err=%v", created, err)
+	}
+	replayed, err := service.Create(ctx, command)
+	if err != nil || !replayed.Replayed || !reflect.DeepEqual(replayed.Response, created.Response) ||
+		!reflect.DeepEqual(replayed.Operation, created.Operation) {
+		t.Fatalf("replay persisted node enrollment: result=%#v err=%v", replayed, err)
+	}
+
+	ciphertext, err := base64.RawURLEncoding.Strict().DecodeString(created.Response.WrappedCredential.Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	label, err := paasv1.NodeEnrollmentCredentialWrappingLabel(
+		installationID, created.Response.Enrollment.Metadata.ID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(label)
+	credential, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, wrappingPrivateKey, ciphertext, label)
+	if err != nil {
+		t.Fatalf("decrypt one-time join credential: %v", err)
+	}
+	defer clear(credential)
+	credentialDigest := sha256.Sum256(credential)
+	if created.Response.Join.CredentialDigest != "sha256:"+hex.EncodeToString(credentialDigest[:]) {
+		t.Fatal("wrapped join credential does not match its signed digest")
+	}
+	var (
+		credentialSalt     []byte
+		credentialVerifier string
+		enrollmentState    string
+		operationState     string
+		operationAction    string
+		storedCount        int
+	)
+	if err := admin.QueryRow(ctx, `SELECT enrollment.credential_salt,
+			enrollment.credential_verifier, enrollment.state,
+			operation.state, operation.action,
+			count(*) OVER ()
+		FROM paas.node_enrollments AS enrollment
+		JOIN paas.operations AS operation
+		  ON operation.authority_key = enrollment.authority_key
+		 AND operation.id = enrollment.operation_id
+		WHERE enrollment.installation_id = $1 AND enrollment.id = $2`,
+		installationID, created.Response.Enrollment.Metadata.ID,
+	).Scan(
+		&credentialSalt, &credentialVerifier, &enrollmentState,
+		&operationState, &operationAction, &storedCount,
+	); err != nil {
+		t.Fatalf("inspect persisted node enrollment: %v", err)
+	}
+	verifierInput := make([]byte, 0, len(credentialSalt)+len(credential))
+	verifierInput = append(verifierInput, credentialSalt...)
+	verifierInput = append(verifierInput, credential...)
+	verifierDigest := sha256.Sum256(verifierInput)
+	clear(verifierInput)
+	if len(credentialSalt) != 32 || credentialVerifier != "sha256:"+hex.EncodeToString(verifierDigest[:]) ||
+		credentialVerifier == created.Response.Join.CredentialDigest || enrollmentState != "WAITING_INSTALL" ||
+		operationState != "ACCEPTED" || operationAction != "REGISTER_EXECUTION_TARGET" || storedCount != 1 {
+		t.Fatal("node enrollment authority or salted credential verifier was not persisted exactly once")
+	}
+	_, err = admin.Exec(ctx, `UPDATE paas.node_enrollments SET credential_salt = NULL
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, created.Response.Enrollment.Metadata.ID,
+	)
+	assertPostgresCode(t, err, "23514")
+	retainingCredential := created.Response.Enrollment
+	consumedAt := retainingCredential.Metadata.CreatedAt.Add(time.Microsecond)
+	retainingCredential.State = paasv1.NodeEnrollmentVerifying
+	retainingCredential.CredentialConsumedAt = &consumedAt
+	retainingCredential.Metadata.ResourceVersion++
+	retainingCredential.Metadata.UpdatedAt = consumedAt
+	if paasv1.ValidateNodeEnrollment(retainingCredential) != nil {
+		t.Fatal("invalid credential-retention attack fixture")
+	}
+	_, err = admin.Exec(ctx, `UPDATE paas.node_enrollments
+		SET state = 'VERIFYING', resource_version = $3, document = $4::jsonb
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, created.Response.Enrollment.Metadata.ID,
+		retainingCredential.Metadata.ResourceVersion, integrationJSON(t, retainingCredential),
+	)
+	assertPostgresCode(t, err, "23514")
+
+	read, err := service.Get(ctx, authorization, created.Response.Enrollment.Metadata.ID)
+	listed, listErr := service.List(ctx, authorization)
+	if err != nil || listErr != nil || !reflect.DeepEqual(read, created.Response.Enrollment) || len(listed.Items) != 1 ||
+		!reflect.DeepEqual(listed.Items[0], created.Response.Enrollment) {
+		t.Fatalf("read persisted node enrollment: get=%#v list=%#v errors=%v/%v", read, listed, err, listErr)
+	}
+	ordinaryJSON := strings.ToLower(string(integrationJSON(t, listed)))
+	for _, forbidden := range []string{"wrappedcredential", "ciphertext", "credentialsalt", "credentialverifier"} {
+		if strings.Contains(ordinaryJSON, forbidden) {
+			t.Fatalf("ordinary node enrollment read exposed %s", forbidden)
+		}
+	}
+	var visibleAcrossInstallations bool
+	err = repository.WithinInstallation(ctx, installationID+"-other", func(
+		transactionContext context.Context,
+		transaction nodeenrollment.Transaction,
+	) error {
+		_, visibleAcrossInstallations, err = transaction.LoadEnrollment(
+			transactionContext, created.Response.Enrollment.Metadata.ID,
+		)
+		return err
+	})
+	if err != nil || visibleAcrossInstallations {
+		t.Fatalf("node enrollment crossed installation RLS boundary: visible=%t err=%v", visibleAcrossInstallations, err)
+	}
+	if _, err := apiPool.Exec(ctx, `UPDATE paas.node_enrollments
+		SET resource_version = resource_version WHERE installation_id = $1 AND id = $2`,
+		installationID, created.Response.Enrollment.Metadata.ID,
+	); err == nil {
+		t.Fatal("API login bypassed the node enrollment transition functions")
+	}
+
+	exchangeCreateCommand := command
+	exchangeCreateCommand.IdempotencyKey = prefix + "-exchange-node"
+	exchangeCreateCommand.Request.Name = "enrollment-exchange"
+	exchangeCreateCommand.Request.Labels = map[string]string{
+		"matrix-profile": "local-compose", "matrix-zone": "integration",
+	}
+	exchangeCreated, err := service.Create(ctx, exchangeCreateCommand)
+	if err != nil {
+		t.Fatalf("create exchangeable node enrollment: %v", err)
+	}
+	exchangeCredential := integrationEnrollmentCredential(
+		t, exchangeCreated.Response, wrappingPrivateKey, installationID,
+	)
+	defer clear(exchangeCredential)
+	_, nodePrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, collectorPrivateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exchangeRequest := integrationEnrollmentExchangeRequest(
+		t, exchangeCreated.Response, exchangeCredential, prefix+"-exchange",
+		nodePrivateKey, collectorPrivateKey,
+	)
+	exchanged, err := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+		EnrollmentID:        exchangeCreated.Response.Enrollment.Metadata.ID,
+		ObservedPeerAddress: "192.168.50.10", Request: exchangeRequest,
+	})
+	if err != nil || exchanged.Enrollment.State != paasv1.NodeEnrollmentVerifying ||
+		exchanged.Enrollment.Metadata.ResourceVersion != 2 ||
+		paasv1.ValidateNodeEnrollmentExchangeResponseForRequest(exchanged.Response, exchangeRequest) != nil {
+		t.Fatalf("exchange persisted node enrollment: result=%#v err=%v", exchanged, err)
+	}
+	if _, err := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+		EnrollmentID:        exchangeCreated.Response.Enrollment.Metadata.ID,
+		ObservedPeerAddress: "192.168.50.10", Request: exchangeRequest,
+	}); !errors.Is(err, nodeenrollment.ErrCredentialConsumed) {
+		t.Fatalf("replayed consumed credential error = %v", err)
+	}
+	nodePublicKey, collectorPublicKey, err := paasv1.NodeEnrollmentExchangePublicKeys(exchangeRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodePublicKeyDigest := sha256.Sum256(nodePublicKey)
+	collectorPublicKeyDigest := sha256.Sum256(collectorPublicKey)
+	clear(nodePublicKey)
+	clear(collectorPublicKey)
+	challengeRequest := paasv1.CreateNodeEnrollmentRecoveryChallengeRequest{
+		APIVersion:   paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:         paasv1.NodeEnrollmentRecoveryChallengeRequestKind,
+		EnrollmentID: exchangeRequest.EnrollmentID, InstallationID: exchangeRequest.InstallationID,
+		ExecutionTargetID: exchangeRequest.ExecutionTargetID, ExchangeID: exchangeRequest.ExchangeID,
+		MachineFingerprint:            exchangeRequest.MachineFingerprint,
+		RuntimeContractDigest:         exchangeRequest.RuntimeContractDigest,
+		NodePublicKeyFingerprint:      "sha256:" + hex.EncodeToString(nodePublicKeyDigest[:]),
+		CollectorPublicKeyFingerprint: "sha256:" + hex.EncodeToString(collectorPublicKeyDigest[:]),
+	}
+	challenge, err := service.CreateRecoveryChallenge(ctx, nodeenrollment.RecoveryChallengeCommand{
+		EnrollmentID: exchangeRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.10",
+		Request: challengeRequest,
+	})
+	if err != nil || challenge.Enrollment.Metadata.ResourceVersion != 2 ||
+		paasv1.ValidateNodeEnrollmentRecoveryChallengeForRequest(challenge.Challenge, challengeRequest) != nil {
+		t.Fatalf("create persisted recovery challenge: result=%#v err=%v", challenge, err)
+	}
+	issuerCertificateDER, err := base64.RawURLEncoding.Strict().DecodeString(exchanged.Response.IssuerCertificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuerPrivateKeyDER, err := x509.MarshalPKCS8PrivateKey(issuerPrivateKey)
+	if err != nil {
+		clear(issuerCertificateDER)
+		t.Fatal(err)
+	}
+	restartedIssuer, err := enrollmentissuer.New(installationID, issuerCertificateDER, issuerPrivateKeyDER)
+	clear(issuerCertificateDER)
+	clear(issuerPrivateKeyDER)
+	if err != nil {
+		t.Fatalf("restart enrollment issuer: %v", err)
+	}
+	restartedService, err := nodeenrollment.New(repository, restartedIssuer, enrollmentConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofBytes, err := paasv1.NodeEnrollmentRecoveryProofSigningBytes(challenge.Challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryRequest := paasv1.RecoverNodeEnrollmentExchangeRequest{
+		APIVersion:         paasv1.NodeEnrollmentRecoveryAPIVersion,
+		Kind:               paasv1.NodeEnrollmentRecoveryProofRequestKind,
+		Challenge:          challenge.Challenge,
+		NodeSignature:      base64.RawURLEncoding.EncodeToString(ed25519.Sign(nodePrivateKey, proofBytes)),
+		CollectorSignature: base64.RawURLEncoding.EncodeToString(ed25519.Sign(collectorPrivateKey, proofBytes)),
+	}
+	clear(proofBytes)
+	recoveredExchange, err := restartedService.RecoverExchange(ctx, nodeenrollment.RecoverExchangeCommand{
+		EnrollmentID: exchangeRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.10",
+		Request: recoveryRequest,
+	})
+	if err != nil || !reflect.DeepEqual(recoveredExchange.Response, exchanged.Response) ||
+		!reflect.DeepEqual(recoveredExchange.Enrollment, exchanged.Enrollment) {
+		t.Fatalf("recover persisted exchange after issuer restart: result=%#v err=%v", recoveredExchange, err)
+	}
+	replayedRecovery, err := restartedService.RecoverExchange(ctx, nodeenrollment.RecoverExchangeCommand{
+		EnrollmentID: exchangeRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.10",
+		Request: recoveryRequest,
+	})
+	if err != nil || !reflect.DeepEqual(replayedRecovery, recoveredExchange) {
+		t.Fatalf("replay persisted exchange recovery: result=%#v err=%v", replayedRecovery, err)
+	}
+
+	var persistedExchange nodeenrollment.StoredEnrollment
+	err = repository.WithinInstallation(ctx, installationID, func(
+		transactionContext context.Context,
+		transaction nodeenrollment.Transaction,
+	) error {
+		var found bool
+		var loadErr error
+		persistedExchange, found, loadErr = transaction.LoadEnrollment(
+			transactionContext, exchangeCreated.Response.Enrollment.Metadata.ID,
+		)
+		if loadErr != nil {
+			return loadErr
+		}
+		if !found {
+			return errors.New("exchanged enrollment is absent")
+		}
+		return nil
+	})
+	if err != nil || persistedExchange.Exchange == nil || persistedExchange.SealedExchangeResult == nil ||
+		len(persistedExchange.CredentialSalt) != 0 || persistedExchange.CredentialVerifier != "" ||
+		persistedExchange.WrappedCredential.Ciphertext != "" {
+		t.Fatalf("load persisted exchange: stored=%#v err=%v", persistedExchange, err)
+	}
+	defer persistedExchange.Clear()
+	var exchangeDocument, sealedDocument string
+	var exchangedCredentialCleared bool
+	if err := admin.QueryRow(ctx, `SELECT
+		credential_salt IS NULL AND credential_verifier IS NULL
+			AND wrapped_credential_document IS NULL,
+		exchange_document::text, sealed_exchange_result_document::text
+		FROM paas.node_enrollments
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, exchangeCreated.Response.Enrollment.Metadata.ID,
+	).Scan(&exchangedCredentialCleared, &exchangeDocument, &sealedDocument); err != nil ||
+		!exchangedCredentialCleared || len(exchangeDocument) > 16*1024 || len(sealedDocument) > 64*1024 {
+		t.Fatalf("inspect exchanged credential storage: cleared=%t exchange=%d sealed=%d err=%v", exchangedCredentialCleared, len(exchangeDocument), len(sealedDocument), err)
+	}
+	for _, forbidden := range []string{
+		base64.RawURLEncoding.EncodeToString(exchangeCredential),
+		exchangeRequest.NodeCertificateRequest,
+		exchangeRequest.CollectorCertificateRequest,
+	} {
+		if strings.Contains(exchangeDocument, forbidden) || strings.Contains(sealedDocument, forbidden) {
+			t.Fatal("persisted node exchange retained raw credential or CSR material")
+		}
+	}
+	_, err = admin.Exec(ctx, `UPDATE paas.node_enrollments
+		SET exchange_document = jsonb_set(
+			exchange_document, '{nodeListenAddress}', to_jsonb('8.8.8.8:16443'::text)
+		)
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, exchangeCreated.Response.Enrollment.Metadata.ID,
+	)
+	assertPostgresCode(t, err, "23514")
+
+	completionRequest := paasv1.CompleteNodeEnrollmentRequest{
+		APIVersion: paasv1.NodeEnrollmentExchangeAPIVersion, Kind: paasv1.NodeEnrollmentCompletionRequestKind,
+		EnrollmentID: exchangeRequest.EnrollmentID, InstallationID: exchangeRequest.InstallationID,
+		ExecutionTargetID: exchangeRequest.ExecutionTargetID, ExchangeID: exchangeRequest.ExchangeID,
+		MachineFingerprint: exchangeRequest.MachineFingerprint, RuntimeContractDigest: exchangeRequest.RuntimeContractDigest,
+		ControllerID: exchanged.Response.ControllerID, BindingRef: exchanged.Response.BindingRef,
+		NodeListenAddress: exchanged.Response.NodeListenAddress, CollectorEndpoint: exchanged.Response.CollectorEndpoint,
+		NodePublicKeyFingerprint:      "sha256:" + hex.EncodeToString(nodePublicKeyDigest[:]),
+		CollectorPublicKeyFingerprint: "sha256:" + hex.EncodeToString(collectorPublicKeyDigest[:]),
+	}
+	completed, err := restartedService.Complete(ctx, nodeenrollment.CompleteCommand{
+		EnrollmentID: exchangeRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.10",
+		Request: completionRequest,
+	})
+	if err != nil || completed.Replayed || paasv1.ValidateCompleteNodeEnrollmentResponse(completed.Response) != nil ||
+		completed.Response.Enrollment.State != paasv1.NodeEnrollmentReady ||
+		completed.Response.Enrollment.Metadata.ResourceVersion != 3 ||
+		completed.Response.Operation.ID != exchangeCreated.Operation.ID ||
+		completed.Response.Operation.State != paasv1.OperationSucceeded || completionProbe.calls != 1 {
+		t.Fatalf("complete persisted node enrollment: result=%#v probes=%d err=%v", completed, completionProbe.calls, err)
+	}
+	var (
+		completedEnrollmentState, completedOperationState string
+		completedVersion                                  uint64
+		sealedCleared                                     bool
+		storedBinding, storedFingerprint                  string
+		storedController, storedEndpoint                  string
+		connectionEnabled, allocationExists               bool
+		auditCount                                        int
+	)
+	if err := admin.QueryRow(ctx, `SELECT enrollment.state, enrollment.resource_version,
+			enrollment.sealed_exchange_result_document IS NULL, operation.state,
+			target.binding_ref, target.identity_fingerprint,
+			connection.controller_id, connection.endpoint, connection.enabled,
+			EXISTS (SELECT 1 FROM paas.execution_target_allocations AS allocation
+				WHERE allocation.execution_target_id = target.id),
+			(SELECT count(*) FROM paas.audit_outbox AS outbox
+				WHERE outbox.installation_id = enrollment.installation_id
+				  AND outbox.operation_id = enrollment.operation_id
+				  AND outbox.document->>'action' = 'paas.execution-target.registered')
+		FROM paas.node_enrollments AS enrollment
+		JOIN paas.operations AS operation
+		  ON operation.authority_key = enrollment.authority_key
+		 AND operation.id = enrollment.operation_id
+		JOIN paas.execution_targets AS target
+		  ON target.installation_id = enrollment.installation_id
+		 AND target.id = enrollment.execution_target_id
+		JOIN paas.enrolled_node_connections AS connection
+		  ON connection.installation_id = enrollment.installation_id
+		 AND connection.execution_target_id = enrollment.execution_target_id
+		WHERE enrollment.installation_id = $1 AND enrollment.id = $2`,
+		installationID, exchangeRequest.EnrollmentID,
+	).Scan(
+		&completedEnrollmentState, &completedVersion, &sealedCleared, &completedOperationState,
+		&storedBinding, &storedFingerprint, &storedController, &storedEndpoint, &connectionEnabled,
+		&allocationExists, &auditCount,
+	); err != nil || completedEnrollmentState != "READY" || completedVersion != 3 || !sealedCleared ||
+		completedOperationState != "SUCCEEDED" || storedBinding != completionRequest.BindingRef ||
+		storedFingerprint != completionRequest.MachineFingerprint || storedController != completionRequest.ControllerID ||
+		storedEndpoint != "https://"+completionRequest.NodeListenAddress || !connectionEnabled ||
+		!allocationExists || auditCount != 1 {
+		t.Fatalf("inspect atomic node completion: state=%q/%q version=%d sealed=%t binding=%q fingerprint=%q controller=%q endpoint=%q enabled=%t allocation=%t audit=%d err=%v",
+			completedEnrollmentState, completedOperationState, completedVersion, sealedCleared,
+			storedBinding, storedFingerprint, storedController, storedEndpoint, connectionEnabled,
+			allocationExists, auditCount, err)
+	}
+	replayedCompletion, err := restartedService.Complete(ctx, nodeenrollment.CompleteCommand{
+		EnrollmentID: exchangeRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.10",
+		Request: completionRequest,
+	})
+	if err != nil || !replayedCompletion.Replayed ||
+		!reflect.DeepEqual(replayedCompletion.Response, completed.Response) || completionProbe.calls != 1 {
+		t.Fatalf("replay persisted node completion: result=%#v probes=%d err=%v", replayedCompletion, completionProbe.calls, err)
+	}
+	expectedConnection := port.EnrolledNodeConnection{
+		InstallationID: installationID, ExecutionTargetID: exchangeRequest.ExecutionTargetID,
+		ControllerID: completionRequest.ControllerID, BindingRef: completionRequest.BindingRef,
+		Endpoint:            "https://" + completionRequest.NodeListenAddress,
+		IdentityFingerprint: completionRequest.MachineFingerprint, Enabled: true,
+	}
+	for role, connectionPool := range map[string]*pgxpool.Pool{"api": apiPool, "worker": workerPool} {
+		connectionRepository, repositoryErr := NewEnrolledNodeConnectionRepository(connectionPool)
+		if repositoryErr != nil {
+			t.Fatalf("create %s node connection reader: %v", role, repositoryErr)
+		}
+		loadedConnection, found, loadErr := connectionRepository.LoadEnrolledNodeConnection(
+			ctx, installationID, exchangeRequest.ExecutionTargetID,
+		)
+		if loadErr != nil || !found || loadedConnection != expectedConnection {
+			t.Fatalf("%s node connection read = %#v found=%t err=%v", role, loadedConnection, found, loadErr)
+		}
+		_, found, loadErr = connectionRepository.LoadEnrolledNodeConnection(
+			ctx, installationID+"-other", exchangeRequest.ExecutionTargetID,
+		)
+		if loadErr != nil || found {
+			t.Fatalf("%s node connection crossed installation RLS: found=%t err=%v", role, found, loadErr)
+		}
+	}
+	var connectionVisible, connectionCrossVisible bool
+	err = repository.WithinInstallation(ctx, installationID, func(
+		transactionContext context.Context,
+		transaction nodeenrollment.Transaction,
+	) error {
+		_, connectionVisible, err = transaction.LoadEnrolledNodeConnection(
+			transactionContext, exchangeRequest.ExecutionTargetID,
+		)
+		return err
+	})
+	if err != nil || !connectionVisible {
+		t.Fatalf("committed node connection is not installation-readable: visible=%t err=%v", connectionVisible, err)
+	}
+	err = repository.WithinInstallation(ctx, installationID+"-other", func(
+		transactionContext context.Context,
+		transaction nodeenrollment.Transaction,
+	) error {
+		_, connectionCrossVisible, err = transaction.LoadEnrolledNodeConnection(
+			transactionContext, exchangeRequest.ExecutionTargetID,
+		)
+		return err
+	})
+	if err != nil || connectionCrossVisible {
+		t.Fatalf("node connection crossed installation RLS boundary: visible=%t err=%v", connectionCrossVisible, err)
+	}
+	if _, err := apiPool.Exec(ctx, `UPDATE paas.enrolled_node_connections
+		SET enabled = false WHERE installation_id = $1 AND execution_target_id = $2`,
+		installationID, exchangeRequest.ExecutionTargetID,
+	); err == nil {
+		t.Fatal("API login bypassed the atomic node connection function")
+	}
+
+	failureCreateCommand := command
+	failureCreateCommand.IdempotencyKey = prefix + "-completion-failure-node"
+	failureCreateCommand.Request.Name = "enrollment-completion-failure"
+	failureCreateCommand.Request.Labels = map[string]string{
+		"matrix-profile": "local-compose", "matrix-zone": "integration",
+	}
+	failureCreated, err := service.Create(ctx, failureCreateCommand)
+	if err != nil {
+		t.Fatalf("create failure-closing enrollment: %v", err)
+	}
+	failureCredential := integrationEnrollmentCredential(
+		t, failureCreated.Response, wrappingPrivateKey, installationID,
+	)
+	defer clear(failureCredential)
+	failureRequest := integrationEnrollmentExchangeRequest(
+		t, failureCreated.Response, failureCredential, prefix+"-completion-failure",
+		integrationEd25519PrivateKey(t), integrationEd25519PrivateKey(t),
+	)
+	failureExchange, err := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+		EnrollmentID: failureRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.16",
+		Request: failureRequest,
+	})
+	if err != nil {
+		t.Fatalf("exchange failure-closing enrollment: %v", err)
+	}
+	failureNodeKey, failureCollectorKey, err := paasv1.NodeEnrollmentExchangePublicKeys(failureRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failureNodeDigest := sha256.Sum256(failureNodeKey)
+	failureCollectorDigest := sha256.Sum256(failureCollectorKey)
+	clear(failureNodeKey)
+	clear(failureCollectorKey)
+	failureCompletion := paasv1.CompleteNodeEnrollmentRequest{
+		APIVersion: paasv1.NodeEnrollmentExchangeAPIVersion, Kind: paasv1.NodeEnrollmentCompletionRequestKind,
+		EnrollmentID: failureRequest.EnrollmentID, InstallationID: failureRequest.InstallationID,
+		ExecutionTargetID: failureRequest.ExecutionTargetID, ExchangeID: failureRequest.ExchangeID,
+		MachineFingerprint: failureRequest.MachineFingerprint, RuntimeContractDigest: failureRequest.RuntimeContractDigest,
+		ControllerID: failureExchange.Response.ControllerID, BindingRef: failureExchange.Response.BindingRef,
+		NodeListenAddress: failureExchange.Response.NodeListenAddress, CollectorEndpoint: failureExchange.Response.CollectorEndpoint,
+		NodePublicKeyFingerprint:      "sha256:" + hex.EncodeToString(failureNodeDigest[:]),
+		CollectorPublicKeyFingerprint: "sha256:" + hex.EncodeToString(failureCollectorDigest[:]),
+	}
+	completionProbe.err = paasv1.AdapterFault{Normalized: paasv1.NormalizedAdapterError{
+		Class: paasv1.AdapterErrorPermissionDenied, Code: paasv1.ErrorAdapterRejected,
+		Message: "test mTLS rejection", Retryable: false,
+	}}
+	_, err = restartedService.Complete(ctx, nodeenrollment.CompleteCommand{
+		EnrollmentID: failureRequest.EnrollmentID, ObservedPeerAddress: "192.168.50.16",
+		Request: failureCompletion,
+	})
+	completionProbe.err = nil
+	if !errors.Is(err, nodeenrollment.ErrVerificationFailed) {
+		t.Fatalf("definitive completion failure error = %v", err)
+	}
+	var failedState, failedOperationState, failedDiagnostic string
+	var failedVersion uint64
+	var failedSealedCleared, failedErrorStored bool
+	var failedTargetCount, failedConnectionCount, failedAuditCount int
+	if err := admin.QueryRow(ctx, `SELECT enrollment.state, enrollment.resource_version,
+			enrollment.sealed_exchange_result_document IS NULL,
+			enrollment.document#>>'{diagnostic,code}', operation.state,
+			operation.error IS NOT NULL AND operation.error IS NOT DISTINCT FROM operation.document->'error',
+			(SELECT count(*) FROM paas.execution_targets AS target
+				WHERE target.id = enrollment.execution_target_id),
+			(SELECT count(*) FROM paas.enrolled_node_connections AS connection
+				WHERE connection.installation_id = enrollment.installation_id
+				  AND connection.execution_target_id = enrollment.execution_target_id),
+			(SELECT count(*) FROM paas.audit_outbox AS outbox
+				WHERE outbox.authority_key = enrollment.authority_key
+				  AND outbox.operation_id = enrollment.operation_id)
+		FROM paas.node_enrollments AS enrollment
+		JOIN paas.operations AS operation
+		  ON operation.authority_key = enrollment.authority_key
+		 AND operation.id = enrollment.operation_id
+		WHERE enrollment.installation_id = $1 AND enrollment.id = $2`,
+		installationID, failureRequest.EnrollmentID,
+	).Scan(
+		&failedState, &failedVersion, &failedSealedCleared, &failedDiagnostic,
+		&failedOperationState, &failedErrorStored,
+		&failedTargetCount, &failedConnectionCount, &failedAuditCount,
+	); err != nil || failedState != "FAILED" || failedVersion != 3 || !failedSealedCleared ||
+		failedDiagnostic != "MTLS_VERIFICATION_FAILED" || failedOperationState != "FAILED" ||
+		!failedErrorStored || failedTargetCount != 0 || failedConnectionCount != 0 || failedAuditCount != 0 {
+		t.Fatalf("inspect failed node completion: state=%q operation=%q version=%d sealed=%t diagnostic=%q error=%t target=%d connection=%d audit=%d err=%v",
+			failedState, failedOperationState, failedVersion, failedSealedCleared, failedDiagnostic,
+			failedErrorStored, failedTargetCount, failedConnectionCount, failedAuditCount, err)
+	}
+
+	concurrentCreateCommand := command
+	concurrentCreateCommand.IdempotencyKey = prefix + "-concurrent-node"
+	concurrentCreateCommand.Request.Name = "enrollment-concurrent"
+	concurrentCreated, err := service.Create(ctx, concurrentCreateCommand)
+	if err != nil {
+		t.Fatalf("create concurrently exchangeable enrollment: %v", err)
+	}
+	concurrentCredential := integrationEnrollmentCredential(
+		t, concurrentCreated.Response, wrappingPrivateKey, installationID,
+	)
+	defer clear(concurrentCredential)
+	concurrentNodePrivateKey := integrationEd25519PrivateKey(t)
+	concurrentCollectorPrivateKey := integrationEd25519PrivateKey(t)
+	concurrentRequest := integrationEnrollmentExchangeRequest(
+		t, concurrentCreated.Response, concurrentCredential, prefix+"-concurrent",
+		concurrentNodePrivateKey, concurrentCollectorPrivateKey,
+	)
+	startExchange := make(chan struct{})
+	exchangeErrors := make(chan error, 2)
+	for range 2 {
+		go func() {
+			<-startExchange
+			_, exchangeErr := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+				EnrollmentID:        concurrentCreated.Response.Enrollment.Metadata.ID,
+				ObservedPeerAddress: "192.168.50.11", Request: concurrentRequest,
+			})
+			exchangeErrors <- exchangeErr
+		}()
+	}
+	close(startExchange)
+	successes, consumed := 0, 0
+	for range 2 {
+		exchangeErr := <-exchangeErrors
+		switch {
+		case exchangeErr == nil:
+			successes++
+		case errors.Is(exchangeErr, nodeenrollment.ErrCredentialConsumed):
+			consumed++
+		default:
+			t.Fatalf("concurrent node enrollment exchange error = %v", exchangeErr)
+		}
+	}
+	if successes != 1 || consumed != 1 {
+		t.Fatalf("concurrent node exchange outcomes success=%d consumed=%d", successes, consumed)
+	}
+
+	collisionCreateCommand := command
+	collisionCreateCommand.IdempotencyKey = prefix + "-collision-node"
+	collisionCreateCommand.Request.Name = "enrollment-collision"
+	collisionCreated, err := service.Create(ctx, collisionCreateCommand)
+	if err != nil {
+		t.Fatalf("create public-key collision enrollment: %v", err)
+	}
+	collisionCredential := integrationEnrollmentCredential(
+		t, collisionCreated.Response, wrappingPrivateKey, installationID,
+	)
+	defer clear(collisionCredential)
+	collisionCollectorPrivateKey := integrationEd25519PrivateKey(t)
+	collisionRequest := integrationEnrollmentExchangeRequest(
+		t, collisionCreated.Response, collisionCredential, prefix+"-collision",
+		collectorPrivateKey, collisionCollectorPrivateKey,
+	)
+	if _, err := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+		EnrollmentID:        collisionCreated.Response.Enrollment.Metadata.ID,
+		ObservedPeerAddress: "192.168.50.12", Request: collisionRequest,
+	}); !errors.Is(err, nodeenrollment.ErrConflict) {
+		t.Fatalf("cross-role public-key collision error = %v", err)
+	}
+	collisionEnrollment, err := service.Get(
+		ctx, authorization, collisionCreated.Response.Enrollment.Metadata.ID,
+	)
+	if err != nil || collisionEnrollment.State != paasv1.NodeEnrollmentWaitingInstall ||
+		collisionEnrollment.CredentialConsumedAt != nil {
+		t.Fatalf("public-key collision changed enrollment: %#v / %v", collisionEnrollment, err)
+	}
+	identityCollisionScenarios := []struct {
+		name   string
+		mutate func(*paasv1.ExchangeNodeEnrollmentRequest)
+	}{
+		{name: "exchange-id", mutate: func(value *paasv1.ExchangeNodeEnrollmentRequest) {
+			value.ExchangeID = exchangeRequest.ExchangeID
+		}},
+		{name: "machine", mutate: func(value *paasv1.ExchangeNodeEnrollmentRequest) {
+			value.MachineFingerprint = exchangeRequest.MachineFingerprint
+		}},
+	}
+	for _, scenario := range identityCollisionScenarios {
+		identityCollisionCommand := command
+		identityCollisionCommand.IdempotencyKey = prefix + "-" + scenario.name + "-collision-node"
+		identityCollisionCommand.Request.Name = "enrollment-" + scenario.name + "-collision"
+		identityCollisionCreated, createErr := service.Create(ctx, identityCollisionCommand)
+		if createErr != nil {
+			t.Fatalf("create %s collision enrollment: %v", scenario.name, createErr)
+		}
+		identityCollisionCredential := integrationEnrollmentCredential(
+			t, identityCollisionCreated.Response, wrappingPrivateKey, installationID,
+		)
+		defer clear(identityCollisionCredential)
+		identityCollisionRequest := integrationEnrollmentExchangeRequest(
+			t, identityCollisionCreated.Response, identityCollisionCredential,
+			prefix+"-"+scenario.name+"-collision",
+			integrationEd25519PrivateKey(t), integrationEd25519PrivateKey(t),
+		)
+		scenario.mutate(&identityCollisionRequest)
+		if paasv1.ValidateExchangeNodeEnrollmentRequest(identityCollisionRequest) != nil {
+			t.Fatalf("invalid %s collision fixture", scenario.name)
+		}
+		if _, exchangeErr := service.Exchange(ctx, nodeenrollment.ExchangeCommand{
+			EnrollmentID:        identityCollisionCreated.Response.Enrollment.Metadata.ID,
+			ObservedPeerAddress: "192.168.50.15",
+			Request:             identityCollisionRequest,
+		}); !errors.Is(exchangeErr, nodeenrollment.ErrConflict) {
+			t.Fatalf("%s collision error = %v", scenario.name, exchangeErr)
+		}
+		identityCollisionEnrollment, getErr := service.Get(
+			ctx, authorization, identityCollisionCreated.Response.Enrollment.Metadata.ID,
+		)
+		if getErr != nil || identityCollisionEnrollment.State != paasv1.NodeEnrollmentWaitingInstall ||
+			identityCollisionEnrollment.CredentialConsumedAt != nil {
+			t.Fatalf(
+				"%s collision changed enrollment: %#v / %v",
+				scenario.name, identityCollisionEnrollment, getErr,
+			)
+		}
+	}
+
+	crossRoleCommands := [2]nodeenrollment.CreateCommand{command, command}
+	crossRoleCommands[0].IdempotencyKey = prefix + "-cross-role-node-a"
+	crossRoleCommands[0].Request.Name = "enrollment-cross-role-a"
+	crossRoleCommands[1].IdempotencyKey = prefix + "-cross-role-node-b"
+	crossRoleCommands[1].Request.Name = "enrollment-cross-role-b"
+	var crossRoleCreated [2]nodeenrollment.CreateResult
+	var crossRoleCredentials [2][]byte
+	for index := range crossRoleCommands {
+		crossRoleCreated[index], err = service.Create(ctx, crossRoleCommands[index])
+		if err != nil {
+			t.Fatalf("create concurrent cross-role collision enrollment %d: %v", index, err)
+		}
+		crossRoleCredentials[index] = integrationEnrollmentCredential(
+			t, crossRoleCreated[index].Response, wrappingPrivateKey, installationID,
+		)
+		defer clear(crossRoleCredentials[index])
+	}
+	crossRoleKeyA := integrationEd25519PrivateKey(t)
+	crossRoleKeyB := integrationEd25519PrivateKey(t)
+	crossRoleRequests := [2]paasv1.ExchangeNodeEnrollmentRequest{
+		integrationEnrollmentExchangeRequest(
+			t, crossRoleCreated[0].Response, crossRoleCredentials[0], prefix+"-cross-role-a",
+			crossRoleKeyA, crossRoleKeyB,
+		),
+		integrationEnrollmentExchangeRequest(
+			t, crossRoleCreated[1].Response, crossRoleCredentials[1], prefix+"-cross-role-b",
+			crossRoleKeyB, crossRoleKeyA,
+		),
+	}
+	readCommittedService, err := nodeenrollment.New(
+		&readCommittedNodeEnrollmentRepository{
+			NodeEnrollmentRepository: repository,
+			barrier:                  newConcurrentExchangeBarrier(),
+		},
+		issuer,
+		enrollmentConfig,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type crossRoleOutcome struct {
+		index int
+		err   error
+	}
+	startCrossRoleExchange := make(chan struct{})
+	crossRoleOutcomes := make(chan crossRoleOutcome, len(crossRoleRequests))
+	for index := range crossRoleRequests {
+		go func(index int) {
+			<-startCrossRoleExchange
+			_, exchangeErr := readCommittedService.Exchange(ctx, nodeenrollment.ExchangeCommand{
+				EnrollmentID:        crossRoleCreated[index].Response.Enrollment.Metadata.ID,
+				ObservedPeerAddress: fmt.Sprintf("192.168.50.%d", 13+index),
+				Request:             crossRoleRequests[index],
+			})
+			crossRoleOutcomes <- crossRoleOutcome{index: index, err: exchangeErr}
+		}(index)
+	}
+	close(startCrossRoleExchange)
+	crossRoleSuccesses, crossRoleConflicts := 0, 0
+	for range crossRoleRequests {
+		outcome := <-crossRoleOutcomes
+		switch {
+		case outcome.err == nil:
+			crossRoleSuccesses++
+		case errors.Is(outcome.err, nodeenrollment.ErrConflict):
+			crossRoleConflicts++
+		default:
+			t.Fatalf("concurrent cross-role collision exchange %d error = %v", outcome.index, outcome.err)
+		}
+	}
+	if crossRoleSuccesses != 1 || crossRoleConflicts != 1 {
+		t.Fatalf(
+			"concurrent cross-role key outcomes success=%d conflict=%d",
+			crossRoleSuccesses, crossRoleConflicts,
+		)
+	}
+	waiting, verifying := 0, 0
+	for index := range crossRoleCreated {
+		value, getErr := service.Get(
+			ctx, authorization, crossRoleCreated[index].Response.Enrollment.Metadata.ID,
+		)
+		if getErr != nil {
+			t.Fatalf("read concurrent cross-role collision enrollment %d: %v", index, getErr)
+		}
+		switch value.State {
+		case paasv1.NodeEnrollmentWaitingInstall:
+			if value.CredentialConsumedAt != nil {
+				t.Fatalf("rejected cross-role collision enrollment %d consumed its credential", index)
+			}
+			waiting++
+		case paasv1.NodeEnrollmentVerifying:
+			if value.CredentialConsumedAt == nil {
+				t.Fatalf("accepted cross-role collision enrollment %d retained its credential", index)
+			}
+			verifying++
+		default:
+			t.Fatalf("concurrent cross-role collision enrollment %d state = %s", index, value.State)
+		}
+	}
+	if waiting != 1 || verifying != 1 {
+		t.Fatalf("concurrent cross-role persisted states waiting=%d verifying=%d", waiting, verifying)
+	}
+
+	revocableCommand := command
+	revocableCommand.IdempotencyKey = prefix + "-revoke-node"
+	revocableCommand.Request.Name = "enrollment-revoke"
+	revocable, err := service.Create(ctx, revocableCommand)
+	if err != nil {
+		t.Fatalf("create revocable node enrollment: %v", err)
+	}
+	revokeCommand := nodeenrollment.RevokeCommand{
+		Authorization:           authorization,
+		EnrollmentID:            revocable.Response.Enrollment.Metadata.ID,
+		ExpectedResourceVersion: revocable.Response.Enrollment.Metadata.ResourceVersion,
+		IdempotencyKey:          prefix + "-revoke-enrollment",
+	}
+	revoked, err := service.Revoke(ctx, revokeCommand)
+	if err != nil || revoked.Replayed || revoked.Enrollment.State != paasv1.NodeEnrollmentRevoked ||
+		revoked.Enrollment.Metadata.ResourceVersion != 2 || revoked.Enrollment.ReplacedByID != "" {
+		t.Fatalf("revoke persisted node enrollment: result=%#v err=%v", revoked, err)
+	}
+	revokedReplay, err := service.Revoke(ctx, revokeCommand)
+	if err != nil || !revokedReplay.Replayed || !reflect.DeepEqual(revokedReplay.Enrollment, revoked.Enrollment) {
+		t.Fatalf("replay persisted node enrollment revocation: result=%#v err=%v", revokedReplay, err)
+	}
+	var terminationFingerprint, terminationDigest, replacedByID string
+	var revokedCredentialCleared bool
+	if err := admin.QueryRow(ctx, `SELECT
+			COALESCE(termination_idempotency_fingerprint, ''),
+			COALESCE(termination_request_digest, ''),
+			COALESCE(replaced_by_id, ''),
+			credential_salt IS NULL AND credential_verifier IS NULL
+				AND wrapped_credential_document IS NULL
+		FROM paas.node_enrollments
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, revoked.Enrollment.Metadata.ID,
+	).Scan(&terminationFingerprint, &terminationDigest, &replacedByID, &revokedCredentialCleared); err != nil ||
+		terminationFingerprint == "" || terminationDigest == "" || replacedByID != "" || !revokedCredentialCleared {
+		t.Fatalf("inspect persisted node enrollment revocation: fingerprint=%q digest=%q replacement=%q err=%v", terminationFingerprint, terminationDigest, replacedByID, err)
+	}
+
+	regenerableCommand := command
+	regenerableCommand.IdempotencyKey = prefix + "-regenerable-node"
+	regenerableCommand.Request.Name = "enrollment-regenerate"
+	regenerable, err := service.Create(ctx, regenerableCommand)
+	if err != nil {
+		t.Fatalf("create regenerable node enrollment: %v", err)
+	}
+	regenerateCommand := nodeenrollment.RegenerateCommand{
+		Authorization:           authorization,
+		EnrollmentID:            regenerable.Response.Enrollment.Metadata.ID,
+		ExpectedResourceVersion: regenerable.Response.Enrollment.Metadata.ResourceVersion,
+		IdempotencyKey:          prefix + "-regenerate-enrollment",
+		Request: paasv1.RegenerateNodeEnrollmentRequest{
+			WrappingPublicKey: base64.RawURLEncoding.EncodeToString(wrappingPublicKey),
+		},
+		ControlPlaneBaseURL: command.ControlPlaneBaseURL,
+	}
+	regenerated, err := service.Regenerate(ctx, regenerateCommand)
+	if err != nil || regenerated.Replayed ||
+		regenerated.Response.Enrollment.Metadata.ID == regenerable.Response.Enrollment.Metadata.ID ||
+		regenerated.Response.Enrollment.ExecutionTargetID == regenerable.Response.Enrollment.ExecutionTargetID {
+		t.Fatalf("regenerate persisted node enrollment: result=%#v err=%v", regenerated, err)
+	}
+	regeneratedReplay, err := service.Regenerate(ctx, regenerateCommand)
+	if err != nil || !regeneratedReplay.Replayed ||
+		!reflect.DeepEqual(regeneratedReplay.Response, regenerated.Response) ||
+		!reflect.DeepEqual(regeneratedReplay.Operation, regenerated.Operation) {
+		t.Fatalf("replay persisted node enrollment regeneration: result=%#v err=%v", regeneratedReplay, err)
+	}
+	var sourceState, sourceOperationState, replacementState string
+	var sourceCredentialCleared, replacementCredentialPresent bool
+	if err := admin.QueryRow(ctx, `SELECT source.state, source_operation.state,
+			replacement.state, source.replaced_by_id,
+			source.credential_salt IS NULL AND source.credential_verifier IS NULL
+				AND source.wrapped_credential_document IS NULL,
+			replacement.credential_salt IS NOT NULL AND replacement.credential_verifier IS NOT NULL
+				AND replacement.wrapped_credential_document IS NOT NULL
+		FROM paas.node_enrollments AS source
+		JOIN paas.operations AS source_operation
+		  ON source_operation.authority_key = source.authority_key
+		 AND source_operation.id = source.operation_id
+		JOIN paas.node_enrollments AS replacement
+		  ON replacement.installation_id = source.installation_id
+		 AND replacement.id = source.replaced_by_id
+		WHERE source.installation_id = $1 AND source.id = $2`,
+		installationID, regenerable.Response.Enrollment.Metadata.ID,
+	).Scan(&sourceState, &sourceOperationState, &replacementState, &replacedByID,
+		&sourceCredentialCleared, &replacementCredentialPresent); err != nil ||
+		sourceState != "REVOKED" || sourceOperationState != "CANCELLED" ||
+		replacementState != "WAITING_INSTALL" || replacedByID != string(regenerated.Response.Enrollment.Metadata.ID) ||
+		!sourceCredentialCleared || !replacementCredentialPresent {
+		t.Fatalf("inspect atomic enrollment replacement: source=%s operation=%s replacement=%s id=%s err=%v", sourceState, sourceOperationState, replacementState, replacedByID, err)
+	}
+
+	stagedEnrollment := created.Response.Enrollment
+	stagedEnrollment.ExpiresAt = stagedEnrollment.Metadata.CreatedAt.Add(time.Microsecond)
+	stagedJoin := created.Response.Join
+	stagedJoin.ExpiresAt = stagedEnrollment.ExpiresAt
+	stagedJoin.Signature = ""
+	commitment, err := paasv1.NodeEnrollmentJoinSigningBytes(stagedJoin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedJoin.Signature = base64.RawURLEncoding.EncodeToString(ed25519.Sign(issuerPrivateKey, commitment))
+	if paasv1.ValidateNodeEnrollment(stagedEnrollment) != nil || paasv1.ValidateNodeEnrollmentJoin(stagedJoin) != nil {
+		t.Fatal("invalid overdue node enrollment fixture")
+	}
+	if _, err := admin.Exec(ctx, `UPDATE paas.node_enrollments
+		SET expires_at = $3, document = $4::jsonb, join_document = $5::jsonb
+		WHERE installation_id = $1 AND id = $2`,
+		installationID, stagedEnrollment.Metadata.ID, stagedEnrollment.ExpiresAt,
+		integrationJSON(t, stagedEnrollment), integrationJSON(t, stagedJoin),
+	); err != nil {
+		t.Fatalf("stage overdue node enrollment: %v", err)
+	}
+	expired, err := service.Get(ctx, authorization, stagedEnrollment.Metadata.ID)
+	if err != nil || expired.State != paasv1.NodeEnrollmentExpired ||
+		expired.Metadata.ResourceVersion != 2 || expired.Diagnostic == nil ||
+		expired.Diagnostic.Code != paasv1.NodeEnrollmentDiagnosticExpired {
+		t.Fatalf("expire persisted node enrollment: enrollment=%#v err=%v", expired, err)
+	}
+	var terminalAt *time.Time
+	var expiredCredentialCleared bool
+	if err := admin.QueryRow(ctx, `SELECT operation.state, operation.terminal_at,
+			enrollment.credential_salt IS NULL AND enrollment.credential_verifier IS NULL
+				AND enrollment.wrapped_credential_document IS NULL
+		FROM paas.operations AS operation
+		JOIN paas.node_enrollments AS enrollment
+		  ON enrollment.authority_key = operation.authority_key
+		 AND enrollment.operation_id = operation.id
+		WHERE enrollment.installation_id = $1 AND enrollment.id = $2`,
+		installationID, stagedEnrollment.Metadata.ID,
+	).Scan(&operationState, &terminalAt, &expiredCredentialCleared); err != nil ||
+		operationState != "CANCELLED" || terminalAt == nil || !expiredCredentialCleared {
+		t.Fatalf("expiration did not close registration Operation atomically: state=%s terminal=%v err=%v", operationState, terminalAt, err)
+	}
+	return exchangeRequest.ExecutionTargetID
+}
+
+type readCommittedNodeEnrollmentRepository struct {
+	*NodeEnrollmentRepository
+	barrier *concurrentExchangeBarrier
+}
+
+func (repository *readCommittedNodeEnrollmentRepository) WithinInstallation(
+	ctx context.Context,
+	installationID string,
+	callback func(context.Context, nodeenrollment.Transaction) error,
+) error {
+	return repository.withinInstallation(
+		ctx,
+		installationID,
+		pgx.ReadCommitted,
+		func(transactionContext context.Context, transaction nodeenrollment.Transaction) error {
+			return callback(transactionContext, concurrentExchangeTransaction{
+				Transaction: transaction,
+				barrier:     repository.barrier,
+			})
+		},
+	)
+}
+
+type concurrentExchangeTransaction struct {
+	nodeenrollment.Transaction
+	barrier *concurrentExchangeBarrier
+}
+
+func (transaction concurrentExchangeTransaction) ExchangeEnrollment(
+	ctx context.Context,
+	before nodeenrollment.StoredEnrollment,
+	after nodeenrollment.StoredEnrollment,
+) error {
+	if err := transaction.barrier.wait(ctx); err != nil {
+		return err
+	}
+	return transaction.Transaction.ExchangeEnrollment(ctx, before, after)
+}
+
+type concurrentExchangeBarrier struct {
+	mutex   sync.Mutex
+	arrived int
+	ready   chan struct{}
+}
+
+func newConcurrentExchangeBarrier() *concurrentExchangeBarrier {
+	return &concurrentExchangeBarrier{ready: make(chan struct{})}
+}
+
+func (barrier *concurrentExchangeBarrier) wait(ctx context.Context) error {
+	barrier.mutex.Lock()
+	barrier.arrived++
+	if barrier.arrived == 2 {
+		close(barrier.ready)
+	}
+	ready := barrier.ready
+	barrier.mutex.Unlock()
+	select {
+	case <-ready:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+type integrationEnrollmentCompletionProbe struct {
+	err   error
+	calls int
+}
+
+func (probe *integrationEnrollmentCompletionProbe) Probe(
+	_ context.Context,
+	connection port.EnrolledNodeConnection,
+	_ paasv1.InspectExecutionTargetRequest,
+) (paasv1.AdapterCapabilitiesContract, paasv1.ExecutionTargetObservation, error) {
+	probe.calls++
+	if probe.err != nil {
+		return paasv1.AdapterCapabilitiesContract{}, paasv1.ExecutionTargetObservation{}, probe.err
+	}
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	capabilities := paasv1.AdapterCapabilitiesContract{
+		Adapter: paasv1.AdapterRef{Kind: paasv1.AdapterInfrastructure, Name: "nodehttps", ContractVersion: "v1"},
+		Actions: []paasv1.AdapterAction{
+			paasv1.AdapterCapabilities,
+			paasv1.AdapterInspectExecutionTarget,
+			paasv1.AdapterObserveExecutionTarget,
+		},
+		IsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
+		ObservedAt:          now,
+	}
+	observation := paasv1.ExecutionTargetObservation{
+		ExecutionTargetID: connection.ExecutionTargetID, IdentityFingerprint: connection.IdentityFingerprint,
+		Health:                       paasv1.ExecutionTargetHealthReady,
+		Capacity:                     paasv1.Capacity{CPUMillis: 4000, MemoryBytes: 8 << 30, StorageBytes: 100 << 30, WorkloadSlots: 32},
+		Allocatable:                  paasv1.Capacity{CPUMillis: 3000, MemoryBytes: 6 << 30, StorageBytes: 80 << 30, WorkloadSlots: 24},
+		SupportedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload}, ObservedAt: now,
+		Usage: &paasv1.ExecutionTargetUsage{
+			ObservedAt: now, ValidUntil: now.Add(15 * time.Second),
+			CPU:              paasv1.CPUUsage{State: paasv1.MeasurementUnavailable},
+			Memory:           paasv1.MemoryUsage{State: paasv1.MeasurementUnavailable},
+			FilesystemsState: paasv1.MeasurementUnavailable,
+		},
+	}
+	return capabilities, observation, nil
+}
+
+func newIntegrationEnrollmentIssuer(
+	t *testing.T,
+	installationID string,
+) (*enrollmentissuer.Issuer, ed25519.PrivateKey) {
+	t.Helper()
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	certificateTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(now.UnixNano()),
+		Subject:               pkix.Name{CommonName: "matrix-integration-enrollment-issuer"},
+		NotBefore:             now.Add(-time.Hour),
+		NotAfter:              now.Add(365 * 24 * time.Hour),
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		MaxPathLenZero:        true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	issuerURI, err := paasv1.NodeEnrollmentIssuerURI(installationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificateTemplate.URIs = append(certificateTemplate.URIs, issuerURI)
+	certificateDER, err := x509.CreateCertificate(
+		rand.Reader, certificateTemplate, certificateTemplate, publicKey, privateKey,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKeyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer, err := enrollmentissuer.New(
+		installationID, certificateDER, privateKeyDER,
+	)
+	clear(privateKeyDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuer, privateKey
+}
+
+func integrationEnrollmentCredential(
+	t *testing.T,
+	created paasv1.CreateNodeEnrollmentResponse,
+	wrappingPrivateKey *rsa.PrivateKey,
+	installationID string,
+) []byte {
+	t.Helper()
+	ciphertext, err := base64.RawURLEncoding.Strict().DecodeString(created.WrappedCredential.Ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	label, err := paasv1.NodeEnrollmentCredentialWrappingLabel(
+		installationID, created.Enrollment.Metadata.ID,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(label)
+	credential, err := rsa.DecryptOAEP(sha256.New(), rand.Reader, wrappingPrivateKey, ciphertext, label)
+	clear(ciphertext)
+	if err != nil {
+		t.Fatalf("decrypt integration enrollment credential: %v", err)
+	}
+	digest := sha256.Sum256(credential)
+	if len(credential) != 32 || created.Join.CredentialDigest != "sha256:"+hex.EncodeToString(digest[:]) {
+		clear(credential)
+		t.Fatal("integration enrollment credential differs from its signed commitment")
+	}
+	return credential
+}
+
+func integrationEd25519PrivateKey(t *testing.T) ed25519.PrivateKey {
+	t.Helper()
+	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return privateKey
+}
+
+func integrationEnrollmentExchangeRequest(
+	t *testing.T,
+	created paasv1.CreateNodeEnrollmentResponse,
+	credential []byte,
+	identitySeed string,
+	nodePrivateKey ed25519.PrivateKey,
+	collectorPrivateKey ed25519.PrivateKey,
+) paasv1.ExchangeNodeEnrollmentRequest {
+	t.Helper()
+	certificateRequest := func(privateKey ed25519.PrivateKey) string {
+		encoded, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{}, privateKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return base64.RawURLEncoding.EncodeToString(encoded)
+	}
+	identityDigest := sha256.Sum256([]byte(identitySeed))
+	request := paasv1.ExchangeNodeEnrollmentRequest{
+		APIVersion:   paasv1.NodeEnrollmentExchangeAPIVersion,
+		Kind:         paasv1.NodeEnrollmentExchangeRequestKind,
+		EnrollmentID: created.Enrollment.Metadata.ID, InstallationID: created.Join.InstallationID,
+		ExecutionTargetID:           created.Enrollment.ExecutionTargetID,
+		ExchangeID:                  "node-exchange-" + hex.EncodeToString(identityDigest[:16]),
+		Credential:                  base64.RawURLEncoding.EncodeToString(credential),
+		MachineFingerprint:          integrationDigest(identitySeed + "-machine"),
+		RuntimeContractDigest:       integrationDigest("node-runtime-contract"),
+		Listener:                    paasv1.NodeEnrollmentListenerClaim{ManagementPort: 16443, CollectorPort: 19100},
+		NodeCertificateRequest:      certificateRequest(nodePrivateKey),
+		CollectorCertificateRequest: certificateRequest(collectorPrivateKey),
+	}
+	if err := paasv1.ValidateExchangeNodeEnrollmentRequest(request); err != nil {
+		t.Fatalf("build integration enrollment exchange request: %v", err)
+	}
+	return request
 }
 
 func seedIntegrationFixture(

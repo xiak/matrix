@@ -21,24 +21,40 @@ type Streams struct {
 	ErrOut io.Writer
 }
 
+type Subject string
+
+const (
+	SubjectPlatform Subject = "PLATFORM"
+	SubjectNode     Subject = "NODE"
+)
+
 type Request struct {
-	Action                    lifecycle.Action
-	Root                      string
-	Bundle                    string
-	TrustKey                  string
-	SecurityMailConfiguration string
-	NorthboundOrigin          string
-	BackupID                  string
-	SupportOutput             string
+	Subject                     Subject
+	Action                      lifecycle.Action
+	Root                        string
+	Bundle                      string
+	TrustKey                    string
+	SecurityMailConfiguration   string
+	NorthboundOrigin            string
+	BackupID                    string
+	SupportOutput               string
+	Join                        string
+	Configuration               string
+	ExpectedConfigurationDigest string
+	RevokePreviousCredentials   bool
+	RecoveryInput               string
+	Resume                      bool
 }
 
 type Result struct {
-	State         string `json:"state"`
-	ReleaseID     string `json:"releaseId,omitempty"`
-	PreviousID    string `json:"previousId,omitempty"`
-	BackupID      string `json:"backupId,omitempty"`
-	Changed       bool   `json:"changed"`
-	CorrelationID string `json:"correlationId,omitempty"`
+	State               string `json:"state"`
+	ReleaseID           string `json:"releaseId,omitempty"`
+	PreviousID          string `json:"previousId,omitempty"`
+	BackupID            string `json:"backupId,omitempty"`
+	Changed             bool   `json:"changed"`
+	CorrelationID       string `json:"correlationId,omitempty"`
+	ExecutionTargetID   string `json:"executionTargetId,omitempty"`
+	ConfigurationDigest string `json:"configurationDigest,omitempty"`
 }
 
 type PlatformBackend interface {
@@ -139,6 +155,7 @@ type RunnerNodeBackend interface {
 
 type Backends struct {
 	Platform         PlatformBackend
+	Node             PlatformBackend
 	SourceCredential SourceCredentialBackend
 	SourceTrust      SourceTrustBackend
 	RunnerNode       RunnerNodeBackend
@@ -192,12 +209,16 @@ func validateStreams(streams Streams) error {
 
 func validateResult(result Result) error {
 	var problems []error
+	if result.ConfigurationDigest != "" && !sha256Pattern.MatchString(result.ConfigurationDigest) {
+		problems = append(problems, errors.New("node configuration digest is invalid"))
+	}
 	if !safeStatePattern.MatchString(result.State) {
 		problems = append(problems, errors.New("platform result state is invalid"))
 	}
 	for label, value := range map[string]string{
 		"release": result.ReleaseID, "previous release": result.PreviousID,
 		"backup": result.BackupID, "correlation": result.CorrelationID,
+		"execution target": result.ExecutionTargetID,
 	} {
 		if value != "" && !safeIDPattern.MatchString(value) {
 			problems = append(problems, fmt.Errorf("platform result %s identity is invalid", label))

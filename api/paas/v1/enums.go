@@ -34,6 +34,71 @@ const (
 
 type ExecutionTargetDesiredState string
 
+// NodeEnrollmentState is the short-lived admission ceremony state. READY
+// hands long-lived ownership to ExecutionTarget; no state makes an enrollment
+// itself schedulable.
+type NodeEnrollmentState string
+
+const (
+	NodeEnrollmentWaitingInstall NodeEnrollmentState = "WAITING_INSTALL"
+	NodeEnrollmentVerifying      NodeEnrollmentState = "VERIFYING"
+	NodeEnrollmentReady          NodeEnrollmentState = "READY"
+	NodeEnrollmentFailed         NodeEnrollmentState = "FAILED"
+	NodeEnrollmentExpired        NodeEnrollmentState = "EXPIRED"
+	NodeEnrollmentRevoked        NodeEnrollmentState = "REVOKED"
+)
+
+func NodeEnrollmentStates() []NodeEnrollmentState {
+	return []NodeEnrollmentState{
+		NodeEnrollmentWaitingInstall,
+		NodeEnrollmentVerifying,
+		NodeEnrollmentReady,
+		NodeEnrollmentFailed,
+		NodeEnrollmentExpired,
+		NodeEnrollmentRevoked,
+	}
+}
+
+// NodeEnrollmentDiagnosticCode is deliberately closed and carries no native
+// error, endpoint, certificate, path, provider output, or credential detail.
+type NodeEnrollmentDiagnosticCode string
+
+const (
+	NodeEnrollmentDiagnosticExpired            NodeEnrollmentDiagnosticCode = "ENROLLMENT_EXPIRED"
+	NodeEnrollmentDiagnosticRevoked            NodeEnrollmentDiagnosticCode = "ENROLLMENT_REVOKED"
+	NodeEnrollmentDiagnosticCredentialUsed     NodeEnrollmentDiagnosticCode = "CREDENTIAL_CONSUMED"
+	NodeEnrollmentDiagnosticInstallation       NodeEnrollmentDiagnosticCode = "INSTALLATION_MISMATCH"
+	NodeEnrollmentDiagnosticIdentity           NodeEnrollmentDiagnosticCode = "IDENTITY_CONFLICT"
+	NodeEnrollmentDiagnosticRuntime            NodeEnrollmentDiagnosticCode = "RUNTIME_UNSUPPORTED"
+	NodeEnrollmentDiagnosticListener           NodeEnrollmentDiagnosticCode = "MANAGEMENT_UNREACHABLE"
+	NodeEnrollmentDiagnosticMTLS               NodeEnrollmentDiagnosticCode = "MTLS_VERIFICATION_FAILED"
+	NodeEnrollmentDiagnosticResource           NodeEnrollmentDiagnosticCode = "RESOURCE_CONFLICT"
+	NodeEnrollmentDiagnosticNetworkInterrupted NodeEnrollmentDiagnosticCode = "NETWORK_INTERRUPTED"
+)
+
+func NodeEnrollmentDiagnosticCodes() []NodeEnrollmentDiagnosticCode {
+	return []NodeEnrollmentDiagnosticCode{
+		NodeEnrollmentDiagnosticExpired,
+		NodeEnrollmentDiagnosticRevoked,
+		NodeEnrollmentDiagnosticCredentialUsed,
+		NodeEnrollmentDiagnosticInstallation,
+		NodeEnrollmentDiagnosticIdentity,
+		NodeEnrollmentDiagnosticRuntime,
+		NodeEnrollmentDiagnosticListener,
+		NodeEnrollmentDiagnosticMTLS,
+		NodeEnrollmentDiagnosticResource,
+		NodeEnrollmentDiagnosticNetworkInterrupted,
+	}
+}
+
+type JoinCredentialWrappingAlgorithm string
+
+const JoinCredentialRSAOAEP256 JoinCredentialWrappingAlgorithm = "RSA_OAEP_256"
+
+type NodeJoinSignatureAlgorithm string
+
+const NodeJoinSignatureEd25519 NodeJoinSignatureAlgorithm = "ED25519"
+
 type MeasurementState string
 
 const (
@@ -47,6 +112,7 @@ const (
 const (
 	ExecutionTargetActive   ExecutionTargetDesiredState = "ACTIVE"
 	ExecutionTargetDraining ExecutionTargetDesiredState = "DRAINING"
+	ExecutionTargetRemoved  ExecutionTargetDesiredState = "REMOVED"
 )
 
 type IsolationGuarantee string
@@ -113,11 +179,105 @@ func DeploymentPhases() []DeploymentPhase {
 	}
 }
 
+// DeploymentInstanceState is the provider-neutral lifecycle exposed for one
+// current Deployment instance. Provider-native names and identifiers never
+// enter the northbound contract.
+type DeploymentInstanceState string
+
+const (
+	DeploymentInstanceCreated    DeploymentInstanceState = "CREATED"
+	DeploymentInstanceRunning    DeploymentInstanceState = "RUNNING"
+	DeploymentInstanceRestarting DeploymentInstanceState = "RESTARTING"
+	DeploymentInstanceRemoving   DeploymentInstanceState = "REMOVING"
+	DeploymentInstancePaused     DeploymentInstanceState = "PAUSED"
+	DeploymentInstanceExited     DeploymentInstanceState = "EXITED"
+	DeploymentInstanceDead       DeploymentInstanceState = "DEAD"
+)
+
+func DeploymentInstanceStates() []DeploymentInstanceState {
+	return []DeploymentInstanceState{
+		DeploymentInstanceCreated,
+		DeploymentInstanceRunning,
+		DeploymentInstanceRestarting,
+		DeploymentInstanceRemoving,
+		DeploymentInstancePaused,
+		DeploymentInstanceExited,
+		DeploymentInstanceDead,
+	}
+}
+
+type DeploymentInstanceHealth string
+
+const (
+	DeploymentInstanceHealthNone      DeploymentInstanceHealth = "NONE"
+	DeploymentInstanceHealthStarting  DeploymentInstanceHealth = "STARTING"
+	DeploymentInstanceHealthHealthy   DeploymentInstanceHealth = "HEALTHY"
+	DeploymentInstanceHealthUnhealthy DeploymentInstanceHealth = "UNHEALTHY"
+)
+
+func DeploymentInstanceHealthStates() []DeploymentInstanceHealth {
+	return []DeploymentInstanceHealth{
+		DeploymentInstanceHealthNone,
+		DeploymentInstanceHealthStarting,
+		DeploymentInstanceHealthHealthy,
+		DeploymentInstanceHealthUnhealthy,
+	}
+}
+
+// TerminalSessionState is independent of Deployment Operations. A session is
+// single-use: once it leaves PENDING its connection ticket cannot be reused.
+type TerminalSessionState string
+
+const (
+	TerminalSessionPending    TerminalSessionState = "PENDING"
+	TerminalSessionConnecting TerminalSessionState = "CONNECTING"
+	TerminalSessionActive     TerminalSessionState = "ACTIVE"
+	TerminalSessionEnded      TerminalSessionState = "ENDED"
+)
+
+func TerminalSessionStates() []TerminalSessionState {
+	return []TerminalSessionState{
+		TerminalSessionPending,
+		TerminalSessionConnecting,
+		TerminalSessionActive,
+		TerminalSessionEnded,
+	}
+}
+
+// TerminalSessionOutcome is present only after a session has ended. It is a
+// sanitized lifecycle result and never contains terminal input or output.
+type TerminalSessionOutcome string
+
+const (
+	TerminalSessionCompleted    TerminalSessionOutcome = "COMPLETED"
+	TerminalSessionUnsupported  TerminalSessionOutcome = "UNSUPPORTED"
+	TerminalSessionExpired      TerminalSessionOutcome = "EXPIRED"
+	TerminalSessionDisconnected TerminalSessionOutcome = "DISCONNECTED"
+	TerminalSessionRevoked      TerminalSessionOutcome = "REVOKED"
+	TerminalSessionReplaced     TerminalSessionOutcome = "REPLACED"
+	TerminalSessionFailed       TerminalSessionOutcome = "FAILED"
+)
+
+func TerminalSessionOutcomes() []TerminalSessionOutcome {
+	return []TerminalSessionOutcome{
+		TerminalSessionCompleted,
+		TerminalSessionUnsupported,
+		TerminalSessionExpired,
+		TerminalSessionDisconnected,
+		TerminalSessionRevoked,
+		TerminalSessionReplaced,
+		TerminalSessionFailed,
+	}
+}
+
 type OperationAction string
 
 const (
 	OperationCreateExecutionPool         OperationAction = "CREATE_EXECUTION_POOL"
 	OperationRegisterExecutionTarget     OperationAction = "REGISTER_EXECUTION_TARGET"
+	OperationDrainExecutionTarget        OperationAction = "DRAIN_EXECUTION_TARGET"
+	OperationActivateExecutionTarget     OperationAction = "ACTIVATE_EXECUTION_TARGET"
+	OperationRemoveExecutionTarget       OperationAction = "REMOVE_EXECUTION_TARGET"
 	OperationCreatePlacement             OperationAction = "CREATE_PLACEMENT"
 	OperationCreateApplication           OperationAction = "CREATE_APPLICATION"
 	OperationSetApplicationLabel         OperationAction = "SET_APPLICATION_LABEL"
@@ -135,6 +295,9 @@ func OperationActions() []OperationAction {
 	return []OperationAction{
 		OperationCreateExecutionPool,
 		OperationRegisterExecutionTarget,
+		OperationDrainExecutionTarget,
+		OperationActivateExecutionTarget,
+		OperationRemoveExecutionTarget,
 		OperationCreatePlacement,
 		OperationCreateApplication,
 		OperationSetApplicationLabel,

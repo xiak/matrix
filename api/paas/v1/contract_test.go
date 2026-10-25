@@ -84,24 +84,48 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 	if matrixIAM["type"] != "http" || matrixIAM["scheme"] != "bearer" {
 		t.Fatalf("MatrixIAM = %#v, want HTTP bearer", matrixIAM)
 	}
+	terminalTicket := object(t, schemes["MatrixTerminalTicket"], "MatrixTerminalTicket")
+	if terminalTicket["type"] != "apiKey" || terminalTicket["in"] != "cookie" || terminalTicket["name"] != "matrix_terminal_ticket" {
+		t.Fatalf("MatrixTerminalTicket = %#v, want exact cookie ticket", terminalTicket)
+	}
 
 	want := map[string][]string{
-		"/ready":                           {"get"},
-		"/v1/applications":                 {"get", "post"},
-		"/v1/applications/{applicationId}": {"get"},
-		"/v1/applications/{applicationId}/labels/{labelKey}": {"put", "delete"},
-		"/v1/configurations":                                      {"post"},
-		"/v1/configurations/{configurationId}":                    {"get"},
-		"/v1/configuration-revisions":                             {"post"},
-		"/v1/configuration-revisions/{configurationRevisionId}":   {"get"},
-		"/v1/application-revisions":                               {"post"},
-		"/v1/application-revisions/{applicationRevisionId}":       {"get"},
-		"/v1/deployments":                                         {"post"},
-		"/v1/deployments/{deploymentId}":                          {"get", "put"},
-		"/v1/deployments/{deploymentId}/rollback":                 {"post"},
-		"/v1/deployments/{deploymentId}/generations/{generation}": {"get"},
-		"/v1/operations/{operationId}":                            {"get"},
-		"/v1/installation:verify":                                 {"post"},
+		"/v1/execution-pools":                                        {"get", "post"},
+		"/v1/execution-pools/{executionPoolId}":                      {"get"},
+		"/v1/execution-targets":                                      {"get", "post"},
+		"/v1/execution-targets/{executionTargetId}":                  {"get"},
+		"/v1/execution-targets/{executionTargetId}/drain":            {"post"},
+		"/v1/execution-targets/{executionTargetId}/activate":         {"post"},
+		"/v1/execution-targets/{executionTargetId}/remove":           {"post"},
+		"/v1/node-enrollments":                                       {"get", "post"},
+		"/v1/node-enrollments/{nodeEnrollmentId}":                    {"get"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/exchange":           {"post"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/recovery-challenge": {"post"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/recover":            {"post"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/complete":           {"post"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/revoke":             {"post"},
+		"/v1/node-enrollments/{nodeEnrollmentId}/regenerate":         {"post"},
+		"/v1/platform/operations/{operationId}":                      {"get"},
+		"/ready":                                                     {"get"},
+		"/v1/applications":                                           {"get", "post"},
+		"/v1/applications/{applicationId}":                           {"get"},
+		"/v1/applications/{applicationId}/labels/{labelKey}":         {"put", "delete"},
+		"/v1/configurations":                                         {"post"},
+		"/v1/configurations/{configurationId}":                       {"get"},
+		"/v1/configuration-revisions":                                {"post"},
+		"/v1/configuration-revisions/{configurationRevisionId}":      {"get"},
+		"/v1/application-revisions":                                  {"post"},
+		"/v1/application-revisions/{applicationRevisionId}":          {"get"},
+		"/v1/deployments":                                            {"get", "post"},
+		"/v1/deployments/{deploymentId}":                             {"get", "put"},
+		"/v1/deployments/{deploymentId}/rollback":                    {"post"},
+		"/v1/deployments/{deploymentId}/generations/{generation}":    {"get"},
+		"/v1/deployments/{deploymentId}/runtime":                     {"get"},
+		"/v1/deployments/{deploymentId}/terminal-sessions":           {"post"},
+		"/v1/terminal-sessions/{terminalSessionId}":                  {"delete"},
+		"/v1/terminal-sessions/{terminalSessionId}/connect":          {"get"},
+		"/v1/operations/{operationId}":                               {"get"},
+		"/v1/installation:verify":                                    {"post"},
 	}
 	paths := object(t, document["paths"], "paths")
 	if len(paths) != len(want) {
@@ -116,9 +140,13 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 		for _, method := range methods {
 			operation := object(t, pathItem[method], path+" "+method)
 			securityOverride, overridesSecurity := operation["security"]
-			if path == "/ready" {
+			if path == "/ready" ||
+				path == "/v1/node-enrollments/{nodeEnrollmentId}/exchange" ||
+				path == "/v1/node-enrollments/{nodeEnrollmentId}/recovery-challenge" ||
+				path == "/v1/node-enrollments/{nodeEnrollmentId}/recover" ||
+				path == "/v1/node-enrollments/{nodeEnrollmentId}/complete" {
 				if !overridesSecurity || len(securityOverride.([]any)) != 0 {
-					t.Errorf("%s %s must explicitly allow unauthenticated health checks", method, path)
+					t.Errorf("%s %s must explicitly omit MatrixIAM authentication", method, path)
 				}
 			} else if path == "/v1/installation:verify" {
 				if !overridesSecurity {
@@ -133,6 +161,20 @@ func TestOpenAPINorthboundSurfaceUsesMatrixIAM(t *testing.T) {
 				verificationRequirement := object(t, verificationSecurity[0], "installation verifier security")
 				if len(verificationRequirement) != 1 || verificationRequirement["MatrixInstallationVerifier"] == nil {
 					t.Errorf("%s %s must require only MatrixInstallationVerifier", method, path)
+				}
+			} else if path == "/v1/terminal-sessions/{terminalSessionId}/connect" {
+				if !overridesSecurity {
+					t.Errorf("%s %s must override bearer security", method, path)
+					continue
+				}
+				connectionSecurity := securityOverride.([]any)
+				if len(connectionSecurity) != 1 {
+					t.Errorf("%s %s security = %#v", method, path, connectionSecurity)
+					continue
+				}
+				connectionRequirement := object(t, connectionSecurity[0], "terminal ticket security")
+				if len(connectionRequirement) != 1 || connectionRequirement["MatrixTerminalTicket"] == nil {
+					t.Errorf("%s %s must require only MatrixTerminalTicket", method, path)
 				}
 			} else if overridesSecurity {
 				t.Errorf("%s %s must inherit MatrixIAM", method, path)
@@ -167,7 +209,12 @@ func TestOpenAPIEnumsMatchGoContract(t *testing.T) {
 	assertExactEnum(t, schemas, "ExecutionTargetDesiredState", stringify([]ExecutionTargetDesiredState{
 		ExecutionTargetActive,
 		ExecutionTargetDraining,
+		ExecutionTargetRemoved,
 	}))
+	assertExactEnum(t, schemas, "NodeEnrollmentState", stringify(NodeEnrollmentStates()))
+	assertExactEnum(t, schemas, "NodeEnrollmentDiagnosticCode", stringify(NodeEnrollmentDiagnosticCodes()))
+	assertExactEnum(t, schemas, "JoinCredentialWrappingAlgorithm", stringify([]JoinCredentialWrappingAlgorithm{JoinCredentialRSAOAEP256}))
+	assertExactEnum(t, schemas, "NodeJoinSignatureAlgorithm", stringify([]NodeJoinSignatureAlgorithm{NodeJoinSignatureEd25519}))
 	assertExactEnum(t, schemas, "IsolationGuarantee", stringify(IsolationGuarantees()))
 	assertExactEnum(t, schemas, "PlacementStrategy", stringify([]PlacementStrategy{
 		PlacementFirstFit,

@@ -290,7 +290,7 @@ SELECT managedservice.complete_operation($1, $2, 'predecessor-worker', $3, $4, $
 		t.Fatalf("upgraded predecessor rejected current ROLE activation=%#v replayed=%v err=%v", roleActivation, replayed, err)
 	}
 	var schemaVersion uint64
-	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 7 {
+	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 8 {
 		t.Fatalf("current PaaS readiness schema=%d err=%v", schemaVersion, err)
 	}
 }

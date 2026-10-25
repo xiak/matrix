@@ -340,6 +340,7 @@ type unusedExecutionProfileRepository struct {
 func (repository *unusedExecutionProfileRepository) WithinTransaction(
 	context.Context,
 	paasv1.TenantID,
+	string,
 	func(context.Context, refreshexecutionprofile.Transaction) error,
 ) error {
 	repository.calls++
@@ -402,7 +403,7 @@ func TestExecutionProfileRefreshRetainsClosedProbeTimeoutCode(t *testing.T) {
 			}
 			repository := &unusedExecutionProfileRepository{}
 			service, err := refreshexecutionprofile.New(adapter, repository, refreshexecutionprofile.Config{
-				TenantID: "organization-default", IDs: localExecutionProfileIDs,
+				InstallationID: "installation-default", TenantID: "organization-default", IDs: localExecutionProfileIDs,
 				MachineBindingRef: "local", ObservationTimeout: executionTargetTimeout,
 				MaximumObservationAge: executionTargetMaximumAge, MaxTransactionAttempts: 5,
 			})

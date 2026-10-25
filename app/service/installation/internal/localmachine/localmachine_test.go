@@ -31,9 +31,276 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/internal/releasetest"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
+
+func fixedManagedServiceInventory(string) (string, error) {
+	return "sha256:" + strings.Repeat("a", 64), nil
+}
+
+func TestNodeControllerReplacementIsAtomicResumableAndAPIScoped(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("protected platform topology targets Linux")
+	}
+	installation, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(installation, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{runtime: runtimeBoundary, validateController: func(nodeconfig.ControllerConfiguration) error { return nil }}
+	installed := installedPlanFrom(installation)
+	expected, err := effects.NodeConnectionsDigest(context.Background(), installed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configuration := nodeconfig.EmptyController(installation.InstallationID)
+	configuration.Nodes = []nodeconfig.Connection{{BindingRef: "binding-a", TargetID: "target-a", Endpoint: "https://192.168.50.10:16443", IdentityFingerprint: "sha256:" + strings.Repeat("a", 64)}}
+	configuration.Certificate, configuration.PrivateKey, configuration.Trust = []byte("cert"), []byte("private-controller-key"), []byte("trust")
+	input, err := nodeconfig.EncodeController(configuration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private := t.TempDir()
+	if os.Chmod(private, 0o700) != nil {
+		t.Fatal("protect fixture input")
+	}
+	path := filepath.Join(private, "connections.json")
+	if os.WriteFile(path, input, 0o600) != nil {
+		t.Fatal("write fixture input")
+	}
+	credentials := snapshotManagedCredentials(t, installation.Root)
+	before := readTestFile(t, installation.Root, layout.NodeControllerConfiguration)
+	plan, err := effects.PrepareNodeConnections(context.Background(), installed, path, expected, nil)
+	if err != nil {
+		t.Fatal("prepare controller", err)
+	}
+	defer plan.Clear()
+	plan.CommandID = "cmd-" + strings.Repeat("a", 32)
+	if _, err := effects.PrepareNodeConnections(context.Background(), installed, path, "sha256:"+strings.Repeat("f", 64), nil); !errors.Is(err, platformcommand.ErrEffectConflict) {
+		t.Fatal("wrong expected configuration admitted")
+	}
+	if runtimeBoundary.composeCalls != 0 || !bytes.Equal(before, readTestFile(t, installation.Root, layout.NodeControllerConfiguration)) {
+		t.Fatal("preparation changed runtime or configuration")
+	}
+	if err := effects.ApplyNodeConnectionsPhase(context.Background(), plan, lifecycle.PhaseStaging); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, readTestFile(t, installation.Root, layout.NodeControllerConfiguration)) {
+		t.Fatal("staging published live credentials")
+	}
+	pending := &lifecycle.Execution{Command: lifecycle.Command{ID: plan.CommandID, Action: lifecycle.ActionConfigureNodes, InputDigest: plan.InputDigest, ExpectedConfigurationDigest: expected}, Phase: lifecycle.PhaseConfiguring}
+	if os.Remove(path) != nil {
+		t.Fatal("remove original input")
+	}
+	resumed, err := effects.PrepareNodeConnections(context.Background(), installed, "", "", pending)
+	if err != nil || !bytes.Equal(resumed.After, plan.After) {
+		t.Fatal("no-input resume changed the private intent")
+	}
+	defer resumed.Clear()
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseConfiguring, lifecycle.PhaseConfiguring, lifecycle.PhaseStarting, lifecycle.PhaseVerifying, lifecycle.PhaseCommitting, lifecycle.PhaseCommitting} {
+		if err := effects.ApplyNodeConnectionsPhase(context.Background(), resumed, phase); err != nil {
+			t.Fatalf("controller phase %s failed: %v", phase, err)
+		}
+	}
+	args := runtimeBoundary.composeArguments
+	if runtimeBoundary.composeCalls != 1 || args[len(args)-1] != "paas-api" || !slices.Contains(args, "--no-deps") || !slices.Contains(args, "--force-recreate") || !hasArgumentPair(args, "--pull", "never") || len(runtimeBoundary.migrationRuns) != 0 {
+		t.Fatal("connection replacement changed more than the API")
+	}
+	if !bytes.Equal(input, readTestFile(t, installation.Root, layout.NodeControllerConfiguration)) || !equalSnapshots(credentials, snapshotManagedCredentials(t, installation.Root)) {
+		t.Fatal("connection replacement changed other credentials or lost input")
+	}
+	if exists, err := managedFileExists(installation.Root, filepath.FromSlash(layout.NodeControllerPending)); err != nil || exists {
+		t.Fatal("committed replacement retained previous private keys")
+	}
+	pending.Phase = lifecycle.PhaseCommitting
+	resumedAfterCleanup, err := effects.PrepareNodeConnections(context.Background(), installed, "", "", pending)
+	defer resumedAfterCleanup.Clear()
+	if err != nil || resumedAfterCleanup.InputDigest != plan.InputDigest || effects.ApplyNodeConnectionsPhase(context.Background(), resumedAfterCleanup, lifecycle.PhaseCommitting) != nil {
+		t.Fatal("cleanup-before-journal crash cannot resume")
+	}
+	if runtimeBoundary.composeCalls != 1 {
+		t.Fatal("cleanup replay restarted the API")
+	}
+}
+
+func TestNodeControllerRejectsRebindingUntrustedCredentialsAndForeignRuntime(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("protected platform topology targets Linux")
+	}
+	for _, mode := range []string{"wrong installation", "bad credential", "runtime drift", "remove binding", "rebind endpoint", "wrong pending intent", "foreign file"} {
+		t.Run(mode, func(t *testing.T) {
+			installation, expectation := configuredPlatformStartFixture(t)
+			runtimeBoundary := newPlatformStartRuntime(installation, expectation)
+			runtimeBoundary.started = true
+			effects := &Effects{runtime: runtimeBoundary, validateController: func(nodeconfig.ControllerConfiguration) error { return nil }}
+			installed := installedPlanFrom(installation)
+			configuration := nodeconfig.EmptyController(installation.InstallationID)
+			configuration.Nodes = []nodeconfig.Connection{{BindingRef: "binding-a", TargetID: "target-a", Endpoint: "https://192.168.50.10:16443", IdentityFingerprint: "sha256:" + strings.Repeat("a", 64)}}
+			configuration.Certificate, configuration.PrivateKey, configuration.Trust = []byte("cert"), []byte("private-key"), []byte("trust")
+			encoded, _ := nodeconfig.EncodeController(configuration)
+			if err := replaceManagedExpected(installation.Root, filepath.FromSlash(layout.NodeControllerConfiguration), readTestFile(t, installation.Root, layout.NodeControllerConfiguration), encoded); err != nil {
+				t.Fatal(err)
+			}
+			expected, _ := effects.NodeConnectionsDigest(context.Background(), installed)
+			configuration.PrivateKey = []byte("new-private-key")
+			switch mode {
+			case "wrong installation":
+				configuration.InstallationID = "other"
+			case "bad credential":
+				effects.validateController = func(nodeconfig.ControllerConfiguration) error { return errors.New("secret not for output") }
+			case "runtime drift":
+				runtimeBoundary.resourceDriftService = "paas-worker"
+			case "remove binding":
+				configuration.Nodes = []nodeconfig.Connection{}
+				configuration.Certificate = nil
+				configuration.PrivateKey = nil
+				configuration.Trust = nil
+			case "rebind endpoint":
+				configuration.Nodes[0].Endpoint = "https://192.168.50.11:16443"
+			}
+			input, _ := nodeconfig.EncodeController(configuration)
+			private := t.TempDir()
+			_ = os.Chmod(private, 0o700)
+			path := filepath.Join(private, "input.json")
+			if os.WriteFile(path, input, 0o600) != nil {
+				t.Fatal("write private input")
+			}
+			before := readTestFile(t, installation.Root, layout.NodeControllerConfiguration)
+			plan, err := effects.PrepareNodeConnections(context.Background(), installed, path, expected, nil)
+			defer plan.Clear()
+			if mode == "wrong pending intent" || mode == "foreign file" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				plan.CommandID = "cmd-" + strings.Repeat("b", 32)
+				if err := effects.ApplyNodeConnectionsPhase(context.Background(), plan, lifecycle.PhaseStaging); err != nil {
+					t.Fatal(err)
+				}
+				if mode == "wrong pending intent" {
+					plan.CommandID = "cmd-" + strings.Repeat("c", 32)
+				} else {
+					if os.WriteFile(filepath.Join(installation.Root, filepath.FromSlash(layout.NodeControllerConfiguration)), []byte("foreign"), 0o600) != nil {
+						t.Fatal("write foreign configuration")
+					}
+					before = []byte("foreign")
+				}
+				err = effects.ApplyNodeConnectionsPhase(context.Background(), plan, lifecycle.PhaseConfiguring)
+			}
+			if err == nil || strings.Contains(err.Error(), "secret") || runtimeBoundary.composeCalls != 0 || !bytes.Equal(before, readTestFile(t, installation.Root, layout.NodeControllerConfiguration)) {
+				t.Fatal("rejected controller input changed state, started a provider or exposed details")
+			}
+		})
+	}
+}
+
+func TestEnrollmentIssuerCannotAdoptSubstitutedMaterial(t *testing.T) {
+	for _, mode := range []string{"certificate", "private key", "installation identity"} {
+		t.Run(mode, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatalf("stage installation: %v", err)
+			}
+			installationID := plan.InstallationID
+			switch mode {
+			case "certificate", "private key":
+				relativePath := layout.EnrollmentIssuerCertificate
+				if mode == "private key" {
+					relativePath = layout.EnrollmentIssuerPrivateKey
+				}
+				content := readTestFile(t, plan.Root, relativePath)
+				content[len(content)-1] ^= 0x01
+				if err := os.WriteFile(
+					filepath.Join(plan.Root, filepath.FromSlash(relativePath)), content, 0o600,
+				); err != nil {
+					t.Fatalf("substitute enrollment issuer %s: %v", mode, err)
+				}
+			case "installation identity":
+				installationID = "mxi-22222222222222222222222222222222"
+			}
+			before := snapshotManagedCredentials(t, plan.Root)
+			if err := ensureEnrollmentIssuer(plan.Root, installationID, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatalf("substituted enrollment issuer %s error = %v", mode, err)
+			}
+			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+				t.Fatal("rejected enrollment issuer changed installation credentials")
+			}
+		})
+	}
+}
+
+func TestEnrollmentIngressCannotAdoptSubstitutedMaterial(t *testing.T) {
+	for _, mode := range []string{"certificate", "private key", "installation identity"} {
+		t.Run(mode, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatalf("stage installation: %v", err)
+			}
+			installationID := plan.InstallationID
+			switch mode {
+			case "certificate", "private key":
+				relativePath := layout.EnrollmentIngressCertificate
+				if mode == "private key" {
+					relativePath = layout.EnrollmentIngressPrivateKey
+				}
+				content := readTestFile(t, plan.Root, relativePath)
+				content[len(content)-2] ^= 0x01
+				if err := os.WriteFile(
+					filepath.Join(plan.Root, filepath.FromSlash(relativePath)), content, 0o600,
+				); err != nil {
+					t.Fatalf("substitute enrollment ingress %s: %v", mode, err)
+				}
+				clear(content)
+			case "installation identity":
+				installationID = "mxi-22222222222222222222222222222222"
+			}
+			before := snapshotManagedCredentials(t, plan.Root)
+			if err := ensureEnrollmentIngress(plan.Root, installationID, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatalf("substituted enrollment ingress %s error = %v", mode, err)
+			}
+			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+				t.Fatal("rejected enrollment ingress changed installation credentials")
+			}
+		})
+	}
+}
+
+func TestEnrollmentControllerCannotAdoptSubstitutedMaterial(t *testing.T) {
+	for _, mode := range []string{"certificate", "private key", "trust", "installation identity"} {
+		t.Run(mode, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatalf("stage installation: %v", err)
+			}
+			installationID := plan.InstallationID
+			switch mode {
+			case "certificate", "private key", "trust":
+				relativePath := layout.EnrollmentControllerCertificate
+				if mode == "private key" {
+					relativePath = layout.EnrollmentControllerPrivateKey
+				} else if mode == "trust" {
+					relativePath = layout.EnrollmentControllerTrust
+				}
+				content := readTestFile(t, plan.Root, relativePath)
+				content[len(content)-2] ^= 0x01
+				if err := os.WriteFile(
+					filepath.Join(plan.Root, filepath.FromSlash(relativePath)), content, 0o600,
+				); err != nil {
+					t.Fatalf("substitute enrollment controller %s: %v", mode, err)
+				}
+				clear(content)
+			case "installation identity":
+				installationID = "mxi-22222222222222222222222222222222"
+			}
+			before := snapshotManagedCredentials(t, plan.Root)
+			if err := ensureEnrollmentController(plan.Root, installationID, failingEntropy{}); !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatalf("substituted enrollment controller %s error = %v", mode, err)
+			}
+			if !equalSnapshots(before, snapshotManagedCredentials(t, plan.Root)) {
+				t.Fatal("rejected enrollment controller changed installation credentials")
+			}
+		})
+	}
+}
 
 func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T) {
 	plan := newInstallPlan(t)
@@ -254,13 +521,13 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		"X-Matrix-External-Origin: \"" + plan.NorthboundOrigin + "\"": 2,
 		"X-Matrix-External-Request-Target: \"$request_uri\"":          2,
 		"X-Matrix-External-Source-IP: \"$remote_addr\"":               2,
-		"- Forwarded":                                              6,
-		"- X-Forwarded-For":                                        6,
-		"- X-Real-IP":                                              6,
-		"- X-Matrix-External-Origin":                               4,
-		"- X-Matrix-External-Request-Target":                       4,
-		"- X-Matrix-External-Source-IP":                            4,
-		"- X-Matrix-Edge-Assertion":                                7,
+		"- Forwarded":                                              7,
+		"- X-Forwarded-For":                                        7,
+		"- X-Real-IP":                                              7,
+		"- X-Matrix-External-Origin":                               5,
+		"- X-Matrix-External-Request-Target":                       5,
+		"- X-Matrix-External-Source-IP":                            5,
+		"- X-Matrix-Edge-Assertion":                                8,
 		"serverless-post-function:":                                2,
 		`io.open("/run/matrix/audit-edge-assertion", "rb")`:        1,
 		`io.open("/run/matrix/paas-edge-assertion", "rb")`:         1,
@@ -275,7 +542,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		start string
 		end   string
 	}{
-		{"id: matrix-audit\n", "id: matrix-paas-installation-verification\n"},
+		{"id: matrix-audit\n", "id: matrix-platform\n"},
 		{"id: matrix-paas\n", "id: matrix-managed-services\n"},
 	} {
 		start := bytes.Index(apisix, []byte(route.start))
@@ -1553,9 +1820,11 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	}
 	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
 	runtimeBoundary.started = true
+	managedInventory := "sha256:" + strings.Repeat("a", 64)
 	effects := &Effects{
 		runtime: runtimeBoundary, entropy: rand.Reader,
-		verifier: &recordingInstallationVerifier{},
+		verifier:         &recordingInstallationVerifier{},
+		managedInventory: func(string) (string, error) { return managedInventory, nil },
 	}
 	request := platformcommand.BackupPlan{
 		InstalledPlan: installedPlanFrom(plan),
@@ -1586,6 +1855,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		manifest.BackupID != request.BackupID ||
 		manifest.InstallationID != plan.InstallationID ||
 		manifest.ReleaseDigest != plan.Bundle.ManifestSHA256 ||
+		manifest.ManagedServiceInventory != managedInventory ||
 		len(manifest.Artifacts) != 2 || manifest.Seal == nil || manifest.Seal.Value == "" {
 		t.Fatalf("sealed backup manifest = %#v", manifest)
 	}
@@ -1636,6 +1906,21 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	if runtimeBoundary.backupCustodyRuns != custodyRuns {
 		t.Fatal("backup replay acquired a second TOTP custody snapshot")
 	}
+	managedInventory = "sha256:" + strings.Repeat("b", 64)
+	if _, err := effects.InspectBackup(
+		context.Background(), request.InstalledPlan, request.BackupID,
+	); !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
+		runtimeBoundary.providerRemovals != 0 || runtimeBoundary.recoveryRestores != 0 {
+		t.Fatalf("changed managed inventory was not rejected before effects: %v", err)
+	}
+	if err := effects.CreateBackup(context.Background(), request); err != nil {
+		t.Fatalf("replay of an authenticated old snapshot failed: %v", err)
+	}
+	if replayed, err := os.ReadFile(filepath.Join(backupRoot, backupManifestFilename)); err != nil ||
+		!bytes.Equal(replayed, manifestContent) {
+		t.Fatal("backup replay replaced its original inventory witness")
+	}
+	managedInventory = manifest.ManagedServiceInventory
 	for _, scalar := range []string{"0", "null"} {
 		ambiguous := append([]byte(`{"schemaVersion":`+scalar+`,`), manifestContent[1:]...)
 		if err := os.WriteFile(filepath.Join(backupRoot, backupManifestFilename), ambiguous, 0o600); err != nil {
@@ -1657,6 +1942,41 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 		context.Background(), request,
 	); !errors.Is(err, platformcommand.ErrEffectVerification) {
 		t.Fatalf("tampered backup replay error = %v", err)
+	}
+}
+
+func TestBackupRejectsManagedInventoryChangeDuringSnapshot(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine backup effects target Linux")
+	}
+	plan, expectation := configuredPlatformStartFixture(t)
+	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary.started = true
+	effects := &Effects{
+		runtime: runtimeBoundary, entropy: rand.Reader,
+		verifier: &recordingInstallationVerifier{},
+		managedInventory: func(string) (string, error) {
+			if runtimeBoundary.backupStreams == 0 {
+				return "sha256:" + strings.Repeat("a", 64), nil
+			}
+			return "sha256:" + strings.Repeat("b", 64), nil
+		},
+	}
+	request := platformcommand.BackupPlan{
+		InstalledPlan: installedPlanFrom(plan),
+		BackupID:      "backup-cccccccccccccccccccccccccccccccc",
+		CreatedAt:     time.Date(2026, 8, 26, 5, 0, 0, 0, time.UTC),
+	}
+	if err := effects.CreateBackup(context.Background(), request); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
+		t.Fatalf("backup admitted changing managed inventory: %v", err)
+	}
+	for _, name := range []string{request.BackupID, "." + request.BackupID + ".partial"} {
+		if _, err := os.Lstat(filepath.Join(plan.Root, filepath.FromSlash(layout.BackupDirectory), name)); !os.IsNotExist(err) {
+			t.Fatal("incoherent snapshot was published or retained")
+		}
+	}
+	if !runtimeBoundary.started || runtimeBoundary.providerRemovals != 0 || runtimeBoundary.recoveryRestores != 0 {
+		t.Fatal("rejected backup changed the running platform")
 	}
 }
 
@@ -1697,9 +2017,17 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 			DeploymentID: state.DeploymentID, Generation: state.Generation,
 		}, nil
 	}
+	managedInventory := "sha256:" + strings.Repeat("a", 64)
+	changeInventoryAfterStop := false
 	effects := &Effects{
 		runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
 		projectInspector: projectInspector,
+		managedInventory: func(string) (string, error) {
+			if changeInventoryAfterStop && !runtimeBoundary.started {
+				return "sha256:" + strings.Repeat("b", 64), nil
+			}
+			return managedInventory, nil
+		},
 	}
 	backup := platformcommand.BackupPlan{
 		InstalledPlan: installedPlanFrom(plan),
@@ -1750,6 +2078,21 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 			AuthenticationStateDigest: source.AuthenticationStateDigest,
 		},
 	}
+	managedInventory = "sha256:" + strings.Repeat("b", 64)
+	if err := effects.ApplyRecoveryPhase(
+		context.Background(), recovery, lifecycle.PhaseRecovering,
+	); !errors.Is(err, platformcommand.ErrEffectPrecondition) ||
+		runtimeBoundary.providerRemovals != removals || runtimeBoundary.recoveryRestores != 0 {
+		t.Fatalf("inventory change after inspection was not rejected before shutdown: %v", err)
+	}
+	managedInventory = "sha256:" + strings.Repeat("a", 64)
+	changeInventoryAfterStop = true
+	if err := effects.ApplyRecoveryPhase(
+		context.Background(), recovery, lifecycle.PhaseRecovering,
+	); !errors.Is(err, platformcommand.ErrEffectPrecondition) || runtimeBoundary.recoveryRestores != 0 {
+		t.Fatalf("inventory race was not rejected before database restore: %v", err)
+	}
+	changeInventoryAfterStop = false
 	for _, phase := range []lifecycle.Phase{
 		lifecycle.PhaseRecovering, lifecycle.PhaseStarting, lifecycle.PhaseVerifying,
 	} {
@@ -1816,7 +2159,7 @@ func TestRecoveryRejectsDifferentProfilesBeforeProviderEffects(t *testing.T) {
 			runtimeBoundary.started = true
 			verifier := &recordingInstallationVerifier{}
 			effects := &Effects{runtime: runtimeBoundary, entropy: rand.Reader, verifier: verifier,
-				projectInspector: newRecoveryProbeInspector(t, target)}
+				projectInspector: newRecoveryProbeInspector(t, target), managedInventory: fixedManagedServiceInventory}
 			backup := platformcommand.BackupPlan{
 				InstalledPlan: upgrade.Source, BackupID: upgrade.BackupID, CreatedAt: upgrade.CreatedAt,
 			}
@@ -1867,7 +2210,7 @@ func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *test
 	plan, expectation := configuredPlatformStartFixture(t)
 	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
 	runtimeBoundary.started = true
-	effects := &Effects{runtime: runtimeBoundary, entropy: rand.Reader, verifier: &recordingInstallationVerifier{}}
+	effects := &Effects{runtime: runtimeBoundary, entropy: rand.Reader, verifier: &recordingInstallationVerifier{}, managedInventory: fixedManagedServiceInventory}
 	request := platformcommand.BackupPlan{
 		InstalledPlan: installedPlanFrom(plan), BackupID: "backup-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
 		CreatedAt: time.Date(2026, 8, 26, 5, 0, 0, 0, time.UTC),
@@ -1884,16 +2227,88 @@ func TestPublishedBackupSealRemainsReadableAndProfileCannotBeSubstituted(t *test
 	if err := json.Unmarshal(content, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = legacyBackupAPIVersion, 1, release.DatabaseProfile{}
-	manifest.AccessKeyWrapping = nil
-	manifest.TOTPBackupCustody = nil
-	manifest.AuthenticationStateDigest = ""
 	key, err := loadBackupSealKey(plan.Root, nil, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer clear(key)
-	artifacts, err := json.Marshal(manifest.Artifacts)
+
+	// Freeze the published v3 field set and ordering independently of the
+	// current Go struct. Wire v4 adds the managed-service inventory witness;
+	// it must not reinterpret or rewrite an already signed v3 document.
+	authenticationManifest := manifest
+	authenticationManifest.APIVersion = authenticationBackupAPIVersion
+	authenticationManifest.ManagedServiceInventory = ""
+	authenticationManifest.Seal = nil
+	artifacts, err := json.Marshal(authenticationManifest.Artifacts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := json.Marshal(authenticationManifest.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accessKeyWrapping, err := json.Marshal(authenticationManifest.AccessKeyWrapping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	totpCustody, err := json.Marshal(authenticationManifest.TOTPBackupCustody)
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalV3 := []byte(fmt.Sprintf(
+		`{"apiVersion":"installation.matrix.xiak.com/v3","kind":"PlatformBackup","backupId":%q,"installationId":%q,"releaseId":%q,"releaseDigest":%q,"createdAt":%q,"artifacts":%s,"database":%s,"accessKeyWrapping":%s,"totpBackupCustody":%s,"authenticationStateDigest":%q}`,
+		authenticationManifest.BackupID, authenticationManifest.InstallationID,
+		authenticationManifest.ReleaseID, authenticationManifest.ReleaseDigest,
+		authenticationManifest.CreatedAt.Format(time.RFC3339Nano), artifacts, database,
+		accessKeyWrapping, totpCustody, authenticationManifest.AuthenticationStateDigest,
+	))
+	macV3 := hmac.New(sha256.New, key)
+	_, _ = macV3.Write([]byte("matrix-platform-backup-v1\x00"))
+	_, _ = macV3.Write(canonicalV3)
+	sealedV3Want := []byte(fmt.Sprintf(
+		`{"apiVersion":"installation.matrix.xiak.com/v3","kind":"PlatformBackup","backupId":%q,"installationId":%q,"releaseId":%q,"releaseDigest":%q,"createdAt":%q,"artifacts":%s,"seal":{"algorithm":"HMAC-SHA256","keyId":"installation-backup-v1","value":"sha256:%s"},"database":%s,"accessKeyWrapping":%s,"totpBackupCustody":%s,"authenticationStateDigest":%q}`+"\n",
+		authenticationManifest.BackupID, authenticationManifest.InstallationID,
+		authenticationManifest.ReleaseID, authenticationManifest.ReleaseDigest,
+		authenticationManifest.CreatedAt.Format(time.RFC3339Nano), artifacts,
+		hex.EncodeToString(macV3.Sum(nil)), database, accessKeyWrapping, totpCustody,
+		authenticationManifest.AuthenticationStateDigest,
+	))
+	sealedV3, err := sealBackupManifest(authenticationManifest, key)
+	if err != nil || !bytes.Equal(sealedV3, sealedV3Want) {
+		t.Fatalf("published v3 backup seal changed: %v", err)
+	}
+	if err := os.WriteFile(backupPath, sealedV3, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	readV3, _, err := readVerifiedBackupDirectory(
+		plan.Root, plan.InstallationID, request.BackupID,
+		filepath.Join(filepath.FromSlash(layout.BackupDirectory), request.BackupID), key,
+	)
+	if profile, profileErr := readV3.databaseProfile(); err != nil || profileErr != nil ||
+		profile != authenticationManifest.Database {
+		t.Fatalf("read published v3 backup: %#v / %v / %v", profile, err, profileErr)
+	}
+	if _, err := effects.InspectBackup(
+		context.Background(), request.InstalledPlan, request.BackupID,
+	); !errors.Is(err, platformcommand.ErrEffectPrecondition) {
+		t.Fatalf("historical v3 backup entered current recovery: %v", err)
+	}
+	injectedV3 := authenticationManifest
+	injectedV3.ManagedServiceInventory = manifest.ManagedServiceInventory
+	if _, err := injectedV3.databaseProfile(); err == nil {
+		t.Fatal("published v3 accepted a v4 managed-service inventory field")
+	}
+	if _, err := sealBackupManifest(injectedV3, key); err == nil {
+		t.Fatal("published v3 sealed a v4 managed-service inventory field")
+	}
+
+	manifest.APIVersion, manifest.SchemaVersion, manifest.Database = legacyBackupAPIVersion, 1, release.DatabaseProfile{}
+	manifest.AccessKeyWrapping = nil
+	manifest.TOTPBackupCustody = nil
+	manifest.AuthenticationStateDigest = ""
+	manifest.ManagedServiceInventory = ""
+	artifacts, err = json.Marshal(manifest.Artifacts)
 	if err != nil {
 		t.Fatal(err)
 	}

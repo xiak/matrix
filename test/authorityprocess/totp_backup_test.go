@@ -55,6 +55,8 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	backupBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-backup-custody", "./app/service/iam/cmd/matrix-iam-backup-custody")
 	recoveryBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-authentication-recovery", "./app/service/iam/cmd/matrix-iam-authentication-recovery")
 	migrator := buildAuthorityBinary(t, ctx, root, temporary, "iam-backup-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	bootstrap := processBootstrap(t)
+	bootstrap.InstallationID = "mxi-102030405060708090a0b0c0d0e0f000"
 	const apiLogin = "matrix_iam_api_login"
 	var migrationEnvironment []string
 	for _, value := range []struct{ environment, login string }{
@@ -86,7 +88,10 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 	}
 	migrationEnvironment = append(migrationEnvironment,
 		installationv1.IAMProductAuthorizationMigrationFileEnvironment+"="+
-			writeProtectedFile(t, temporary, "iam-product-authorization.json", productAuthorization))
+			writeProtectedFile(t, temporary, "iam-product-authorization.json", productAuthorization),
+		"MATRIX_MIGRATION_INSTALLATION_ID="+bootstrap.InstallationID,
+		"MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE="+
+			writeProtectedFile(t, temporary, "iam-backup-platform-credential", []byte(platformServiceCredential)))
 	clear(productAuthorization)
 	for _, action := range []string{"apply", "apply", "verify"} {
 		child := startChild(t, root, migrator, migrationEnvironment, action)
@@ -95,8 +100,6 @@ func TestIAMTOTPBackupProcesses(t *testing.T) {
 		}
 		assertProcessOutputsSanitized(t, []*childProcess{child}, config.Password, processDBPassword)
 	}
-	bootstrap := processBootstrap(t)
-	bootstrap.InstallationID = "mxi-102030405060708090a0b0c0d0e0f000"
 	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(bootstrap)
 	if err != nil {
 		t.Fatal(err)

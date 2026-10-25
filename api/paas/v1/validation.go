@@ -1,27 +1,61 @@
 package paasv1
 
 import (
+	"bytes"
+	"crypto/ed25519"
+	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
+	"net"
+	"net/netip"
+	"net/url"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
 var (
-	idPattern                = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
-	namePattern              = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
-	environmentKeyPattern    = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
-	digestPattern            = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
-	contractVersionPattern   = regexp.MustCompile(`^v[1-9][0-9]*$`)
-	applicationCursorPattern = regexp.MustCompile(`^pc1\.[A-Za-z0-9_-]+$`)
+	idPattern                   = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$`)
+	namePattern                 = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
+	environmentKeyPattern       = regexp.MustCompile(`^[A-Z_][A-Z0-9_]{0,127}$`)
+	digestPattern               = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+	contractVersionPattern      = regexp.MustCompile(`^v[1-9][0-9]*$`)
+	deploymentInstanceIDPattern = regexp.MustCompile(`^instance-[0-9a-f]{32}$`)
+	terminalSessionIDPattern    = regexp.MustCompile(`^terminal-session-[0-9a-f]{32}$`)
+	nodeEnrollmentIDPattern     = regexp.MustCompile(`^node-enrollment-[0-9a-f]{32}$`)
+	nodeExchangeIDPattern       = regexp.MustCompile(`^node-exchange-[0-9a-f]{32}$`)
+	nodeBindingIDPattern        = regexp.MustCompile(`^node-binding-[0-9a-f]{32}$`)
+	applicationCursorPattern    = regexp.MustCompile(`^pc1\.[A-Za-z0-9_-]+$`)
 )
 
 const (
-	ApplicationDirectoryPageSize = 50
-	MaxApplicationCursorBytes    = 384
+	MaximumExecutionPoolListItems                  = 129
+	MaximumNodeEnrollmentListItems                 = 128
+	MaximumNodeEnrollmentLifetime                  = 30 * time.Minute
+	MaximumNodeEnrollmentCertificateLifetime       = 30 * 24 * time.Hour
+	MaximumNodeEnrollmentRecoveryChallengeLifetime = 5 * time.Minute
+	MinimumNodeEnrollmentListenerPort              = 1024
+	NodeEnrollmentJoinAPIVersion                   = "node.enrollment.matrix.xiak.com/v1"
+	NodeEnrollmentJoinKind                         = "NodeEnrollmentJoin"
+	NodeEnrollmentExchangeAPIVersion               = "node.enrollment.matrix.xiak.com/v1"
+	NodeEnrollmentExchangeRequestKind              = "NodeEnrollmentExchangeRequest"
+	NodeEnrollmentExchangeResponseKind             = "NodeEnrollmentExchangeResponse"
+	NodeEnrollmentRecoveryAPIVersion               = "node.enrollment.matrix.xiak.com/v1"
+	NodeEnrollmentRecoveryChallengeRequestKind     = "NodeEnrollmentRecoveryChallengeRequest"
+	NodeEnrollmentRecoveryChallengeKind            = "NodeEnrollmentRecoveryChallenge"
+	NodeEnrollmentRecoveryProofRequestKind         = "NodeEnrollmentRecoveryProofRequest"
+	NodeEnrollmentCompletionRequestKind            = "NodeEnrollmentCompletionRequest"
+	ApplicationDirectoryPageSize                   = 50
+	MaxApplicationCursorBytes                      = 384
 )
 
 var sensitiveKeyFragments = [...]string{
@@ -219,6 +253,841 @@ func ValidateExecutionPool(value ExecutionPool) error {
 	return errors.Join(problems...)
 }
 
+func ValidateCreateExecutionPoolRequest(value CreateExecutionPoolRequest) error {
+	problems := []error{
+		ValidateID("id", string(value.ID)),
+		validateLabels("labels", value.Labels),
+		validateLabelSelector("spec.executionTargetSelector", value.Spec.ExecutionTargetSelector),
+		validateUniqueKnown("spec.allowedIsolationGuarantees", value.Spec.AllowedIsolationGuarantees, IsolationGuarantees(), true),
+	}
+	if !namePattern.MatchString(value.Name) {
+		problems = append(problems, errors.New("name must be a DNS label"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateExecutionPoolList(value ExecutionPoolList) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "ExecutionPoolList" ||
+		value.Items == nil || len(value.Items) > MaximumExecutionPoolListItems {
+		problems = append(problems, errors.New("execution pool list metadata or size is invalid"))
+	}
+	seen := map[ResourceID]bool{}
+	for _, pool := range value.Items {
+		if ValidateExecutionPool(pool) != nil || seen[pool.Metadata.ID] {
+			problems = append(problems, errors.New("execution pool list contains an invalid or duplicate pool"))
+			continue
+		}
+		seen[pool.Metadata.ID] = true
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCreateNodeEnrollmentRequest(value CreateNodeEnrollmentRequest) error {
+	problems := []error{
+		ValidateID("executionPoolId", string(value.ExecutionPoolID)),
+		validateLabels("labels", value.Labels),
+		validateWrappingPublicKey(value.WrappingPublicKey),
+	}
+	if !namePattern.MatchString(value.Name) {
+		problems = append(problems, errors.New("name must be a DNS label"))
+	}
+	if _, supplied := value.Labels["matrix-machine-fingerprint"]; supplied {
+		problems = append(problems, errors.New("node identity label is installation-owned"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateRegenerateNodeEnrollmentRequest(value RegenerateNodeEnrollmentRequest) error {
+	return validateWrappingPublicKey(value.WrappingPublicKey)
+}
+
+func ValidateNodeEnrollmentDiagnostic(value NodeEnrollmentDiagnostic) error {
+	if !contains(NodeEnrollmentDiagnosticCodes(), value.Code) {
+		return errors.New("node enrollment diagnostic code is invalid")
+	}
+	retryable := value.Code == NodeEnrollmentDiagnosticListener ||
+		value.Code == NodeEnrollmentDiagnosticNetworkInterrupted
+	return errors.Join(
+		validateContractTime("diagnostic.occurredAt", value.OccurredAt),
+		func() error {
+			if value.Retryable != retryable {
+				return errors.New("node enrollment diagnostic retryability is invalid")
+			}
+			return nil
+		}(),
+	)
+}
+
+func ValidateNodeEnrollment(value NodeEnrollment) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "NodeEnrollment" {
+		problems = append(problems, errors.New("node enrollment type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceMetadata(value.Metadata),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateID("executionPoolId", string(value.ExecutionPoolID)),
+		ValidateID("operationId", string(value.OperationID)),
+		validateContractTime("expiresAt", value.ExpiresAt),
+	)
+	if value.Metadata.Scope.Kind != AuthorityPlatform {
+		problems = append(problems, errors.New("node enrollment must be platform scoped"))
+	}
+	if !nodeEnrollmentIDPattern.MatchString(string(value.Metadata.ID)) {
+		problems = append(problems, errors.New("node enrollment identity is invalid"))
+	}
+	if !contains(NodeEnrollmentStates(), value.State) {
+		problems = append(problems, errors.New("node enrollment state is invalid"))
+	}
+	if !value.ExpiresAt.After(value.Metadata.CreatedAt) ||
+		value.ExpiresAt.Sub(value.Metadata.CreatedAt) > MaximumNodeEnrollmentLifetime {
+		problems = append(problems, errors.New("node enrollment expiry is invalid"))
+	}
+	if value.CredentialConsumedAt != nil {
+		problems = append(problems, validateContractTime("credentialConsumedAt", *value.CredentialConsumedAt))
+		if value.CredentialConsumedAt.Before(value.Metadata.CreatedAt) ||
+			value.CredentialConsumedAt.After(value.Metadata.UpdatedAt) ||
+			!value.CredentialConsumedAt.Before(value.ExpiresAt) {
+			problems = append(problems, errors.New("node enrollment credential time is invalid"))
+		}
+	}
+	if value.ReadyAt != nil {
+		problems = append(problems, validateContractTime("readyAt", *value.ReadyAt))
+		if value.CredentialConsumedAt == nil || value.ReadyAt.Before(*value.CredentialConsumedAt) ||
+			value.ReadyAt.After(value.Metadata.UpdatedAt) || value.ReadyAt.After(value.ExpiresAt) {
+			problems = append(problems, errors.New("node enrollment ready time is invalid"))
+		}
+	}
+	if value.ReplacedByID != "" && !nodeEnrollmentIDPattern.MatchString(string(value.ReplacedByID)) {
+		problems = append(problems, errors.New("replacement enrollment identity is invalid"))
+	}
+	if value.Diagnostic != nil {
+		problems = append(problems, ValidateNodeEnrollmentDiagnostic(*value.Diagnostic))
+		if value.Diagnostic.OccurredAt.Before(value.Metadata.CreatedAt) ||
+			value.Diagnostic.OccurredAt.After(value.Metadata.UpdatedAt) {
+			problems = append(problems, errors.New("node enrollment diagnostic time is invalid"))
+		}
+	}
+	switch value.State {
+	case NodeEnrollmentWaitingInstall:
+		if value.CredentialConsumedAt != nil || value.ReadyAt != nil || value.ReplacedByID != "" || value.Diagnostic != nil {
+			problems = append(problems, errors.New("waiting node enrollment contains terminal or exchange state"))
+		}
+	case NodeEnrollmentVerifying:
+		if value.CredentialConsumedAt == nil || value.ReadyAt != nil || value.ReplacedByID != "" || value.Diagnostic != nil {
+			problems = append(problems, errors.New("verifying node enrollment state is incomplete"))
+		}
+	case NodeEnrollmentReady:
+		if value.CredentialConsumedAt == nil || value.ReadyAt == nil || value.ReplacedByID != "" || value.Diagnostic != nil {
+			problems = append(problems, errors.New("ready node enrollment state is incomplete"))
+		}
+	case NodeEnrollmentFailed:
+		if value.CredentialConsumedAt == nil || value.ReadyAt != nil || value.ReplacedByID != "" || value.Diagnostic == nil ||
+			(value.Diagnostic != nil && (value.Diagnostic.Code == NodeEnrollmentDiagnosticExpired || value.Diagnostic.Code == NodeEnrollmentDiagnosticRevoked)) {
+			problems = append(problems, errors.New("failed node enrollment state is incomplete"))
+		}
+	case NodeEnrollmentExpired:
+		if value.ReadyAt != nil || value.ReplacedByID != "" || value.Diagnostic == nil ||
+			(value.Diagnostic != nil && value.Diagnostic.Code != NodeEnrollmentDiagnosticExpired) ||
+			value.Metadata.UpdatedAt.Before(value.ExpiresAt) {
+			problems = append(problems, errors.New("expired node enrollment state is incomplete"))
+		}
+	case NodeEnrollmentRevoked:
+		if value.ReadyAt != nil || value.Diagnostic == nil ||
+			(value.Diagnostic != nil && value.Diagnostic.Code != NodeEnrollmentDiagnosticRevoked) {
+			problems = append(problems, errors.New("revoked node enrollment state is incomplete"))
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateNodeEnrollmentList(value NodeEnrollmentList) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "NodeEnrollmentList" ||
+		value.Items == nil || len(value.Items) > MaximumNodeEnrollmentListItems {
+		problems = append(problems, errors.New("node enrollment list metadata or size is invalid"))
+	}
+	seen := map[ResourceID]bool{}
+	for _, enrollment := range value.Items {
+		if ValidateNodeEnrollment(enrollment) != nil || seen[enrollment.Metadata.ID] {
+			problems = append(problems, errors.New("node enrollment list contains an invalid or duplicate enrollment"))
+			continue
+		}
+		seen[enrollment.Metadata.ID] = true
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateNodeEnrollmentJoin(value NodeEnrollmentJoin) error {
+	commitment, certificate, err := nodeEnrollmentJoinCommitment(value)
+	if err != nil {
+		return err
+	}
+	signature, err := decodeRawURLBase64("node enrollment join signature", value.Signature, ed25519.SignatureSize)
+	if err != nil {
+		return err
+	}
+	publicKey, ok := certificate.PublicKey.(ed25519.PublicKey)
+	if !ok || !ed25519.Verify(publicKey, commitment, signature) {
+		return errors.New("node enrollment join signature is invalid")
+	}
+	return nil
+}
+
+func NodeEnrollmentIssuerURI(installationID string) (*url.URL, error) {
+	if ValidateID("installationId", installationID) != nil {
+		return nil, errors.New("node enrollment issuer installation is invalid")
+	}
+	return &url.URL{
+		Scheme: "spiffe",
+		Host:   "matrix.xiak.com",
+		Path:   "/installation/" + installationID + "/node-enrollment-issuer",
+	}, nil
+}
+
+// NodeEnrollmentIngressServerName is the installation-bound TLS name used by
+// the bootstrap client. The signed join already commits InstallationID and the
+// issuer certificate, so the connection address can remain independent from
+// this deterministic verification name without relying on customer DNS.
+func NodeEnrollmentIngressServerName(installationID string) (string, error) {
+	if ValidateID("installationId", installationID) != nil {
+		return "", errors.New("node enrollment ingress installation is invalid")
+	}
+	digest := sha256.Sum256([]byte("matrix-node-enrollment-ingress/v1\x00" + installationID))
+	return "mx-" + hex.EncodeToString(digest[:24]) + ".enrollment.matrix.invalid", nil
+}
+
+// NodeEnrollmentJoinSigningBytes returns the exact public commitment signed by
+// the installation enrollment issuer. It never contains the raw credential.
+func NodeEnrollmentJoinSigningBytes(value NodeEnrollmentJoin) ([]byte, error) {
+	commitment, _, err := nodeEnrollmentJoinCommitment(value)
+	return commitment, err
+}
+
+// NodeEnrollmentCredentialWrappingLabel returns the exact RSA-OAEP label that
+// binds one encrypted join credential to its installation and enrollment.
+func NodeEnrollmentCredentialWrappingLabel(
+	installationID string,
+	enrollmentID ResourceID,
+) ([]byte, error) {
+	if ValidateID("installationId", installationID) != nil ||
+		!nodeEnrollmentIDPattern.MatchString(string(enrollmentID)) {
+		return nil, errors.New("node enrollment credential wrapping identity is invalid")
+	}
+	return []byte("matrix-node-enrollment-v1\x00" + installationID + "\x00" +
+		string(enrollmentID)), nil
+}
+
+func ValidateWrappedJoinCredential(value WrappedJoinCredential) error {
+	if value.Algorithm != JoinCredentialRSAOAEP256 {
+		return errors.New("join credential wrapping algorithm is invalid")
+	}
+	_, err := decodeRawURLBase64("wrapped join credential", value.Ciphertext, 384)
+	return err
+}
+
+func ValidateCreateNodeEnrollmentResponse(value CreateNodeEnrollmentResponse) error {
+	return errors.Join(
+		ValidateNodeEnrollment(value.Enrollment),
+		ValidateNodeEnrollmentJoin(value.Join),
+		ValidateWrappedJoinCredential(value.WrappedCredential),
+		func() error {
+			if value.Enrollment.Metadata.ID != value.Join.EnrollmentID ||
+				value.Enrollment.ExecutionTargetID != value.Join.ExecutionTargetID ||
+				!value.Enrollment.ExpiresAt.Equal(value.Join.ExpiresAt) ||
+				value.Enrollment.State != NodeEnrollmentWaitingInstall {
+				return errors.New("node enrollment creation response is inconsistent")
+			}
+			return nil
+		}(),
+	)
+}
+
+func ValidateExchangeNodeEnrollmentRequest(value ExchangeNodeEnrollmentRequest) error {
+	_, _, err := nodeEnrollmentExchangePublicKeys(value)
+	return err
+}
+
+// NodeEnrollmentExchangePublicKeys returns canonical PKIX public-key bytes
+// only after the complete exchange request has passed its closed contract.
+// It never exposes or derives either target-host private key.
+func NodeEnrollmentExchangePublicKeys(value ExchangeNodeEnrollmentRequest) ([]byte, []byte, error) {
+	node, collector, err := nodeEnrollmentExchangePublicKeys(value)
+	if err != nil {
+		return nil, nil, err
+	}
+	return bytes.Clone(node.RawSubjectPublicKeyInfo), bytes.Clone(collector.RawSubjectPublicKeyInfo), nil
+}
+
+func nodeEnrollmentExchangePublicKeys(value ExchangeNodeEnrollmentRequest) (*x509.CertificateRequest, *x509.CertificateRequest, error) {
+	var problems []error
+	if value.APIVersion != NodeEnrollmentExchangeAPIVersion ||
+		value.Kind != NodeEnrollmentExchangeRequestKind ||
+		!nodeEnrollmentIDPattern.MatchString(string(value.EnrollmentID)) ||
+		!nodeExchangeIDPattern.MatchString(value.ExchangeID) {
+		problems = append(problems, errors.New("node enrollment exchange metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateDigest("machineFingerprint", value.MachineFingerprint),
+		ValidateDigest("runtimeContractDigest", value.RuntimeContractDigest),
+	)
+	if _, err := decodeRawURLBase64("node enrollment credential", value.Credential, 32); err != nil {
+		problems = append(problems, errors.New("node enrollment credential is invalid"))
+	}
+	if value.Listener.ManagementPort < MinimumNodeEnrollmentListenerPort ||
+		value.Listener.CollectorPort < MinimumNodeEnrollmentListenerPort ||
+		value.Listener.ManagementPort == value.Listener.CollectorPort {
+		problems = append(problems, errors.New("node enrollment listener claim is invalid"))
+	}
+	nodeRequest, nodeErr := parseNodeEnrollmentCertificateRequest("node", value.NodeCertificateRequest)
+	collectorRequest, collectorErr := parseNodeEnrollmentCertificateRequest("collector", value.CollectorCertificateRequest)
+	problems = append(problems, nodeErr, collectorErr)
+	if nodeRequest != nil && collectorRequest != nil &&
+		bytes.Equal(nodeRequest.RawSubjectPublicKeyInfo, collectorRequest.RawSubjectPublicKeyInfo) {
+		problems = append(problems, errors.New("node enrollment public keys must be distinct"))
+	}
+	return nodeRequest, collectorRequest, errors.Join(problems...)
+}
+
+func parseNodeEnrollmentCertificateRequest(name, value string) (*x509.CertificateRequest, error) {
+	encoded, err := decodeRawURLBase64(name+" certificate request", value, -1)
+	if err != nil || len(encoded) < 64 || len(encoded) > 4096 {
+		return nil, errors.New("node enrollment certificate request is invalid")
+	}
+	request, err := x509.ParseCertificateRequest(encoded)
+	if err != nil || request == nil || request.CheckSignature() != nil ||
+		request.PublicKeyAlgorithm != x509.Ed25519 || request.SignatureAlgorithm != x509.PureEd25519 ||
+		request.Subject.String() != "" || !bytes.Equal(request.RawSubject, []byte{0x30, 0x00}) ||
+		len(request.Attributes) != 0 || len(request.Extensions) != 0 || len(request.ExtraExtensions) != 0 ||
+		len(request.DNSNames) != 0 || len(request.EmailAddresses) != 0 || len(request.IPAddresses) != 0 ||
+		len(request.URIs) != 0 {
+		return nil, errors.New("node enrollment certificate request is invalid")
+	}
+	publicKey, ok := request.PublicKey.(ed25519.PublicKey)
+	if !ok || len(publicKey) != ed25519.PublicKeySize {
+		return nil, errors.New("node enrollment certificate request is invalid")
+	}
+	return request, nil
+}
+
+func ValidateNodeEnrollmentExchangeResponse(value NodeEnrollmentExchangeResponse) error {
+	var problems []error
+	if value.APIVersion != NodeEnrollmentExchangeAPIVersion ||
+		value.Kind != NodeEnrollmentExchangeResponseKind ||
+		!nodeEnrollmentIDPattern.MatchString(string(value.EnrollmentID)) ||
+		!nodeExchangeIDPattern.MatchString(value.ExchangeID) ||
+		!nodeBindingIDPattern.MatchString(value.BindingRef) {
+		problems = append(problems, errors.New("node enrollment exchange response metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateID("controllerId", value.ControllerID),
+		ValidateDigest("machineFingerprint", value.MachineFingerprint),
+		ValidateDigest("runtimeContractDigest", value.RuntimeContractDigest),
+		validateContractTime("certificateNotBefore", value.CertificateNotBefore),
+		validateContractTime("certificateNotAfter", value.CertificateNotAfter),
+	)
+	if !value.CertificateNotAfter.After(value.CertificateNotBefore) ||
+		value.CertificateNotAfter.Sub(value.CertificateNotBefore) > MaximumNodeEnrollmentCertificateLifetime {
+		problems = append(problems, errors.New("node enrollment certificate lifetime is invalid"))
+	}
+	nodeAddress, nodePort, nodeAddressErr := parseNodeEnrollmentPrivateAddress(value.NodeListenAddress)
+	collectorAddress, collectorPort, collectorAddressErr := parseNodeEnrollmentCollectorEndpoint(value.CollectorEndpoint)
+	problems = append(problems, nodeAddressErr, collectorAddressErr)
+	if nodeAddressErr == nil && collectorAddressErr == nil && nodePort == collectorPort {
+		problems = append(problems, errors.New("node enrollment listener ports must be distinct"))
+	}
+	issuer, issuerErr := parseNodeEnrollmentIssuer(value.IssuerCertificate, value.InstallationID)
+	nodeCertificate, nodeErr := parseNodeEnrollmentRoleCertificate(
+		value.NodeCertificate,
+		value.InstallationID,
+		value.ExecutionTargetID,
+		"nodes",
+		nodeAddress,
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		issuer,
+		value.CertificateNotBefore,
+		value.CertificateNotAfter,
+	)
+	collectorCertificate, collectorErr := parseNodeEnrollmentRoleCertificate(
+		value.CollectorCertificate,
+		value.InstallationID,
+		value.ExecutionTargetID,
+		"collectors",
+		collectorAddress,
+		[]x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		issuer,
+		value.CertificateNotBefore,
+		value.CertificateNotAfter,
+	)
+	problems = append(problems, issuerErr, nodeErr, collectorErr)
+	if nodeCertificate != nil && collectorCertificate != nil &&
+		bytes.Equal(nodeCertificate.RawSubjectPublicKeyInfo, collectorCertificate.RawSubjectPublicKeyInfo) {
+		problems = append(problems, errors.New("node enrollment certificates reuse one public key"))
+	}
+	return errors.Join(problems...)
+}
+
+// ValidateNodeEnrollmentExchangeResponseForRequest binds an issued result to
+// the exact locally persisted exchange intent and both CSR public keys.
+func ValidateNodeEnrollmentExchangeResponseForRequest(
+	response NodeEnrollmentExchangeResponse,
+	request ExchangeNodeEnrollmentRequest,
+) error {
+	if ValidateExchangeNodeEnrollmentRequest(request) != nil ||
+		ValidateNodeEnrollmentExchangeResponse(response) != nil ||
+		response.EnrollmentID != request.EnrollmentID ||
+		response.InstallationID != request.InstallationID ||
+		response.ExecutionTargetID != request.ExecutionTargetID ||
+		response.ExchangeID != request.ExchangeID ||
+		response.MachineFingerprint != request.MachineFingerprint ||
+		response.RuntimeContractDigest != request.RuntimeContractDigest {
+		return errors.New("node enrollment exchange response differs from its request")
+	}
+	_, managementPort, managementErr := parseNodeEnrollmentPrivateAddress(response.NodeListenAddress)
+	_, collectorPort, collectorErr := parseNodeEnrollmentCollectorEndpoint(response.CollectorEndpoint)
+	if managementErr != nil || collectorErr != nil ||
+		managementPort != request.Listener.ManagementPort || collectorPort != request.Listener.CollectorPort {
+		return errors.New("node enrollment exchange response changes its listener claim")
+	}
+	nodeRequest, collectorRequest, err := nodeEnrollmentExchangePublicKeys(request)
+	if err != nil {
+		return err
+	}
+	nodeCertificate, nodeErr := decodeNodeEnrollmentCertificate(response.NodeCertificate)
+	collectorCertificate, collectorCertificateErr := decodeNodeEnrollmentCertificate(response.CollectorCertificate)
+	if nodeErr != nil || collectorCertificateErr != nil ||
+		!bytes.Equal(nodeCertificate.RawSubjectPublicKeyInfo, nodeRequest.RawSubjectPublicKeyInfo) ||
+		!bytes.Equal(collectorCertificate.RawSubjectPublicKeyInfo, collectorRequest.RawSubjectPublicKeyInfo) {
+		return errors.New("node enrollment exchange response changes its public keys")
+	}
+	return nil
+}
+
+func ValidateCompleteNodeEnrollmentRequest(value CompleteNodeEnrollmentRequest) error {
+	var problems []error
+	if value.APIVersion != NodeEnrollmentExchangeAPIVersion ||
+		value.Kind != NodeEnrollmentCompletionRequestKind ||
+		!nodeEnrollmentIDPattern.MatchString(string(value.EnrollmentID)) ||
+		!nodeExchangeIDPattern.MatchString(value.ExchangeID) ||
+		!nodeBindingIDPattern.MatchString(value.BindingRef) {
+		problems = append(problems, errors.New("node enrollment completion metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateID("controllerId", value.ControllerID),
+		ValidateDigest("machineFingerprint", value.MachineFingerprint),
+		ValidateDigest("runtimeContractDigest", value.RuntimeContractDigest),
+		ValidateDigest("nodePublicKeyFingerprint", value.NodePublicKeyFingerprint),
+		ValidateDigest("collectorPublicKeyFingerprint", value.CollectorPublicKeyFingerprint),
+	)
+	_, nodePort, nodeErr := parseNodeEnrollmentPrivateAddress(value.NodeListenAddress)
+	_, collectorPort, collectorErr := parseNodeEnrollmentCollectorEndpoint(value.CollectorEndpoint)
+	problems = append(problems, nodeErr, collectorErr)
+	if nodeErr == nil && collectorErr == nil && nodePort == collectorPort {
+		problems = append(problems, errors.New("node enrollment completion listener ports must be distinct"))
+	}
+	if value.NodePublicKeyFingerprint == value.CollectorPublicKeyFingerprint {
+		problems = append(problems, errors.New("node enrollment completion public keys must be distinct"))
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateCompleteNodeEnrollmentResponse(value CompleteNodeEnrollmentResponse) error {
+	if ValidateNodeEnrollment(value.Enrollment) != nil ||
+		ValidateExecutionTarget(value.ExecutionTarget) != nil ||
+		ValidateOperation(value.Operation) != nil ||
+		value.Enrollment.State != NodeEnrollmentReady ||
+		value.Enrollment.ExecutionTargetID != value.ExecutionTarget.Metadata.ID ||
+		value.Enrollment.ExecutionPoolID != value.ExecutionTarget.Spec.ExecutionPoolID ||
+		value.Enrollment.OperationID != value.Operation.ID ||
+		value.Operation.Action != OperationRegisterExecutionTarget ||
+		value.Operation.Target != (ResourceRef{Kind: "ExecutionTarget", ID: value.ExecutionTarget.Metadata.ID}) ||
+		value.Operation.State != OperationSucceeded {
+		return errors.New("node enrollment completion response is invalid")
+	}
+	return nil
+}
+
+func ValidateCreateNodeEnrollmentRecoveryChallengeRequest(
+	value CreateNodeEnrollmentRecoveryChallengeRequest,
+) error {
+	if value.APIVersion != NodeEnrollmentRecoveryAPIVersion ||
+		value.Kind != NodeEnrollmentRecoveryChallengeRequestKind ||
+		!validNodeEnrollmentRecoveryIdentity(
+			value.EnrollmentID,
+			value.InstallationID,
+			value.ExecutionTargetID,
+			value.ExchangeID,
+			value.MachineFingerprint,
+			value.RuntimeContractDigest,
+			value.NodePublicKeyFingerprint,
+			value.CollectorPublicKeyFingerprint,
+		) {
+		return errors.New("node enrollment recovery challenge request is invalid")
+	}
+	return nil
+}
+
+func ValidateNodeEnrollmentRecoveryChallenge(value NodeEnrollmentRecoveryChallenge) error {
+	if _, err := nodeEnrollmentRecoveryChallengeAuthenticationBytes(value); err != nil {
+		return err
+	}
+	authenticator, err := decodeRawURLBase64(
+		"node enrollment recovery challenge authenticator",
+		value.Authenticator,
+		sha256.Size,
+	)
+	clear(authenticator)
+	return err
+}
+
+// NodeEnrollmentRecoveryChallengeAuthenticationBytes returns the exact public
+// challenge commitment authenticated by the installation issuer. The
+// authenticator itself is deliberately excluded.
+func NodeEnrollmentRecoveryChallengeAuthenticationBytes(
+	value NodeEnrollmentRecoveryChallenge,
+) ([]byte, error) {
+	return nodeEnrollmentRecoveryChallengeAuthenticationBytes(value)
+}
+
+// NodeEnrollmentRecoveryProofSigningBytes returns the complete authenticated
+// challenge that both target-host role keys must sign independently.
+func NodeEnrollmentRecoveryProofSigningBytes(value NodeEnrollmentRecoveryChallenge) ([]byte, error) {
+	if ValidateNodeEnrollmentRecoveryChallenge(value) != nil {
+		return nil, errors.New("node enrollment recovery challenge is invalid")
+	}
+	encoded, err := json.Marshal(struct {
+		Purpose   string                          `json:"purpose"`
+		Challenge NodeEnrollmentRecoveryChallenge `json:"challenge"`
+	}{"MATRIX_NODE_ENROLLMENT_RECOVERY_PROOF_V1", value})
+	if err != nil {
+		return nil, errors.New("node enrollment recovery proof cannot be encoded")
+	}
+	return encoded, nil
+}
+
+func ValidateRecoverNodeEnrollmentExchangeRequest(value RecoverNodeEnrollmentExchangeRequest) error {
+	if value.APIVersion != NodeEnrollmentRecoveryAPIVersion ||
+		value.Kind != NodeEnrollmentRecoveryProofRequestKind ||
+		ValidateNodeEnrollmentRecoveryChallenge(value.Challenge) != nil {
+		return errors.New("node enrollment recovery proof is invalid")
+	}
+	nodeSignature, nodeErr := decodeRawURLBase64(
+		"node enrollment recovery node signature", value.NodeSignature, ed25519.SignatureSize,
+	)
+	collectorSignature, collectorErr := decodeRawURLBase64(
+		"node enrollment recovery collector signature", value.CollectorSignature, ed25519.SignatureSize,
+	)
+	clear(nodeSignature)
+	clear(collectorSignature)
+	if nodeErr != nil || collectorErr != nil {
+		return errors.New("node enrollment recovery proof is invalid")
+	}
+	return nil
+}
+
+func ValidateNodeEnrollmentRecoveryChallengeForRequest(
+	challenge NodeEnrollmentRecoveryChallenge,
+	request CreateNodeEnrollmentRecoveryChallengeRequest,
+) error {
+	if ValidateNodeEnrollmentRecoveryChallenge(challenge) != nil ||
+		ValidateCreateNodeEnrollmentRecoveryChallengeRequest(request) != nil ||
+		challenge.EnrollmentID != request.EnrollmentID ||
+		challenge.InstallationID != request.InstallationID ||
+		challenge.ExecutionTargetID != request.ExecutionTargetID ||
+		challenge.ExchangeID != request.ExchangeID ||
+		challenge.MachineFingerprint != request.MachineFingerprint ||
+		challenge.RuntimeContractDigest != request.RuntimeContractDigest ||
+		challenge.NodePublicKeyFingerprint != request.NodePublicKeyFingerprint ||
+		challenge.CollectorPublicKeyFingerprint != request.CollectorPublicKeyFingerprint {
+		return errors.New("node enrollment recovery challenge differs from its request")
+	}
+	return nil
+}
+
+func nodeEnrollmentRecoveryChallengeAuthenticationBytes(
+	value NodeEnrollmentRecoveryChallenge,
+) ([]byte, error) {
+	if value.APIVersion != NodeEnrollmentRecoveryAPIVersion ||
+		value.Kind != NodeEnrollmentRecoveryChallengeKind ||
+		!validNodeEnrollmentRecoveryIdentity(
+			value.EnrollmentID,
+			value.InstallationID,
+			value.ExecutionTargetID,
+			value.ExchangeID,
+			value.MachineFingerprint,
+			value.RuntimeContractDigest,
+			value.NodePublicKeyFingerprint,
+			value.CollectorPublicKeyFingerprint,
+		) ||
+		validateContractTime("issuedAt", value.IssuedAt) != nil ||
+		validateContractTime("expiresAt", value.ExpiresAt) != nil ||
+		!value.ExpiresAt.After(value.IssuedAt) ||
+		value.ExpiresAt.Sub(value.IssuedAt) > MaximumNodeEnrollmentRecoveryChallengeLifetime {
+		return nil, errors.New("node enrollment recovery challenge is invalid")
+	}
+	challenge, err := decodeRawURLBase64("node enrollment recovery challenge", value.Challenge, 32)
+	clear(challenge)
+	if err != nil {
+		return nil, errors.New("node enrollment recovery challenge is invalid")
+	}
+	encoded, err := json.Marshal(struct {
+		Purpose                       string     `json:"purpose"`
+		APIVersion                    string     `json:"apiVersion"`
+		Kind                          string     `json:"kind"`
+		EnrollmentID                  ResourceID `json:"enrollmentId"`
+		InstallationID                string     `json:"installationId"`
+		ExecutionTargetID             ResourceID `json:"executionTargetId"`
+		ExchangeID                    string     `json:"exchangeId"`
+		MachineFingerprint            string     `json:"machineFingerprint"`
+		RuntimeContractDigest         string     `json:"runtimeContractDigest"`
+		NodePublicKeyFingerprint      string     `json:"nodePublicKeyFingerprint"`
+		CollectorPublicKeyFingerprint string     `json:"collectorPublicKeyFingerprint"`
+		Challenge                     string     `json:"challenge"`
+		IssuedAt                      time.Time  `json:"issuedAt"`
+		ExpiresAt                     time.Time  `json:"expiresAt"`
+	}{
+		"MATRIX_NODE_ENROLLMENT_RECOVERY_CHALLENGE_V1",
+		value.APIVersion,
+		value.Kind,
+		value.EnrollmentID,
+		value.InstallationID,
+		value.ExecutionTargetID,
+		value.ExchangeID,
+		value.MachineFingerprint,
+		value.RuntimeContractDigest,
+		value.NodePublicKeyFingerprint,
+		value.CollectorPublicKeyFingerprint,
+		value.Challenge,
+		value.IssuedAt,
+		value.ExpiresAt,
+	})
+	if err != nil {
+		return nil, errors.New("node enrollment recovery challenge cannot be encoded")
+	}
+	return encoded, nil
+}
+
+func validNodeEnrollmentRecoveryIdentity(
+	enrollmentID ResourceID,
+	installationID string,
+	executionTargetID ResourceID,
+	exchangeID string,
+	machineFingerprint string,
+	runtimeContractDigest string,
+	nodePublicKeyFingerprint string,
+	collectorPublicKeyFingerprint string,
+) bool {
+	return nodeEnrollmentIDPattern.MatchString(string(enrollmentID)) &&
+		ValidateID("installationId", installationID) == nil &&
+		ValidateID("executionTargetId", string(executionTargetID)) == nil &&
+		nodeExchangeIDPattern.MatchString(exchangeID) &&
+		ValidateDigest("machineFingerprint", machineFingerprint) == nil &&
+		ValidateDigest("runtimeContractDigest", runtimeContractDigest) == nil &&
+		ValidateDigest("nodePublicKeyFingerprint", nodePublicKeyFingerprint) == nil &&
+		ValidateDigest("collectorPublicKeyFingerprint", collectorPublicKeyFingerprint) == nil &&
+		nodePublicKeyFingerprint != collectorPublicKeyFingerprint
+}
+
+func parseNodeEnrollmentPrivateAddress(value string) (netip.Addr, uint16, error) {
+	host, portText, err := net.SplitHostPort(value)
+	port, portErr := strconv.ParseUint(portText, 10, 16)
+	address, addressErr := netip.ParseAddr(host)
+	if err != nil || portErr != nil || addressErr != nil ||
+		port < MinimumNodeEnrollmentListenerPort || address.Is4In6() || !address.IsPrivate() ||
+		address.IsLoopback() || address.IsUnspecified() || address.IsMulticast() || address.IsLinkLocalUnicast() ||
+		net.JoinHostPort(address.String(), strconv.FormatUint(port, 10)) != value {
+		return netip.Addr{}, 0, errors.New("node enrollment management address is invalid")
+	}
+	return address, uint16(port), nil
+}
+
+func parseNodeEnrollmentCollectorEndpoint(value string) (netip.Addr, uint16, error) {
+	endpoint, err := url.Parse(value)
+	if err != nil || endpoint.Scheme != "https" || endpoint.User != nil || endpoint.Opaque != "" ||
+		endpoint.Path != "" || endpoint.RawPath != "" || endpoint.RawQuery != "" || endpoint.ForceQuery ||
+		endpoint.Fragment != "" {
+		return netip.Addr{}, 0, errors.New("node enrollment collector endpoint is invalid")
+	}
+	host, portText, splitErr := net.SplitHostPort(endpoint.Host)
+	port, portErr := strconv.ParseUint(portText, 10, 16)
+	address, addressErr := netip.ParseAddr(host)
+	if splitErr != nil || portErr != nil || addressErr != nil || port < MinimumNodeEnrollmentListenerPort ||
+		address.Is4In6() || !address.IsLoopback() ||
+		"https://"+net.JoinHostPort(address.String(), strconv.FormatUint(port, 10)) != value {
+		return netip.Addr{}, 0, errors.New("node enrollment collector endpoint is invalid")
+	}
+	return address, uint16(port), nil
+}
+
+func parseNodeEnrollmentIssuer(value, installationID string) (*x509.Certificate, error) {
+	encoded, err := decodeRawURLBase64("node enrollment exchange issuer certificate", value, -1)
+	certificate, parseErr := x509.ParseCertificate(encoded)
+	expectedURI, uriErr := NodeEnrollmentIssuerURI(installationID)
+	if err != nil || parseErr != nil || certificate == nil || uriErr != nil ||
+		!certificate.BasicConstraintsValid || !certificate.IsCA || !certificate.MaxPathLenZero || certificate.MaxPathLen != 0 ||
+		certificate.PublicKeyAlgorithm != x509.Ed25519 || certificate.SignatureAlgorithm != x509.PureEd25519 ||
+		certificate.KeyUsage != x509.KeyUsageCertSign|x509.KeyUsageDigitalSignature ||
+		certificate.CheckSignatureFrom(certificate) != nil || len(certificate.URIs) != 1 ||
+		certificate.URIs[0].String() != expectedURI.String() {
+		return nil, errors.New("node enrollment exchange issuer certificate is invalid")
+	}
+	return certificate, nil
+}
+
+func parseNodeEnrollmentRoleCertificate(
+	value string,
+	installationID string,
+	targetID ResourceID,
+	role string,
+	address netip.Addr,
+	usages []x509.ExtKeyUsage,
+	issuer *x509.Certificate,
+	notBefore time.Time,
+	notAfter time.Time,
+) (*x509.Certificate, error) {
+	certificate, err := decodeNodeEnrollmentCertificate(value)
+	expectedURI := (&url.URL{
+		Scheme: "spiffe", Host: "matrix.xiak.com",
+		Path: "/installations/" + installationID + "/" + role + "/" + string(targetID),
+	}).String()
+	publicKey, publicKeyOK := certificatePublicKey(certificate)
+	if err != nil || issuer == nil || !address.IsValid() || !publicKeyOK || len(publicKey) != ed25519.PublicKeySize ||
+		certificate.SignatureAlgorithm != x509.PureEd25519 || certificate.IsCA || !certificate.BasicConstraintsValid ||
+		certificate.SerialNumber == nil || certificate.SerialNumber.Sign() <= 0 ||
+		certificate.Subject.String() != "" || !bytes.Equal(certificate.RawSubject, []byte{0x30, 0x00}) ||
+		certificate.KeyUsage != x509.KeyUsageDigitalSignature || !slices.Equal(certificate.ExtKeyUsage, usages) ||
+		len(certificate.UnknownExtKeyUsage) != 0 || len(certificate.DNSNames) != 0 || len(certificate.EmailAddresses) != 0 ||
+		len(certificate.URIs) != 1 || certificate.URIs[0].String() != expectedURI ||
+		len(certificate.IPAddresses) != 1 || !certificate.IPAddresses[0].Equal(net.IP(address.AsSlice())) ||
+		!certificate.NotBefore.Equal(notBefore) || !certificate.NotAfter.Equal(notAfter) ||
+		certificate.NotBefore.Before(issuer.NotBefore) || certificate.NotAfter.After(issuer.NotAfter) ||
+		certificate.CheckSignatureFrom(issuer) != nil {
+		return nil, errors.New("node enrollment role certificate is invalid")
+	}
+	return certificate, nil
+}
+
+func decodeNodeEnrollmentCertificate(value string) (*x509.Certificate, error) {
+	encoded, err := decodeRawURLBase64("node enrollment role certificate", value, -1)
+	if err != nil || len(encoded) > 4096 {
+		return nil, errors.New("node enrollment role certificate is invalid")
+	}
+	certificate, err := x509.ParseCertificate(encoded)
+	if err != nil || certificate == nil {
+		return nil, errors.New("node enrollment role certificate is invalid")
+	}
+	return certificate, nil
+}
+
+func certificatePublicKey(certificate *x509.Certificate) (ed25519.PublicKey, bool) {
+	if certificate == nil || certificate.PublicKeyAlgorithm != x509.Ed25519 {
+		return nil, false
+	}
+	publicKey, ok := certificate.PublicKey.(ed25519.PublicKey)
+	return publicKey, ok
+}
+
+func validateWrappingPublicKey(value string) error {
+	encoded, err := decodeRawURLBase64("wrapping public key", value, -1)
+	if err != nil || len(encoded) < 384 || len(encoded) > 1024 {
+		return errors.New("wrapping public key is invalid")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(encoded)
+	key, ok := parsed.(*rsa.PublicKey)
+	if err != nil || !ok || key.N == nil || key.N.BitLen() != 3072 || key.E != 65537 {
+		return errors.New("wrapping public key must be RSA-3072 with exponent 65537")
+	}
+	return nil
+}
+
+func nodeEnrollmentJoinCommitment(value NodeEnrollmentJoin) ([]byte, *x509.Certificate, error) {
+	var problems []error
+	if value.APIVersion != NodeEnrollmentJoinAPIVersion || value.Kind != NodeEnrollmentJoinKind ||
+		!nodeEnrollmentIDPattern.MatchString(string(value.EnrollmentID)) {
+		problems = append(problems, errors.New("node enrollment join metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateID("installationId", value.InstallationID),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateDigest("credentialDigest", value.CredentialDigest),
+		validateContractTime("expiresAt", value.ExpiresAt),
+	)
+	endpoint, err := url.Parse(value.ControlPlaneURL)
+	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil || endpoint.Opaque != "" ||
+		endpoint.RawQuery != "" || endpoint.ForceQuery || endpoint.Fragment != "" ||
+		endpoint.Path != "/api/paas/v1/node-enrollments/"+url.PathEscape(string(value.EnrollmentID))+"/exchange" {
+		problems = append(problems, errors.New("node enrollment control-plane URL is invalid"))
+	}
+	certificateBytes, certificateErr := decodeRawURLBase64("node enrollment issuer certificate", value.IssuerCertificate, -1)
+	certificate, parseErr := x509.ParseCertificate(certificateBytes)
+	expectedIssuer, issuerErr := NodeEnrollmentIssuerURI(value.InstallationID)
+	if certificateErr != nil || parseErr != nil || certificate == nil || !certificate.BasicConstraintsValid || !certificate.IsCA ||
+		certificate.PublicKeyAlgorithm != x509.Ed25519 || certificate.KeyUsage&x509.KeyUsageCertSign == 0 ||
+		certificate.CheckSignatureFrom(certificate) != nil ||
+		value.ExpiresAt.Before(certificate.NotBefore) || value.ExpiresAt.After(certificate.NotAfter) ||
+		issuerErr != nil || len(certificate.URIs) != 1 || certificate.URIs[0].String() != expectedIssuer.String() {
+		problems = append(problems, errors.New("node enrollment issuer certificate is invalid"))
+	}
+	if value.SignatureAlgorithm != NodeJoinSignatureEd25519 {
+		problems = append(problems, errors.New("node enrollment join signature algorithm is invalid"))
+	}
+	if err := errors.Join(problems...); err != nil {
+		return nil, nil, err
+	}
+	commitment, err := json.Marshal(struct {
+		APIVersion         string                     `json:"apiVersion"`
+		Kind               string                     `json:"kind"`
+		EnrollmentID       ResourceID                 `json:"enrollmentId"`
+		InstallationID     string                     `json:"installationId"`
+		ExecutionTargetID  ResourceID                 `json:"executionTargetId"`
+		ControlPlaneURL    string                     `json:"controlPlaneUrl"`
+		CredentialDigest   string                     `json:"credentialDigest"`
+		ExpiresAt          time.Time                  `json:"expiresAt"`
+		IssuerCertificate  string                     `json:"issuerCertificate"`
+		SignatureAlgorithm NodeJoinSignatureAlgorithm `json:"signatureAlgorithm"`
+	}{value.APIVersion, value.Kind, value.EnrollmentID, value.InstallationID, value.ExecutionTargetID,
+		value.ControlPlaneURL, value.CredentialDigest, value.ExpiresAt, value.IssuerCertificate, value.SignatureAlgorithm})
+	if err != nil {
+		return nil, nil, errors.New("node enrollment join commitment cannot be encoded")
+	}
+	return commitment, certificate, nil
+}
+
+func decodeRawURLBase64(name, value string, exactBytes int) ([]byte, error) {
+	if value == "" || len(value) > 16*1024 || strings.ContainsAny(value, "=\r\n\t ") {
+		return nil, fmt.Errorf("%s is invalid", name)
+	}
+	decoded, err := base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil || (exactBytes >= 0 && len(decoded) != exactBytes) ||
+		base64.RawURLEncoding.EncodeToString(decoded) != value {
+		return nil, fmt.Errorf("%s is invalid", name)
+	}
+	return decoded, nil
+}
+
+func ValidateRegisterExecutionTargetRequest(value RegisterExecutionTargetRequest) error {
+	problems := []error{
+		ValidateID("id", string(value.ID)),
+		ValidateID("executionPoolId", string(value.ExecutionPoolID)),
+		ValidateID("bindingRef", value.BindingRef),
+		validateLabels("labels", value.Labels),
+	}
+	if !namePattern.MatchString(value.Name) {
+		problems = append(problems, errors.New("name must be a DNS label"))
+	}
+	if _, supplied := value.Labels["matrix-machine-fingerprint"]; supplied {
+		problems = append(problems, errors.New("node identity label is installation-owned"))
+	}
+	return errors.Join(problems...)
+}
+
 func ValidateExecutionTarget(value ExecutionTarget) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "ExecutionTarget" {
@@ -256,7 +1125,7 @@ func ValidateExecutionTarget(value ExecutionTarget) error {
 			validateAdapterRef("spec.gatewayAdapter", *value.Spec.GatewayAdapter, AdapterGateway),
 		)
 	}
-	if !contains([]ExecutionTargetDesiredState{ExecutionTargetActive, ExecutionTargetDraining}, value.Spec.DesiredState) {
+	if !contains([]ExecutionTargetDesiredState{ExecutionTargetActive, ExecutionTargetDraining, ExecutionTargetRemoved}, value.Spec.DesiredState) {
 		problems = append(problems, fmt.Errorf("unknown target desired state %q", value.Spec.DesiredState))
 	}
 	if !contains(
@@ -277,6 +1146,25 @@ func ValidateExecutionTarget(value ExecutionTarget) error {
 		problems = append(problems, ValidateExecutionTargetUsage(*value.Status.Usage))
 	}
 	return errors.Join(problems...)
+}
+
+// MaximumExecutionTargetListItems bounds one built-in target plus the 128
+// managed targets admitted by an installation.
+const MaximumExecutionTargetListItems = 129
+
+func ValidateExecutionTargetList(value ExecutionTargetList) error {
+	if value.APIVersion != APIVersion || value.Kind != "ExecutionTargetList" ||
+		value.Items == nil || len(value.Items) > MaximumExecutionTargetListItems {
+		return errors.New("execution target list is invalid")
+	}
+	seen := make(map[ResourceID]bool, len(value.Items))
+	for _, item := range value.Items {
+		if ValidateExecutionTarget(item) != nil || seen[item.Metadata.ID] {
+			return errors.New("execution target list is invalid")
+		}
+		seen[item.Metadata.ID] = true
+	}
+	return nil
 }
 
 func ValidatePlacementPolicy(value PlacementPolicy) error {
@@ -831,6 +1719,26 @@ func ValidateObserveDeploymentRequest(value ObserveDeploymentRequest) error {
 	return errors.Join(problems...)
 }
 
+func ValidateObserveDeploymentRuntimeRequest(value ObserveDeploymentRuntimeRequest) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("requestId", string(value.RequestID)),
+		ValidateResourceScope(value.Scope),
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		ValidateDigest("expectedContentDigest", value.ExpectedContentDigest),
+		validateContractTime("deadline", value.Deadline),
+	)
+	if value.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("deployment runtime observation must be tenant scoped"))
+	}
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("deployment runtime observation generation must be positive"))
+	}
+	return errors.Join(problems...)
+}
+
 func ValidateDeploymentObservation(value DeploymentObservation) error {
 	var problems []error
 	problems = append(problems,
@@ -876,6 +1784,346 @@ func ValidateDeploymentObservation(value DeploymentObservation) error {
 		if err := ValidateEvidence(evidence); err != nil {
 			problems = append(problems, fmt.Errorf("evidence[%d]: %w", index, err))
 		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateDeploymentList(value DeploymentList) error {
+	if value.APIVersion != APIVersion || value.Kind != "DeploymentList" ||
+		ValidateResourceScope(value.Scope) != nil || value.Scope.Kind != AuthorityTenant ||
+		value.Items == nil || len(value.Items) > MaximumDeploymentListItems {
+		return errors.New("deployment list is invalid")
+	}
+	var previous ResourceID
+	for index, item := range value.Items {
+		if ValidateDeployment(item) != nil || item.Metadata.Scope != value.Scope {
+			return errors.New("deployment list is invalid")
+		}
+		if index > 0 && item.Metadata.ID <= previous {
+			return errors.New("deployment list is invalid")
+		}
+		previous = item.Metadata.ID
+	}
+	if value.NextAfter != "" {
+		if ValidateID("nextAfter", string(value.NextAfter)) != nil || len(value.Items) == 0 ||
+			value.NextAfter != value.Items[len(value.Items)-1].Metadata.ID {
+			return errors.New("deployment list is invalid")
+		}
+	}
+	return nil
+}
+
+func ValidateDeploymentRuntimeObservation(value DeploymentRuntimeObservation) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		validateContractTime("observedAt", value.ObservedAt),
+	)
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("deployment runtime generation must be positive"))
+	}
+	if value.Instances == nil || len(value.Instances) > MaximumDeploymentRuntimeInstances {
+		problems = append(problems, errors.New("deployment runtime instances are invalid"))
+	}
+	seen := make(map[ResourceID]struct{}, len(value.Instances))
+	for index, instance := range value.Instances {
+		path := fmt.Sprintf("instances[%d]", index)
+		if !deploymentInstanceIDPattern.MatchString(string(instance.ID)) {
+			problems = append(problems, fmt.Errorf("%s.id is not an opaque node-derived identity", path))
+		}
+		if !namePattern.MatchString(instance.ComponentName) {
+			problems = append(problems, fmt.Errorf("%s.componentName is invalid", path))
+		}
+		if !contains(DeploymentInstanceStates(), instance.State) {
+			problems = append(problems, fmt.Errorf("%s.state is invalid", path))
+		}
+		if !contains(DeploymentInstanceHealthStates(), instance.Health) {
+			problems = append(problems, fmt.Errorf("%s.health is invalid", path))
+		}
+		terminal := instance.State == DeploymentInstanceExited ||
+			instance.State == DeploymentInstanceDead
+		if (instance.ExitCode != nil) != terminal {
+			problems = append(
+				problems,
+				fmt.Errorf("%s.exitCode must exactly match a terminal state", path),
+			)
+		}
+		if _, duplicate := seen[instance.ID]; duplicate {
+			problems = append(problems, fmt.Errorf("%s.id is duplicated", path))
+		}
+		seen[instance.ID] = struct{}{}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateDeploymentResourceObservation(value DeploymentResourceObservation) error {
+	var problems []error
+	problems = append(problems,
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateID("executionTargetId", string(value.ExecutionTargetID)),
+		validateContractTime("observedAt", value.ObservedAt),
+	)
+	if value.Generation == 0 {
+		problems = append(problems, errors.New("deployment resource generation must be positive"))
+	}
+	if value.Instances == nil || len(value.Instances) > MaximumDeploymentRuntimeInstances {
+		problems = append(problems, errors.New("deployment resource instances are invalid"))
+	}
+	previous := ResourceID("")
+	for index, instance := range value.Instances {
+		path := fmt.Sprintf("instances[%d]", index)
+		if !deploymentInstanceIDPattern.MatchString(string(instance.ID)) || instance.ID <= previous {
+			problems = append(problems, fmt.Errorf("%s.id is invalid or unordered", path))
+		}
+		previous = instance.ID
+		problems = append(problems, validateDeploymentInstanceResources(path, instance))
+	}
+	return errors.Join(problems...)
+}
+
+func validateDeploymentInstanceResources(path string, value DeploymentResourceInstance) error {
+	var problems []error
+	if !validResourceMeasurement(value.CPU.State, value.CPU.Value != nil, true, false) {
+		problems = append(problems, fmt.Errorf("%s.cpu is invalid", path))
+	}
+	if cpu := value.CPU.Value; cpu != nil {
+		if cpu.WindowMillis < 1 || cpu.WindowMillis > 60000 ||
+			!finiteNonnegative(cpu.UsedCores) || cpu.UsedCores > 4096 ||
+			cpu.LimitCPUMillis < 1 || cpu.LimitCPUMillis > 4096000 {
+			problems = append(problems, fmt.Errorf("%s.cpu value is invalid", path))
+		}
+	}
+	if !validResourceMeasurement(value.Memory.State, value.Memory.Value != nil, false, false) {
+		problems = append(problems, fmt.Errorf("%s.memory is invalid", path))
+	}
+	if memory := value.Memory.Value; memory != nil {
+		if !safeMeasurementInteger(memory.UsedBytes, memory.LimitBytes) ||
+			memory.LimitBytes == 0 || memory.UsedBytes > memory.LimitBytes {
+			problems = append(problems, fmt.Errorf("%s.memory value is invalid", path))
+		}
+	}
+	if !validResourceMeasurement(value.Network.State, value.Network.Value != nil, false, false) {
+		problems = append(problems, fmt.Errorf("%s.network is invalid", path))
+	}
+	if network := value.Network.Value; network != nil && !safeMeasurementInteger(
+		network.ReceivedBytes, network.TransmittedBytes,
+		network.ReceiveErrors, network.TransmitErrors,
+		network.ReceiveDrops, network.TransmitDrops,
+	) {
+		problems = append(problems, fmt.Errorf("%s.network value is invalid", path))
+	}
+	if !validResourceMeasurement(value.BlockIO.State, value.BlockIO.Value != nil, false, false) {
+		problems = append(problems, fmt.Errorf("%s.blockIo is invalid", path))
+	}
+	if block := value.BlockIO.Value; block != nil && !safeMeasurementInteger(
+		block.ReadBytes, block.WriteBytes, block.ReadOperations, block.WriteOperations,
+	) {
+		problems = append(problems, fmt.Errorf("%s.blockIo value is invalid", path))
+	}
+	if !validResourceMeasurement(value.Storage.State, value.Storage.Value != nil, false, true) {
+		problems = append(problems, fmt.Errorf("%s.storage is invalid", path))
+	}
+	if storage := value.Storage.Value; storage != nil {
+		if validateContractTime("storage.observedAt", storage.ObservedAt) != nil ||
+			validateContractTime("storage.validUntil", storage.ValidUntil) != nil ||
+			!storage.ValidUntil.After(storage.ObservedAt) ||
+			storage.ValidUntil.Sub(storage.ObservedAt) > 5*time.Minute ||
+			!safeMeasurementInteger(
+				storage.WritableLayerBytes, storage.ImageTotalBytes,
+				storage.ImageSharedBytes, storage.ImageUniqueBytes,
+			) || storage.ImageSharedBytes > storage.ImageTotalBytes ||
+			storage.ImageUniqueBytes != storage.ImageTotalBytes-storage.ImageSharedBytes ||
+			!validResourceMeasurement(storage.VolumesState, storage.Volumes != nil, false, false) {
+			problems = append(problems, fmt.Errorf("%s.storage value is invalid", path))
+		}
+		if volumes := storage.Volumes; volumes != nil {
+			if !safeMeasurementInteger(volumes.Bytes, volumes.SharedBytes) ||
+				volumes.SharedCount > volumes.Count || volumes.SharedBytes > volumes.Bytes {
+				problems = append(problems, fmt.Errorf("%s.volume value is invalid", path))
+			}
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func validResourceMeasurement(state MeasurementState, present, warming, stale bool) bool {
+	switch state {
+	case MeasurementAvailable:
+		return present
+	case MeasurementWarmingUp:
+		return warming && !present
+	case MeasurementStale:
+		return stale && present
+	case MeasurementUnavailable, MeasurementUnsupported:
+		return !present
+	default:
+		return false
+	}
+}
+
+func ValidateDeploymentResourceSnapshot(value DeploymentResourceSnapshot) error {
+	switch value.State {
+	case MeasurementAvailable, MeasurementStale:
+		if value.Value == nil || ValidateDeploymentResourceObservation(value.Value.Observation) != nil ||
+			validateContractTime("validUntil", value.Value.ValidUntil) != nil ||
+			!value.Value.ValidUntil.After(value.Value.Observation.ObservedAt) ||
+			value.Value.ValidUntil.Sub(value.Value.Observation.ObservedAt) > time.Minute {
+			return errors.New("deployment resource snapshot is invalid")
+		}
+	case MeasurementUnavailable:
+		if value.Value != nil {
+			return errors.New("unavailable deployment resources must not contain a value")
+		}
+	default:
+		return errors.New("deployment resource snapshot state is invalid")
+	}
+	return nil
+}
+
+func ValidateDeploymentRuntimeSnapshot(value DeploymentRuntimeSnapshot) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "DeploymentRuntimeSnapshot" {
+		problems = append(problems, errors.New("deployment runtime snapshot type metadata is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceScope(value.Scope),
+		ValidateDeploymentResourceSnapshot(value.Resources),
+	)
+	if value.Scope.Kind != AuthorityTenant {
+		problems = append(problems, errors.New("deployment runtime snapshot must be tenant scoped"))
+	}
+	switch value.State {
+	case MeasurementAvailable, MeasurementStale:
+		if value.Value == nil {
+			problems = append(problems, errors.New("deployment runtime value is required"))
+			break
+		}
+		problems = append(problems,
+			ValidateDeploymentRuntimeObservation(value.Value.Observation),
+			validateContractTime("validUntil", value.Value.ValidUntil),
+		)
+		if !value.Value.ValidUntil.After(value.Value.Observation.ObservedAt) {
+			problems = append(problems, errors.New("deployment runtime validity window is invalid"))
+		}
+	case MeasurementUnavailable:
+		if value.Value != nil {
+			problems = append(problems, errors.New("unavailable deployment runtime must not contain a value"))
+		}
+		if value.Resources.State != MeasurementUnavailable {
+			problems = append(problems, errors.New("unavailable deployment runtime cannot contain current resources"))
+		}
+	default:
+		problems = append(problems, errors.New("deployment runtime state is invalid"))
+	}
+	if value.Value != nil && value.Resources.Value != nil {
+		runtime := value.Value.Observation
+		resources := value.Resources.Value.Observation
+		if runtime.DeploymentID != resources.DeploymentID || runtime.Generation != resources.Generation ||
+			runtime.ApplicationRevisionID != resources.ApplicationRevisionID ||
+			runtime.ExecutionTargetID != resources.ExecutionTargetID ||
+			len(runtime.Instances) != len(resources.Instances) {
+			problems = append(problems, errors.New("deployment runtime and resource identities do not match"))
+		} else {
+			seen := make(map[ResourceID]struct{}, len(runtime.Instances))
+			for _, instance := range runtime.Instances {
+				seen[instance.ID] = struct{}{}
+			}
+			for _, instance := range resources.Instances {
+				if _, found := seen[instance.ID]; !found {
+					problems = append(problems, errors.New("deployment runtime and resource instances do not match"))
+					break
+				}
+			}
+		}
+	}
+	return errors.Join(problems...)
+}
+
+func ValidateTerminalSize(value TerminalSize) error {
+	if value.Columns < MinimumTerminalColumns || value.Columns > MaximumTerminalColumns ||
+		value.Rows < MinimumTerminalRows || value.Rows > MaximumTerminalRows {
+		return errors.New("terminal size is outside the supported range")
+	}
+	return nil
+}
+
+func ValidateTerminalSessionID(value ResourceID) error {
+	if !terminalSessionIDPattern.MatchString(string(value)) {
+		return errors.New("terminal session identity is invalid")
+	}
+	return nil
+}
+
+func ValidateDeploymentInstanceID(value ResourceID) error {
+	if !deploymentInstanceIDPattern.MatchString(string(value)) {
+		return errors.New("Deployment instance identity is invalid")
+	}
+	return nil
+}
+
+func ValidateCreateTerminalSessionRequest(value CreateTerminalSessionRequest) error {
+	return errors.Join(
+		ValidateDeploymentInstanceID(value.InstanceID),
+		ValidateTerminalSize(value.Size),
+	)
+}
+
+func ValidateTerminalSession(value TerminalSession) error {
+	var problems []error
+	if value.APIVersion != APIVersion || value.Kind != "TerminalSession" ||
+		ValidateTerminalSessionID(value.ID) != nil {
+		problems = append(problems, errors.New("terminal session type or identity is invalid"))
+	}
+	problems = append(problems,
+		ValidateResourceScope(value.Scope),
+		ValidateID("deploymentId", string(value.DeploymentID)),
+		ValidateID("applicationRevisionId", string(value.ApplicationRevisionID)),
+		ValidateTerminalSize(value.Size),
+		validateContractTime("createdAt", value.CreatedAt),
+		validateContractTime("connectBefore", value.ConnectBefore),
+		validateContractTime("expiresAt", value.ExpiresAt),
+	)
+	if value.Scope.Kind != AuthorityTenant ||
+		!deploymentInstanceIDPattern.MatchString(string(value.InstanceID)) || value.Generation == 0 {
+		problems = append(problems, errors.New("terminal session Deployment binding is invalid"))
+	}
+	if !value.ConnectBefore.After(value.CreatedAt) || value.ConnectBefore.After(value.ExpiresAt) ||
+		!value.ExpiresAt.After(value.CreatedAt) ||
+		value.ConnectBefore.Sub(value.CreatedAt) > TerminalSessionConnectTimeout ||
+		value.ExpiresAt.Sub(value.CreatedAt) > MaximumTerminalSessionDuration {
+		problems = append(problems, errors.New("terminal session time boundary is invalid"))
+	}
+	if value.ConnectedAt != nil {
+		problems = append(problems, validateContractTime("connectedAt", *value.ConnectedAt))
+		if value.ConnectedAt.Before(value.CreatedAt) || value.ConnectedAt.After(value.ExpiresAt) {
+			problems = append(problems, errors.New("terminal connection time is invalid"))
+		}
+	}
+	if value.EndedAt != nil {
+		problems = append(problems, validateContractTime("endedAt", *value.EndedAt))
+		if value.EndedAt.Before(value.CreatedAt) ||
+			(value.ConnectedAt != nil && value.EndedAt.Before(*value.ConnectedAt)) {
+			problems = append(problems, errors.New("terminal end time is invalid"))
+		}
+	}
+	switch value.State {
+	case TerminalSessionPending, TerminalSessionConnecting:
+		if value.Outcome != "" || value.ConnectedAt != nil || value.EndedAt != nil {
+			problems = append(problems, errors.New("unstarted terminal session contains terminal fields"))
+		}
+	case TerminalSessionActive:
+		if value.Outcome != "" || value.ConnectedAt == nil || value.EndedAt != nil {
+			problems = append(problems, errors.New("active terminal session lifecycle is invalid"))
+		}
+	case TerminalSessionEnded:
+		if !contains(TerminalSessionOutcomes(), value.Outcome) || value.EndedAt == nil {
+			problems = append(problems, errors.New("ended terminal session requires a closed outcome and time"))
+		}
+	default:
+		problems = append(problems, errors.New("terminal session state is invalid"))
 	}
 	return errors.Join(problems...)
 }
@@ -1016,38 +2264,6 @@ func ValidateProblem(value Problem) error {
 	return errors.Join(problems...)
 }
 
-func ValidateSubjectRef(value SubjectRef) error {
-	if !contains([]SubjectType{SubjectUser, SubjectRole, SubjectServiceAccount, SubjectAgent, SubjectSystemUser}, value.Type) {
-		return fmt.Errorf("unknown subject type %q", value.Type)
-	}
-	if (value.Type == SubjectRole) != (value.RoleSession != nil) {
-		return errors.New("only a ROLE requires exact role session lineage")
-	}
-	if value.AccessKeyID != "" && value.Type != SubjectUser {
-		return errors.New("only a USER can carry access-key lineage")
-	}
-	if value.AccessKeyID != "" {
-		if err := ValidateID("subject.accessKeyId", value.AccessKeyID); err != nil {
-			return err
-		}
-	}
-	if value.RoleSession != nil {
-		if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
-			return errors.New("role session source is invalid")
-		}
-		var sourceErr error
-		if value.RoleSession.SourceUserID != "" {
-			sourceErr = ValidateID("roleSession.sourceUserId", value.RoleSession.SourceUserID)
-		} else {
-			sourceErr = ValidateID("roleSession.sourceServicePrincipalId", value.RoleSession.SourceServicePrincipalID)
-		}
-		if err := errors.Join(ValidateID("roleSession.sessionId", value.RoleSession.SessionID), sourceErr); err != nil {
-			return err
-		}
-	}
-	return ValidateID("subject.id", value.ID)
-}
-
 func ValidateOperation(value Operation) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "Operation" {
@@ -1070,9 +2286,20 @@ func ValidateOperation(value Operation) error {
 		problems = append(problems, fmt.Errorf("unknown operation action %q", value.Action))
 	}
 	switch value.Action {
-	case OperationCreateExecutionPool, OperationRegisterExecutionTarget:
-		if value.Scope.Kind != AuthorityPlatform {
-			problems = append(problems, errors.New("platform operation action requires platform scope"))
+	case OperationCreateExecutionPool, OperationRegisterExecutionTarget,
+		OperationDrainExecutionTarget, OperationActivateExecutionTarget,
+		OperationRemoveExecutionTarget:
+		problems = append(problems, ValidateID("operation.installationId", value.InstallationID))
+		if value.Scope.Kind != AuthorityPlatform || value.RequestedBy.Type != SubjectUser ||
+			value.RequestedBy.RoleSession != nil || value.RequestedBy.AccessKeyID != "" {
+			problems = append(problems, errors.New("platform operation requires installation scope and a user"))
+		}
+		expectedTarget := "ExecutionPool"
+		if value.Action != OperationCreateExecutionPool {
+			expectedTarget = "ExecutionTarget"
+		}
+		if value.Target.Kind != expectedTarget {
+			problems = append(problems, errors.New("platform operation target kind differs from its action"))
 		}
 	case OperationCreatePlacement,
 		OperationCreateApplication,
@@ -1085,7 +2312,7 @@ func ValidateOperation(value Operation) error {
 		OperationUpdate,
 		OperationStop,
 		OperationRollback:
-		if value.Scope.Kind != AuthorityTenant {
+		if value.Scope.Kind != AuthorityTenant || value.InstallationID != "" {
 			problems = append(problems, errors.New("tenant operation action requires tenant scope"))
 		}
 	}
@@ -1096,12 +2323,6 @@ func ValidateOperation(value Operation) error {
 		problems = append(problems, errors.New("operation target kind is required"))
 	}
 	problems = append(problems, ValidateSubjectRef(value.RequestedBy))
-	if value.RequestedBy.Type == SubjectRole && value.Scope.Kind != AuthorityTenant {
-		problems = append(problems, errors.New("role operation requires tenant scope"))
-	}
-	if value.RequestedBy.AccessKeyID != "" && value.Scope.Kind != AuthorityTenant {
-		problems = append(problems, errors.New("access-key operation requires tenant scope"))
-	}
 	if value.UpdatedAt.Before(value.CreatedAt) {
 		problems = append(problems, errors.New("operation.updatedAt cannot precede createdAt"))
 	}
@@ -1141,6 +2362,38 @@ func ValidateOperation(value Operation) error {
 		problems = append(problems, errors.New("only failed operations can contain an error"))
 	}
 	return errors.Join(problems...)
+}
+
+func ValidateSubjectRef(value SubjectRef) error {
+	if !contains([]SubjectType{SubjectUser, SubjectRole, SubjectServiceAccount, SubjectAgent, SubjectSystemUser}, value.Type) {
+		return fmt.Errorf("unknown subject type %q", value.Type)
+	}
+	if (value.Type == SubjectRole) != (value.RoleSession != nil) {
+		return errors.New("only a ROLE requires exact role session lineage")
+	}
+	if value.AccessKeyID != "" && value.Type != SubjectUser {
+		return errors.New("only a USER can carry access-key lineage")
+	}
+	if value.AccessKeyID != "" {
+		if err := ValidateID("subject.accessKeyId", value.AccessKeyID); err != nil {
+			return err
+		}
+	}
+	if value.RoleSession != nil {
+		if (value.RoleSession.SourceUserID == "") == (value.RoleSession.SourceServicePrincipalID == "") {
+			return errors.New("role session source is invalid")
+		}
+		var sourceErr error
+		if value.RoleSession.SourceUserID != "" {
+			sourceErr = ValidateID("roleSession.sourceUserId", value.RoleSession.SourceUserID)
+		} else {
+			sourceErr = ValidateID("roleSession.sourceServicePrincipalId", value.RoleSession.SourceServicePrincipalID)
+		}
+		if err := errors.Join(ValidateID("roleSession.sessionId", value.RoleSession.SessionID), sourceErr); err != nil {
+			return err
+		}
+	}
+	return ValidateID("subject.id", value.ID)
 }
 
 func ValidateEvidence(value Evidence) error {

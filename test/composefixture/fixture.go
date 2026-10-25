@@ -50,6 +50,7 @@ func Import(ctx context.Context) (*Image, error) {
 		}
 	}()
 	binaryPath := filepath.Join(temporary, "fixture")
+	shellPath := filepath.Join(temporary, "terminal-shell")
 	_, sourceFile, _, ok := runtime.Caller(0)
 	if !ok {
 		return nil, errors.New("resolve fixture source failed")
@@ -65,22 +66,69 @@ func Import(ctx context.Context) (*Image, error) {
 	if output, buildErr := command.CombinedOutput(); buildErr != nil {
 		return nil, fmt.Errorf("build offline fixture failed: %w: %s", buildErr, bounded(output))
 	}
+	shellCommand := exec.CommandContext(
+		ctx, "go", "build", "-trimpath", "-ldflags=-s -w", "-o", shellPath,
+		filepath.Join(filepath.Dir(sourceFile), "cmd", "matrix-terminal-shell"),
+	)
+	shellCommand.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+goArchitecture)
+	if output, buildErr := shellCommand.CombinedOutput(); buildErr != nil {
+		return nil, fmt.Errorf("build offline terminal shell failed: %w: %s", buildErr, bounded(output))
+	}
 	archivePath := filepath.Join(temporary, "rootfs.tar")
-	if err := writeRootFS(archivePath, binaryPath); err != nil {
+	if err := writeRootFS(archivePath, binaryPath, shellPath); err != nil {
 		return nil, err
 	}
+	identity, err := importRootFS(ctx, archivePath)
+	if err != nil {
+		return nil, err
+	}
+	cleanup = false
+	return &Image{ID: identity, temporary: temporary}, nil
+}
+
+// ImportBinaries imports caller-built static Linux verification and terminal
+// shell fixtures. It lets real host gates run without installing a compiler on
+// the managed host. Both paths are explicit test authority and never reach
+// production adapters.
+func ImportBinaries(ctx context.Context, binaryPath, shellPath string) (*Image, error) {
+	if ctx == nil || !validBinarySource(binaryPath) || !validBinarySource(shellPath) ||
+		binaryPath == shellPath {
+		return nil, errors.New("prebuilt fixture paths are invalid")
+	}
+	temporary, err := os.MkdirTemp("", "matrix-compose-fixture-")
+	if err != nil {
+		return nil, errors.New("create fixture workspace failed")
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = removeTemporary(temporary)
+		}
+	}()
+	archivePath := filepath.Join(temporary, "rootfs.tar")
+	if err := writeRootFS(archivePath, binaryPath, shellPath); err != nil {
+		return nil, err
+	}
+	identity, err := importRootFS(ctx, archivePath)
+	if err != nil {
+		return nil, err
+	}
+	cleanup = false
+	return &Image{ID: identity, temporary: temporary}, nil
+}
+
+func importRootFS(ctx context.Context, archivePath string) (string, error) {
 	identity, err := dockerOutput(
 		ctx, "import", "--change", `ENTRYPOINT ["/fixture"]`, archivePath,
 	)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 	identity = strings.TrimSpace(identity)
 	if !imageIDPattern.MatchString(identity) {
-		return nil, errors.New("Docker import returned an invalid fixture identity")
+		return "", errors.New("Docker import returned an invalid fixture identity")
 	}
-	cleanup = false
-	return &Image{ID: identity, temporary: temporary}, nil
+	return identity, nil
 }
 
 func (image *Image) Close(ctx context.Context) error {
@@ -126,7 +174,7 @@ func Probe(
 	return nil
 }
 
-func writeRootFS(archivePath, binaryPath string) (returnErr error) {
+func writeRootFS(archivePath, binaryPath, shellPath string) (returnErr error) {
 	archive, err := os.OpenFile(archivePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return errors.New("create fixture rootfs failed")
@@ -134,24 +182,42 @@ func writeRootFS(archivePath, binaryPath string) (returnErr error) {
 	defer func() { returnErr = errors.Join(returnErr, archive.Close()) }()
 	writer := tar.NewWriter(archive)
 	defer func() { returnErr = errors.Join(returnErr, writer.Close()) }()
-	binary, err := os.Open(binaryPath)
-	if err != nil {
-		return errors.New("open fixture binary failed")
+	if err := writeExecutable(writer, "fixture", binaryPath); err != nil {
+		return err
 	}
-	defer func() { returnErr = errors.Join(returnErr, binary.Close()) }()
-	info, err := binary.Stat()
-	if err != nil {
-		return errors.New("stat fixture binary failed")
-	}
-	if err := writer.WriteHeader(&tar.Header{
-		Name: "fixture", Mode: 0o755, Size: info.Size(), Typeflag: tar.TypeReg,
-	}); err != nil {
-		return errors.New("write fixture rootfs header failed")
-	}
-	if _, err := io.Copy(writer, binary); err != nil {
-		return errors.New("write fixture rootfs binary failed")
+	if err := writeExecutable(writer, "bin/sh", shellPath); err != nil {
+		return err
 	}
 	return nil
+}
+
+func writeExecutable(writer *tar.Writer, name, sourcePath string) error {
+	binary, err := os.Open(sourcePath)
+	if err != nil {
+		return errors.New("open fixture executable failed")
+	}
+	defer binary.Close()
+	info, err := binary.Stat()
+	if err != nil {
+		return errors.New("stat fixture executable failed")
+	}
+	if err := writer.WriteHeader(&tar.Header{
+		Name: name, Mode: 0o755, Size: info.Size(), Typeflag: tar.TypeReg,
+	}); err != nil {
+		return errors.New("write fixture rootfs executable header failed")
+	}
+	if _, err := io.Copy(writer, binary); err != nil {
+		return errors.New("write fixture rootfs executable failed")
+	}
+	return nil
+}
+
+func validBinarySource(target string) bool {
+	if !filepath.IsAbs(target) || filepath.Clean(target) != target {
+		return false
+	}
+	info, err := os.Stat(target)
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0 && info.Size() <= 64*1024*1024
 }
 
 func dockerOutput(ctx context.Context, arguments ...string) (string, error) {

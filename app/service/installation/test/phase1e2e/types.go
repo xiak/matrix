@@ -13,18 +13,22 @@ import (
 const defaultEdgeEndpoint = "http://127.0.0.1:8080"
 
 type options struct {
-	root                   string
-	releaseA               string
-	releaseB               string
-	trustKey               string
-	securityMail           string
-	securityMailFixture    string
-	securityMailFixtureSHA string
-	securityMailFixtureID  string
-	edge                   string
-	accessKeyBrowser       bool
-	accessKeyBrowserDir    string
-	afterStart             bool
+	root                    string
+	releaseA                string
+	releaseB                string
+	trustKey                string
+	securityMail            string
+	securityMailFixture     string
+	securityMailFixtureSHA  string
+	securityMailFixtureID   string
+	edge                    string
+	accessKeyBrowser        bool
+	accessKeyBrowserDir     string
+	browserReady            bool
+	multiHostLifecycle      bool
+	nativeNodes             string
+	nativeDeploymentRuntime bool
+	afterStart              bool
 }
 
 type releasePair struct {
@@ -72,8 +76,35 @@ type mfaRetention struct {
 	Seed             []byte
 	Credential       []byte
 	Contact          iamv1.NotificationContact
+	Replacement      contactReplacementRetention
 	State            iamv1.AuthenticatorState
 	LastConsumedStep int64
+}
+
+// contactReplacementRetention is a sanitized observation of the immutable
+// replacement and its three delivery records. It contains no verification
+// code, password, MAC, Session material or SMTP credential.
+type contactReplacementRetention struct {
+	AccountID               iamv1.AccountID                 `json:"accountId"`
+	UserID                  iamv1.PrincipalID               `json:"userId"`
+	VerificationID          string                          `json:"verificationId"`
+	CompletionEventID       string                          `json:"completionEventId"`
+	ExpectedResourceVersion uint64                          `json:"expectedResourceVersion"`
+	Email                   string                          `json:"email"`
+	State                   string                          `json:"state"`
+	Notifications           []securityNotificationRetention `json:"notifications"`
+}
+
+type securityNotificationRetention struct {
+	ID              string `json:"id"`
+	EventID         string `json:"eventId"`
+	Kind            string `json:"kind"`
+	Email           string `json:"email"`
+	ContactRevision uint64 `json:"contactRevision"`
+	State           string `json:"state"`
+	Attempts        uint32 `json:"attempts"`
+	LastOutcome     string `json:"lastOutcome"`
+	LastSMTPCode    uint16 `json:"lastSmtpCode"`
 }
 
 type tenantRetention struct {

@@ -1,5 +1,29 @@
 package localmachine
 
+func legacyProductlessAPISIXMainConfig() []byte {
+	return []byte(`deployment:
+  role: data_plane
+  role_data_plane:
+    config_provider: yaml
+plugins:
+  - proxy-rewrite
+  - serverless-pre-function
+  - serverless-post-function
+stream_plugins: []
+nginx_config:
+  user: root
+  error_log: /dev/stderr
+  http:
+    access_log: /dev/stdout
+  http_configuration_snippet: |
+    client_body_temp_path /tmp/client_body_temp;
+    proxy_temp_path /tmp/proxy_temp;
+    fastcgi_temp_path /tmp/fastcgi_temp;
+    uwsgi_temp_path /tmp/uwsgi_temp;
+    scgi_temp_path /tmp/scgi_temp;
+`)
+}
+
 // legacyProductlessAPISIXStandaloneConfig is the byte-exact gateway contract
 // owned by the accepted productless Phase 1 release. It exists only so an
 // authenticated installed predecessor can be observed, restored, and started

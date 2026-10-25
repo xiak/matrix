@@ -563,6 +563,24 @@ func (transaction *fakeLifecycleTransaction) LoadDeployment(
 	return transaction.deployment, transaction.deploymentFound, nil
 }
 
+func (transaction *fakeLifecycleTransaction) ListDeployments(
+	_ context.Context,
+	after paasv1.ResourceID,
+	limit int,
+) ([]paasv1.Deployment, paasv1.ResourceID, error) {
+	if !transaction.deploymentFound || transaction.deployment.Metadata.ID <= after || limit < 1 {
+		return []paasv1.Deployment{}, "", nil
+	}
+	return []paasv1.Deployment{transaction.deployment}, "", nil
+}
+
+func (*fakeLifecycleTransaction) LoadDeploymentRuntime(
+	context.Context,
+	paasv1.ResourceID,
+) (paasv1.DeploymentRuntimeSnapshot, bool, error) {
+	return paasv1.DeploymentRuntimeSnapshot{}, false, nil
+}
+
 func (transaction *fakeLifecycleTransaction) LoadApplication(
 	_ context.Context,
 	id paasv1.ResourceID,

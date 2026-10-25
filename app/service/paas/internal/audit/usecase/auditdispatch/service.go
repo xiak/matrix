@@ -71,7 +71,8 @@ func (usecase *Usecase) DispatchOnce(ctx context.Context) (Result, error) {
 	cancel()
 	completion := Completion{
 		TenantID: claim.TenantID, EventID: claim.EventID,
-		Stream: claim.Stream, WorkerID: usecase.config.WorkerID,
+		InstallationID: claim.InstallationID,
+		Stream:         claim.Stream, WorkerID: usecase.config.WorkerID,
 		FencingToken: claim.FencingToken,
 	}
 	if deliveryErr == nil {
@@ -116,7 +117,8 @@ func validateClaim(claim Claim) error {
 	if claim.Stream != StreamAppHosting && claim.Stream != StreamManagedService {
 		problems = append(problems, errors.New("Audit claim stream is invalid"))
 	}
-	if claim.TenantID != claim.Event.TenantID || claim.EventID != claim.Event.EventID {
+	if claim.TenantID != claim.Event.TenantID || claim.InstallationID != claim.Event.InstallationID ||
+		claim.EventID != claim.Event.EventID || claim.Stream == StreamManagedService && claim.InstallationID != "" {
 		problems = append(problems, errors.New("Audit claim and event identity differ"))
 	}
 	if claim.Attempts < 1 || claim.Attempts > 100 {

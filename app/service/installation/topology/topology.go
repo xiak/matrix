@@ -22,8 +22,14 @@ import (
 	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
-const ContractVersion = "matrix-platform-compose/v1"
-
+const (
+	ContractVersion                        = "matrix-platform-compose/v1"
+	NodeEnrollmentIngressPort              = uint16(8443)
+	NodeEnrollmentIngressTargetPort        = uint16(9443)
+	NodeEnrollmentIngressLoopbackPort      = uint16(9081)
+	NodeEnrollmentIngressCertificateTarget = "/usr/local/apisix/conf/cert/ssl_PLACE_HOLDER.crt"
+	NodeEnrollmentIngressPrivateKeyTarget  = "/usr/local/apisix/conf/cert/ssl_PLACE_HOLDER.key"
+)
 const (
 	DevOpsExecutorGatewayServerName = "devops-executor-gateway"
 	devOpsExecutorAdminPort         = uint16(8443)
@@ -77,8 +83,25 @@ func DevOpsRunnerNamespace(installationID string) string {
 		strings.TrimPrefix(installationID, "mxi-") + "/devops/runners"
 }
 
+const (
+	enrollmentIssuerCertificateEnvironment           = "MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE"
+	enrollmentIssuerPrivateKeyEnvironment            = "MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE"
+	enrollmentIssuerCertificateTarget                = "/run/matrix/node-enrollment-issuer.der"
+	enrollmentIssuerPrivateKeyTarget                 = "/run/matrix/node-enrollment-issuer-key.der"
+	enrollmentControllerCertificateEnvironment       = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
+	enrollmentControllerPrivateKeyEnvironment        = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
+	enrollmentControllerTrustEnvironment             = "MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE"
+	workerEnrollmentControllerCertificateEnvironment = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
+	workerEnrollmentControllerPrivateKeyEnvironment  = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
+	workerEnrollmentControllerTrustEnvironment       = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE"
+)
+
 func ContractDigest() string {
-	content, err := json.Marshal(contractDescription())
+	return contractDescriptionDigest(contractDescription())
+}
+
+func contractDescriptionDigest(value contract) string {
+	content, err := json.Marshal(value)
 	if err != nil {
 		panic("static platform topology contract cannot be encoded")
 	}
@@ -122,6 +145,7 @@ func contractDescription() contract {
 			"control":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":        {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
 			"mail-egress": {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-mail-egress")},
+			"management":  {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-management")},
 			"source":      {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-source")},
 			"web":         {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
@@ -151,6 +175,9 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 		options.Port == devOpsExecutorRunnerPort {
 		return Result{}, errors.New("platform listener port conflicts with the DevOps runner listener")
 	}
+	if options.Port == NodeEnrollmentIngressPort {
+		return Result{}, errors.New("platform listener port conflicts with the node enrollment listener")
+	}
 	images := make(map[string]string, len(manifest.Images))
 	for _, image := range manifest.Images {
 		images[image.Component] = image.RuntimeReference()
@@ -162,6 +189,7 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 			"control":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":        {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
 			"mail-egress": {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-mail-egress")},
+			"management":  {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-management")},
 			"web":         {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
 	}
@@ -319,6 +347,9 @@ func validateLegacyOptions(options Options) error {
 	if options.Port == 0 {
 		problems = append(problems, errors.New("platform listener port is invalid"))
 	}
+	if options.NorthboundOrigin != "" && externalrequest.ValidateOrigin(options.NorthboundOrigin) != nil {
+		problems = append(problems, errors.New("platform northbound origin is invalid"))
+	}
 	return errors.Join(problems...)
 }
 
@@ -439,6 +470,10 @@ func compileServices(
 	devopsIAMCredential := path.Join(root, layout.DevOpsIAMCredential)
 	devopsAuditCredential := path.Join(root, layout.DevOpsAuditCredential)
 	platformIAMCredential := path.Join(root, layout.PlatformIAMCredential)
+	enrollmentIssuerCertificate := path.Join(root, layout.EnrollmentIssuerCertificate)
+	enrollmentIssuerPrivateKey := path.Join(root, layout.EnrollmentIssuerPrivateKey)
+	enrollmentIngressCertificate := path.Join(root, layout.EnrollmentIngressCertificate)
+	enrollmentIngressPrivateKey := path.Join(root, layout.EnrollmentIngressPrivateKey)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
 	releaseTrust := path.Join(root, layout.ReleaseTrust)
 	releaseRoot := path.Join(root, layout.ReleaseDirectory(manifest.Release.ID))
@@ -638,12 +673,24 @@ func compileServices(
 		bind(paasIAMCredential, "/run/matrix/paas-iam-credential", true),
 	}
 	if profile == currentProfile {
+		paasAPI.Networks = append(paasAPI.Networks, "management")
 		paasAPI.Environment["MATRIX_PAAS_NORTHBOUND_ORIGIN"] = options.NorthboundOrigin
 		paasAPI.Environment["MATRIX_PAAS_CURSOR_KEY_FILE"] = "/run/matrix/paas-cursor-key"
 		paasAPI.Environment["MATRIX_PAAS_EDGE_ASSERTION_FILE"] = "/run/matrix/paas-edge-assertion"
+		paasAPI.Environment["MATRIX_PAAS_NODE_CONNECTIONS_FILE"] = "/run/matrix/node-controller/configuration.json"
+		paasAPI.Environment[enrollmentControllerCertificateEnvironment] = "/run/matrix/node-controller/enrollment-controller.pem"
+		paasAPI.Environment[enrollmentControllerPrivateKeyEnvironment] = "/run/matrix/node-controller/enrollment-controller-key.pem"
+		paasAPI.Environment[enrollmentControllerTrustEnvironment] = "/run/matrix/node-controller/enrollment-controller-trust.pem"
+		paasAPI.Environment[enrollmentIssuerCertificateEnvironment] = enrollmentIssuerCertificateTarget
+		paasAPI.Environment[enrollmentIssuerPrivateKeyEnvironment] = enrollmentIssuerPrivateKeyTarget
+		paasAPI.Environment["MATRIX_PAAS_PUBLIC_BASE_PATH"] = "/api/paas/v1"
+		paasAPI.Environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] = "false"
 		paasAPI.Volumes = append(paasAPI.Volumes,
 			bind(paasCursorKey, "/run/matrix/paas-cursor-key", true),
 			bind(paasEdgeAssertion, "/run/matrix/paas-edge-assertion", true),
+			bind(enrollmentIssuerCertificate, enrollmentIssuerCertificateTarget, true),
+			bind(enrollmentIssuerPrivateKey, enrollmentIssuerPrivateKeyTarget, true),
+			bind(path.Join(root, layout.NodeControllerDirectory), "/run/matrix/node-controller", true),
 		)
 	}
 	paasAPI.Tmpfs = append(paasAPI.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
@@ -668,6 +715,12 @@ func compileServices(
 		"DOCKER_CONFIG":                            "/tmp/docker-config",
 	}
 	if profile == currentProfile {
+		paasWorker.Networks = append(paasWorker.Networks, "management")
+		paasWorker.Environment["MATRIX_PAAS_WORKER_INSTALLATION_ID"] = options.InstallationID
+		paasWorker.Environment["MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE"] = "/run/matrix/node-controller/configuration.json"
+		paasWorker.Environment[workerEnrollmentControllerCertificateEnvironment] = "/run/matrix/node-controller/enrollment-controller.pem"
+		paasWorker.Environment[workerEnrollmentControllerPrivateKeyEnvironment] = "/run/matrix/node-controller/enrollment-controller-key.pem"
+		paasWorker.Environment[workerEnrollmentControllerTrustEnvironment] = "/run/matrix/node-controller/enrollment-controller-trust.pem"
 		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE"] = images["postgres"]
 		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE"] = images["mysql"]
 		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE"] = images["elasticsearch"]
@@ -679,6 +732,12 @@ func compileServices(
 		bind(executorRoot, executorRoot, false),
 		bind(workloadSecretRoot, workloadSecretRoot, true),
 		bind("/var/run/docker.sock", "/var/run/docker.sock", false),
+	}
+	if profile == currentProfile {
+		paasWorker.Volumes = append(
+			paasWorker.Volumes,
+			bind(path.Join(root, layout.NodeControllerDirectory), "/run/matrix/node-controller", true),
+		)
 	}
 	paasWorker.Tmpfs = append(paasWorker.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasWorker.DependsOn = healthy("postgres")
@@ -733,9 +792,16 @@ func compileServices(
 		bind(apisixNginx, "/usr/local/apisix/conf/nginx.conf", false),
 	}
 	if profile == currentProfile {
+		apisix.Ports = append(
+			apisix.Ports,
+			net.JoinHostPort(options.Listener, fmt.Sprint(NodeEnrollmentIngressPort))+":"+
+				fmt.Sprint(NodeEnrollmentIngressTargetPort)+"/tcp",
+		)
 		apisix.Volumes = append(apisix.Volumes,
 			bind(auditEdgeAssertion, "/run/matrix/audit-edge-assertion", true),
 			bind(paasEdgeAssertion, "/run/matrix/paas-edge-assertion", true),
+			bind(enrollmentIngressCertificate, NodeEnrollmentIngressCertificateTarget, true),
+			bind(enrollmentIngressPrivateKey, NodeEnrollmentIngressPrivateKeyTarget, true),
 		)
 	}
 	apisix.Tmpfs = append(

@@ -17,7 +17,9 @@ import (
 	"strings"
 	"time"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/installation/release"
 	"github.com/xiak/matrix/app/service/installation/topology"
 )
@@ -44,6 +46,43 @@ func WriteDevOps(base string) (Fixture, error) {
 		return Fixture{}, err
 	}
 	return fixtures[0], nil
+}
+
+func WriteNode(base string) (Fixture, error) {
+	fixtures, err := writeManifests(base, []release.Manifest{NodeManifest()})
+	if err != nil {
+		return Fixture{}, err
+	}
+	return fixtures[0], nil
+}
+
+func NodeManifest() release.Manifest {
+	manifest := Manifest()
+	manifest.Kind = release.NodeManifestKind
+	manifest.Database = release.DatabaseProfile{}
+	manifest.Products = nil
+	manifest.Images = nil
+	manifest.Node = &release.NodeProfile{
+		ProtocolAPIVersion: nodev1.APIVersion,
+		RuntimeRevision:    nodeconfig.RuntimeRevision,
+		CollectorVersion:   nodeconfig.CollectorVersion,
+	}
+	manifest.Host.MinimumSystemd = nodeconfig.MinimumSystemd
+	manifest.Host.MinimumDocker = nodeconfig.MinimumDocker
+	manifest.Host.MinimumCompose = nodeconfig.MinimumCompose
+	manifest.TopologyDigest = nodeconfig.ContractDigest()
+	manifest.Files = nil
+	for _, name := range []string{
+		"bin/matrix-node-agent", "bin/mx", "bin/node-exporter",
+		"licenses/node-exporter-license.txt", "licenses/node-exporter-notice.txt",
+	} {
+		file := release.File{Path: name, MediaType: "text/plain", Size: 1, SHA256: stableDigest(name)}
+		if strings.HasPrefix(name, "bin/") {
+			file.MediaType, file.Executable = "application/vnd.matrix.executable", true
+		}
+		manifest.Files = append(manifest.Files, file)
+	}
+	return manifest
 }
 
 // WriteSequence creates signed immediate-successor fixtures under one trust
@@ -75,6 +114,48 @@ func WriteSequence(base string, count int, profiles ...release.DatabaseProfile) 
 		manifest.Release.Version = version
 		manifest.Release.SourceCommit = commit
 		manifest.Release.BuildID = fmt.Sprintf("installation-consumer-test-%d", index+1)
+		manifest.Release.CreatedAt = manifest.Release.CreatedAt.Add(time.Duration(index) * time.Hour)
+		if index > 0 {
+			manifest.Release.PreviousID = manifests[index-1].Release.ID
+			manifest.Release.PreviousVersion = manifests[index-1].Release.Version
+		}
+		manifests[index] = manifest
+	}
+	return writeManifests(base, manifests)
+}
+
+func WriteNodeSequence(base string, count int) ([]Fixture, error) {
+	return writeNodeSequence(base, count, nil)
+}
+
+func WriteNodeRuntimeSequence(base string, revisions ...uint64) ([]Fixture, error) {
+	return writeNodeSequence(base, len(revisions), revisions)
+}
+
+func writeNodeSequence(base string, count int, revisions []uint64) ([]Fixture, error) {
+	if count < 1 || count > 8 || (len(revisions) != 0 && len(revisions) != count) {
+		return nil, errors.New("fixture node release sequence length is invalid")
+	}
+	manifests := make([]release.Manifest, count)
+	for index := range manifests {
+		manifest := NodeManifest()
+		if len(revisions) != 0 {
+			manifest.Node.RuntimeRevision = revisions[index]
+			switch revisions[index] {
+			case nodeconfig.RuntimeRevision:
+				manifest.TopologyDigest = nodeconfig.ContractDigest()
+			case nodeconfig.DeploymentRuntimePredecessorRevision:
+				manifest.TopologyDigest = nodeconfig.DeploymentRuntimePredecessorContractDigest()
+			default:
+				return nil, errors.New("fixture node runtime revision is unsupported")
+			}
+		}
+		commit := strings.Repeat(string("abcdef12"[index]), 40)
+		version := fmt.Sprintf("v0.%d.0", index+1)
+		manifest.Release.ID = "matrix-" + version + "-" + commit[:12]
+		manifest.Release.Version = version
+		manifest.Release.SourceCommit = commit
+		manifest.Release.BuildID = fmt.Sprintf("node-installation-consumer-test-%d", index+1)
 		manifest.Release.CreatedAt = manifest.Release.CreatedAt.Add(time.Duration(index) * time.Hour)
 		if index > 0 {
 			manifest.Release.PreviousID = manifests[index-1].Release.ID
@@ -138,6 +219,9 @@ func writeManifestsWithLegacy(
 		for fileIndex := range manifest.Files {
 			declaration := &manifest.Files[fileIndex]
 			content := []byte("matrix-release-payload:" + declaration.Path)
+			if manifest.Kind == release.NodeManifestKind && declaration.Executable {
+				content = append(content, []byte(":"+manifest.Release.ID)...)
+			}
 			if declaration.Path == release.IAMProductAuthorizationPath {
 				content, err = iamv1.EncodeProductAuthorizationReleaseCatalog(iamv1.ProductAuthorizationReleaseCatalog{
 					APIVersion: iamv1.APIVersion, Kind: iamv1.ProductAuthorizationReleaseCatalogKind,

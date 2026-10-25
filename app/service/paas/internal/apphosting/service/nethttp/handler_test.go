@@ -15,11 +15,15 @@ import (
 	"testing"
 	"time"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/internal/externalrequest"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
@@ -29,12 +33,13 @@ func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 		APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
 		SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 678_000, time.UTC),
 	}
-	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeInstallationVerifier{}, Config{
-		InstallationID: "installation-test", CursorKey: testApplicationCursorKey(),
-		Readiness: func(context.Context) (paasv1.Readiness, error) {
-			return readiness, readyErr
-		},
-	})
+	handler, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{},
+		&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+			InstallationID: "installation-test", CursorKey: testApplicationCursorKey(),
+			Readiness: func(context.Context) (paasv1.Readiness, error) {
+				return readiness, readyErr
+			},
+		})
 	if err != nil {
 		t.Fatalf("create readiness handler: %v", err)
 	}
@@ -700,7 +705,8 @@ func TestHandlerRequiresInstallationBoundApplicationCursorKey(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			candidate := base
 			mutate(&candidate)
-			if _, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeInstallationVerifier{}, candidate); err == nil {
+			if _, err := NewHandler(&fakeAuthorizer{}, &fakeWorkflow{}, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{},
+				&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, candidate); err == nil {
 				t.Fatal("invalid cursor authority accepted")
 			}
 		})
@@ -1465,6 +1471,87 @@ func (authorizer *fakeAuthorizer) AuthorizeAccessKey(
 	}, nil
 }
 
+type fakeExecutionWorkflow struct{}
+
+func (*fakeExecutionWorkflow) CreatePool(context.Context, executionadmission.CreatePoolCommand) (paasv1.ExecutionPool, paasv1.Operation, bool, error) {
+	return paasv1.ExecutionPool{}, paasv1.Operation{}, false, errors.New("unexpected CreatePool")
+}
+func (*fakeExecutionWorkflow) RegisterTarget(context.Context, executionadmission.RegisterTargetCommand) (paasv1.ExecutionTarget, paasv1.Operation, bool, error) {
+	return paasv1.ExecutionTarget{}, paasv1.Operation{}, false, errors.New("unexpected RegisterTarget")
+}
+func (*fakeExecutionWorkflow) TransitionTarget(context.Context, executionadmission.TransitionTargetCommand) (executionadmission.TransitionTargetResult, error) {
+	return executionadmission.TransitionTargetResult{}, errors.New("unexpected TransitionTarget")
+}
+func (*fakeExecutionWorkflow) GetPool(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionPool, error) {
+	return paasv1.ExecutionPool{}, errors.New("unexpected GetPool")
+}
+func (*fakeExecutionWorkflow) ListPools(context.Context, port.Authorization) (paasv1.ExecutionPoolList, error) {
+	return paasv1.ExecutionPoolList{}, errors.New("unexpected ListPools")
+}
+func (*fakeExecutionWorkflow) GetTarget(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ExecutionTarget, error) {
+	return paasv1.ExecutionTarget{}, errors.New("unexpected GetTarget")
+}
+func (*fakeExecutionWorkflow) ListTargets(context.Context, port.Authorization) (paasv1.ExecutionTargetList, error) {
+	return paasv1.ExecutionTargetList{}, errors.New("unexpected ListTargets")
+}
+func (*fakeExecutionWorkflow) GetOperation(context.Context, port.Authorization, paasv1.OperationID) (paasv1.Operation, error) {
+	return paasv1.Operation{}, errors.New("unexpected platform GetOperation")
+}
+
+type fakeEnrollmentWorkflow struct{}
+
+func (*fakeEnrollmentWorkflow) Create(context.Context, nodeenrollment.CreateCommand) (nodeenrollment.CreateResult, error) {
+	return nodeenrollment.CreateResult{}, errors.New("unexpected enrollment Create")
+}
+func (*fakeEnrollmentWorkflow) Exchange(context.Context, nodeenrollment.ExchangeCommand) (nodeenrollment.ExchangeResult, error) {
+	return nodeenrollment.ExchangeResult{}, errors.New("unexpected enrollment Exchange")
+}
+func (*fakeEnrollmentWorkflow) Complete(context.Context, nodeenrollment.CompleteCommand) (nodeenrollment.CompleteResult, error) {
+	return nodeenrollment.CompleteResult{}, errors.New("unexpected enrollment Complete")
+}
+func (*fakeEnrollmentWorkflow) CreateRecoveryChallenge(context.Context, nodeenrollment.RecoveryChallengeCommand) (nodeenrollment.RecoveryChallengeResult, error) {
+	return nodeenrollment.RecoveryChallengeResult{}, errors.New("unexpected enrollment CreateRecoveryChallenge")
+}
+func (*fakeEnrollmentWorkflow) RecoverExchange(context.Context, nodeenrollment.RecoverExchangeCommand) (nodeenrollment.ExchangeResult, error) {
+	return nodeenrollment.ExchangeResult{}, errors.New("unexpected enrollment RecoverExchange")
+}
+func (*fakeEnrollmentWorkflow) Get(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.NodeEnrollment, error) {
+	return paasv1.NodeEnrollment{}, errors.New("unexpected enrollment Get")
+}
+func (*fakeEnrollmentWorkflow) List(context.Context, port.Authorization) (paasv1.NodeEnrollmentList, error) {
+	return paasv1.NodeEnrollmentList{}, errors.New("unexpected enrollment List")
+}
+func (*fakeEnrollmentWorkflow) Revoke(context.Context, nodeenrollment.RevokeCommand) (nodeenrollment.RevokeResult, error) {
+	return nodeenrollment.RevokeResult{}, errors.New("unexpected enrollment Revoke")
+}
+func (*fakeEnrollmentWorkflow) Regenerate(context.Context, nodeenrollment.RegenerateCommand) (nodeenrollment.CreateResult, error) {
+	return nodeenrollment.CreateResult{}, errors.New("unexpected enrollment Regenerate")
+}
+
+type fakeTerminalWorkflow struct{}
+
+func (*fakeTerminalWorkflow) Create(context.Context, terminalsession.CreateCommand) (terminalsession.CreateResult, error) {
+	return terminalsession.CreateResult{}, errors.New("unexpected terminal Create")
+}
+func (*fakeTerminalWorkflow) Consume(context.Context, paasv1.ResourceID, string) (terminalsession.StoredSession, error) {
+	return terminalsession.StoredSession{}, errors.New("unexpected terminal Consume")
+}
+func (*fakeTerminalWorkflow) Activate(context.Context, terminalsession.StoredSession) (terminalsession.StoredSession, error) {
+	return terminalsession.StoredSession{}, errors.New("unexpected terminal Activate")
+}
+func (*fakeTerminalWorkflow) End(context.Context, paasv1.TenantID, paasv1.ResourceID, paasv1.TerminalSessionOutcome) (terminalsession.StoredSession, bool, error) {
+	return terminalsession.StoredSession{}, false, errors.New("unexpected terminal End")
+}
+func (*fakeTerminalWorkflow) Close(context.Context, terminalsession.CloseCommand) (terminalsession.StoredSession, bool, error) {
+	return terminalsession.StoredSession{}, false, errors.New("unexpected terminal Close")
+}
+
+type fakeTerminalConnector struct{}
+
+func (*fakeTerminalConnector) OpenTerminal(context.Context, string, nodev1.TerminalOpenRequest) (port.TerminalConnection, error) {
+	return nil, port.ErrTerminalUnavailable
+}
+
 type fakeWorkflow struct {
 	createApplicationCalls             int
 	createApplicationCommand           applicationlifecycle.CreateApplicationCommand
@@ -1694,6 +1781,14 @@ func (workflow *fakeWorkflow) GetDeployment(context.Context, port.Authorization,
 	return paasv1.Deployment{}, errors.New("unexpected GetDeployment")
 }
 
+func (workflow *fakeWorkflow) ListDeployments(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.DeploymentList, error) {
+	return paasv1.DeploymentList{}, errors.New("unexpected ListDeployments")
+}
+
+func (workflow *fakeWorkflow) GetDeploymentRuntime(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.DeploymentRuntimeSnapshot, error) {
+	return paasv1.DeploymentRuntimeSnapshot{}, errors.New("unexpected GetDeploymentRuntime")
+}
+
 func (workflow *fakeWorkflow) GetDeploymentGeneration(context.Context, port.Authorization, paasv1.ResourceID, uint64) (paasv1.DeploymentGeneration, error) {
 	return paasv1.DeploymentGeneration{}, errors.New("unexpected GetDeploymentGeneration")
 }
@@ -1708,16 +1803,17 @@ func mustHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) ht
 
 func mustAccessKeyHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authorizer, workflow, &fakeInstallationVerifier{}, Config{
-		NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
-		EdgeAssertion: testEdgeAssertion(),
-		CursorKey:     testApplicationCursorKey(),
-		NewRequestID:  func() (string, error) { return "request-test", nil },
-		Readiness: func(context.Context) (paasv1.Readiness, error) {
-			return paasv1.Readiness{APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
-				SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC)}, nil
-		},
-	})
+	handler, err := NewHandler(authorizer, workflow, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{},
+		&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+			NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
+			EdgeAssertion: testEdgeAssertion(),
+			CursorKey:     testApplicationCursorKey(),
+			NewRequestID:  func() (string, error) { return "request-test", nil },
+			Readiness: func(context.Context) (paasv1.Readiness, error) {
+				return paasv1.Readiness{APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
+					SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC)}, nil
+			},
+		})
 	if err != nil {
 		t.Fatalf("create AccessKey HTTP handler: %v", err)
 	}
@@ -1731,16 +1827,17 @@ func mustHandlerWithVerifier(
 	verifier InstallationVerifier,
 ) http.Handler {
 	t.Helper()
-	handler, err := NewHandler(authorizer, workflow, verifier, Config{
-		InstallationID: "installation-test", CursorKey: testApplicationCursorKey(),
-		NewRequestID: func() (string, error) { return "request-test", nil },
-		Readiness: func(context.Context) (paasv1.Readiness, error) {
-			return paasv1.Readiness{
-				APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
-				SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC),
-			}, nil
-		},
-	})
+	handler, err := NewHandler(authorizer, workflow, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{},
+		&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, verifier, Config{
+			InstallationID: "installation-test", CursorKey: testApplicationCursorKey(),
+			NewRequestID: func() (string, error) { return "request-test", nil },
+			Readiness: func(context.Context) (paasv1.Readiness, error) {
+				return paasv1.Readiness{
+					APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
+					SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC),
+				}, nil
+			},
+		})
 	if err != nil {
 		t.Fatalf("create HTTP handler: %v", err)
 	}
@@ -1758,21 +1855,22 @@ func testEdgeAssertion() []byte {
 func mustDirectoryHandler(t *testing.T, authorizer port.Authorizer, workflow Workflow) http.Handler {
 	t.Helper()
 	sequence := 0
-	handler, err := NewHandler(authorizer, workflow, &fakeInstallationVerifier{}, Config{
-		NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
-		EdgeAssertion: testEdgeAssertion(),
-		CursorKey:     testApplicationCursorKey(),
-		NewRequestID: func() (string, error) {
-			id := fmt.Sprintf("request-directory-%03d", sequence)
-			sequence++
-			return id, nil
-		},
-		Now: func() time.Time { return time.Date(2026, time.October, 7, 1, 2, 3, 0, time.UTC) },
-		Readiness: func(context.Context) (paasv1.Readiness, error) {
-			return paasv1.Readiness{APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
-				SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC)}, nil
-		},
-	})
+	handler, err := NewHandler(authorizer, workflow, &fakeExecutionWorkflow{}, &fakeEnrollmentWorkflow{},
+		&fakeTerminalWorkflow{}, &fakeTerminalConnector{}, &fakeInstallationVerifier{}, Config{
+			NorthboundOrigin: "https://api.example.test:443", InstallationID: "installation-one",
+			EdgeAssertion: testEdgeAssertion(),
+			CursorKey:     testApplicationCursorKey(),
+			NewRequestID: func() (string, error) {
+				id := fmt.Sprintf("request-directory-%03d", sequence)
+				sequence++
+				return id, nil
+			},
+			Now: func() time.Time { return time.Date(2026, time.October, 7, 1, 2, 3, 0, time.UTC) },
+			Readiness: func(context.Context) (paasv1.Readiness, error) {
+				return paasv1.Readiness{APIVersion: paasv1.APIVersion, Kind: "Readiness", State: paasv1.ReadinessReady,
+					SchemaVersion: 1, CheckedAt: time.Date(2026, 8, 26, 3, 4, 5, 0, time.UTC)}, nil
+			},
+		})
 	if err != nil {
 		t.Fatalf("create directory HTTP handler: %v", err)
 	}

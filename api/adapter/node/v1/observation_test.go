@@ -69,3 +69,29 @@ func TestCertificateIdentityIsExactAndRoleBound(t *testing.T) {
 		t.Fatal("path-shaped identity accepted")
 	}
 }
+
+func TestReadinessIsBoundedAndCannotCarryCommands(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	value := Readiness{APIVersion: APIVersion, Kind: ReadinessResponseKind,
+		Identity:            Identity{InstallationID: "installation-a", ExecutionTargetID: "target-a"},
+		IdentityFingerprint: "sha256:" + strings.Repeat("a", 64), ObservedAt: now, ValidUntil: now.Add(MaximumObservationAge)}
+	content, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeReadiness(strings.NewReader(string(content)))
+	if err != nil || decoded != value {
+		t.Fatalf("readiness round trip: %#v, %v", decoded, err)
+	}
+	for _, invalid := range []string{
+		strings.Replace(string(content), `"kind":`, `"command":"execute","kind":`, 1),
+		strings.Replace(string(content), `"kind":`, `"kind":"NodeReadiness","kind":`, 1),
+		strings.Replace(string(content), `"identity":`, `"Identity":`, 1),
+		string(content) + `{}`, string(content) + strings.Repeat(" ", MaximumReadinessResponseBytes),
+		strings.Replace(string(content), value.ValidUntil.Format(time.RFC3339Nano), now.Add(time.Hour).Format(time.RFC3339Nano), 1),
+	} {
+		if _, err := DecodeReadiness(strings.NewReader(invalid)); err == nil {
+			t.Fatal("invalid readiness was admitted")
+		}
+	}
+}

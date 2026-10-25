@@ -20,10 +20,15 @@ BEGIN
             ('audit_outbox'),
             ('execution_pools'),
             ('execution_targets'),
+            ('node_enrollments'),
+            ('enrolled_node_connections'),
             ('execution_target_allocations'),
             ('adapter_commands'),
             ('adapter_receipts'),
             ('deployment_observations'),
+            ('deployment_runtime_snapshots'),
+            ('deployment_resource_snapshots'),
+            ('terminal_sessions'),
             ('placement_decisions'),
             ('capacity_claims'),
             ('capacity_reservations')
@@ -67,9 +72,16 @@ BEGIN
             'deployment_generations',
             'operations',
             'audit_outbox',
+            'execution_pools',
+            'execution_targets',
+            'node_enrollments',
+            'enrolled_node_connections',
             'adapter_commands',
             'adapter_receipts',
             'deployment_observations',
+            'deployment_runtime_snapshots',
+            'deployment_resource_snapshots',
+            'terminal_sessions',
             'placement_decisions',
             'capacity_reservations'
        )
@@ -93,8 +105,39 @@ BEGIN
             ('deployment_generations_operation_uq'),
             ('deployment_generations_operation_fk'),
             ('operations_idempotency_uq'),
+            ('operations_tenant_identity_uq'),
+            ('operations_ids_valid'),
+            ('operations_document_identity'),
             ('audit_outbox_operation_fk'),
+            ('audit_outbox_terminal_session_fk'),
+            ('audit_outbox_ids_valid'),
+            ('audit_outbox_owner_valid'),
+            ('audit_outbox_document_identity'),
             ('execution_targets_pool_fk'),
+            ('execution_targets_installation_pool_fk'),
+            ('execution_targets_installation_identity_valid'),
+            ('execution_pools_installation_valid'),
+            ('node_enrollments_target_uq'),
+            ('node_enrollments_operation_uq'),
+            ('node_enrollments_termination_uq'),
+            ('node_enrollments_exchange_uq'),
+            ('node_enrollments_machine_uq'),
+            ('node_enrollments_node_key_uq'),
+            ('node_enrollments_collector_key_uq'),
+            ('node_enrollments_pool_fk'),
+            ('node_enrollments_operation_fk'),
+            ('node_enrollments_replacement_fk'),
+            ('node_enrollments_identity_valid'),
+            ('node_enrollments_state_valid'),
+            ('node_enrollments_credential_valid'),
+            ('node_enrollments_exchange_valid'),
+            ('node_enrollments_exchange_document_valid'),
+            ('node_enrollments_sealed_result_valid'),
+            ('node_enrollments_document_identity'),
+            ('enrolled_node_connections_target_fk'),
+            ('enrolled_node_connections_binding_uq'),
+            ('enrolled_node_connections_fingerprint_uq'),
+            ('enrolled_node_connections_identity_valid'),
             ('execution_target_allocations_target_fk'),
             ('adapter_commands_operation_action_uq'),
             ('adapter_commands_operation_fk'),
@@ -105,6 +148,28 @@ BEGIN
             ('deployment_observations_command_fk'),
             ('deployment_observations_generation_fk'),
             ('deployment_observations_revision_fk'),
+            ('deployment_runtime_snapshots_deployment_fk'),
+            ('deployment_runtime_snapshots_generation_fk'),
+            ('deployment_runtime_snapshots_revision_fk'),
+            ('deployment_runtime_snapshots_target_fk'),
+            ('deployment_runtime_snapshots_decision_fk'),
+            ('deployment_resource_snapshots_deployment_fk'),
+            ('deployment_resource_snapshots_generation_fk'),
+            ('deployment_resource_snapshots_revision_fk'),
+            ('deployment_resource_snapshots_target_fk'),
+            ('deployment_resource_snapshots_decision_fk'),
+            ('terminal_sessions_global_id_uq'),
+            ('terminal_sessions_idempotency_uq'),
+            ('terminal_sessions_deployment_fk'),
+            ('terminal_sessions_generation_fk'),
+            ('terminal_sessions_revision_fk'),
+            ('terminal_sessions_target_fk'),
+            ('terminal_sessions_decision_fk'),
+            ('terminal_sessions_ids_valid'),
+            ('terminal_sessions_values_valid'),
+            ('terminal_sessions_state_valid'),
+            ('terminal_sessions_time_valid'),
+            ('terminal_sessions_document_identity'),
             ('placement_decisions_operation_uq'),
             ('placement_decisions_deployment_fk'),
             ('placement_decisions_generation_fk'),
@@ -163,15 +228,26 @@ BEGIN
             ('adapter_commands'),
             ('adapter_receipts'),
             ('deployment_observations'),
+            ('deployment_runtime_snapshots'),
+            ('deployment_resource_snapshots'),
+            ('terminal_sessions'),
             ('placement_decisions'),
-            ('capacity_reservations')
+            ('capacity_reservations'),
+            ('node_enrollments'),
+            ('enrolled_node_connections')
       ) AS required(table_name)
      WHERE NOT EXISTS (
         SELECT 1
           FROM pg_catalog.pg_policies
          WHERE schemaname = 'paas'
            AND tablename = required.table_name
-           AND policyname = 'tenant_isolation'
+           AND policyname = CASE
+                WHEN required.table_name IN ('operations', 'audit_outbox')
+                    THEN 'authority_isolation'
+                WHEN required.table_name IN ('node_enrollments', 'enrolled_node_connections')
+                    THEN 'installation_read'
+                ELSE 'tenant_isolation'
+           END
     );
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'missing apphosting tenant policies: %', missing;
@@ -210,6 +286,28 @@ BEGIN
         RAISE EXCEPTION 'removed pre-Audit submit_deployment signature still exists';
     END IF;
 
+    IF to_regprocedure('paas.complete_audit_event(text,text,text,bigint,text,timestamptz,text)') IS NOT NULL
+       OR to_regprocedure('paas.current_installation_id()') IS NULL
+       OR to_regprocedure('paas.subject_reference_valid(jsonb)') IS NULL THEN
+        RAISE EXCEPTION 'Operation authority function contract is invalid';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'paas'
+           AND procedure.proname = 'subject_reference_valid'
+           AND pg_catalog.pg_get_function_identity_arguments(procedure.oid) = 'subject jsonb'
+           AND NOT procedure.prosecdef
+           AND procedure.provolatile = 'i'
+           AND NOT procedure.proisstrict
+           AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
+    ) THEN
+        RAISE EXCEPTION 'subject lineage validator is missing or unsafe';
+    END IF;
+
     SELECT string_agg(required.name, ', ' ORDER BY required.name)
       INTO missing
       FROM (
@@ -217,6 +315,46 @@ BEGIN
             (
                 'append_audit_outbox',
                 'submitted_operation jsonb, submitted_audit_event jsonb'
+            ),
+            (
+                'append_terminal_audit_outbox',
+                'requested_session_id text, submitted_audit_event jsonb'
+            ),
+            (
+                'lock_terminal_session_by_fingerprint',
+                'requested_fingerprint text'
+            ),
+            (
+                'lock_terminal_session',
+                'requested_session_id text'
+            ),
+            (
+                'lock_open_terminal_session',
+                'requested_subject_type text, requested_subject_id text, requested_deployment_id text, requested_instance_id text'
+            ),
+            (
+                'lock_current_terminal_runtime',
+                'requested_deployment_id text, requested_instance_id text, requested_now timestamp with time zone'
+            ),
+            (
+                'create_terminal_session',
+                'submitted_stored jsonb, requested_ticket_digest text, submitted_audit_event jsonb'
+            ),
+            (
+                'rotate_terminal_session_ticket',
+                'requested_session_id text, requested_ticket_digest text'
+            ),
+            (
+                'open_terminal_session_ticket',
+                'requested_session_id text, requested_ticket_digest text'
+            ),
+            (
+                'consume_terminal_session_ticket',
+                'requested_session_id text, submitted_session jsonb'
+            ),
+            (
+                'transition_terminal_session',
+                'requested_session_id text, submitted_session jsonb, submitted_audit_event jsonb'
             ),
             (
                 'create_apphosting_resource',
@@ -231,6 +369,46 @@ BEGIN
                 'requested_id text'
             ),
             (
+                'admit_execution_resource',
+                'submitted_resource jsonb, submitted_operation jsonb, submitted_audit_event jsonb, submitted_binding_ref text, submitted_identity_fingerprint text, expected_pool_version bigint, submitted_pool jsonb'
+            ),
+            (
+                'create_node_enrollment',
+                'submitted_enrollment jsonb, submitted_operation jsonb, submitted_join jsonb, submitted_wrapped_credential jsonb, submitted_credential_salt bytea, submitted_credential_verifier text, submitted_actor_type text, submitted_actor_id text, submitted_iam_decision_id text, submitted_request_id text, submitted_audit_id text, submitted_traceparent text'
+            ),
+            (
+                'exchange_node_enrollment',
+                'requested_enrollment_id text, expected_resource_version bigint, expected_credential_verifier text, submitted_enrollment jsonb, submitted_operation jsonb, submitted_exchange jsonb, submitted_sealed_result jsonb'
+            ),
+            (
+                'expire_node_enrollment',
+                'requested_enrollment_id text, expected_resource_version bigint, submitted_enrollment jsonb, submitted_operation jsonb'
+            ),
+            (
+                'revoke_node_enrollment',
+                'requested_enrollment_id text, expected_resource_version bigint, submitted_termination_fingerprint text, submitted_termination_request_digest text, submitted_enrollment jsonb, submitted_operation jsonb, submitted_replacement jsonb, submitted_replacement_operation jsonb'
+            ),
+            (
+                'fail_node_enrollment',
+                'requested_enrollment_id text, expected_resource_version bigint, submitted_enrollment jsonb, submitted_operation jsonb'
+            ),
+            (
+                'complete_node_enrollment',
+                'requested_enrollment_id text, expected_enrollment_version bigint, submitted_enrollment jsonb, submitted_operation jsonb, submitted_target jsonb, submitted_binding_ref text, submitted_identity_fingerprint text, submitted_controller_id text, submitted_endpoint text, expected_pool_version bigint, submitted_pool jsonb, submitted_audit_event jsonb'
+            ),
+            (
+                'transition_execution_target',
+                'expected_target_version bigint, submitted_target jsonb, expected_pool_version bigint, submitted_pool jsonb, submitted_operation jsonb, submitted_audit_event jsonb'
+            ),
+            (
+                'refresh_execution_target',
+                'expected_target_version bigint, submitted_target jsonb, expected_pool_version bigint, submitted_pool jsonb'
+            ),
+            (
+                'store_execution_pool_observation',
+                'expected_resource_version bigint, submitted_pool jsonb'
+            ),
+            (
                 'submit_deployment',
                 'submitted_deployment jsonb, submitted_generation jsonb, submitted_operation jsonb, submitted_audit_event jsonb, expected_resource_version bigint'
             ),
@@ -240,7 +418,7 @@ BEGIN
             ),
             (
                 'complete_audit_event',
-                'requested_tenant_id text, requested_event_id text, requested_worker_id text, expected_fencing_token bigint, requested_outcome text, requested_retry_at timestamp with time zone, requested_error_code text'
+                'requested_tenant_id text, requested_installation_id text, requested_event_id text, requested_worker_id text, expected_fencing_token bigint, requested_outcome text, requested_retry_at timestamp with time zone, requested_error_code text'
             ),
             (
                 'audit_outbox_snapshot',
@@ -296,7 +474,19 @@ BEGIN
             ),
             (
                 'reconcile_local_execution_profile',
-                'expected_pool_version bigint, submitted_pool jsonb, expected_target_version bigint, submitted_target jsonb, expected_policy_version bigint, submitted_policy jsonb'
+                'requested_installation_id text, expected_pool_version bigint, submitted_pool jsonb, expected_target_version bigint, submitted_target jsonb, expected_policy_version bigint, submitted_policy jsonb'
+            ),
+            (
+                'next_deployment_runtime_candidate',
+                'requested_after_tenant_id text, requested_after_deployment_id text'
+            ),
+            (
+                'store_deployment_runtime_snapshot',
+                'requested_tenant_id text, requested_deployment_id text, requested_generation bigint, requested_application_revision_id text, requested_execution_target_id text, requested_placement_decision_id text, requested_observed_at timestamp with time zone, requested_valid_until timestamp with time zone, submitted_document jsonb'
+            ),
+            (
+                'store_deployment_telemetry_snapshot',
+                'requested_tenant_id text, requested_deployment_id text, requested_generation bigint, requested_application_revision_id text, requested_execution_target_id text, requested_placement_decision_id text, requested_runtime_observed_at timestamp with time zone, requested_runtime_valid_until timestamp with time zone, submitted_runtime_document jsonb, requested_resource_observed_at timestamp with time zone, requested_resource_valid_until timestamp with time zone, submitted_resource_document jsonb'
             )
       ) AS required(name, identity_arguments)
      WHERE NOT EXISTS (
@@ -313,6 +503,77 @@ BEGIN
     );
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'application transition functions are missing or unsafe: %', missing;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'paas'
+           AND procedure.proname = 'valid_deployment_resource_document'
+           AND pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+                = 'resource_document jsonb'
+           AND NOT procedure.prosecdef
+           AND procedure.provolatile = 'i'
+           AND procedure.proisstrict
+           AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
+    ) THEN
+        RAISE EXCEPTION 'Deployment resource validator is missing or unsafe';
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_namespace AS namespace
+            ON namespace.oid = procedure.pronamespace
+         WHERE namespace.nspname = 'paas'
+           AND procedure.proname = 'terminal_session_snapshot'
+           AND pg_catalog.pg_get_function_identity_arguments(procedure.oid)
+                = 'session_row paas.terminal_sessions'
+           AND NOT procedure.prosecdef
+           AND procedure.provolatile = 'i'
+           AND procedure.proisstrict
+           AND 'search_path=pg_catalog, pg_temp' = ANY(procedure.proconfig)
+    ) THEN
+        RAISE EXCEPTION 'terminal session snapshot encoder is missing or unsafe';
+    END IF;
+
+    IF NOT paas.valid_deployment_resource_document(
+        jsonb_build_object(
+            'deploymentId', 'deployment-resource-verification',
+            'generation', 1,
+            'applicationRevisionId', 'application-revision-verification',
+            'executionTargetId', 'execution-target-verification',
+            'instances', jsonb_build_array(jsonb_build_object(
+                'id', 'instance-0123456789abcdef0123456789abcdef',
+                'cpu', jsonb_build_object('state', 'UNSUPPORTED'),
+                'memory', jsonb_build_object('state', 'UNSUPPORTED'),
+                'network', jsonb_build_object('state', 'UNSUPPORTED'),
+                'blockIo', jsonb_build_object('state', 'UNSUPPORTED'),
+                'storage', jsonb_build_object(
+                    'state', 'AVAILABLE',
+                    'value', jsonb_build_object(
+                        'observedAt', '2026-08-31T00:00:00Z',
+                        'validUntil', '2026-08-31T00:01:30Z',
+                        'writableLayerBytes', 1,
+                        'imageTotalBytes', 10,
+                        'imageSharedBytes', 4,
+                        'imageUniqueBytes', 6,
+                        'volumesState', 'AVAILABLE',
+                        'volumes', jsonb_build_object(
+                            'count', 0,
+                            'bytes', 0,
+                            'sharedCount', 0,
+                            'sharedBytes', 0
+                        )
+                    )
+                )
+            )),
+            'observedAt', '2026-08-31T00:00:01Z'
+        )
+    ) THEN
+        RAISE EXCEPTION 'Deployment resource validator rejects valid available storage';
     END IF;
 
     IF has_schema_privilege('matrix_paas_api', 'paas', 'CREATE')
@@ -342,9 +603,18 @@ BEGIN
             'paas.operations',
             'INSERT, UPDATE, DELETE'
        )
+       OR has_table_privilege('matrix_paas_api', 'paas.execution_pools', 'INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_api', 'paas.execution_targets', 'INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_api', 'paas.node_enrollments', 'INSERT, UPDATE, DELETE')
+       OR has_table_privilege('matrix_paas_api', 'paas.enrolled_node_connections', 'INSERT, UPDATE, DELETE')
        OR has_table_privilege(
             'matrix_paas_api',
             'paas.audit_outbox',
+            'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.terminal_sessions',
             'SELECT, INSERT, UPDATE, DELETE'
        )
        OR has_table_privilege(
@@ -366,6 +636,16 @@ BEGIN
             'matrix_paas_api',
             'paas.deployment_observations',
             'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.deployment_runtime_snapshots',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_api',
+            'paas.deployment_resource_snapshots',
+            'INSERT, UPDATE, DELETE'
        )
        OR has_table_privilege(
             'matrix_paas_api',
@@ -417,6 +697,11 @@ BEGIN
        )
        OR has_table_privilege(
             'matrix_paas_worker',
+            'paas.terminal_sessions',
+            'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
             'paas.deployments',
             'INSERT, UPDATE, DELETE'
        )
@@ -434,6 +719,16 @@ BEGIN
             'matrix_paas_worker',
             'paas.deployment_observations',
             'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.deployment_runtime_snapshots',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.deployment_resource_snapshots',
+            'SELECT, INSERT, UPDATE, DELETE'
        )
        OR has_table_privilege(
             'matrix_paas_worker',
@@ -462,6 +757,16 @@ BEGIN
        )
        OR has_table_privilege(
             'matrix_paas_worker',
+            'paas.node_enrollments',
+            'SELECT, INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
+            'paas.enrolled_node_connections',
+            'INSERT, UPDATE, DELETE'
+       )
+       OR has_table_privilege(
+            'matrix_paas_worker',
             'paas.placement_policies',
             'INSERT, UPDATE, DELETE'
        )
@@ -473,7 +778,60 @@ BEGIN
         RAISE EXCEPTION 'worker role can rewrite authoritative or immutable input';
     END IF;
 
-    IF NOT has_table_privilege(
+    IF NOT has_function_privilege('matrix_paas_api', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.create_node_enrollment(jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.exchange_node_enrollment(text,bigint,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.expire_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.revoke_node_enrollment(text,bigint,text,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.fail_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.complete_node_enrollment(text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
+       OR NOT has_function_privilege('matrix_paas_api', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
+       OR EXISTS (
+            SELECT 1
+              FROM unnest(ARRAY[
+                    'paas.lock_terminal_session_by_fingerprint(text)',
+                    'paas.lock_terminal_session(text)',
+                    'paas.lock_open_terminal_session(text,text,text,text)',
+                    'paas.lock_current_terminal_runtime(text,text,timestamptz)',
+                    'paas.create_terminal_session(jsonb,text,jsonb)',
+                    'paas.rotate_terminal_session_ticket(text,text)',
+                    'paas.open_terminal_session_ticket(text,text)',
+                    'paas.consume_terminal_session_ticket(text,jsonb)',
+                    'paas.transition_terminal_session(text,jsonb,jsonb)'
+                   ]) AS terminal_function(signature)
+             WHERE NOT has_function_privilege(
+                    'matrix_paas_api', terminal_function.signature, 'EXECUTE'
+                   )
+                OR has_function_privilege(
+                    'matrix_paas_worker', terminal_function.signature, 'EXECUTE'
+                   )
+       )
+       OR EXISTS (
+            SELECT 1
+              FROM unnest(ARRAY[
+                    'paas.terminal_session_snapshot(paas.terminal_sessions)',
+                    'paas.append_terminal_audit_outbox(text,jsonb)'
+                   ]) AS internal_terminal_function(signature)
+             WHERE has_function_privilege(
+                    'matrix_paas_api', internal_terminal_function.signature, 'EXECUTE'
+                   )
+                OR has_function_privilege(
+                    'matrix_paas_worker', internal_terminal_function.signature, 'EXECUTE'
+                   )
+       )
+       OR has_function_privilege('matrix_paas_worker', 'paas.admit_execution_resource(jsonb,jsonb,jsonb,text,text,bigint,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.create_node_enrollment(jsonb,jsonb,jsonb,jsonb,bytea,text,text,text,text,text,text,text)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.exchange_node_enrollment(text,bigint,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.expire_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.revoke_node_enrollment(text,bigint,text,text,jsonb,jsonb,jsonb,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.fail_node_enrollment(text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.complete_node_enrollment(text,bigint,jsonb,jsonb,jsonb,text,text,text,text,bigint,jsonb,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.transition_execution_target(bigint,jsonb,bigint,jsonb,jsonb,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.refresh_execution_target(bigint,jsonb,bigint,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_api', 'paas.store_execution_pool_observation(bigint,jsonb)', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'paas.store_execution_pool_observation(bigint,jsonb)', 'EXECUTE')
+       OR NOT has_table_privilege(
             'matrix_paas_api',
             'paas.applications',
             'SELECT'
@@ -499,6 +857,21 @@ BEGIN
             'SELECT'
        )
        OR NOT has_table_privilege(
+            'matrix_paas_api',
+            'paas.deployment_runtime_snapshots',
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_api',
+            'paas.deployment_resource_snapshots',
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_api',
+            'paas.enrolled_node_connections',
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
             'matrix_paas_worker',
             'paas.adapter_commands',
             'SELECT'
@@ -506,6 +879,16 @@ BEGIN
        OR NOT has_table_privilege(
             'matrix_paas_worker',
             'paas.placement_decisions',
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_worker',
+            'paas.deployment_runtime_snapshots',
+            'SELECT'
+       )
+       OR NOT has_table_privilege(
+            'matrix_paas_worker',
+            'paas.enrolled_node_connections',
             'SELECT'
        )
        OR NOT has_function_privilege(
@@ -545,9 +928,37 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_paas_worker',
-            'paas.reconcile_local_execution_profile(bigint, jsonb, bigint, jsonb, bigint, jsonb)',
+            'paas.reconcile_local_execution_profile(text, bigint, jsonb, bigint, jsonb, bigint, jsonb)',
             'EXECUTE'
        )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.next_deployment_runtime_candidate(text, text)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.store_deployment_runtime_snapshot(text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb)',
+            'EXECUTE'
+       )
+       OR NOT has_function_privilege(
+            'matrix_paas_worker',
+            'paas.store_deployment_telemetry_snapshot(text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb, timestamptz, timestamptz, jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_api',
+            'paas.valid_deployment_resource_document(jsonb)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_paas_worker',
+            'paas.valid_deployment_resource_document(jsonb)',
+            'EXECUTE'
+       )
+       OR to_regprocedure(
+            'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
+       ) IS NOT NULL
        OR NOT has_function_privilege(
             'matrix_paas_api',
             'paas.create_apphosting_resource(jsonb, jsonb, jsonb)',
@@ -575,7 +986,7 @@ BEGIN
        )
        OR NOT has_function_privilege(
             'matrix_paas_worker',
-            'paas.complete_audit_event(text, text, text, bigint, text, timestamptz, text)',
+            'paas.complete_audit_event(text, text, text, text, bigint, text, timestamptz, text)',
             'EXECUTE'
        )
        OR NOT has_function_privilege(
@@ -622,7 +1033,7 @@ BEGIN
             SELECT 1
               FROM unnest(ARRAY[
                     'paas.claim_audit_event(text, integer)',
-                    'paas.complete_audit_event(text, text, text, bigint, text, timestamptz, text)',
+                    'paas.complete_audit_event(text, text, text, text, bigint, text, timestamptz, text)',
                     'paas.audit_outbox_snapshot()',
                     'paas.worker_readiness()',
                     'paas.claim_operation(text, integer)',
@@ -635,7 +1046,10 @@ BEGIN
                     'paas.record_deployment_observation(text, text, bigint, text, jsonb)',
                     'paas.release_operation_lease(text, text, bigint, timestamptz)',
                     'paas.transition_capacity_reservation(text, text, bigint, text, text, bigint)',
-                    'paas.reconcile_local_execution_profile(bigint, jsonb, bigint, jsonb, bigint, jsonb)'
+                    'paas.reconcile_local_execution_profile(text, bigint, jsonb, bigint, jsonb, bigint, jsonb)',
+                    'paas.next_deployment_runtime_candidate(text, text)',
+                    'paas.store_deployment_runtime_snapshot(text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb)',
+                    'paas.store_deployment_telemetry_snapshot(text, text, bigint, text, text, text, timestamptz, timestamptz, jsonb, timestamptz, timestamptz, jsonb)'
                    ]) AS worker_function(signature)
              WHERE has_function_privilege(
                     'matrix_paas_api',
@@ -672,7 +1086,9 @@ BEGIN
             'matrix_paas_worker',
             'paas.append_audit_outbox(jsonb, jsonb)',
             'EXECUTE'
-       ) THEN
+       )
+       OR (SELECT schema_version FROM paas.readiness()) IS DISTINCT FROM 8::bigint
+       OR (SELECT schema_version FROM paas.worker_readiness()) IS DISTINCT FROM 8::bigint THEN
         RAISE EXCEPTION 'application roles lack required current privileges';
     END IF;
 END

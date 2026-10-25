@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -40,6 +43,88 @@ type stateRuntime struct {
 	observeError   error
 	containers     []RuntimeContainer
 	publishedPorts uint32
+}
+
+func TestLocalRuntimeReadinessOverlapsIndependentEngineAndComposeProbes(t *testing.T) {
+	entered := make(chan string, 2)
+	release := make(chan struct{})
+	completed := make(chan error, 1)
+	runner := func(ctx context.Context, output io.Writer, arguments ...string) (bool, error) {
+		if output != nil {
+			return false, errors.New("readiness unexpectedly requested provider output")
+		}
+		entered <- strings.Join(arguments, " ")
+		select {
+		case <-ctx.Done():
+			return true, ctx.Err()
+		case <-release:
+			return true, nil
+		}
+	}
+	go func() { completed <- readyDockerRuntime(context.Background(), runner) }()
+	commands := map[string]bool{}
+	for range 2 {
+		select {
+		case command := <-entered:
+			commands[command] = true
+		case <-time.After(time.Second):
+			t.Fatal("independent readiness probes consumed their budget serially")
+		}
+	}
+	close(release)
+	if err := <-completed; err != nil || len(commands) != 2 ||
+		!commands["version --format {{.Server.Version}}"] || !commands["compose version --short"] {
+		t.Fatalf("runtime readiness probes = %v, %v", commands, err)
+	}
+}
+
+type resourceStateRuntime struct {
+	*stateRuntime
+	observedIDs []string
+	resources   map[string]RuntimeContainerResources
+	err         error
+}
+
+type terminalStateRuntime struct {
+	*stateRuntime
+	opened   RuntimeContainer
+	openSize paasv1.TerminalSize
+	calls    int
+}
+
+func (runtime *terminalStateRuntime) OpenTerminal(
+	_ context.Context,
+	_ RuntimeProject,
+	container RuntimeContainer,
+	size paasv1.TerminalSize,
+) (Terminal, error) {
+	runtime.opened, runtime.openSize = container, size
+	runtime.calls++
+	return stubComposeTerminal{}, nil
+}
+
+type stubComposeTerminal struct{}
+
+func (stubComposeTerminal) Read([]byte) (int, error)                          { return 0, io.EOF }
+func (stubComposeTerminal) Write(value []byte) (int, error)                   { return len(value), nil }
+func (stubComposeTerminal) Close() error                                      { return nil }
+func (stubComposeTerminal) Resize(context.Context, paasv1.TerminalSize) error { return nil }
+func (stubComposeTerminal) ExitCode(context.Context) (int32, error)           { return 0, nil }
+
+func (runtime *resourceStateRuntime) ObserveResources(
+	_ context.Context,
+	_ RuntimeProject,
+	containers []RuntimeContainer,
+) (map[string]RuntimeContainerResources, error) {
+	runtime.observedIDs = runtime.observedIDs[:0]
+	for _, container := range containers {
+		runtime.observedIDs = append(runtime.observedIDs, container.ID)
+	}
+	result := make(map[string]RuntimeContainerResources, len(runtime.resources))
+	for id, value := range runtime.resources {
+		result[id] = value
+	}
+	return result, runtime.err
 }
 
 func (runtime *stateRuntime) Apply(_ context.Context, project RuntimeProject) error {
@@ -130,6 +215,18 @@ func TestExecutorRunsRetrySafeApplyRollbackObserveAndStop(t *testing.T) {
 		len(observation.Endpoints) != 2 {
 		t.Fatalf("ready observation = %#v", observation)
 	}
+	runtimeObservation, err := executor.ObserveDeploymentRuntime(
+		context.Background(), runtimeObserveRequest(request, now.Add(3*time.Minute)),
+	)
+	if err != nil || len(runtimeObservation.Instances) != len(runtime.containers) ||
+		runtimeObservation.ExecutionTargetID != request.Command.ExecutionTargetID {
+		t.Fatalf("runtime observation/error = %#v / %v", runtimeObservation, err)
+	}
+	encodedRuntime, err := json.Marshal(runtimeObservation)
+	if err != nil || strings.Contains(string(encodedRuntime), runtime.containers[0].ID) ||
+		!strings.HasPrefix(string(runtimeObservation.Instances[0].ID), "instance-") {
+		t.Fatalf("runtime observation exposed provider identity: %s / %v", encodedRuntime, err)
+	}
 
 	conflict := cloneCompileRequest(t, request)
 	conflict.Generation.Spec.Components[0].Replicas++
@@ -169,6 +266,113 @@ func TestExecutorRunsRetrySafeApplyRollbackObserveAndStop(t *testing.T) {
 		t.Fatalf("secret directory after stop error = %v, want not found", err)
 	}
 	assertTreeExcludes(t, root, string((&secretFixture{content: []byte("database-password")}).content))
+}
+
+func TestTerminalResolvesOnlyTheOpaqueRunningCurrentInstanceUnderProjectProof(t *testing.T) {
+	executor, request, runtime, _, now := executorFixture(t)
+	provider := &terminalStateRuntime{stateRuntime: runtime}
+	executor.runtime = provider
+	if _, err := executor.ApplyDeployment(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	proof := runtimeObserveRequest(request, now.Add(time.Minute))
+	observation, err := executor.ObserveDeploymentRuntime(context.Background(), proof)
+	if err != nil || len(observation.Instances) == 0 {
+		t.Fatalf("runtime observation = %#v/%v", observation, err)
+	}
+	size := paasv1.TerminalSize{Columns: 120, Rows: 40}
+	terminal, err := executor.OpenDeploymentTerminal(
+		context.Background(), proof, observation.Instances[0].ID, size,
+	)
+	if err != nil || terminal == nil || provider.calls != 1 || provider.openSize != size ||
+		opaqueDeploymentInstanceID(
+			projectState{
+				TenantID: request.Command.Scope.TenantID, DeploymentID: request.Command.DeploymentID,
+				Generation:            request.Generation.Generation,
+				ApplicationRevisionID: request.ApplicationRevision.Metadata.ID,
+			},
+			request.Command.ExecutionTargetID,
+			provider.opened.ID,
+		) != observation.Instances[0].ID {
+		t.Fatalf("terminal selection = %#v calls=%d error=%v", provider.opened, provider.calls, err)
+	}
+	_, err = executor.OpenDeploymentTerminal(
+		context.Background(), proof,
+		"instance-ffffffffffffffffffffffffffffffff",
+		size,
+	)
+	if fault := requireComposeFault(t, err); fault.Normalized.Class != paasv1.AdapterErrorNotFound || provider.calls != 1 {
+		t.Fatalf("unknown opaque instance reached provider: %#v calls=%d", fault.Normalized, provider.calls)
+	}
+	provider.stateRuntime.mu.Lock()
+	for index := range provider.containers {
+		if provider.containers[index].ID == provider.opened.ID {
+			provider.containers[index].State = "paused"
+		}
+	}
+	provider.stateRuntime.mu.Unlock()
+	_, err = executor.OpenDeploymentTerminal(
+		context.Background(), proof, observation.Instances[0].ID, size,
+	)
+	if fault := requireComposeFault(t, err); fault.Normalized.Class != paasv1.AdapterErrorConflict || provider.calls != 1 {
+		t.Fatalf("non-running instance reached provider: %#v calls=%d", fault.Normalized, provider.calls)
+	}
+}
+
+func TestDeploymentTelemetrySelectsOnlyProvedCurrentContainersAndReturnsOpaqueResources(t *testing.T) {
+	executor, request, runtime, _, now := executorFixture(t)
+	if _, err := executor.ApplyDeployment(context.Background(), request); err != nil {
+		t.Fatalf("apply Deployment: %v", err)
+	}
+	currentID := runtime.containers[0].ID
+	resourceValues := make(map[string]RuntimeContainerResources, len(runtime.containers))
+	for _, container := range runtime.containers {
+		resourceValues[container.ID] = RuntimeContainerResources{
+			CPU: paasv1.DeploymentInstanceCPUUsage{
+				State: paasv1.MeasurementAvailable,
+				Value: &paasv1.DeploymentInstanceCPUUsageValue{
+					WindowMillis: 1000, UsedCores: 0.25, LimitCPUMillis: 500,
+				},
+			},
+			Memory:  paasv1.DeploymentInstanceMemoryUsage{State: paasv1.MeasurementUnsupported},
+			Network: paasv1.DeploymentInstanceNetworkUsage{State: paasv1.MeasurementUnsupported},
+			BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
+			Storage: paasv1.DeploymentInstanceStorageUsage{State: paasv1.MeasurementUnsupported},
+		}
+	}
+	stale := runtime.containers[0]
+	stale.ID = "container-stale-generation"
+	stale.Labels = maps.Clone(stale.Labels)
+	stale.Labels["com.xiak.matrix.generation"] = "999"
+	runtime.containers = append(runtime.containers, stale)
+	resourceRuntime := &resourceStateRuntime{
+		stateRuntime: runtime,
+		resources:    resourceValues,
+	}
+	executor.runtime = resourceRuntime
+	runtimeObservation, resources, err := executor.ObserveDeploymentTelemetry(
+		context.Background(), runtimeObserveRequest(request, now.Add(3*time.Minute)),
+	)
+	if err != nil || len(runtimeObservation.Instances) != 3 || len(resources.Instances) != 3 ||
+		len(resourceRuntime.observedIDs) != 3 || slices.Contains(resourceRuntime.observedIDs, stale.ID) ||
+		resources.Instances[0].CPU.Value == nil ||
+		paasv1.ValidateDeploymentResourceObservation(resources) != nil {
+		t.Fatalf("telemetry runtime/resources/selected/error = %#v / %#v / %#v / %v",
+			runtimeObservation, resources, resourceRuntime.observedIDs, err)
+	}
+	encoded, err := json.Marshal(resources)
+	if err != nil || strings.Contains(string(encoded), currentID) || strings.Contains(string(encoded), stale.ID) {
+		t.Fatalf("telemetry exposed provider identity: %s / %v", encoded, err)
+	}
+
+	resourceRuntime.resources["provider-container-attacker"] = resourceRuntime.resources[currentID]
+	_, _, err = executor.ObserveDeploymentTelemetry(
+		context.Background(), runtimeObserveRequest(request, now.Add(3*time.Minute)),
+	)
+	if fault := requireComposeFault(t, err); fault.Normalized.Class != paasv1.AdapterErrorValidation ||
+		fault.Normalized.Code != paasv1.ErrorAdapterRejected {
+		t.Fatalf("extra provider resource fault = %#v", fault.Normalized)
+	}
 }
 
 func TestInspectRunningProjectStateProvesExactStoredDocumentsWithoutCreatingState(t *testing.T) {
@@ -493,6 +697,40 @@ func observeRequest(
 	}
 	request.Command.RequestDigest = paasv1.ObserveDeploymentRequestDigest(request)
 	return request
+}
+
+func runtimeObserveRequest(
+	effect paasv1.DeploymentExecutionRequest,
+	deadline time.Time,
+) paasv1.ObserveDeploymentRuntimeRequest {
+	return paasv1.ObserveDeploymentRuntimeRequest{
+		RequestID:             paasv1.CommandID(fmt.Sprintf("runtime-generation-%d", effect.Generation.Generation)),
+		Scope:                 effect.Command.Scope,
+		DeploymentID:          effect.Generation.DeploymentID,
+		Generation:            effect.Generation.Generation,
+		ApplicationRevisionID: effect.ApplicationRevision.Metadata.ID,
+		ExecutionTargetID:     effect.Command.ExecutionTargetID,
+		ExpectedContentDigest: effect.Generation.ContentDigest,
+		Deadline:              deadline,
+	}
+}
+
+func TestOpaqueRuntimeInstanceIdentityBindsTheExactExecutionTarget(t *testing.T) {
+	state := projectState{
+		TenantID:              "tenant-a",
+		DeploymentID:          "deployment-a",
+		Generation:            2,
+		ApplicationRevisionID: "revision-a",
+	}
+	first := opaqueDeploymentInstanceID(state, "target-a", "provider-container-a")
+	if first == opaqueDeploymentInstanceID(state, "target-b", "provider-container-a") {
+		t.Fatal("opaque runtime instance identity aliased another execution target")
+	}
+	changed := state
+	changed.ApplicationRevisionID = "revision-b"
+	if first == opaqueDeploymentInstanceID(changed, "target-a", "provider-container-a") {
+		t.Fatal("opaque runtime instance identity aliased another application revision")
+	}
 }
 
 func requireComposeFault(t *testing.T, err error) paasv1.AdapterFault {

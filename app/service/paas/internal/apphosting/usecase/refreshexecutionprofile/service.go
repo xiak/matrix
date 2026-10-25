@@ -17,10 +17,13 @@ import (
 )
 
 const (
-	profileLabelKey   = "matrix-profile"
-	profileLabelValue = "local-compose"
-	fingerprintLabel  = "matrix-machine-fingerprint"
-	maximumVersion    = uint64(9007199254740991)
+	profileLabelKey              = "matrix-profile"
+	profileLabelValue            = "local-compose"
+	fingerprintLabel             = "matrix-machine-fingerprint"
+	maximumPoolTargets           = 129
+	managedObservationMaximumAge = 15 * time.Second
+	maximumObservationFutureSkew = 2 * time.Second
+	maximumVersion               = uint64(9007199254740991)
 )
 
 var (
@@ -81,6 +84,10 @@ type Snapshot struct {
 	Pool            *paasv1.ExecutionPool
 	Target          *paasv1.ExecutionTarget
 	Policy          *paasv1.PlacementPolicy
+	// Targets is the complete installation-owned pool membership. The worker
+	// owns observation of the built-in local target, but it must preserve node
+	// targets admitted by the platform API when refreshing aggregate status.
+	Targets []paasv1.ExecutionTarget
 }
 
 type Versions struct {
@@ -104,11 +111,13 @@ type Repository interface {
 	WithinTransaction(
 		context.Context,
 		paasv1.TenantID,
+		string,
 		func(context.Context, Transaction) error,
 	) error
 }
 
 type Config struct {
+	InstallationID         string
 	TenantID               paasv1.TenantID
 	IDs                    IDs
 	MachineBindingRef      string
@@ -140,7 +149,8 @@ func New(
 		return nil, err
 	}
 	digest := sha256.Sum256([]byte(fmt.Sprintf(
-		"matrix-local-execution-profile/v1\x00%s\x00%s\x00%s\x00%s\x00%s",
+		"matrix-local-execution-profile/v2\x00%s\x00%s\x00%s\x00%s\x00%s\x00%s",
+		config.InstallationID,
 		config.TenantID,
 		config.IDs.PoolID,
 		config.IDs.TargetID,
@@ -188,6 +198,7 @@ func (service *Service) Refresh(ctx context.Context) error {
 		err = service.repository.WithinTransaction(
 			ctx,
 			service.config.TenantID,
+			service.config.InstallationID,
 			func(transactionContext context.Context, transaction Transaction) error {
 				snapshot, loadErr := transaction.Load(transactionContext, service.config.IDs)
 				if loadErr != nil {
@@ -223,6 +234,7 @@ func (service *Service) Ready(ctx context.Context) error {
 	return service.repository.WithinTransaction(
 		ctx,
 		service.config.TenantID,
+		service.config.InstallationID,
 		func(transactionContext context.Context, transaction Transaction) error {
 			snapshot, err := transaction.Load(transactionContext, service.config.IDs)
 			if err != nil {
@@ -231,11 +243,17 @@ func (service *Service) Ready(ctx context.Context) error {
 			if err := service.validateCurrent(snapshot); err != nil {
 				return errors.New("execution profile is not ready")
 			}
-			if snapshot.Pool.Status.Phase != paasv1.ExecutionPoolReady ||
-				snapshot.Pool.Status.ExecutionTargetCount != 1 ||
-				snapshot.Pool.Status.ReadyExecutionTargetCount != 1 ||
+			phase, count, ready, valid := service.aggregatePoolStatus(
+				snapshot.Targets,
+				snapshot.TransactionTime,
+			)
+			if !valid || snapshot.Pool.Status.Phase != phase ||
+				snapshot.Pool.Status.ExecutionTargetCount != count ||
+				snapshot.Pool.Status.ReadyExecutionTargetCount != ready || ready == 0 ||
 				snapshot.Target.Status.Health != paasv1.ExecutionTargetHealthReady ||
-				snapshot.Target.Status.ObservedAt.After(snapshot.TransactionTime) ||
+				snapshot.Target.Status.ObservedAt.After(
+					snapshot.TransactionTime.Add(maximumObservationFutureSkew),
+				) ||
 				snapshot.TransactionTime.Sub(snapshot.Target.Status.ObservedAt) >
 					service.config.MaximumObservationAge {
 				return errors.New("execution profile is not ready")
@@ -253,7 +271,7 @@ func (service *Service) build(
 		snapshot.TransactionTime.Location() != time.UTC ||
 		snapshot.TransactionTime != snapshot.TransactionTime.Round(0) ||
 		snapshot.TransactionTime.Nanosecond()%1_000 != 0 ||
-		observation.ObservedAt.After(snapshot.TransactionTime.Add(service.config.ObservationTimeout)) ||
+		observation.ObservedAt.After(snapshot.TransactionTime.Add(maximumObservationFutureSkew)) ||
 		snapshot.TransactionTime.Sub(observation.ObservedAt) > service.config.MaximumObservationAge {
 		return Profile{}, Versions{}, errors.New("execution target observation time is invalid")
 	}
@@ -312,29 +330,6 @@ func (service *Service) build(
 		targetLabels,
 		snapshot.TransactionTime,
 	)
-	poolPhase := paasv1.ExecutionPoolUnavailable
-	readyCount := uint32(0)
-	if observation.Health == paasv1.ExecutionTargetHealthReady {
-		poolPhase = paasv1.ExecutionPoolReady
-		readyCount = 1
-	} else if observation.Health == paasv1.ExecutionTargetHealthDegraded {
-		poolPhase = paasv1.ExecutionPoolDegraded
-	}
-	pool := paasv1.ExecutionPool{
-		APIVersion: paasv1.APIVersion,
-		Kind:       "ExecutionPool",
-		Metadata:   poolMetadata,
-		Spec: paasv1.ExecutionPoolSpec{
-			ExecutionTargetSelector: paasv1.LabelSelector{MatchLabels: map[string]string{
-				profileLabelKey: profileLabelValue,
-			}},
-			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
-		},
-		Status: paasv1.ExecutionPoolStatus{
-			Phase: poolPhase, ExecutionTargetCount: 1,
-			ReadyExecutionTargetCount: readyCount, ObservedAt: observation.ObservedAt,
-		},
-	}
 	target := paasv1.ExecutionTarget{
 		APIVersion: paasv1.APIVersion,
 		Kind:       "ExecutionTarget",
@@ -356,6 +351,39 @@ func (service *Service) build(
 			ObservedAt:                   observation.ObservedAt,
 		},
 	}
+	targets := append([]paasv1.ExecutionTarget(nil), snapshot.Targets...)
+	foundLocal := false
+	for index := range targets {
+		if targets[index].Metadata.ID == service.config.IDs.TargetID {
+			targets[index] = target
+			foundLocal = true
+		}
+	}
+	if !foundLocal {
+		targets = append(targets, target)
+	}
+	poolPhase, targetCount, readyCount, valid := service.aggregatePoolStatus(
+		targets,
+		snapshot.TransactionTime,
+	)
+	if !valid {
+		return Profile{}, Versions{}, ErrConflict
+	}
+	pool := paasv1.ExecutionPool{
+		APIVersion: paasv1.APIVersion,
+		Kind:       "ExecutionPool",
+		Metadata:   poolMetadata,
+		Spec: paasv1.ExecutionPoolSpec{
+			ExecutionTargetSelector: paasv1.LabelSelector{MatchLabels: map[string]string{
+				profileLabelKey: profileLabelValue,
+			}},
+			AllowedIsolationGuarantees: []paasv1.IsolationGuarantee{paasv1.IsolationWorkload},
+		},
+		Status: paasv1.ExecutionPoolStatus{
+			Phase: poolPhase, ExecutionTargetCount: targetCount,
+			ReadyExecutionTargetCount: readyCount, ObservedAt: observation.ObservedAt,
+		},
+	}
 	policy := service.policy(snapshot)
 	profile := Profile{Pool: pool, Target: target, Policy: policy}
 	if paasv1.ValidateExecutionPool(pool) != nil || paasv1.ValidateExecutionTarget(target) != nil ||
@@ -363,6 +391,50 @@ func (service *Service) build(
 		return Profile{}, Versions{}, errors.New("execution profile cannot be constructed")
 	}
 	return profile, versions, nil
+}
+
+func (service *Service) aggregatePoolStatus(
+	targets []paasv1.ExecutionTarget,
+	at time.Time,
+) (paasv1.ExecutionPoolPhase, uint32, uint32, bool) {
+	if len(targets) == 0 || len(targets) > maximumPoolTargets {
+		return "", 0, 0, false
+	}
+	seen := make(map[paasv1.ResourceID]bool, len(targets))
+	var count uint32
+	var ready uint32
+	degraded := false
+	for _, target := range targets {
+		if paasv1.ValidateExecutionTarget(target) != nil || seen[target.Metadata.ID] {
+			return "", 0, 0, false
+		}
+		seen[target.Metadata.ID] = true
+		// Removal retains an immutable target tombstone, but the tombstone is no
+		// longer pool membership. Excluding it here keeps the fixed local-profile
+		// refresher consistent with admission refresh and placement inventory.
+		if target.Spec.DesiredState == paasv1.ExecutionTargetRemoved {
+			continue
+		}
+		count++
+		maximumAge := managedObservationMaximumAge
+		if target.Spec.InfrastructureAdapter.Name == "localmachine" {
+			maximumAge = service.config.MaximumObservationAge
+		}
+		fresh := !target.Status.ObservedAt.After(at.Add(maximumObservationFutureSkew)) &&
+			at.Sub(target.Status.ObservedAt) <= maximumAge
+		if fresh && target.Status.Health == paasv1.ExecutionTargetHealthReady && target.Spec.DesiredState == paasv1.ExecutionTargetActive {
+			ready++
+		}
+		degraded = degraded || (fresh && target.Status.Health == paasv1.ExecutionTargetHealthDegraded)
+	}
+	phase := paasv1.ExecutionPoolUnavailable
+	if ready > 0 || degraded {
+		phase = paasv1.ExecutionPoolDegraded
+		if ready == count {
+			phase = paasv1.ExecutionPoolReady
+		}
+	}
+	return phase, count, ready, true
 }
 
 func (service *Service) policy(snapshot Snapshot) paasv1.PlacementPolicy {
@@ -504,6 +576,7 @@ func persistedIsolationGuarantees(
 func validateConfig(config Config) error {
 	var problems []error
 	problems = append(problems,
+		paasv1.ValidateID("installationId", config.InstallationID),
 		paasv1.ValidateID("tenantId", string(config.TenantID)),
 		paasv1.ValidateID("executionPoolId", string(config.IDs.PoolID)),
 		paasv1.ValidateID("executionTargetId", string(config.IDs.TargetID)),
@@ -513,6 +586,12 @@ func validateConfig(config Config) error {
 	if config.IDs.PoolID == config.IDs.TargetID || config.IDs.PoolID == config.IDs.PolicyID ||
 		config.IDs.TargetID == config.IDs.PolicyID {
 		problems = append(problems, errors.New("execution profile identities must be distinct"))
+	}
+	if config.IDs != (IDs{
+		PoolID: "execution-pool-local", TargetID: "execution-target-local",
+		PolicyID: "placement-policy-local",
+	}) {
+		problems = append(problems, errors.New("execution profile identities are not the built-in profile"))
 	}
 	if config.ObservationTimeout < time.Second || config.ObservationTimeout > 30*time.Second ||
 		config.ObservationTimeout%time.Second != 0 {

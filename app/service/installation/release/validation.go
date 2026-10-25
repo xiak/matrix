@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 )
 
 const (
@@ -90,11 +92,33 @@ func DecodeInstalledCanonical(content []byte) (Manifest, error) {
 
 func ValidateManifest(manifest Manifest) error {
 	var problems []error
+	if manifest.Kind == NodeManifestKind {
+		if manifest.APIVersion != ManifestAPIVersion || manifest.Database != (DatabaseProfile{}) ||
+			len(manifest.Products) != 0 || manifest.Node == nil ||
+			manifest.Node.ProtocolAPIVersion != nodev1.APIVersion ||
+			manifest.Node.RuntimeRevision == 0 || manifest.Node.RuntimeRevision > 9007199254740991 ||
+			!versionPattern.MatchString("v"+manifest.Node.CollectorVersion) || len(manifest.Images) != 0 ||
+			manifest.Host.MinimumSystemd < 247 || manifest.Host.MinimumSystemd > 9999 {
+			problems = append(problems, errors.New("node release profile is invalid"))
+		}
+		problems = append(problems,
+			validateReleaseIdentity(manifest.Release),
+			validateSigner(manifest.Signer),
+			validateHost(manifest.Host),
+			validateDigest("topologyDigest", manifest.TopologyDigest),
+			validateFiles(manifest.Files, true),
+		)
+		if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
+			problems = append(problems, errors.New("minimum free space is outside the supported range"))
+		}
+		return errors.Join(problems...)
+	}
 	if (manifest.APIVersion != ManifestAPIVersion && manifest.APIVersion != LegacyManifestAPIVersion) ||
 		manifest.Kind != ManifestKind {
 		problems = append(problems, errors.New("release type is unsupported"))
 	}
-	if (manifest.APIVersion == LegacyManifestAPIVersion) != (manifest.Database.SchemaVersion != 0) {
+	if (manifest.APIVersion == LegacyManifestAPIVersion) != (manifest.Database.SchemaVersion != 0) ||
+		manifest.Node != nil || manifest.Host.MinimumSystemd != 0 {
 		problems = append(problems, errors.New("release database profile differs from its manifest version"))
 	}
 	problems = append(problems,
@@ -104,7 +128,7 @@ func ValidateManifest(manifest Manifest) error {
 		ValidateDatabaseProfile(manifest.Database),
 		validateProducts(manifest.Products, manifest.Images),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
-		validateFiles(manifest.Files),
+		validateFiles(manifest.Files, false),
 		validateRunnerPayloads(manifest.Products, manifest.Files),
 		validateRequiredReleaseFiles(manifest),
 		validateImages(manifest.Products, manifest.Images, manifest.Files),
@@ -187,7 +211,7 @@ func validateLegacyProductlessManifest(manifest Manifest) error {
 		validateHost(manifest.Host),
 		ValidateDatabaseProfile(manifest.Database),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
-		validateFiles(manifest.Files),
+		validateFiles(manifest.Files, false),
 		validateImagesAgainst(
 			manifest.Images, manifest.Files, legacyProductlessRequiredImages(), false,
 		),
@@ -472,8 +496,8 @@ func productDependenciesCycle(products []Product) bool {
 	return false
 }
 
-func validateFiles(files []File) error {
-	if len(files) < 7 || len(files) > 128 {
+func validateFiles(files []File, node bool) error {
+	if (!node && (len(files) < 7 || len(files) > 128)) || (node && len(files) != 5) {
 		return errors.New("release payload inventory size is invalid")
 	}
 	seen := make(map[string]struct{}, len(files))
@@ -498,23 +522,27 @@ func validateFiles(files []File) error {
 				return errors.New("release mx payload is invalid")
 			}
 			foundExecutable = true
-		case strings.HasPrefix(file.Path, "images/") && strings.HasSuffix(file.Path, ".tar"):
+		case node && (file.Path == "bin/matrix-node-agent" || file.Path == "bin/node-exporter"):
+			if file.MediaType != mediaExecutable || !file.Executable {
+				return errors.New("release node executable payload is invalid")
+			}
+		case !node && strings.HasPrefix(file.Path, "images/") && strings.HasSuffix(file.Path, ".tar"):
 			if file.MediaType != mediaDockerArchive || file.Executable {
 				return errors.New("release image archive payload is invalid")
 			}
-		case file.Path == RunnerBinaryPath:
+		case !node && file.Path == RunnerBinaryPath:
 			if file.MediaType != mediaExecutable || !file.Executable {
 				return errors.New("release runner executable payload is invalid")
 			}
-		case file.Path == RunnerToolchainArchivePath:
+		case !node && file.Path == RunnerToolchainArchivePath:
 			if file.MediaType != mediaDockerArchive || file.Executable {
 				return errors.New("release runner toolchain payload is invalid")
 			}
-		case file.Path == RunnerGVisorArchivePath:
+		case !node && file.Path == RunnerGVisorArchivePath:
 			if file.MediaType != mediaGVisorArchive || file.Executable {
 				return errors.New("release runner gVisor payload is invalid")
 			}
-		case file.Path == RunnerGVisorChecksumPath:
+		case !node && file.Path == RunnerGVisorChecksumPath:
 			if file.MediaType != mediaPlainText || file.Executable ||
 				file.Size > maximumManifestBytes {
 				return errors.New("release runner gVisor checksum payload is invalid")
@@ -527,7 +555,7 @@ func validateFiles(files []File) error {
 			if file.MediaType != mediaPlainText || file.Executable || file.Size > maximumManifestBytes {
 				return errors.New("release license payload is invalid")
 			}
-		case file.Path == IAMProductAuthorizationPath:
+		case !node && file.Path == IAMProductAuthorizationPath:
 			if file.MediaType != IAMProductAuthorizationMediaType || file.Executable || file.Size > maximumManifestBytes {
 				return errors.New("release IAM product authorization catalog is invalid")
 			}
@@ -537,6 +565,16 @@ func validateFiles(files []File) error {
 	}
 	if !foundExecutable {
 		return errors.New("release mx payload is missing")
+	}
+	if node {
+		for _, required := range []string{
+			"bin/matrix-node-agent", "bin/mx", "bin/node-exporter",
+			"licenses/node-exporter-license.txt", "licenses/node-exporter-notice.txt",
+		} {
+			if _, found := seen[required]; !found {
+				return errors.New("node release payload is missing")
+			}
+		}
 	}
 	return nil
 }

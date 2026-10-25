@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:17b4cd782055223a0357b08b63c261f228b7102b58c67cd16f1f3f0fec54dff2" {
+	if actual := ContractDigest(); actual != "sha256:1a0c373817fd0e5e3700193e31a507b3e39de4e827e39dc3c1da9ad0864d18cd" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -66,8 +66,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	manifest := topologyManifest()
 	options := Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32),
-		Root:           "/srv/matrix", Listener: "127.0.0.1", Port: 8443,
-		NorthboundOrigin: "http://matrix.example.test:8443",
+		Root:           "/srv/matrix", Listener: "127.0.0.1", Port: 8080,
+		NorthboundOrigin: "http://matrix.example.test:8080",
 	}
 	result, err := Compile(manifest, options)
 	if err != nil {
@@ -98,7 +98,10 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	if !ok {
 		t.Fatal("compiled topology has no networks object")
 	}
-	expectedNetworks := map[string]bool{"control": true, "edge": false, "mail-egress": false, "source": false, "web": true}
+	expectedNetworks := map[string]bool{
+		"control": true, "edge": false, "mail-egress": false,
+		"management": false, "source": false, "web": true,
+	}
 	actualNetworks := make([]string, 0, len(networks))
 	for name, raw := range networks {
 		network, valid := raw.(map[string]any)
@@ -114,7 +117,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		actualNetworks = append(actualNetworks, name)
 	}
 	slices.Sort(actualNetworks)
-	if !slices.Equal(actualNetworks, []string{"control", "edge", "mail-egress", "source", "web"}) {
+	if !slices.Equal(actualNetworks, []string{"control", "edge", "mail-egress", "management", "source", "web"}) {
 		t.Fatalf("compiled networks = %v", actualNetworks)
 	}
 
@@ -242,10 +245,19 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		},
 		"paas-api": {
 			"MATRIX_PAAS_CURSOR_KEY_FILE", "MATRIX_PAAS_DATABASE_DSN_FILE",
-			"MATRIX_PAAS_EDGE_ASSERTION_FILE", "MATRIX_PAAS_IAM_ENDPOINT",
+			"MATRIX_PAAS_EDGE_ASSERTION_FILE",
+			"MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE",
+			"MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE",
+			"MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE",
+			"MATRIX_PAAS_ENROLLMENT_ISSUER_CERTIFICATE_FILE",
+			"MATRIX_PAAS_ENROLLMENT_ISSUER_PRIVATE_KEY_FILE",
+			"MATRIX_PAAS_IAM_ENDPOINT",
 			"MATRIX_PAAS_INSTALLATION_ID", "MATRIX_PAAS_LISTEN_ADDRESS",
+			"MATRIX_PAAS_NODE_CONNECTIONS_FILE",
 			"MATRIX_PAAS_NORTHBOUND_ORIGIN",
+			"MATRIX_PAAS_PUBLIC_BASE_PATH",
 			"MATRIX_PAAS_RELEASE_ID", "MATRIX_PAAS_SERVICE_CREDENTIAL_FILE",
+			"MATRIX_PAAS_TERMINAL_COOKIE_SECURE",
 			"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST",
 		},
 		"paas-audit-dispatcher": {
@@ -258,11 +270,16 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"DOCKER_CONFIG", "DOCKER_HOST",
 			"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE", "MATRIX_PAAS_WORKER_BINDING_REF",
 			"MATRIX_PAAS_WORKER_BINDING_ROOT", "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE",
+			"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE",
+			"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE",
+			"MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE",
 			"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID", "MATRIX_PAAS_WORKER_ID",
+			"MATRIX_PAAS_WORKER_INSTALLATION_ID",
 			"MATRIX_PAAS_WORKER_LISTEN_ADDRESS", "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF",
 			"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE",
 			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE", "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE",
 			"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE",
+			"MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE",
 			"MATRIX_PAAS_WORKER_SECRET_ROOT",
 		},
 		"platform-api": {
@@ -347,6 +364,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		}
 		if slices.Contains(actualServiceNetworks, "mail-egress") != (name == "iam-notification-dispatcher") {
 			t.Fatalf("service %q crosses the SMTP egress boundary", name)
+		}
+		if slices.Contains(actualServiceNetworks, "management") != (name == "paas-api" || name == "paas-worker") {
+			t.Fatalf("service %q crosses the node management boundary", name)
 		}
 		labels, ok := service["labels"].(map[string]any)
 		if !ok || labels["com.xiak.matrix.managed"] != "true" ||
@@ -480,8 +500,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					name, actualServiceNetworks,
 				)
 			}
-			validAPISIX := name == "apisix" && len(ports) == 1 &&
-				ports[0] == "127.0.0.1:8443:9080/tcp"
+			validAPISIX := name == "apisix" && len(ports) == 2 &&
+				ports[0] == "127.0.0.1:8080:9080/tcp" &&
+				ports[1] == "127.0.0.1:8443:9443/tcp"
 			validRunner := name == "devops-executor-gateway" && len(ports) == 1 &&
 				ports[0] == "127.0.0.1:8444:8444/tcp"
 			if !validAPISIX && !validRunner {
@@ -580,6 +601,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 					},
 					"/run/matrix/paas-edge-assertion": {
 						path.Join(options.Root, layout.PaaSEdgeAssertion), true,
+					},
+					NodeEnrollmentIngressCertificateTarget: {
+						path.Join(options.Root, layout.EnrollmentIngressCertificate), true,
+					},
+					NodeEnrollmentIngressPrivateKeyTarget: {
+						path.Join(options.Root, layout.EnrollmentIngressPrivateKey), true,
 					},
 				}
 				if len(volumes) != len(expected) {
@@ -758,7 +785,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			}
 		}
 	}
-	if portCount != 2 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
+	if portCount != 3 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
 		!foundAPISIXRuntimeBoundary || !foundDevOpsSourceSecrets ||
 		!foundDevOpsSourceFetcherBoundary || !foundDevOpsSourceObserverBoundary ||
 		!foundDevOpsBuildWorkerBoundary || !foundDevOpsCheckReporterBoundary ||
@@ -798,8 +825,8 @@ func TestCompileOmitsUnselectedDevOpsProduct(t *testing.T) {
 	})
 	result, err := Compile(manifest, Options{
 		InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix",
-		Listener: "127.0.0.1", Port: 8443,
-		NorthboundOrigin: "http://matrix.example.test:8443",
+		Listener: "127.0.0.1", Port: 8080,
+		NorthboundOrigin: "http://matrix.example.test:8080",
 	})
 	if err != nil {
 		t.Fatalf("compile PaaS-only topology: %v", err)

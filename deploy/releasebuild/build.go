@@ -31,17 +31,19 @@ type SigningMaterial struct {
 }
 
 type Config struct {
-	RepositoryRoot  string
-	Output          string
-	GVisorArchive   string
-	Version         string
-	BuildID         string
-	SourceCommit    string
-	CreatedAt       time.Time
-	PreviousID      string
-	PreviousVersion string
-	Signer          SigningMaterial
-	Entropy         io.Reader
+	Kind             string
+	CollectorArchive string
+	RepositoryRoot   string
+	Output           string
+	GVisorArchive    string
+	Version          string
+	BuildID          string
+	SourceCommit     string
+	CreatedAt        time.Time
+	PreviousID       string
+	PreviousVersion  string
+	Signer           SigningMaterial
+	Entropy          io.Reader
 }
 
 type Result struct {
@@ -80,13 +82,17 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
-	iamProductAuthorization, err := readIAMProductAuthorization(config.RepositoryRoot)
-	if err != nil {
-		return Result{}, err
-	}
-	baseImages, err := verifyBaseImages(ctx, effects)
-	if err != nil {
-		return Result{}, err
+	var iamProductAuthorization []byte
+	var baseImages map[string]ImageMetadata
+	if config.Kind != installationrelease.NodeManifestKind {
+		iamProductAuthorization, err = readIAMProductAuthorization(config.RepositoryRoot)
+		if err != nil {
+			return Result{}, err
+		}
+		baseImages, err = verifyBaseImages(ctx, effects)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 
 	workspace, err := os.MkdirTemp(filepath.Dir(config.Output), ".matrix-release-build-")
@@ -99,8 +105,17 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	}
 	bundle := filepath.Join(workspace, "bundle")
 	if err := os.Mkdir(bundle, 0o700); err != nil ||
-		os.Mkdir(filepath.Join(bundle, "bin"), 0o700) != nil ||
-		os.Mkdir(filepath.Join(bundle, "images"), 0o700) != nil ||
+		os.Mkdir(filepath.Join(bundle, "bin"), 0o700) != nil {
+		return Result{}, errors.New("create release bundle workspace failed")
+	}
+	if config.Kind == installationrelease.NodeManifestKind {
+		files, err := assembleNodePayloads(ctx, config, effects, bundle)
+		if err != nil {
+			return Result{}, err
+		}
+		return publishBundle(config, bundle, trust, files, nil, nil)
+	}
+	if err := os.Mkdir(filepath.Join(bundle, "images"), 0o700); err != nil ||
 		os.MkdirAll(filepath.Join(bundle, "config", "iam"), 0o700) != nil ||
 		os.MkdirAll(filepath.Join(bundle, "runner", "linux-amd64", "bin"), 0o700) != nil ||
 		os.MkdirAll(filepath.Join(bundle, "runner", "linux-amd64", "images"), 0o700) != nil ||
@@ -137,6 +152,17 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	if err != nil {
 		return Result{}, err
 	}
+	return publishBundle(config, bundle, trust, files, images, products)
+}
+
+func publishBundle(
+	config Config,
+	bundle string,
+	trust installationrelease.TrustRoot,
+	files []installationrelease.File,
+	images []installationrelease.Image,
+	products []installationrelease.Product,
+) (Result, error) {
 	manifest := newManifest(config, files, images, products)
 	manifestBytes, err := installationrelease.EncodeCanonical(manifest)
 	if err != nil {
@@ -164,6 +190,21 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 }
 
 func validateConfig(config Config) (Config, installationrelease.TrustRoot, error) {
+	if config.Kind == "" {
+		config.Kind = installationrelease.ManifestKind
+	}
+	if config.Kind != installationrelease.ManifestKind && config.Kind != installationrelease.NodeManifestKind {
+		return Config{}, installationrelease.TrustRoot{}, errors.New("release target is invalid")
+	}
+	if config.Kind == installationrelease.NodeManifestKind {
+		if config.CollectorArchive == "" || len(config.CollectorArchive) > 4096 ||
+			!filepath.IsAbs(config.CollectorArchive) || filepath.Clean(config.CollectorArchive) != config.CollectorArchive ||
+			isFilesystemRoot(config.CollectorArchive) {
+			return Config{}, installationrelease.TrustRoot{}, errors.New("pinned node collector archive is required")
+		}
+	} else if config.CollectorArchive != "" {
+		return Config{}, installationrelease.TrustRoot{}, errors.New("platform release cannot contain node input")
+	}
 	if config.Entropy == nil {
 		config.Entropy = rand.Reader
 	}
@@ -173,10 +214,10 @@ func validateConfig(config Config) (Config, installationrelease.TrustRoot, error
 			return Config{}, installationrelease.TrustRoot{}, errors.New("release build path is invalid")
 		}
 	}
-	if config.GVisorArchive == "" || len(config.GVisorArchive) > 4096 ||
+	if config.Kind != installationrelease.NodeManifestKind && (config.GVisorArchive == "" || len(config.GVisorArchive) > 4096 ||
 		!filepath.IsAbs(config.GVisorArchive) ||
 		filepath.Clean(config.GVisorArchive) != config.GVisorArchive ||
-		isFilesystemRoot(config.GVisorArchive) {
+		isFilesystemRoot(config.GVisorArchive)) {
 		return Config{}, installationrelease.TrustRoot{}, errors.New("runner gVisor archive path is invalid")
 	}
 	repositoryInfo, err := os.Lstat(config.RepositoryRoot)
@@ -207,6 +248,10 @@ func validateConfig(config Config) (Config, installationrelease.TrustRoot, error
 	}
 	products := builtProducts(config.Version)
 	placeholderFiles, placeholderImages := placeholderPayloads(products)
+	if config.Kind == installationrelease.NodeManifestKind {
+		products = nil
+		placeholderFiles, placeholderImages = nodePlaceholderPayloads(), nil
+	}
 	if err := installationrelease.ValidateManifest(newManifest(config, placeholderFiles, placeholderImages, products)); err != nil {
 		return Config{}, installationrelease.TrustRoot{}, errors.New("release build metadata is invalid")
 	}
@@ -457,9 +502,9 @@ func newManifest(
 	if len(config.SourceCommit) >= 12 {
 		releaseID = "matrix-" + config.Version + "-" + config.SourceCommit[:12]
 	}
-	return installationrelease.Manifest{
+	manifest := installationrelease.Manifest{
 		APIVersion: installationrelease.ManifestAPIVersion,
-		Kind:       installationrelease.ManifestKind,
+		Kind:       config.Kind,
 		Release: installationrelease.ReleaseIdentity{
 			ID: releaseID, Version: config.Version, SourceCommit: config.SourceCommit,
 			BuildID: config.BuildID, CreatedAt: config.CreatedAt,
@@ -478,6 +523,12 @@ func newManifest(
 		Products:         products,
 		TopologyDigest:   topology.ContractDigest(), Files: files, Images: images,
 	}
+	if config.Kind == installationrelease.NodeManifestKind {
+		manifest.Products = nil
+		manifest.Images = nil
+		manifest = nodeManifest(manifest)
+	}
+	return manifest
 }
 
 func placeholderPayloads(

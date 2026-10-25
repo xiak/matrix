@@ -3696,7 +3696,7 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		current, found := LookupAuthorizationProfile(product)
 		expectedRevision := uint64(4)
 		if product == ProductPaaS {
-			expectedRevision = 13
+			expectedRevision = 14
 		}
 		if !found || current.Revision != expectedRevision {
 			t.Fatal("missing explicit new product revision")
@@ -3707,8 +3707,10 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 		}
 		for _, action := range current.Actions {
 			ref := AuthorizationProfileReference{Product: product, Revision: current.Revision, ContentDigest: currentDigest}
+			roleAllowed := action.Scope == AuthorityScopeTenant &&
+				action.Action != ActionPaaSTerminalSessionCreate && action.Action != ActionPaaSTerminalSessionClose
 			if CheckAuthorizationProfileSubject(current, ref, action.Action, SubjectUser) != nil ||
-				(CheckAuthorizationProfileSubject(current, ref, action.Action, SubjectRole) == nil) != (action.Scope == AuthorityScopeTenant) ||
+				(CheckAuthorizationProfileSubject(current, ref, action.Action, SubjectRole) == nil) != roleAllowed ||
 				CheckAuthorizationProfileSubject(current, ref, action.Action, SubjectServiceAccount) == nil {
 				t.Fatal("product granted an undeclared subject capability", action.Action)
 			}
@@ -3720,7 +3722,8 @@ func TestRoleBusinessProfilesRequireExplicitCurrentCapabilities(t *testing.T) {
 			if slices.IndexFunc(archives[index].Actions, func(value AuthorizationProfileAction) bool {
 				return value.Action == action.Action
 			}) < 0 {
-				if product != ProductPaaS || (action.Action != ActionPaaSApplicationLabelSet && action.Action != ActionPaaSApplicationLabelDelete) {
+				if product != ProductPaaS || (action.Action != ActionPaaSApplicationLabelSet && action.Action != ActionPaaSApplicationLabelDelete &&
+					action.Action != ActionPaaSTerminalSessionCreate && action.Action != ActionPaaSTerminalSessionClose) {
 					t.Fatal("current product added an unexpected action", action.Action)
 				}
 				continue
@@ -4535,7 +4538,7 @@ func TestHistoricalDecisionProfileDoesNotBorrowCurrentHead(t *testing.T) {
 
 func TestPaaSProfileDeclaresCompletePlatformProduct(t *testing.T) {
 	profile, found := LookupAuthorizationProfile(ProductPaaS)
-	if !found || profile.Revision != 13 {
+	if !found || profile.Revision != 14 {
 		t.Fatal("missing current PaaS role, tag, and AccessKey-capable declaration")
 	}
 	expected := map[Action]struct {

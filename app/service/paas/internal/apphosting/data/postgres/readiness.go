@@ -11,6 +11,8 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
+const paasDatabaseSchemaVersion = 8
+
 func (repository *ApplicationRepository) Readiness(
 	ctx context.Context,
 ) (paasv1.Readiness, error) {
@@ -47,7 +49,7 @@ func readReadiness(
 		return paasv1.Readiness{}, fmt.Errorf("read PaaS readiness: %w", err)
 	}
 	checkedAt = databaseTime(checkedAt)
-	if schemaVersion != 7 || checkedAt.IsZero() ||
+	if schemaVersion != paasDatabaseSchemaVersion || checkedAt.IsZero() ||
 		checkedAt.Location() != time.UTC || checkedAt.Nanosecond()%1_000 != 0 {
 		return paasv1.Readiness{}, errors.New("PaaS readiness state is invalid")
 	}

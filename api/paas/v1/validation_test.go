@@ -167,14 +167,14 @@ func TestValidateOperationDistinguishesPlatformAndTenantScope(t *testing.T) {
 	decodeStrictJSON(t, "examples/operation.json", &operation)
 	operation.Action = OperationRegisterExecutionTarget
 	operation.Scope = ResourceScope{Kind: AuthorityPlatform}
+	operation.InstallationID = "installation-a"
 	operation.Target = ResourceRef{Kind: "ExecutionTarget", ID: "target-local-001"}
 	if err := ValidateOperation(operation); err != nil {
 		t.Fatalf("platform target registration must validate: %v", err)
 	}
 
 	operation.Scope = ResourceScope{Kind: AuthorityTenant, TenantID: "tenant-a"}
-	if err := ValidateOperation(operation); err == nil ||
-		!strings.Contains(err.Error(), "platform scope") {
+	if err := ValidateOperation(operation); err == nil {
 		t.Fatalf("tenant-scoped target registration must fail, got %v", err)
 	}
 
@@ -183,6 +183,24 @@ func TestValidateOperationDistinguishesPlatformAndTenantScope(t *testing.T) {
 	if err := ValidateOperation(operation); err == nil ||
 		!strings.Contains(err.Error(), "tenant scope") {
 		t.Fatalf("platform-scoped deploy must fail, got %v", err)
+	}
+	operation.Scope = ResourceScope{Kind: AuthorityTenant, TenantID: "tenant-a"}
+	if ValidateOperation(operation) == nil {
+		t.Fatal("tenant operation must reject an installation identity")
+	}
+	operation.Action = OperationRegisterExecutionTarget
+	operation.Scope = ResourceScope{Kind: AuthorityPlatform}
+	for _, mutate := range []func(*Operation){
+		func(value *Operation) { value.InstallationID = "" },
+		func(value *Operation) { value.Scope.TenantID = "tenant-a" },
+		func(value *Operation) { value.RequestedBy.Type = SubjectServiceAccount },
+		func(value *Operation) { value.Target.Kind = "Application" },
+	} {
+		invalid := operation
+		mutate(&invalid)
+		if ValidateOperation(invalid) == nil {
+			t.Fatal("invalid platform Operation authority was accepted")
+		}
 	}
 }
 
@@ -232,6 +250,44 @@ func TestValidateExecutionTargetCapabilityRequirementFollowsHealth(t *testing.T)
 	target.Status.Health = ExecutionTargetHealthReady
 	if err := ValidateExecutionTarget(target); err == nil {
 		t.Fatal("ready target without advertised isolation was accepted")
+	}
+}
+
+func TestValidateExecutionTargetListIsBoundedAndUnique(t *testing.T) {
+	var target ExecutionTarget
+	decodeStrictJSON(t, "examples/execution-target.json", &target)
+	valid := ExecutionTargetList{
+		APIVersion: APIVersion,
+		Kind:       "ExecutionTargetList",
+		Items:      []ExecutionTarget{target},
+	}
+	if err := ValidateExecutionTargetList(valid); err != nil {
+		t.Fatalf("valid execution target list: %v", err)
+	}
+	empty := valid
+	empty.Items = []ExecutionTarget{}
+	if err := ValidateExecutionTargetList(empty); err != nil {
+		t.Fatalf("empty execution target list: %v", err)
+	}
+	missing := valid
+	missing.Items = nil
+	if ValidateExecutionTargetList(missing) == nil {
+		t.Fatal("nil execution target inventory accepted")
+	}
+	duplicate := valid
+	duplicate.Items = append(duplicate.Items, target)
+	if ValidateExecutionTargetList(duplicate) == nil {
+		t.Fatal("duplicate execution target accepted")
+	}
+	overflow := valid
+	overflow.Items = make([]ExecutionTarget, MaximumExecutionTargetListItems+1)
+	for index := range overflow.Items {
+		item := target
+		item.Metadata.ID = ResourceID(fmt.Sprintf("target-%03d", index))
+		overflow.Items[index] = item
+	}
+	if ValidateExecutionTargetList(overflow) == nil {
+		t.Fatal("oversized execution target inventory accepted")
 	}
 }
 

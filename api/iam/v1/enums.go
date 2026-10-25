@@ -297,6 +297,8 @@ const (
 	ActionPaaSNodeEnrollmentRevoke     Action = "paas.node-enrollment.revoke"
 	ActionPaaSNodeEnrollmentRegenerate Action = "paas.node-enrollment.regenerate"
 	ActionPaaSPlatformOperationRead    Action = "paas.platform-operation.read"
+	ActionPaaSTerminalSessionCreate    Action = "paas.terminal-session.create"
+	ActionPaaSTerminalSessionClose     Action = "paas.terminal-session.close"
 
 	ActionPaaSApplicationCreate           Action = "paas.application.create"
 	ActionPaaSApplicationRead             Action = "paas.application.read"
@@ -410,6 +412,7 @@ const (
 	ResourceExecutionPool         ResourceKind = "EXECUTION_POOL"
 	ResourceExecutionTarget       ResourceKind = "EXECUTION_TARGET"
 	ResourceNodeEnrollment        ResourceKind = "NODE_ENROLLMENT"
+	ResourceTerminalSession       ResourceKind = "TERMINAL_SESSION"
 	ResourceDevOpsProject         ResourceKind = "DEVOPS_PROJECT"
 	ResourceSourceConnection      ResourceKind = "SOURCE_CONNECTION"
 	ResourceRepositoryBinding     ResourceKind = "REPOSITORY_BINDING"
@@ -522,7 +525,7 @@ func BootstrapServicePurposes() []ServicePurpose {
 // editable source. Product revision changes must accompany changed declarations.
 var authorizationProfiles = authorizationProfilesForBuild([]AuthorizationProfile{
 	iamPolicyAttachmentChangeProfile(),
-	paasProfileRevisionThirteen,
+	paasProfileRevisionFourteen,
 	devOpsProfileRevisionOne,
 	managedServiceProfileRevisionSeven,
 	auditProfileRevisionFour,
@@ -580,7 +583,7 @@ var iamProfileRevisionOne = declaredProductProfile(ProductIAM, ServiceIAM, 1,
 )
 
 func HistoricalAuthorizationProfiles() []AuthorizationProfile {
-	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), iamAccessDispositionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(paasProfileRevisionTwelve), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(managedServiceProfileRevisionFour), cloneAuthorizationProfile(managedServiceProfileRevisionFive), cloneAuthorizationProfile(managedServiceProfileRevisionSix), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
+	return []AuthorizationProfile{cloneAuthorizationProfile(iamProfileRevisionOne), iamRoleManagementProfile(), iamRoleSessionProfile(), iamRoleSessionManagementProfile(), iamAccessKeyManagementProfile(), iamSecuritySettingsReadProfile(), iamSecuritySettingsProfile(), iamServiceRoleProfile(), iamSecurityReportProfile(), iamAccessAnalyzerProfile(), iamAccessFindingProfile(), iamAccessDispositionProfile(), cloneAuthorizationProfile(paasProfileRevisionOne), cloneAuthorizationProfile(paasProfileRevisionTwo), cloneAuthorizationProfile(paasProfileRevisionThree), cloneAuthorizationProfile(paasProfileRevisionFour), cloneAuthorizationProfile(paasProfileRevisionFive), cloneAuthorizationProfile(paasProfileRevisionSix), cloneAuthorizationProfile(paasProfileRevisionSeven), cloneAuthorizationProfile(paasProfileRevisionEight), cloneAuthorizationProfile(paasProfileRevisionNine), cloneAuthorizationProfile(paasProfileRevisionTen), cloneAuthorizationProfile(paasProfileRevisionEleven), cloneAuthorizationProfile(paasProfileRevisionTwelve), cloneAuthorizationProfile(paasProfileRevisionThirteen), cloneAuthorizationProfile(managedServiceProfileRevisionOne), cloneAuthorizationProfile(managedServiceProfileRevisionTwo), cloneAuthorizationProfile(managedServiceProfileRevisionThree), cloneAuthorizationProfile(managedServiceProfileRevisionFour), cloneAuthorizationProfile(managedServiceProfileRevisionFive), cloneAuthorizationProfile(managedServiceProfileRevisionSix), cloneAuthorizationProfile(auditProfileRevisionOne), cloneAuthorizationProfile(auditProfileRevisionTwo), cloneAuthorizationProfile(auditProfileRevisionThree)}
 }
 
 // Revision one remains archived because compiled policy content and decisions
@@ -644,6 +647,27 @@ var paasProfileRevisionTen = paasInstanceReadAccessKeyProfile(paasProfileRevisio
 var paasProfileRevisionEleven = paasDeploymentMutationAccessKeyProfile(paasProfileRevisionTen)
 var paasProfileRevisionTwelve = applicationLabelAccessKeyProfile(paasProfileRevisionEleven)
 var paasProfileRevisionThirteen = applicationListBatchProfile(paasProfileRevisionTwelve)
+var paasProfileRevisionFourteen = terminalSessionProfile(paasProfileRevisionThirteen)
+
+func terminalSessionProfile(previous AuthorizationProfile) AuthorizationProfile {
+	profile := cloneAuthorizationProfile(previous)
+	profile.Revision++
+	definition, known := lookupConditionDefinition(ConditionRequestSourceIP)
+	if !known {
+		panic("invalid release-owned terminal network condition declaration")
+	}
+	for _, declaration := range []AuthorizationProfileAction{
+		declaredProfileAction(ActionPaaSTerminalSessionCreate, ResourceTerminalSession, AuthorityScopeTenant, ResourceTerminalSession, []AuthorizationResourceShape{{Mode: AuthorizationResourceCollection, CollectionUsage: AuthorizationCollectionCreate}}),
+		declaredProfileAction(ActionPaaSTerminalSessionClose, ResourceTerminalSession, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	} {
+		declaration.SubjectTypes = []SubjectType{SubjectUser}
+		declaration.Conditions = append(declaration.Conditions, AuthorizationProfileCondition{
+			Key: definition.Key, ValueType: definition.ValueType, Source: definition.Source,
+		})
+		profile.Actions = append(profile.Actions, declaration)
+	}
+	return profile
+}
 
 var devOpsProfileRevisionOne = declaredProductProfile(ProductDevOps, ServiceDevOps, 1,
 	declaredProfileAction(ActionDevOpsProjectCreate, ResourceDevOpsProject, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),

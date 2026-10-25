@@ -23,6 +23,33 @@ const (
 	testVerifierCredential = "mx1.PaaSVerifierCredential0000000000000000001"
 )
 
+func TestPaaSResourceAdapterCoversCurrentProductProfile(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name string
+		in   iamv1.ResourceKind
+		out  string
+	}{
+		{"application", iamv1.ResourceApplication, port.ResourceApplication},
+		{"configuration", iamv1.ResourceConfiguration, port.ResourceConfiguration},
+		{"configuration revision", iamv1.ResourceConfigurationRevision, port.ResourceConfigurationRevision},
+		{"application revision", iamv1.ResourceApplicationRevision, port.ResourceApplicationRevision},
+		{"deployment", iamv1.ResourceDeployment, port.ResourceDeployment},
+		{"operation", iamv1.ResourceOperation, port.ResourceOperation},
+		{"execution pool", iamv1.ResourceExecutionPool, port.ResourceExecutionPool},
+		{"execution target", iamv1.ResourceExecutionTarget, port.ResourceExecutionTarget},
+		{"node enrollment", iamv1.ResourceNodeEnrollment, port.ResourceNodeEnrollment},
+		{"terminal session", iamv1.ResourceTerminalSession, port.ResourceTerminalSession},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resource, err := toPaaSResource(iamv1.ResourceReference{Kind: test.in, ID: "resource-one"})
+			if err != nil || resource != (paasv1.ResourceRef{Kind: test.out, ID: "resource-one"}) {
+				t.Fatalf("mapped resource=%#v err=%v", resource, err)
+			}
+		})
+	}
+}
+
 func TestClientMapsAllowedIAMDecisionWithoutTrustingCallerAuthority(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.URL.Path != "/v1/authorize" ||
@@ -666,7 +693,7 @@ func newTestClient(t *testing.T, endpoint string) *Client {
 	if err != nil {
 		t.Fatalf("create PaaS service credential: %v", err)
 	}
-	client, err := NewClient(Config{Endpoint: endpoint, ServiceCredential: credential})
+	client, err := NewClient(Config{Endpoint: endpoint, ServiceCredential: credential, InstallationID: "installation-example"})
 	if err != nil {
 		t.Fatalf("create PaaS IAM client: %v", err)
 	}

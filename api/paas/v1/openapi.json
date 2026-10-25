@@ -123,7 +123,7 @@
             "type": "integer"
           },
           "bindingRef": {
-            "type": "string"
+            "$ref": "#/components/schemas/ID"
           },
           "commandId": {
             "$ref": "#/components/schemas/ID"
@@ -593,6 +593,100 @@
         ],
         "type": "object"
       },
+      "CompleteNodeEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "bindingRef": {
+            "pattern": "^node-binding-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "collectorEndpoint": {
+            "format": "uri",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^https://(?:127\\.0\\.0\\.1|\\[::1\\]):[1-9][0-9]{3,4}$",
+            "type": "string"
+          },
+          "collectorPublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "controllerId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "NodeEnrollmentCompletionRequest"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodeListenAddress": {
+            "maxLength": 64,
+            "minLength": 8,
+            "type": "string"
+          },
+          "nodePublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "controllerId",
+          "bindingRef",
+          "nodeListenAddress",
+          "collectorEndpoint",
+          "nodePublicKeyFingerprint",
+          "collectorPublicKeyFingerprint"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
+      "CompleteNodeEnrollmentResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enrollment": {
+            "$ref": "#/components/schemas/NodeEnrollment"
+          },
+          "executionTarget": {
+            "$ref": "#/components/schemas/ExecutionTarget"
+          },
+          "operation": {
+            "$ref": "#/components/schemas/Operation"
+          }
+        },
+        "required": [
+          "enrollment",
+          "executionTarget",
+          "operation"
+        ],
+        "type": "object"
+      },
       "ComponentBinding": {
         "additionalProperties": false,
         "oneOf": [
@@ -878,6 +972,143 @@
         ],
         "type": "object"
       },
+      "CreateExecutionPoolRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/ExecutionPoolSpec"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "CreateNodeEnrollmentRecoveryChallengeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "collectorPublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "NodeEnrollmentRecoveryChallengeRequest"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodePublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "nodePublicKeyFingerprint",
+          "collectorPublicKeyFingerprint"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
+      "CreateNodeEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "executionPoolId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels"
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "wrappingPublicKey": {
+            "maxLength": 1024,
+            "minLength": 512,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "executionPoolId",
+          "wrappingPublicKey"
+        ],
+        "type": "object"
+      },
+      "CreateNodeEnrollmentResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enrollment": {
+            "$ref": "#/components/schemas/NodeEnrollment"
+          },
+          "join": {
+            "$ref": "#/components/schemas/NodeEnrollmentJoin"
+          },
+          "wrappedCredential": {
+            "$ref": "#/components/schemas/WrappedJoinCredential"
+          }
+        },
+        "required": [
+          "enrollment",
+          "join",
+          "wrappedCredential"
+        ],
+        "type": "object"
+      },
+      "CreateTerminalSessionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "instanceId": {
+            "pattern": "^instance-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "size": {
+            "$ref": "#/components/schemas/TerminalSize"
+          }
+        },
+        "required": [
+          "instanceId",
+          "size"
+        ],
+        "type": "object"
+      },
       "Deployment": {
         "additionalProperties": false,
         "properties": {
@@ -1080,6 +1311,619 @@
         "type": "object",
         "x-matrix-immutable": true
       },
+      "DeploymentInstanceBlockIOUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceBlockIOUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceBlockIOUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "readBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "readOperations": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "writeBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "writeOperations": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "readBytes",
+          "writeBytes",
+          "readOperations",
+          "writeOperations"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceCPUUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED",
+              "WARMING_UP"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceCPUUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceCPUUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "limitCpuMillis": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usedCores": {
+            "minimum": 0,
+            "type": "number"
+          },
+          "windowMillis": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "windowMillis",
+          "usedCores",
+          "limitCpuMillis"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceHealth": {
+        "enum": [
+          "NONE",
+          "STARTING",
+          "HEALTHY",
+          "UNHEALTHY"
+        ],
+        "type": "string"
+      },
+      "DeploymentInstanceMemoryUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceMemoryUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceMemoryUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "limitBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "usedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "usedBytes",
+          "limitBytes"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceNetworkUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceNetworkUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceNetworkUsageValue": {
+        "additionalProperties": false,
+        "properties": {
+          "receiveDrops": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "receiveErrors": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "receivedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transmitDrops": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transmitErrors": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "transmittedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "receivedBytes",
+          "transmittedBytes",
+          "receiveErrors",
+          "transmitErrors",
+          "receiveDrops",
+          "transmitDrops"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceState": {
+        "enum": [
+          "CREATED",
+          "RUNNING",
+          "RESTARTING",
+          "REMOVING",
+          "PAUSED",
+          "EXITED",
+          "DEAD"
+        ],
+        "type": "string"
+      },
+      "DeploymentInstanceStorageUsage": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED",
+                    "WARMING_UP"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED",
+              "STALE"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentInstanceStorageUsageValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceStorageUsageValue": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "volumesState": {
+                  "const": "AVAILABLE"
+                }
+              },
+              "required": [
+                "volumesState"
+              ]
+            },
+            "then": {
+              "required": [
+                "volumes"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "volumesState": {
+                  "enum": [
+                    "UNAVAILABLE",
+                    "UNSUPPORTED"
+                  ]
+                }
+              },
+              "required": [
+                "volumesState"
+              ]
+            },
+            "then": {
+              "properties": {
+                "volumes": false
+              }
+            }
+          }
+        ],
+        "properties": {
+          "imageSharedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "imageTotalBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "imageUniqueBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "validUntil": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "volumes": {
+            "$ref": "#/components/schemas/DeploymentInstanceVolumeUsage"
+          },
+          "volumesState": {
+            "enum": [
+              "AVAILABLE",
+              "UNAVAILABLE",
+              "UNSUPPORTED"
+            ],
+            "type": "string"
+          },
+          "writableLayerBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "observedAt",
+          "validUntil",
+          "writableLayerBytes",
+          "imageTotalBytes",
+          "imageSharedBytes",
+          "imageUniqueBytes",
+          "volumesState"
+        ],
+        "type": "object"
+      },
+      "DeploymentInstanceVolumeUsage": {
+        "additionalProperties": false,
+        "properties": {
+          "bytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "count": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sharedBytes": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "sharedCount": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count",
+          "bytes",
+          "sharedCount",
+          "sharedBytes"
+        ],
+        "type": "object"
+      },
+      "DeploymentList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/Deployment"
+            },
+            "maxItems": 100,
+            "type": "array"
+          },
+          "kind": {
+            "const": "DeploymentList"
+          },
+          "nextAfter": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "scope",
+          "items"
+        ],
+        "type": "object"
+      },
       "DeploymentObservation": {
         "additionalProperties": false,
         "properties": {
@@ -1145,6 +1989,341 @@
           "STOPPED"
         ],
         "type": "string"
+      },
+      "DeploymentResourceInstance": {
+        "additionalProperties": false,
+        "properties": {
+          "blockIo": {
+            "$ref": "#/components/schemas/DeploymentInstanceBlockIOUsage"
+          },
+          "cpu": {
+            "$ref": "#/components/schemas/DeploymentInstanceCPUUsage"
+          },
+          "id": {
+            "pattern": "^instance-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "memory": {
+            "$ref": "#/components/schemas/DeploymentInstanceMemoryUsage"
+          },
+          "network": {
+            "$ref": "#/components/schemas/DeploymentInstanceNetworkUsage"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/DeploymentInstanceStorageUsage"
+          }
+        },
+        "required": [
+          "id",
+          "cpu",
+          "memory",
+          "network",
+          "blockIo",
+          "storage"
+        ],
+        "type": "object"
+      },
+      "DeploymentResourceObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationRevisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentResourceInstance"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "deploymentId",
+          "generation",
+          "applicationRevisionId",
+          "executionTargetId",
+          "instances",
+          "observedAt"
+        ],
+        "type": "object"
+      },
+      "DeploymentResourceSnapshot": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "UNAVAILABLE"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentResourceValue"
+          }
+        },
+        "required": [
+          "state"
+        ],
+        "type": "object"
+      },
+      "DeploymentResourceValue": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "$ref": "#/components/schemas/DeploymentResourceObservation"
+          },
+          "validUntil": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "observation",
+          "validUntil"
+        ],
+        "type": "object"
+      },
+      "DeploymentRuntimeInstance": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "required": [
+                "exitCode"
+              ]
+            },
+            "then": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "EXITED",
+                    "DEAD"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "EXITED",
+                    "DEAD"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "exitCode"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "componentName": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "exitCode": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "health": {
+            "$ref": "#/components/schemas/DeploymentInstanceHealth"
+          },
+          "id": {
+            "pattern": "^instance-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DeploymentInstanceState"
+          }
+        },
+        "required": [
+          "id",
+          "componentName",
+          "state",
+          "health"
+        ],
+        "type": "object"
+      },
+      "DeploymentRuntimeObservation": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationRevisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "instances": {
+            "items": {
+              "$ref": "#/components/schemas/DeploymentRuntimeInstance"
+            },
+            "maxItems": 64,
+            "type": "array"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "deploymentId",
+          "generation",
+          "applicationRevisionId",
+          "executionTargetId",
+          "instances",
+          "observedAt"
+        ],
+        "type": "object"
+      },
+      "DeploymentRuntimeSnapshot": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "UNAVAILABLE"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "value": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "AVAILABLE",
+                    "STALE"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "value"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "DeploymentRuntimeSnapshot"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/DeploymentResourceSnapshot"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "state": {
+            "enum": [
+              "AVAILABLE",
+              "STALE",
+              "UNAVAILABLE"
+            ],
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/components/schemas/DeploymentRuntimeValue"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "scope",
+          "state",
+          "resources"
+        ],
+        "type": "object"
+      },
+      "DeploymentRuntimeValue": {
+        "additionalProperties": false,
+        "properties": {
+          "observation": {
+            "$ref": "#/components/schemas/DeploymentRuntimeObservation"
+          },
+          "validUntil": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "observation",
+          "validUntil"
+        ],
+        "type": "object"
       },
       "DeploymentSpec": {
         "additionalProperties": false,
@@ -1349,6 +2528,77 @@
         ],
         "type": "string"
       },
+      "ExchangeNodeEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "collectorCertificateRequest": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "credential": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "kind": {
+            "const": "NodeEnrollmentExchangeRequest"
+          },
+          "listener": {
+            "$ref": "#/components/schemas/NodeEnrollmentListenerClaim"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodeCertificateRequest": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "credential",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "listener",
+          "nodeCertificateRequest",
+          "collectorCertificateRequest"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
       "ExecutionPool": {
         "additionalProperties": false,
         "properties": {
@@ -1374,6 +2624,30 @@
           "metadata",
           "spec",
           "status"
+        ],
+        "type": "object"
+      },
+      "ExecutionPoolList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionPool"
+            },
+            "maxItems": 129,
+            "type": "array"
+          },
+          "kind": {
+            "const": "ExecutionPoolList"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "items"
         ],
         "type": "object"
       },
@@ -1465,7 +2739,8 @@
       "ExecutionTargetDesiredState": {
         "enum": [
           "ACTIVE",
-          "DRAINING"
+          "DRAINING",
+          "REMOVED"
         ],
         "type": "string"
       },
@@ -1477,6 +2752,30 @@
           "UNAVAILABLE"
         ],
         "type": "string"
+      },
+      "ExecutionTargetList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ExecutionTarget"
+            },
+            "maxItems": 129,
+            "type": "array"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "items"
+        ],
+        "type": "object"
       },
       "ExecutionTargetObservation": {
         "additionalProperties": false,
@@ -1988,6 +3287,12 @@
         ],
         "type": "string"
       },
+      "JoinCredentialWrappingAlgorithm": {
+        "enum": [
+          "RSA_OAEP_256"
+        ],
+        "type": "string"
+      },
       "LabelSelector": {
         "additionalProperties": false,
         "properties": {
@@ -2123,6 +3428,576 @@
         "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
         "type": "string"
       },
+      "NodeEnrollment": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "WAITING_INSTALL"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "credentialConsumedAt": false,
+                "diagnostic": false,
+                "readyAt": false,
+                "replacedById": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "VERIFYING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "diagnostic": false,
+                "readyAt": false,
+                "replacedById": false
+              },
+              "required": [
+                "credentialConsumedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "READY"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "diagnostic": false,
+                "replacedById": false
+              },
+              "required": [
+                "credentialConsumedAt",
+                "readyAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "FAILED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "readyAt": false,
+                "replacedById": false
+              },
+              "required": [
+                "credentialConsumedAt",
+                "diagnostic"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "EXPIRED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "readyAt": false,
+                "replacedById": false
+              },
+              "required": [
+                "diagnostic"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "REVOKED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "readyAt": false
+              },
+              "required": [
+                "diagnostic"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "credentialConsumedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "diagnostic": {
+            "$ref": "#/components/schemas/NodeEnrollmentDiagnostic"
+          },
+          "executionPoolId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "NodeEnrollment"
+          },
+          "metadata": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ResourceMetadata"
+              },
+              {
+                "properties": {
+                  "id": {
+                    "pattern": "^node-enrollment-[0-9a-f]{32}$",
+                    "type": "string"
+                  }
+                }
+              }
+            ]
+          },
+          "operationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "readyAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "replacedById": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "state": {
+            "$ref": "#/components/schemas/NodeEnrollmentState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "executionTargetId",
+          "executionPoolId",
+          "operationId",
+          "state",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentDiagnostic": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "MANAGEMENT_UNREACHABLE",
+                    "NETWORK_INTERRUPTED"
+                  ]
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "retryable": {
+                  "const": true
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "enum": [
+                    "ENROLLMENT_EXPIRED",
+                    "ENROLLMENT_REVOKED",
+                    "CREDENTIAL_CONSUMED",
+                    "INSTALLATION_MISMATCH",
+                    "IDENTITY_CONFLICT",
+                    "RUNTIME_UNSUPPORTED",
+                    "MTLS_VERIFICATION_FAILED",
+                    "RESOURCE_CONFLICT"
+                  ]
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "retryable": {
+                  "const": false
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/NodeEnrollmentDiagnosticCode"
+          },
+          "occurredAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "retryable": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "code",
+          "retryable",
+          "occurredAt"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentDiagnosticCode": {
+        "enum": [
+          "ENROLLMENT_EXPIRED",
+          "ENROLLMENT_REVOKED",
+          "CREDENTIAL_CONSUMED",
+          "INSTALLATION_MISMATCH",
+          "IDENTITY_CONFLICT",
+          "RUNTIME_UNSUPPORTED",
+          "MANAGEMENT_UNREACHABLE",
+          "MTLS_VERIFICATION_FAILED",
+          "RESOURCE_CONFLICT",
+          "NETWORK_INTERRUPTED"
+        ],
+        "type": "string"
+      },
+      "NodeEnrollmentExchangeResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "bindingRef": {
+            "pattern": "^node-binding-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "certificateNotAfter": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "certificateNotBefore": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "collectorCertificate": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "collectorEndpoint": {
+            "format": "uri",
+            "maxLength": 80,
+            "minLength": 16,
+            "pattern": "^https://(?:127\\.0\\.0\\.1|\\[::1\\]):[1-9][0-9]{3,4}$",
+            "type": "string"
+          },
+          "controllerId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "issuerCertificate": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "NodeEnrollmentExchangeResponse"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodeCertificate": {
+            "maxLength": 5462,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "nodeListenAddress": {
+            "maxLength": 64,
+            "minLength": 8,
+            "type": "string"
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "controllerId",
+          "bindingRef",
+          "nodeListenAddress",
+          "collectorEndpoint",
+          "nodeCertificate",
+          "collectorCertificate",
+          "issuerCertificate",
+          "certificateNotBefore",
+          "certificateNotAfter"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
+      "NodeEnrollmentJoin": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "controlPlaneUrl": {
+            "format": "uri",
+            "maxLength": 2048,
+            "pattern": "^https://[^?#]+/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange$",
+            "type": "string"
+          },
+          "credentialDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "enrollmentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "issuerCertificate": {
+            "maxLength": 16384,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "NodeEnrollmentJoin"
+          },
+          "signature": {
+            "maxLength": 86,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "type": "string"
+          },
+          "signatureAlgorithm": {
+            "$ref": "#/components/schemas/NodeJoinSignatureAlgorithm"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "controlPlaneUrl",
+          "credentialDigest",
+          "expiresAt",
+          "issuerCertificate",
+          "signatureAlgorithm",
+          "signature"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentList": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/NodeEnrollment"
+            },
+            "maxItems": 128,
+            "type": "array"
+          },
+          "kind": {
+            "const": "NodeEnrollmentList"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "items"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentListenerClaim": {
+        "additionalProperties": false,
+        "properties": {
+          "collectorPort": {
+            "maximum": 65535,
+            "minimum": 1024,
+            "type": "integer"
+          },
+          "managementPort": {
+            "maximum": 65535,
+            "minimum": 1024,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "managementPort",
+          "collectorPort"
+        ],
+        "type": "object"
+      },
+      "NodeEnrollmentRecoveryChallenge": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "authenticator": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "challenge": {
+            "maxLength": 43,
+            "minLength": 43,
+            "pattern": "^[A-Za-z0-9_-]{43}$",
+            "type": "string"
+          },
+          "collectorPublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "enrollmentId": {
+            "pattern": "^node-enrollment-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "exchangeId": {
+            "pattern": "^node-exchange-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "issuedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "const": "NodeEnrollmentRecoveryChallenge"
+          },
+          "machineFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "nodePublicKeyFingerprint": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "runtimeContractDigest": {
+            "$ref": "#/components/schemas/Digest"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "enrollmentId",
+          "installationId",
+          "executionTargetId",
+          "exchangeId",
+          "machineFingerprint",
+          "runtimeContractDigest",
+          "nodePublicKeyFingerprint",
+          "collectorPublicKeyFingerprint",
+          "challenge",
+          "issuedAt",
+          "expiresAt",
+          "authenticator"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
+      "NodeEnrollmentState": {
+        "enum": [
+          "WAITING_INSTALL",
+          "VERIFYING",
+          "READY",
+          "FAILED",
+          "EXPIRED",
+          "REVOKED"
+        ],
+        "type": "string"
+      },
+      "NodeJoinSignatureAlgorithm": {
+        "enum": [
+          "ED25519"
+        ],
+        "type": "string"
+      },
       "NormalizedAdapterError": {
         "additionalProperties": false,
         "properties": {
@@ -2187,6 +4062,49 @@
         "type": "object",
         "x-matrix-visibility": "internal"
       },
+      "ObserveDeploymentRuntimeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "applicationRevisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "deadline": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionTargetId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "expectedContentDigest": {
+            "$ref": "#/components/schemas/Digest"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "requestId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          }
+        },
+        "required": [
+          "requestId",
+          "scope",
+          "deploymentId",
+          "generation",
+          "applicationRevisionId",
+          "executionTargetId",
+          "expectedContentDigest",
+          "deadline"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "internal"
+      },
       "ObserveExecutionTargetRequest": {
         "additionalProperties": false,
         "properties": {
@@ -2202,6 +4120,97 @@
       },
       "Operation": {
         "additionalProperties": false,
+        "allOf": [
+          {
+            "else": {
+              "properties": {
+                "installationId": false,
+                "scope": {
+                  "properties": {
+                    "kind": {
+                      "const": "TENANT"
+                    }
+                  },
+                  "required": [
+                    "tenantId"
+                  ]
+                }
+              }
+            },
+            "if": {
+              "properties": {
+                "action": {
+                  "enum": [
+                    "CREATE_EXECUTION_POOL",
+                    "REGISTER_EXECUTION_TARGET"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "requestedBy": {
+                  "properties": {
+                    "type": {
+                      "const": "USER"
+                    }
+                  }
+                },
+                "scope": {
+                  "properties": {
+                    "kind": {
+                      "const": "PLATFORM"
+                    },
+                    "tenantId": false
+                  }
+                }
+              },
+              "required": [
+                "installationId"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "CREATE_EXECUTION_POOL"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ExecutionPool"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "REGISTER_EXECUTION_TARGET"
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "target": {
+                  "properties": {
+                    "kind": {
+                      "const": "ExecutionTarget"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ],
         "properties": {
           "action": {
             "$ref": "#/components/schemas/OperationAction"
@@ -2225,6 +4234,9 @@
           },
           "idempotencyFingerprint": {
             "$ref": "#/components/schemas/Digest"
+          },
+          "installationId": {
+            "$ref": "#/components/schemas/ID"
           },
           "kind": {
             "const": "Operation"
@@ -2272,6 +4284,9 @@
         "enum": [
           "CREATE_EXECUTION_POOL",
           "REGISTER_EXECUTION_TARGET",
+          "DRAIN_EXECUTION_TARGET",
+          "ACTIVATE_EXECUTION_TARGET",
+          "REMOVE_EXECUTION_TARGET",
           "CREATE_PLACEMENT",
           "CREATE_APPLICATION",
           "SET_APPLICATION_LABEL",
@@ -2586,6 +4601,90 @@
         ],
         "type": "string"
       },
+      "RecoverNodeEnrollmentExchangeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "node.enrollment.matrix.xiak.com/v1"
+          },
+          "challenge": {
+            "$ref": "#/components/schemas/NodeEnrollmentRecoveryChallenge"
+          },
+          "collectorSignature": {
+            "maxLength": 86,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "type": "string",
+            "writeOnly": true
+          },
+          "kind": {
+            "const": "NodeEnrollmentRecoveryProofRequest"
+          },
+          "nodeSignature": {
+            "maxLength": 86,
+            "minLength": 86,
+            "pattern": "^[A-Za-z0-9_-]{86}$",
+            "type": "string",
+            "writeOnly": true
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "challenge",
+          "nodeSignature",
+          "collectorSignature"
+        ],
+        "type": "object",
+        "x-matrix-visibility": "node-bootstrap"
+      },
+      "RegenerateNodeEnrollmentRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "wrappingPublicKey": {
+            "maxLength": 1024,
+            "minLength": 512,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "wrappingPublicKey"
+        ],
+        "type": "object"
+      },
+      "RegisterExecutionTargetRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "bindingRef": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "executionPoolId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "labels": {
+            "$ref": "#/components/schemas/Labels",
+            "not": {
+              "required": [
+                "matrix-machine-fingerprint"
+              ]
+            }
+          },
+          "name": {
+            "$ref": "#/components/schemas/Name"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "executionPoolId",
+          "bindingRef"
+        ],
+        "type": "object"
+      },
       "ResourceMetadata": {
         "additionalProperties": false,
         "properties": {
@@ -2862,6 +4961,183 @@
         ],
         "type": "string"
       },
+      "TerminalSession": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "enum": [
+                    "PENDING",
+                    "CONNECTING"
+                  ]
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "connectedAt": false,
+                "endedAt": false,
+                "outcome": false
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "ACTIVE"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "endedAt": false,
+                "outcome": false
+              },
+              "required": [
+                "connectedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "ENDED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "required": [
+                "outcome",
+                "endedAt"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "apiVersion": {
+            "const": "paas.matrix.xiak.com/v1"
+          },
+          "applicationRevisionId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "connectBefore": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "connectedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "deploymentId": {
+            "$ref": "#/components/schemas/ID"
+          },
+          "endedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "generation": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^terminal-session-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "instanceId": {
+            "pattern": "^instance-[0-9a-f]{32}$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "TerminalSession"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/TerminalSessionOutcome"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "size": {
+            "$ref": "#/components/schemas/TerminalSize"
+          },
+          "state": {
+            "$ref": "#/components/schemas/TerminalSessionState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "id",
+          "scope",
+          "deploymentId",
+          "generation",
+          "applicationRevisionId",
+          "instanceId",
+          "size",
+          "state",
+          "createdAt",
+          "connectBefore",
+          "expiresAt"
+        ],
+        "type": "object"
+      },
+      "TerminalSessionOutcome": {
+        "enum": [
+          "COMPLETED",
+          "UNSUPPORTED",
+          "EXPIRED",
+          "DISCONNECTED",
+          "REVOKED",
+          "REPLACED",
+          "FAILED"
+        ],
+        "type": "string"
+      },
+      "TerminalSessionState": {
+        "enum": [
+          "PENDING",
+          "CONNECTING",
+          "ACTIVE",
+          "ENDED"
+        ],
+        "type": "string"
+      },
+      "TerminalSize": {
+        "additionalProperties": false,
+        "properties": {
+          "columns": {
+            "maximum": 512,
+            "minimum": 2,
+            "type": "integer"
+          },
+          "rows": {
+            "maximum": 256,
+            "minimum": 2,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "columns",
+          "rows"
+        ],
+        "type": "object"
+      },
       "Timestamp": {
         "format": "date-time",
         "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]{1,6})?Z$",
@@ -2882,6 +5158,26 @@
           "releaseId"
         ],
         "type": "object"
+      },
+      "WrappedJoinCredential": {
+        "additionalProperties": false,
+        "properties": {
+          "algorithm": {
+            "$ref": "#/components/schemas/JoinCredentialWrappingAlgorithm"
+          },
+          "ciphertext": {
+            "description": "RSA-3072 OAEP-SHA256 ciphertext whose UTF-8 label is matrix-node-enrollment-v1\\0\u003cinstallationId\u003e\\0\u003cenrollmentId\u003e.",
+            "maxLength": 512,
+            "minLength": 512,
+            "pattern": "^[A-Za-z0-9_-]{512}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "algorithm",
+          "ciphertext"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -2894,6 +5190,12 @@
         "description": "Narrow installation-verifier service credential resolved through IAM installation.verify.",
         "scheme": "bearer",
         "type": "http"
+      },
+      "MatrixTerminalTicket": {
+        "description": "Single-use terminal connection ticket delivered only by an HttpOnly SameSite=Strict host-only cookie.",
+        "in": "cookie",
+        "name": "matrix_terminal_ticket",
+        "type": "apiKey"
       }
     }
   },
@@ -3773,6 +6075,58 @@
       }
     },
     "/v1/deployments": {
+      "get": {
+        "operationId": "listDeployments",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentList"
+                }
+              }
+            },
+            "description": "Current bounded authorized collection.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List tenant-scoped Deployments"
+      },
       "post": {
         "operationId": "createDeployment",
         "parameters": [
@@ -4204,6 +6558,782 @@
         "summary": "Roll back Deployment"
       }
     },
+    "/v1/deployments/{deploymentId}/runtime": {
+      "get": {
+        "operationId": "getDeploymentRuntime",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeploymentRuntimeSnapshot"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get current Deployment runtime"
+      }
+    },
+    "/v1/deployments/{deploymentId}/terminal-sessions": {
+      "post": {
+        "operationId": "createTerminalSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "deploymentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateTerminalSessionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalSession"
+                }
+              }
+            },
+            "description": "A durable terminal session and a single-use connection cookie.",
+            "headers": {
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Set-Cookie": {
+                "description": "HttpOnly SameSite=Strict host-only connection ticket; Secure is required when TLS is in use.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TerminalSession"
+                }
+              }
+            },
+            "description": "A durable terminal session and a single-use connection cookie.",
+            "headers": {
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Set-Cookie": {
+                "description": "HttpOnly SameSite=Strict host-only connection ticket; Secure is required when TLS is in use.",
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a short-lived terminal session for one current Deployment instance"
+      }
+    },
+    "/v1/execution-pools": {
+      "get": {
+        "operationId": "listExecutionPools",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionPoolList"
+                }
+              }
+            },
+            "description": "Current bounded authorized collection.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List installation-scoped ExecutionPools selectable for enrollment"
+      },
+      "post": {
+        "operationId": "createExecutionPool",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExecutionPoolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create ExecutionPool"
+      }
+    },
+    "/v1/execution-pools/{executionPoolId}": {
+      "get": {
+        "operationId": "getExecutionPool",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionPoolId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionPool"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get ExecutionPool"
+      }
+    },
+    "/v1/execution-targets": {
+      "get": {
+        "operationId": "listExecutionTargets",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionTargetList"
+                }
+              }
+            },
+            "description": "Current bounded authorized collection.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List installation-scoped ExecutionTargets"
+      },
+      "post": {
+        "operationId": "registerExecutionTarget",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterExecutionTargetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create ExecutionTarget"
+      }
+    },
+    "/v1/execution-targets/{executionTargetId}": {
+      "get": {
+        "operationId": "getExecutionTarget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionTargetId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExecutionTarget"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get ExecutionTarget"
+      }
+    },
+    "/v1/execution-targets/{executionTargetId}/activate": {
+      "post": {
+        "operationId": "activateExecutionTarget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionTargetId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Return a draining ExecutionTarget to placement eligibility"
+      }
+    },
+    "/v1/execution-targets/{executionTargetId}/drain": {
+      "post": {
+        "operationId": "drainExecutionTarget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionTargetId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Exclude an ExecutionTarget from new placement without moving existing work"
+      }
+    },
+    "/v1/execution-targets/{executionTargetId}/remove": {
+      "post": {
+        "operationId": "removeExecutionTarget",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "executionTargetId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Durable Operation accepted or completed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Permanently remove an empty draining ExecutionTarget from pool membership"
+      }
+    },
     "/v1/installation:verify": {
       "post": {
         "operationId": "verifyInstallation",
@@ -4263,6 +7393,666 @@
         "summary": "Run the fixed no-secret installation application probe"
       }
     },
+    "/v1/node-enrollments": {
+      "get": {
+        "operationId": "listNodeEnrollments",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollmentList"
+                }
+              }
+            },
+            "description": "Current bounded authorized collection.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "List recent installation-scoped NodeEnrollments"
+      },
+      "post": {
+        "operationId": "createNodeEnrollment",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNodeEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a short-lived Linux node enrollment with a wrapped one-time credential"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}": {
+      "get": {
+        "operationId": "getNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollment"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get one installation-scoped NodeEnrollment"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/complete": {
+      "post": {
+        "description": "Node bootstrap only. Every public commitment is compared with the consumed exchange before a bounded outbound mTLS identity and capability probe.",
+        "operationId": "completeNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteNodeEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompleteNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "The exact committed enrollment, existing ExecutionTarget and terminal registration Operation.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Probe and atomically register one exchanged Linux node"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/exchange": {
+      "post": {
+        "description": "Node bootstrap only. The credential and PKCS#10 requests are accepted solely in this bounded TLS request body and are never returned or logged.",
+        "operationId": "exchangeNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExchangeNodeEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollmentExchangeResponse"
+                }
+              }
+            },
+            "description": "The credential was consumed exactly once and this public certificate result was sealed for recovery.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Consume one node enrollment credential and issue role-bound certificates"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/recover": {
+      "post": {
+        "description": "Node bootstrap only. The request is accepted solely through the installation-authenticated TLS ingress and carries no join credential or private key.",
+        "operationId": "recoverNodeEnrollmentExchange",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecoverNodeEnrollmentExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollmentExchangeResponse"
+                }
+              }
+            },
+            "description": "The challenge or exact previously sealed exchange result.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Recover the exact sealed exchange result with both target-host role keys"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/recovery-challenge": {
+      "post": {
+        "description": "Node bootstrap only. The request is accepted solely through the installation-authenticated TLS ingress and carries no join credential or private key.",
+        "operationId": "createNodeEnrollmentRecoveryChallenge",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNodeEnrollmentRecoveryChallengeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollmentRecoveryChallenge"
+                }
+              }
+            },
+            "description": "The challenge or exact previously sealed exchange result.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Create a short-lived challenge for one consumed node enrollment exchange"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/regenerate": {
+      "post": {
+        "operationId": "regenerateNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegenerateNodeEnrollmentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreateNodeEnrollmentResponse"
+                }
+              }
+            },
+            "description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              },
+              "Operation-Location": {
+                "$ref": "#/components/headers/OperationLocation"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Revoke an enrollment and create a fresh identity and wrapped credential"
+      }
+    },
+    "/v1/node-enrollments/{nodeEnrollmentId}/revoke": {
+      "post": {
+        "operationId": "revokeNodeEnrollment",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "nodeEnrollmentId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NodeEnrollment"
+                }
+              }
+            },
+            "description": "Enrollment transition committed or exactly replayed.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Revoke an enrollment before it publishes an ExecutionTarget"
+      }
+    },
     "/v1/operations/{operationId}": {
       "get": {
         "operationId": "getOperation",
@@ -4315,6 +8105,154 @@
           }
         },
         "summary": "Get Operation"
+      }
+    },
+    "/v1/platform/operations/{operationId}": {
+      "get": {
+        "operationId": "getPlatformOperation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operationId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Operation"
+                }
+              }
+            },
+            "description": "Current tenant-scoped resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "504": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get an installation-scoped Operation"
+      }
+    },
+    "/v1/terminal-sessions/{terminalSessionId}": {
+      "delete": {
+        "operationId": "closeTerminalSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "terminalSessionId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The terminal session is closed or was already closed."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Close the caller's exact terminal session"
+      }
+    },
+    "/v1/terminal-sessions/{terminalSessionId}/connect": {
+      "get": {
+        "operationId": "connectTerminalSession",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "terminalSessionId",
+            "required": true,
+            "schema": {
+              "$ref": "#/components/schemas/ID"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "WebSocket upgraded with the matrix.terminal.v1 subprotocol."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "410": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "MatrixTerminalTicket": []
+          }
+        ],
+        "summary": "Consume the single-use ticket and upgrade to the bounded terminal WebSocket",
+        "x-matrix-websocket-max-frame": 65536,
+        "x-matrix-websocket-subprotocol": "matrix.terminal.v1"
       }
     }
   },

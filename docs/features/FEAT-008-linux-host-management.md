@@ -1,9 +1,16 @@
 # FEAT-008: existing Linux hosts and remote application delivery
 
-- Status: Target and initial donor review complete; P3-1 implementation in progress
+- Status: The P3-0 through P3-6 donor gates remain accepted on pushed sources
+  `be3c4a96b4381426c01cd6315eaa3713c2855982` and
+  `16b42679a3f19d73ee41af016e81ef2b95b938fd`. Their selected production
+  semantics are being revalidated in the unified mainline candidate at IAM 88 /
+  Audit 40 / PaaS 8, contract revision 40; historical profiles and donor
+  checkpoints are not alternate current releases
 - Target: Matrix PaaS Phase 3
 - Design date: 2026-08-27
-- Branch: `feat/linux-host-management`
+- Integration branch: `feat/integrate-all-feats`
+- Accepted baseline branch: `feat/linux-host-management`
+- Fixed Phase 3 integration donor: `8177bc5016ca686ac8d5eb5417bf97165b939484`
 - Fixed integration baseline: `f5ce412ff795abdaf5ba8e5fe112378f1cd1af41`
 
 ## Outcome and scope
@@ -13,6 +20,20 @@ usage. Deploy, update, stop and roll back applications through the existing
 IAM-authorized, audited workflow. Provide live resource views and access to
 the actual running application container. Prove signed offline installation,
 operations, upgrade, rollback and recovery across independent hosts.
+
+The unified backend keeps the already accepted IAM console as the UI owner.
+Phase 3 UI snapshots remain fixed historical evidence and are not overlaid on
+that console; subsequent visual and interaction changes are delivered by the
+UX/UI feature branch and enter this FEAT only through a verified fixed commit.
+
+P3-6 replaces fresh-host private-key delivery and the separate manual target
+registration step with one observable console journey. A platform operator
+creates a short-lived enrollment, transfers one offline join document to an
+existing Linux host, and runs one `mx node install` command. Node and collector
+private keys are generated on that host. Successful proof of possession and a
+real mTLS probe atomically publish the existing `ExecutionTarget`, its terminal
+Operation and Audit fact; `NodeEnrollment` never becomes a second long-lived
+host model.
 
 The long-term private-cloud direction, optional Kubernetes provider and domain
 boundaries belong to [ADR-0002](../architecture/ADR-0002-product-boundary.md).
@@ -24,6 +45,9 @@ Development, artifacts and disposable runtime objects are isolated from
 Phase 2. Never reset, edit, merge into, redeploy or stop its branch, worktree
 or environment. UI additions happen only on this Phase 3 branch; existing
 console and managed PostgreSQL behavior remain regression requirements.
+Never reboot a remote machine, including a remote experiment VM. Reboot
+acceptance uses only task-owned local guests; the shared host, Docker Desktop,
+other engines and other tasks' services must remain running unchanged.
 
 ## Iterative roadmap
 
@@ -35,16 +59,157 @@ exercise combines these capabilities rather than introducing them late.
 | Iteration | Usable outcome | Required evidence | State |
 | --- | --- | --- | --- |
 | P3-0: design and adoption | Fixed scope, isolated branch and donor decisions | Target committed before fixed-source review; no donor dependency | Complete for the initial node slice |
-| P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | In progress |
-| P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Pending |
-| P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Pending |
-| P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Pending |
-| P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Pending |
+| P3-1: one managed host | Secure resident agent enrollment, identity, heartbeat and continuously refreshed basic CPU/memory/filesystem status through the control plane | Real authenticated Linux node; wrong identity denied; stale/disconnected state; restart and signed offline startup | Complete |
+| P3-2: remote application loop | Deploy, observe, update, stop and roll back a real application on that host | IAM/Audit/Operation/accounting integration; exact routing; ENV/Secret behavior; replay and lost-response recovery | Complete |
+| P3-3: interactive operations | Live host/container UI and terminal in the selected running instance | Successive measurements without reload; real terminal I/O, resize, expiry, disconnect, authorization and audit | Complete |
+| P3-4: multiple hosts | Pool placement, drain, unavailable-node handling and safe removal across two independent hosts | No cross-host/local fallback; identity collision, tenant isolation and concurrent capacity checks | Complete |
+| P3-5: offline release | Platform and nodes install, operate, upgrade, roll back and recover without external access | Complete Gates A-E on exact committed source and signed releases | Complete |
+| P3-6: console self-enrollment | Create, transfer, verify and complete an existing Linux host from the console with host-local keys and no separate registration | Authenticated browser, two real hosts, signed offline install, one-time/revocable exchange, failure cleanup, lifecycle operations and upgrade/rollback retention | Complete |
 
 Start P3-1 after P3-0's donor review. Its basic measurements do not replace
 P3-3's full observability scope. Historical queries, interactive sessions and
 multi-host policy are implemented when their iteration is reached.
-No iteration alone completes the Phase 3 goal.
+The accepted P3-0 through P3-5 evidence is the P3-6 integration baseline, not
+evidence for the new ceremony. FEAT-008 remains open until every P3-6 gate below
+passes on an exact pushed commit.
+
+## P3-6 console self-enrollment target
+
+### User journey and scope
+
+The platform operator enters **Infrastructure -> Host resources**, chooses
+**Enroll Linux host**, supplies a display name, an existing execution pool and
+only installation-allowlisted scheduling labels, then creates an enrollment.
+The console shows its expiry and one-time nature and offers a client-generated
+offline join file plus this fixed-shape command:
+
+```text
+sudo ./mx node install --root /opt/matrix-node --bundle ./matrix-node-release --trust-key ./release-trust.json --join ./matrix-node-join.json
+```
+
+The UI neither accepts nor synthesizes shell fragments, Compose documents,
+host paths, Docker flags, SSH credentials or provider-native parameters. The
+command and filenames are product-owned constants; installation of Linux,
+Docker Engine and Compose, firewall changes, PXE/BMC/VM provisioning and
+Kubernetes node provisioning remain outside this FEAT.
+
+The console follows the enrollment without a manual refresh through
+`WAITING_INSTALL`, `VERIFYING` and `READY`, or the terminal `FAILED`, `EXPIRED`
+and `REVOKED` states. A ready enrollment links to the existing host detail and
+its health/resources, drain, activation and safe-removal controls. A terminal
+unsuccessful attempt exposes a closed actionable diagnostic and may be replaced
+by a new enrollment; it is never reset in place and never reuses an identity
+that reached credential exchange.
+
+### Ownership and contracts
+
+`NodeEnrollment` is an installation-scoped, short-lived apphosting ceremony.
+It owns the requested target name, execution pool, allowlisted labels, generated
+enrollment/target identities, credential commitment, expiry, exchange proof,
+terminal status and sanitized diagnostic. After success, the existing
+`ExecutionTarget`, its registration identity and connection own all durable
+host state. Enrollment history may be retained for Audit correlation, but is
+excluded from placement, capacity, host inventory and ongoing health.
+
+Authenticated platform APIs create/read/list/revoke/regenerate enrollments and
+list selectable execution pools. Creation requires an idempotency key and a
+browser-generated ephemeral RSA-OAEP wrapping public key. The server generates
+the 256-bit join credential, stores only its salted digest, and returns only an
+encrypted envelope plus public, integrity-bound join metadata. Browser code
+decrypts it in memory, creates the join file locally, never writes it to web
+storage or a URL, revokes the download URL and clears its buffers when the
+dialog closes. The copied command contains no credential. A reload loses the
+secret and therefore offers regeneration, which revokes the old attempt and
+creates a new identity instead of weakening one-time semantics.
+
+The RSA-OAEP-SHA256 envelope uses the exact UTF-8 label
+`matrix-node-enrollment-v1\0<installationId>\0<enrollmentId>`. A ciphertext
+from another installation or enrollment therefore cannot be decrypted as the
+current join even when the same ephemeral wrapping key is involved.
+
+The node-facing bootstrap API is separate from the IAM session API. The raw
+join credential appears only in the bounded TLS request body for the initial
+exchange; request logging is disabled for that body and no response echoes it.
+The node generates distinct node and collector private keys locally and writes
+them only to protected installation-owned paths. It submits only public-key
+requests, the actual installation and machine identity, and a provider-neutral
+management-listener claim. The server derives the dial address from the
+authenticated installation policy and the observed private-network peer rather
+than accepting a browser-selected or arbitrary endpoint.
+
+Installation owns the enrollment issuer, platform controller credential,
+trust roots and their protected lifecycle. The browser, node bundle and PaaS
+database never receive the CA private key or controller private key. The
+issuer returns role-constrained certificates for the exact installation,
+target and submitted public keys. The existing node mTLS protocol still
+requires both certificate identity and the persisted target identity; a
+provisional certificate alone grants no scheduling, observation or execution
+authority.
+
+### Exchange, atomicity and recovery
+
+An initial exchange is locked by enrollment ID and credential digest. The
+first valid request changes `WAITING_INSTALL` to `VERIFYING`, consumes the
+credential exactly once, fixes the two public keys, machine fingerprint and
+exchange ID, and stores a bounded encrypted certificate result. Concurrent or
+later credential use fails even when the body is identical. Before redeeming,
+the node persists its client-generated exchange ID and public-key commitment.
+If the success response is lost, it resumes through a separate challenge and
+proof-of-possession endpoint; it never sends the consumed credential again and
+can recover only the same stored result.
+
+The node stages the returned credentials, starts only its owned agent and
+collector services, and asks for completion with its new identity. The control
+plane performs a real bounded mTLS identity/capability probe outside the
+database transaction. One transaction then fixes the long-lived connection,
+registers the existing `ExecutionTarget` in the selected pool, completes the
+existing `REGISTER_EXECUTION_TARGET` Operation, writes its installation Audit
+outbox fact and marks the enrollment `READY`. Until that commit there is no
+schedulable target. Exact completion replay returns the committed result;
+changed target, pool, labels, public keys, fingerprint, installation, endpoint
+or exchange identity fails closed.
+
+Expiry or operator revocation prevents first exchange immediately. Revocation
+during verification invalidates the provisional exchange and prevents final
+registration. Definitive validation/probe failure records only a closed reason,
+invalidates provisional credentials and drives the installer to stop/remove
+only its newly owned services and credential files. Bounded network outage
+retains the sealed local exchange intent for retry; lost completion responses
+are reconciled by exact enrollment/target status and never create another
+target. Regeneration always terminates the old enrollment and creates a fresh
+credential and identity.
+
+Long-lived dynamic connections are persisted with the target registration and
+loaded by API and worker processes without recreating the platform or requiring
+`mx platform configure-nodes`. Existing sealed nodes remain readable across
+the supported upgrade/rollback pair. Fresh nodes in the new release no longer
+accept an operator-supplied node/collector private-key enrollment or require a
+second northbound target-registration call; superseded fresh-install paths and
+their tests are removed in the same slice once the replacement gate exists.
+
+Safe removal keeps the existing allocation/work/session preconditions and
+immutable target tombstone. For a dynamically enrolled target the same commit
+also disables its connection identity so new controller calls fail; it does
+not delete customer data, stop Docker, execute remote shell or silently evict
+work. Local uninstall remains an explicit target-host action outside this UI
+journey.
+
+### Secret and diagnostic boundary
+
+Join credentials and all private keys are forbidden from logs, Audit payloads,
+URLs, problem details, Operation results, browser storage, diagnostics and
+support bundles. Ordinary HTTP responses never contain the raw join credential;
+the creation response contains only its RSA-OAEP ciphertext. Enrollment reads
+after creation cannot recover that ciphertext or credential. Certificate and
+CSR bodies are accepted only on the node bootstrap routes and are never
+projected into console resources.
+
+Failures expose only closed codes with operator actions: expired/revoked,
+credential consumed, installation mismatch, identity conflict, unsupported
+runtime, unreachable management listener, mTLS verification failure, resource
+conflict or retryable network interruption. Raw addresses, certificate data,
+provider errors, paths, Docker output and secrets stay behind the adapter
+boundary.
 
 ## Ownership and node design
 
@@ -64,6 +229,31 @@ database credentials and no scheduling or IAM authority. Installation owns
 certificate provisioning, renewal and revocation. SSH may bootstrap or rescue
 a node; it is not the steady-state workload protocol.
 
+The signed-platform connection increment uses `mx platform configure-nodes`
+with a protected, installation-bound controller configuration and the expected
+current configuration digest. Installation owns the private input, an atomic
+configuration replacement and a resumable journal; only the owned PaaS API is
+recreated to load an appended binding inventory. Existing target/binding/pin
+tuples cannot be removed or rebound by this command. Certificate replacement
+may not change controller identity. An empty initial configuration admits no
+nodes. The runtime receives no CA signing key, node key, host path selector or
+SSH/database credential through this input. A private management egress
+network and a read-only private configuration directory belong to the signed
+topology; no host network or Docker socket is added to the API. Configuring a
+connection grants no platform role, registers no target and creates no tenant
+resource. Existing platform-authorized admission owns those decisions.
+
+This increment consumes operator-provisioned controller credentials; it does
+not yet provide an automatic certificate issuer. Its acceptance requires
+closed/secret-safe input, wrong installation/identity/expected digest rejection,
+append-only inventory, crash/resume and current credential replacement,
+exact API-only effects, unchanged other services/workloads, signed topology
+and real platform/node observations. Evidence and remaining release gates are
+recorded below. The previous platform bundle has no node connection mount and
+cannot be described as integrated merely because the native process gate passed.
+This changes the signed topology digest, not the database profile; transition
+from the previous topology is not admitted or claimed by this increment.
+
 PostgreSQL owns desired state/accounting; nodes own effects/observations.
 Disconnection preserves accepted workloads. Restart/reconnect uses durable
 receipts and actual runtime observations. Unknown outcomes require observation
@@ -74,6 +264,12 @@ generation while offline.
 
 ### Admission and execution
 
+- Pool creation and target registration are platform-authorized use cases.
+  A registration selects an opaque, installation-owned node binding, never a
+  caller-provided endpoint, certificate or host path. The configured
+  installation, target and identity pin must agree with the real node probe.
+  Extend the existing Operation/outbox owner with an explicit installation
+  authority partition; do not represent platform resources as a fake tenant.
 - Resolve bindings server-side and probe outside transactions; atomically
   commit accepted identity, pool/target, Operation and audit event. Exact
   idempotency replay succeeds; changed input, identity collisions and binding
@@ -82,6 +278,21 @@ generation while offline.
   or unsupported targets reject new placement without stopping healthy nodes.
   Drain retains existing work; removal rejects live/reserved/unresolved work.
   Neither touches unrelated host files or Docker objects.
+- P3-4 exposes three platform-authorized commands on an admitted managed target:
+  `ACTIVE -> DRAINING`, `DRAINING -> ACTIVE`, and the terminal
+  `DRAINING -> REMOVED`. Each command requires the current strong ETag and an
+  idempotency key, commits its Operation and installation Audit fact with the
+  target/pool update, and never calls the node. `REMOVED` is an immutable
+  tombstone: default inventory and placement exclude it, exact reads and
+  history retain it, and its target ID, binding and machine fingerprint can
+  never be registered again.
+- Safe removal locks the same target-allocation identity used by placement and
+  fails closed while a consuming capacity claim, non-terminal target Operation,
+  unresolved adapter result, non-stopped current Deployment, or open terminal
+  session remains. It neither evicts nor migrates work, releases capacity,
+  closes sessions, deletes host data, revokes node credentials, nor changes the
+  protected connection inventory. A lost response can replay only the exact
+  committed command; changing its action, target, ETag or content conflicts.
 - Persisted placement selects the exact executor for apply/observe/stop/rollback.
   No other-host or control-plane fallback. Preserve RLS, least privilege,
   worker fencing and capacity conservation.
@@ -125,6 +336,72 @@ used is total minus free, not total minus space available to non-root users.
 Unreported inode capacity is explicitly unsupported or unavailable. Source
 timestamps/expiry survive reads; failure never becomes a fabricated zero.
 
+P3-3 starts with a platform-operator host inventory and current-resource view.
+The public collection is bounded by the installation's admitted-target limit
+and returns normalized `ExecutionTarget` documents only; it exposes no binding,
+endpoint, certificate, host path or provider credential and accepts no tenant or
+target selector. Reads use the already persisted background observations and
+must not synchronously probe a node, renew a source timestamp or advance a
+resource version. The console performs one authenticated fetch at a time on a
+five-second cadence, cancels it on navigation or logout, retains the last proved
+sample across a transient failure and shows source time, expiry and measurement
+state. A stale or unavailable value remains visibly stale or unavailable.
+
+This first increment provides successive CPU, memory and filesystem samples
+without a page reload; it is not yet the final live-subscription, history,
+container-attribution or terminal acceptance. Those remain P3-3 work. Host
+inventory is platform-scoped, while later container observations and terminal
+sessions resolve tenant ownership from a Deployment and never grant a tenant
+user general host visibility.
+
+The next P3-3 increment owns a tenant-scoped Deployment and current-instance
+view. The existing PaaS worker, which already owns the sealed target routes and
+node credentials, samples running Deployments independently of an open console
+and persists one bounded latest runtime snapshot per Deployment. The API never
+acquires node credentials or synchronously probes a host. A tenant-authorized
+read resolves the persisted Deployment, generation, placement and latest
+snapshot in one tenant transaction; it accepts no host, binding or provider
+selector. Transient collection failure retains the last proved value and its
+source time while making staleness explicit.
+
+The node lists containers only through the exact persisted Compose project and
+revalidates tenant, Deployment, generation, application revision, content
+digest and target identity. It returns at most 64 current instances with a
+node-derived opaque instance ID, component, lifecycle/health and exit state.
+Docker container IDs, names, labels, image IDs, host paths and sockets never
+cross the node boundary. The browser polls one selected Deployment at a time,
+cancels on navigation/logout and cannot use this read model to choose a host or
+open a terminal. Per-container CPU, memory, network and storage samples are the
+next P3-3 increment below; the write-capable terminal remains separate.
+
+The per-container measurement increment keeps lifecycle and resource facts as
+separate proofs. A new node telemetry call first revalidates the same sealed
+Compose project and current generation, then obtains structured Docker Engine
+statistics only for those already validated provider instances. The public
+model joins by the opaque instance ID and exposes no Docker ID/name, image ID,
+volume name, mount path, socket or host selector. CPU reports a bounded sample
+window and used cores against the configured limit; memory reports used bytes
+and limit; network and block I/O report cumulative bytes/errors/drops or an
+explicit unsupported state. No human-formatted `docker stats` output is parsed.
+
+Fast resource collection follows the existing five-second background cadence.
+Writable-layer, image and named-volume space use a separately timestamped,
+bounded 30-second Docker disk-usage cache. Image total/shared/unique bytes and
+volume total/shared bytes remain distinct, so a shared layer or volume is never
+presented as exclusive container usage. Unknown drivers and unavailable size
+accounting are explicit, not zero. A failed refresh retains the last committed
+proof until its own validity expires; storage can become stale independently of
+current CPU/memory/network and lifecycle state.
+
+The immutable lifecycle observation document remains byte-compatible. Resource
+proofs use a separate tenant-scoped, placement/generation-fenced table and
+least-privilege functions that revision-5 binaries ignore. PaaS therefore stays
+at schema 2 while the complete authority contract advances to revision 6 and
+the node runtime to revision 6. The only initial transition is the exact
+revision-5/runtime-5 predecessor after fresh, retained-data, real Docker and
+data-preserving rollback gates pass; this is not a general same-schema
+compatibility rule.
+
 ### Interactive container access
 
 UI selection resolves server-side to the authorized tenant, exact Deployment
@@ -133,6 +410,41 @@ addresses/container IDs or expose node credentials/Docker sockets to browsers.
 A separate IAM action admits a short-lived, single-use session bound to user
 and instance; the node verifies workload ownership again.
 
+The first terminal slice uses
+`POST /v1/deployments/{deploymentId}/terminal-sessions` with a required
+`Idempotency-Key` and the closed body `instanceId` and
+`size { columns, rows }`. The
+only authority is tenant action `paas.terminal-session.create` on the
+`TERMINAL_SESSION` collection; `ORGANIZATION_ADMIN` and `PAAS_DEVELOPER` own it
+and `PAAS_VIEWER` does not. The PaaS transaction resolves the opaque instance
+against the persisted current runtime proof and binds the durable session to
+the exact tenant, user and IAM decision, Deployment, generation, application
+revision, content digest and execution target. An equal unconsumed replay may
+rotate only its one-time ticket; a consumed, expired or changed replay cannot
+create another connection. Creating a replacement terminates the prior live
+session for that user and instance before the new one can become active.
+
+The northbound connection is same-origin WebSocket
+`/v1/terminal-sessions/{terminalSessionId}/connect` with subprotocol
+`matrix.terminal.v1`. The 256-bit ticket is delivered only as a short-lived,
+HttpOnly, `SameSite=Strict` cookie, is stored only as a digest and is consumed
+atomically at the upgrade. TLS deployments additionally require the `Secure`
+host cookie form. The browser never receives a node endpoint or provider ID.
+Cross-origin, missing/duplicate cookie, already-consumed ticket and silent
+reconnect are rejected. The exact APISIX route enables WebSocket forwarding
+without turning the other PaaS routes into upgrade endpoints.
+
+Browser binary frames are bounded stdin and server binary frames are TTY
+output. Closed text control frames cover only resize and close from the client,
+and ready, exit or sanitized error from the server. Each frame is at most 64
+KiB; the ticket lasts 30 seconds, idle sessions last at most two minutes and
+absolute sessions at most 15 minutes. One PaaS connection registry provides
+replacement/revocation for the Phase 1 modular-monolith topology; the durable
+session state remains the future distributed cancellation boundary. A separate
+authorized close route revokes the caller's exact session. Backpressure,
+deadline, disconnect and process cancellation always close both WebSockets and
+the provider stream.
+
 Support bounded bidirectional I/O and resize with origin checks, idle/absolute
 expiry, concurrency/backpressure, revocation and disconnect cleanup.
 Replacement ends the old session; reconnect cannot silently switch generation
@@ -140,28 +452,287 @@ or replica. Use the container's configured user without privileged execution,
 added mounts, host namespaces or environment injection. No-shell images report
 unsupported; no unapproved debug image is injected.
 
+The release-owned verification workload is the closed signed success fixture:
+its builder pins the official Alpine `3.24.1` amd64 image identity, verifies
+`/bin/sh` under network-none, read-only, capability-dropped, non-root execution
+and then signs the resulting workload image. It is selected through the normal
+ApplicationRevision artifact contract and is never injected into another
+workload. Distroless customer images therefore continue to fail closed as
+unsupported instead of silently gaining a debug container.
+
+The node connection carries a closed first-frame request over the existing mTLS
+controller identity and repeats the complete sealed Deployment/instance proof.
+Under the Compose project lock the node lists the current project, maps the
+opaque ID back to exactly one running provider instance and only then opens
+Docker Engine exec with TTY, stdin/stdout/stderr and `/bin/sh`. It omits user,
+environment, working-directory, privilege, mount and namespace overrides. A
+resize targets only that exec ID; the provider ID and exec ID never leave the
+node adapter.
+
 A terminal is write-capable and may expose its workload's own secrets; it is
 not read-only. Interactive edits do not create desired generations. Audit
 actor, resource/session, decision, start/end and outcome; do not retain raw
 I/O by default or include it in support. Sessions, metric samples and deployment
 Operations have distinct lifecycles.
 
+PaaS emits the closed facts `paas.terminal-session.created`,
+`paas.terminal-session.started` and `paas.terminal-session.ended` against the
+`TERMINAL_SESSION` target. The ended result distinguishes completed,
+unsupported, expired, disconnected, revoked, replaced and failed outcomes.
+These facts reuse the immutable original create decision proof, contain no
+Operation ID, command, TTY bytes, ticket, provider identity or workload secret,
+and use the existing PaaS outbox/tenant chain. This expand-only slice keeps the
+authority tuple at IAM 4/Audit 3/PaaS 2, advances the complete contract to
+revision 7 and node runtime to revision 7. Only the exact revision-6/runtime-6
+release is an eligible predecessor after retained-data, pending-outbox and
+data-preserving rollback gates; this is not general same-schema compatibility.
+
 ### Offline lifecycle
+
+The signed release manifest names IAM, Audit and PaaS schema versions
+individually. New bundles use manifest v2 and the closed authority profile;
+the current source requires IAM 4, Audit 3 and PaaS 2. A separate contract
+revision binds the compatible function/wire boundary: changing a return-column
+shape without changing schema numbers still changes this profile. Revision 4
+includes purpose-only local credential recovery and its closed SYSTEM Audit
+fact, retaining the seven-column IAM Audit claim and credential-generation/
+password-session contracts owned by [FEAT-006](FEAT-006-platform-authorities.md),
+event-bound producer proof and host admission. Readiness and retained-
+data gates verify the exact function shapes. Equal revisions
+with different authority schema tuples still cannot admit a transition.
+The published Phase 1 v1 manifest and
+sealed backup formats remain verifiable without changing their bytes; this is
+not admission of an older platform topology or implicit platform permissions.
+Their former single schema number is not evidence that a newer authority can
+run after rollback. Upgrade and data-preserving rollback initially admit only
+identical complete database profiles; a different profile is rejected before
+backup, migration, process replacement or journal advancement. Recovery also
+requires the current release, target release and authenticated backup to have
+the same complete profile, including at resumed recovery/start/verification
+boundaries. Selecting an older backup is not permission to cross profiles. Admitting a
+future cross-profile transition requires its retained-data and actual N-1
+runtime gates, not an increasing version number. Backup/recovery and sanitized
+support carry the same complete profile. This admission rule does not by itself
+prove an offline release compatible or accepted.
 
 Authenticate signed executable/collector/image payloads and protocol
 compatibility before effects. Stage, verify images/ownership, start supervised
 processes, verify real behavior, then commit the release. Replay/restart
 preserves ownership, secrets and accepted receipts.
 
-Stage compatible upgrades without disrupting workloads. Failed verification
-restores the previous executable/configuration; explicit N-1 rollback retains
-compatible data. Both versions read retained receipts and communicate with the
-supported control plane. Reconcile interrupted activation from sealed state,
-not directory presence. Verify certificate renewal/revocation independently.
+The existing installed-platform gate admits a verified, immediate predecessor
+with a distinct source commit only within the same complete profile and
+topology. It must also write an application and Operation through the successor,
+read that exact terminal Operation and its Audit history through the predecessor
+after data-preserving rollback, and prove that only explicit restoration of the
+earlier backup removes those later records. Same-source A/B remains a lifecycle
+fixture, not proof of a separately built predecessor.
 
-Retain platform backup/recovery/status/support. Node support exposes bounded
-normalized identities, release/health/capacity and correlations, not raw logs,
-paths or secrets. Destructive recovery is an explicit operator action.
+Its optional native companion uses two independently booted, empty workload
+engines in the same externally disconnected experiment. Pinned loopback SSH
+forwards are fixture preparation only, never a runtime adapter or a source of
+fabricated host facts. Signed enrollment and platform admission must bind the
+actual machine/engine identities, CPU, memory and filesystem observations;
+background refresh is checked without an HTTP reader. Admission Operations,
+Audit hashes, latest trust and real database fixture data must survive the
+combined platform/node lifecycle and automatic native boot. These database
+fixtures do not count as P3-2 remote application delivery. After boot, the
+machine/engine identities must still match, while capacity quantities are
+compared with the current OS facts rather than treated as immutable identity.
+
+The first node distribution is a distinct, closed `OfflineNodeRelease` in
+the existing signed release owner, containing `mx`, the node executable and
+the pinned collector, not platform images or a fictitious database profile.
+The existing lifecycle/journal owner seals its installation, target and
+credential/configuration commitment; node phases cannot run platform database
+or backup effects. `mx node` owns enrollment/start/status/verification while
+the existing local-machine adapter owns native process effects. Protected
+installation input supplies only the node and collector certificates, never
+a controller private key. The node's own identity can query a bounded
+self-readiness endpoint, but cannot invoke the controller observation or
+execution surface. Readiness requires fresh host and collector observations.
+
+Native execution uses installation-owned transient systemd services, with a
+dynamically allocated collector UID, read-only payload/credential access and
+no Docker socket for that collector. A narrowly owned persistent startup unit
+invokes the staged `mx node start`, authenticates the retained release,
+configuration and credentials, then reconciles the same node and collector.
+It cannot bypass node-payload verification or create a new enrollment authority.
+
+The startup unit is derived from the sealed installation/target binding. Its
+source stays below the protected installation root; only exact, non-forced
+registration links may be created. Existing masks, foreign units, drop-ins or
+changed policies fail before runtime replacement. Readiness includes the
+verified persistent registration. Replay must recover an interrupted, already
+configured node installation using its original command and staged release;
+missing or conflicting state is not permission to create another installation.
+Failed-install rollback removes only its own registration while retaining
+receipts and workloads; release rollback retains the registration. No customer
+package or firewall is changed. Full local guest boot,
+tamper rejection, interruption/replay and unchanged retained state are required
+before accepting this slice.
+
+Native installation roots must be clean absolute POSIX paths without whitespace,
+control characters, quotes, backslashes, colons, dollar signs or percent signs.
+The minimum systemd's transient bind serialization does not quote source paths;
+unsupported roots are rejected before creating installation state, not accepted
+until a later manager reload changes their meaning. The signed node runtime
+contract binds this restriction. External enrollment input files are copied
+into the protected root and are not native mount sources.
+
+Node credential rotation is an installation command, not a writable node API.
+`mx node rotate-credentials` consumes protected enrollment input and the expected
+current configuration digest. It may change only the node/collector certificate,
+key and management trust bytes; installation/target, controller, binding, host
+fingerprint, addresses, reserve policy, storage and signed release stay fixed.
+The existing journal seals the old and candidate commitments before activation.
+Both sets are staged in protected installation-owned storage so an interrupted
+replacement can resume the same command without the original input files.
+Only the exact node and collector processes are reconciled; executor receipts,
+Docker workloads and boot ownership are retained. Expiry of the old certificates
+does not prevent an authorized rotation of their still-authenticated sealed bytes.
+After the new commitment is durable, remove only its two authenticated temporary
+credential snapshots. Cleanup is replayable; failure retains the new commitment
+and blocks staging another rotation, rather than accumulating old private keys.
+
+The default rotation replaces the complete management trust set and both private
+keys. Node and collector keys must be distinct, and no old key may be retained
+by moving it to the other role. It rejects retained old trust keys, including
+reissued CA certificates with the same key, and is the first revocation primitive;
+ordinary same-trust certificate renewal requires explicit `--revoke-previous=false`.
+Revocation is not automatically rolled back after activation failure. The sealed
+candidate remains the recovery intent, failed verification stays unaccepted, and
+restart must not silently restore the old credential set. This is a bounded local
+trust-domain replacement, not CRL/OCSP, automatic CA issuance or zero-gap CA overlap.
+The control plane reloads protected credential references at each new node TLS
+connection, without changing the admitted node mapping or falling back to cached
+credentials on invalid input. Completing the trust switch requires updating that
+installation-owned control-plane input as well; local node readiness alone is not
+proof that every consumer has revoked the previous node credential.
+
+The existing TLS, lifecycle, native-effect and process gates must prove successful
+renewal, old-peer rejection after the complete trust switch, exact replay and stale
+digest conflict, wrong identity/address/key rejection before effects, interruption
+at replacement boundaries, retained workload/receipt state and restart with only
+the committed credentials. The signed node runtime revision changes for this
+capability; it does not change the platform authority database profile or admit an
+unverified older node release.
+
+`mx node upgrade` stages an authenticated immediate successor before accepting
+its activation intent. The candidate must remain available in protected local
+storage if the original media disappears. `--resume` and the persistent startup
+entry use only that sealed source/destination pair and original command.
+`mx node rollback` selects only the retained, signed predecessor. Neither command
+accepts new enrollment, credentials, reserves, host paths or a platform database
+profile. The latest credential commitment survives both directions.
+
+The node running contract must also admit the upgrade/rollback journal and boot
+entry, not merely the observation protocol. This slice introduces runtime
+revision 3: revision-2 installers reject those journal actions and cannot be
+treated as compatible rollback readers. Cross-runtime-profile transitions remain
+unsupported before effects; old nodes keep their current installation. Prove a
+real signed predecessor/successor pair within the supported contract before
+claiming N-1. Same-source A/B alone remains insufficient for that claim.
+
+Activation authenticates both exact native service owners and the closed old/new
+startup definitions before changing either. Replace the protected boot source
+atomically without removing its registration links; admit only those two known
+loaded definitions while reconciling a lost reload reply. Reconcile only the node
+and collector, retaining every Docker workload, executor receipt and credential.
+Failed candidate verification restores and verifies the source release; an
+uncertain effect retains the same intent instead of issuing another upgrade.
+Conflicting ownership or failed recovery is explicit and never permits force,
+unknown-file overwrite or a host/engine restart. Existing lifecycle, native
+effect and signed-process owners must prove these boundaries, including removal
+of original media, interruption/replay, latest-key retention and unchanged
+workload identity/data. Certificate renewal/revocation remains independent.
+
+Retain platform backup/recovery/status/support. `mx node support` writes a
+bounded, closed diagnostic snapshot only under the installation's private
+support directory. It authenticates the installed release, enrollment and
+native ownership, but never reconciles a process, changes the lifecycle journal
+or cleans credentials. An active lifecycle command conflicts; diagnosis does
+not replace its recovery intent. A repeated output name may return only its
+validated stored snapshot for the same journal/credential commitment,
+with original observation times; a changed installation requires a new file.
+
+The snapshot contains normalized identity, release/runtime revision, supervision
+and readiness states, configured reserve, bounded collector CPU/memory/filesystem
+quantities and lifecycle correlations. It reuses the existing authenticated
+collector with at most two samples and no background task or controller key.
+Missing observations remain unavailable, not zero. Raw logs, host/device paths,
+endpoints, environment, certificates, keys and provider output are excluded.
+Support file creation adds no journal action or node-wire field, so it does not
+alter the runtime-revision-3 rollback reader contract. Existing CLI, workflow,
+filesystem and signed-native gates must prove redaction, write-once/private
+output, outage diagnosis and unchanged journal/services/workloads. Destructive
+recovery remains an explicit operator action.
+
+### Local platform credential recovery
+
+`mx platform recover-credentials` is a distinct installation operation, not
+backup restoration or bootstrap replay. Its first slice invokes only IAM's
+purpose-limited recovery transaction for the sealed original installation
+primary. The account, binding, session, concurrency and Audit invariants are
+owned by [FEAT-006](FEAT-006-platform-authorities.md). It does not grant or
+restore platform authority, transfer ownership, enable an account or tenant,
+or recover service credentials. Development-history first authorization and
+revoked-role reinstatement are unsupported product intents.
+
+The existing installation lock and authenticated journal own the command.
+Before recording a new intent or invoking recovery, authenticate the installed
+release, complete supported authority profile, protected bootstrap provenance
+and local capability. Do not accept caller-selected users, tenants, database
+addresses or executables. Invoke only the signed IAM entrypoint with its
+restricted local recovery capability; existing online users, runtime services
+and the installation verifier gain no such capability. Migration and direct
+table writes are not the recovery interface. Recovery neither changes release
+pointers nor restarts the platform, engine, node or workloads.
+
+Read secret input through a bounded protected-file boundary, never a password
+argument or environment value. Ordinary journal records, command output,
+errors, Audit and support evidence contain no password, password hash or raw
+recovery material. Keep only the authenticated protected material needed to
+resume an interrupted command. Its exact identity remains stable across
+response loss and process restart; replay after a later credential change or
+role revocation cannot perform another reset. Once the IAM completion receipt
+and local completion are durable, remove only that command's authenticated
+temporary material. Failed cleanup is resumable and cannot authorize another
+recovery or a rollback of credentials.
+
+Extend the existing CLI, lifecycle, filesystem and installed-runtime gates.
+Prove wrong-root/provenance/profile and changed-input rejection before effects,
+bounded secret input and sanitized output, lost-response and crash replay,
+one-way credential replacement, exact temporary-material cleanup, and unchanged
+service/workload identities and data. IAM's transaction and delayed-Audit gates
+remain in their current owner. SQL migration evidence alone does not admit a
+cross-profile release transition or accept the combined offline slice.
+
+### Supported release and authority migration boundary
+
+Matrix supports upgrade, rollback and recovery only between explicitly signed
+releases admitted by an exact source, database profile, contract revision and
+topology transition. The fixed `c88a84f` executable is a development-history
+and retained-data fixture, not a supported customer predecessor for platform
+authority. Its bootstrap records do not identify the executing source or role
+catalog. Consequently, an absent platform binding or empty grant history is
+never evidence from which the product may grant `PLATFORM_OPERATOR`.
+
+Fresh supported installations establish their sealed installation owner and
+initial platform authority through the current bootstrap ceremony. Credential
+loss for an owner that still has an unrevoked platform binding uses the separate
+purpose-only recovery operation above. A revoked binding remains revoked, and
+unknown or incomplete provenance fails closed.
+
+If a future published release requires a new highest privilege, that release
+must define a dedicated, version-scoped transition with authenticated source
+and target manifests, explicit operator intent, one-time non-rollback
+consumption evidence and a closed Audit fact. Database migration, startup
+reconciliation, bootstrap replay and absence checks are not substitutes. This
+pre-v1 replacement-first boundary removes development-history first
+authorization from P3-1 while retaining the real `c88a84f` regression that
+proves migration and replay never grant absent authority. The supported
+compatibility baseline begins with the first accepted Phase 3 signed release.
 
 ## Acceptance gates
 
@@ -172,6 +743,26 @@ paths or secrets. Destructive recovery is an explicit operator action.
 | C: real runtime/UI | Independent engines run application lifecycle with actual ENV/Secrets/limits/networks; samples respond to controlled CPU/file activity; browser receives successive/stale/recovered samples and opens the exact container with real I/O/resize/expiry/disconnect; specified negative paths |
 | D: clean offline lifecycle | Empty control-plane engine and two empty workload engines with external egress disabled throughout; signed A install/enrollment and Gate C; tamper rejection, failed-candidate rollback, compatible B upgrade and N-1 rollback; backup/recovery, certificate lifecycle, restart, verify/status/support; Phase 2 untouched |
 | E: release closure | Exact committed source: generation drift, module verification, unit/vet/race/repeated tests, architecture, real database/adapters, cross-platform builds, links, donor/secret/path scans and diff checks; applicable independent GitHub gates and signed artifacts; no donor dependency |
+
+The following P3-6 gates reopen FEAT-008 without invalidating the accepted
+baseline evidence:
+
+| P3-6 gate | Required evidence | State |
+| --- | --- | --- |
+| F1: contracts and automated gates | Unit, architecture, API, PostgreSQL, IAM, Audit, security and UI behavior suites cover the new enrollment boundary and all existing Phase 3 regressions | Complete |
+| F2: authenticated browser journey | One real browser creates an enrollment, downloads the locally assembled join file, copies the fixed command, follows automatic state changes and enters the resulting existing host detail; direct API calls or mocked state do not substitute | Complete |
+| F3: independent hosts and workload | Two separately installed Linux/Docker/Compose hosts enroll independently; the first runs a real application and the second enrolls separately, with no shared identity, credential, resource sample, route or scheduling state | Complete |
+| F4: disconnected signed install | With external network unavailable, the target installs and joins from the signed offline release plus join file without pulling packages or images | Complete |
+| F5: negative and recovery matrix | Expiry, revocation, credential replay, concurrent exchange, wrong identity, wrong installation, network interruption and lost exchange/completion responses fail closed or recover idempotently without a schedulable half target | Complete |
+| F6: post-enrollment lifecycle | Deploy, update, stop, rollback, current host/container resources, drain, reactivate and safe remove all operate through the enrolled target | Complete |
+| F7: release transition retention | Supported platform/node upgrade and rollback retain enrolled targets, identity pins, disabled identities, Operations, Audit records and exact replay behavior | Complete |
+| F8: non-interference | No remote Linux host, Docker Engine or unrelated workload is restarted, and no Docker prune or broad cleanup occurs | Complete |
+| F9: zero secret leakage | Join credentials and private keys are absent from logs, Audit, ordinary HTTP responses, browser storage, problem details, diagnostics and support artifacts; the one creation envelope is ciphertext only | Complete |
+| F10: exact release closure | The exact pushed source passes a real offline Compose E2E and every applicable existing Phase 3 gate; signed artifacts and the rolling checkpoint name that commit | Complete |
+
+FEAT-008 returns to accepted only when F1 through F10 are all backed by exact
+current evidence. Passing a narrower mock, API-only, single-host or connected
+runtime check cannot close one of these rows.
 
 Tests extend their current owners and prove current behavior, contracts or
 security boundaries. Add a suite only for a new boundary or unowned gate.
@@ -214,14 +805,1233 @@ and full Phase 1/2/3 release exercises were not implied by that default run.
 [Independent CI](https://github.com/xiak/matrix/actions/runs/33044131708) passed
 on `540dc10`, including the full Linux Go/race and real node/collector process
 gates in the existing [verification workflow](../../.github/workflows/verification.yml).
-No implementation iteration or complete Phase 3 gate is accepted.
-Next in P3-1: control-plane admission/refresh and signed offline node startup.
-The node observation chain alone is not the completed observability product.
-The prerequisite installation-scoped IAM role/decision boundary and its
+At that checkpoint, no implementation iteration or complete Phase 3 gate was
+accepted; the node observation chain alone was not the completed observability
+product.
+The prerequisite installation-scoped IAM and Audit boundaries and their
 verification are owned by
-[FEAT-006](FEAT-006-platform-authorities.md#installation-scoped-platform-authorization).
-Platform host mutations, their Operation/Audit integration and explicit
-authorization when upgrading an older installation remain unaccepted.
+[FEAT-006](FEAT-006-platform-authorities.md).
+
+Control-plane pool creation, target registration and current-state queries now
+use the existing apphosting authority. A protected installation file selects
+the node's endpoint, mTLS controller credentials and exact identity pin;
+northbound input contains only its opaque binding reference. Admission probes
+outside the transaction, then atomically stores the pool/target, identity,
+terminal installation Operation and Audit outbox fact. Current IAM permission
+is required even for exact replay; a committed replay does not need a reachable
+node or rewrite the original decision. Tenant and installation Operation/outbox
+partitions remain distinct even when their authority IDs have identical text.
+
+The PaaS process refreshes admitted hosts from a five-second background loop
+without UI readers, with at most two concurrent probes and 128 configured
+targets. This bounds work; it is not a multi-host latency guarantee. Refresh
+preserves scheduling intent, labels, accepted identity and reservations.
+Metric-only samples do not advance the placement resource version; changed
+health/capacity does. Lost connectivity retains last capacity and source times,
+marks the target unavailable and lets usage expire. Reconnection restores fresh
+observations without re-enrollment. GET does not renew source measurements.
+
+The existing [PostgreSQL gate](../../app/service/paas/internal/apphosting/data/postgres/execution_admission_integration_test.go)
+passed with concurrent admission/replay, identity collisions, forced RLS,
+cross-partition rejection, atomic rollback, refresh and outbox fencing. The
+[five-process gate](../../test/authorityprocess/process_e2e_test.go) now obtains
+host facts through real IAM-authorized PaaS HTTP mutations and its dispatcher,
+not a hand-made host Audit event. It passed background no-reader sampling,
+wrong node identity, outage/recovery, exact Operation/Audit correlation and
+next-request denial after platform revocation and IAM restart. Its node peer is
+a closed wire fixture reached by the production mTLS client. Runtime database
+login evidence uses the corrected gate owned by
+[FEAT-006](FEAT-006-platform-authorities.md), not the earlier DSN assumption.
+
+The [Linux variant of that same gate](../../test/authorityprocess/node_runtime_linux_test.go)
+connects the real node and pinned collector to all five authority processes.
+Native Ubuntu/ZFS runs received the actual machine fingerprint, OS CPU/memory,
+filesystem measurements and reserve policy through the PaaS API. The same
+admission, no-reader refresh, wrong-identity rejection, outage/restart,
+Operation and Audit assertions run against those processes. Shared filesystem
+capacity may change between samples; the resource version must remain monotonic,
+while the controlled wire peer still proves metric-only version stability.
+The native gate ran with one CPU, a 1 GiB ceiling, protected system/home paths
+and loopback-only network access. The collector ran as UID/GID 65534 without
+Docker access. Its separate PostgreSQL 18 fixture had no network or published
+port and used only a fixture-owned local socket. Executables and the
+pinned collector were hash-checked before the run. Existing host services and
+containers were not changed. The transient processes, test database/image,
+socket and native experiment files were removed afterward. This proves real observation
+through the control plane, not remote application execution or signed node
+installation.
+The combined node gate passed on source `1ff7f16` in the existing
+[independent CI node-process job](https://github.com/xiak/matrix/actions/runs/33063053971).
+
+The [retained-data upgrade gate](../../app/service/paas/internal/apphosting/data/postgres/upgrade_integration_test.go)
+executes the fixed `3916644` PaaS schema 1 and seeds tenant work through its
+transaction functions. Applying the new schema twice preserved Operations,
+immutable generations, Audit documents and in-flight leases; retained work and
+Audit completion continued afterward. Legacy execution pools were not silently
+enrolled. PaaS API/worker readiness now requires schema 2 and rejects schema 1.
+Fresh PostgreSQL and upgrade tests, the five-process gate, full Go race/vet,
+stable generation, module verification, ten repeated focused runs and Linux
+builds passed locally. Source `3e208ea` passed
+[independent CI](https://github.com/xiak/matrix/actions/runs/33056029691),
+including all existing Go/race, PostgreSQL/authority-process and real
+node/collector process jobs.
+
+The fixed account, historical-proof and lifecycle/session integration has passed
+this branch's host admission regression; its authority evidence is owned by
+[FEAT-006](FEAT-006-platform-authorities.md).
+
+The release builder now emits the explicit authority profile and contract
+revision. Existing [lifecycle gates](../../app/service/installation/internal/platformcommand/backend_test.go)
+prove rejection of an unproved profile before any effect or journal change,
+including equal schema numbers with a different contract revision and an
+incompatible predecessor already present in sealed state. An actual `mx` built
+from the published `c88a84f` source authenticated the v1 format and rejected v2
+before effects in an egress-disabled Linux fixture. This does not demonstrate
+that the older executable can run the current platform topology.
+The existing [backup/recovery gates](../../app/service/installation/internal/localmachine/localmachine_test.go)
+proved unchanged v1 canonical seals, no rewrite on replay, complete profile
+binding, rejection of substituted profiles and zero/null legacy selectors,
+and retained sanitized support behavior. The real PostgreSQL 18 five-process
+gate checks each authority's HTTP schema version against the release profile,
+alongside the existing host, tenant-isolation and runtime-login assertions.
+The process fixture ran on its own internal bridge without published ports;
+its process and database containers each had a verified one-CPU ceiling and
+bounded memory/PIDs. Release, lifecycle and local-machine tests passed ten
+repetitions in network-disabled Linux containers. Full Go race/vet, Linux
+builds/vet, module verification and stable generation passed. Source `c29f9e3`
+passed all three existing jobs in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33065856592).
+These tests
+establish admission and format boundaries, not a signed offline release or
+runnable cross-profile N-1 compatibility.
+
+The existing process gate consumes a release-builder-produced signed
+`OfflineNodeRelease` and executes its bundled `mx`, without a second test-only
+release implementation. Clean source `bd08f5d` assembled the runtime-revision-2
+bundle with the pinned collector, licenses and two native executables. Gate
+`9c49d55` passed its full native exercise in 417.07 seconds on a task-owned
+local Ubuntu 22.04 guest with systemd 249, Docker 27.5.1 and Compose 2.33.0.
+The software-emulated guest had two virtual CPUs and 2 GiB memory inside a
+two-CPU, 3 GiB wrapper with no external network, published port, privileged
+mode or shared Docker socket. The gate had its own one-CPU, 768 MiB limit.
+It covered exact install replay, no-reader sampling, staged-payload and effective
+service-policy tamper rejection, manager reload, collector outage/reconciliation
+and supervised crash restart. Restoring an altered unit source without reloading
+does not hide a loaded privileged execution flag. Unsupported native roots fail
+before creating installation state. Partial boot registration is repaired without
+replacing healthy processes.
+
+The same gate's boot preparation passed in 180.73 seconds, retaining an
+interrupted real installer command. Only that local guest kernel was rebooted;
+the changed boot ID was verified. The persistent startup unit automatically
+completed the original in-flight command, with no service retry or manual start. Both
+resident processes were running before the first manual `mx` status query.
+The retained installation/target, release, command ID, configuration, certificate/key bytes
+and executor marker were unchanged. The read-only boot phase passed in
+8.20 seconds; it separately bounds the wait for fresh observations after boot
+load instead of equating a running process with a current sample. This boot
+case does not combine kernel reboot with credential rotation or prove that a
+deployed application/database workload survives reboot. No remote machine,
+shared engine or other task's service was restarted. Its task-owned runtime
+and transferred fixture files were removed after verification.
+
+The collector runs under a distinct non-root UID without access to the node
+private key or Docker socket. Systemd owns and removes its private runtime
+directory when the service stops. Real stop/restart and cleanup assertions prove
+that no mount placeholder remains; a pre-existing directory is not adopted by
+name. Local effect gates retain executor files and credentials during rollback;
+failed-install rollback authenticates every service before removing its exact
+boot links.
+
+Enrollment/security regressions cover closed input, overlapping IP aliases,
+exact certificate roles, mutual trust, expiry and certificate address binding.
+The node's self credential cannot enter the controller command surface.
+The existing journal/lifecycle gates preserve the node's sealed identity and
+prevent platform database/backup phases or cross-purpose directory reuse.
+Linux local-machine tests cover retained executor files, credentials and backup
+bytes, including recovery rejection at every effect boundary when the current,
+target and authenticated backup profiles differ. Node lifecycle does not change
+the platform database profile. The integrated authority composition is specified
+above; the existing lifecycle gate explicitly rejects transitions in either
+direction with the preceding
+IAM 2 / Audit 2 / PaaS 2, revision 1 profile before journal or provider effects.
+
+The native exercise consumes an extracted Linux bundle; declared executable
+modes were restored after the Windows-origin transfer before verification.
+It does not prove a portable archive format or a compatible signed
+platform/node release pair.
+
+The verified runtime-revision-2 slice supports sealed credential rotation and protected
+control-plane credential reload. The existing lifecycle/filesystem gates prove
+old/candidate commitments, immutable target/configuration/release, rejected
+foreign services and unknown file contents, mixed-file recovery, exact replay,
+and one-way recovery intent. Committed snapshot cleanup can resume after an
+unlink; failure preserves the new credentials and blocks another rotation.
+Native service ownership binds immutable enrollment and signed release, while
+the journal separately authenticates credential bytes. Rotation retains the
+exact persistent startup source and verifies ownership before stopping services.
+
+The existing real-TLS gates prove exact roles, expired sealed predecessors,
+rejection of shared or cross-role reused private keys and reissued old CA keys,
+and refusal of both retired peers. The same control-plane client reads replaced
+protected credential references; missing/invalid input and changed node mappings
+fail before HTTP without falling back to cached credentials.
+
+The extended signed native gate exercises explicit same-trust renewal,
+default complete trust replacement, killing the real installer, removal of all
+external rotation inputs, resumption from sealed snapshots, old-controller/node
+TLS refusal, resident-process restart, and replay retaining the original command.
+A separate preloaded PostgreSQL 18 fixture had no network or published port,
+a half-CPU quota and a 384 MiB memory ceiling. Its container ID, startup time,
+restart count and SQL marker remained unchanged throughout. An executor-state
+marker and boot/configuration bytes were retained, and completed rotation snapshots were
+removed. Its initialization has a bounded fixture wait independent of node
+readiness deadlines. This case passed within the full minimum-systemd exercise
+above and in independent CI; it is not evidence of PaaS remote application
+placement.
+
+Full Go tests/vet, affected-package race checks, ten focused repetitions,
+architecture, stable generation, module verification and Linux builds passed.
+The production rotation slice `a7ad849` and the gate-only fixture correction
+`9c49d55` each passed all three jobs in
+[production CI](https://github.com/xiak/matrix/actions/runs/33144098456) and
+[gate CI](https://github.com/xiak/matrix/actions/runs/33146237962), including the
+signed native package, real-authority node variant and retained-data/
+least-privilege regressions. The gate correction also passed the local default
+Go suite, vet, module verification and Linux test build.
+No authority database profile changed, and no remote machine or shared engine
+was restarted. These per-node checks alone do not prove a combined offline
+platform/node lifecycle.
+
+The local original-primary credential recovery consumer now uses the signed
+IAM one-shot executable, protected intent files and the existing installation
+journal. Public CLI/backend tests cover exact retry, unknown outcomes,
+definitive rejection and one-way completion; local-effect tests reject
+substituted process ownership, preserve in-flight recovery and authenticate
+temporary-file cleanup. The authority transaction/process evidence is owned by
+[FEAT-006](FEAT-006-platform-authorities.md). Control-network resolution retains
+the complete provider identity; ownership checks do not accept a truncated
+prefix. Audit observation retries only explicitly unavailable responses within
+a fixed bound; authorization errors, malformed pages and missing historical
+hashes still fail.
+
+The existing installed-runtime gate's combined phase (`a060715`) consumed
+signed platform A from `91b8ba5` and B from `7910622`, both with the complete
+4/3/2 revision-4 profile and the same protected-node-connection topology.
+Signed node A used `cd271c5`; B used `6697292`, both at runtime revision 3.
+Both pairs contain distinct source revisions. The lifecycle phase passed in
+1076.69 seconds with a new empty control-plane engine and two independently
+booted, empty workload engines, with external egress disabled throughout.
+
+The task-owned Docker 27.5.1 wrapper had four CPUs, an 8 GiB ceiling and a
+768-task limit. It was privileged for nested Docker, without a host socket,
+host bind mount or published port. Two local Ubuntu 22.04/systemd 249 guests
+each had two virtual CPUs, 2 GiB RAM and an ext4 disk. Their private management
+forwards served only this experiment. No remote machine was accessed.
+
+The gate killed the real installer after IAM committed but before the provider returned,
+removed the operator input and resumed the same sealed intent through its
+exact receipt. Old sessions and the retired password were rejected; forced
+change, completed replay, unchanged service/workload identities, private-file
+cleanup and the single SYSTEM fact with a complete platform chain passed.
+Application generations, failed-candidate automatic rollback, successful B
+upgrade, data-preserving rollback, selected-backup recovery, retained Audit
+hashes, capacity release and sanitized support also passed.
+
+Both signed nodes were admitted through the real platform authority. The gate
+checked actual machine/engine identities and CPU/memory/filesystem quantities,
+background refresh without HTTP readers, isolated node outage and replay of
+the original admission Operation. Complete trust/key replacement rejected the
+old controller. Updating controller credentials recreated only the owned
+PaaS API, preserving every other running service and workload at that boundary.
+Node A-to-B upgrade and B-to-A rollback retained the latest credentials.
+The original host Operations, Audit hashes, node bindings and two independent
+PostgreSQL 18 container identities, start times and SQL markers survived the
+combined platform/node lifecycle, including selected-backup recovery.
+
+The exercised manifest SHA-256 values were platform A
+`76938c05d17633b003c78a6ea4bfa04def0afeecf5683b3a9743779c08fc447a`
+and B `a42e56940667bb4334ff4e3239cca894489688f993b0bbce67e2485ccbb97b04`,
+node A `5b19cd9f1f9daafb8ea620f62a73b32d52342ff1c3dc511b97065d2a7f40cfff`
+and B `32d66e02d67ecc1d7ef6491103639c048dfe393cee93e350a9ad8901be5cc9d9`.
+
+A new application, terminal Operation and associated Audit fact were committed
+through B after the backup. Actual A read the same Operation and retained
+Audit hashes after rollback; only explicit recovery of the earlier backup
+removed those later records. The status consumer retains the existing
+configuration digest and still rejects unknown fields. The populated controller
+inventory retained its latest credential commitment through rollback and
+recovery, rather than restoring the older trust from the backup.
+
+Only the two local guests and their task-owned engine were shut down and
+started again. All nine platform container identities became healthy
+automatically. The boot phase (`dc8dd3a`) passed in 71.02 seconds, proving new
+kernel boot IDs with the original machine/engine identities, automatic sealed
+node startup without a test start command, latest credentials, fresh platform
+observations, retained host Operations/Audit hashes and the same database
+containers and SQL data. Their new start times reflected the actual boot.
+Current OS capacity was compared exactly with the new platform sample; one
+guest's usable RAM changed by 4096 bytes without changing its identity.
+
+No remote machine, shared engine or other task's service was restarted.
+The temporary engines, guest disks and test volumes were removed afterward;
+fixed source and signed inputs were retained. This accepts the exercised
+observation-only lifecycle and exact predecessor pairs, not arbitrary
+historical N-1, cross-profile transitions, development-history upgrade
+compatibility or the complete Phase 3 release. The database fixtures are not remote PaaS
+application placement or interactive-container acceptance.
+The exercised input was an extracted signed directory with declared file modes
+restored after Windows-origin copying, not a portable-archive acceptance.
+Local checks passed affected-package race, architecture, vet and fixed Linux
+builds. The existing five-process gate also passed in 30.90 seconds with a
+separate PostgreSQL 18 database limited to one CPU, 768 MiB and 192 tasks;
+that local variant uses the controlled node wire peer. Its platform Audit
+observer retries only the closed `audit.unavailable` response, at most five
+times. Denials, malformed responses, persistent unavailability and invalid
+page/chain data remain failures; mutation and negative-access assertions do
+not acquire retry behavior. The default behavior regression covers these cases.
+All three jobs on the final code checkpoint `524a982` passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33190459118), including
+full Go/race/vet, module/generation checks, retained authority upgrades,
+least-privilege processes and the real Linux node variant. CI does not run
+the optional two-guest combined exercise and is not a substitute for it.
+
+The protected platform/node connection increment `91b8ba5` passed repository
+tests/vet, affected-package race, architecture, stable generation and Linux
+native installation regressions. Its closed private contract, append-only
+inventory, interrupted-effect/resume and exact API-only provider boundaries
+are covered in the existing owners. All three jobs passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33165337635).
+
+Signed platform and node bundles from that exact source were then installed
+on two operator-provided Debian/ext4 VMs. Real IAM-authorized admission,
+platform-only Operations, exact historical Audit/content commitments and a
+complete platform chain passed. CPU, memory, filesystem and inode samples
+advanced through the signed platform. Stopping only the owned node service
+produced unavailable/stale state with retained capacity and source times;
+committed admission replay and reconnection kept the original target and facts.
+Wrong-installation connection input changed neither journal nor runtime.
+
+The same installation replaced the node/collector keys and complete management
+trust set. Current-controller TLS succeeded before and after retired-controller
+and anonymous rejection. The old platform connection remained unavailable until
+its protected controller credentials were replaced, then fresh samples resumed.
+Both configuration commands recreated only the PaaS API: the other eight
+platform container IDs, start times and restart counts were unchanged. Completed
+configuration replay and authenticated pending-file cleanup passed. Node verify
+and platform status ended ready. No remote machine, engine or Kubernetes service
+was restarted. This observation fixture reserved every workload slot and placed
+no application. Its VM network was not externally disconnected, so it is not
+Gate D, a signed platform/node upgrade pair, or remote application acceptance.
+
+The signed node release-transition implementation `cd271c5` introduces runtime
+revision 3 without changing the platform database profile. The diagnostic
+increment `6697292` retains that journal/wire/runtime contract. Existing
+lifecycle, journal, CLI and native-effect gates cover closed source/target
+ownership, interrupted activation and manager reload, unavailable original
+media, source recovery, completed replay and retention of credentials rotated
+after upgrade. Diagnostic gates cover private write-once output, redaction,
+conflicting metadata/content, unavailable measurements and canceled collection.
+Full Go tests/vet, affected-package race, architecture, stable generation,
+module verification and Linux builds passed. All three jobs passed on the
+exact successor commit in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33174882532), whose
+native gate now builds its actual predecessor from fixed `cd271c5`.
+
+That gate also passed in 124.59 seconds on a task-owned Debian/ext4 VM with
+systemd 257.7 and Docker 28.5.1. Signed A used `cd271c5`; B used `6697292`,
+not another label on A's source. The one-CPU, 768 MiB, 128-task helper denied
+non-loopback IP traffic; the preloaded PostgreSQL 18 fixture had no network,
+port or image pull. Actual installer interruption, resume after media removal,
+B boot-entry execution, complete credential replacement on B, interrupted
+rollback and failed-candidate automatic source recovery passed. The old A
+installer read B's journal and operated again after rollback. Workload
+identity/start time/restart count/SQL data, executor marker and latest credential
+commitments were retained.
+
+The signed B diagnostic command read both B and rolled-back A, returned real
+bounded CPU/memory/filesystem quantities, and reported collector outage without
+zero-valued substitutes. Repeating a destination retained its original bytes
+and source times; diagnostic creation/replay left journal, keys, native process
+identities and workload unchanged. The gate removed only its temporary services
+and workload. The VM boot ID and pre-existing node/collector PIDs and start
+times were unchanged, with no blocked D-state tasks afterwards. Declared
+executable modes were restored after Windows-origin archive transfer. The VM
+itself was not externally disconnected. This admits the tested runtime-3
+predecessor/successor pair, not arbitrary historical N-1, runtime-2 admission,
+a portable archive format or the combined offline platform/node release.
+
+P3-2 is accepted for its remote application loop. The production slice fixed at
+`54a5591` routes every persisted placement to its exact target-bound executor.
+An update or rollback is an in-place replacement on the Deployment's current
+target: only that Deployment's exact active capacity claim is excluded while
+checking replacement capacity, and every other target fails closed. Relocation
+remains a future explicit operation, not an implicit response to a busy host.
+Unit and real PostgreSQL 18 gates cover invalid caller-supplied bindings,
+digest binding, a one-slot target with the old generation still active,
+concurrent accounting and release after terminal success.
+
+A signed platform release from exact source `54a5591` used manifest SHA-256
+`d40d292b7f176045a145fe07d616ae85e8f037c5c3230afd3396703693306947`
+and transport SHA-256
+`76a87b96bf9da545030f9c5701e8c0e99017e59b7489e9237d89195078791cda`.
+It upgraded the task-owned control plane and used the separately installed
+managed node without an external image pull. A real application with bounded
+resources, configuration environment values and a protected file Secret
+reached READY at generation 1. Update generation 2 and rollback generation 3
+remained on the same managed host; generation 4 stopped it, cleared placement
+and released every claim. The control-plane host had no container for this
+Deployment. Exact PaaS decisions and APPLY/APPLY/ROLLBACK/STOP commands all
+named the managed target and reached terminal success; the tenant and platform
+Audit chains verified. Successive host samples advanced independently of reads
+and reported real CPU, memory and filesystem values throughout the lifecycle.
+
+The first real run exposed the former implicit rescheduling defect instead of
+masking it: generation 2 had moved to the control-plane host while generation 1
+remained on the managed node. The accepted slice replaces that behavior. The
+two test Deployments ended STOPPED with released claims and zero remaining
+containers; only the exact orphaned test container and its network were removed,
+while its authenticated project state was retained. Both remote machine boot
+identities remained unchanged and neither machine nor Docker Engine was
+restarted.
+
+The signed product source's first independent run exposed a stale test fixture
+that still invoked the removed six-argument execution-profile function. The
+test-only successor `640ff2d` uses the installation-scoped seven-argument
+contract. Full local Go tests/vet, the affected race gate, a dedicated real
+PostgreSQL 18 authority-process run and the real Linux node-process variant
+passed. All three jobs then passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33262466613).
+
+P3-2 did not accept interactive access, multi-host scheduling policy or the
+complete offline release. The next P3-3 work added successive live
+host/container views and a separately authorized, short-lived terminal bound
+to the selected running instance. That checkpoint did not close Gate D, and no untested
+predecessor or cross-profile admission is inferred from the fixed pairs
+exercised there.
+
+The first P3-3 tenant Deployment runtime-inventory implementation is fixed at
+`21e526e`. It adds a bounded ID-ordered Deployment collection and one selected
+Deployment's current-instance snapshot without introducing a Machine model or
+a host/provider selector. The existing PaaS worker samples independently of UI
+readers through the sealed target route; tenant reads retain the exact source
+time and last proved value while projecting stale or unavailable state. The
+node revalidates tenant, generation, application revision, content and target,
+then returns only opaque provider-neutral instance identity, component,
+lifecycle, health and terminal exit state. The console polls only the selected
+Deployment every five seconds and cancels on navigation/logout.
+
+This additive slice keeps PaaS schema 2 and advances the authority contract to
+revision 5 and node runtime to revision 5. Its only installed predecessor is
+runtime 4 at fixed source `c273fbf` and topology digest
+`sha256:1c07008679db72f2057c17c1fd62cba5ae02f29026d0e44d2b17cf1c5bbf1326`.
+The signed gate first exposed that the current release builder had stamped its
+own runtime metadata onto predecessor binaries. Fix `91399dd` makes the fixed
+predecessor build its own manifest and makes the target release tool own the
+forward transition; the old tool fails closed while B is current and operates
+again only after rollback. The same fix replaces the final current-only check
+inside installed-release reauthentication with the exact current-or-frozen-
+predecessor policy. Gate correction `71dacd6` verifies support evidence against
+the actually selected signed runtime in both directions.
+
+Fresh and retained PostgreSQL 18 gates, worker fencing and least-privilege
+checks, API/adapter/use-case tests, full Go tests/vet/race, architecture,
+stable generation and the frontend's 118 behavior tests passed. A native
+Debian/ext4 host then ran signed A from `c273fbf` at runtime 4 and signed B from
+`91399dd` at runtime 5 under a one-CPU, 768 MiB, 128-task, loopback-only gate.
+Install, no-reader observation, credential retirement, interrupted A-to-B
+upgrade, old-tool rejection, B-to-A rollback, failed-candidate source recovery,
+support evidence and the bounded PostgreSQL workload's identity/data retention
+passed in 143.45 seconds. The exercised `release.json` SHA-256 values were A
+`1085ad593921a6fe8154ff732866002554394975bb3c503504e1e54d47ba9c30` and B
+`c7473702f4b766e462f6da08ab71e8625026160826366ace74df71a331e5f45c`.
+Only exact test-owned services, container and `/opt` directories were removed;
+the host's ten existing platform containers remained running and the machine
+and Docker Engine were not restarted.
+
+Exact checkpoint `71dacd6bdedaec3b9964a40459e8ef8d22b7e4ca` passed all three jobs in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33272639690),
+including the corrected signed runtime-4-to-5 native gate and independent
+authority processes. This verified the code checkpoint and the explicit node
+transition. At that checkpoint it had not yet proved a signed platform's real
+tenant snapshot in the browser across two managed hosts, per-container
+resource quantities, a terminal session, complete Gate C/D or Phase 3.
+
+The signed two-host runtime/UI gate is fixed at
+`6b8eeb237a7acd99d1518b4f2f0aac2c2b044767`. It extends the existing optional
+installed-runtime owner rather than creating a parallel release harness. Signed
+platform A used source `21e526e` and manifest SHA-256
+`01f35d1cfbf95fd6814c7ae6f4a708faf26512b9ea5d4df43ce7565b2ed27e62`;
+platform B used source `91399dd` and manifest SHA-256
+`a89f00eddaf16b82ca0b7734397ab1f85c46271591b0606755254aa2fe1e49ad`.
+The corresponding runtime-4 and runtime-5 node manifests were
+`19021bc5a5e707be82f15d158f1c1d81e059e56fb96f126394acc0b18c7405da`
+and `7af244423c0be3f7e3f235fe6719522e549fc6593844cdab504032335141fda5`.
+All three jobs for that exact checkpoint passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33348789655).
+
+The real lifecycle passed in 556.31 seconds with a task-owned signed platform
+and the two operator-provided Debian/ext4 hosts. It admitted exact target
+identities `a-runtime-native-1` and `a-runtime-native-2`, reserved one workload
+slot on each, and placed one real signed-image Deployment on each through the
+normal FIRST_FIT, Operation, capacity-claim and Audit owners. Two independently
+advancing background snapshots retained the same provider-neutral instance on
+the exact persisted target. Direct provider inspection proved that no copy
+existed on the other host and that tenant, Deployment, generation, revision and
+component labels matched, while Docker IDs and names differed from the public
+opaque identity. A caller-supplied execution-target query selector was rejected.
+
+One authenticated browser session on that installed platform displayed both
+Deployments as READY/RUNNING with their distinct targets and opaque instances.
+It also displayed both hosts' real CPU, load, memory and ext4 capacity with
+source time and freshness; a 12.5-second observation changed the first host's
+load from `1.83 / 0.83 / 0.58` to `1.57 / 0.82 / 0.58` without reloading the
+page. Images without a health check remained explicitly `NONE`, not falsely
+healthy. The opt-in browser credential uses a bounded private regular file and
+is included in support/path leakage checks; group-readable, line-delimited and
+symlink input are rejected.
+
+Only exact task-owned services, containers, images, keys and remote fixture
+roots were removed afterward. Each host returned to its ten pre-existing
+running containers; its machine boot ID and Docker Engine ID were unchanged.
+Neither host, Docker Engine nor any unrelated service was restarted. That
+checkpoint used existing operator-provided hosts and did not cover the
+externally disconnected or reboot phase of Gate D. Per-container resource
+attribution and the separately authorized short-lived terminal were still open
+at that checkpoint.
+
+The per-container resource implementation is fixed at
+`44402510890042cb9b1c7d6d16e7f4453b4dbc19`. The Compose adapter overlaps its
+bounded container-statistics and Docker disk-inventory requests under one
+cancelable observation context. A slow global storage inventory therefore no
+longer serially consumes the entire three-second budget after CPU, memory and
+network sampling; the existing storage cache, independent freshness and
+unavailable/stale states remain unchanged. The behavior gate proves both
+provider requests can make progress within one observation budget. Its race
+run, twenty repetitions, full Go suite and vet passed locally. The exact
+checkpoint's `go`, `node-process` and `authority-process` jobs also passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33374998320).
+
+Signed platform B `matrix-v0.3.0-host.15-444025108900` was assembled from that
+clean source with profile IAM 4, Audit 3, PaaS 2 and contract revision 6. It
+names the accepted host.8 release as its immediate predecessor. Its
+`release.json` SHA-256 is
+`050bbd5dccb6b13716abdcb44a46ef5b9d518809a831bbbfe5bad2cf8329ee7d`;
+the transport archive SHA-256 is
+`3e942557e68a152ee7baa6a08db97a53e748de4246ead62f16223dc02dd70cfc`.
+The independently built Linux acceptance driver SHA-256 is
+`0384ff2a94dc8fb01a5bb46c9010bad674e7cbd0116234bedd60c9052425e481`.
+
+A fresh Docker 27.5.1-in-Docker engine with zero containers, images and volumes
+then ran the complete installed-runtime gate against the two operator-provided
+Debian/ext4 hosts. In 675.26 seconds it passed release-A installation, IAM and
+Audit through APISIX, application generations, purpose-only local credential
+recovery, two signed native admissions, backup and trust replacement, failed-
+candidate rollback, host.15 upgrade, two real native Deployments and successive
+runtime/resource snapshots, the exact node predecessor/successor transition,
+platform rollback, backup recovery, application rollback/stop, capacity
+release and zero-leakage support. Both containers reported bounded CPU and
+memory against their configured limits, network counters, explicit block-I/O
+support state, and separately timestamped image, writable-layer and volume
+storage without exposing provider identities. The accepted log SHA-256 is
+`69caecd927058a439e9022f7082ff80092a97f5ffbe47a90d3274505df6afb03`.
+
+The recovery step used the authenticated current host.15 controller while the
+selected sealed backup determined host.8 as the target; the historical target
+binary did not own the restore algorithm. Both remote boot IDs and Docker
+Engine IDs were unchanged before and after the gate, pre-existing node/
+collector units and platform containers remained active, and no machine or
+Docker Engine was restarted. The gate ended at its explicit `restart-required`
+boundary because remote reboot is prohibited. At that checkpoint, the evidence
+accepted the per-container resource slice and the exercised signed
+transition/recovery, not the externally disconnected/reboot portion of Gate D,
+the write-capable short-lived terminal, complete Gate C/D or Phase 3.
+
+The write-capable terminal implementation is fixed at
+`38cb80b67eff6c9083bdf52660eae0ed24847269`. It owns the closed PaaS session
+contract, IAM action, same-origin one-time HttpOnly ticket, bounded WebSocket
+protocol, exact Deployment/generation/instance proof, node mTLS hop, Compose
+TTY adapter, xterm renderer and the three redacted Audit facts. Unit,
+architecture, real Compose and HTTP/WebSocket gates cover resize, bounded
+bidirectional I/O, expiry, disconnect, close/replacement, unsupported shells,
+origin/ticket rejection, consumed-ticket non-disclosure and Audit association.
+Those automated paths do not substitute for the required real browser gate.
+
+The first signed terminal lifecycle exposed a retained-data compatibility
+defect rather than permitting a loose rollback. Audit chain verification had
+read records after the requested terminal sequence, so a predecessor could be
+forced to decode future terminal actions while verifying an older prefix.
+`46158bc17519d06ed66e0abc787fc88be2c64fc8` bounds the read to the requested
+record count. The expand-only reader bridge is fixed at
+`d5d44b851238c0dcf20ee87f2a227cd8132331dc`; lifecycle correction
+`746586a35845b32055be17450f2b77f7d23b7e68` permits that authenticated bridge
+as current-only only after an explicit committed rollback, while fresh install
+and normal upgrade still require their exact predecessor. The final sequence
+gate is `44559b1ba6318efb6508e5f603993c0d463400bb`.
+
+The resulting signed release sequence is base
+`matrix-v0.3.0-host.15-444025108900` (IAM 4/Audit 3/PaaS 2, revision 6), bridge
+`matrix-v0.3.0-host.21-746586a35845` (the same profile and topology), then
+terminal successor `matrix-v0.3.0-host.22-44559b1ba631` (revision 7 and terminal
+topology). Their `release.json` SHA-256 values are respectively
+`3b08de94926bbdc986f1a97519f165024b55f35bc63be9b736228da776a67b51`,
+`59b13efa7cdc4857a76cdd087326067fe510337cc67660650370e8478dee2f25`
+and `311cdfe269c0f808abde34e61c5913311fd4b7c48d9fa5469034a075fde86f1f`.
+The complete offline transport archive SHA-256 is
+`f7c9404e5379f4a692c347f518c4be76640ba337936b8305fe1de670e0ca9176ce`;
+the independent Linux gate binary SHA-256 is
+`6e7bceaa57391b89ec2af9320b7603cacb509034aa754ea86f4c023fa7990660`.
+
+A fresh externally disconnected Docker 27.5.1-in-Docker engine then exercised
+that exact sequence with the two operator-provided Debian/ext4 hosts. In
+1127.29 seconds it passed base install, bridge upgrade/rollback/reactivation,
+successor activation, two signed node transitions, two real native
+Deployments, two terminal sessions with actual input/output and resize,
+one-time ticket replay denial, all three terminal Audit facts, successor-to-
+bridge rollback with later Operation/Audit readability, backup recovery,
+application rollback/stop, accounting release and zero-leakage support. The
+accepted log SHA-256 is
+`015c460c72738c6ee3ec04b6daf07e84c91e1a8bf6f9725e1cd293da1e619746`.
+Neither remote machine nor either Docker Engine was restarted; the gate ended
+at its explicit `restart-required` boundary. All three jobs for the exact
+source passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33408657183).
+
+Test-only checkpoint `b75115b4c62bb7ad6a9f3d7df008db757c59c20f`
+separates browser preparation from the already accepted two-host gate: it
+requires a private operator-password file, runs the same signed sequence and
+stops with the successor and real local workload current instead of claiming a
+second host. Its three independent jobs passed in
+[CI](https://github.com/xiak/matrix/actions/runs/33414863566). A new internal,
+three-CPU/3 GiB DIND run reached `browser-successor-ready` in 533.39 seconds;
+the successor reports READY with the exact bridge predecessor. The gate log
+and sanitized status SHA-256 values are
+`218e8ded27af1feca2179262a134c951140f5b88b1278a9352b5e7183353aacb`
+and `013cf159d1bc9c6ba6edc0eeb5b2cc1345292ad535a44f2bec6009f82741e7ac`.
+The task-local console was reachable through a loopback-only SSH forward and
+its real login page was rendered. No browser credential or terminal action had
+yet been submitted, so that preparation was not browser acceptance. At that
+checkpoint P3-3 remained open until one authenticated browser selected the
+persisted running instance and proved terminal I/O, resize, explicit
+disconnect, consumed-ticket replay denial and the associated Audit view. The
+then-prohibited remote reboot phase also remained outside that
+browser-preparation evidence.
+
+P3-4 keeps the existing `ExecutionTarget` and `ExecutionPool` owners. It adds
+the exact `ACTIVE -> DRAINING -> ACTIVE` and terminal
+`DRAINING -> REMOVED` transitions with platform IAM decisions,
+installation-scoped Audit facts, synchronous terminal Operations, strong
+resource-version preconditions and one lifecycle-wide idempotency namespace.
+Changing the action, target or expected version under a committed key
+conflicts. A removed target remains an immutable exact-read tombstone while
+default inventory, placement and refresh exclude it; neither the use case nor
+the database transition invokes a node adapter.
+
+The final implementation source is
+`489433624b74da031bf0e54a1dc897ee5f0c1406`. Cross-profile failed upgrades
+remove the candidate and enter authenticated recovery instead of starting an
+old binary on an expanded database; explicit recovery also removes a retained
+predecessor from the effect plan. The lifecycle HTTP gate requires the exact
+idempotency-conflict and live-work conflict codes. The final real gate exposed
+one further retained-history defect: completed `OBSERVE_DEPLOYMENT` commands
+have their result in `deployment_observations`, deliberately not in
+`adapter_receipts`, so treating every missing receipt as an unresolved effect
+made a safely stopped target impossible to remove. The PostgreSQL authority
+now excludes only this read-only observation action from the unresolved-effect
+check. A red/green PostgreSQL 18 integration gate proves the old query rejects
+safe removal, the corrected query accepts completed observation history, and
+an unfinished apply/stop effect still rejects removal; the same gate passes
+under the race detector.
+
+The accepted signed successor is
+`matrix-v0.3.0-host.29-489433624b74`, with IAM 5, Audit 4, PaaS 3 and contract
+revision 8. It names the fixed bridge
+`matrix-v0.3.0-host.23.1-5344b739b428` as its immediate predecessor. The
+successor `release.json` SHA-256 is
+`809844c60c3bbd3904e81468a01fc4a9488d94d22795f0ea42d30d2bae950563`;
+the complete Linux POSIX release archive is
+`dc0311b4fa788eb04caa1d4a4cf465a30c1001286a7d6aa11fd82da60c480c42`.
+The independently built gate binary and its POSIX archive are respectively
+`d309f3d8becfb1e66212f70bc5a1f71ea8d7838c5eb62cd68930047eae39cb8d`
+and `5c0cc9cf6b96bad4e27aa8cccd9ff57890a1c70da867858d0d42349475108dfc`.
+
+A fresh, externally closed Docker 27.5.1-in-Docker engine with independent
+data and Docker volumes then exercised the complete signed sequence against
+the two operator-provided Linux hosts. In 898.01 seconds it passed base
+install/status/verify, bridge upgrade/rollback/reactivation, IAM and Audit
+through APISIX, two application generations, purpose-only original-platform
+credential recovery, two signed native admissions, protected backup, complete
+node trust replacement, failed cross-profile candidate recovery, successor
+upgrade with retained data, two real terminal sessions with resize/replay/
+Audit, live-work drain and blocked removal, reactivation, safe tombstone
+removal, placement on the remaining host, two native Deployments and advancing
+runtime/resource snapshots. The accepted gate log SHA-256 is
+`bf783daeb191a5b8f82846b1f671eb5f5b53c1eb3d0961c51b2042057fccbaaa`;
+the final sealed journal names the exact successor READY and has SHA-256
+`0da60585b9a282deddb877f14c7770aaca5028de114d73a9f59652eaecce3329`.
+
+All exact task-owned node, collector and startup units, host fixture roots,
+DIND container and volumes were removed after evidence capture. Both remote
+boot IDs and Docker Engine IDs were unchanged, and no remote machine, Docker
+Engine or unrelated service was restarted. The full Go suite, vet, focused
+PostgreSQL 18 race gate and local architecture gates pass. All three jobs for
+the exact source passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33452721266).
+This accepted P3-4 but not P3-3's real-browser terminal exercise; the following
+exact-source gate owned the then-remaining P3-5 reboot evidence.
+
+The final reboot driver correction is fixed at
+`0a09444c5fc4d9bd4b9e4d280519570b6e41937e`. It rehydrates the two retained
+runtime nodes from the protected controller endpoints and their exact completed
+registration Operations instead of assuming ordinal target IDs. The private
+receipt also preserves whether the gate owns the Deployment runtime; the
+post-restart path rejects an obsolete standalone workload in that mode and
+requires failed external connectivity rather than incorrectly requiring that
+the operator-provided host have no default route. Its independently built
+Linux gate binary SHA-256 is
+`83ae12e059485efd782cc8c1499b720c62df1d929e787bd9e22726dc76f24929`.
+The full Go suite, vet, module verification and focused lifecycle race tests
+passed locally. The exact commit's `go`, `authority-process` and `node-process`
+jobs passed in
+[independent CI](https://github.com/xiak/matrix/actions/runs/33640613028).
+
+A fresh attempt then exercised the accepted signed release sequence in a
+separate, externally closed Docker 27.5.1-in-Docker engine with two independent
+fresh Debian 13 QEMU guests. The exact product successor was
+`matrix-v0.3.0-host.36-0be1b7b0bc24`, with IAM 5, Audit 4, PaaS 3 and contract
+revision 8; its `release.json` SHA-256 was
+`3c7ee7a346056e194ed5823fedc5d6b856405ca6f1d3717bdcac29410b431d7e`.
+The before-restart phase took 2181.18 seconds and passed signed base install,
+bridge upgrade/rollback/reactivation, IAM/Audit through APISIX, two application
+generations, purpose-only credential recovery, two signed native admissions,
+protected backup, complete trust replacement, failed cross-profile recovery,
+successor upgrade, two real terminal sessions, two native Deployments with
+advancing runtime/resource snapshots, real node predecessor/successor
+credentials, cross-profile rollback rejection, backup recovery, application
+rollback/stop, capacity release and bounded zero-leakage support. It ended only
+at the explicit `restart-required` boundary. The log and retained-receipt
+SHA-256 values were respectively
+`0f7bde2702db6031347eab7346aecbb708fa73492132d55b48c1ec00f4507055`
+and
+`dfb246e2993ddb753753fd8f0119d589ae243cccb9d530cc5c610b5882f8a6a0`.
+
+Only the two task-owned QEMU guest kernels were then rebooted. Their boot IDs
+changed from `dc5e6fac-3ffc-44e6-a2fd-d458e34b7f48` and
+`ec96cfe6-2e44-4901-a1d8-00bbbac775b7` to
+`aca7829c-399f-47fe-991e-ec791161af36` and
+`d7cad9ec-64ea-4318-a2b2-83dd29267f51`. Their Docker Engine IDs remained
+`1ae0e8df-bed0-4b86-a542-c1ebd7baa342` and
+`2701261a-9e6a-427d-a366-b07944b978e4`, and their machine identities and QEMU
+container identities also remained unchanged. The node, collector and startup
+units automatically returned active while the guest egress locks remained
+effective. The 128.07-second after-restart phase passed two real kernel boots
+with automatic reconnection and retained data, post-restart status/verify and
+the complete offline lifecycle. Its log SHA-256 was
+`1d87f170f941ae28cf116694be742da5427a37db5697456e16517ed62ffe6655`;
+the two sanitized post-restart fact SHA-256 values were
+`2c2bf2a3787f8763d4d1ec4ec6e9b8599888916219093a79c4809ab408a6e0ba`
+and
+`7d9b4abe3dadbeb0c74c963dc7c81061bd67b04b8468e70426647e8ae84a559b`.
+
+The outer hosts retained boot IDs
+`6546f4e0-e2b0-4ee7-854a-f783545d7756` and
+`2340cea6-797b-447c-953b-cdf4ab02b2c9` and Docker Engine IDs
+`209c2bb9-a2b9-4387-8028-c1f76b26322b` and
+`7a9a32f7-8e63-4940-8f21-ca4cd385c13a` throughout. No outer machine or Docker
+Engine was restarted. After evidence capture, both QEMU guests were gracefully
+powered off and all exact attempt containers, volumes, network and remote
+fixture roots were removed; no prune or unrelated cleanup was performed. This
+accepts the remaining reboot portion and complete clean offline lifecycle of
+Gate D. At that checkpoint, P3-5 and complete Gates A-E remained open only for
+the explicitly deferred authenticated real-browser terminal exercise in Gate C.
+
+The final Gate C browser closure is fixed by three commits. Test preparation
+`8442226fcfae881b674f58b53678e600a5511373` retains only the exact native
+Deployments needed by the browser. Browser transport correction
+`8944e23d89a1b0f6a1f85f24841d9b3e54687c88` consumes both browser `Blob` and
+`ArrayBuffer` WebSocket binary frames in order and uses a valid private close
+code for malformed frames. Terminal presentation correction
+`acc27112cfb8ee9d35059ac29bd98a97ff20e3ac` adds an explicit expand/restore
+control whose container-size change drives the existing `ResizeObserver` and
+the real terminal resize protocol. All three jobs passed for the preparation,
+[transport](https://github.com/xiak/matrix/actions/runs/33832368475) and
+[resize](https://github.com/xiak/matrix/actions/runs/33834765831) commits; the
+preparation commit's independent run is
+[33826498908](https://github.com/xiak/matrix/actions/runs/33826498908).
+
+A fresh task-owned Docker 27.5.1-in-Docker engine with external egress removed
+then ran the full signed native preparation against the two operator-provided
+Linux hosts. The platform reached signed release
+`matrix-v0.3.0-host.38.5-acc27112cfb8` (IAM 5, Audit 4, PaaS 3, revision 8)
+through its declared predecessor `matrix-v0.3.0-host.38.4-8944e23d89a1`;
+their `release.json` SHA-256 values are respectively
+`dd4688f7ad222fef850c01ee928f4b8cf62660444ffa6ac02b6ac2a5cd649d8a`
+and `f32ea3751fed9de34074382ef5b63f555711b75b1f9352616fa6b7e8865c747c`.
+Both nodes ran signed successor `matrix-node-v0.3.0-host.29-8914451c5eb7`,
+which includes the bounded controller/node terminal-clock-skew correction.
+The 1494.88-second gate passed signed install, transitions and retained data;
+two real native Deployments; two terminal sessions with input/output, resize,
+one-time ticket replay rejection and Audit; and stopped at the browser-ready
+successor. Its 986-byte log SHA-256 is
+`ef2fe8adf7b493a9fc598bcdac6a3511866504cac4cddd2837b3df67ce7d3d57`.
+
+The authenticated browser then selected Deployment
+`phase3-runtime-deployment-1`, instance
+`instance-7e4829d6c267ac8498927cdab19c2d5b` on target
+`a-runtime-native-1`. Successive five-second refreshes advanced source times
+and runtime state without a page reload and showed actual CPU, memory, network,
+writable-layer, image and volume values; unavailable block I/O remained
+explicitly unsupported rather than fabricated. In terminal session
+`terminal-session-b01f6ea7a5a019c9c2d4da9bfe4a3f94`, browser keyboard input
+printed `matrix-browser-gate-c-acc2711`; `stty size` visibly changed from
+`17 98` to `31 98` after expansion and returned to `17 98` after restoration.
+The user-visible close control ended the session with outcome `COMPLETED`,
+cleared its ticket digest, and produced an APISIX WebSocket `101` followed by
+the explicit session `DELETE` `204`. Because the one-time ticket is HttpOnly,
+the browser did not extract it: the same isolated signed run's native client
+retained the opaque ticket only in memory and proved exact replay returned the
+closed `404` problem contract.
+
+Audit stored exactly the `paas.terminal-session.created`/`ACCEPTED`,
+`paas.terminal-session.started`/`SUCCEEDED` and
+`paas.terminal-session.ended`/`COMPLETED` facts for that browser session, all
+as PaaS facts for tenant `organization-default`, actor USER
+`principal-admin`, with non-empty IAM decisions and no terminal content. A
+full database verification of the tenant's 1,233 records found contiguous
+sequences, exact previous-hash links, recomputed record hashes, matching chain
+head and matching event registry. Full `go test -p 2 -count=1 ./...`,
+`go vet -p 2 ./...`, module verification, 132 UI tests, type/lint/architecture,
+contrast checks, two bounded production exports and embedded-asset comparison
+passed for the fixed source. This closes P3-3, Gate C, P3-5 and the Phase 3
+Gates A-E acceptance target.
+
+After evidence capture, the browser logout revoked the IAM session. On each
+remote host, the exact task-owned node, collector and startup units, Compose
+workload and network, verification image, 235 MiB fixture root, SSH key and
+IPv4/IPv6 egress-lock chains were removed. Default operator SSH still worked,
+and the hosts retained boot IDs
+`6546f4e0-e2b0-4ee7-854a-f783545d7756` and
+`2340cea6-797b-447c-953b-cdf4ab02b2c9` and Docker Engine IDs
+`209c2bb9-a2b9-4387-8028-c1f76b26322b` and
+`7a9a32f7-8e63-4940-8f21-ca4cd385c13a`. The exact local DIND container, its
+two labeled volumes and dedicated network were also removed, and no task relay
+process remained. No prune, remote reboot, Docker Engine restart or unrelated
+cleanup was performed. The temporary clean source worktree was unregistered;
+the final signed `matrix-v0.3.0-host.38.5-acc27112cfb8` directory was separated
+as the release deliverable rather than treated as a running test resource.
+
+P3-6 control-plane admission is now implemented through pushed source
+`f2ce67c2b77957aa261bdd59a635e796ac6004f5`. Platform-authorized revocation
+requires the current strong ETag and an idempotency key, closes either a
+waiting or verifying enrollment and cancels its existing registration
+Operation. Regeneration atomically revokes that attempt and creates a fresh
+enrollment, target identity, one-time credential and Operation while retaining
+only the requested name, pool and allowlisted labels. Exact replays return the
+committed result; changed content, expired or terminal state and stale versions
+fail closed. The PostgreSQL integration verifies installation RLS, denied
+direct writes, salted credential authority, revocation replay and the deferred
+old-to-new replacement relation. Ordinary reads and mutation responses contain
+no recoverable credential material.
+
+Pushed source `65d1f1a2e762d15fd29d1b257ac7e15836c8a8a7` advances the candidate
+database profile to IAM 5, Audit 4, PaaS 4 and contract revision 9, with the
+accepted `acc27112cfb8ee9d35059ac29bd98a97ff20e3ac` profile as its one exact
+predecessor. The real PostgreSQL 18 gate built that predecessor's migration and
+API, retained its tenant work and runtime snapshot across two successor
+migration applications, exercised create/read/revoke/regenerate/expiry on the
+upgraded database, and proved the schema-3 API rejected schema-4 readiness.
+A fresh combined platform migration and a separate fresh PaaS integration also
+passed, as did the full Go suite, vet, focused race checks, stable contract
+generation and diff checks. This is database/control-plane evidence only: F1
+and F7 remain open until the bootstrap, completion, Audit, UI, supported signed
+release transition and exact release gates pass.
+
+Pushed source `761c2aac177f67127963e2128303bea872a22e60` makes one-time enrollment
+credential storage state-bound: only `WAITING_INSTALL` may retain the salted
+verifier and RSA-wrapped creation envelope. Expiry, revocation and regeneration
+clear all three credential columns in the same authority transaction, while a
+regenerated replacement receives distinct fresh material. The domain rejects
+credential material on every non-waiting state, and the PostgreSQL adapter
+loads the resulting nullable terminal records without weakening their signed
+join identity. A real PostgreSQL 18 gate proved that a waiting row with missing
+material and a verifying row retaining material both fail with SQLSTATE
+`23514`; normal revoke, replace and expiry paths persist SQL `NULL` and remain
+readable and exactly replayable. The fixed schema-3 upgrade gate, fresh combined
+platform migration, full Go suite, vet, focused race checks and stable contract
+generation also passed. This narrows the F9 exposure surface but does not close
+F9; bootstrap exchange, Audit, browser, diagnostics, support artifacts and the
+exact signed-runtime gate remain outstanding.
+
+Pushed source `e2e32c78194cf252c27c5307ea3afa2a7a76539a` implements the bounded
+control-plane bootstrap exchange. Its separate unauthenticated route accepts
+one strict JSON document of at most 64 KiB, rejects ambient session and
+conditional headers, requires APISIX-provided HTTPS and observed-private-peer
+facts, and never echoes credential or CSR material. The node submits distinct
+host-local Ed25519 certificate requests, a fixed listener claim, machine and
+runtime commitments and a persisted exchange identity. The issuer creates
+installation/target/role-constrained certificates and seals the bounded result
+with an installation-derived AES-256-GCM key. The use case signs outside the
+database transaction, then revalidates and atomically consumes the credential,
+fixes the submitted identities, stores the sealed result and advances only to
+`VERIFYING`; replay, expiry, revocation, changed identity and unsupported
+runtime fail closed.
+
+The PostgreSQL authority adds schema-invariant checks, least-privilege function
+execution, identity uniqueness and an installation advisory lock that prevents
+cross-role key reuse even under `READ COMMITTED`. Contract revision 10 adds the
+issuer files and bootstrap APISIX route while reconstructing the exact
+`acc27112cfb8ee9d35059ac29bd98a97ff20e3ac` topology and APISIX documents for
+the one supported predecessor transition and byte-exact rollback. On the exact
+source, deterministic generation, module verification, the full Go suite,
+`go vet`, focused race suites, Linux installation/topology tests, five fresh
+PostgreSQL 18 integration databases, a PostgreSQL race run and the fixed
+predecessor upgrade/rollback gate passed. This is backend exchange evidence
+only: at that milestone the installed public APISIX listener was still
+HTTP/9080, so exchange intentionally failed closed pending the successor
+TLS-ingress slice below.
+
+Pushed source `04dfab97b3006eac90d28e3a57759d126bcf4adb` supplies the installed
+node-enrollment TLS ingress without exposing a signing key or adding a DNS
+dependency. Installation generates a distinct protected Ed25519 ingress key
+and certificate chain signed by its existing enrollment issuer; the client
+verification name is deterministically derived from the signed installation
+identity. Current topology retains UI/API HTTP on the selected listener, adds
+the fixed host port 8443, and read-only mounts only the ingress chain and key
+into APISIX. A TLS-1.3-only front accepts only readiness and the exact bounded
+exchange path, strips ambient authority, captures the network peer, and
+forwards to an APISIX listener bound only to container loopback. The general
+HTTP route cannot select that exchange route or forge its transport facts.
+
+The signed topology digest advances while database contract revision 10 stays
+unchanged because no API or persistence contract changed. The exact accepted
+predecessor still reconstructs its one HTTP port, routes and APISIX main
+configuration; the latter is pinned independently by digest
+`sha256:a5568af2d039c722a76f56c3724f3e97d9c6f9132abe92db839cc1772034e70b`.
+A real locked APISIX 3.17 container verified the issuer-authenticated SNI,
+TLS 1.3, the 8443-to-loopback exchange route, private observed peer and header
+stripping, while rejecting a different installation name, TLS 1.2, unrelated
+paths and a body above 64 KiB. The final source also passed the full Go suite,
+`go vet`, deterministic generation, module verification, focused race and
+Linux suites, and the real PostgreSQL 18 fixed-predecessor upgrade/byte-exact
+rollback gate; every disposable test container and network was removed.
+
+Pushed source `ccb66a55505ac3e48883b1e4a1215e2e69950d0b` adds the separate
+lost-response recovery ceremony without retaining a second credential or
+creating another host model. A two-minute stateless challenge is authenticated
+with a domain-separated installation key and binds the enrollment,
+installation, target, exchange, machine/runtime commitments and both fixed
+role-key fingerprints. Recovery requires independent Ed25519 proofs from the
+node and collector keys, the same observed private peer and an enrollment still
+in `VERIFYING`. It is read-only, returns only the digest-exact sealed
+exchange result, keeps the resource version unchanged and replays identically
+within the challenge lifetime; wrong proofs, changed intent, expiry and
+revocation fail closed.
+
+The TLS bootstrap route now admits only the exact exchange, recovery-challenge
+and recover actions while preserving the 64 KiB bound and ambient-authority
+stripping. The additive wire surface leaves the database profile, contract
+revision and Compose topology digest unchanged. A fresh PostgreSQL 18 gate
+proved recovery of the persistent result through a restarted issuer/service;
+the locked APISIX 3.17 image proved all three actions through the TLS
+8443-to-loopback boundary. Stable generation, module verification, the full Go
+suite, `go vet`, focused race suites and the Linux container suite also passed,
+and every disposable test container was removed. Completion and its real mTLS
+probe, durable dynamic controller connection, node installer, Audit, browser
+and exact signed-runtime closure remain outstanding; F1 through F10 therefore
+remain open.
+
+Pushed source `b0e18d6f1d265c51e2d796f9ec77e86547b797c1` implements the
+control-plane completion boundary. The public bootstrap request can only
+repeat commitments fixed by the consumed exchange; the service compares every
+field and the observed private peer before a bounded, target-bound outbound
+mTLS capability and identity probe. A successful probe atomically publishes
+the existing ExecutionTarget, allocation, execution-pool snapshot, non-secret
+controller route, terminal registration Operation, Audit outbox fact and READY
+enrollment. Exact replay reads that committed result. Retryable network and
+handshake interruption leave verification open, while definitive identity,
+runtime and resource conflicts atomically fail the enrollment and Operation.
+
+Installation now generates a distinct protected Ed25519 controller client
+identity signed by the enrollment issuer. API and worker read each enrolled
+route through installation-forced RLS before every observation, deployment,
+telemetry or terminal effect, construct no fallback route and reread the
+controller credential for every new TLS connection. Safe target removal
+disables that route in the same authority transaction. The candidate advances
+to IAM 5, Audit 4, PaaS 5 and contract revision 11; its one supported
+predecessor is the exact pushed `ccb66a55505ac3e48883b1e4a1215e2e69950d0b`
+schema-4/revision-10 release, including its issuer and TLS-ingress state.
+
+Fresh and race-enabled PostgreSQL 18 gates proved schema 5, completion,
+failure, replay, RLS, removal and retained-data upgrade, while the fixed
+predecessor executable rejected successor readiness and rollback reconstruction
+remained byte exact. Locked APISIX 3.17 admitted all four bootstrap actions only
+through TLS 1.3 on 8443 to its loopback listener and stripped ambient authority.
+Deterministic generation, module verification, the full Go suite, `go vet`,
+focused race suites, ten focused repetitions and the egress-disabled Linux
+container suite passed, and their disposable containers and volumes were
+removed. Pushed source `660c7d2e9e1c494891ed0e6083a8337e9b0e4655`
+also supplies the independent-process gate with the same role-separated issuer
+and controller identities required by the installed service. Its
+[Verification run](https://github.com/xiak/matrix/actions/runs/34042093478)
+passed all three full-race, PostgreSQL/authority-process and real Linux node
+jobs, including signed startup, upgrade, rollback and the node through
+independent platform authorities. This is not P3-6 acceptance: the host-side
+installer, independent Audit delivery, browser journey, two-host lifecycle and
+exact signed-runtime closure remain open, so F1 through F10 remain open.
+
+Pushed source `61ee882f310ca732e77c2f098edecafb32466e33` implements the
+host-side self-enrollment installer boundary. Fresh node installation accepts
+only the protected signed join file, generates distinct node and collector keys
+locally, persists an immutable exchange intent before sending the one-time
+credential, pins the installation issuer and fixed TLS ceremony, and recovers a
+lost exchange only with both role-key proofs. The installation journal retains
+`COMMITTING` across uncertain completion, publishes no local success before the
+remote atomic registration, and resumes digest-bound cleanup after interruption;
+definitive completion rejection rolls back and removes only proved enrollment
+artifacts. Malformed success responses remain uncertain rather than authorizing
+credential replay or rollback.
+
+On that exact source, deterministic API generation, module verification, the
+full Go suite, `go vet`, focused race suites, ten focused enrollment repetitions,
+Linux/amd64 cross-build and diff checks passed. This is automated host-side
+evidence only. Its
+[Verification run](https://github.com/xiak/matrix/actions/runs/34049832210)
+passed the full-race, PostgreSQL/authority-process and Linux node jobs. The
+Linux job retained the fixed predecessor's configuration-based installation to
+prove the supported upgrade/rollback boundary; it did not exercise a fresh
+current-source self-enrollment.
+
+Pushed source `22bbcd4e981c5453f2d9a42faaeee8abbe4a6713` adds a distinct
+current-release native gate without weakening that fixed-predecessor evidence.
+On a root Linux/amd64 systemd host it authenticates a fresh release with no
+predecessor, consumes one protected signed join through the pinned TLS exchange
+and completion routes, starts the real node and collector, observes the host
+through controller mTLS, removes all ephemeral ceremony state, and proves an
+exact replay after the bootstrap ingress is unavailable. The same gate checks
+that the raw or encoded join credential enters neither the durable journal nor
+support evidence. Its
+[Verification run](https://github.com/xiak/matrix/actions/runs/34051196271)
+passed the full-race, PostgreSQL/authority-process and Linux node jobs,
+including both the existing signed upgrade/rollback gate and the new
+current-source self-enrollment step.
+
+This is still a host-side gate with an isolated bootstrap authority fixture,
+not the authenticated browser create/decrypt/transfer journey or the combined
+two-host offline lifecycle. The superseded current-source setup remains until
+that migration is atomic. Independent Audit delivery, two real hosts and exact
+signed-runtime closure also remain outstanding. F1 through F10 therefore
+remain open.
+
+Pushed source `6003f17eaaf4bf564e8e42e26913ec646971a5f4` implements the
+console-owned enrollment ceremony. The host workspace accepts only a DNS-label
+name and one current READY execution pool, derives the submitted labels from
+that pool's selector, and exposes no shell, path, endpoint, provider or
+credential input. Browser Web Crypto generates a non-extractable RSA-OAEP-3072
+private key, sends only its SPKI public key, decrypts the 256-bit credential in
+memory, verifies it against the signed join metadata's digest and assembles the
+exact protected join file.
+The download uses the product-owned filename, removes its temporary anchor,
+revokes its object URL and clears mutable plaintext, digest, ciphertext and
+file buffers. No browser storage or logging path is used, and the copied fixed
+install command contains no credential.
+
+Strict response projection rejects unknown fields, invalid timelines, unknown
+states, non-HTTPS public origins, weak ETags, malformed signature encodings and
+non-RSA-3072 envelopes. The console co-polls enrollment and existing host
+inventory without manual refresh, preserves proved facts across transient read
+failure, clears them on authorization loss, and permits only current-version
+revoke or fresh-identity regeneration. It shows the closed diagnostic set and
+links READY to the exact existing host only after that target appears in host
+inventory. Pushed follow-up `b8c8843aa9db2dfa2986d98241d9470a7a5ea694`
+normalizes the one Windows/Linux Next static-export path variation while still
+requiring identical paths and SHA-256 content for all 72 embedded assets.
+
+The exact follow-up source's
+[Verification run](https://github.com/xiak/matrix/actions/runs/34054998970)
+passed the full-race Go job, PostgreSQL/authority-process job, real Linux node
+job and the new independent Node 24 UI job. The UI job passed type checking,
+lint, architecture, contrast, all 143 behavior tests, a production export and
+the embedded-asset comparison. These are automated UI and build facts, not the
+F2 authenticated real-browser journey; the combined two-host offline runtime,
+negative/recovery matrix, lifecycle, transition retention, non-interference
+and exact release evidence also remain outstanding. F1 through F10 therefore
+remain open.
+
+P3-6 acceptance closes on exact pushed source
+`be3c4a96b4381426c01cd6315eaa3713c2855982`. Its
+[verification run](https://github.com/xiak/matrix/actions/runs/34093252964)
+completed in 5m59s: the full-race Go job, independent UI job,
+PostgreSQL/authority-process job and real Linux node-process job all passed.
+Together they exercised deterministic generation, module verification,
+`go test -race -p 2 ./...`, UI type/lint/architecture/contrast/behavior and
+production-export checks, real PostgreSQL/IAM/Audit authority boundaries, and
+signed Linux startup, self-enrollment, upgrade and rollback. This closes F1
+and supplies the independent exact-source half of F10.
+
+An authenticated real browser completed the console ceremony for three
+passwordless-root Ubuntu 22.04 hosts with Docker Engine 29.1.3 and Compose
+2.40.3. From **Infrastructure -> Host resources** it created each enrollment,
+downloaded the browser-assembled protected join document, copied the fixed
+product command, and co-polled the enrollment and existing host inventory to
+the three **Enrollment complete** host details without a manual target
+registration. The durable mappings are:
+
+- `cicd-1` / `172.30.1.201`: enrollment
+  `node-enrollment-f7bea5cd46b976a310a0b3233e86bb1d`, target
+  `execution-target-d166dfe6a54ae4ff14a0c949fe671ce4`;
+- `cicd-2` / `172.30.1.202`: enrollment
+  `node-enrollment-a1a6d104134fbb77d113acc9d54667bc`, target
+  `execution-target-e970075b14136c5dfd505101aca75359`;
+- `cicd-3` / `172.30.1.203`: enrollment
+  `node-enrollment-a46c956ac0b4651c88a3f221979f5c8b`, target
+  `execution-target-1270d8d99db0c8b523370b491e1a322a`.
+
+All three host-local `mx node status` and `mx node verify` commands returned
+`READY` with their exact independent target and configuration digest. The
+control plane retained three `READY` enrollments, three enabled target-bound
+HTTPS routes and a `local` execution pool at 4/4 ready with independently
+advancing live resource samples. After final gate isolation, the real platform
+was restored to nine healthy services, its existing probe application was
+restarted, the console relay returned HTTP 200 and the same 4/4 state resumed.
+This real-browser and independent-host evidence closes F2 and contributes to
+F3.
+
+The exact source also produced two signed offline platform releases:
+`matrix-v0.3.0-enrollment-f10-a-be3c4a96b438` with release-manifest SHA-256
+`13a37a81fc7d0ebb01275a79525863b1d906da6938af9f64ad4c800263bf176a`, and
+its supported successor `matrix-v0.3.0-enrollment-f10-b-be3c4a96b438` with
+SHA-256 `16d8980b28d8150ea943da7f761b7b3670ef272e93c1fc3be97678fe55b7b102`.
+Both name source `be3c4a96b4381426c01cd6315eaa3713c2855982`, database profile IAM 5 /
+Audit 4 / PaaS 5, contract revision 11 and topology digest
+`sha256:3b5e33844c8f9fc90bcad489a071cc292b1b42d65dbe387adb05ffec562d9178`.
+With external TCP access to `1.1.1.1:443` denied and an initially image-empty
+task engine, the 542.27-second real Compose gate installed release A, enrolled
+two independent native Linux/Docker/Compose guests, ran two real applications,
+and completed deploy, update, stop, rollback, resources, signed terminal,
+drain, remove-block, reactivate and safe tombstone removal. It then exercised
+automatic upgrade/rollback and the compatible release-B transition while
+retaining identities, connection disablement, Operations, Audit and replay
+semantics. The gate ended with `signed-multi-host-lifecycle-complete`; its
+1,060-byte log SHA-256 is
+`a3761e44c0a547cd3ef8acf0f2530d2ad893d22bafed6fdba37ea3ab4d46aaa7`.
+This closes F3, F4, F6, F7 and the runtime half of F10.
+
+F5 is covered both inside that isolated runtime (bootstrap outage, lost
+response recovery, bounded background failure and atomic lifecycle
+transitions) and by the exact-source unit/race/PostgreSQL matrix. In
+particular, the current tests expire reads without credential disclosure,
+consume an exchange once, require both persisted role keys for recovery,
+reject every changed completion commitment before probing, distinguish
+retryable from definitive probe failure, fence revocation racing completion,
+reject wrong credentials and authority before issuance, close expiry without
+certificate issuance, exactly replay revocation, and serialize concurrent
+same-role and cross-role identity collisions. The native installer suites add
+wrong installation, replay after ingress loss, interrupted completion and
+definitive-cleanup coverage; no rejected path publishes a schedulable target.
+
+F8 retained both native guests' boot and Docker Engine identities throughout
+the offline gate: node 1 remained
+`a58df78f-456b-49df-a73b-9b92dc9cc550` /
+`eafd1e16-51cf-4779-b510-51bbc89481a8`, and node 2 remained
+`3f1c670e-7673-4a22-929d-6397a35bbd60` /
+`6e704f67-51e0-4770-9e62-d36b5dd1019c`. The three real hosts likewise
+required no Linux or Docker restart. On `172.30.1.203`, all 15 pre-existing
+`matrix-integration-*` container IDs and ports, including the existing 8443
+gateway binding, matched the before snapshot after enrollment and after final
+platform restoration. Cleanup removed only exact task-owned units, images,
+Compose projects and validated fixture roots; no Docker prune or broad cleanup
+was run.
+
+F9's platform support artifact has SHA-256
+`b97b268014db00dcbea80fa0633cf59c86849b78df3f40ac8395d64e4903c12e`;
+the two node support artifacts have SHA-256
+`9f56919850985df288aec64d3666a835d6c519e0220cf2d1a9edb14f95d5115d`
+and `72cac9648698cab595ab4175075026d76bc59b98d6849e2633522111f79917cd`.
+Private-key, raw/encoded join-credential and forbidden Audit-field scans passed
+for those artifacts, platform/container logs and Audit. Both gate enrollments
+and all three real-host enrollments retained SQL `NULL` for credential salt,
+verifier and wrapped creation envelope after consumption. UI behavior tests
+spy on the browser Storage API and prove the in-memory decrypt/download path
+performs no storage read or write, removes its anchor, revokes its object URL
+and clears plaintext buffers; authentication tests require both local and
+session storage to remain empty. The real browser session also returned to
+login on a fresh document navigation, confirming its page-memory boundary.
+All transferred one-time join files were removed after successful import.
+
+## K2 authority successor release closure
+
+Pushed source `16b42679a3f19d73ee41af016e81ef2b95b938fd` integrates the
+K2 IAM authority and signed service access-key boundary without reopening the
+accepted host model or adding SSH onboarding. Its
+[verification run](https://github.com/xiak/matrix/actions/runs/35214563892)
+completed successfully for the Go, UI, PostgreSQL/authority-process and real
+Linux node-process jobs. The resulting platform profile is IAM 30 / Audit 18 /
+PaaS 6 at contract revision 12; the node runtime revision is 7.
+
+The final offline artifacts are:
+
+- predecessor platform release `matrix-v0.3.0-k2-a-be3c4a96b438`, sourced from
+  the accepted `be3c4a96b4381426c01cd6315eaa3713c2855982` release, with
+  release-manifest SHA-256
+  `42f2897ee6deb587c275debe195855d31cab4e1d975fc8718bc75138677c86dc`;
+- successor platform release `matrix-v0.3.1-k2-b-16b42679a3f1`, sourced from
+  `16b42679a3f19d73ee41af016e81ef2b95b938fd`, with release-manifest SHA-256
+  `b00fe4322acd216735c3b7179678a45a19bb9127405f78192f937e7233874a30`;
+- node release `matrix-v0.3.1-node-k2-16b42679a3f1`, from the same successor
+  source, with release-manifest SHA-256
+  `4aadbd648d475546e7b1b3f32ac1f7d12d9e541d7efcd6f606c7402f30e68d38`;
+- the exact Linux phase gate executable with SHA-256
+  `dc12d7b0b9104614236833c388c09ce1c1bc5f2894d26a97e1a411ea119c7c3d`.
+
+An isolated, resource-limited Docker-in-Docker release exercise authenticated
+and installed release A, upgraded to release B, verified the platform, exercised
+credential recovery, backup, cross-profile rejection, rollback, selected-backup
+recovery, a real application and support evidence, and then repeated status and
+verification after restarting only its task-owned container. It used no shared
+Phase 2 service or remote reboot. All task containers and volumes were removed
+after the gate; no broad Docker prune was used. The signing private key was
+destroyed after the releases and tests were complete.
+
+A final one-command gate then enrolled existing host `172.30.1.161` from a
+fresh platform installed at release A and upgraded to release B. The
+short-lived enrollment
+`node-enrollment-df493b1ead7b7fb4b88a8cdf6620f423` completed as `READY` and
+atomically published target
+`execution-target-37ff698b6432e3d52ea16499c51d3c59` in
+`execution-pool-local`. The host ran the product-owned `mx node install`
+command once; its local `node status` and `node verify` both returned `READY`
+for node release `matrix-v0.3.1-node-k2-16b42679a3f1`. The resident node and
+collector ran in distinct systemd services with CPU, memory and task limits.
+
+Successive control-plane observations advanced from
+`2026-09-17T12:47:49.091707Z` to `2026-09-17T12:48:45.090641Z`. After the
+collector warm-up, CPU, memory and filesystem measurements were all
+`AVAILABLE`: four logical CPUs, 6,212,542,464 total memory bytes and a
+558,439,206,912-byte root filesystem were observed from the real host. The
+stored enrollment had consumed its credential and erased the salt, verifier
+and wrapped creation envelope. Its target-bound HTTPS connection remained
+enabled and the `paas.execution-target.registered` Audit outbox fact was
+delivered once.
+
+The negative resource gate also failed closed: an enrollment missing the
+selected pool's required `matrix-profile=local-compose` label terminated with
+`RESOURCE_CONFLICT` and published no target. The successful retry used a new
+platform enrollment and a new credential. The failed attempt was not mutated
+or replayed; its disposable test platform was destroyed before the fresh gate.
+
+Because the platform for this last test ran inside a nested task engine, the
+engine observed the host through its bridge gateway. Two task-only raw TCP
+forwarders made that observed address routable while preserving the product's
+end-to-end mTLS identity and peer binding. This was test-harness transport, not
+an SSH or caller-selected endpoint capability. SSH was used only to copy the
+offline bundle and invoke the command on the test VM.
+
+Cleanup stopped and disabled only the exact task-owned services, removed the
+one-time join document and the validated test roots on `172.30.1.160` and
+`172.30.1.161`, and removed the labeled local containers and volumes. Both VMs
+retained their original boot sessions from 2026-07-05; neither remote machine
+was rebooted. No other Phase environment, Docker object or host path was
+changed.
 
 ## Adoption
 

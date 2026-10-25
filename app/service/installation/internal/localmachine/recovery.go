@@ -80,6 +80,7 @@ func recoverBackup(
 	runtimeBoundary dockerRuntime,
 	streaming streamingDockerRuntime,
 	projectInspector RecoveryProjectInspector,
+	inspectManagedInventory func(string) (string, error),
 	plan platformcommand.RecoveryPlan,
 ) error {
 	current, target, manifest, err := authenticateRecoveryPlan(plan)
@@ -88,6 +89,9 @@ func recoverBackup(
 	}
 	defer clear(current.TrustBytes)
 	defer clear(target.TrustBytes)
+	if err := requireManagedServiceInventory(current.Root, manifest.ManagedServiceInventory, inspectManagedInventory); err != nil {
+		return err
+	}
 	for _, image := range target.Bundle.Manifest.Images {
 		_, present, inspectErr := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if inspectErr != nil {
@@ -134,6 +138,9 @@ func recoverBackup(
 		if err := rollbackInstallation(ctx, runtimeBoundary, participant); err != nil {
 			return err
 		}
+	}
+	if err := requireManagedServiceInventory(current.Root, manifest.ManagedServiceInventory, inspectManagedInventory); err != nil {
+		return err
 	}
 	if err := removeRecoveredVerificationProject(
 		ctx, runtimeBoundary, projectInspector, current, target,
@@ -185,6 +192,37 @@ func recoverBackup(
 		return err
 	}
 	return effects.reconcileAuthenticationRecovery(ctx, plan)
+}
+
+func readManagedServiceInventory(root string, inspect func(string) (string, error)) (string, error) {
+	if inspect == nil {
+		return "", errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("managed-service inventory inspection is unavailable"),
+		)
+	}
+	digest, err := inspect(filepath.Join(root, filepath.FromSlash(layout.ExecutorRoot)))
+	if err != nil || !validSHA256(digest) {
+		return "", errors.Join(
+			platformcommand.ErrEffectUnavailable,
+			errors.New("managed-service inventory cannot be proved"),
+		)
+	}
+	return digest, nil
+}
+
+func requireManagedServiceInventory(root, expected string, inspect func(string) (string, error)) error {
+	actual, err := readManagedServiceInventory(root, inspect)
+	if err != nil {
+		return err
+	}
+	if actual != expected {
+		return errors.Join(
+			platformcommand.ErrEffectPrecondition,
+			errors.New("selected backup does not match the managed-service inventory"),
+		)
+	}
+	return nil
 }
 
 func removeRecoveredVerificationProject(

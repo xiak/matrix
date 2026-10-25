@@ -60,6 +60,10 @@ func buildDocument() schema {
 					"type": "http", "scheme": "bearer",
 					"description": "Narrow installation-verifier service credential resolved through IAM installation.verify.",
 				},
+				"MatrixTerminalTicket": schema{
+					"type": "apiKey", "in": "cookie", "name": "matrix_terminal_ticket",
+					"description": "Single-use terminal connection ticket delivered only by an HttpOnly SameSite=Strict host-only cookie.",
+				},
 			},
 			"parameters": schema{
 				"IdempotencyKey": schema{
@@ -116,6 +120,8 @@ func buildPaths() schema {
 		createID   string
 		readID     string
 	}{
+		{collection: "execution-pools", parameter: "executionPoolId", kind: "ExecutionPool", createBody: "CreateExecutionPoolRequest", createID: "createExecutionPool", readID: "getExecutionPool"},
+		{collection: "execution-targets", parameter: "executionTargetId", kind: "ExecutionTarget", createBody: "RegisterExecutionTargetRequest", createID: "registerExecutionTarget", readID: "getExecutionTarget"},
 		{collection: "applications", parameter: "applicationId", kind: "Application", createBody: "CreateApplicationRequest", createID: "createApplication", readID: "getApplication"},
 		{collection: "configurations", parameter: "configurationId", kind: "Configuration", createBody: "CreateConfigurationRequest", createID: "createConfiguration", readID: "getConfiguration"},
 		{collection: "configuration-revisions", parameter: "configurationRevisionId", kind: "ConfigurationRevision", createBody: "CreateConfigurationRevisionRequest", createID: "createConfigurationRevision", readID: "getConfigurationRevision"},
@@ -160,8 +166,91 @@ func buildPaths() schema {
 	paths["/v1/applications/{applicationId}/labels/{labelKey}"] = schema{
 		"put": setLabel, "delete": deleteLabel,
 	}
+	executionTargets := paths["/v1/execution-targets"].(schema)
+	executionTargets["get"] = collectionReadOperation(
+		"listExecutionTargets",
+		"List installation-scoped ExecutionTargets",
+		"ExecutionTargetList",
+	)
+	executionPools := paths["/v1/execution-pools"].(schema)
+	executionPools["get"] = collectionReadOperation(
+		"listExecutionPools",
+		"List installation-scoped ExecutionPools selectable for enrollment",
+		"ExecutionPoolList",
+	)
+	paths["/v1/node-enrollments"] = schema{
+		"get": collectionReadOperation(
+			"listNodeEnrollments",
+			"List recent installation-scoped NodeEnrollments",
+			"NodeEnrollmentList",
+		),
+		"post": createNodeEnrollmentOperation(
+			"createNodeEnrollment",
+			"Create a short-lived Linux node enrollment with a wrapped one-time credential",
+			"CreateNodeEnrollmentRequest",
+			false,
+		),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}"] = schema{
+		"get": readOperation(
+			"getNodeEnrollment",
+			"Get one installation-scoped NodeEnrollment",
+			"nodeEnrollmentId",
+			"NodeEnrollment",
+		),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/exchange"] = schema{
+		"post": exchangeNodeEnrollmentOperation(),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/recovery-challenge"] = schema{
+		"post": nodeEnrollmentRecoveryOperation(
+			"createNodeEnrollmentRecoveryChallenge",
+			"Create a short-lived challenge for one consumed node enrollment exchange",
+			"CreateNodeEnrollmentRecoveryChallengeRequest",
+			"NodeEnrollmentRecoveryChallenge",
+		),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/recover"] = schema{
+		"post": nodeEnrollmentRecoveryOperation(
+			"recoverNodeEnrollmentExchange",
+			"Recover the exact sealed exchange result with both target-host role keys",
+			"RecoverNodeEnrollmentExchangeRequest",
+			"NodeEnrollmentExchangeResponse",
+		),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/complete"] = schema{
+		"post": nodeEnrollmentCompletionOperation(),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/revoke"] = schema{
+		"post": nodeEnrollmentLifecycleOperation(
+			"revokeNodeEnrollment",
+			"Revoke an enrollment before it publishes an ExecutionTarget",
+			"",
+			"NodeEnrollment",
+		),
+	}
+	paths["/v1/node-enrollments/{nodeEnrollmentId}/regenerate"] = schema{
+		"post": createNodeEnrollmentOperation(
+			"regenerateNodeEnrollment",
+			"Revoke an enrollment and create a fresh identity and wrapped credential",
+			"RegenerateNodeEnrollmentRequest",
+			true,
+		),
+	}
+	for _, command := range []struct {
+		name, operationID, summary string
+	}{
+		{"drain", "drainExecutionTarget", "Exclude an ExecutionTarget from new placement without moving existing work"},
+		{"activate", "activateExecutionTarget", "Return a draining ExecutionTarget to placement eligibility"},
+		{"remove", "removeExecutionTarget", "Permanently remove an empty draining ExecutionTarget from pool membership"},
+	} {
+		paths["/v1/execution-targets/{executionTargetId}/"+command.name] = schema{
+			"post": targetLifecycleOperation(command.operationID, command.summary),
+		}
+	}
 
 	paths["/v1/deployments"] = schema{
+		"get":  deploymentCollectionReadOperation(),
 		"post": mutationOperation("createDeployment", "Create Deployment", "CreateDeploymentRequest", false, "202"),
 	}
 	paths["/v1/deployments/{deploymentId}"] = schema{
@@ -189,8 +278,25 @@ func buildPaths() schema {
 			"responses": readResponses("DeploymentGeneration"),
 		},
 	}
+	paths["/v1/deployments/{deploymentId}/runtime"] = schema{
+		"get": readOperation(
+			"getDeploymentRuntime", "Get current Deployment runtime", "deploymentId", "DeploymentRuntimeSnapshot",
+		),
+	}
+	paths["/v1/deployments/{deploymentId}/terminal-sessions"] = schema{
+		"post": createTerminalSessionOperation(),
+	}
+	paths["/v1/terminal-sessions/{terminalSessionId}"] = schema{
+		"delete": closeTerminalSessionOperation(),
+	}
+	paths["/v1/terminal-sessions/{terminalSessionId}/connect"] = schema{
+		"get": connectTerminalSessionOperation(),
+	}
 	paths["/v1/operations/{operationId}"] = schema{
 		"get": readOperation("getOperation", "Get Operation", "operationId", "Operation"),
+	}
+	paths["/v1/platform/operations/{operationId}"] = schema{
+		"get": readOperation("getPlatformOperation", "Get an installation-scoped Operation", "operationId", "Operation"),
 	}
 	paths["/v1/installation:verify"] = schema{
 		"post": schema{
@@ -221,6 +327,244 @@ func buildPaths() schema {
 		},
 	}
 	return paths
+}
+
+func exchangeNodeEnrollmentOperation() schema {
+	return schema{
+		"operationId": "exchangeNodeEnrollment",
+		"summary":     "Consume one node enrollment credential and issue role-bound certificates",
+		"description": "Node bootstrap only. The credential and PKCS#10 requests are accepted solely in this bounded TLS request body and are never returned or logged.",
+		"security":    []any{},
+		"parameters": []any{
+			pathIDParameter("nodeEnrollmentId"),
+		},
+		"requestBody": jsonRequestBody("ExchangeNodeEnrollmentRequest"),
+		"responses": schema{
+			"200": schema{
+				"description": "The credential was consumed exactly once and this public certificate result was sealed for recovery.",
+				"headers": schema{
+					"ETag": componentRef("#/components/headers/ETag"),
+				},
+				"content": schema{"application/json": schema{"schema": ref("NodeEnrollmentExchangeResponse")}},
+			},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"410": componentRef("#/components/responses/ProblemResponse"),
+			"413": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+			"504": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func nodeEnrollmentRecoveryOperation(operationID, summary, requestSchema, responseSchema string) schema {
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"description": "Node bootstrap only. The request is accepted solely through the installation-authenticated TLS ingress and carries no join credential or private key.",
+		"security":    []any{},
+		"parameters": []any{
+			pathIDParameter("nodeEnrollmentId"),
+		},
+		"requestBody": jsonRequestBody(requestSchema),
+		"responses": schema{
+			"200": schema{
+				"description": "The challenge or exact previously sealed exchange result.",
+				"headers": schema{
+					"ETag": componentRef("#/components/headers/ETag"),
+				},
+				"content": schema{"application/json": schema{"schema": ref(responseSchema)}},
+			},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"410": componentRef("#/components/responses/ProblemResponse"),
+			"413": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+			"504": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func nodeEnrollmentCompletionOperation() schema {
+	return schema{
+		"operationId": "completeNodeEnrollment",
+		"summary":     "Probe and atomically register one exchanged Linux node",
+		"description": "Node bootstrap only. Every public commitment is compared with the consumed exchange before a bounded outbound mTLS identity and capability probe.",
+		"security":    []any{},
+		"parameters": []any{
+			pathIDParameter("nodeEnrollmentId"),
+		},
+		"requestBody": jsonRequestBody("CompleteNodeEnrollmentRequest"),
+		"responses": schema{
+			"200": schema{
+				"description": "The exact committed enrollment, existing ExecutionTarget and terminal registration Operation.",
+				"headers":     schema{"ETag": componentRef("#/components/headers/ETag")},
+				"content":     schema{"application/json": schema{"schema": ref("CompleteNodeEnrollmentResponse")}},
+			},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"410": componentRef("#/components/responses/ProblemResponse"),
+			"413": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+			"504": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func createNodeEnrollmentOperation(operationID, summary, bodySchema string, withPath bool) schema {
+	parameters := []any{componentRef("#/components/parameters/IdempotencyKey")}
+	if withPath {
+		parameters = append([]any{pathIDParameter("nodeEnrollmentId"), componentRef("#/components/parameters/IfMatch")}, parameters...)
+	}
+	success := schema{
+		"description": "Enrollment created; the raw credential is present only inside the RSA-OAEP ciphertext.",
+		"headers": schema{
+			"Location":           componentRef("#/components/headers/Location"),
+			"Operation-Location": componentRef("#/components/headers/OperationLocation"),
+			"ETag":               componentRef("#/components/headers/ETag"),
+		},
+		"content": schema{"application/json": schema{"schema": ref("CreateNodeEnrollmentResponse")}},
+	}
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"parameters":  parameters,
+		"requestBody": jsonRequestBody(bodySchema),
+		"responses": schema{
+			"200": success,
+			"201": success,
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"412": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"428": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func nodeEnrollmentLifecycleOperation(operationID, summary, bodySchema, responseSchema string) schema {
+	operation := schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"parameters": []any{
+			pathIDParameter("nodeEnrollmentId"),
+			componentRef("#/components/parameters/IdempotencyKey"),
+			componentRef("#/components/parameters/IfMatch"),
+		},
+		"responses": schema{
+			"200": schema{
+				"description": "Enrollment transition committed or exactly replayed.",
+				"headers":     schema{"ETag": componentRef("#/components/headers/ETag")},
+				"content":     schema{"application/json": schema{"schema": ref(responseSchema)}},
+			},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"412": componentRef("#/components/responses/ProblemResponse"),
+			"428": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+	if bodySchema != "" {
+		operation["requestBody"] = jsonRequestBody(bodySchema)
+	}
+	return operation
+}
+
+func createTerminalSessionOperation() schema {
+	success := schema{
+		"description": "A durable terminal session and a single-use connection cookie.",
+		"headers": schema{
+			"Location":   componentRef("#/components/headers/Location"),
+			"Set-Cookie": schema{"description": "HttpOnly SameSite=Strict host-only connection ticket; Secure is required when TLS is in use.", "schema": schema{"type": "string"}},
+		},
+		"content": schema{
+			"application/json": schema{"schema": ref("TerminalSession")},
+		},
+	}
+	return schema{
+		"operationId": "createTerminalSession",
+		"summary":     "Create a short-lived terminal session for one current Deployment instance",
+		"parameters": []any{
+			pathIDParameter("deploymentId"),
+			componentRef("#/components/parameters/IdempotencyKey"),
+		},
+		"requestBody": jsonRequestBody("CreateTerminalSessionRequest"),
+		"responses": schema{
+			"200": success,
+			"201": success,
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"415": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+			"504": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func closeTerminalSessionOperation() schema {
+	return schema{
+		"operationId": "closeTerminalSession",
+		"summary":     "Close the caller's exact terminal session",
+		"parameters":  []any{pathIDParameter("terminalSessionId")},
+		"responses": schema{
+			"204": schema{"description": "The terminal session is closed or was already closed."},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
+}
+
+func connectTerminalSessionOperation() schema {
+	return schema{
+		"operationId": "connectTerminalSession",
+		"summary":     "Consume the single-use ticket and upgrade to the bounded terminal WebSocket",
+		"parameters":  []any{pathIDParameter("terminalSessionId")},
+		"security": []any{schema{
+			"MatrixTerminalTicket": []string{},
+		}},
+		"x-matrix-websocket-subprotocol": "matrix.terminal.v1",
+		"x-matrix-websocket-max-frame":   paasv1.MaximumTerminalFrameBytes,
+		"responses": schema{
+			"101": schema{"description": "WebSocket upgraded with the matrix.terminal.v1 subprotocol."},
+			"400": componentRef("#/components/responses/ProblemResponse"),
+			"401": componentRef("#/components/responses/ProblemResponse"),
+			"403": componentRef("#/components/responses/ProblemResponse"),
+			"404": componentRef("#/components/responses/ProblemResponse"),
+			"409": componentRef("#/components/responses/ProblemResponse"),
+			"410": componentRef("#/components/responses/ProblemResponse"),
+			"500": componentRef("#/components/responses/ProblemResponse"),
+			"503": componentRef("#/components/responses/ProblemResponse"),
+		},
+	}
 }
 
 func readinessOperation() schema {
@@ -276,6 +620,19 @@ func mutationOperationWithPath(
 	return operation
 }
 
+func targetLifecycleOperation(operationID, summary string) schema {
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"parameters": []any{
+			pathIDParameter("executionTargetId"),
+			componentRef("#/components/parameters/IdempotencyKey"),
+			componentRef("#/components/parameters/IfMatch"),
+		},
+		"responses": mutationResponses("200"),
+	}
+}
+
 func readOperation(operationID, summary, pathParameter, responseSchema string) schema {
 	return schema{
 		"operationId": operationID,
@@ -283,6 +640,27 @@ func readOperation(operationID, summary, pathParameter, responseSchema string) s
 		"parameters":  []any{pathIDParameter(pathParameter)},
 		"responses":   readResponses(responseSchema),
 	}
+}
+
+func collectionReadOperation(operationID, summary, responseSchema string) schema {
+	responses := readResponses(responseSchema)
+	object(responses["200"])["description"] = "Current bounded authorized collection."
+	return schema{
+		"operationId": operationID,
+		"summary":     summary,
+		"responses":   responses,
+	}
+}
+
+func deploymentCollectionReadOperation() schema {
+	operation := collectionReadOperation(
+		"listDeployments", "List tenant-scoped Deployments", "DeploymentList",
+	)
+	operation["parameters"] = []any{schema{
+		"name": "after", "in": "query", "required": false,
+		"schema": ref("ID"),
+	}}
+	return operation
 }
 
 func jsonRequestBody(schemaName string) schema {
@@ -389,42 +767,57 @@ func scalarSchemas() map[string]any {
 
 func enumSchemas() map[string][]string {
 	return map[string][]string{
-		"AuthorityKind":                 stringsOf(paasv1.AuthorityPlatform, paasv1.AuthorityTenant),
-		"TenantStatus":                  stringsOf(paasv1.TenantActive, paasv1.TenantSuspended, paasv1.TenantDeactivated),
-		"ExecutionPoolPhase":            stringsOf(paasv1.ExecutionPoolReady, paasv1.ExecutionPoolDegraded, paasv1.ExecutionPoolUnavailable),
-		"ExecutionTargetHealth":         stringsOf(paasv1.ExecutionTargetHealthUnknown, paasv1.ExecutionTargetHealthReady, paasv1.ExecutionTargetHealthDegraded, paasv1.ExecutionTargetHealthUnavailable),
-		"MeasurementState":              stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementWarmingUp, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementStale),
-		"ExecutionTargetDesiredState":   stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining),
-		"IsolationGuarantee":            stringsOfSlice(paasv1.IsolationGuarantees()),
-		"PlacementStrategy":             stringsOf(paasv1.PlacementFirstFit, paasv1.PlacementSpread, paasv1.PlacementBinPack),
-		"PlacementOutcome":              stringsOf(paasv1.PlacementScheduled, paasv1.PlacementUnschedulable),
-		"DeploymentDesiredState":        stringsOf(paasv1.DeploymentDesiredRunning, paasv1.DeploymentDesiredStopped),
-		"DeploymentPhase":               stringsOfSlice(paasv1.DeploymentPhases()),
-		"OperationAction":               stringsOfSlice(paasv1.OperationActions()),
-		"OperationState":                stringsOfSlice(paasv1.OperationStates()),
-		"EvidenceType":                  stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
-		"EvidenceSeverity":              stringsOf(paasv1.EvidenceInfo, paasv1.EvidenceWarning, paasv1.EvidenceError),
-		"SubjectType":                   stringsOf(paasv1.SubjectUser, paasv1.SubjectRole, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser),
-		"ReadinessState":                stringsOf(paasv1.ReadinessReady, paasv1.ReadinessNotReady),
-		"InstallationVerificationState": stringsOf(paasv1.InstallationVerificationPending, paasv1.InstallationVerificationReady, paasv1.InstallationVerificationFailed),
-		"ErrorCode":                     stringsOfSlice(paasv1.ErrorCodes()),
-		"AdapterKind":                   stringsOf(paasv1.AdapterInfrastructure, paasv1.AdapterDeploymentExecutor, paasv1.AdapterGateway),
-		"AdapterAction":                 stringsOf(paasv1.AdapterCapabilities, paasv1.AdapterInspectExecutionTarget, paasv1.AdapterObserveExecutionTarget, paasv1.AdapterValidateDeployment, paasv1.AdapterApplyDeployment, paasv1.AdapterObserveDeployment, paasv1.AdapterStopDeployment, paasv1.AdapterRollbackDeployment, paasv1.AdapterReconcileRoutes, paasv1.AdapterObserveRoutes, paasv1.AdapterDeleteRoutes),
-		"AdapterResultState":            stringsOf(paasv1.AdapterResultSucceeded, paasv1.AdapterResultInProgress, paasv1.AdapterResultFailed, paasv1.AdapterResultUnknown),
-		"AdapterErrorClass":             stringsOf(paasv1.AdapterErrorValidation, paasv1.AdapterErrorConflict, paasv1.AdapterErrorPermissionDenied, paasv1.AdapterErrorQuotaExceeded, paasv1.AdapterErrorRateLimited, paasv1.AdapterErrorTransient, paasv1.AdapterErrorUnavailable, paasv1.AdapterErrorTimeout, paasv1.AdapterErrorNotFound, paasv1.AdapterErrorUnknownOutcome, paasv1.AdapterErrorInternal),
-		"ArtifactKind":                  stringsOf(paasv1.ArtifactOCIImage, paasv1.ArtifactOCIArtifact, paasv1.ArtifactReleaseBundle),
-		"InputKind":                     stringsOf(paasv1.InputConfiguration, paasv1.InputSecret),
-		"InjectionMode":                 stringsOf(paasv1.InjectionEnvironment, paasv1.InjectionFile),
-		"EndpointProtocol":              stringsOf(paasv1.EndpointHTTP, paasv1.EndpointGRPC, paasv1.EndpointTCP),
-		"EndpointVisibility":            stringsOf(paasv1.EndpointPrivate, paasv1.EndpointPublic),
+		"AuthorityKind":                   stringsOf(paasv1.AuthorityPlatform, paasv1.AuthorityTenant),
+		"TenantStatus":                    stringsOf(paasv1.TenantActive, paasv1.TenantSuspended, paasv1.TenantDeactivated),
+		"ExecutionPoolPhase":              stringsOf(paasv1.ExecutionPoolReady, paasv1.ExecutionPoolDegraded, paasv1.ExecutionPoolUnavailable),
+		"ExecutionTargetHealth":           stringsOf(paasv1.ExecutionTargetHealthUnknown, paasv1.ExecutionTargetHealthReady, paasv1.ExecutionTargetHealthDegraded, paasv1.ExecutionTargetHealthUnavailable),
+		"NodeEnrollmentState":             stringsOfSlice(paasv1.NodeEnrollmentStates()),
+		"NodeEnrollmentDiagnosticCode":    stringsOfSlice(paasv1.NodeEnrollmentDiagnosticCodes()),
+		"JoinCredentialWrappingAlgorithm": stringsOf(paasv1.JoinCredentialRSAOAEP256),
+		"NodeJoinSignatureAlgorithm":      stringsOf(paasv1.NodeJoinSignatureEd25519),
+		"MeasurementState":                stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementWarmingUp, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementStale),
+		"ExecutionTargetDesiredState":     stringsOf(paasv1.ExecutionTargetActive, paasv1.ExecutionTargetDraining, paasv1.ExecutionTargetRemoved),
+		"IsolationGuarantee":              stringsOfSlice(paasv1.IsolationGuarantees()),
+		"PlacementStrategy":               stringsOf(paasv1.PlacementFirstFit, paasv1.PlacementSpread, paasv1.PlacementBinPack),
+		"PlacementOutcome":                stringsOf(paasv1.PlacementScheduled, paasv1.PlacementUnschedulable),
+		"DeploymentDesiredState":          stringsOf(paasv1.DeploymentDesiredRunning, paasv1.DeploymentDesiredStopped),
+		"DeploymentPhase":                 stringsOfSlice(paasv1.DeploymentPhases()),
+		"DeploymentInstanceState":         stringsOfSlice(paasv1.DeploymentInstanceStates()),
+		"DeploymentInstanceHealth":        stringsOfSlice(paasv1.DeploymentInstanceHealthStates()),
+		"TerminalSessionState":            stringsOfSlice(paasv1.TerminalSessionStates()),
+		"TerminalSessionOutcome":          stringsOfSlice(paasv1.TerminalSessionOutcomes()),
+		"OperationAction":                 stringsOfSlice(paasv1.OperationActions()),
+		"OperationState":                  stringsOfSlice(paasv1.OperationStates()),
+		"EvidenceType":                    stringsOf(paasv1.EvidencePolicyDecision, paasv1.EvidencePlacementDecision, paasv1.EvidenceAdapterCommand, paasv1.EvidenceAdapterResult, paasv1.EvidenceObservation, paasv1.EvidenceVerification, paasv1.EvidenceAuditDispatch),
+		"EvidenceSeverity":                stringsOf(paasv1.EvidenceInfo, paasv1.EvidenceWarning, paasv1.EvidenceError),
+		"SubjectType":                     stringsOf(paasv1.SubjectUser, paasv1.SubjectRole, paasv1.SubjectServiceAccount, paasv1.SubjectAgent, paasv1.SubjectSystemUser),
+		"ReadinessState":                  stringsOf(paasv1.ReadinessReady, paasv1.ReadinessNotReady),
+		"InstallationVerificationState":   stringsOf(paasv1.InstallationVerificationPending, paasv1.InstallationVerificationReady, paasv1.InstallationVerificationFailed),
+		"ErrorCode":                       stringsOfSlice(paasv1.ErrorCodes()),
+		"AdapterKind":                     stringsOf(paasv1.AdapterInfrastructure, paasv1.AdapterDeploymentExecutor, paasv1.AdapterGateway),
+		"AdapterAction":                   stringsOf(paasv1.AdapterCapabilities, paasv1.AdapterInspectExecutionTarget, paasv1.AdapterObserveExecutionTarget, paasv1.AdapterValidateDeployment, paasv1.AdapterApplyDeployment, paasv1.AdapterObserveDeployment, paasv1.AdapterStopDeployment, paasv1.AdapterRollbackDeployment, paasv1.AdapterReconcileRoutes, paasv1.AdapterObserveRoutes, paasv1.AdapterDeleteRoutes),
+		"AdapterResultState":              stringsOf(paasv1.AdapterResultSucceeded, paasv1.AdapterResultInProgress, paasv1.AdapterResultFailed, paasv1.AdapterResultUnknown),
+		"AdapterErrorClass":               stringsOf(paasv1.AdapterErrorValidation, paasv1.AdapterErrorConflict, paasv1.AdapterErrorPermissionDenied, paasv1.AdapterErrorQuotaExceeded, paasv1.AdapterErrorRateLimited, paasv1.AdapterErrorTransient, paasv1.AdapterErrorUnavailable, paasv1.AdapterErrorTimeout, paasv1.AdapterErrorNotFound, paasv1.AdapterErrorUnknownOutcome, paasv1.AdapterErrorInternal),
+		"ArtifactKind":                    stringsOf(paasv1.ArtifactOCIImage, paasv1.ArtifactOCIArtifact, paasv1.ArtifactReleaseBundle),
+		"InputKind":                       stringsOf(paasv1.InputConfiguration, paasv1.InputSecret),
+		"InjectionMode":                   stringsOf(paasv1.InjectionEnvironment, paasv1.InjectionFile),
+		"EndpointProtocol":                stringsOf(paasv1.EndpointHTTP, paasv1.EndpointGRPC, paasv1.EndpointTCP),
+		"EndpointVisibility":              stringsOf(paasv1.EndpointPrivate, paasv1.EndpointPublic),
 	}
 }
 
 func structContracts() map[string]reflect.Type {
 	values := []any{
 		paasv1.ResourceScope{}, paasv1.ResourceMetadata{}, paasv1.Tenant{},
-		paasv1.LabelSelector{}, paasv1.ExecutionPoolSpec{}, paasv1.ExecutionPoolStatus{}, paasv1.ExecutionPool{},
-		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{},
+		paasv1.LabelSelector{}, paasv1.ExecutionPoolSpec{}, paasv1.ExecutionPoolStatus{}, paasv1.ExecutionPool{}, paasv1.ExecutionPoolList{},
+		paasv1.CreateExecutionPoolRequest{}, paasv1.RegisterExecutionTargetRequest{},
+		paasv1.NodeEnrollmentDiagnostic{}, paasv1.NodeEnrollment{}, paasv1.NodeEnrollmentList{},
+		paasv1.CreateNodeEnrollmentRequest{}, paasv1.RegenerateNodeEnrollmentRequest{}, paasv1.NodeEnrollmentJoin{},
+		paasv1.WrappedJoinCredential{}, paasv1.CreateNodeEnrollmentResponse{},
+		paasv1.NodeEnrollmentListenerClaim{}, paasv1.ExchangeNodeEnrollmentRequest{}, paasv1.NodeEnrollmentExchangeResponse{},
+		paasv1.CreateNodeEnrollmentRecoveryChallengeRequest{}, paasv1.NodeEnrollmentRecoveryChallenge{},
+		paasv1.RecoverNodeEnrollmentExchangeRequest{}, paasv1.CompleteNodeEnrollmentRequest{}, paasv1.CompleteNodeEnrollmentResponse{},
+		paasv1.AdapterRef{}, paasv1.Capacity{}, paasv1.ExecutionTargetSpec{}, paasv1.ExecutionTargetStatus{}, paasv1.ExecutionTarget{}, paasv1.ExecutionTargetList{},
 		paasv1.ExecutionTargetUsage{}, paasv1.CPUUsage{}, paasv1.CPUUsageValue{}, paasv1.MemoryUsage{}, paasv1.MemoryUsageValue{},
 		paasv1.FilesystemUsage{}, paasv1.FilesystemUsageValue{},
 		paasv1.PlacementPolicySpec{}, paasv1.PlacementPolicy{}, paasv1.PlacementDecision{},
@@ -434,11 +827,21 @@ func structContracts() map[string]reflect.Type {
 		paasv1.CreateConfigurationRevisionRequest{}, paasv1.ApplicationRevisionComponent{}, paasv1.ApplicationRevisionSpec{},
 		paasv1.ApplicationRevision{}, paasv1.CreateApplicationRevisionRequest{}, paasv1.DeploymentComponent{}, paasv1.DeploymentSpec{},
 		paasv1.DeploymentStatus{}, paasv1.Deployment{}, paasv1.CreateDeploymentRequest{}, paasv1.RollbackDeploymentRequest{},
+		paasv1.DeploymentList{}, paasv1.DeploymentRuntimeInstance{}, paasv1.DeploymentRuntimeObservation{},
+		paasv1.DeploymentInstanceCPUUsage{}, paasv1.DeploymentInstanceCPUUsageValue{},
+		paasv1.DeploymentInstanceMemoryUsage{}, paasv1.DeploymentInstanceMemoryUsageValue{},
+		paasv1.DeploymentInstanceNetworkUsage{}, paasv1.DeploymentInstanceNetworkUsageValue{},
+		paasv1.DeploymentInstanceBlockIOUsage{}, paasv1.DeploymentInstanceBlockIOUsageValue{},
+		paasv1.DeploymentInstanceVolumeUsage{}, paasv1.DeploymentInstanceStorageUsage{}, paasv1.DeploymentInstanceStorageUsageValue{},
+		paasv1.DeploymentResourceInstance{}, paasv1.DeploymentResourceObservation{}, paasv1.DeploymentResourceValue{}, paasv1.DeploymentResourceSnapshot{},
+		paasv1.DeploymentRuntimeValue{}, paasv1.DeploymentRuntimeSnapshot{},
+		paasv1.TerminalSize{}, paasv1.CreateTerminalSessionRequest{}, paasv1.TerminalSession{},
 		paasv1.DeploymentGeneration{}, paasv1.SubjectRef{}, paasv1.RoleSessionReference{}, paasv1.ResourceRef{}, paasv1.FieldViolation{}, paasv1.Readiness{},
 		paasv1.VerifyInstallationRequest{}, paasv1.InstallationVerification{},
 		paasv1.Problem{}, paasv1.Operation{}, paasv1.Evidence{}, paasv1.AdapterCapabilitiesContract{},
 		paasv1.AdapterCommandEnvelope{}, paasv1.InspectExecutionTargetRequest{}, paasv1.ObserveExecutionTargetRequest{},
 		paasv1.DeploymentExecutionRequest{}, paasv1.ObserveDeploymentRequest{}, paasv1.DeploymentEndpointObservation{},
+		paasv1.ObserveDeploymentRuntimeRequest{},
 		paasv1.DeploymentObservation{}, paasv1.ExecutionTargetObservation{}, paasv1.NormalizedAdapterError{}, paasv1.AdapterResult{},
 	}
 	result := make(map[string]reflect.Type, len(values))
@@ -492,7 +895,13 @@ func schemaForField(owner string, field reflect.StructField, jsonName string) sc
 	if owner == "ApplicationList" && field.Name == "NextAfter" {
 		return schema{"type": "string", "pattern": `^pc1\.[A-Za-z0-9_-]+$`, "minLength": 5, "maxLength": paasv1.MaxApplicationCursorBytes}
 	}
-	if owner == "DeploymentEndpointObservation" &&
+	if (owner == "DeploymentRuntimeInstance" || owner == "DeploymentResourceInstance") && field.Name == "ID" {
+		return schema{"type": "string", "pattern": `^instance-[0-9a-f]{32}$`}
+	}
+	if field.Name == "BindingRef" {
+		return ref("ID")
+	}
+	if (owner == "DeploymentEndpointObservation" || owner == "DeploymentRuntimeInstance") &&
 		(field.Name == "ComponentName" || field.Name == "EndpointName" || field.Name == "Address") {
 		return ref("Name")
 	}
@@ -569,12 +978,18 @@ func schemaForType(contract reflect.Type, jsonName string) schema {
 }
 
 func applySemanticOverlays(schemas map[string]any) {
+	registrationLabels := object(schemas["RegisterExecutionTargetRequest"])["properties"].(schema)["labels"].(schema)
+	registrationLabels["not"] = schema{"required": []string{"matrix-machine-fingerprint"}}
 	resourceKinds := map[string]string{
 		"Application": "Application", "ApplicationList": "ApplicationList", "Configuration": "Configuration",
 		"ConfigurationRevision": "ConfigurationRevision", "ApplicationRevision": "ApplicationRevision",
-		"Deployment": "Deployment", "DeploymentGeneration": "DeploymentGeneration",
-		"ExecutionPool": "ExecutionPool", "ExecutionTarget": "ExecutionTarget",
-		"PlacementPolicy": "PlacementPolicy", "PlacementDecision": "PlacementDecision",
+		"Deployment": "Deployment", "DeploymentList": "DeploymentList",
+		"DeploymentGeneration": "DeploymentGeneration", "DeploymentRuntimeSnapshot": "DeploymentRuntimeSnapshot",
+		"TerminalSession": "TerminalSession",
+		"ExecutionPool":   "ExecutionPool", "ExecutionPoolList": "ExecutionPoolList",
+		"ExecutionTarget": "ExecutionTarget", "NodeEnrollment": "NodeEnrollment",
+		"NodeEnrollmentList": "NodeEnrollmentList",
+		"PlacementPolicy":    "PlacementPolicy", "PlacementDecision": "PlacementDecision",
 		"Operation": "Operation", "Evidence": "Evidence",
 		"Readiness": "Readiness", "InstallationVerification": "InstallationVerification",
 	}
@@ -587,13 +1002,303 @@ func applySemanticOverlays(schemas map[string]any) {
 			properties["kind"] = schema{"const": kind}
 		}
 	}
+	joinProperties := object(schemas["NodeEnrollmentJoin"])["properties"].(schema)
+	joinProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentJoinAPIVersion}
+	joinProperties["kind"] = schema{"const": paasv1.NodeEnrollmentJoinKind}
+	exchangeRequest := object(schemas["ExchangeNodeEnrollmentRequest"])
+	exchangeRequestProperties := exchangeRequest["properties"].(schema)
+	exchangeRequestProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentExchangeAPIVersion}
+	exchangeRequestProperties["kind"] = schema{"const": paasv1.NodeEnrollmentExchangeRequestKind}
+	exchangeResponse := object(schemas["NodeEnrollmentExchangeResponse"])
+	exchangeResponseProperties := exchangeResponse["properties"].(schema)
+	exchangeResponseProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentExchangeAPIVersion}
+	exchangeResponseProperties["kind"] = schema{"const": paasv1.NodeEnrollmentExchangeResponseKind}
+	recoveryChallengeRequest := object(schemas["CreateNodeEnrollmentRecoveryChallengeRequest"])
+	recoveryChallengeRequestProperties := recoveryChallengeRequest["properties"].(schema)
+	recoveryChallengeRequestProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentRecoveryAPIVersion}
+	recoveryChallengeRequestProperties["kind"] = schema{"const": paasv1.NodeEnrollmentRecoveryChallengeRequestKind}
+	recoveryChallenge := object(schemas["NodeEnrollmentRecoveryChallenge"])
+	recoveryChallengeProperties := recoveryChallenge["properties"].(schema)
+	recoveryChallengeProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentRecoveryAPIVersion}
+	recoveryChallengeProperties["kind"] = schema{"const": paasv1.NodeEnrollmentRecoveryChallengeKind}
+	recoveryProof := object(schemas["RecoverNodeEnrollmentExchangeRequest"])
+	recoveryProofProperties := recoveryProof["properties"].(schema)
+	recoveryProofProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentRecoveryAPIVersion}
+	recoveryProofProperties["kind"] = schema{"const": paasv1.NodeEnrollmentRecoveryProofRequestKind}
+	completionRequest := object(schemas["CompleteNodeEnrollmentRequest"])
+	completionRequestProperties := completionRequest["properties"].(schema)
+	completionRequestProperties["apiVersion"] = schema{"const": paasv1.NodeEnrollmentExchangeAPIVersion}
+	completionRequestProperties["kind"] = schema{"const": paasv1.NodeEnrollmentCompletionRequestKind}
 
 	for _, name := range []string{"ConfigurationRevisionSpec", "ApplicationRevisionSpec", "DeploymentGeneration", "PlacementDecision"} {
 		object(schemas[name])["x-matrix-immutable"] = true
 	}
+	object(schemas["DeploymentList"])["properties"].(schema)["items"].(schema)["maxItems"] = paasv1.MaximumDeploymentListItems
+	object(schemas["ExecutionPoolList"])["properties"].(schema)["items"].(schema)["maxItems"] = paasv1.MaximumExecutionPoolListItems
+	object(schemas["NodeEnrollmentList"])["properties"].(schema)["items"].(schema)["maxItems"] = paasv1.MaximumNodeEnrollmentListItems
+	wrappingKeySchema := schema{
+		"type": "string", "minLength": 512, "maxLength": 1024,
+		"pattern": `^[A-Za-z0-9_-]+$`,
+	}
+	object(schemas["CreateNodeEnrollmentRequest"])["properties"].(schema)["wrappingPublicKey"] = wrappingKeySchema
+	object(schemas["RegenerateNodeEnrollmentRequest"])["properties"].(schema)["wrappingPublicKey"] = wrappingKeySchema
+	exchangeRequestProperties["enrollmentId"] = schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}
+	exchangeRequestProperties["exchangeId"] = schema{"type": "string", "pattern": `^node-exchange-[0-9a-f]{32}$`}
+	exchangeRequestProperties["credential"] = schema{
+		"type": "string", "minLength": 43, "maxLength": 43,
+		"pattern": `^[A-Za-z0-9_-]{43}$`, "writeOnly": true,
+	}
+	certificateRequestSchema := schema{
+		"type": "string", "minLength": 86, "maxLength": 5462,
+		"pattern": `^[A-Za-z0-9_-]+$`, "writeOnly": true,
+	}
+	exchangeRequestProperties["nodeCertificateRequest"] = certificateRequestSchema
+	exchangeRequestProperties["collectorCertificateRequest"] = certificateRequestSchema
+	listenerProperties := object(schemas["NodeEnrollmentListenerClaim"])["properties"].(schema)
+	for _, name := range []string{"managementPort", "collectorPort"} {
+		listenerProperties[name] = schema{
+			"type": "integer", "minimum": paasv1.MinimumNodeEnrollmentListenerPort, "maximum": 65535,
+		}
+	}
+	exchangeResponseProperties["enrollmentId"] = schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}
+	exchangeResponseProperties["exchangeId"] = schema{"type": "string", "pattern": `^node-exchange-[0-9a-f]{32}$`}
+	exchangeResponseProperties["bindingRef"] = schema{"type": "string", "pattern": `^node-binding-[0-9a-f]{32}$`}
+	exchangeResponseProperties["nodeListenAddress"] = schema{
+		"type": "string", "minLength": 8, "maxLength": 64,
+	}
+	exchangeResponseProperties["collectorEndpoint"] = schema{
+		"type": "string", "format": "uri", "minLength": 16, "maxLength": 80,
+		"pattern": `^https://(?:127\.0\.0\.1|\[::1\]):[1-9][0-9]{3,4}$`,
+	}
+	certificateSchema := schema{
+		"type": "string", "minLength": 86, "maxLength": 5462,
+		"pattern": `^[A-Za-z0-9_-]+$`,
+	}
+	for _, name := range []string{"nodeCertificate", "collectorCertificate", "issuerCertificate"} {
+		exchangeResponseProperties[name] = certificateSchema
+	}
+	exchangeRequest["x-matrix-visibility"] = "node-bootstrap"
+	exchangeResponse["x-matrix-visibility"] = "node-bootstrap"
+	for _, recovery := range []schema{recoveryChallengeRequest, recoveryChallenge, recoveryProof} {
+		recovery["x-matrix-visibility"] = "node-bootstrap"
+	}
+	completionRequest["x-matrix-visibility"] = "node-bootstrap"
+	for _, properties := range []schema{recoveryChallengeRequestProperties, recoveryChallengeProperties} {
+		properties["enrollmentId"] = schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}
+		properties["exchangeId"] = schema{"type": "string", "pattern": `^node-exchange-[0-9a-f]{32}$`}
+	}
+	recoveryChallengeProperties["challenge"] = schema{
+		"type": "string", "minLength": 43, "maxLength": 43,
+		"pattern": `^[A-Za-z0-9_-]{43}$`,
+	}
+	recoveryChallengeProperties["authenticator"] = schema{
+		"type": "string", "minLength": 43, "maxLength": 43,
+		"pattern": `^[A-Za-z0-9_-]{43}$`,
+	}
+	for _, name := range []string{"nodeSignature", "collectorSignature"} {
+		recoveryProofProperties[name] = schema{
+			"type": "string", "minLength": 86, "maxLength": 86,
+			"pattern": `^[A-Za-z0-9_-]{86}$`, "writeOnly": true,
+		}
+	}
+	completionRequestProperties["enrollmentId"] = schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}
+	completionRequestProperties["exchangeId"] = schema{"type": "string", "pattern": `^node-exchange-[0-9a-f]{32}$`}
+	completionRequestProperties["bindingRef"] = schema{"type": "string", "pattern": `^node-binding-[0-9a-f]{32}$`}
+	completionRequestProperties["nodeListenAddress"] = schema{"type": "string", "minLength": 8, "maxLength": 64}
+	completionRequestProperties["collectorEndpoint"] = schema{
+		"type": "string", "format": "uri", "minLength": 16, "maxLength": 80,
+		"pattern": `^https://(?:127\.0\.0\.1|\[::1\]):[1-9][0-9]{3,4}$`,
+	}
+	joinProperties["controlPlaneUrl"] = schema{
+		"type": "string", "format": "uri", "maxLength": 2048,
+		"pattern": `^https://[^?#]+/api/paas/v1/node-enrollments/node-enrollment-[0-9a-f]{32}/exchange$`,
+	}
+	joinProperties["issuerCertificate"] = schema{
+		"type": "string", "minLength": 1, "maxLength": 16384,
+		"pattern": `^[A-Za-z0-9_-]+$`,
+	}
+	joinProperties["signature"] = schema{
+		"type": "string", "minLength": 86, "maxLength": 86,
+		"pattern": `^[A-Za-z0-9_-]{86}$`,
+	}
+	wrappedProperties := object(schemas["WrappedJoinCredential"])["properties"].(schema)
+	wrappedProperties["ciphertext"] = schema{
+		"type": "string", "minLength": 512, "maxLength": 512,
+		"pattern": `^[A-Za-z0-9_-]{512}$`,
+		"description": "RSA-3072 OAEP-SHA256 ciphertext whose UTF-8 label is " +
+			"matrix-node-enrollment-v1\\0<installationId>\\0<enrollmentId>.",
+	}
+	enrollmentProperties := object(schemas["NodeEnrollment"])["properties"].(schema)
+	enrollmentProperties["metadata"] = schema{"allOf": []any{
+		ref("ResourceMetadata"),
+		schema{"properties": schema{"id": schema{"type": "string", "pattern": `^node-enrollment-[0-9a-f]{32}$`}}},
+	}}
+	object(schemas["NodeEnrollment"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentWaitingInstall)}}, "required": []string{"state"}},
+			"then": schema{"properties": schema{"credentialConsumedAt": false, "readyAt": false, "replacedById": false, "diagnostic": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentVerifying)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"credentialConsumedAt"}, "properties": schema{"readyAt": false, "replacedById": false, "diagnostic": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentReady)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"credentialConsumedAt", "readyAt"}, "properties": schema{"replacedById": false, "diagnostic": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentFailed)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"credentialConsumedAt", "diagnostic"}, "properties": schema{"readyAt": false, "replacedById": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentExpired)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"diagnostic"}, "properties": schema{"readyAt": false, "replacedById": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.NodeEnrollmentRevoked)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"diagnostic"}, "properties": schema{"readyAt": false}},
+		},
+	}
+	diagnosticProperties := object(schemas["NodeEnrollmentDiagnostic"])["properties"].(schema)
+	diagnosticProperties["retryable"] = schema{"type": "boolean"}
+	object(schemas["NodeEnrollmentDiagnostic"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"code": schema{"enum": stringsOf(paasv1.NodeEnrollmentDiagnosticListener, paasv1.NodeEnrollmentDiagnosticNetworkInterrupted)}}, "required": []string{"code"}},
+			"then": schema{"properties": schema{"retryable": schema{"const": true}}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"code": schema{"enum": stringsOf(paasv1.NodeEnrollmentDiagnosticExpired, paasv1.NodeEnrollmentDiagnosticRevoked, paasv1.NodeEnrollmentDiagnosticCredentialUsed, paasv1.NodeEnrollmentDiagnosticInstallation, paasv1.NodeEnrollmentDiagnosticIdentity, paasv1.NodeEnrollmentDiagnosticRuntime, paasv1.NodeEnrollmentDiagnosticMTLS, paasv1.NodeEnrollmentDiagnosticResource)}}, "required": []string{"code"}},
+			"then": schema{"properties": schema{"retryable": schema{"const": false}}},
+		},
+	}
+	object(schemas["DeploymentRuntimeObservation"])["properties"].(schema)["instances"].(schema)["maxItems"] = paasv1.MaximumDeploymentRuntimeInstances
+	object(schemas["DeploymentResourceObservation"])["properties"].(schema)["instances"].(schema)["maxItems"] = paasv1.MaximumDeploymentRuntimeInstances
+	for _, name := range []string{"DeploymentRuntimeObservation", "DeploymentResourceObservation", "ObserveDeploymentRuntimeRequest"} {
+		object(schemas[name])["properties"].(schema)["generation"].(schema)["minimum"] = 1
+	}
+	object(schemas["DeploymentRuntimeSnapshot"])["properties"].(schema)["state"] = schema{
+		"type": "string",
+		"enum": stringsOf(
+			paasv1.MeasurementAvailable,
+			paasv1.MeasurementStale,
+			paasv1.MeasurementUnavailable,
+		),
+	}
+	object(schemas["DeploymentRuntimeSnapshot"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.MeasurementUnavailable)}}},
+			"then": schema{"properties": schema{"value": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementStale)}}},
+			"then": schema{"required": []string{"value"}},
+		},
+	}
+	terminalSizeProperties := object(schemas["TerminalSize"])["properties"].(schema)
+	terminalSizeProperties["columns"] = schema{"type": "integer", "minimum": paasv1.MinimumTerminalColumns, "maximum": paasv1.MaximumTerminalColumns}
+	terminalSizeProperties["rows"] = schema{"type": "integer", "minimum": paasv1.MinimumTerminalRows, "maximum": paasv1.MaximumTerminalRows}
+	object(schemas["CreateTerminalSessionRequest"])["properties"].(schema)["instanceId"] = schema{"type": "string", "pattern": `^instance-[0-9a-f]{32}$`}
+	terminalProperties := object(schemas["TerminalSession"])["properties"].(schema)
+	terminalProperties["id"] = schema{"type": "string", "pattern": `^terminal-session-[0-9a-f]{32}$`}
+	terminalProperties["instanceId"] = schema{"type": "string", "pattern": `^instance-[0-9a-f]{32}$`}
+	terminalProperties["generation"].(schema)["minimum"] = 1
+	object(schemas["TerminalSession"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.TerminalSessionPending, paasv1.TerminalSessionConnecting)}}, "required": []string{"state"}},
+			"then": schema{"properties": schema{"outcome": false, "connectedAt": false, "endedAt": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.TerminalSessionActive)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"connectedAt"}, "properties": schema{"outcome": false, "endedAt": false}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.TerminalSessionEnded)}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"outcome", "endedAt"}},
+		},
+	}
+	object(schemas["DeploymentResourceSnapshot"])["properties"].(schema)["state"] = schema{
+		"type": "string",
+		"enum": stringsOf(
+			paasv1.MeasurementAvailable,
+			paasv1.MeasurementStale,
+			paasv1.MeasurementUnavailable,
+		),
+	}
+	object(schemas["DeploymentResourceSnapshot"])["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"const": string(paasv1.MeasurementUnavailable)}}, "required": []string{"state"}},
+			"then": schema{"properties": schema{"value": false}},
+		},
+		schema{
+			"if": schema{"properties": schema{"state": schema{
+				"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementStale),
+			}}, "required": []string{"state"}},
+			"then": schema{"required": []string{"value"}},
+		},
+	}
+	for _, name := range []string{
+		"DeploymentInstanceCPUUsage", "DeploymentInstanceMemoryUsage",
+		"DeploymentInstanceNetworkUsage", "DeploymentInstanceBlockIOUsage",
+		"DeploymentInstanceStorageUsage",
+	} {
+		states := stringsOf(
+			paasv1.MeasurementAvailable,
+			paasv1.MeasurementUnavailable,
+			paasv1.MeasurementUnsupported,
+		)
+		if name == "DeploymentInstanceCPUUsage" {
+			states = append(states, string(paasv1.MeasurementWarmingUp))
+		}
+		if name == "DeploymentInstanceStorageUsage" {
+			states = append(states, string(paasv1.MeasurementStale))
+		}
+		object(schemas[name])["properties"].(schema)["state"] = schema{"type": "string", "enum": states}
+		object(schemas[name])["allOf"] = []any{
+			schema{
+				"if": schema{"properties": schema{"state": schema{
+					"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementStale),
+				}}, "required": []string{"state"}},
+				"then": schema{"required": []string{"value"}},
+			},
+			schema{
+				"if": schema{"properties": schema{"state": schema{
+					"enum": stringsOf(paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported, paasv1.MeasurementWarmingUp),
+				}}, "required": []string{"state"}},
+				"then": schema{"properties": schema{"value": false}},
+			},
+		}
+	}
+	storage := object(schemas["DeploymentInstanceStorageUsageValue"])
+	storage["properties"].(schema)["volumesState"] = schema{
+		"type": "string",
+		"enum": stringsOf(paasv1.MeasurementAvailable, paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported),
+	}
+	storage["allOf"] = []any{
+		schema{
+			"if":   schema{"properties": schema{"volumesState": schema{"const": string(paasv1.MeasurementAvailable)}}, "required": []string{"volumesState"}},
+			"then": schema{"required": []string{"volumes"}},
+		},
+		schema{
+			"if": schema{"properties": schema{"volumesState": schema{
+				"enum": stringsOf(paasv1.MeasurementUnavailable, paasv1.MeasurementUnsupported),
+			}}, "required": []string{"volumesState"}},
+			"then": schema{"properties": schema{"volumes": false}},
+		},
+	}
+	object(schemas["DeploymentRuntimeInstance"])["allOf"] = []any{
+		schema{
+			"if":   schema{"required": []string{"exitCode"}},
+			"then": schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.DeploymentInstanceExited, paasv1.DeploymentInstanceDead)}}},
+		},
+		schema{
+			"if":   schema{"properties": schema{"state": schema{"enum": stringsOf(paasv1.DeploymentInstanceExited, paasv1.DeploymentInstanceDead)}}},
+			"then": schema{"required": []string{"exitCode"}},
+		},
+	}
 	for _, name := range []string{
 		"AdapterCapabilitiesContract", "AdapterCommandEnvelope", "InspectExecutionTargetRequest",
 		"ObserveExecutionTargetRequest", "DeploymentExecutionRequest", "ObserveDeploymentRequest",
+		"ObserveDeploymentRuntimeRequest",
 		"DeploymentEndpointObservation", "DeploymentObservation", "ExecutionTargetObservation",
 		"NormalizedAdapterError", "AdapterResult",
 	} {
@@ -604,8 +1309,34 @@ func applySemanticOverlays(schemas map[string]any) {
 		paasv1.OperationSucceeded, paasv1.OperationFailed,
 		paasv1.OperationCancelled, paasv1.OperationManualIntervention,
 	)
+	object(schemas["Operation"])["allOf"] = []any{schema{
+		"if": schema{"properties": schema{"action": schema{"enum": stringsOf(paasv1.OperationCreateExecutionPool, paasv1.OperationRegisterExecutionTarget)}}},
+		"then": schema{
+			"required": []string{"installationId"},
+			"properties": schema{
+				"scope":       schema{"properties": schema{"kind": schema{"const": string(paasv1.AuthorityPlatform)}, "tenantId": false}},
+				"requestedBy": schema{"properties": schema{"type": schema{"const": string(paasv1.SubjectUser)}}},
+			},
+		},
+		"else": schema{"properties": schema{"installationId": false, "scope": schema{"properties": schema{"kind": schema{"const": string(paasv1.AuthorityTenant)}}, "required": []string{"tenantId"}}}},
+	}}
+	for _, target := range []struct {
+		action paasv1.OperationAction
+		kind   string
+	}{
+		{paasv1.OperationCreateExecutionPool, "ExecutionPool"},
+		{paasv1.OperationRegisterExecutionTarget, "ExecutionTarget"},
+	} {
+		operation := object(schemas["Operation"])
+		operation["allOf"] = append(operation["allOf"].([]any), schema{
+			"if":   schema{"properties": schema{"action": schema{"const": string(target.action)}}},
+			"then": schema{"properties": schema{"target": schema{"properties": schema{"kind": schema{"const": target.kind}}}}},
+		})
+	}
 
 	setArrayMinimum(schemas, "ExecutionPoolSpec", "allowedIsolationGuarantees", 1)
+	executionTargetListItems := object(schemas["ExecutionTargetList"])["properties"].(schema)["items"].(schema)
+	executionTargetListItems["maxItems"] = paasv1.MaximumExecutionTargetListItems
 	usageProperties := object(schemas["ExecutionTargetUsage"])["properties"].(schema)
 	usageProperties["filesystems"].(schema)["maxItems"] = paasv1.MaximumObservedFilesystems
 	usageProperties["filesystems"].(schema)["minItems"] = 1

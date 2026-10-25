@@ -124,6 +124,48 @@ func TestInvalidSnapshotsFailBeforeSelection(t *testing.T) {
 	}
 }
 
+func TestActivePlacementMustMatchExactObservedCapacityClaim(t *testing.T) {
+	valid := baseInput()
+	valid.Snapshot.Deployment.Generation = 2
+	valid.Snapshot.Deployment.Status = paasv1.DeploymentStatus{
+		Phase:                         paasv1.DeploymentPending,
+		ObservedGeneration:            1,
+		ObservedApplicationRevisionID: valid.Snapshot.ApplicationRevision.Metadata.ID,
+		PlacementDecisionID:           "decision-active",
+		CurrentOperationID:            valid.OperationID,
+		ReadyComponents:               2,
+		ObservedAt:                    fixtureTime.Add(-time.Minute),
+	}
+	valid.Snapshot.CapacityClaims = []CapacityClaim{
+		testCapacityClaim("claim-active", "target-b", Resources{WorkloadSlots: 1}),
+	}
+	valid.Snapshot.ActivePlacement = &ActivePlacement{
+		DecisionID: "decision-active", ExecutionTargetID: "target-b", CapacityClaimID: "claim-active",
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*Input)
+		match  string
+	}{
+		{name: "missing binding", mutate: func(input *Input) { input.Snapshot.ActivePlacement = nil }, match: "no active capacity binding"},
+		{name: "wrong decision", mutate: func(input *Input) { input.Snapshot.ActivePlacement.DecisionID = "decision-other" }, match: "does not match Deployment status"},
+		{name: "wrong target", mutate: func(input *Input) { input.Snapshot.ActivePlacement.ExecutionTargetID = "target-a" }, match: "exact active capacity claim"},
+		{name: "wrong claim", mutate: func(input *Input) { input.Snapshot.ActivePlacement.CapacityClaimID = "claim-other" }, match: "exact active capacity claim"},
+		{name: "released claim", mutate: func(input *Input) { input.Snapshot.CapacityClaims[0].State = CapacityClaimReleased }, match: "exact active capacity claim"},
+		{name: "binding without status", mutate: func(input *Input) { input.Snapshot.Deployment.Status.PlacementDecisionID = "" }, match: "without an observed Deployment placement"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			input := cloneInput(valid)
+			test.mutate(&input)
+			if _, err := mustPlanner(t).Plan(input); err == nil || !strings.Contains(err.Error(), test.match) {
+				t.Fatalf("expected %q validation error, got %v", test.match, err)
+			}
+		})
+	}
+}
+
 func TestNewV1PlannerRejectsAmbiguousObservationAge(t *testing.T) {
 	for _, value := range []time.Duration{0, -time.Second, time.Nanosecond} {
 		if _, err := NewV1Planner(value); err == nil {

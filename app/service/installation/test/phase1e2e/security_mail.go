@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/mail"
 	"os"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -23,12 +24,13 @@ import (
 )
 
 const (
-	securityMailRecipient = "receiver@matrix.test"
+	securityMailRecipient         = "receiver@matrix.test"
+	securityMailPreviousRecipient = "previous@matrix.test"
+	securityMailCurrentRecipient  = "current@matrix.test"
 )
 
 var (
 	providerIDPattern = regexp.MustCompile(`^[a-f0-9]{12,64}$`)
-	mailPathPattern   = regexp.MustCompile(`^/home/receiver/Maildir/(new|cur)/[a-zA-Z0-9_.,:=+-]+$`)
 	mailCodePattern   = regexp.MustCompile(`(?m)^Verification code: ([0-9]{8})\r?$`)
 	mailRefPattern    = regexp.MustCompile(`(?m)^Notification reference: [A-Za-z0-9][A-Za-z0-9._:-]{0,127}\r?$`)
 )
@@ -262,13 +264,24 @@ func (fixture *securityMailFixture) close(ctx context.Context) error {
 
 func (fixture *securityMailFixture) receive(
 	ctx context.Context,
+	recipient string,
 	subject string,
 	forbidden [][]byte,
 ) ([]byte, string, error) {
+	mailbox, found := map[string]string{
+		securityMailRecipient:         "receiver",
+		securityMailPreviousRecipient: "previous",
+		securityMailCurrentRecipient:  "current",
+	}[recipient]
+	if !found {
+		return nil, "", errors.New("mail fixture recipient is invalid")
+	}
+	maildir := "/home/" + mailbox + "/Maildir"
+	mailPathPattern := regexp.MustCompile(`^` + regexp.QuoteMeta(maildir) + `/(new|cur)/[a-zA-Z0-9_.,:=+-]+$`)
 	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		files, err := dockerLines(
-			ctx, "exec", fixture.containerID, "find", "/home/receiver/Maildir/new", "/home/receiver/Maildir/cur",
+			ctx, "exec", fixture.containerID, "find", maildir+"/new", maildir+"/cur",
 			"-maxdepth", "1", "-type", "f", "-print",
 		)
 		if err != nil || len(files) > 100 {
@@ -300,7 +313,7 @@ func (fixture *securityMailFixture) receive(
 				clear(body)
 				continue
 			}
-			if message.Header.Get("To") != securityMailRecipient || message.Header.Get("From") != fixture.sender ||
+			if message.Header.Get("To") != recipient || message.Header.Get("From") != fixture.sender ||
 				message.Header.Get("Received") == "" || message.Header.Get("Message-ID") == "" ||
 				!mailRefPattern.Match(body) || containsAny(encoded, forbidden) || containsAny(body, forbidden) {
 				clear(encoded)
@@ -325,7 +338,7 @@ func (value *gate) verifySecurityMail(
 		return iamv1.NotificationContact{}, err
 	}
 	verifiedContact, verifyErr := value.verifySecurityMailWithFixture(
-		ctx, bearer, password, fixture, "phase1-security-mail",
+		ctx, bearer, password, fixture, securityMailRecipient, "phase1-security-mail",
 	)
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -343,12 +356,13 @@ func (value *gate) verifySecurityMailWithFixture(
 	ctx context.Context,
 	bearer, password []byte,
 	fixture *securityMailFixture,
+	recipient string,
 	requestPrefix string,
 ) (iamv1.NotificationContact, error) {
 	var verifiedContact iamv1.NotificationContact
 	verifyErr := func() error {
 		verification, err := value.edge.startNotificationContactVerification(
-			ctx, bearer, password, requestPrefix+"-contact",
+			ctx, bearer, password, recipient, requestPrefix+"-contact",
 		)
 		if err != nil {
 			return fail("security-mail-verification-start")
@@ -366,7 +380,7 @@ func (value *gate) verifySecurityMailWithFixture(
 			return fail("security-mail-delivery-not-accepted")
 		}
 		body, verificationMessageID, err := fixture.receive(
-			ctx, "MATRIX notification address verification", value.edge.forbidden,
+			ctx, recipient, "MATRIX notification address verification", value.edge.forbidden,
 		)
 		if err != nil {
 			return fail("security-mail-verification-mailbox")
@@ -387,14 +401,14 @@ func (value *gate) verifySecurityMailWithFixture(
 			return fail("security-mail-verification-confirm")
 		}
 		contact, err := value.edge.notificationContact(ctx, bearer)
-		if err != nil || contact.State != "VERIFIED" || contact.Email != securityMailRecipient ||
+		if err != nil || contact.State != "VERIFIED" || contact.Email != recipient ||
 			contact.ResourceVersion != 1 || contact.AccountID != verification.AccountID ||
 			contact.UserID != verification.UserID || contact.VerifiedAt == nil {
 			return fail("security-mail-contact-state")
 		}
 		verifiedContact = contact
 		notice, noticeMessageID, err := fixture.receive(
-			ctx, "MATRIX notification address verified", value.edge.forbidden,
+			ctx, recipient, "MATRIX notification address verified", value.edge.forbidden,
 		)
 		if err != nil || noticeMessageID == verificationMessageID || bytes.Contains(notice, []byte("Verification code:")) ||
 			bytes.Contains(notice, code) {
@@ -408,4 +422,93 @@ func (value *gate) verifySecurityMailWithFixture(
 		return iamv1.NotificationContact{}, verifyErr
 	}
 	return verifiedContact, nil
+}
+
+func (value *gate) observeContactReplacement(
+	ctx context.Context,
+	installationID string,
+	contact iamv1.NotificationContact,
+	verification iamv1.NotificationContactVerification,
+) (contactReplacementRetention, error) {
+	query := contactReplacementObservationQuery(contact.AccountID, contact.UserID, verification.ID)
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		content, observeErr := value.postgresScalar(ctx, installationID, query)
+		var observed contactReplacementRetention
+		if observeErr == nil && json.Unmarshal([]byte(content), &observed) == nil &&
+			validContactReplacementRetention(observed, contact, verification) {
+			return observed, nil
+		}
+		if !waitPoll(ctx, 100*time.Millisecond) {
+			break
+		}
+	}
+	return contactReplacementRetention{}, errors.New("contact replacement delivery observation failed")
+}
+
+func contactReplacementObservationQuery(
+	accountID iamv1.AccountID,
+	userID iamv1.PrincipalID,
+	verificationID string,
+) string {
+	query := `SELECT jsonb_build_object(
+ 'accountId',v.tenant_id,'userId',v.user_id,'verificationId',v.id,
+ 'completionEventId',v.completion_event_id,'expectedResourceVersion',v.contact_revision,
+ 'email',v.email,'state',v.state,'notifications',(
+   SELECT jsonb_agg(jsonb_build_object(
+     'id',n.id,'eventId',n.event_id,'kind',n.kind,'email',n.email,
+     'contactRevision',n.contact_revision,'state',n.state,'attempts',n.attempts,
+     'lastOutcome',n.last_outcome,'lastSmtpCode',n.last_smtp_code) ORDER BY n.kind,n.id)
+   FROM iam.security_notifications n WHERE n.tenant_id=v.tenant_id AND n.verification_id=v.id
+ ))::text
+FROM iam.notification_contact_verifications v
+WHERE v.tenant_id=$TENANT AND v.user_id=$USER AND v.id=$VERIFICATION AND v.purpose='REPLACEMENT'`
+	return strings.NewReplacer(
+		"$TENANT", postgresHexText(string(accountID)),
+		"$USER", postgresHexText(string(userID)),
+		"$VERIFICATION", postgresHexText(verificationID),
+	).Replace(query)
+}
+
+func postgresHexText(value string) string {
+	return "convert_from(decode('" + hex.EncodeToString([]byte(value)) + "','hex'),'UTF8')"
+}
+
+func validContactReplacementRetention(
+	value contactReplacementRetention,
+	contact iamv1.NotificationContact,
+	verification iamv1.NotificationContactVerification,
+) bool {
+	if contact.Email != securityMailCurrentRecipient || contact.ResourceVersion != 2 || contact.PendingVerificationID != "" ||
+		value.AccountID != contact.AccountID || value.UserID != contact.UserID || value.VerificationID != verification.ID ||
+		value.CompletionEventID == "" || value.ExpectedResourceVersion != 1 || value.Email != securityMailCurrentRecipient ||
+		value.State != "VERIFIED" || len(value.Notifications) != 3 {
+		return false
+	}
+	want := map[string]struct {
+		email    string
+		revision uint64
+	}{
+		"ADDRESS_VERIFICATION":      {securityMailCurrentRecipient, 1},
+		"CONTACT_REPLACED_CURRENT":  {securityMailCurrentRecipient, 2},
+		"CONTACT_REPLACED_PREVIOUS": {securityMailPreviousRecipient, 1},
+	}
+	seen := make(map[string]struct{}, len(want))
+	for _, notification := range value.Notifications {
+		expected, ok := want[notification.Kind]
+		if !ok || notification.ID == "" || notification.EventID == "" || notification.Email != expected.email ||
+			notification.ContactRevision != expected.revision || notification.State != "ACCEPTED" ||
+			notification.Attempts != 1 || notification.LastOutcome != "ACCEPTED" || notification.LastSMTPCode != 250 {
+			return false
+		}
+		if notification.Kind != "ADDRESS_VERIFICATION" && notification.EventID != value.CompletionEventID {
+			return false
+		}
+		seen[notification.Kind] = struct{}{}
+	}
+	return len(seen) == len(want)
+}
+
+func sameContactReplacementRetention(left, right contactReplacementRetention) bool {
+	return reflect.DeepEqual(left, right)
 }

@@ -5,18 +5,184 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
+	nodev1 "github.com/xiak/matrix/api/adapter/node/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	machineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
+	"github.com/xiak/matrix/app/adapter/infrastructure/nodeexporter"
+	localcontaineradapter "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
+	nodehttps "github.com/xiak/matrix/app/adapter/node/https"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
+	"github.com/xiak/matrix/app/service/installation/internal/enrollmenthttps"
 	"github.com/xiak/matrix/app/service/installation/internal/localmachine"
+	"github.com/xiak/matrix/app/service/installation/internal/nodecommand"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/internal/runnernodecommand"
 	"github.com/xiak/matrix/app/service/installation/internal/sourcecredentialcommand"
 	"github.com/xiak/matrix/app/service/installation/internal/sourcetrustcommand"
+	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 )
 
 type composeRecoveryProjectInspector struct{}
+
+type nodeInstallationVerifier struct{}
+
+type nodeEnrollmentHost struct {
+	probe machineadapter.HostProbe
+}
+
+func (host nodeEnrollmentHost) MachineFingerprint(ctx context.Context, root string) (string, error) {
+	if host.probe == nil {
+		return "", nodecommand.ErrUnavailable
+	}
+	facts, err := host.probe.Inspect(ctx, root)
+	if err != nil {
+		return "", nodecommand.ErrUnavailable
+	}
+	fingerprint, err := machineadapter.DeriveMachineFingerprint(facts)
+	if err != nil {
+		return "", nodecommand.ErrVerification
+	}
+	return fingerprint, nil
+}
+
+func (nodeInstallationVerifier) ValidateController(configuration nodeconfig.ControllerConfiguration) error {
+	credentials, err := nodehttps.NewCredentials(
+		configuration.Certificate, configuration.PrivateKey, configuration.Trust,
+	)
+	if err != nil {
+		return err
+	}
+	for _, node := range configuration.Nodes {
+		client, err := nodehttps.New(nodehttps.Config{
+			Endpoint: node.Endpoint,
+			Identity: nodev1.Identity{
+				InstallationID:    configuration.InstallationID,
+				ExecutionTargetID: node.TargetID,
+			},
+			ControllerID:        configuration.ControllerID,
+			BindingRef:          node.BindingRef,
+			ExpectedFingerprint: node.IdentityFingerprint,
+			Credentials:         func() (nodehttps.Credentials, error) { return credentials, nil },
+		})
+		if err != nil {
+			return err
+		}
+		client.Close()
+	}
+	return nil
+}
+
+func (nodeInstallationVerifier) Validate(
+	config nodeconfig.Configuration,
+	material nodecommand.Credentials,
+) error {
+	node, err := nodehttps.NewCredentials(material.Certificate, material.PrivateKey, material.Trust)
+	if err != nil {
+		return err
+	}
+	collector, err := nodehttps.NewCredentials(
+		material.CollectorCertificate, material.CollectorPrivateKey, material.Trust,
+	)
+	if err != nil {
+		return err
+	}
+	address, err := nodeconfig.CollectorListenAddress(config)
+	if err != nil {
+		return err
+	}
+	return nodehttps.ValidateEnrollment(
+		node, collector, config.Identity, config.ListenAddress, address,
+	)
+}
+
+func (nodeInstallationVerifier) Verify(
+	ctx context.Context,
+	config nodeconfig.Configuration,
+	material nodecommand.Credentials,
+) error {
+	credentials, err := nodehttps.NewCredentials(material.Certificate, material.PrivateKey, material.Trust)
+	if err != nil {
+		return err
+	}
+	client, err := nodehttps.NewReadinessClient(
+		"https://"+config.ListenAddress, config.Identity,
+		config.ExpectedFingerprint, credentials,
+	)
+	if err != nil {
+		return err
+	}
+	defer client.Close()
+	_, err = client.Verify(ctx)
+	return err
+}
+
+func (nodeInstallationVerifier) ObserveUsage(
+	ctx context.Context,
+	config nodeconfig.Configuration,
+	material nodecommand.Credentials,
+) (paasv1.ExecutionTargetUsage, error) {
+	credentials, err := nodehttps.NewCredentials(material.Certificate, material.PrivateKey, material.Trust)
+	if err != nil {
+		return paasv1.ExecutionTargetUsage{}, err
+	}
+	collector, err := nodeexporter.New(nodeexporter.Config{
+		Endpoint: config.CollectorEndpoint, Identity: config.Identity, Credentials: credentials,
+	})
+	if err != nil {
+		return paasv1.ExecutionTargetUsage{}, err
+	}
+	defer collector.Close()
+	first, err := collector.ObserveExecutionTargetUsage(ctx)
+	if err != nil || first.CPU.State != paasv1.MeasurementWarmingUp {
+		return first, err
+	}
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return paasv1.ExecutionTargetUsage{}, ctx.Err()
+	case <-timer.C:
+		return collector.ObserveExecutionTargetUsage(ctx)
+	}
+}
+
+func (nodeInstallationVerifier) ValidateRotation(
+	config nodeconfig.Configuration,
+	previous, candidate nodecommand.Credentials,
+	revokePrevious bool,
+) error {
+	previousNode, err := nodehttps.NewCredentials(previous.Certificate, previous.PrivateKey, previous.Trust)
+	if err != nil {
+		return err
+	}
+	previousCollector, err := nodehttps.NewCredentials(
+		previous.CollectorCertificate, previous.CollectorPrivateKey, previous.Trust,
+	)
+	if err != nil {
+		return err
+	}
+	node, err := nodehttps.NewCredentials(candidate.Certificate, candidate.PrivateKey, candidate.Trust)
+	if err != nil {
+		return err
+	}
+	collector, err := nodehttps.NewCredentials(
+		candidate.CollectorCertificate, candidate.CollectorPrivateKey, candidate.Trust,
+	)
+	if err != nil {
+		return err
+	}
+	address, err := nodeconfig.CollectorListenAddress(config)
+	if err != nil {
+		return err
+	}
+	return nodehttps.ValidateCredentialRotation(
+		previousNode, previousCollector, node, collector,
+		config.Identity, config.ListenAddress, address, revokePrevious,
+	)
+}
 
 func (composeRecoveryProjectInspector) InspectRecoveryProject(
 	bindingRoot string,
@@ -53,8 +219,24 @@ func (composeRecoveryProjectInspector) InspectRecoveryProject(
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
-	effects := localmachine.NewEffects(composeRecoveryProjectInspector{})
+	verifier := nodeInstallationVerifier{}
+	effects := localmachine.NewEffects(
+		composeRecoveryProjectInspector{}, localcontaineradapter.InspectRecoveryInventory,
+		verifier.ValidateController,
+	)
 	platformBackend, err := platformcommand.NewBackend(effects)
+	if err != nil {
+		stop()
+		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
+		os.Exit(cli.ExitInternal)
+	}
+	nodeEffects := localmachine.NewNodeEffects(verifier)
+	nodeBackend, err := nodecommand.NewBackend(
+		nodeEffects,
+		nodeEffects,
+		nodeEnrollmentHost{probe: machineadapter.NewLocalHostProbe()},
+		enrollmenthttps.New(),
+	)
 	if err != nil {
 		stop()
 		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
@@ -81,7 +263,7 @@ func main() {
 	exitCode := cli.Run(ctx, os.Args[1:], cli.Streams{
 		In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr,
 	}, cli.Backends{
-		Platform: platformBackend, SourceCredential: sourceCredentialBackend,
+		Platform: platformBackend, Node: nodeBackend, SourceCredential: sourceCredentialBackend,
 		SourceTrust: sourceTrustBackend, RunnerNode: runnerNodeBackend,
 	})
 	stop()

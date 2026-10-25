@@ -65,6 +65,89 @@ func TestWorkerCompletesDeployRollbackAndStopWithReservationConsistency(t *testi
 	}
 }
 
+func TestWorkerRoutesPersistedPlacementToExactExecutor(t *testing.T) {
+	workflow := newFakeWorkflow(paasv1.OperationDeploy)
+	selected := &fakeDeploymentExecutor{
+		effectStates:      []paasv1.AdapterResultState{paasv1.AdapterResultSucceeded},
+		observationPhases: []paasv1.DeploymentPhase{paasv1.DeploymentReady},
+	}
+	other := &fakeDeploymentExecutor{}
+	worker := mustWorkerWithRoutes(t, workflow, []DeploymentRoute{
+		{ExecutionTargetID: "target-b", BindingRef: "binding-b", Executor: other},
+		{ExecutionTargetID: "target-a", BindingRef: "binding-a", Executor: selected},
+	})
+	if found, err := worker.ProcessNext(context.Background(), "worker-a"); err != nil || !found {
+		t.Fatalf("process routed Deployment found/error = %v/%v", found, err)
+	}
+	if selected.applyCalls != 1 || selected.observeCalls != 1 ||
+		other.applyCalls != 0 || other.observeCalls != 0 {
+		t.Fatalf("selected/other executor calls = %#v / %#v", selected, other)
+	}
+	if workflow.state.EffectRequest == nil || workflow.state.ObserveRequest == nil ||
+		workflow.state.EffectRequest.Command.BindingRef != "binding-a" ||
+		workflow.state.ObserveRequest.Command.BindingRef != "binding-a" {
+		t.Fatalf("persisted commands did not retain exact target route: %#v", workflow.state)
+	}
+}
+
+func TestWorkerResolvesCommittedDynamicRouteBeforeEveryEffectBoundary(t *testing.T) {
+	workflow := newFakeWorkflow(paasv1.OperationDeploy)
+	executor := &fakeDeploymentExecutor{
+		effectStates:      []paasv1.AdapterResultState{paasv1.AdapterResultSucceeded},
+		observationPhases: []paasv1.DeploymentPhase{paasv1.DeploymentReady},
+	}
+	resolver := &fakeDynamicRouteResolver{route: DeploymentRoute{
+		ExecutionTargetID: "target-a", BindingRef: "binding-dynamic", Executor: executor,
+	}}
+	worker, err := NewWorker(workflow.queue, workflow, workflow, []DeploymentRoute{{
+		ExecutionTargetID: "target-static", BindingRef: "binding-static", Executor: &fakeDeploymentExecutor{},
+	}}, Config{
+		EffectTimeout: time.Minute, ReconcileBackoff: time.Second, MaxAttempts: 3,
+		Clock: func() time.Time { return workerTime }, DynamicRoutes: resolver,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if found, err := worker.ProcessNext(context.Background(), "worker-a"); err != nil || !found {
+		t.Fatalf("process dynamic Deployment found/error = %v/%v", found, err)
+	}
+	if resolver.calls < 3 || executor.applyCalls != 1 || executor.observeCalls != 1 ||
+		workflow.state.EffectRequest.Command.BindingRef != "binding-dynamic" ||
+		workflow.state.ObserveRequest.Command.BindingRef != "binding-dynamic" {
+		t.Fatalf("dynamic route calls=%d executor=%#v state=%#v", resolver.calls, executor, workflow.state)
+	}
+}
+
+type fakeDynamicRouteResolver struct {
+	route DeploymentRoute
+	calls int
+	err   error
+}
+
+func (resolver *fakeDynamicRouteResolver) ResolveDeploymentRoute(
+	_ context.Context,
+	_ paasv1.ResourceID,
+) (DeploymentRoute, bool, error) {
+	resolver.calls++
+	return resolver.route, resolver.route.Executor != nil, resolver.err
+}
+
+func TestWorkerRejectsPlacementWithoutExactExecutorRoute(t *testing.T) {
+	workflow := newFakeWorkflow(paasv1.OperationDeploy)
+	other := &fakeDeploymentExecutor{}
+	worker := mustWorkerWithRoutes(t, workflow, []DeploymentRoute{{
+		ExecutionTargetID: "target-b", BindingRef: "binding-b", Executor: other,
+	}})
+	found, err := worker.ProcessNext(context.Background(), "worker-a")
+	if !found || err == nil || !strings.Contains(err.Error(), "no exact Deployment route") {
+		t.Fatalf("missing route found/error = %v/%v", found, err)
+	}
+	if other.applyCalls != 0 || other.rollbackCalls != 0 || other.stopCalls != 0 || other.observeCalls != 0 ||
+		workflow.state.EffectRequest != nil || workflow.state.ObserveRequest != nil {
+		t.Fatalf("missing route produced an effect: workflow=%#v executor=%#v", workflow, other)
+	}
+}
+
 func TestWorkerDefinitiveFailureReleasesOnlyPendingCapacity(t *testing.T) {
 	workflow := newFakeWorkflow(paasv1.OperationDeploy)
 	executor := &fakeDeploymentExecutor{
@@ -190,8 +273,19 @@ func mustWorker(
 	executor *fakeDeploymentExecutor,
 ) *Worker {
 	t.Helper()
-	worker, err := NewWorker(workflow.queue, workflow, workflow, executor, Config{
-		BindingRef: "binding-local", EffectTimeout: time.Minute,
+	return mustWorkerWithRoutes(t, workflow, []DeploymentRoute{{
+		ExecutionTargetID: "target-a", BindingRef: "binding-local", Executor: executor,
+	}})
+}
+
+func mustWorkerWithRoutes(
+	t *testing.T,
+	workflow *fakeWorkflow,
+	routes []DeploymentRoute,
+) *Worker {
+	t.Helper()
+	worker, err := NewWorker(workflow.queue, workflow, workflow, routes, Config{
+		EffectTimeout:    time.Minute,
 		ReconcileBackoff: time.Second, MaxAttempts: 3,
 		Clock: func() time.Time { return workerTime },
 	})

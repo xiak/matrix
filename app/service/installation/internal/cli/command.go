@@ -13,6 +13,7 @@ import (
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
+	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 const (
@@ -47,22 +48,29 @@ const (
 )
 
 type invocationError struct {
-	action commandAction
-	usage  bool
-	err    error
+	subject Subject
+	action  commandAction
+	usage   bool
+	err     error
 }
 
 func (value *invocationError) Error() string { return "platform command failed" }
 func (value *invocationError) Unwrap() error { return value.err }
 
 type commandOptions struct {
-	root                      string
-	bundle                    string
-	trustKey                  string
-	securityMailConfiguration string
-	northboundOrigin          string
-	backupID                  string
-	supportOutput             string
+	root                        string
+	bundle                      string
+	trustKey                    string
+	securityMailConfiguration   string
+	northboundOrigin            string
+	backupID                    string
+	supportOutput               string
+	join                        string
+	configuration               string
+	expectedConfigurationDigest string
+	revokePreviousCredentials   bool
+	recoveryInput               string
+	resume                      bool
 }
 
 type sourceCredentialOptions struct {
@@ -99,14 +107,14 @@ func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 	if err := validateStreams(streams); err != nil {
 		return nil, err
 	}
-	if backends.Platform == nil || backends.SourceCredential == nil ||
+	if backends.Platform == nil || backends.Node == nil || backends.SourceCredential == nil ||
 		backends.SourceTrust == nil || backends.RunnerNode == nil {
 		return nil, errors.New("Matrix CLI backends are required")
 	}
 	format := string(formatHuman)
 	root := &cobra.Command{
 		Use:           "mx",
-		Short:         "Operate the Matrix platform",
+		Short:         "Operate the Matrix platform and its nodes",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -121,14 +129,16 @@ func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
 		if outputFormat(format) != formatHuman && outputFormat(format) != formatJSON {
 			return &invocationError{
-				action: actionForCommand(command), usage: true,
+				subject: subjectForCommand(command), action: actionForCommand(command), usage: true,
 				err: errors.New("output format must be human or json"),
 			}
 		}
 		return nil
 	}
 	root.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
-		return &invocationError{action: actionForCommand(command), usage: true, err: err}
+		return &invocationError{
+			subject: subjectForCommand(command), action: actionForCommand(command), usage: true, err: err,
+		}
 	})
 
 	platform := &cobra.Command{
@@ -140,16 +150,30 @@ func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 		},
 	}
 	root.AddCommand(platform)
-	platform.AddCommand(
-		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionInstall, &format),
-		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionVerify, &format),
-		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionStatus, &format),
-		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionBackup, &format),
-		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionUpgrade, &format),
-		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionRollback, &format),
-		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionRecover, &format),
-		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionSupport, &format),
-	)
+	for _, action := range []lifecycle.Action{
+		lifecycle.ActionInstall, lifecycle.ActionVerify, lifecycle.ActionStatus,
+		lifecycle.ActionBackup, lifecycle.ActionUpgrade, lifecycle.ActionRollback,
+		lifecycle.ActionRecover, lifecycle.ActionRecoverCredentials,
+		lifecycle.ActionConfigureNodes, lifecycle.ActionSupport,
+	} {
+		platform.AddCommand(newLifecycleCommand(
+			streams.Out, backends.Platform, SubjectPlatform, action, &format,
+		))
+	}
+	node := &cobra.Command{
+		Use: "node", Short: "Enroll and supervise an existing Linux execution node", Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error { return command.Help() },
+	}
+	root.AddCommand(node)
+	for _, action := range []lifecycle.Action{
+		lifecycle.ActionInstall, lifecycle.ActionStart, lifecycle.ActionVerify,
+		lifecycle.ActionStatus, lifecycle.ActionRotateCredentials,
+		lifecycle.ActionUpgrade, lifecycle.ActionRollback, lifecycle.ActionSupport,
+	} {
+		node.AddCommand(newLifecycleCommand(
+			streams.Out, backends.Node, SubjectNode, action, &format,
+		))
+	}
 	root.AddCommand(newDevOpsCommand(
 		streams.Out, backends.SourceCredential, backends.SourceTrust,
 		backends.RunnerNode, &format,
@@ -157,42 +181,50 @@ func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 	return root, nil
 }
 
-func newPlatformCommand(
+func newLifecycleCommand(
 	out io.Writer,
 	backend PlatformBackend,
+	subject Subject,
 	action lifecycle.Action,
 	format *string,
 ) *cobra.Command {
 	options := &commandOptions{}
-	name := strings.ToLower(string(action))
+	name := strings.ReplaceAll(strings.ToLower(string(action)), "_", "-")
 	command := &cobra.Command{
 		Use:   name,
-		Short: commandDescription(action),
+		Short: commandDescription(subject, action),
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			if err := validateCommandFlags(action, options); err != nil {
-				return &invocationError{action: commandAction(action), usage: true, err: err}
+			if err := validateCommandFlags(subject, action, options); err != nil {
+				return &invocationError{
+					subject: subject, action: commandAction(action), usage: true, err: err,
+				}
 			}
 			request := Request{
-				Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
+				Subject: subject, Action: action, Root: options.root,
+				Bundle: options.bundle, TrustKey: options.trustKey,
 				SecurityMailConfiguration: options.securityMailConfiguration,
 				NorthboundOrigin:          options.northboundOrigin,
 				BackupID:                  options.backupID, SupportOutput: options.supportOutput,
+				Join: options.join, Configuration: options.configuration,
+				ExpectedConfigurationDigest: options.expectedConfigurationDigest,
+				RevokePreviousCredentials:   options.revokePreviousCredentials,
+				RecoveryInput:               options.recoveryInput, Resume: options.resume,
 			}
 			result, err := backend.Run(command.Context(), request)
 			if err != nil {
-				return &invocationError{action: commandAction(action), err: err}
+				return &invocationError{subject: subject, action: commandAction(action), err: err}
 			}
 			if err := validateResult(result); err != nil {
-				return &invocationError{action: commandAction(action), err: err}
+				return &invocationError{subject: subject, action: commandAction(action), err: err}
 			}
-			if err := writeSuccess(out, outputFormat(*format), action, result); err != nil {
-				return &invocationError{action: commandAction(action), err: err}
+			if err := writeSuccess(out, outputFormat(*format), subject, action, result); err != nil {
+				return &invocationError{subject: subject, action: commandAction(action), err: err}
 			}
 			return nil
 		},
 	}
-	bindCommandFlags(command.Flags(), action, options)
+	bindCommandFlags(command.Flags(), subject, action, options)
 	return command
 }
 
@@ -570,17 +602,41 @@ func sourceTrustAction(operation SourceTrustOperation) commandAction {
 	}
 }
 
-func bindCommandFlags(flags *pflag.FlagSet, action lifecycle.Action, options *commandOptions) {
+func bindCommandFlags(
+	flags *pflag.FlagSet,
+	subject Subject,
+	action lifecycle.Action,
+	options *commandOptions,
+) {
 	flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
 	switch action {
+	case lifecycle.ActionConfigureNodes:
+		flags.StringVar(&options.configuration, "configuration", "", "protected node controller configuration file")
+		flags.StringVar(&options.expectedConfigurationDigest, "expected-configuration-digest", "", "current configuration digest reported by platform status")
+		flags.BoolVar(&options.resume, "resume", false, "resume only the sealed pending node configuration")
+	case lifecycle.ActionRecoverCredentials:
+		flags.StringVar(&options.recoveryInput, "recovery-input", "", "protected original-primary credential recovery request file")
+		flags.BoolVar(&options.resume, "resume", false, "resume the exact sealed credential recovery without new input")
+	case lifecycle.ActionRotateCredentials:
+		flags.StringVar(&options.configuration, "configuration", "", "protected replacement node enrollment file")
+		flags.StringVar(&options.expectedConfigurationDigest, "expected-configuration-digest", "", "current sealed node configuration digest")
+		flags.BoolVar(&options.revokePreviousCredentials, "revoke-previous", true, "replace all previous management trust keys; false permits same-trust renewal")
 	case lifecycle.ActionInstall:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
 		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
-		flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
-		flags.StringVar(&options.northboundOrigin, "northbound-origin", "", "canonical public HTTP origin with explicit port")
+		if subject == SubjectNode {
+			flags.StringVar(&options.join, "join", "", "protected one-time node join file")
+		} else {
+			flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
+			flags.StringVar(&options.northboundOrigin, "northbound-origin", "", "canonical public HTTP origin with explicit port")
+		}
 	case lifecycle.ActionUpgrade:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")
-		flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
+		if subject == SubjectNode {
+			flags.BoolVar(&options.resume, "resume", false, "resume only the sealed node release change")
+		} else {
+			flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
+		}
 	case lifecycle.ActionRecover:
 		flags.StringVar(&options.backupID, "backup", "", "verified installation-owned backup identity")
 	case lifecycle.ActionSupport:
@@ -588,18 +644,48 @@ func bindCommandFlags(flags *pflag.FlagSet, action lifecycle.Action, options *co
 	}
 }
 
-func validateCommandFlags(action lifecycle.Action, options *commandOptions) error {
+func validateCommandFlags(subject Subject, action lifecycle.Action, options *commandOptions) error {
 	if options == nil || strings.TrimSpace(options.root) == "" {
 		return errors.New("installation root is required")
 	}
 	switch action {
+	case lifecycle.ActionConfigureNodes:
+		if subject != SubjectPlatform ||
+			(options.resume && (options.configuration != "" || options.expectedConfigurationDigest != "")) ||
+			(!options.resume && (strings.TrimSpace(options.configuration) == "" ||
+				!sha256Pattern.MatchString(options.expectedConfigurationDigest))) {
+			return errors.New("node configuration and expected digest, or explicit resume, are required")
+		}
+	case lifecycle.ActionRecoverCredentials:
+		if subject != SubjectPlatform || options.resume == (strings.TrimSpace(options.recoveryInput) != "") ||
+			(options.resume && options.recoveryInput != "") {
+			return errors.New("protected recovery input or explicit resume is required, but not both")
+		}
+	case lifecycle.ActionRotateCredentials:
+		if subject != SubjectNode || strings.TrimSpace(options.configuration) == "" ||
+			!sha256Pattern.MatchString(options.expectedConfigurationDigest) {
+			return errors.New("replacement enrollment and current configuration digest are required")
+		}
 	case lifecycle.ActionInstall:
-		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.trustKey) == "" ||
-			strings.TrimSpace(options.securityMailConfiguration) == "" || strings.TrimSpace(options.northboundOrigin) == "" {
-			return errors.New("offline bundle, trust key, security-mail configuration and northbound origin are required")
+		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.trustKey) == "" {
+			return errors.New("offline bundle and trust key are required")
+		}
+		if subject == SubjectNode && strings.TrimSpace(options.join) == "" {
+			return errors.New("protected one-time node join is required")
+		}
+		if subject == SubjectPlatform &&
+			(strings.TrimSpace(options.securityMailConfiguration) == "" ||
+				externalrequest.ValidateOrigin(options.northboundOrigin) != nil) {
+			return errors.New("security-mail configuration and canonical northbound origin are required")
 		}
 	case lifecycle.ActionUpgrade:
-		if strings.TrimSpace(options.bundle) == "" || strings.TrimSpace(options.securityMailConfiguration) == "" {
+		if subject == SubjectNode {
+			if options.resume == (strings.TrimSpace(options.bundle) != "") ||
+				(options.resume && options.bundle != "") {
+				return errors.New("offline node bundle or explicit resume is required, but not both")
+			}
+		} else if strings.TrimSpace(options.bundle) == "" ||
+			strings.TrimSpace(options.securityMailConfiguration) == "" {
 			return errors.New("offline bundle and security-mail configuration are required")
 		}
 	case lifecycle.ActionRecover:
@@ -614,7 +700,27 @@ func validateCommandFlags(action lifecycle.Action, options *commandOptions) erro
 	return nil
 }
 
-func commandDescription(action lifecycle.Action) string {
+func commandDescription(subject Subject, action lifecycle.Action) string {
+	if subject == SubjectNode {
+		switch action {
+		case lifecycle.ActionInstall:
+			return "Install and enroll a node from a signed one-time join"
+		case lifecycle.ActionStart:
+			return "Start or reconcile the sealed node and collector services"
+		case lifecycle.ActionUpgrade:
+			return "Activate a compatible signed successor without changing node enrollment"
+		case lifecycle.ActionRollback:
+			return "Restore the retained signed predecessor with current node credentials"
+		case lifecycle.ActionVerify:
+			return "Verify the sealed node and fresh collector observations"
+		case lifecycle.ActionStatus:
+			return "Read node supervision and readiness status"
+		case lifecycle.ActionRotateCredentials:
+			return "Rotate node credentials without changing workload ownership"
+		case lifecycle.ActionSupport:
+			return "Write a sanitized node snapshot without changing its lifecycle or services"
+		}
+	}
 	switch action {
 	case lifecycle.ActionInstall:
 		return "Install an authenticated offline Matrix release"
@@ -630,6 +736,10 @@ func commandDescription(action lifecycle.Action) string {
 		return "Roll back to the previous Matrix release"
 	case lifecycle.ActionRecover:
 		return "Recover from a verified Matrix platform backup"
+	case lifecycle.ActionRecoverCredentials:
+		return "Recover the original platform administrator's credentials without restoring authority"
+	case lifecycle.ActionConfigureNodes:
+		return "Configure protected node connections without admitting or relocating hosts"
 	case lifecycle.ActionSupport:
 		return "Write sanitized Matrix support evidence"
 	default:
@@ -672,6 +782,10 @@ func actionForCommand(command *cobra.Command) commandAction {
 	switch command.Name() {
 	case "install":
 		return commandAction(lifecycle.ActionInstall)
+	case "start":
+		return commandAction(lifecycle.ActionStart)
+	case "rotate-credentials":
+		return commandAction(lifecycle.ActionRotateCredentials)
 	case "verify":
 		return commandAction(lifecycle.ActionVerify)
 	case "status":
@@ -684,11 +798,27 @@ func actionForCommand(command *cobra.Command) commandAction {
 		return commandAction(lifecycle.ActionRollback)
 	case "recover":
 		return commandAction(lifecycle.ActionRecover)
+	case "recover-credentials":
+		return commandAction(lifecycle.ActionRecoverCredentials)
+	case "configure-nodes":
+		return commandAction(lifecycle.ActionConfigureNodes)
 	case "support":
 		return commandAction(lifecycle.ActionSupport)
 	default:
 		return ""
 	}
+}
+
+func subjectForCommand(command *cobra.Command) Subject {
+	for current := command; current != nil; current = current.Parent() {
+		switch current.Name() {
+		case "node":
+			return SubjectNode
+		case "platform":
+			return SubjectPlatform
+		}
+	}
+	return SubjectPlatform
 }
 
 // Run is the process boundary used by cmd/mx. Subcommands return errors; this
@@ -706,7 +836,7 @@ func Run(ctx context.Context, arguments []string, streams Streams, backends Back
 		return ExitInternal
 	}
 	command.SetArgs(arguments)
-	err = command.ExecuteContext(ctx)
+	executed, err := command.ExecuteContextC(ctx)
 	if err == nil {
 		return ExitSuccess
 	}
@@ -715,7 +845,14 @@ func Run(ctx context.Context, arguments []string, streams Streams, backends Back
 		format = string(formatHuman)
 	}
 	action, fault := normalizeFailure(err, ctx)
-	if writeErr := writeFailure(streams.ErrOut, outputFormat(format), action, fault); writeErr != nil {
+	subject := subjectForCommand(executed)
+	var invocation *invocationError
+	if errors.As(err, &invocation) && invocation.subject != "" {
+		subject = invocation.subject
+	}
+	if writeErr := writeFailure(
+		streams.ErrOut, outputFormat(format), subject, action, fault,
+	); writeErr != nil {
 		return ExitInternal
 	}
 	return exitCode(fault.Class)
@@ -814,10 +951,20 @@ type failureBody struct {
 	Message string     `json:"message"`
 }
 
-func writeSuccess(out io.Writer, format outputFormat, action lifecycle.Action, result Result) error {
+func writeSuccess(
+	out io.Writer,
+	format outputFormat,
+	subject Subject,
+	action lifecycle.Action,
+	result Result,
+) error {
+	kind := "PlatformCommandResult"
+	if subject == SubjectNode {
+		kind = "NodeCommandResult"
+	}
 	if format == formatJSON {
 		return writeJSONLine(out, successEnvelope{
-			APIVersion: OutputAPIVersion, Kind: "PlatformCommandResult", Action: commandAction(action),
+			APIVersion: OutputAPIVersion, Kind: kind, Action: commandAction(action),
 			Status: "SUCCEEDED", Result: result,
 		})
 	}
@@ -827,6 +974,12 @@ func writeSuccess(out io.Writer, format outputFormat, action lifecycle.Action, r
 	}
 	if err == nil && result.BackupID != "" {
 		_, err = fmt.Fprintf(out, " backup=%s", result.BackupID)
+	}
+	if err == nil && result.ExecutionTargetID != "" {
+		_, err = fmt.Fprintf(out, " target=%s", result.ExecutionTargetID)
+	}
+	if err == nil && result.ConfigurationDigest != "" {
+		_, err = fmt.Fprintf(out, " configuration=%s", result.ConfigurationDigest)
 	}
 	if err == nil {
 		_, err = io.WriteString(out, "\n")
@@ -901,11 +1054,22 @@ func writeRunnerNodeSuccess(
 	return err
 }
 
-func writeFailure(out io.Writer, format outputFormat, action commandAction, fault *Fault) error {
+func writeFailure(
+	out io.Writer,
+	format outputFormat,
+	subject Subject,
+	action commandAction,
+	fault *Fault,
+) error {
 	message := faultMessage(fault.Class)
+	if subject == SubjectNode {
+		message = strings.ReplaceAll(strings.ReplaceAll(message, "Platform", "Node"), "platform", "node")
+	}
 	if format == formatJSON {
 		kind := "PlatformCommandFailure"
-		if action == actionSourceCredentialApply || action == actionSourceCredentialRetirePrevious {
+		if subject == SubjectNode {
+			kind = "NodeCommandFailure"
+		} else if action == actionSourceCredentialApply || action == actionSourceCredentialRetirePrevious {
 			kind = "SourceCredentialCommandFailure"
 		} else if action == actionSourceTrustApply || action == actionSourceTrustRemove {
 			kind = "SourceTrustCommandFailure"

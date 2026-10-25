@@ -35,6 +35,20 @@ const (
 	AuthorizeDeploymentRollback          = iamv1.ActionPaaSDeploymentRollback
 	AuthorizeDeploymentRead              = iamv1.ActionPaaSDeploymentRead
 	AuthorizeOperationRead               = iamv1.ActionPaaSOperationRead
+	AuthorizeExecutionPoolCreate         = iamv1.ActionPaaSExecutionPoolCreate
+	AuthorizeExecutionPoolRead           = iamv1.ActionPaaSExecutionPoolRead
+	AuthorizeExecutionTargetRegister     = iamv1.ActionPaaSExecutionTargetRegister
+	AuthorizeExecutionTargetRead         = iamv1.ActionPaaSExecutionTargetRead
+	AuthorizeExecutionTargetDrain        = iamv1.ActionPaaSExecutionTargetDrain
+	AuthorizeExecutionTargetActivate     = iamv1.ActionPaaSExecutionTargetActivate
+	AuthorizeExecutionTargetRemove       = iamv1.ActionPaaSExecutionTargetRemove
+	AuthorizeNodeEnrollmentCreate        = iamv1.ActionPaaSNodeEnrollmentCreate
+	AuthorizeNodeEnrollmentRead          = iamv1.ActionPaaSNodeEnrollmentRead
+	AuthorizeNodeEnrollmentRevoke        = iamv1.ActionPaaSNodeEnrollmentRevoke
+	AuthorizeNodeEnrollmentRegenerate    = iamv1.ActionPaaSNodeEnrollmentRegenerate
+	AuthorizePlatformOperationRead       = iamv1.ActionPaaSPlatformOperationRead
+	AuthorizeTerminalSessionCreate       = iamv1.ActionPaaSTerminalSessionCreate
+	AuthorizeTerminalSessionClose        = iamv1.ActionPaaSTerminalSessionClose
 )
 
 const (
@@ -44,6 +58,10 @@ const (
 	ResourceApplicationRevision   = "ApplicationRevision"
 	ResourceDeployment            = "Deployment"
 	ResourceOperation             = "Operation"
+	ResourceExecutionPool         = "ExecutionPool"
+	ResourceExecutionTarget       = "ExecutionTarget"
+	ResourceNodeEnrollment        = "NodeEnrollment"
+	ResourceTerminalSession       = "TerminalSession"
 )
 
 // AuthorizationRequest carries transient credential material to the IAM
@@ -115,14 +133,15 @@ type AccessKeyListAuthorization struct {
 // Authorization is the trusted IAM result consumed by apphosting. Tenant and
 // subject are never reconstructed from HTTP headers or request documents.
 type Authorization struct {
-	TenantID     paasv1.TenantID
-	Subject      paasv1.SubjectRef
-	DecisionID   string
-	RequestID    string
-	RequestTags  []iamv1.AuthorizationTag
-	ResourceTags []iamv1.AuthorizationTag
-	AuditID      string
-	TraceParent  string
+	TenantID       paasv1.TenantID
+	InstallationID string
+	Subject        paasv1.SubjectRef
+	DecisionID     string
+	RequestID      string
+	RequestTags    []iamv1.AuthorizationTag
+	ResourceTags   []iamv1.AuthorizationTag
+	AuditID        string
+	TraceParent    string
 }
 
 // SubjectResolutionRequest carries only the transient bearer. The adapter
@@ -269,9 +288,11 @@ func newIAMAuthorizationRequest(
 		profile.CallingService != iamv1.ServicePaaS {
 		return iamv1.AuthorizationRequest{}, errors.New("authorization request is outside the PaaS profile")
 	}
-	request, err = iamv1.BindAuthorizationSourceIP(request, sourceIP)
-	if err != nil {
-		return iamv1.AuthorizationRequest{}, errors.New("authorization network context is invalid")
+	if authorizationActionAcceptsSourceIP(profile, action) {
+		request, err = iamv1.BindAuthorizationSourceIP(request, sourceIP)
+		if err != nil {
+			return iamv1.AuthorizationRequest{}, errors.New("authorization network context is invalid")
+		}
 	}
 	request, err = iamv1.BindAuthorizationRequestTags(request, requestLabels)
 	if err != nil {
@@ -282,6 +303,23 @@ func newIAMAuthorizationRequest(
 		return iamv1.AuthorizationRequest{}, errors.New("authorization resource tags are invalid")
 	}
 	return request, nil
+}
+
+func authorizationActionAcceptsSourceIP(profile iamv1.AuthorizationProfile, action iamv1.Action) bool {
+	for _, declaration := range profile.Actions {
+		if declaration.Action != action {
+			continue
+		}
+		for _, condition := range declaration.Conditions {
+			if condition.Key == iamv1.ConditionRequestSourceIP &&
+				condition.ValueType == iamv1.ConditionIP &&
+				condition.Source == iamv1.ConditionCallingServiceNetwork {
+				return true
+			}
+		}
+		return false
+	}
+	return false
 }
 
 func ValidateAuthorizationBatchRequest(value AuthorizationBatchRequest) error {
@@ -383,9 +421,9 @@ func ValidateAccessKeyListAuthorizationForRequest(
 }
 
 // isAppHostingAction is the PEP route boundary within the wider PaaS product
-// Profile. Platform host and installation actions intentionally remain in the
-// same release-owned product declaration but are not accepted by this HTTP
-// adapter.
+// Profile. It includes both tenant app-hosting actions and the installation-
+// scoped host control actions served by this process. Authority scope is
+// checked separately and may never be inferred from an HTTP selector.
 func isAppHostingAction(value iamv1.Action) bool {
 	switch value {
 	case AuthorizeApplicationCreate, AuthorizeApplicationRead,
@@ -395,7 +433,15 @@ func isAppHostingAction(value iamv1.Action) bool {
 		AuthorizeApplicationRevisionCreate, AuthorizeApplicationRevisionRead,
 		AuthorizeDeploymentCreate, AuthorizeDeploymentUpdate,
 		AuthorizeDeploymentStop, AuthorizeDeploymentRollback,
-		AuthorizeDeploymentRead, AuthorizeOperationRead:
+		AuthorizeDeploymentRead, AuthorizeOperationRead,
+		AuthorizeExecutionPoolCreate, AuthorizeExecutionPoolRead,
+		AuthorizeExecutionTargetRegister, AuthorizeExecutionTargetRead,
+		AuthorizeExecutionTargetDrain, AuthorizeExecutionTargetActivate,
+		AuthorizeExecutionTargetRemove,
+		AuthorizeNodeEnrollmentCreate, AuthorizeNodeEnrollmentRead,
+		AuthorizeNodeEnrollmentRevoke, AuthorizeNodeEnrollmentRegenerate,
+		AuthorizePlatformOperationRead,
+		AuthorizeTerminalSessionCreate, AuthorizeTerminalSessionClose:
 		return true
 	default:
 		return false
@@ -410,6 +456,10 @@ func iamResourceReference(value paasv1.ResourceRef) (iamv1.ResourceReference, er
 		ResourceApplicationRevision:   iamv1.ResourceApplicationRevision,
 		ResourceDeployment:            iamv1.ResourceDeployment,
 		ResourceOperation:             iamv1.ResourceOperation,
+		ResourceExecutionPool:         iamv1.ResourceExecutionPool,
+		ResourceExecutionTarget:       iamv1.ResourceExecutionTarget,
+		ResourceNodeEnrollment:        iamv1.ResourceNodeEnrollment,
+		ResourceTerminalSession:       iamv1.ResourceTerminalSession,
 	}
 	kind, known := kinds[value.Kind]
 	if !known {
@@ -422,7 +472,11 @@ func ValidateAuthorizationForRequest(
 	value Authorization,
 	request AuthorizationRequest,
 ) error {
-	problems := []error{ValidateAuthorization(value)}
+	validate := ValidateTenantAuthorization
+	if iamv1.IsPlatformAction(request.Action) {
+		validate = ValidatePlatformAuthorization
+	}
+	problems := []error{validate(value)}
 	if value.RequestID != request.RequestID {
 		problems = append(problems, errors.New("IAM authorization request correlation mismatch"))
 	}
@@ -432,6 +486,13 @@ func ValidateAuthorizationForRequest(
 		problems = append(problems, errors.New("IAM authorization request tags mismatch"))
 	}
 	return errors.Join(problems...)
+}
+
+func ValidateTenantAuthorization(value Authorization) error {
+	if ValidateAuthorization(value) != nil || value.TenantID == "" || value.InstallationID != "" {
+		return errors.New("tenant authorization is invalid")
+	}
+	return nil
 }
 
 // ValidateAuthorizationTagsForAction re-binds a product command immediately
@@ -496,8 +557,14 @@ func ValidateAuthorizationForSubjectContext(value Authorization, subject Authori
 
 func ValidateAuthorization(value Authorization) error {
 	var problems []error
+	if (value.TenantID == "") == (value.InstallationID == "") {
+		problems = append(problems, errors.New("authorization requires exactly one tenant or installation authority"))
+	} else if value.TenantID != "" {
+		problems = append(problems, paasv1.ValidateID("authorization.tenantId", string(value.TenantID)))
+	} else {
+		problems = append(problems, paasv1.ValidateID("authorization.installationId", value.InstallationID))
+	}
 	problems = append(problems,
-		paasv1.ValidateID("authorization.tenantId", string(value.TenantID)),
 		paasv1.ValidateSubjectRef(value.Subject),
 		paasv1.ValidateID("authorization.decisionId", value.DecisionID),
 		paasv1.ValidateID("authorization.requestId", value.RequestID),
@@ -533,4 +600,13 @@ func ValidateAuthorization(value Authorization) error {
 		previous = tag.Key
 	}
 	return errors.Join(problems...)
+}
+
+func ValidatePlatformAuthorization(value Authorization) error {
+	if ValidateAuthorization(value) != nil || value.TenantID != "" || value.InstallationID == "" ||
+		value.Subject.Type != paasv1.SubjectUser || value.Subject.RoleSession != nil ||
+		value.Subject.AccessKeyID != "" {
+		return errors.New("platform authorization is invalid")
+	}
+	return nil
 }

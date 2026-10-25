@@ -91,12 +91,13 @@ type mxEnvelope struct {
 }
 
 type mxResult struct {
-	State         string `json:"state"`
-	ReleaseID     string `json:"releaseId,omitempty"`
-	PreviousID    string `json:"previousId,omitempty"`
-	BackupID      string `json:"backupId,omitempty"`
-	Changed       bool   `json:"changed"`
-	CorrelationID string `json:"correlationId,omitempty"`
+	State               string `json:"state"`
+	ReleaseID           string `json:"releaseId,omitempty"`
+	PreviousID          string `json:"previousId,omitempty"`
+	BackupID            string `json:"backupId,omitempty"`
+	Changed             bool   `json:"changed"`
+	CorrelationID       string `json:"correlationId,omitempty"`
+	ConfigurationDigest string `json:"configurationDigest,omitempty"`
 }
 
 type mxFailure struct {
@@ -155,6 +156,40 @@ func runMX(
 	args = append(args, arguments...)
 	output, err := runProcess(ctx, mxPath(bundle), args...)
 	return checkMXOutput(action, output, err, ctx.Err(), forbidden)
+}
+
+// runMXClosedFailure accepts only one explicitly named public failure shape.
+// Free-form stderr, unknown codes, transport failures, and sensitive output all
+// remain failures of the gate rather than evidence that a command was safely
+// rejected.
+func runMXClosedFailure(
+	ctx context.Context,
+	bundle release.VerifiedBundle,
+	action string,
+	arguments []string,
+	forbidden [][]byte,
+	wantClass cli.FaultClass,
+	wantCode string,
+	wantExit int,
+) error {
+	args := []string{"--format", "json", "platform", action}
+	args = append(args, arguments...)
+	output, processErr := runProcess(ctx, mxPath(bundle), args...)
+	step := "mx-" + action + "-closed-failure"
+	if containsAny(output.stdout, forbidden) || containsAny(output.stderr, forbidden) {
+		return fail(step + "-sensitive-output")
+	}
+	if ctx.Err() != nil || processErr != nil || len(output.stdout) != 0 || output.exit != wantExit {
+		return fail(step + "-process")
+	}
+	var envelope mxFailure
+	if decodeOne(output.stderr, &envelope) != nil ||
+		envelope.APIVersion != cli.OutputAPIVersion || envelope.Kind != "PlatformCommandFailure" ||
+		envelope.Action != strings.ToUpper(action) || envelope.Status != "FAILED" ||
+		envelope.Error.Class != string(wantClass) || envelope.Error.Code != wantCode {
+		return fail(step + "-contract")
+	}
+	return nil
 }
 
 func checkMXOutput(action string, output commandOutput, processErr, contextErr error, forbidden [][]byte) (mxResult, error) {
@@ -508,6 +543,10 @@ func assertNoExternalRoute() error {
 			}
 		}
 	}
+	return assertNoExternalConnectivity()
+}
+
+func assertNoExternalConnectivity() error {
 	connection, dialErr := net.DialTimeout("tcp", "1.1.1.1:443", 300*time.Millisecond)
 	if connection != nil {
 		_ = connection.Close()
@@ -535,17 +574,19 @@ func assertEmptyDocker(ctx context.Context) error {
 }
 
 type containerInspection struct {
-	ID     string `json:"Id"`
-	Name   string `json:"Name"`
-	Image  string `json:"Image"`
-	Config struct {
+	ID           string `json:"Id"`
+	Name         string `json:"Name"`
+	Image        string `json:"Image"`
+	RestartCount uint64 `json:"RestartCount"`
+	Config       struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
 	} `json:"Config"`
 	State struct {
-		Running bool   `json:"Running"`
-		Status  string `json:"Status"`
-		Health  *struct {
+		Running   bool   `json:"Running"`
+		Status    string `json:"Status"`
+		StartedAt string `json:"StartedAt"`
+		Health    *struct {
 			Status string `json:"Status"`
 		} `json:"Health"`
 	} `json:"State"`

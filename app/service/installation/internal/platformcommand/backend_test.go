@@ -1163,6 +1163,37 @@ func (effects *installEffects) ReadSecurityMailConfiguration(
 	return SecurityMailInput{Digest: digest, Configuration: configuration}, nil
 }
 
+func (effects *installEffects) NodeConnectionsDigest(context.Context, InstalledPlan) (string, error) {
+	return "sha256:" + strings.Repeat("a", 64), nil
+}
+
+func (effects *installEffects) PrepareNodeConnections(
+	context.Context, InstalledPlan, string, string, *lifecycle.Execution,
+) (NodeConnectionsPlan, error) {
+	return NodeConnectionsPlan{}, ErrEffectPrecondition
+}
+
+func (effects *installEffects) ApplyNodeConnectionsPhase(
+	context.Context, NodeConnectionsPlan, lifecycle.Phase,
+) error {
+	return ErrEffectPrecondition
+}
+
+func (effects *installEffects) PrepareCredentialRecovery(
+	_ context.Context,
+	installed InstalledPlan,
+	_ string,
+	_ *lifecycle.Execution,
+) (CredentialRecoveryPlan, error) {
+	return CredentialRecoveryPlan{InstalledPlan: installed}, ErrEffectPrecondition
+}
+
+func (effects *installEffects) ApplyCredentialRecoveryPhase(
+	context.Context, CredentialRecoveryPlan, lifecycle.Phase,
+) error {
+	return ErrEffectPrecondition
+}
+
 func (effects *installEffects) ApplyInstallPhase(
 	_ context.Context,
 	plan InstallPlan,

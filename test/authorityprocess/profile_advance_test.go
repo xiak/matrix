@@ -56,6 +56,8 @@ func TestIAMAuthorizationProfileAdvanceProcess(t *testing.T) {
 	root, temporary := repositoryRoot(t), t.TempDir()
 	currentBinary := buildAuthorityBinary(t, ctx, root, temporary, "iam-profile-current", "./app/service/iam/cmd/matrix-iam")
 	currentMigrator := buildAuthorityBinary(t, ctx, root, temporary, "iam-profile-current-migrate", "./app/service/iam/cmd/matrix-iam-migrate")
+	bootstrap := processBootstrap(t)
+	bootstrap.InstallationID = "mxi-66778899001122334455667788990011"
 	const apiLogin = "matrix_iam_api_login"
 	var migrationEnvironment []string
 	for _, value := range []struct{ environment, login string }{
@@ -85,7 +87,10 @@ func TestIAMAuthorizationProfileAdvanceProcess(t *testing.T) {
 	}
 	migrationEnvironment = append(migrationEnvironment,
 		installationv1.IAMProductAuthorizationMigrationFileEnvironment+"="+
-			writeProtectedFile(t, temporary, "iam-profile-product-authorization.json", productAuthorization))
+			writeProtectedFile(t, temporary, "iam-profile-product-authorization.json", productAuthorization),
+		"MATRIX_MIGRATION_INSTALLATION_ID="+bootstrap.InstallationID,
+		"MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE="+
+			writeProtectedFile(t, temporary, "iam-profile-platform-credential", []byte(platformServiceCredential)))
 	clear(productAuthorization)
 	for _, action := range []string{"apply", "apply", "verify"} {
 		child := startChild(t, root, currentMigrator, migrationEnvironment, action)
@@ -95,8 +100,6 @@ func TestIAMAuthorizationProfileAdvanceProcess(t *testing.T) {
 		assertProcessOutputsSanitized(t, []*childProcess{child}, config.Password, processDBPassword)
 	}
 
-	bootstrap := processBootstrap(t)
-	bootstrap.InstallationID = "mxi-66778899001122334455667788990011"
 	encodedBootstrap, err := iamv1.EncodeBootstrapDocument(bootstrap)
 	if err != nil {
 		t.Fatal(err)

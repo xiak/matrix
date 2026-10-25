@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	pathpkg "path"
 	"slices"
 	"strconv"
 	"strings"
@@ -26,10 +29,17 @@ import (
 	"github.com/xiak/matrix/app/service/internal/externalrequest"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/port"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/applicationlifecycle"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/executionadmission"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/nodeenrollment"
+	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/terminalsession"
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
-const defaultMaximumBodyBytes = int64(16 * 1024 * 1024)
+const (
+	defaultMaximumBodyBytes = int64(16 * 1024 * 1024)
+	terminalTicketCookie    = "matrix_terminal_ticket"
+	defaultTerminalBasePath = "/v1"
+)
 
 type Workflow interface {
 	CreateApplication(
@@ -59,20 +69,33 @@ type Workflow interface {
 	GetConfiguration(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Configuration, error)
 	GetConfigurationRevision(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ConfigurationRevision, error)
 	GetApplicationRevision(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.ApplicationRevision, error)
+	ListDeployments(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.DeploymentList, error)
 	GetDeployment(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.Deployment, error)
+	GetDeploymentRuntime(context.Context, port.Authorization, paasv1.ResourceID) (paasv1.DeploymentRuntimeSnapshot, error)
 	GetDeploymentGeneration(context.Context, port.Authorization, paasv1.ResourceID, uint64) (paasv1.DeploymentGeneration, error)
 	GetOperation(context.Context, port.Authorization, paasv1.OperationID) (paasv1.Operation, error)
 }
 
 type Config struct {
-	MaximumBodyBytes int64
-	NorthboundOrigin string
-	InstallationID   string
-	EdgeAssertion    []byte
-	CursorKey        []byte
-	NewRequestID     func() (string, error)
-	Now              func() time.Time
-	Readiness        func(context.Context) (paasv1.Readiness, error)
+	MaximumBodyBytes       int64
+	NorthboundOrigin       string
+	InstallationID         string
+	TerminalPublicBasePath string
+	TerminalCookieSecure   bool
+	EdgeAssertion          []byte
+	CursorKey              []byte
+	NewRequestID           func() (string, error)
+	NewTerminalTicket      func() (string, string, error)
+	Now                    func() time.Time
+	Readiness              func(context.Context) (paasv1.Readiness, error)
+}
+
+type TerminalWorkflow interface {
+	Create(context.Context, terminalsession.CreateCommand) (terminalsession.CreateResult, error)
+	Consume(context.Context, paasv1.ResourceID, string) (terminalsession.StoredSession, error)
+	Activate(context.Context, terminalsession.StoredSession) (terminalsession.StoredSession, error)
+	End(context.Context, paasv1.TenantID, paasv1.ResourceID, paasv1.TerminalSessionOutcome) (terminalsession.StoredSession, bool, error)
+	Close(context.Context, terminalsession.CloseCommand) (terminalsession.StoredSession, bool, error)
 }
 
 type InstallationVerifier interface {
@@ -85,21 +108,31 @@ type InstallationVerifier interface {
 type handler struct {
 	authorizer           port.Authorizer
 	workflow             Workflow
+	execution            ExecutionWorkflow
+	enrollment           EnrollmentWorkflow
+	terminal             TerminalWorkflow
+	terminalConnector    port.TerminalConnector
 	installationVerifier InstallationVerifier
 	accessKeyBoundary    *externalrequest.Boundary
 	applicationCursors   applicationCursorCodec
 	config               Config
 	routes               *http.ServeMux
+	terminalRegistry     *terminalRegistry
 }
 
 func NewHandler(
 	authorizer port.Authorizer,
 	workflow Workflow,
+	execution ExecutionWorkflow,
+	enrollment EnrollmentWorkflow,
+	terminal TerminalWorkflow,
+	terminalConnector port.TerminalConnector,
 	installationVerifier InstallationVerifier,
 	config Config,
 ) (http.Handler, error) {
-	if authorizer == nil || workflow == nil || installationVerifier == nil {
-		return nil, errors.New("HTTP Authorizer, workflow, and installation verifier are required")
+	if authorizer == nil || workflow == nil || execution == nil || enrollment == nil || terminal == nil ||
+		terminalConnector == nil || installationVerifier == nil {
+		return nil, errors.New("HTTP Authorizer, application, execution, enrollment, terminal, and installation verifier dependencies are required")
 	}
 	if config.Readiness == nil {
 		return nil, errors.New("HTTP readiness check is required")
@@ -115,6 +148,15 @@ func NewHandler(
 	}
 	if config.Now == nil {
 		config.Now = time.Now
+	}
+	if config.TerminalPublicBasePath == "" {
+		config.TerminalPublicBasePath = defaultTerminalBasePath
+	}
+	if !validTerminalPublicBasePath(config.TerminalPublicBasePath) {
+		return nil, errors.New("terminal public base path is invalid")
+	}
+	if config.NewTerminalTicket == nil {
+		config.NewTerminalTicket = newTerminalTicket
 	}
 	if paasv1.ValidateID("installationId", config.InstallationID) != nil {
 		return nil, errors.New("PaaS installation identity is required")
@@ -137,12 +179,32 @@ func NewHandler(
 	}
 	config.EdgeAssertion = nil
 	value := &handler{
-		authorizer: authorizer, workflow: workflow,
+		authorizer: authorizer, workflow: workflow, execution: execution, enrollment: enrollment,
+		terminal: terminal, terminalConnector: terminalConnector,
 		installationVerifier: installationVerifier, accessKeyBoundary: accessKeyBoundary,
-		applicationCursors: applicationCursors, config: config,
+		applicationCursors: applicationCursors, config: config, terminalRegistry: newTerminalRegistry(),
 	}
 	routes := http.NewServeMux()
 	routes.HandleFunc("GET /ready", value.ready)
+	routes.HandleFunc("POST /v1/execution-pools", value.createExecutionPool)
+	routes.HandleFunc("GET /v1/execution-pools", value.listExecutionPools)
+	routes.HandleFunc("GET /v1/execution-pools/{executionPoolId}", value.getExecutionPool)
+	routes.HandleFunc("POST /v1/node-enrollments", value.createNodeEnrollment)
+	routes.HandleFunc("GET /v1/node-enrollments", value.listNodeEnrollments)
+	routes.HandleFunc("GET /v1/node-enrollments/{nodeEnrollmentId}", value.getNodeEnrollment)
+	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/exchange", value.exchangeNodeEnrollment)
+	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/complete", value.completeNodeEnrollment)
+	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/recovery-challenge", value.createNodeEnrollmentRecoveryChallenge)
+	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/recover", value.recoverNodeEnrollmentExchange)
+	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/revoke", value.revokeNodeEnrollment)
+	routes.HandleFunc("POST /v1/node-enrollments/{nodeEnrollmentId}/regenerate", value.regenerateNodeEnrollment)
+	routes.HandleFunc("POST /v1/execution-targets", value.registerExecutionTarget)
+	routes.HandleFunc("GET /v1/execution-targets", value.listExecutionTargets)
+	routes.HandleFunc("GET /v1/execution-targets/{executionTargetId}", value.getExecutionTarget)
+	routes.HandleFunc("POST /v1/execution-targets/{executionTargetId}/drain", value.drainExecutionTarget)
+	routes.HandleFunc("POST /v1/execution-targets/{executionTargetId}/activate", value.activateExecutionTarget)
+	routes.HandleFunc("POST /v1/execution-targets/{executionTargetId}/remove", value.removeExecutionTarget)
+	routes.HandleFunc("GET /v1/platform/operations/{operationId}", value.getPlatformOperation)
 	routes.HandleFunc("POST /v1/applications", value.createApplication)
 	routes.HandleFunc("GET /v1/applications", value.listApplications)
 	routes.HandleFunc("GET /v1/applications/{applicationId}", value.getApplication)
@@ -155,11 +217,16 @@ func NewHandler(
 	routes.HandleFunc("POST /v1/application-revisions", value.createApplicationRevision)
 	routes.HandleFunc("GET /v1/application-revisions/{applicationRevisionId}", value.getApplicationRevision)
 	routes.HandleFunc("POST /v1/deployments", value.createDeployment)
+	routes.HandleFunc("GET /v1/deployments", value.listDeployments)
 	routes.HandleFunc("GET /v1/deployments/{deploymentId}", value.getDeployment)
+	routes.HandleFunc("GET /v1/deployments/{deploymentId}/runtime", value.getDeploymentRuntime)
+	routes.HandleFunc("POST /v1/deployments/{deploymentId}/terminal-sessions", value.createTerminalSession)
 	routes.HandleFunc("PUT /v1/deployments/{deploymentId}", value.updateDeployment)
 	routes.HandleFunc("POST /v1/deployments/{deploymentId}/rollback", value.rollbackDeployment)
 	routes.HandleFunc("GET /v1/deployments/{deploymentId}/generations/{generation}", value.getDeploymentGeneration)
 	routes.HandleFunc("GET /v1/operations/{operationId}", value.getOperation)
+	routes.HandleFunc("DELETE /v1/terminal-sessions/{terminalSessionId}", value.closeTerminalSession)
+	routes.HandleFunc("GET /v1/terminal-sessions/{terminalSessionId}/connect", value.connectTerminalSession)
 	routes.HandleFunc("POST /v1/installation:verify", value.verifyInstallation)
 	value.routes = routes
 	return value, nil
@@ -272,6 +339,9 @@ func accessKeyActionsForRoute(method, path string) ([]iamv1.Action, bool) {
 		if path == "/v1/applications" {
 			return []iamv1.Action{port.AuthorizeApplicationRead}, true
 		}
+		if path == "/v1/deployments" {
+			return []iamv1.Action{port.AuthorizeDeploymentRead}, true
+		}
 		for _, route := range []struct {
 			prefix string
 			idName string
@@ -291,6 +361,10 @@ func accessKeyActionsForRoute(method, path string) ([]iamv1.Action, bool) {
 		}
 		const deploymentPrefix = "/v1/deployments/"
 		parts := strings.Split(strings.TrimPrefix(path, deploymentPrefix), "/")
+		if len(parts) == 2 && parts[1] == "runtime" &&
+			paasv1.ValidateID("deploymentId", parts[0]) == nil {
+			return []iamv1.Action{port.AuthorizeDeploymentRead}, true
+		}
 		if len(parts) == 3 && parts[1] == "generations" &&
 			paasv1.ValidateID("deploymentId", parts[0]) == nil {
 			generation, err := strconv.ParseUint(parts[2], 10, 64)
@@ -361,7 +435,8 @@ func (value *handler) prepareAccessKeyRequest(response http.ResponseWriter, requ
 	if request.URL != nil {
 		expectedActions, accepted = accessKeyActionsForRoute(request.Method, request.URL.Path)
 	}
-	queryAllowed := request.Method == http.MethodGet && request.URL.Path == "/v1/applications"
+	queryAllowed := request.Method == http.MethodGet &&
+		(request.URL.Path == "/v1/applications" || request.URL.Path == "/v1/deployments")
 	if value.accessKeyBoundary == nil || !accepted || request.URL.RawQuery != "" && !queryAllowed {
 		requestID, ok := value.beginRequest(response)
 		if !ok {
@@ -980,6 +1055,43 @@ func (value *handler) getApplicationRevision(response http.ResponseWriter, reque
 	writeResource(response, requestID, resource, resourceVersionETag(resource.Metadata.ResourceVersion), err)
 }
 
+func (value *handler) listDeployments(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.ContentLength > 0 || len(request.TransferEncoding) > 0 || request.URL.ForceQuery {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list query or body is invalid", false)
+		return
+	}
+	query, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil || len(query) > 1 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list query is invalid", false)
+		return
+	}
+	var after paasv1.ResourceID
+	if values, present := query["after"]; present {
+		if len(values) != 1 || values[0] == "" || paasv1.ValidateID("after", values[0]) != nil ||
+			request.URL.RawQuery != "after="+url.QueryEscape(values[0]) {
+			writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list cursor is invalid", false)
+			return
+		}
+		after = paasv1.ResourceID(values[0])
+	} else if len(query) != 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment list query is invalid", false)
+		return
+	}
+	authorization, ok := value.authorizeCollectionRequest(
+		response, request, requestID, port.AuthorizeDeploymentRead,
+		port.ResourceDeployment, iamv1.AuthorizationCollectionList,
+	)
+	if !ok {
+		return
+	}
+	resources, readErr := value.workflow.ListDeployments(request.Context(), authorization, after)
+	writeResource(response, requestID, resources, "", readErr)
+}
+
 func (value *handler) getDeployment(response http.ResponseWriter, request *http.Request) {
 	id, authorization, requestID, ok := value.authorizePath(response, request, "deploymentId", port.AuthorizeDeploymentRead, port.ResourceDeployment)
 	if !ok {
@@ -987,6 +1099,134 @@ func (value *handler) getDeployment(response http.ResponseWriter, request *http.
 	}
 	resource, err := value.workflow.GetDeployment(request.Context(), authorization, id)
 	writeResource(response, requestID, resource, resourceVersionETag(resource.Metadata.ResourceVersion), err)
+}
+
+func (value *handler) getDeploymentRuntime(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.URL.RawQuery != "" || request.URL.ForceQuery ||
+		request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "Deployment runtime accepts no selector or body", false)
+		return
+	}
+	id, ok := pathResourceID(response, request, "deploymentId")
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorizeRequest(
+		response, request, requestID, port.AuthorizeDeploymentRead,
+		port.ResourceDeployment, id, iamv1.AuthorizationResourceInstance, "",
+	)
+	if !ok {
+		return
+	}
+	resource, err := value.workflow.GetDeploymentRuntime(request.Context(), authorization, id)
+	writeResource(response, requestID, resource, "", err)
+}
+
+func (value *handler) createTerminalSession(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.URL.RawQuery != "" || request.URL.ForceQuery {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "terminal session creation accepts no query", false)
+		return
+	}
+	deploymentID, ok := pathResourceID(response, request, "deploymentId")
+	if !ok {
+		return
+	}
+	body, ok := decodeJSON[paasv1.CreateTerminalSessionRequest](value, response, request, requestID)
+	if !ok {
+		return
+	}
+	if paasv1.ValidateCreateTerminalSessionRequest(body) != nil {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "terminal session request is invalid", false)
+		return
+	}
+	idempotencyValues := request.Header.Values("Idempotency-Key")
+	if len(idempotencyValues) != 1 || idempotencyValues[0] == "" {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "one Idempotency-Key is required", false)
+		return
+	}
+	authorization, ok := value.authorizeCollectionRequest(
+		response, request, requestID, port.AuthorizeTerminalSessionCreate,
+		port.ResourceTerminalSession, iamv1.AuthorizationCollectionCreate,
+	)
+	if !ok {
+		return
+	}
+	rawTicket, ticketDigest, err := value.config.NewTerminalTicket()
+	if err != nil || !validTerminalTicket(rawTicket, ticketDigest) {
+		writeProblem(response, requestID, http.StatusInternalServerError, paasv1.ErrorInternal, "Internal error", "terminal ticket could not be generated", false)
+		return
+	}
+	result, err := value.terminal.Create(request.Context(), terminalsession.CreateCommand{
+		Authorization: authorization, DeploymentID: deploymentID, Request: body,
+		IdempotencyKey: idempotencyValues[0], TicketDigest: ticketDigest,
+	})
+	if err != nil {
+		writeTerminalError(response, requestID, err)
+		return
+	}
+	if terminalsession.ValidateStoredSession(result.Stored) != nil ||
+		result.Stored.Session.State != paasv1.TerminalSessionPending {
+		writeProblem(response, requestID, http.StatusInternalServerError, paasv1.ErrorInternal, "Internal error", "terminal workflow returned an invalid session", false)
+		return
+	}
+	if result.ReplacedID != "" {
+		value.terminalRegistry.revoke(result.ReplacedID, paasv1.TerminalSessionReplaced)
+	}
+	path := value.terminalConnectPath(result.Stored.Session.ID)
+	http.SetCookie(response, &http.Cookie{
+		Name: terminalTicketCookie, Value: rawTicket, Path: path,
+		Expires: result.Stored.Session.ConnectBefore, MaxAge: int(paasv1.TerminalSessionConnectTimeout.Seconds()),
+		HttpOnly: true, Secure: request.TLS != nil || value.config.TerminalCookieSecure,
+		SameSite: http.SameSiteStrictMode,
+	})
+	response.Header().Set("Location", value.config.TerminalPublicBasePath+"/terminal-sessions/"+string(result.Stored.Session.ID))
+	status := http.StatusCreated
+	if result.Replayed {
+		status = http.StatusOK
+	}
+	writeJSON(response, status, result.Stored.Session)
+}
+
+func (value *handler) closeTerminalSession(response http.ResponseWriter, request *http.Request) {
+	requestID, ok := value.beginRequest(response)
+	if !ok {
+		return
+	}
+	if request.URL.RawQuery != "" || request.URL.ForceQuery ||
+		request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "terminal close accepts no query or body", false)
+		return
+	}
+	sessionID, ok := pathTerminalSessionID(response, request, "terminalSessionId")
+	if !ok {
+		return
+	}
+	authorization, ok := value.authorizeRequest(
+		response, request, requestID, port.AuthorizeTerminalSessionClose,
+		port.ResourceTerminalSession, sessionID, iamv1.AuthorizationResourceInstance, "",
+	)
+	if !ok {
+		return
+	}
+	_, changed, err := value.terminal.Close(request.Context(), terminalsession.CloseCommand{
+		Authorization: authorization, SessionID: sessionID,
+	})
+	if err != nil {
+		writeTerminalError(response, requestID, err)
+		return
+	}
+	if changed {
+		value.terminalRegistry.revoke(sessionID, paasv1.TerminalSessionRevoked)
+	}
+	response.WriteHeader(http.StatusNoContent)
 }
 
 func (value *handler) getDeploymentGeneration(response http.ResponseWriter, request *http.Request) {
@@ -1086,6 +1326,20 @@ func (value *handler) authorizeRequest(
 	usage iamv1.AuthorizationCollectionUsage,
 ) (port.Authorization, bool) {
 	return value.authorizeRequestWithLabels(response, request, requestID, action, kind, id, mode, usage, nil, nil)
+}
+
+func (value *handler) authorizeCollectionRequest(
+	response http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	action iamv1.Action,
+	kind string,
+	usage iamv1.AuthorizationCollectionUsage,
+) (port.Authorization, bool) {
+	return value.authorizeRequest(
+		response, request, requestID, action, kind, "collection",
+		iamv1.AuthorizationResourceCollection, usage,
+	)
 }
 
 func (value *handler) authorizeRequestWithLabels(
@@ -1296,6 +1550,19 @@ func pathOperationID(
 	return paasv1.OperationID(id), ok
 }
 
+func pathTerminalSessionID(
+	response http.ResponseWriter,
+	request *http.Request,
+	name string,
+) (paasv1.ResourceID, bool) {
+	id := paasv1.ResourceID(request.PathValue(name))
+	if paasv1.ValidateTerminalSessionID(id) != nil {
+		writeProblem(response, "request-invalid", http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", name+" is invalid", false)
+		return "", false
+	}
+	return id, true
+}
+
 func writeOperation(
 	response http.ResponseWriter,
 	status int,
@@ -1305,6 +1572,9 @@ func writeOperation(
 ) {
 	response.Header().Set("Location", location)
 	response.Header().Set("Operation-Location", "/v1/operations/"+string(operation.ID))
+	if operation.Scope.Kind == paasv1.AuthorityPlatform {
+		response.Header().Set("Operation-Location", "/v1/platform/operations/"+string(operation.ID))
+	}
 	response.Header().Set("ETag", resourceVersionETag(resourceVersion))
 	writeJSON(response, status, operation)
 }
@@ -1347,15 +1617,35 @@ func writeAuthorizationError(response http.ResponseWriter, requestID string, err
 
 func writeWorkflowError(response http.ResponseWriter, requestID string, err error) {
 	switch {
-	case errors.Is(err, applicationlifecycle.ErrInvalidArgument):
+	case errors.Is(err, port.ErrPermissionDenied):
+		writeAuthorizationError(response, requestID, err)
+	case errors.Is(err, executionadmission.ErrUnavailable), errors.Is(err, executionadmission.ErrRetryableTransaction):
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorExecutionTargetUnavailable, "Execution target unavailable", "the execution target cannot be observed or admitted now", true)
+	case errors.Is(err, executionadmission.ErrConflict):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Execution admission conflict", "the request conflicts with the registered execution authority", false)
+	case errors.Is(err, executionadmission.ErrInvalidTransition):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Execution target transition conflict", "the execution target is not in the required lifecycle state", false)
+	case errors.Is(err, executionadmission.ErrTargetInUse):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Execution target is in use", "live or unresolved work must be completed before removal", true)
+	case errors.Is(err, executionadmission.ErrNotFound), errors.Is(err, nodeenrollment.ErrNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "the requested installation resource does not exist", false)
+	case errors.Is(err, nodeenrollment.ErrUnavailable), errors.Is(err, nodeenrollment.ErrRetryableTransaction):
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorInternal, "Enrollment unavailable", "node enrollment is temporarily unavailable", true)
+	case errors.Is(err, nodeenrollment.ErrConflict):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Enrollment conflict", "node enrollment conflicts with current installation authority", false)
+	case errors.Is(err, nodeenrollment.ErrInvalidTransition):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Invalid enrollment transition", "node enrollment cannot make the requested transition", false)
+	case errors.Is(err, nodeenrollment.ErrExpired), errors.Is(err, nodeenrollment.ErrRevoked), errors.Is(err, nodeenrollment.ErrCredentialConsumed):
+		writeProblem(response, requestID, http.StatusGone, paasv1.ErrorConflict, "Enrollment unavailable", "node enrollment can no longer issue its join document", false)
+	case errors.Is(err, applicationlifecycle.ErrInvalidArgument), errors.Is(err, executionadmission.ErrInvalidArgument), errors.Is(err, nodeenrollment.ErrInvalidArgument):
 		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "request violates the apphosting contract", false)
 	case errors.Is(err, applicationlifecycle.ErrNotFound):
 		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "the requested tenant resource does not exist", false)
 	case errors.Is(err, applicationlifecycle.ErrAlreadyExists):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorAlreadyExists, "Already exists", "the resource already exists", false)
-	case errors.Is(err, applicationlifecycle.ErrIdempotencyConflict):
+	case errors.Is(err, applicationlifecycle.ErrIdempotencyConflict), errors.Is(err, executionadmission.ErrIdempotencyConflict), errors.Is(err, nodeenrollment.ErrIdempotencyConflict):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorIdempotencyConflict, "Idempotency conflict", "Idempotency-Key was already used for different content", false)
-	case errors.Is(err, applicationlifecycle.ErrResourceVersionConflict):
+	case errors.Is(err, applicationlifecycle.ErrResourceVersionConflict), errors.Is(err, executionadmission.ErrResourceVersionConflict), errors.Is(err, nodeenrollment.ErrResourceVersion):
 		writeProblem(response, requestID, http.StatusPreconditionFailed, paasv1.ErrorResourceVersionConflict, "Resource version conflict", "If-Match does not identify the current resource version", false)
 	case errors.Is(err, applicationlifecycle.ErrNoDesiredChange):
 		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "No desired change", "the requested desired state is unchanged", false)
@@ -1365,6 +1655,29 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 		writeProblem(response, requestID, http.StatusGatewayTimeout, paasv1.ErrorDeadlineExceeded, "Deadline exceeded", "request deadline was exceeded", true)
 	default:
 		writeProblem(response, requestID, http.StatusInternalServerError, paasv1.ErrorInternal, "Internal error", "the apphosting request could not be completed", true)
+	}
+}
+
+func writeTerminalError(response http.ResponseWriter, requestID string, err error) {
+	switch {
+	case errors.Is(err, terminalsession.ErrInvalidArgument):
+		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument, "Invalid argument", "terminal session request is invalid", false)
+	case errors.Is(err, terminalsession.ErrNotFound):
+		writeProblem(response, requestID, http.StatusNotFound, paasv1.ErrorNotFound, "Not found", "terminal session or current runtime instance does not exist", false)
+	case errors.Is(err, terminalsession.ErrPermissionDenied):
+		writeProblem(response, requestID, http.StatusForbidden, paasv1.ErrorPermissionDenied, "Permission denied", "terminal session belongs to another subject", false)
+	case errors.Is(err, terminalsession.ErrIdempotencyConflict):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorIdempotencyConflict, "Idempotency conflict", "Idempotency-Key was already used for different terminal content", false)
+	case errors.Is(err, terminalsession.ErrExpired):
+		writeProblem(response, requestID, http.StatusGone, paasv1.ErrorConflict, "Terminal expired", "terminal connection ticket has expired", false)
+	case errors.Is(err, terminalsession.ErrConflict):
+		writeProblem(response, requestID, http.StatusConflict, paasv1.ErrorConflict, "Terminal conflict", "terminal session conflicts with current runtime or lifecycle", false)
+	case errors.Is(err, terminalsession.ErrRetryableTransaction):
+		writeProblem(response, requestID, http.StatusServiceUnavailable, paasv1.ErrorInternal, "PaaS unavailable", "terminal session could not be committed safely", true)
+	case errors.Is(err, context.DeadlineExceeded):
+		writeProblem(response, requestID, http.StatusGatewayTimeout, paasv1.ErrorDeadlineExceeded, "Deadline exceeded", "terminal session deadline was exceeded", true)
+	default:
+		writeProblem(response, requestID, http.StatusInternalServerError, paasv1.ErrorInternal, "Internal error", "terminal session could not be completed", true)
 	}
 }
 
@@ -1414,10 +1727,50 @@ func terminalOperation(state paasv1.OperationState) bool {
 		state == paasv1.OperationManualIntervention
 }
 
+func validTerminalPublicBasePath(value string) bool {
+	if len(value) < 2 || len(value) > 128 || value[0] != '/' ||
+		strings.HasSuffix(value, "/") || pathpkg.Clean(value) != value {
+		return false
+	}
+	for _, character := range value[1:] {
+		if character != '/' && character != '-' && character != '_' && character != '.' &&
+			(character < 'a' || character > 'z') &&
+			(character < 'A' || character > 'Z') &&
+			(character < '0' || character > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func (value *handler) terminalConnectPath(sessionID paasv1.ResourceID) string {
+	return value.config.TerminalPublicBasePath + "/terminal-sessions/" + string(sessionID) + "/connect"
+}
+
 func newRequestID() (string, error) {
 	var raw [16]byte
 	if _, err := rand.Read(raw[:]); err != nil {
 		return "", fmt.Errorf("generate request ID: %w", err)
 	}
 	return "request-" + hex.EncodeToString(raw[:]), nil
+}
+
+func newTerminalTicket() (string, string, error) {
+	var raw [32]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", "", errors.New("generate terminal ticket")
+	}
+	ticket := base64.RawURLEncoding.EncodeToString(raw[:])
+	digest := sha256.Sum256([]byte(ticket))
+	return ticket, "sha256:" + hex.EncodeToString(digest[:]), nil
+}
+
+func validTerminalTicket(ticket string, digest string) bool {
+	decoded, err := base64.RawURLEncoding.DecodeString(ticket)
+	if err != nil || len(decoded) != 32 || len(ticket) != 43 ||
+		paasv1.ValidateDigest("ticketDigest", digest) != nil {
+		return false
+	}
+	calculated := sha256.Sum256([]byte(ticket))
+	return digest == "sha256:"+hex.EncodeToString(calculated[:])
 }

@@ -6,6 +6,7 @@ package nodehttps
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"net"
@@ -25,43 +26,177 @@ type Config struct {
 	ControllerID        string
 	BindingRef          string
 	ExpectedFingerprint string
-	Credentials         Credentials
+	// Credentials is evaluated for each TLS connection. An invalid replacement
+	// must fail closed rather than using a credential cached at process startup.
+	Credentials func() (Credentials, error)
 }
 
 type Client struct {
 	endpoint            string
+	terminalEndpoint    string
 	identity            nodev1.Identity
 	bindingRef          string
 	expectedFingerprint string
 	http                *http.Client
+	terminalHTTP        *http.Client
 }
 
 func New(config Config) (*Client, error) {
-	endpoint, err := url.Parse(config.Endpoint)
-	if err != nil || !validEndpoint(endpoint) || nodev1.ValidateIdentity(config.Identity) != nil ||
-		paasv1.ValidateID("bindingRef", config.BindingRef) != nil ||
-		paasv1.ValidateDigest("expectedFingerprint", config.ExpectedFingerprint) != nil {
-		return nil, errors.New("node connection configuration is invalid")
-	}
-	security, err := clientTLS(config.Credentials, config.Identity, config.ControllerID)
+	endpoint, connection, err := newControllerConnection(
+		config,
+		nodev1.MaximumObservationDuration,
+		5*time.Second,
+	)
 	if err != nil {
 		return nil, err
 	}
+	terminalEndpoint, terminalConnection, err := newControllerConnection(
+		config,
+		0,
+		5*time.Second,
+	)
+	if err != nil {
+		connection.CloseIdleConnections()
+		return nil, err
+	}
+	return &Client{
+		endpoint:         endpoint + nodev1.ObservationPath,
+		terminalEndpoint: terminalEndpoint + nodev1.DeploymentTerminalSessionPath,
+		identity:         config.Identity,
+		bindingRef:       config.BindingRef, expectedFingerprint: config.ExpectedFingerprint,
+		http: connection, terminalHTTP: terminalConnection,
+	}, nil
+}
+
+func newControllerConnection(
+	config Config,
+	timeout time.Duration,
+	responseHeaderTimeout time.Duration,
+) (string, *http.Client, error) {
+	endpoint, err := url.Parse(config.Endpoint)
+	if err != nil || !validEndpoint(endpoint) || nodev1.ValidateIdentity(config.Identity) != nil ||
+		paasv1.ValidateID("bindingRef", config.BindingRef) != nil ||
+		paasv1.ValidateDigest("expectedFingerprint", config.ExpectedFingerprint) != nil || config.Credentials == nil {
+		return "", nil, errors.New("node connection configuration is invalid")
+	}
+	credentials, err := config.Credentials()
+	if err != nil {
+		return "", nil, errors.New("node connection credentials are unavailable")
+	}
+	_, err = clientTLS(credentials, config.Identity, config.ControllerID)
+	if err != nil {
+		return "", nil, err
+	}
+	connection := newBoundedHTTPClient(nil, timeout, responseHeaderTimeout)
+	connection.Transport.(*http.Transport).DialTLSContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		credentials, err := config.Credentials()
+		if err != nil {
+			return nil, errTLSIdentity
+		}
+		security, err := clientTLS(credentials, config.Identity, config.ControllerID)
+		if err != nil {
+			return nil, errTLSIdentity
+		}
+		host, _, err := net.SplitHostPort(address)
+		if err != nil {
+			return nil, errTLSIdentity
+		}
+		security.ServerName = host
+		bounded, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		raw, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(bounded, network, address)
+		if err != nil {
+			return nil, err
+		}
+		connection := tls.Client(raw, security)
+		if err := connection.HandshakeContext(bounded); err != nil {
+			_ = raw.Close()
+			if definitiveTLSIdentityError(err) {
+				return nil, errTLSIdentity
+			}
+			return nil, err
+		}
+		return connection, nil
+	}
+	return endpoint.String(), connection, nil
+}
+
+func newHTTPClient(security *tls.Config) *http.Client {
+	return newBoundedHTTPClient(
+		security,
+		nodev1.MaximumObservationDuration,
+		5*time.Second,
+	)
+}
+
+func newBoundedHTTPClient(
+	security *tls.Config,
+	timeout time.Duration,
+	responseHeaderTimeout time.Duration,
+) *http.Client {
 	transport := &http.Transport{
 		Proxy:           nil,
 		DialContext:     (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
 		TLSClientConfig: security, TLSHandshakeTimeout: 5 * time.Second,
-		ResponseHeaderTimeout: 5 * time.Second, MaxResponseHeaderBytes: 32 * 1024,
+		ResponseHeaderTimeout: responseHeaderTimeout, MaxResponseHeaderBytes: 32 * 1024,
 		MaxConnsPerHost: 8, DisableCompression: true, DisableKeepAlives: true,
 	}
-	return &Client{
-		endpoint: endpoint.String() + nodev1.ObservationPath, identity: config.Identity,
-		bindingRef: config.BindingRef, expectedFingerprint: config.ExpectedFingerprint,
-		http: &http.Client{
-			Transport: transport, Timeout: nodev1.MaximumObservationDuration,
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
-		},
-	}, nil
+	return &http.Client{
+		Transport: transport, Timeout: timeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+}
+
+// ReadinessClient uses only this node's own credential. Possessing it cannot
+// construct a controller client or invoke a controller observation/action.
+type ReadinessClient struct {
+	endpoint    string
+	identity    nodev1.Identity
+	fingerprint string
+	http        *http.Client
+}
+
+func NewReadinessClient(endpointText string, identity nodev1.Identity, fingerprint string, credentials Credentials) (*ReadinessClient, error) {
+	endpoint, err := url.Parse(endpointText)
+	if err != nil || !validEndpoint(endpoint) || nodev1.ValidateIdentity(identity) != nil ||
+		paasv1.ValidateDigest("identityFingerprint", fingerprint) != nil {
+		return nil, errors.New("node readiness connection is invalid")
+	}
+	security, err := readinessClientTLS(credentials, identity)
+	if err != nil {
+		return nil, err
+	}
+	return &ReadinessClient{endpoint: endpoint.String() + nodev1.ReadinessPath,
+		identity: identity, fingerprint: fingerprint, http: newHTTPClient(security)}, nil
+}
+
+func (client *ReadinessClient) Close() { client.http.CloseIdleConnections() }
+
+func (client *ReadinessClient) Verify(ctx context.Context) (nodev1.Readiness, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, client.endpoint, nil)
+	if err != nil {
+		return nodev1.Readiness{}, fault(paasv1.ErrorAdapterRejected)
+	}
+	response, err := client.http.Do(request)
+	if err != nil {
+		return nodev1.Readiness{}, fault(paasv1.ErrorExecutionTargetUnavailable)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nodev1.Readiness{}, responseFault(response.StatusCode)
+	}
+	if response.Header.Get("Content-Type") != "application/json" || response.Header.Get("Content-Encoding") != "" {
+		return nodev1.Readiness{}, fault(paasv1.ErrorAdapterRejected)
+	}
+	value, err := nodev1.DecodeReadiness(response.Body)
+	now := time.Now()
+	if err != nil || value.Identity != client.identity || value.IdentityFingerprint != client.fingerprint ||
+		value.ObservedAt.After(now) || !now.Before(value.ValidUntil) {
+		return nodev1.Readiness{}, fault(paasv1.ErrorAdapterRejected)
+	}
+	return value, nil
 }
 
 func validEndpoint(value *url.URL) bool {
@@ -75,7 +210,17 @@ func validEndpoint(value *url.URL) bool {
 	return err == nil && portErr == nil && host != "" && port > 0
 }
 
-func (client *Client) Close() { client.http.CloseIdleConnections() }
+func (client *Client) Close() {
+	if client == nil {
+		return
+	}
+	if client.http != nil {
+		client.http.CloseIdleConnections()
+	}
+	if client.terminalHTTP != nil {
+		client.terminalHTTP.CloseIdleConnections()
+	}
+}
 
 func (client *Client) Capabilities(ctx context.Context) (paasv1.AdapterCapabilitiesContract, error) {
 	if err := ctx.Err(); err != nil {
@@ -132,6 +277,9 @@ func (client *Client) observe(ctx context.Context, command paasv1.AdapterCommand
 		if errors.Is(operationContext.Err(), context.DeadlineExceeded) {
 			return empty, fault(paasv1.ErrorDeadlineExceeded)
 		}
+		if definitiveTLSIdentityError(err) {
+			return empty, fault(paasv1.ErrorAdapterRejected)
+		}
 		return empty, fault(paasv1.ErrorExecutionTargetUnavailable)
 	}
 	defer response.Body.Close()
@@ -158,6 +306,18 @@ func (client *Client) observe(ctx context.Context, command paasv1.AdapterCommand
 	usage := value.Observation.Usage.Snapshot(time.Now())
 	value.Observation.Usage = &usage
 	return value.Observation, nil
+}
+
+func definitiveTLSIdentityError(err error) bool {
+	if errors.Is(err, errTLSIdentity) {
+		return true
+	}
+	var alert tls.AlertError
+	var recordHeader tls.RecordHeaderError
+	var verification *tls.CertificateVerificationError
+	var operation *net.OpError
+	return errors.As(err, &alert) || errors.As(err, &recordHeader) || errors.As(err, &verification) ||
+		(errors.As(err, &operation) && operation.Op == "remote error" && operation.Net == "")
 }
 
 func responseFault(status int) error {

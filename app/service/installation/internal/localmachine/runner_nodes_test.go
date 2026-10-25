@@ -26,7 +26,7 @@ func TestRunnerNodeCreateEnrollAndReplay(t *testing.T) {
 	if err := stageInstallation(platform, rand.Reader); err != nil {
 		t.Fatalf("stage DevOps installation: %v", err)
 	}
-	effects := NewEffects(nil)
+	effects := NewEffects(nil, nil)
 	pins, err := readRunnerAuthorityPins(platform.Root, platform.InstallationID)
 	if err != nil {
 		t.Fatal(err)

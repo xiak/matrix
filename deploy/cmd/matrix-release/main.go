@@ -87,8 +87,25 @@ func runAssemble(ctx context.Context, arguments []string, output io.Writer) erro
 	gvisorPath := flags.String("gvisor-archive", "", "fixed offline gVisor x86-64 archive")
 	previousID := flags.String("previous-id", "", "immediate predecessor release ID")
 	previousVersion := flags.String("previous-version", "", "immediate predecessor version")
+	target := flags.String("target", "platform", "release target: platform or node")
+	collectorArchive := flags.String("collector-archive", "", "fixed node collector release archive")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
 		return errors.New("release assembly input is invalid")
+	}
+	kind := installationrelease.ManifestKind
+	collectorAbsolute := ""
+	if *target == "node" {
+		kind = installationrelease.NodeManifestKind
+		if *gvisorPath != "" {
+			return errors.New("release target input is invalid")
+		}
+		var err error
+		collectorAbsolute, err = absolutePath(*collectorArchive)
+		if err != nil {
+			return err
+		}
+	} else if *target != "platform" || *collectorArchive != "" {
+		return errors.New("release target input is invalid")
 	}
 	repositoryAbsolute, err := absolutePath(*repository)
 	if err != nil {
@@ -106,9 +123,12 @@ func runAssemble(ctx context.Context, arguments []string, output io.Writer) erro
 	if err != nil {
 		return err
 	}
-	gvisorAbsolute, err := absolutePath(*gvisorPath)
-	if err != nil {
-		return err
+	gvisorAbsolute := ""
+	if kind == installationrelease.ManifestKind {
+		gvisorAbsolute, err = absolutePath(*gvisorPath)
+		if err != nil {
+			return err
+		}
 	}
 	createdAt, err := time.Parse(time.RFC3339Nano, *createdAtText)
 	if err != nil {
@@ -140,6 +160,7 @@ func runAssemble(ctx context.Context, arguments []string, output io.Writer) erro
 	}
 	clear(suppliedBytes)
 	result, err := releasebuild.Assemble(ctx, releasebuild.Config{
+		Kind: kind, CollectorArchive: collectorAbsolute,
 		RepositoryRoot: repositoryAbsolute, Output: bundleAbsolute,
 		GVisorArchive: gvisorAbsolute,
 		Version:       *version, BuildID: *buildID, SourceCommit: sourceCommit,

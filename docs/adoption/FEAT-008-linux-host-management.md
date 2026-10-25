@@ -1,6 +1,6 @@
 # FEAT-008 adoption review: existing Linux hosts
 
-- Status: Initial node slice review complete
+- Status: Fixed-source implementation review complete; unified integration verification in progress
 - Target: [FEAT-008](../features/FEAT-008-linux-host-management.md)
 - Target design date: 2026-08-27
 - Direct donor dependency allowed: No
@@ -12,6 +12,8 @@
 | Legacy PaaS | `69336e51f94fa98f6aa278fa4c62382e224dbeaf` | Git objects only; never the donor worktree |
 | IAM/Audit and delivery foundation | `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d` | Git objects only; narrow execution/observability/lifecycle slices |
 | PaaS design | `338d9b5fcb820120c32265e380c55e5f171cdb75` | Git objects only; rationale, not runtime evidence |
+| K2 IAM/Audit authority | `644fff09446fc8ffb003cc53cf2fb55d4f58828a` | Git objects only; backend contracts, authority storage, HTTP adapters and independent-process gates |
+| Accepted Phase 3 implementation | `8177bc5016ca686ac8d5eb5417bf97165b939484` | Git objects only; select host enrollment, node runtime, PaaS and installation slices without importing its profile, UI or checkpoint |
 
 Source identities are owned by [the fixed-source entry](sources.yaml).
 The target and iterative roadmap were pushed in `fbdb250` before these Git
@@ -34,8 +36,66 @@ sections, not an unreviewed transitive implementation closure.
 | Foundation `deploy/compose/middleware/observability/victoriametrics/promscrape.yaml` | `REFERENCE` | Periodic collection and trusted scrape identities inform the integration. Its application scrape jobs are not host measurements or proof of current host-observability acceptance. |
 | Design `docs/paas/adoption-manifest.yaml`: staged adoption and dependency boundaries | `REFERENCE` | Preserve independently verifiable slices and explicit unknown/stale state. |
 | Same design manifest: GitLab/current-DevOps execution authority and release inventory | `REJECT` | Matrix owns its independent host runtime and offline lifecycle; donor CI/product topology is not a runtime prerequisite. |
+| K2 `api/iam/v1`, IAM authority and migrations: accounts, policies, groups, roles, role sessions and AccessKeys through the fixed decision/replay boundary | `ADAPT` | Replace the older role-binding authorization model with the current closed product-profile authority. Preserve Matrix installation identity, local recovery, node enrollment and tenant isolation while binding signed AccessKey requests to exact external request facts. |
+| K2 Audit contracts, IAM proof adapter and authority-process evidence required by those decisions | `ADAPT` | Accept only the matching installation-scoped facts and exact historical producer proof needed by the selected IAM authority. Keep Audit as an independently deployable authority and preserve its existing chain, query and installation partitions. |
+| K2 donor UI, donor PaaS runtime/profile, release composition, FEAT status and checkpoints | `REJECT` | The Phase 3 branch owns its PaaS schema, one-time node-enrollment journey, signed topology and release evidence. Donor acceptance does not prove the combined IAM 30 / Audit 18 / PaaS 6 product. |
+| Phase 3 implementation: node enrollment, target lifecycle, runtime observations, terminal, node agent and installation-owned credential authority | `ADAPT` | Integrate these slices into the current IAM/Audit/PaaS owners, regenerate the PaaS contract, advance PaaS to schema 8 and retain the current signed installation and DevOps boundaries. |
+| Phase 3 implementation: database profile, console/UI tree, FEAT checkpoint and historical release composition | `REJECT` | The unified owner uses IAM 88 / Audit 40 / PaaS 8 at revision 40. UX/UI remains independently owned, and donor acceptance evidence cannot substitute for combined mainline gates. |
 
-No source file is copied and no donor is a build/runtime dependency. Existing
-accepted Matrix adapters, validators, journals and tests retain their owners.
+The initial external-source review copies no files and creates no donor
+build/runtime dependency. Existing accepted Matrix adapters, validators,
+journals and tests retain their owners.
 Any additional source needed by a later iteration is reviewed here at its
 fixed commit before use, rather than opening the whole donor in advance.
+
+For the offline compatibility slice, the accepted Matrix Phase 1 source
+`c88a84f379afcf94431e2aca7332fe6ec3136dc7` is `REFERENCE` for the published v1
+manifest/backup bytes and `REUSE` as a separately built legacy `mx` consumer in
+the format-rejection gate. This inspection followed the FEAT-008 profile
+design. No older installer implementation is copied into the working tree,
+and the old scalar schema comparison is not reused for new authority profiles.
+
+The fixed `c88a84f` installation is `REJECT` as a supported platform-authority
+upgrade source. It remains only a real retained-data and format-regression
+producer. No customer-facing release promise admits it, its bootstrap fact has
+no source or role-catalog commitment, and absence of a platform binding cannot
+authorize a grant. Normal bootstrap replay, credential recovery, schema
+application and startup reconciliation are also `REJECT` as first-authorization
+substitutes. A future published predecessor would require its own signed,
+version-scoped adoption review and explicit transition evidence.
+
+For local original-primary credential recovery, fixed same-repository commit
+`91af8482aa218f64f90a7151bca388918367dc7a` is `ADAPT` for the private IAM
+authority/request/receipt contracts and their capability encoder, and `REUSE`
+for the byte-preserving public `BootstrapDigest` and migrated consumers. This
+follows the installation recovery target in FEAT-008. Only those code and
+contract-test slices are consumed; the donor's FEAT status, checkpoint and
+database profile are not imported. This contract-only source has no recovery
+transaction, local executable or new Audit action, and proves none of their
+runtime acceptance gates.
+
+Fixed same-repository commit `aa345eca5f1ed3921000aa5380d5bfd2aa6d0a50`
+is `ADAPT` for the purpose-only IAM recovery executable, atomic transaction,
+immutable completion evidence, closed installation-scoped Audit fact and their
+existing authority gates. The installation consumer keeps its own PaaS 2
+composition and host regressions; the donor's PaaS 1 profile, FEAT acceptance
+state and checkpoint are `REJECT` for integration. These source gates do not
+accept the combined signed installation/CLI recovery workflow or cross-profile
+release transitions.
+
+For the runtime-revision-3 node release gate, fixed same-repository production
+commit `cd271c5eea8cbf72544a05243f6228f2b6e1c18e` is `REUSE` only as the
+separately built, signed predecessor executable and retained-state producer.
+No predecessor source copy or compatibility alias is added to the working
+tree. Its real installer must read retained journals and latest credentials
+after a supported successor runs; differing labels on same-source bundles
+are not this evidence.
+
+For the installed platform predecessor gate, fixed same-repository production
+commit `91b8ba5a4d069bc5c217a4ccefdd5101ffb0bea7` is `REUSE` as a separately
+built, signed predecessor and retained-state producer. Its complete 4/3/2,
+revision-4 profile and protected-node-connection topology match the successor
+boundary. The old installer and service images must read data committed by
+the successor after rollback. No old implementation is copied, and this
+selection neither admits a different profile/topology nor upgrades the
+operator's existing installation.

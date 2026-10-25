@@ -100,12 +100,20 @@ AS $function$
                AND position('DEVOPS' IN pg_catalog.pg_get_constraintdef(constraint_row.oid)) > 0
        )
        AND EXISTS (
-            SELECT 1 FROM iam.current_authorization_profiles() AS profile
-             WHERE profile.product = 'platform'
+            SELECT 1
+              FROM iam.authorization_profile_heads AS head
+              JOIN iam.authorization_profiles AS profile
+                ON profile.product = head.product
+               AND profile.revision = head.revision
+             WHERE head.product = 'platform'
        )
        AND EXISTS (
-            SELECT 1 FROM iam.current_authorization_profiles() AS profile
-             WHERE profile.product = 'devops'
+            SELECT 1
+              FROM iam.authorization_profile_heads AS head
+              JOIN iam.authorization_profiles AS profile
+                ON profile.product = head.product
+               AND profile.revision = head.revision
+             WHERE head.product = 'devops'
        )
 $function$;
 REVOKE ALL ON FUNCTION iam.release_product_authority_contract_ready()

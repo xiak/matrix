@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: Accepted signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. Its sole rolling development predecessor remains fixed `86/39/7+r36`. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths
+- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The unified mainline candidate is separately composed at `88/40/8+r40` and remains a candidate until its exact combined source, independent CI and signed runtime gate complete. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current source is exactly `87/39/7` revision 37 and its sole rolling data predecessor is fixed `86/39/7` revision 36; a signed upgrade still requires an immediate same-profile release predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
+- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The unified candidate is exactly IAM 88 / Audit 40 / PaaS 8 at contract revision 40. Its retained PaaS-7-to-8 SQL gate is development migration evidence, not permission for a cross-profile release upgrade; no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
 
 ## Outcome
 
@@ -212,8 +212,29 @@ the current pointer unchanged. Explicit rollback returns to that immediate
 previous release without discarding data written after upgrade; the previous
 binary must pass verification against the expanded schema. Recovery is the
 separate destructive path that restores a selected verified backup after an
-operator request. Backups remain installation-owned, restrictive, sealed, and
-excluded from support evidence.
+operator request. The recovery engine comes from an authenticated, supported
+operator bundle compatible with the installation profile; the selected backup
+alone determines the authenticated target release. A historical target binary
+does not own the restore algorithm. Phase 1 recovery may target the current
+release or its exact signed immediate predecessor. A cross-profile recovery is
+admitted only for the explicitly supported predecessor-to-current upgrade
+profile pair; it never admits a skipped or arbitrary downgrade, while direct
+rollback remains equal-profile only. Backups remain installation-owned,
+restrictive, sealed, and excluded from support evidence.
+
+Every current backup also binds a provider-neutral managed-service inventory
+witness. The witness commits only sorted provider-directory and provider-
+project identities below the protected installation root; it never reads or
+serializes service data, credentials, endpoints, configuration, or provider
+documents. Backup creation samples that inventory before and after the
+database snapshot and publishes nothing when it changes. Recovery compares
+the current inventory with the sealed witness before journal advancement or
+provider effects and again after authentication closure but before removing
+projects or restoring PostgreSQL. A mismatch is a normalized precondition
+failure: it cannot stop or restart platform containers, alter quotas or
+managed installations, restore the database, or create a replacement intent.
+This rule applies to every registered local managed-service provider rather
+than a fixed PostgreSQL/MySQL/Elasticsearch/RabbitMQ whitelist.
 
 The current recovery contract closes authentication before a destructive
 database restore and does not reopen it merely because PostgreSQL is healthy.
@@ -1104,6 +1125,11 @@ running Verification 38997696246, or accept the later Account
 4. Explicit N-1 rollback keeps post-upgrade compatible data; verified backup
    recovery restores the selected snapshot and cannot target another
    installation.
+5. A provider project created after a protected backup makes that backup
+   ineligible before journal advancement or destructive effects. The rejected
+   recovery preserves the platform runtime, managed installation, quota and
+   database; after the project is explicitly terminated and the inventory
+   again matches, the existing supported recovery path may proceed.
 
 ### Gate C: clean offline release E2E
 
@@ -1121,6 +1147,11 @@ running Verification 38997696246, or accept the later Account
    configuration; stop removes its project and releases capacity.
 4. Backup recovery, repeated verify/status, restart, bounded support evidence,
    and zero secret/native/path leakage pass before cleanup.
+5. The same signed journey creates a real managed-service installation after
+   the selected backup, observes the old backup fail closed with unchanged
+   platform container identities/start times/restart counts, terminates that
+   installation, and then completes the ordinary recovery. Unit-only directory
+   fixtures do not substitute for this provider-backed gate.
 
 Common generation-drift, unit, vet, race, repeated, schema, architecture,
 real-PostgreSQL, real-Compose, cross-platform build, Markdown-link, stale-term,

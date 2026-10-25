@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,6 +38,143 @@ type sourceFunc func(context.Context) (paasv1.ExecutionTargetObservation, error)
 
 func (fn sourceFunc) Current(ctx context.Context) (paasv1.ExecutionTargetObservation, error) {
 	return fn(ctx)
+}
+
+type deploymentService struct{}
+
+func (deploymentService) Ready(context.Context) error { return nil }
+
+func (deploymentService) ExecuteDeployment(
+	context.Context,
+	nodev1.DeploymentEffectRequest,
+) (paasv1.AdapterResult, error) {
+	return paasv1.AdapterResult{}, errors.New("unexpected Deployment effect")
+}
+
+func (deploymentService) ObserveDeployment(
+	context.Context,
+	paasv1.ObserveDeploymentRequest,
+) (paasv1.DeploymentObservation, error) {
+	return paasv1.DeploymentObservation{}, errors.New("unexpected Deployment observation")
+}
+
+func (deploymentService) ObserveDeploymentRuntime(
+	context.Context,
+	paasv1.ObserveDeploymentRuntimeRequest,
+) (paasv1.DeploymentRuntimeObservation, error) {
+	return paasv1.DeploymentRuntimeObservation{}, errors.New("unexpected Deployment runtime observation")
+}
+
+func (deploymentService) ObserveDeploymentTelemetry(
+	context.Context,
+	paasv1.ObserveDeploymentRuntimeRequest,
+) (
+	paasv1.DeploymentRuntimeObservation,
+	paasv1.DeploymentResourceObservation,
+	error,
+) {
+	return paasv1.DeploymentRuntimeObservation{}, paasv1.DeploymentResourceObservation{},
+		errors.New("unexpected Deployment telemetry observation")
+}
+
+func (deploymentService) OpenTerminal(
+	context.Context,
+	nodev1.TerminalOpenRequest,
+) (TerminalSession, error) {
+	return nil, errors.New("unexpected terminal session")
+}
+
+type deploymentServiceFuncs struct {
+	ready     func(context.Context) error
+	execute   func(context.Context, nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error)
+	observe   func(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error)
+	runtime   func(context.Context, paasv1.ObserveDeploymentRuntimeRequest) (paasv1.DeploymentRuntimeObservation, error)
+	telemetry func(context.Context, paasv1.ObserveDeploymentRuntimeRequest) (
+		paasv1.DeploymentRuntimeObservation,
+		paasv1.DeploymentResourceObservation,
+		error,
+	)
+	terminal func(context.Context, nodev1.TerminalOpenRequest) (TerminalSession, error)
+}
+
+func (service deploymentServiceFuncs) Ready(ctx context.Context) error {
+	if service.ready == nil {
+		return nil
+	}
+	return service.ready(ctx)
+}
+
+func (service deploymentServiceFuncs) ExecuteDeployment(
+	ctx context.Context,
+	request nodev1.DeploymentEffectRequest,
+) (paasv1.AdapterResult, error) {
+	return service.execute(ctx, request)
+}
+
+func (service deploymentServiceFuncs) ObserveDeployment(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRequest,
+) (paasv1.DeploymentObservation, error) {
+	return service.observe(ctx, request)
+}
+
+func (service deploymentServiceFuncs) ObserveDeploymentRuntime(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) (paasv1.DeploymentRuntimeObservation, error) {
+	if service.runtime == nil {
+		return paasv1.DeploymentRuntimeObservation{}, errors.New("unexpected Deployment runtime observation")
+	}
+	return service.runtime(ctx, request)
+}
+
+func (service deploymentServiceFuncs) ObserveDeploymentTelemetry(
+	ctx context.Context,
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) (
+	paasv1.DeploymentRuntimeObservation,
+	paasv1.DeploymentResourceObservation,
+	error,
+) {
+	if service.telemetry == nil {
+		return paasv1.DeploymentRuntimeObservation{}, paasv1.DeploymentResourceObservation{},
+			errors.New("unexpected Deployment telemetry observation")
+	}
+	return service.telemetry(ctx, request)
+}
+
+func (service deploymentServiceFuncs) OpenTerminal(
+	ctx context.Context,
+	request nodev1.TerminalOpenRequest,
+) (TerminalSession, error) {
+	if service.terminal == nil {
+		return nil, errors.New("unexpected terminal session")
+	}
+	return service.terminal(ctx, request)
+}
+
+type deploymentArtifactResolver struct{}
+
+func (deploymentArtifactResolver) ResolveDeploymentArtifact(
+	_ context.Context,
+	artifact paasv1.ArtifactRef,
+) (nodev1.ResolvedArtifact, error) {
+	return nodev1.ResolvedArtifact{
+		ArtifactDigest: artifact.Digest,
+		LocalReference: deploymentTestDigest('d'),
+		LocalImageIDs:  []string{deploymentTestDigest('d')},
+	}, nil
+}
+
+type deploymentSecretResolver struct {
+	content []byte
+}
+
+func (resolver deploymentSecretResolver) ResolveSecret(
+	_ context.Context,
+	_ paasv1.SecretVersionReference,
+) ([]byte, error) {
+	return bytes.Clone(resolver.content), nil
 }
 
 func observedTarget() paasv1.ExecutionTargetObservation {
@@ -83,17 +221,39 @@ func TestRealMTLSBindsBothPeersAndReturnsOnlyTheSelectedNode(t *testing.T) {
 	otherURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, "worker-b")
 	other := authority.issue(t, otherURI, x509.ExtKeyUsageClientAuth, false)
 	wrongController := newClient(t, server.URL, other.credentials, nodeIdentity, "worker-b")
-	if _, err := wrongController.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()}); err == nil {
-		t.Fatal("another controller identity passed mTLS")
+	if _, err := wrongController.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()}); !nonRetryableAdapterFault(err, paasv1.ErrorAdapterRejected) {
+		t.Fatalf("another controller identity mTLS error = %v", err)
 	}
 	wrongNodeIdentity := nodeIdentity
 	wrongNodeIdentity.ExecutionTargetID = "target-b"
 	wrongNode := newClient(t, server.URL, controller.credentials, wrongNodeIdentity, controllerID)
 	command := observationCommand()
 	command.ExecutionTargetID = wrongNodeIdentity.ExecutionTargetID
-	if _, err := wrongNode.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: command}); err == nil {
-		t.Fatal("trusted CA alone admitted another node identity")
+	if _, err := wrongNode.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: command}); !nonRetryableAdapterFault(err, paasv1.ErrorAdapterRejected) {
+		t.Fatalf("wrong node identity mTLS error = %v", err)
 	}
+	unreachable := newClient(t, "https://127.0.0.1:1", controller.credentials, nodeIdentity, controllerID)
+	if _, err := unreachable.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()}); !retryableAdapterFault(err, paasv1.ErrorExecutionTargetUnavailable) {
+		t.Fatalf("unreachable node error = %v", err)
+	}
+	interruptedListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	interruptedDone := make(chan struct{})
+	go func() {
+		defer close(interruptedDone)
+		connection, acceptErr := interruptedListener.Accept()
+		if acceptErr == nil {
+			_ = connection.Close()
+		}
+	}()
+	interrupted := newClient(t, "https://"+interruptedListener.Addr().String(), controller.credentials, nodeIdentity, controllerID)
+	if _, err := interrupted.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()}); !retryableAdapterFault(err, paasv1.ErrorExecutionTargetUnavailable) {
+		t.Fatalf("interrupted TLS handshake error = %v", err)
+	}
+	_ = interruptedListener.Close()
+	<-interruptedDone
 	foreign := newAuthority(t).issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
 	expired := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, true)
 	for name, certificate := range map[string]*tls.Certificate{"missing certificate": nil, "untrusted issuer": &foreign.pair, "expired certificate": &expired.pair} {
@@ -111,6 +271,425 @@ func TestRealMTLSBindsBothPeersAndReturnsOnlyTheSelectedNode(t *testing.T) {
 	}
 	if calls.Load() != 1 {
 		t.Fatalf("rejected peer reached the observation source: %d calls", calls.Load())
+	}
+}
+
+func nonRetryableAdapterFault(err error, code paasv1.ErrorCode) bool {
+	var fault paasv1.AdapterFault
+	return errors.As(err, &fault) && fault.Normalized.Code == code && !fault.Normalized.Retryable
+}
+
+func retryableAdapterFault(err error, code paasv1.ErrorCode) bool {
+	var fault paasv1.AdapterFault
+	return errors.As(err, &fault) && fault.Normalized.Code == code && fault.Normalized.Retryable
+}
+
+func TestRealMTLSDeploymentBindsExactTargetMaterialsAndObservation(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	execution := deploymentExecutionFixture(t)
+	var effectCalls, observationCalls, runtimeCalls, telemetryCalls atomic.Int32
+	var receivedSecret string
+	var receivedSecretBytes []byte
+	service := deploymentServiceFuncs{
+		execute: func(_ context.Context, request nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error) {
+			effectCalls.Add(1)
+			if request.Identity != nodeIdentity || request.Execution.Command.ExecutionTargetID != nodeIdentity.ExecutionTargetID ||
+				request.Execution.Command.BindingRef != "binding-a" || len(request.Materials.Artifacts) != 1 ||
+				request.Materials.Artifacts[0].LocalReference != deploymentTestDigest('d') ||
+				len(request.Materials.Artifacts[0].LocalImageIDs) != 1 ||
+				request.Materials.Artifacts[0].LocalImageIDs[0] != deploymentTestDigest('d') || len(request.Materials.Secrets) != 1 {
+				t.Fatal("node service received a retargeted or incomplete effect")
+			}
+			receivedSecret = string(request.Materials.Secrets[0].Value)
+			receivedSecretBytes = request.Materials.Secrets[0].Value
+			return paasv1.AdapterResult{
+				CommandID: request.Execution.Command.CommandID,
+				State:     paasv1.AdapterResultSucceeded, Receipt: "node-receipt",
+				ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
+			}, nil
+		},
+		observe: func(_ context.Context, request paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error) {
+			observationCalls.Add(1)
+			return deploymentObservationFixture(request), nil
+		},
+		runtime: func(_ context.Context, request paasv1.ObserveDeploymentRuntimeRequest) (paasv1.DeploymentRuntimeObservation, error) {
+			runtimeCalls.Add(1)
+			return deploymentRuntimeObservationFixture(request), nil
+		},
+		telemetry: func(_ context.Context, request paasv1.ObserveDeploymentRuntimeRequest) (
+			paasv1.DeploymentRuntimeObservation,
+			paasv1.DeploymentResourceObservation,
+			error,
+		) {
+			telemetryCalls.Add(1)
+			return deploymentRuntimeObservationFixture(request), deploymentResourceObservationFixture(request), nil
+		},
+	}
+	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+		return observedTarget(), nil
+	}), service, service, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
+	client := newDeploymentClient(t, server.URL, controller.credentials, nodeIdentity, "binding-a")
+	result, err := client.ApplyDeployment(context.Background(), execution)
+	if err != nil || result.State != paasv1.AdapterResultSucceeded || effectCalls.Load() != 1 ||
+		receivedSecret != "secret-value" {
+		t.Fatalf("remote effect failed: %#v, %v", result, err)
+	}
+	if !bytes.Equal(receivedSecretBytes, make([]byte, len(receivedSecretBytes))) {
+		t.Fatal("node handler retained decoded secret bytes after the effect")
+	}
+	observe := deploymentObserveRequest(execution)
+	observation, err := client.ObserveDeployment(context.Background(), observe)
+	if err != nil || observation.Phase != paasv1.DeploymentReady || observationCalls.Load() != 1 {
+		t.Fatalf("remote observation failed: %#v, %v", observation, err)
+	}
+	runtimeObservation, err := client.ObserveDeploymentRuntime(
+		context.Background(), deploymentRuntimeObserveRequest(execution),
+	)
+	if err != nil || len(runtimeObservation.Instances) != 1 || runtimeCalls.Load() != 1 ||
+		runtimeObservation.Instances[0].ID != "instance-0123456789abcdef0123456789abcdef" {
+		t.Fatalf("remote runtime observation failed: %#v, %v", runtimeObservation, err)
+	}
+	runtimeObservation, resources, err := client.ObserveDeploymentTelemetry(
+		context.Background(), deploymentRuntimeObserveRequest(execution),
+	)
+	if err != nil || len(runtimeObservation.Instances) != 1 || len(resources.Instances) != 1 ||
+		telemetryCalls.Load() != 1 || resources.Instances[0].CPU.State != paasv1.MeasurementAvailable ||
+		resources.Instances[0].ID != runtimeObservation.Instances[0].ID {
+		t.Fatalf("remote telemetry observation failed: %#v / %#v / %v", runtimeObservation, resources, err)
+	}
+
+	wrong := deploymentExecutionFixture(t)
+	wrong.Command.BindingRef = "binding-b"
+	wrong.Command.RequestDigest = paasv1.DeploymentExecutionRequestDigest(wrong)
+	wrongClient := newDeploymentClient(t, server.URL, controller.credentials, nodeIdentity, "binding-b")
+	_, err = wrongClient.ApplyDeployment(context.Background(), wrong)
+	var fault paasv1.AdapterFault
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorPermissionDenied || effectCalls.Load() != 1 {
+		t.Fatalf("wrong binding reached the node effect: %v", err)
+	}
+	_, err = wrongClient.ObserveDeploymentRuntime(
+		context.Background(), deploymentRuntimeObserveRequest(execution),
+	)
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorPermissionDenied || runtimeCalls.Load() != 1 {
+		t.Fatalf("wrong binding reached the node runtime observation: %v", err)
+	}
+	_, _, err = wrongClient.ObserveDeploymentTelemetry(
+		context.Background(), deploymentRuntimeObserveRequest(execution),
+	)
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorPermissionDenied ||
+		telemetryCalls.Load() != 1 {
+		t.Fatalf("wrong binding reached the node telemetry observation: %v", err)
+	}
+}
+
+func TestRealMTLSTerminalBindsClosedProofAndBridgesTTYFrames(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	provider := newFakeNodeTerminal()
+	received := make(chan nodev1.TerminalOpenRequest, 1)
+	service := deploymentServiceFuncs{terminal: func(
+		_ context.Context,
+		request nodev1.TerminalOpenRequest,
+	) (TerminalSession, error) {
+		received <- request
+		return provider, nil
+	}}
+	handler, err := New(
+		sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+			return observedTarget(), nil
+		}),
+		service,
+		service,
+		Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
+	client := newClient(t, server.URL, controller.credentials, nodeIdentity, controllerID)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	controllerAhead := 15 * time.Second
+	sessionID := paasv1.ResourceID("terminal-session-0123456789abcdef0123456789abcdef")
+	request := nodev1.TerminalOpenRequest{
+		APIVersion: nodev1.APIVersion, Kind: nodev1.TerminalOpenRequestKind,
+		Identity: nodeIdentity, BindingRef: "binding-a", TerminalSessionID: sessionID,
+		Request: paasv1.ObserveDeploymentRuntimeRequest{
+			RequestID:    paasv1.CommandID(sessionID),
+			Scope:        paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"},
+			DeploymentID: "deployment-a", Generation: 3,
+			ApplicationRevisionID: "application-revision-a", ExecutionTargetID: nodeIdentity.ExecutionTargetID,
+			ExpectedContentDigest: deploymentTestDigest('c'), Deadline: now.Add(controllerAhead + 5*time.Second),
+		},
+		InstanceID: "instance-0123456789abcdef0123456789abcdef",
+		Size:       paasv1.TerminalSize{Columns: 120, Rows: 40},
+		ExpiresAt:  now.Add(paasv1.MaximumTerminalSessionDuration + controllerAhead),
+	}
+	if err := nodev1.ValidateTerminalOpenRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	connection, err := client.OpenTerminal(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	if actual := <-received; actual != request {
+		t.Fatalf("node terminal proof = %#v", actual)
+	}
+	input := []byte("id\n")
+	if err := connection.SendInput(ctx, input); err != nil {
+		t.Fatal(err)
+	}
+	if actual := <-provider.inputs; !bytes.Equal(actual, input) {
+		t.Fatalf("provider input = %q", actual)
+	}
+	size := paasv1.TerminalSize{Columns: 132, Rows: 45}
+	if err := connection.Resize(ctx, size); err != nil {
+		t.Fatal(err)
+	}
+	if actual := <-provider.resizes; actual != size {
+		t.Fatalf("provider resize = %#v", actual)
+	}
+	provider.outputs <- []byte("uid=1000(matrix)\r\n")
+	output, control, err := connection.Receive(ctx)
+	if err != nil || control != nil || string(output) != "uid=1000(matrix)\r\n" {
+		t.Fatalf("node output = %q/%#v/%v", output, control, err)
+	}
+	close(provider.outputs)
+	output, control, err = connection.Receive(ctx)
+	if err != nil || len(output) != 0 || control == nil || control.Type != nodev1.TerminalServerExit ||
+		control.ExitCode == nil || *control.ExitCode != provider.exitCode {
+		t.Fatalf("node exit = %q/%#v/%v", output, control, err)
+	}
+}
+
+func TestTerminalRejectsClockSkewBeyondBoundBeforeProviderEffect(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	providerCalled := make(chan struct{}, 1)
+	service := deploymentServiceFuncs{terminal: func(
+		_ context.Context,
+		_ nodev1.TerminalOpenRequest,
+	) (TerminalSession, error) {
+		providerCalled <- struct{}{}
+		return newFakeNodeTerminal(), nil
+	}}
+	handler, err := New(
+		sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+			return observedTarget(), nil
+		}),
+		service,
+		service,
+		Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
+	client := newClient(t, server.URL, controller.credentials, nodeIdentity, controllerID)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	controllerAhead := terminalClockSkewTolerance + time.Second
+	sessionID := paasv1.ResourceID("terminal-session-abcdef0123456789abcdef0123456789")
+	request := nodev1.TerminalOpenRequest{
+		APIVersion: nodev1.APIVersion, Kind: nodev1.TerminalOpenRequestKind,
+		Identity: nodeIdentity, BindingRef: "binding-a", TerminalSessionID: sessionID,
+		Request: paasv1.ObserveDeploymentRuntimeRequest{
+			RequestID:    paasv1.CommandID(sessionID),
+			Scope:        paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"},
+			DeploymentID: "deployment-a", Generation: 3,
+			ApplicationRevisionID: "application-revision-a", ExecutionTargetID: nodeIdentity.ExecutionTargetID,
+			ExpectedContentDigest: deploymentTestDigest('c'), Deadline: now.Add(controllerAhead + 5*time.Second),
+		},
+		InstanceID: "instance-0123456789abcdef0123456789abcdef",
+		Size:       paasv1.TerminalSize{Columns: 120, Rows: 40},
+		ExpiresAt:  now.Add(paasv1.MaximumTerminalSessionDuration + controllerAhead),
+	}
+	if err := nodev1.ValidateTerminalOpenRequest(request); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if connection, err := client.OpenTerminal(ctx, request); !errors.Is(err, nodehttps.ErrTerminalRejected) {
+		if connection != nil {
+			connection.Close()
+		}
+		t.Fatalf("excessive controller clock skew terminal error = %v", err)
+	}
+	select {
+	case <-providerCalled:
+		t.Fatal("excessive controller clock skew reached the provider")
+	default:
+	}
+}
+
+type fakeNodeTerminal struct {
+	outputs   chan []byte
+	inputs    chan []byte
+	resizes   chan paasv1.TerminalSize
+	exitCode  int32
+	closeOnce sync.Once
+	closed    chan struct{}
+}
+
+func newFakeNodeTerminal() *fakeNodeTerminal {
+	return &fakeNodeTerminal{
+		outputs: make(chan []byte, 2), inputs: make(chan []byte, 1),
+		resizes: make(chan paasv1.TerminalSize, 1), exitCode: 7, closed: make(chan struct{}),
+	}
+}
+
+func (terminal *fakeNodeTerminal) Read(content []byte) (int, error) {
+	value, open := <-terminal.outputs
+	if !open {
+		return 0, io.EOF
+	}
+	return copy(content, value), nil
+}
+
+func (terminal *fakeNodeTerminal) Write(content []byte) (int, error) {
+	terminal.inputs <- bytes.Clone(content)
+	return len(content), nil
+}
+
+func (terminal *fakeNodeTerminal) Resize(_ context.Context, size paasv1.TerminalSize) error {
+	terminal.resizes <- size
+	return nil
+}
+
+func (terminal *fakeNodeTerminal) ExitCode(context.Context) (int32, error) {
+	return terminal.exitCode, nil
+}
+
+func (terminal *fakeNodeTerminal) Close() error {
+	terminal.closeOnce.Do(func() { close(terminal.closed) })
+	return nil
+}
+
+func TestLostRemoteEffectResponseBecomesUnknownThenObservesSameTarget(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	execution := deploymentExecutionFixture(t)
+	var effects, observations atomic.Int32
+	handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case nodev1.DeploymentEffectPath:
+			value, err := nodev1.DecodeDeploymentEffectRequest(request.Body)
+			if err != nil || value.Identity != nodeIdentity {
+				t.Error("lost-response fixture received invalid effect")
+				return
+			}
+			defer value.Materials.Clear()
+			effects.Add(1)
+			connection, _, err := response.(http.Hijacker).Hijack()
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			_ = connection.Close()
+		case nodev1.DeploymentObservationPath:
+			value, err := nodev1.DecodeDeploymentObservationRequest(request.Body)
+			if err != nil || value.Identity != nodeIdentity ||
+				value.Request.Command.ExecutionTargetID != execution.Command.ExecutionTargetID {
+				t.Error("lost-response recovery observed another target")
+				return
+			}
+			observations.Add(1)
+			encoded, _ := json.Marshal(nodev1.DeploymentObservationResponse{
+				APIVersion: nodev1.APIVersion, Kind: nodev1.DeploymentObservationResponseKind,
+				Identity: nodeIdentity, CommandID: value.Request.Command.CommandID,
+				Observation: deploymentObservationFixture(value.Request),
+			})
+			response.Header().Set("Content-Type", "application/json")
+			_, _ = response.Write(encoded)
+		default:
+			response.WriteHeader(http.StatusBadRequest)
+		}
+	})
+	server := startTLSServer(t, node, handler)
+	client := newDeploymentClient(t, server.URL, controller.credentials, nodeIdentity, "binding-a")
+	_, err := client.ApplyDeployment(context.Background(), execution)
+	var fault paasv1.AdapterFault
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorUnknownOutcome || effects.Load() != 1 {
+		t.Fatalf("lost response was not classified as unknown: %v", err)
+	}
+	observation, err := client.ObserveDeployment(context.Background(), deploymentObserveRequest(execution))
+	if err != nil || observation.Phase != paasv1.DeploymentReady || observations.Load() != 1 || effects.Load() != 1 {
+		t.Fatalf("same-target recovery observation failed: %#v, %v", observation, err)
+	}
+}
+
+func TestDeploymentClientRejectsUncorrelatedEffectResponsesAsUnknown(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	for _, problem := range []string{"identity", "command", "unknown field", "wrong content type", "redirect"} {
+		t.Run(problem, func(t *testing.T) {
+			handler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				value, err := nodev1.DecodeDeploymentEffectRequest(request.Body)
+				if err != nil {
+					response.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				defer value.Materials.Clear()
+				if problem == "redirect" {
+					response.Header().Set("Location", "https://127.0.0.1:1/another-target")
+					response.WriteHeader(http.StatusTemporaryRedirect)
+					return
+				}
+				identity := nodeIdentity
+				commandID := value.Execution.Command.CommandID
+				if problem == "identity" {
+					identity.ExecutionTargetID = "target-b"
+				}
+				if problem == "command" {
+					commandID = "other-command"
+				}
+				result := paasv1.AdapterResult{
+					CommandID: commandID, State: paasv1.AdapterResultSucceeded,
+					Receipt: "node-receipt", ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
+				}
+				encoded, _ := json.Marshal(nodev1.DeploymentEffectResponse{
+					APIVersion: nodev1.APIVersion, Kind: nodev1.DeploymentEffectResponseKind,
+					Identity: identity, CommandID: commandID, Result: result,
+				})
+				if problem == "unknown field" {
+					encoded = bytes.Replace(encoded, []byte(`"result":`), []byte(`"shell":"/bin/sh","result":`), 1)
+				}
+				contentType := "application/json"
+				if problem == "wrong content type" {
+					contentType = "text/plain"
+				}
+				response.Header().Set("Content-Type", contentType)
+				_, _ = response.Write(encoded)
+			})
+			server := startTLSServer(t, node, handler)
+			client := newDeploymentClient(t, server.URL, controller.credentials, nodeIdentity, "binding-a")
+			_, err := client.ApplyDeployment(context.Background(), deploymentExecutionFixture(t))
+			var fault paasv1.AdapterFault
+			if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorUnknownOutcome {
+				t.Fatalf("uncorrelated effect response was accepted: %v", err)
+			}
+		})
 	}
 }
 
@@ -169,7 +748,7 @@ func TestAuthenticatedRequestsRejectInvalidInputBeforeReadingTheHost(t *testing.
 	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
 		t.Fatal("plaintext request read the host")
 		return paasv1.ExecutionTargetObservation{}, nil
-	}), Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	}), deploymentService{}, deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,6 +758,100 @@ func TestAuthenticatedRequestsRejectInvalidInputBeforeReadingTheHost(t *testing.
 	handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusForbidden {
 		t.Fatal("plaintext handler admitted forwarded identity")
+	}
+}
+
+func TestSelfReadinessRequiresFreshCollectorButCannotReadControllerSurface(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	var available atomic.Bool
+	var calls atomic.Int32
+	value := observedTarget()
+	value.Usage.CPU = paasv1.CPUUsage{State: paasv1.MeasurementAvailable,
+		Value: &paasv1.CPUUsageValue{LogicalCPUs: 2, WindowMillis: 5000}}
+	value.Usage.Memory = paasv1.MemoryUsage{State: paasv1.MeasurementAvailable,
+		Value: &paasv1.MemoryUsageValue{TotalBytes: 8000, AvailableBytes: 6000, UsedBytes: 2000}}
+	value.Usage.FilesystemsState = paasv1.MeasurementAvailable
+	value.Usage.Filesystems = []paasv1.FilesystemUsage{{Device: "disk-a", MountPoint: "/", FilesystemType: "ext4",
+		State: paasv1.MeasurementAvailable, Value: &paasv1.FilesystemUsageValue{
+			TotalBytes: 10000, UsedBytes: 1000, AvailableBytes: 9000, InodesState: paasv1.MeasurementUnsupported}}}
+	if err := paasv1.ValidateExecutionTargetObservation(value); err != nil {
+		t.Fatal(err)
+	}
+	var runtimeCalls atomic.Int32
+	service := deploymentServiceFuncs{ready: func(context.Context) error {
+		runtimeCalls.Add(1)
+		return nil
+	}}
+	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+		calls.Add(1)
+		if available.Load() {
+			return value, nil
+		}
+		return observedTarget(), nil
+	}), service, service, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a", MaximumConcurrent: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
+	client, err := nodehttps.NewReadinessClient(server.URL, nodeIdentity, value.IdentityFingerprint, node.credentials)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	if _, err := client.Verify(context.Background()); err == nil {
+		t.Fatal("missing collector was reported as a ready installation")
+	}
+	if runtimeCalls.Load() != 0 {
+		t.Fatal("unavailable background observation amplified Docker readiness probes")
+	}
+	available.Store(true)
+	first, err := client.Verify(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := client.Verify(context.Background())
+	if err != nil || first != second || first.ObservedAt != value.ObservedAt || first.ValidUntil != value.Usage.ValidUntil ||
+		runtimeCalls.Load() != 2 {
+		t.Fatalf("readiness changed observation freshness: %#v, %#v, %v", first, second, err)
+	}
+	raw := authority.rawClient(&node.pair)
+	defer raw.CloseIdleConnections()
+	before := calls.Load()
+	response, err := raw.Post(server.URL+nodev1.ObservationPath, "application/json", bytes.NewReader(requestBody(t, observationCommand())))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusForbidden || calls.Load() != before {
+		t.Fatal("self readiness credential gained controller observation authority")
+	}
+	for _, suffix := range []string{"?", "?command=execute", "/extra"} {
+		response, err := raw.Get(server.URL + nodev1.ReadinessPath + suffix)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode < 400 || calls.Load() != before {
+			t.Fatal("request-shaped readiness was admitted")
+		}
+	}
+	otherURI, _ := nodev1.NodeURI(nodev1.Identity{InstallationID: nodeIdentity.InstallationID, ExecutionTargetID: "target-b"})
+	other := authority.issue(t, otherURI, x509.ExtKeyUsageClientAuth, false)
+	wrong := authority.rawClient(&other.pair)
+	defer wrong.CloseIdleConnections()
+	response, err = wrong.Get(server.URL + nodev1.ReadinessPath)
+	if response != nil {
+		response.Body.Close()
+	}
+	if err == nil || calls.Load() != before {
+		t.Fatal("another node identity reached self readiness")
+	}
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	if _, err := nodehttps.NewReadinessClient(server.URL, nodeIdentity, value.IdentityFingerprint, controller.credentials); err == nil {
+		t.Fatal("readiness accepts a controller credential")
 	}
 }
 
@@ -224,6 +897,41 @@ func TestNodeBoundsConcurrencyAndNeverSerializesProviderErrors(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("observation did not finish")
+	}
+}
+
+func TestNodeObservationFailsClosedWhenDeploymentRuntimeIsUnavailable(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	controller := authority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	var hostCalls atomic.Int32
+	service := deploymentServiceFuncs{
+		ready: func(context.Context) error {
+			return errors.New("docker socket /private/path password=secret is unavailable")
+		},
+		execute: func(context.Context, nodev1.DeploymentEffectRequest) (paasv1.AdapterResult, error) {
+			return paasv1.AdapterResult{}, errors.New("unexpected effect")
+		},
+		observe: func(context.Context, paasv1.ObserveDeploymentRequest) (paasv1.DeploymentObservation, error) {
+			return paasv1.DeploymentObservation{}, errors.New("unexpected Deployment observation")
+		},
+	}
+	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+		hostCalls.Add(1)
+		return observedTarget(), nil
+	}), service, service, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := startTLSServer(t, node, handler)
+	client := newClient(t, server.URL, controller.credentials, nodeIdentity, controllerID)
+	_, err = client.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()})
+	var fault paasv1.AdapterFault
+	if !errors.As(err, &fault) || fault.Normalized.Class != paasv1.AdapterErrorUnavailable ||
+		hostCalls.Load() != 0 || strings.Contains(err.Error(), "/private/path") || strings.Contains(err.Error(), "password") {
+		t.Fatalf("unready executor did not close node admission safely: %v", err)
 	}
 }
 
@@ -292,6 +1000,40 @@ func TestClientRejectsUncorrelatedResponsesAndRedirects(t *testing.T) {
 	}
 }
 
+func TestEnrollmentAuthenticatesRolesAddressesAndMutualTrustBeforeEffects(t *testing.T) {
+	authority := newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	collectorURI, _ := nodev1.CollectorURI(nodeIdentity)
+	node := authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	collector := authority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+	if err := nodehttps.ValidateEnrollment(node.credentials, collector.credentials, nodeIdentity, "127.0.0.1:16443", "127.0.0.1:19100"); err != nil {
+		t.Fatal("valid mutually trusted enrollment was rejected")
+	}
+	for _, test := range []struct {
+		name                          string
+		node, collector               nodehttps.Credentials
+		nodeAddress, collectorAddress string
+	}{
+		{"untrusted collector", node.credentials, newAuthority(t).issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false).credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"untrusted node", newAuthority(t).issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth).credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"node lacks client role", authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false).credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"collector lacks server role", node.credentials, authority.issue(t, collectorURI, x509.ExtKeyUsageClientAuth, false).credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"collector cannot act as node", collector.credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"node cannot act as collector", node.credentials, node.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"expired node", authority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, true, x509.ExtKeyUsageClientAuth).credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"expired collector", node.credentials, authority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, true).credentials, "127.0.0.1:16443", "127.0.0.1:19100"},
+		{"node address not in certificate", node.credentials, collector.credentials, "127.0.0.2:16443", "127.0.0.1:19100"},
+		{"collector address not in certificate", node.credentials, collector.credentials, "127.0.0.1:16443", "127.0.0.2:19100"},
+		{"DNS listener", node.credentials, collector.credentials, "localhost:16443", "127.0.0.1:19100"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := nodehttps.ValidateEnrollment(test.node, test.collector, nodeIdentity, test.nodeAddress, test.collectorAddress); err == nil {
+				t.Fatal("incompatible enrollment was admitted")
+			}
+		})
+	}
+}
+
 func TestCollectorTransportRequiresTheExactLocalCollectorAndNodeIdentities(t *testing.T) {
 	authority := newAuthority(t)
 	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
@@ -351,6 +1093,339 @@ func TestCollectorTransportRequiresTheExactLocalCollectorAndNodeIdentities(t *te
 	}
 }
 
+func TestRealMTLSReloadsCredentialsAndRetiresBothOldPeers(t *testing.T) {
+	oldAuthority, nextAuthority := newAuthority(t), newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	controllerURI, _ := nodev1.ControllerURI(nodeIdentity.InstallationID, controllerID)
+	oldNode := oldAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	nextNode := nextAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false)
+	oldController := oldAuthority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	nextController := nextAuthority.issue(t, controllerURI, x509.ExtKeyUsageClientAuth, false)
+	oldSecurity, err := nodehttps.ServerTLS(oldNode.credentials, nodeIdentity, controllerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nextSecurity, err := nodehttps.ServerTLS(nextNode.credentials, nodeIdentity, controllerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var activeServer atomic.Pointer[tls.Config]
+	activeServer.Store(oldSecurity)
+	var calls atomic.Int32
+	handler, err := New(sourceFunc(func(context.Context) (paasv1.ExecutionTargetObservation, error) {
+		calls.Add(1)
+		return observedTarget(), nil
+	}), deploymentService{}, deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(handler)
+	server.TLS = oldSecurity.Clone()
+	server.TLS.GetConfigForClient = func(*tls.ClientHelloInfo) (*tls.Config, error) { return activeServer.Load(), nil }
+	server.Config.ErrorLog = log.New(io.Discard, "", 0)
+	server.StartTLS()
+	defer server.Close()
+	var current atomic.Pointer[nodehttps.Credentials]
+	current.Store(&oldController.credentials)
+	client, err := nodehttps.New(nodehttps.Config{Endpoint: server.URL, Identity: nodeIdentity,
+		ControllerID: controllerID, BindingRef: "binding-a", ExpectedFingerprint: observedTarget().IdentityFingerprint,
+		Credentials: func() (nodehttps.Credentials, error) {
+			if value := current.Load(); value != nil {
+				return *value, nil
+			}
+			return nodehttps.Credentials{}, errors.New("private credential path is unavailable")
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	observe := func(allowed bool) {
+		t.Helper()
+		before := calls.Load()
+		_, err := client.ObserveExecutionTarget(context.Background(), paasv1.ObserveExecutionTargetRequest{Command: observationCommand()})
+		if allowed {
+			if err != nil || calls.Load() != before+1 {
+				t.Fatalf("current credential did not reach the node: %v", err)
+			}
+		} else if err == nil || calls.Load() != before || strings.Contains(err.Error(), "private credential") {
+			t.Fatal("retired or unavailable credential reached the source or leaked provider input")
+		}
+	}
+	observe(true)
+	current.Store(nil)
+	observe(false)
+	current.Store(&nextController.credentials)
+	observe(false) // The old server certificate is no longer trusted.
+	activeServer.Store(nextSecurity)
+	observe(true) // The existing client adopts the new files without reconstruction.
+	retired := oldController.withTrust(t, nextAuthority.pem)
+	current.Store(&retired.credentials)
+	observe(false) // Server trust is current, but the old client identity is retired.
+	current.Store(&nextController.credentials)
+	observe(true)
+	activeServer.Store(oldSecurity)
+	observe(false)
+}
+
+func TestCredentialRenewalAndCompleteTrustRetirementAreDistinct(t *testing.T) {
+	oldAuthority, nextAuthority := newAuthority(t), newAuthority(t)
+	nodeURI, _ := nodev1.NodeURI(nodeIdentity)
+	collectorURI, _ := nodev1.CollectorURI(nodeIdentity)
+	oldNode := oldAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	oldCollector := oldAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+	nextNode := nextAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	nextCollector := nextAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)
+	renewed := oldAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	validate := func(beforeNode, beforeCollector, node, collector issuedCertificate, revoke bool) error {
+		return nodehttps.ValidateCredentialRotation(beforeNode.credentials, beforeCollector.credentials, node.credentials, collector.credentials,
+			nodeIdentity, "127.0.0.1:16443", "127.0.0.1:19100", revoke)
+	}
+	if validate(oldNode, oldCollector, renewed, oldCollector, false) != nil ||
+		validate(oldNode, oldCollector, renewed, oldCollector, true) == nil ||
+		validate(oldNode, oldCollector, nextNode, nextCollector, true) != nil {
+		t.Fatal("renewal was confused with retirement of the complete trust set")
+	}
+	expiredNode := oldAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, true, x509.ExtKeyUsageClientAuth)
+	expiredCollector := oldAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, true)
+	if validate(expiredNode, expiredCollector, nextNode, nextCollector, true) != nil {
+		t.Fatal("expired sealed predecessor prevented authenticated rotation")
+	}
+	retainedNodeKey := nextAuthority.issueWithKey(t, oldNode.pair.PrivateKey.(ed25519.PrivateKey), nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	retainedCollectorKey := nextAuthority.issueWithKey(t, oldCollector.pair.PrivateKey.(ed25519.PrivateKey), collectorURI, x509.ExtKeyUsageServerAuth, false)
+	swappedNodeKey := nextAuthority.issueWithKey(t, oldCollector.pair.PrivateKey.(ed25519.PrivateKey), nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth)
+	swappedCollectorKey := nextAuthority.issueWithKey(t, oldNode.pair.PrivateKey.(ed25519.PrivateKey), collectorURI, x509.ExtKeyUsageServerAuth, false)
+	sharedCollectorKey := nextAuthority.issueWithKey(t, nextNode.pair.PrivateKey.(ed25519.PrivateKey), collectorURI, x509.ExtKeyUsageServerAuth, false)
+	t.Run("renewal cannot share node and collector keys", func(t *testing.T) {
+		if validate(oldNode, oldCollector, nextNode, sharedCollectorKey, false) == nil {
+			t.Fatal("the unprivileged collector received the node private key")
+		}
+	})
+	reissuedTemplate := *oldAuthority.certificate
+	reissuedTemplate.SerialNumber = big.NewInt(2)
+	reissuedDER, err := x509.CreateCertificate(rand.Reader, &reissuedTemplate, &reissuedTemplate, oldAuthority.key.Public(), oldAuthority.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reissuedCA, err := x509.ParseCertificate(reissuedDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reissued := testAuthority{certificate: reissuedCA, key: oldAuthority.key,
+		pem: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: reissuedDER}), roots: x509.NewCertPool()}
+	reissued.roots.AddCert(reissuedCA)
+	if bytes.Equal(reissued.pem, oldAuthority.pem) {
+		t.Fatal("reissued CA fixture did not change its certificate bytes")
+	}
+	mixedTrust := append(append([]byte{}, nextAuthority.pem...), oldAuthority.pem...)
+	for name, peers := range map[string][2]issuedCertificate{
+		"old node key":                    {retainedNodeKey, nextCollector},
+		"old collector key":               {nextNode, retainedCollectorKey},
+		"old collector key moved to node": {swappedNodeKey, nextCollector},
+		"old node key moved to collector": {nextNode, swappedCollectorKey},
+		"shared candidate key":            {nextNode, sharedCollectorKey},
+		"reissued old CA key": {reissued.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth),
+			reissued.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false)},
+		"retained trust":    {nextNode.withTrust(t, mixedTrust), nextCollector.withTrust(t, mixedTrust)},
+		"expired candidate": {nextAuthority.issue(t, nodeURI, x509.ExtKeyUsageServerAuth, true, x509.ExtKeyUsageClientAuth), nextCollector},
+		"wrong role":        {nextAuthority.issue(t, collectorURI, x509.ExtKeyUsageServerAuth, false, x509.ExtKeyUsageClientAuth), nextCollector},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if validate(oldNode, oldCollector, peers[0], peers[1], true) == nil {
+				t.Fatal("unsafe credential retirement passed admission")
+			}
+		})
+	}
+}
+
+func newDeploymentClient(
+	t *testing.T,
+	endpoint string,
+	credentials nodehttps.Credentials,
+	identity nodev1.Identity,
+	bindingRef string,
+) *nodehttps.DeploymentClient {
+	t.Helper()
+	client, err := nodehttps.NewDeploymentClient(nodehttps.DeploymentConfig{
+		Connection: nodehttps.Config{
+			Endpoint: endpoint, Identity: identity, ControllerID: controllerID,
+			BindingRef: bindingRef, ExpectedFingerprint: observedTarget().IdentityFingerprint,
+			Credentials: func() (nodehttps.Credentials, error) { return credentials, nil },
+		},
+		Artifacts: deploymentArtifactResolver{},
+		Secrets:   deploymentSecretResolver{content: []byte("secret-value")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(client.Close)
+	return client
+}
+
+func deploymentExecutionFixture(t *testing.T) paasv1.DeploymentExecutionRequest {
+	t.Helper()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	scope := paasv1.ResourceScope{Kind: paasv1.AuthorityTenant, TenantID: "tenant-a"}
+	metadata := func(id string) paasv1.ResourceMetadata {
+		return paasv1.ResourceMetadata{
+			ID: paasv1.ResourceID(id), Name: id, Scope: scope,
+			ResourceVersion: 1, CreatedAt: now, UpdatedAt: now,
+		}
+	}
+	revision := paasv1.ApplicationRevision{
+		APIVersion: paasv1.APIVersion, Kind: "ApplicationRevision",
+		Metadata: metadata("revision-a"),
+		Spec: paasv1.ApplicationRevisionSpec{
+			ApplicationID: "application-a", Revision: "revision-1",
+			ContentDigest: deploymentTestDigest('b'),
+			Components: []paasv1.ApplicationRevisionComponent{{
+				Name: "web",
+				Artifact: paasv1.ArtifactRef{
+					Kind: paasv1.ArtifactOCIImage, Locator: "registry.example.invalid/web",
+					Digest: deploymentTestDigest('a'),
+				},
+				Resources: paasv1.ResourceRequirements{CPUMillis: 100, MemoryBytes: 64 * 1024 * 1024},
+				Inputs: []paasv1.ComponentInput{{
+					Name: "password", Kind: paasv1.InputSecret,
+					Injection: paasv1.InjectionFile, Required: true,
+				}},
+			}},
+		},
+	}
+	generation := paasv1.DeploymentGeneration{
+		APIVersion: paasv1.APIVersion, Kind: "DeploymentGeneration", Scope: scope,
+		DeploymentID: "deployment-a", Generation: 1,
+		Spec: paasv1.DeploymentSpec{
+			ApplicationRevisionID: revision.Metadata.ID, PlacementPolicyID: "policy-a",
+			DesiredState: paasv1.DeploymentDesiredRunning,
+			Components: []paasv1.DeploymentComponent{{
+				Name: "web", Replicas: 1,
+				Bindings: []paasv1.ComponentBinding{{
+					Name: "password", SecretVersion: &paasv1.SecretVersionReference{
+						SecretID: "secret-a", Version: "version-1",
+					},
+				}},
+			}},
+		},
+		CreatedByOperationID: "operation-a", CreatedAt: now,
+	}
+	generation.ContentDigest = paasv1.DeploymentSpecContentDigest(generation.Spec)
+	placement := paasv1.PlacementDecision{
+		APIVersion: paasv1.APIVersion, Kind: "PlacementDecision",
+		Metadata: metadata("decision-a"), DeploymentID: generation.DeploymentID,
+		DeploymentGeneration: generation.Generation, DeploymentResourceVersion: 1,
+		ApplicationRevisionID: revision.Metadata.ID,
+		PlacementPolicyID:     generation.Spec.PlacementPolicyID, PolicyResourceVersion: 1,
+		RequestedIsolationGuarantee: paasv1.IsolationWorkload,
+		Outcome:                     paasv1.PlacementScheduled, ExecutionTargetID: nodeIdentity.ExecutionTargetID,
+		ExecutionTargetResourceVersion: 1, GrantedIsolationGuarantee: paasv1.IsolationWorkload,
+		CandidateSetDigest: deploymentTestDigest('c'), DecidedAt: now,
+	}
+	request := paasv1.DeploymentExecutionRequest{
+		Command: paasv1.AdapterCommandEnvelope{
+			OperationID: "operation-a", CommandID: "command-a", Attempt: 1,
+			Action: paasv1.AdapterApplyDeployment, Scope: scope,
+			ApplicationID: revision.Spec.ApplicationID, ApplicationRevisionID: revision.Metadata.ID,
+			DeploymentID: generation.DeploymentID, ExecutionTargetID: placement.ExecutionTargetID,
+			BindingRef: "binding-a", Deadline: now.Add(time.Minute),
+		},
+		Generation: generation, ApplicationRevision: revision, Placement: placement,
+	}
+	request.Command.RequestDigest = paasv1.DeploymentExecutionRequestDigest(request)
+	if err := paasv1.ValidateDeploymentExecutionRequest(request); err != nil {
+		t.Fatalf("invalid Deployment fixture: %v", err)
+	}
+	return request
+}
+
+func deploymentObserveRequest(
+	execution paasv1.DeploymentExecutionRequest,
+) paasv1.ObserveDeploymentRequest {
+	command := execution.Command
+	command.CommandID = "observe-a"
+	command.Action = paasv1.AdapterObserveDeployment
+	command.Deadline = time.Now().UTC().Truncate(time.Microsecond).Add(time.Minute)
+	request := paasv1.ObserveDeploymentRequest{
+		Command: command, Generation: execution.Generation.Generation,
+		ExpectedContentDigest: execution.Generation.ContentDigest,
+	}
+	request.Command.RequestDigest = paasv1.ObserveDeploymentRequestDigest(request)
+	return request
+}
+
+func deploymentObservationFixture(
+	request paasv1.ObserveDeploymentRequest,
+) paasv1.DeploymentObservation {
+	return paasv1.DeploymentObservation{
+		DeploymentID: request.Command.DeploymentID, Generation: request.Generation,
+		ApplicationRevisionID: request.Command.ApplicationRevisionID,
+		Phase:                 paasv1.DeploymentReady, ReadyComponents: 1,
+		ReceiptDigest: deploymentTestDigest('e'),
+		ObservedAt:    time.Now().UTC().Truncate(time.Microsecond),
+	}
+}
+
+func deploymentRuntimeObserveRequest(
+	execution paasv1.DeploymentExecutionRequest,
+) paasv1.ObserveDeploymentRuntimeRequest {
+	return paasv1.ObserveDeploymentRuntimeRequest{
+		RequestID:             "runtime-observe-a",
+		Scope:                 execution.Command.Scope,
+		DeploymentID:          execution.Generation.DeploymentID,
+		Generation:            execution.Generation.Generation,
+		ApplicationRevisionID: execution.ApplicationRevision.Metadata.ID,
+		ExecutionTargetID:     execution.Command.ExecutionTargetID,
+		ExpectedContentDigest: execution.Generation.ContentDigest,
+		Deadline:              time.Now().UTC().Truncate(time.Microsecond).Add(time.Minute),
+	}
+}
+
+func deploymentRuntimeObservationFixture(
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) paasv1.DeploymentRuntimeObservation {
+	return paasv1.DeploymentRuntimeObservation{
+		DeploymentID:          request.DeploymentID,
+		Generation:            request.Generation,
+		ApplicationRevisionID: request.ApplicationRevisionID,
+		ExecutionTargetID:     request.ExecutionTargetID,
+		Instances: []paasv1.DeploymentRuntimeInstance{{
+			ID:            "instance-0123456789abcdef0123456789abcdef",
+			ComponentName: "web",
+			State:         paasv1.DeploymentInstanceRunning,
+			Health:        paasv1.DeploymentInstanceHealthHealthy,
+		}},
+		ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
+	}
+}
+
+func deploymentResourceObservationFixture(
+	request paasv1.ObserveDeploymentRuntimeRequest,
+) paasv1.DeploymentResourceObservation {
+	return paasv1.DeploymentResourceObservation{
+		DeploymentID:          request.DeploymentID,
+		Generation:            request.Generation,
+		ApplicationRevisionID: request.ApplicationRevisionID,
+		ExecutionTargetID:     request.ExecutionTargetID,
+		Instances: []paasv1.DeploymentResourceInstance{{
+			ID: "instance-0123456789abcdef0123456789abcdef",
+			CPU: paasv1.DeploymentInstanceCPUUsage{
+				State: paasv1.MeasurementAvailable,
+				Value: &paasv1.DeploymentInstanceCPUUsageValue{
+					WindowMillis: 1000, UsedCores: 0.25, LimitCPUMillis: 500,
+				},
+			},
+			Memory:  paasv1.DeploymentInstanceMemoryUsage{State: paasv1.MeasurementUnsupported},
+			Network: paasv1.DeploymentInstanceNetworkUsage{State: paasv1.MeasurementUnsupported},
+			BlockIO: paasv1.DeploymentInstanceBlockIOUsage{State: paasv1.MeasurementUnsupported},
+			Storage: paasv1.DeploymentInstanceStorageUsage{State: paasv1.MeasurementUnsupported},
+		}},
+		ObservedAt: time.Now().UTC().Truncate(time.Microsecond),
+	}
+}
+
+func deploymentTestDigest(character byte) string {
+	return "sha256:" + strings.Repeat(string(character), 64)
+}
+
 func requestBody(t *testing.T, command paasv1.AdapterCommandEnvelope) []byte {
 	t.Helper()
 	value, err := json.Marshal(nodev1.ObservationRequest{APIVersion: nodev1.APIVersion, Kind: nodev1.ObservationRequestKind, Identity: nodeIdentity, Command: command})
@@ -362,7 +1437,7 @@ func requestBody(t *testing.T, command paasv1.AdapterCommandEnvelope) []byte {
 
 func startNode(t *testing.T, node issuedCertificate, source ObservationSource, concurrent int) *httptest.Server {
 	t.Helper()
-	handler, err := New(source, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a", MaximumConcurrent: concurrent})
+	handler, err := New(source, deploymentService{}, deploymentService{}, Config{Identity: nodeIdentity, ControllerID: controllerID, BindingRef: "binding-a", MaximumConcurrent: concurrent})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -387,7 +1462,8 @@ func newClient(t *testing.T, endpoint string, credentials nodehttps.Credentials,
 	t.Helper()
 	client, err := nodehttps.New(nodehttps.Config{
 		Endpoint: endpoint, Identity: identity, ControllerID: controller, BindingRef: "binding-a",
-		ExpectedFingerprint: observedTarget().IdentityFingerprint, Credentials: credentials,
+		ExpectedFingerprint: observedTarget().IdentityFingerprint,
+		Credentials:         func() (nodehttps.Credentials, error) { return credentials, nil },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -434,10 +1510,16 @@ func newAuthority(t *testing.T) testAuthority {
 
 func (authority testAuthority) issue(t *testing.T, identity string, purpose x509.ExtKeyUsage, expired bool, additionalPurposes ...x509.ExtKeyUsage) issuedCertificate {
 	t.Helper()
-	public, key, err := ed25519.GenerateKey(rand.Reader)
+	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
+	return authority.issueWithKey(t, key, identity, purpose, expired, additionalPurposes...)
+}
+
+func (authority testAuthority) issueWithKey(t *testing.T, key ed25519.PrivateKey, identity string, purpose x509.ExtKeyUsage, expired bool, additionalPurposes ...x509.ExtKeyUsage) issuedCertificate {
+	t.Helper()
+	public := key.Public()
 	uri, err := url.Parse(identity)
 	if err != nil {
 		t.Fatal(err)
@@ -475,6 +1557,26 @@ func (authority testAuthority) issue(t *testing.T, identity string, purpose x509
 		t.Fatal(err)
 	}
 	return issuedCertificate{credentials: credentials, pair: pair}
+}
+
+func (certificate issuedCertificate) withTrust(t *testing.T, trust []byte) issuedCertificate {
+	t.Helper()
+	key, err := x509.MarshalPKCS8PrivateKey(certificate.pair.PrivateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})
+	defer clear(keyPEM)
+	defer clear(key)
+	var chain []byte
+	for _, der := range certificate.pair.Certificate {
+		chain = append(chain, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	}
+	credentials, err := nodehttps.NewCredentials(chain, keyPEM, trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return issuedCertificate{credentials: credentials, pair: certificate.pair}
 }
 
 func (authority testAuthority) rawClient(certificate *tls.Certificate) *http.Client {
