@@ -668,7 +668,7 @@ func sourceProcessBootstrap(t *testing.T) iamv1.BootstrapDocument {
 		APIVersion: iamv1.APIVersion, Kind: "IAMBootstrap",
 		InstallationID: sourceProcessInstallationID,
 		Organization: iamv1.InitialOrganization{
-			ID:          iamv1.OrganizationID(sourceProcessTenantID),
+			ID:          iamv1.AccountID(sourceProcessTenantID),
 			DisplayName: "Source Process Organization",
 		},
 		Administrator: iamv1.InitialAdministrator{
@@ -746,7 +746,7 @@ func assertSourceProcessDevOpsIdentity(
 		!strings.HasPrefix(response.Header.Get("Content-Type"), "application/json") ||
 		iamv1.DecodeRequest(response.Body, &identity) != nil ||
 		iamv1.ValidateServiceIdentity(identity) != nil ||
-		identity.OrganizationID != iamv1.OrganizationID(sourceProcessTenantID) ||
+		identity.AccountID != iamv1.AccountID(sourceProcessTenantID) ||
 		identity.PrincipalID != "service-devops" || identity.Purpose != iamv1.ServiceDevOps {
 		t.Fatalf("physical IAM DevOps identity status=%d identity=%#v", response.StatusCode, identity)
 	}
