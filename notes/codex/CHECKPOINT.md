@@ -1,98 +1,91 @@
 # Codex working checkpoint
 
-> Non-authoritative portable memory. Validate Git, the active host goal and the owning FEAT before acting.
+> Non-authoritative portable memory. Validate it against Git and the owning
+> FEAT before continuing.
 
-## Pushed IAM release milestone
+- Updated: 2026-08-26
+- Repository: `https://github.com/xiak/matrix.git`
+- Branch: `feat/placement-policy`
+- Release: Private Application PaaS v0.1
+- Phase 1 state: Accepted
 
-- Repository `https://github.com/xiak/matrix.git`; the release work is based on
-  fixed production source `95a343ae2f4efb4c9845c9af25d0225e722f870c` and
-  repository-local identity `Xiak <Jellal@aliyun.com>`.
-- The current complete profile is IAM/Audit/PaaS `87/39/7+r37`; the sole rolling
-  data predecessor remains fixed `08e1dc4a6ce81386ea7223e62d03356f82aeee58`
-  (`86/39/7+r36`). Cross-profile transitions remain closed before effects.
-- UX/UI remains owned by the UX engineer. This branch consumes the frozen
-  deterministic export; do not create a parallel frontend or infer LIVE browser
-  acceptance from the signed package.
-- The UI owner has reconciled FEAT-007 and its adoption record to the current
-  four-product release and fixed the foreground-Session consumer at
-  `8fbf2fcc` plus deterministic export `3ec28ae6`. The formal release consumes
-  the identical `093b29dee` UI tree and `matrix-a88a124cebcd3748a05e` build ID.
+## Durable constraints
 
-## Accepted fixed evidence
+- Follow pragmatic DDD and replacement-first pre-v1 changes. Git preserves
+  superseded drafts; the worktree does not retain aliases, compatibility
+  layers, stale tests, duplicate documents, or rollback copies without a real
+  consumer.
+- Each FEAT fixes its enterprise target before donor inspection. Donors are
+  reviewed only at the recorded commits, every relevant slice is classified as
+  `REUSE`, `ADAPT`, `REFERENCE`, or `REJECT`, and no donor is a build or
+  runtime dependency.
+- Product branding is xiak / Matrix, the CLI is `mx`, the Go module is
+  `github.com/xiak/matrix`, and public API groups use
+  `*.matrix.xiak.com/v1`. API groups are identifiers, not customer DNS
+  dependencies.
+- Configuration is a default PaaS capability. Phase 1 supports immutable ENV
+  configuration and exact read-only FILE Secret injection; dynamic refresh,
+  structured files, Nacos, and Consul remain future providers behind the
+  current binding boundary.
+- Repository documentation and generated artifacts contain no machine-local
+  checkout, home, release-artifact, or container-host paths.
 
-- [Verification 40085311144](https://github.com/xiak/matrix/actions/runs/40085311144)
-  attempt 1 matches `95a343ae` and completed successfully with all nineteen jobs.
-- Same-source signed A/B releases `.r37.35` and `.r37.36` passed the existing
-  network-disabled lifecycle in 4197.458 seconds and the exact-container
-  post-restart gate in 435.593 seconds. The cold gate includes real SMTP/TOTP,
-  four managed products, failed-upgrade recovery, normal upgrade, rollback,
-  selected-backup recovery, old credential fencing, Analyzer `RESTORE_GAP`,
-  application rollback/stop and support zero-leakage.
-- The first post-restart runner invocation failed before test compilation because
-  its offline Go cache variables were omitted. It made no product request; the
-  corrected `GOPROXY=off` invocation used the original caches and passed. Keep
-  both records distinct.
-- FEAT-005 owns the manifest, trust and delivery archive identities. The archives
-  were re-extracted and compared for bytes, type, uid/gid and mode, then rehashed
-  after transfer; no private signer or installation state is included.
-- Fixed test source `6efc6c8febc8221e5cf2b9ecf737c8192643c26b`
-  passed the real same-origin foreground-Session browser gate: 61 seconds of
-  passive page work emitted zero touches; three immediate trusted pointer
-  interactions emitted exactly one valid touch and advanced only the current
-  browser Session. The untouched peer and its ordinary protected read did not
-  advance its activity waterline. FEAT-IAM-010 owns the exact evidence and the
-  distinction from server-owned natural idle expiry.
-- [Verification 40097217325](https://github.com/xiak/matrix/actions/runs/40097217325)
-  accepted that exact source with all nineteen jobs `completed/success`.
-  The default workflow compiles the opt-in browser test and runs its adjacent
-  automated regressions; it does not replace the separately executed human-input
-  browser journey.
-- Fixed `76b166b2d816be546c46cf2c9dc8203cdb36d344` reused the existing
-  policy-attachment recovery fixture in two fresh PostgreSQL 18.6 browser runs.
-  USER/CREATE passed in 109.88 seconds and ROLE/CREATE passed in 93.74 seconds:
-  each issued one write, observed UNKNOWN after the successful response was
-  lost, read the immutable original receipt once, issued zero post-loss writes
-  and passed the exact permission, unique outbox/Audit and complete-chain
-  checks. The Role run additionally closed the old RoleSession and required an
-  explicit fresh assumption. FEAT-IAM-010 owns the exact request, target and
-  attachment identities. Both disposable `--rm` containers were removed and
-  the task label had no residual container.
-- Fixed `80ca44282225e119377c31909dbbc8b4e7a3f769` reused the existing Account
-  lifecycle recovery owner in a fresh PostgreSQL 18.6 two-origin browser run.
-  Root-credential recovery submitted once, rendered UNKNOWN after its successful
-  response was lost, exported only a non-secret command summary, performed one
-  completion GET from the second origin and issued zero post-loss writes. The
-  authoritative Account detail retained the same Root identity at version 2;
-  old credentials and Sessions were fenced, the replacement credential required
-  password change, and the unique completion/outbox/Audit chain passed. The
-  disposable `--rm` container had no task-labelled residue after the run.
-- Fixed `72dc37c714825ccfe5f38464ff66f398a13e45b9` reused the existing managed-
-  service command-recovery owner for `INSTALLATION_TERMINATE`. A real disposable
-  PostgreSQL installation was read at version 3, reviewed and submitted once;
-  after the accepted response was lost, the second browser origin imported only
-  the non-secret intent, read the matching completion and re-read the same
-  installation as `TERMINATED` version 6 with the matching termination Operation.
-  The fixture/package passed in 141.74/145.271 seconds with one mutation, zero
-  post-loss writes, an authoritative input commitment, unique request Audit fact
-  and a verified complete tenant chain. A first pre-UI invocation failed closed
-  on the existing worker readiness prerequisite; only the fresh run after
-  `vm.max_map_count=1048576` was established counts. Database, worker container
-  and worker volume labels had no residue after cleanup.
+## Accepted branch state
 
-## Remaining boundaries
+- The branch contains `001d889`. FEAT-001 through FEAT-006 are Accepted;
+  FEAT-005 Gates A/B/C and FEAT-006 Gate C are closed.
+- Exact accepted runtime source is
+  `c88a84f379afcf94431e2aca7332fe6ec3136dc7`. Compatible signed releases are
+  `matrix-v0.1.0-c88a84f379af` (build `phase1-a13-a-c88a84f`) and
+  `matrix-v0.2.0-c88a84f379af` (build `phase1-a13-b-c88a84f`).
+- A fresh Docker-in-Docker engine with outer network mode `none`, Docker
+  27.5.1, Compose v2.33.0, and no initial inner containers, images, or volumes
+  completed the signed offline lifecycle. It installed A, exercised real
+  APISIX/IAM/Audit application generations, proved failed-candidate automatic
+  rollback, upgraded to B, explicitly rolled the platform back to A, recovered
+  a protected A backup, rolled the application back, stopped it and released
+  capacity, produced bounded support evidence, restarted the entire engine,
+  and passed final status/verify with all nine platform services healthy.
+- The exact source passed generation drift, module verification, full unit,
+  vet and race suites, architecture gates, ten-run critical-package coverage,
+  placement fuzzing, clean PostgreSQL 18 migration/IAM/Audit/PaaS/authority
+  process gates, real Compose adapter and PostgreSQL-to-Compose worker gates,
+  CGO-disabled Windows/Linux/Darwin builds, Markdown links, stale-term and
+  machine-path scans, donor-dependency and tenant-authority checks, and
+  `git diff --check`.
 
-- FEAT-IAM-010 owns remaining non-Deferred LIVE UI journeys. Backend, component,
-  CI and signed-lifecycle evidence do not mark an unexecuted browser path green.
-  Foreground Session activity and the complete GROUP/USER/ROLE × CREATE/REVOKE
-  policy-attachment recovery matrix are now accepted, as is the Account
-  Root-credential recovery final submit/UNKNOWN path and managed-service
-  termination final submit/UNKNOWN path. The finite gaps previously named by
-  this checkpoint are closed. Do not infer overall release completion from that
-  list: derive any remaining non-Deferred gate from the owning FEAT matrix and
-  current Git/CI/runtime state before changing the release status.
-- [Issue #6](https://github.com/xiak/matrix/issues/6) remains open: the current
-  green four-product and signed runs do not retroactively establish the unique
-  cause of the preserved Docker observation timeout.
-- Production account-fairness SLO and installation-grade database HA remain
-  Deferred until their deployment prerequisites and real failover environment
-  exist. Functional acceptance is not either claim.
+## Phase 1 execution roadmap
+
+| Slice | Deliverable | State |
+| --- | --- | --- |
+| A1 | Phase boundary, target design, ADRs, and fixed-donor decisions | Accepted |
+| A2 | Application, configuration, deployment, and placement model | Accepted |
+| A3 | PaaS API, Operations, IAM authorization, and Audit boundary | Accepted |
+| A4 | Fenced worker and real Compose workload executor | Accepted |
+| A5 | Signed offline release contract and `mx platform` CLI | Accepted |
+| A6 | Journaled install, migration, start, verify, and cleanup effects | Accepted |
+| A7 | Clean network-disabled Release A install | Accepted |
+| A8 | Status, verify, and restart behavior | Accepted |
+| A9 | Protected backup and bounded support evidence | Accepted |
+| A10 | Authenticated upgrade and automatic rollback | Accepted |
+| A11 | Explicit N-1 platform rollback | Accepted |
+| A12 | Protected backup recovery | Accepted |
+| A13 | Complete clean external-network-disabled lifecycle E2E | Accepted |
+| A14 | Final common gates, documentation convergence, and Phase 1 acceptance | Accepted |
+
+## Continuation
+
+Phase 1 has no unfinished implementation slice. Any later capability must begin
+with its owning FEAT and target design rather than extending this checkpoint or
+reviving a superseded Phase 1 draft.
+
+## Fixed donor baselines
+
+- Legacy PaaS: `69336e51f94fa98f6aa278fa4c62382e224dbeaf`
+- IAM/Audit foundation donor:
+  `f51d5ed19fd60e8c4e43500af5e669d67ae4ef7d`
+- PaaS design: `338d9b5fcb820120c32265e380c55e5f171cdb75`
+
+Replace this file only at a committed-and-pushed milestone or handoff. Do not
+append command logs, chat transcripts, secrets, raw provider payloads, or
+machine-local paths.
