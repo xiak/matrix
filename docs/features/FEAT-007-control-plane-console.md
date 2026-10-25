@@ -4287,6 +4287,28 @@ and is not inherited as a new backend acceptance result.
   descendant or Dialog, and emitted no browser warning/error. This proves the
   shared compact shell and launcher boundary across the current directory; it
   does not promote the MOCK product data or pending IAM backend gate to LIVE.
+  Permission-aware read handling is now fixed at source `f010de00d`: Account
+  and managed-service pages share one `ReadBoundary`, while their owning
+  adapters preserve `401` expiry, `403` denial, exact-object absence, missing
+  runtime routes and temporary unavailability as distinct states. Only a
+  temporary read offers retry; denial offers authorization guidance, diagnostics
+  contain only bounded status/code/request identifiers, and stale product data
+  never remains behind a failed replacement read. Fixed shell and explanatory
+  content render independently from destination-owned data feedback.
+  A real IAM/PostgreSQL browser gate kept one ordinary-User Session across
+  exact reads, a single authorized Analyzer update, one controlled post-write
+  `503`, exact update-action revocation and full permission revocation. Retry
+  reread revision 2 with the saved 14-day window without replaying the write;
+  exact revocation retained those facts while disabling update/disposition,
+  full revocation produced report `403`, and a separate login proved an exact
+  other-User AccessKey read without User-directory or own-key permission.
+  Foreground Session activity remained proxied but was excluded from the
+  business-write probe only for the exact query-free touch route. The 190-case
+  focused suite, previously completed 82-file/2,133-case frontend suite,
+  type/lint/architecture/234-pair style gates, 59-page/57-normalized-segment
+  build, 322-file export/embed equality, PaaS/architecture/authority-process Go
+  gates and the 241-second real browser gate passed. The isolated MOCK pages
+  remain available; this evidence does not turn preview data into authority.
   Product discovery and notifications now use independently
   tested `ProductLauncher` and `NotificationCenter` composites over one shared
   header-popover surface. Notifications restore focus on `Escape`; the service
