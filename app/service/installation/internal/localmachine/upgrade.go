@@ -83,7 +83,7 @@ func rollbackUpgrade(
 	plan platformcommand.UpgradePlan,
 ) error {
 	return rollbackUpgradeWithVerifier(
-		ctx, runtimeBoundary, verifier, plan, release.VerifyDirectory,
+		ctx, runtimeBoundary, verifier, plan, release.VerifyInstalledDirectory,
 	)
 }
 
@@ -128,7 +128,7 @@ func prepareReleaseRollback(
 	}
 	defer clear(previous.TrustBytes)
 	return prepareReleaseRollbackWithAuthenticatedPredecessor(
-		ctx, runtimeBoundary, previous, plan.Current, release.VerifyDirectory,
+		ctx, runtimeBoundary, previous, plan.Current, release.VerifyInstalledDirectory,
 	)
 }
 
@@ -228,7 +228,7 @@ func verifyAuthenticatedPreviousRelease(
 func authenticateRollbackPredecessor(
 	plan platformcommand.RollbackPlan,
 ) (platformcommand.InstallPlan, error) {
-	return authenticateRollbackPredecessorWithVerifier(plan, release.VerifyDirectory)
+	return authenticateRollbackPredecessorWithVerifier(plan, release.VerifyInstalledDirectory)
 }
 
 func authenticateRollbackPredecessorWithVerifier(
@@ -260,7 +260,9 @@ func validateUpgradeIdentity(
 		target.Bundle.Manifest.Release.ID == source.Bundle.Manifest.Release.ID ||
 		target.Bundle.Manifest.Release.PreviousID != source.Bundle.Manifest.Release.ID ||
 		target.Bundle.Manifest.Release.PreviousVersion != source.Bundle.Manifest.Release.Version ||
-		target.Bundle.Manifest.Database != source.Bundle.Manifest.Database {
+		!platformcommand.AdmitsLifecycleDatabasePair(
+			source.Bundle.Manifest, target.Bundle.Manifest,
+		) {
 		return errors.New("upgrade source and target identities are inconsistent")
 	}
 	return nil
@@ -375,7 +377,7 @@ func inspectUpgradeProject(
 func compileUpgradeExpectation(
 	plan platformcommand.InstallPlan,
 ) (platformComposeExpectation, error) {
-	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
 		InstallationID:   plan.InstallationID,
 		Root:             plan.Root,
 		Listener:         plan.Listener,

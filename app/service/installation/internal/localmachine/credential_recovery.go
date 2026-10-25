@@ -429,7 +429,7 @@ func (effects *Effects) credentialRecoveryContainer(ctx context.Context, plan pl
 	expected.mode, expected.networkID = mode, networkID
 	expected.networkName = network.Name
 	expected.service = platformExpectedService{
-		Image: imageID, User: "0:0", Restart: "no", ReadOnly: true,
+		Image: imageID, ImageIDs: []string{imageID}, User: "0:0", Restart: "no", ReadOnly: true,
 		Networks: []string{"control"}, CapDrop: []string{"ALL"}, SecurityOpt: []string{"no-new-privileges:true"},
 		Tmpfs: []string{"/tmp:rw,noexec,nosuid,size=64m"},
 		Labels: map[string]string{"com.xiak.matrix.managed": "true", "com.xiak.matrix.installation": plan.InstallationID,

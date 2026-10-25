@@ -128,7 +128,7 @@ func (effects *Effects) ApplyUpgradePhase(
 			CreatedAt: plan.CreatedAt,
 		})
 	case lifecycle.PhaseStaging:
-		return stageInstallation(plan.Target, effects.entropy)
+		return stageUpgradeInstallation(plan, effects.entropy)
 	case lifecycle.PhaseLoadingImages:
 		return loadInstallImages(ctx, effects.runtime, plan.Target)
 	case lifecycle.PhaseConfiguring:

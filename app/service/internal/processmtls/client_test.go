@@ -132,6 +132,7 @@ func TestLoadSystemdClientCredentialsAcceptsReadOnlyCredentialMount(t *testing.T
 	if err := os.Mkdir(directory, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = os.Chmod(directory, 0o700) })
 	for name, content := range map[string][]byte{
 		"client.crt":    certificatePEM,
 		"client.key":    keyPEM,

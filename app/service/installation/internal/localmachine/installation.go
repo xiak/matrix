@@ -18,7 +18,7 @@ type releaseDirectoryVerifier func(string, []byte) (release.VerifiedBundle, erro
 func authenticateInstalledPlan(
 	installed platformcommand.InstalledPlan,
 ) (platformcommand.InstallPlan, error) {
-	return authenticateInstalledPlanWithVerifier(installed, release.VerifyDirectory)
+	return authenticateInstalledPlanWithVerifier(installed, release.VerifyInstalledDirectory)
 }
 
 func authenticateInstalledPlanWithVerifier(
@@ -62,39 +62,48 @@ func authenticateInstalledPlanWithVerifier(
 			"installed release differs from the sealed current pointer",
 		)
 	}
-	_, err = readEmailVerificationKeyring(installed.Root, installed.InstallationID)
+	legacyWithoutSecurityMail, err := legacyProductlessWithoutSecurityMail(
+		installed.Root, bundle.Manifest,
+	)
 	if err != nil {
 		clear(trustBytes)
-		return platformcommand.InstallPlan{}, errors.New(
-			"installed email-verification custody is unavailable",
-		)
+		return platformcommand.InstallPlan{}, err
 	}
-	channel, err := readSecurityMailSMTPChannel(installed.Root, installed.InstallationID)
-	if err != nil {
-		clear(trustBytes)
-		return platformcommand.InstallPlan{}, errors.New(
-			"installed security-mail custody is unavailable",
-		)
-	}
-	configuration := installationv1.SecurityMailConfiguration{
-		APIVersion:   installationv1.SecurityMailConfigurationAPIVersion,
-		Kind:         installationv1.SecurityMailConfigurationKind,
-		Host:         channel.Host,
-		Port:         channel.Port,
-		TLSMode:      channel.TLSMode,
-		Username:     channel.Username,
-		Password:     channel.Password,
-		From:         channel.From,
-		TrustedCAPEM: channel.TrustedCAPEM,
-	}
-	digest, digestErr := installationv1.SecurityMailConfigurationDigest(configuration)
-	channel = iamv1.SecurityMailSMTPChannel{}
-	configuration.Clear()
-	if digestErr != nil || digest != installed.SecurityMailDigest {
-		clear(trustBytes)
-		return platformcommand.InstallPlan{}, errors.New(
-			"installed security-mail custody differs from the sealed journal",
-		)
+	if !legacyWithoutSecurityMail {
+		_, err = readEmailVerificationKeyring(installed.Root, installed.InstallationID)
+		if err != nil {
+			clear(trustBytes)
+			return platformcommand.InstallPlan{}, errors.New(
+				"installed email-verification custody is unavailable",
+			)
+		}
+		channel, readErr := readSecurityMailSMTPChannel(installed.Root, installed.InstallationID)
+		if readErr != nil {
+			clear(trustBytes)
+			return platformcommand.InstallPlan{}, errors.New(
+				"installed security-mail custody is unavailable",
+			)
+		}
+		configuration := installationv1.SecurityMailConfiguration{
+			APIVersion:   installationv1.SecurityMailConfigurationAPIVersion,
+			Kind:         installationv1.SecurityMailConfigurationKind,
+			Host:         channel.Host,
+			Port:         channel.Port,
+			TLSMode:      channel.TLSMode,
+			Username:     channel.Username,
+			Password:     channel.Password,
+			From:         channel.From,
+			TrustedCAPEM: channel.TrustedCAPEM,
+		}
+		digest, digestErr := installationv1.SecurityMailConfigurationDigest(configuration)
+		channel = iamv1.SecurityMailSMTPChannel{}
+		configuration.Clear()
+		if digestErr != nil || digest != installed.SecurityMailDigest {
+			clear(trustBytes)
+			return platformcommand.InstallPlan{}, errors.New(
+				"installed security-mail custody differs from the sealed journal",
+			)
+		}
 	}
 	return platformcommand.InstallPlan{
 		Root: installed.Root, InstallationID: installed.InstallationID,
@@ -102,6 +111,25 @@ func authenticateInstalledPlanWithVerifier(
 		Listener:      installed.Listener, Port: installed.Port, NorthboundOrigin: installed.NorthboundOrigin,
 		Bundle: bundle, Trust: trust, TrustBytes: trustBytes,
 	}, nil
+}
+
+func legacyProductlessWithoutSecurityMail(root string, manifest release.Manifest) (bool, error) {
+	if !release.IsLegacyProductlessManifest(manifest) {
+		return false, nil
+	}
+	keyExists, err := managedFileExists(
+		root, filepath.FromSlash(layout.IAMEmailVerificationKeyring),
+	)
+	if err != nil {
+		return false, errors.New("installed email-verification custody is unavailable")
+	}
+	channelExists, err := managedFileExists(
+		root, filepath.FromSlash(layout.IAMSecurityMailSMTPChannel),
+	)
+	if err != nil {
+		return false, errors.New("installed security-mail custody is unavailable")
+	}
+	return !keyExists && !channelExists, nil
 }
 
 func verifiedStagedBundle(plan platformcommand.InstallPlan) (release.VerifiedBundle, error) {
@@ -170,7 +198,7 @@ func verifiedInstallationConfiguration(
 func authenticatedInstallationConfiguration(
 	plan platformcommand.InstallPlan,
 ) (verifiedInstallation, error) {
-	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
 		InstallationID:   plan.InstallationID,
 		Root:             plan.Root,
 		Listener:         plan.Listener,

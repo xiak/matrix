@@ -432,6 +432,18 @@ func workspaceFile(name, content string, executable bool) sourcearchive.File {
 func workspaceRoot(t *testing.T) string {
 	t.Helper()
 	rootPath := t.TempDir()
+	t.Cleanup(func() {
+		// Published workspaces are deliberately immutable. Restore directory
+		// ownership permissions before testing.TempDir removes the fixture on
+		// Unix; leaving the production workspace writable would weaken the
+		// contract being exercised.
+		_ = filepath.WalkDir(rootPath, func(path string, entry os.DirEntry, err error) error {
+			if err == nil && entry.IsDir() {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
 	if err := os.Chmod(rootPath, 0o700); err != nil {
 		t.Fatal(err)
 	}

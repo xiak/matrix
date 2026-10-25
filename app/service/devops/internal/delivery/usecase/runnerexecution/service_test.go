@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -808,6 +809,14 @@ func runnerRequestFixture(
 func privateRunnerRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
+	t.Cleanup(func() {
+		_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+			if err == nil && entry.IsDir() {
+				_ = os.Chmod(path, 0o700)
+			}
+			return nil
+		})
+	})
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}

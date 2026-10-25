@@ -285,6 +285,25 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	return nil
 }
 
+func stageUpgradeInstallation(plan platformcommand.UpgradePlan, entropy io.Reader) error {
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	defer clear(source.TrustBytes)
+	if err := validateUpgradeIdentity(source, plan.Target); err != nil {
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	if release.IsLegacyProductlessManifest(source.Bundle.Manifest) {
+		if err := ensureNodeController(
+			plan.Target.Root, plan.Target.InstallationID, true,
+		); err != nil {
+			return err
+		}
+	}
+	return stageInstallation(plan.Target, entropy)
+}
+
 func ensureEnrollmentIssuer(root, installationID string, entropy io.Reader) error {
 	keyPath := filepath.FromSlash(layout.EnrollmentIssuerPrivateKey)
 	certificatePath := filepath.FromSlash(layout.EnrollmentIssuerCertificate)
@@ -1019,7 +1038,7 @@ func sealedIAMBootstrapScope(root, installationID string) (string, string, error
 		return "", "", platformcommand.ErrEffectVerification
 	}
 	defer clear(encoded)
-	document, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(encoded))
+	document, err := iamv1.DecodeBootstrapReplayDocument(bytes.NewReader(encoded))
 	if err != nil || document.InstallationID != installationID {
 		return "", "", platformcommand.ErrEffectVerification
 	}
@@ -1240,7 +1259,7 @@ func localCredentialRecoveryScope(root, installationID string) (iamv1.LocalCrede
 		return iamv1.LocalCredentialRecoveryScope{}, platformcommand.ErrEffectVerification
 	}
 	defer clear(encoded)
-	document, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(encoded))
+	document, err := iamv1.DecodeBootstrapReplayDocument(bytes.NewReader(encoded))
 	if err != nil || document.InstallationID != installationID {
 		return iamv1.LocalCredentialRecoveryScope{}, platformcommand.ErrEffectVerification
 	}

@@ -792,6 +792,19 @@ func TestProductFoundationUpgradeRestoresExactProductlessConfiguration(t *testin
 		t.Skip("local-machine product-foundation configuration targets Linux")
 	}
 	plan := newProductFoundationUpgradePlan(t)
+	orphanedChannel := filepath.Join(
+		plan.Source.Root, filepath.FromSlash(layout.IAMSecurityMailSMTPChannel),
+	)
+	if err := os.WriteFile(orphanedChannel, []byte("{}"), 0o600); err != nil {
+		t.Fatalf("write partial predecessor custody: %v", err)
+	}
+	if authenticated, err := authenticateInstalledPlan(plan.Source); err == nil {
+		clear(authenticated.TrustBytes)
+		t.Fatal("productless predecessor authenticated with partial security-mail custody")
+	}
+	if err := os.Remove(orphanedChannel); err != nil {
+		t.Fatalf("remove partial predecessor custody: %v", err)
+	}
 	source, err := authenticateInstalledPlan(plan.Source)
 	if err != nil {
 		t.Fatalf("authenticate productless predecessor: %v", err)
@@ -806,9 +819,7 @@ func TestProductFoundationUpgradeRestoresExactProductlessConfiguration(t *testin
 		t.Fatal("installed predecessor does not expose the fixed productless configuration")
 	}
 
-	if err := stageInstallation(
-		plan.Target, bytes.NewReader(bytes.Repeat([]byte{0x42}, 32)),
-	); err != nil {
+	if err := stageUpgradeInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage product-foundation target: %v", err)
 	}
 	if actual := readTestFile(t, source.Root, layout.IAMBootstrap); !bytes.Equal(actual, legacyBootstrap) {
@@ -2090,7 +2101,11 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	if err := effects.ApplyRecoveryPhase(
 		context.Background(), recovery, lifecycle.PhaseRecovering,
 	); !errors.Is(err, platformcommand.ErrEffectPrecondition) || runtimeBoundary.recoveryRestores != 0 {
-		t.Fatalf("inventory race was not rejected before database restore: %v", err)
+		t.Fatalf(
+			"inventory race was not rejected before database restore: %v (started=%t network=%t removals=%d authentication=%t)",
+			err, runtimeBoundary.started, runtimeBoundary.networkCreated,
+			runtimeBoundary.providerRemovals, runtimeBoundary.authenticationPresent,
+		)
 	}
 	changeInventoryAfterStop = false
 	for _, phase := range []lifecycle.Phase{
@@ -2112,7 +2127,11 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 		plan.Root, filepath.FromSlash(layout.DevOpsSourceTrustRoot),
 	))
 	if err != nil || len(trustEntries) != 0 {
-		t.Fatalf("recovery retained host source trust: entries=%d err=%v", len(trustEntries), err)
+		entryNames := make([]string, 0, len(trustEntries))
+		for _, entry := range trustEntries {
+			entryNames = append(entryNames, entry.Name())
+		}
+		t.Fatalf("recovery retained host source trust: entries=%v err=%v", entryNames, err)
 	}
 	if runtimeBoundary.recoveryRestores != 1 || runtimeBoundary.postgresOnly ||
 		!runtimeBoundary.started || runtimeBoundary.providerRemovals == removals ||
@@ -2955,9 +2974,18 @@ func newProductFoundationUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
 	}
 	target := platformcommand.InstallPlan{
 		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
-		CorrelationID: "cmd-11111111111111111111111111111111",
-		Listener:      "0.0.0.0", Port: 8080, Bundle: targetBundle,
+		CorrelationID:    "cmd-11111111111111111111111111111111",
+		CommandStartedAt: time.Date(2026, 9, 7, 6, 0, 0, 0, time.UTC),
+		Listener:         "0.0.0.0", Port: 8080,
+		NorthboundOrigin: "http://matrix.example.test:8080", Bundle: targetBundle,
 		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
+		SecurityMail: testSecurityMailInput(t),
+	}
+	// Build the current configuration before replacing its release-owned files
+	// with the fixed predecessor. The predecessor-only fixture below removes
+	// this later node-controller state before exercising the upgrade bridge.
+	if err := ensureNodeController(root, target.InstallationID, true); err != nil {
+		t.Fatalf("prepare product-foundation node controller: %v", err)
 	}
 	if err := stageInstallation(target, rand.Reader); err != nil {
 		t.Fatalf("prepare product-foundation target staging: %v", err)
@@ -2998,22 +3026,35 @@ func newProductFoundationUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
 	); err != nil {
 		t.Fatalf("write productless bootstrap fixture: %v", err)
 	}
-	if err := os.Remove(
-		filepath.Join(root, filepath.FromSlash(layout.PlatformIAMCredential)),
-	); err != nil {
-		t.Fatalf("remove future Platform credential fixture: %v", err)
+	authorityRoot := filepath.Join(root, "secrets", "authority")
+	authorityEntries, err := os.ReadDir(authorityRoot)
+	if err != nil {
+		t.Fatalf("read productless authority fixture: %v", err)
+	}
+	for _, entry := range authorityEntries {
+		if entry.Name() == filepath.Base(filepath.FromSlash(layout.IAMBootstrap)) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(authorityRoot, entry.Name())); err != nil {
+			t.Fatalf("remove future authority fixture %q: %v", entry.Name(), err)
+		}
+	}
+	for _, futurePath := range []string{
+		layout.IAMLocalRecoveryAuthority,
+		layout.NodeControllerDirectory,
+	} {
+		if err := os.RemoveAll(filepath.Join(root, filepath.FromSlash(futurePath))); err != nil {
+			t.Fatalf("remove future productless fixture %q: %v", futurePath, err)
+		}
 	}
 	if err := replaceReleaseConfiguration(
 		target, target.Bundle.Manifest, legacy.Manifest,
 	); err != nil {
 		t.Fatalf("publish productless predecessor configuration: %v", err)
 	}
-	source := platformcommand.InstalledPlan{
-		Root: root, InstallationID: target.InstallationID,
-		CorrelationID: target.CorrelationID, Listener: target.Listener, Port: target.Port,
-		ReleaseID: legacy.Manifest.Release.ID, ReleaseDigest: legacy.ManifestSHA256,
-		TrustKeyID: target.Trust.KeyID, TrustFingerprint: target.Trust.PublicKeyFingerprint,
-	}
+	source := installedPlanFrom(target)
+	source.ReleaseID = legacy.Manifest.Release.ID
+	source.ReleaseDigest = legacy.ManifestSHA256
 	return platformcommand.UpgradePlan{
 		Source: source, Target: target,
 		BackupID:  "backup-11111111111111111111111111111111",
@@ -3217,7 +3258,7 @@ type migrationRuntime struct {
 
 type platformStartRuntime struct {
 	expectation               platformComposeExpectation
-	images                    map[string]bool
+	images                    map[string]string
 	root                      string
 	installationID            string
 	correlationID             string
@@ -3280,11 +3321,15 @@ func newPlatformStartRuntime(
 	plan platformcommand.InstallPlan,
 	expectation platformComposeExpectation,
 ) *platformStartRuntime {
-	images := make(map[string]bool, len(plan.Bundle.Manifest.Images))
+	images := make(map[string]string, len(plan.Bundle.Manifest.Images))
 	iamImageID := ""
 	iamImages := 0
 	for _, image := range plan.Bundle.Manifest.Images {
-		images[image.ImageID] = true
+		imageIDs := image.RuntimeImageIDs()
+		images[image.RuntimeReference()] = imageIDs[0]
+		for _, imageID := range imageIDs {
+			images[imageID] = imageID
+		}
 		if image.Component == "iam" {
 			iamImages++
 			iamImageID = image.ImageID
@@ -3535,8 +3580,8 @@ func (runtimeBoundary *platformStartRuntime) Run(
 		return []byte("1048576\n"), true, nil
 	}
 	if len(arguments) == 5 && arguments[0] == "image" && arguments[1] == "inspect" {
-		imageID := arguments[4]
-		if !runtimeBoundary.images[imageID] {
+		imageID, found := runtimeBoundary.images[arguments[4]]
+		if !found {
 			return nil, true, errors.New("platform image is absent")
 		}
 		if arguments[3] == "{{json .Config.Env}}" {
@@ -4173,7 +4218,7 @@ func (runtimeBoundary *platformStartRuntime) inspectContainer(
 		runtimeBoundary.composeCalls == 0 {
 		labels["com.docker.compose.config-hash"] = strings.Repeat("b", 64)
 	}
-	imageID := expected.Image
+	imageID := expected.ImageIDs[0]
 	if runtimeBoundary.imageDriftService == serviceName {
 		imageID = "sha256:" + strings.Repeat("f", 64)
 	}
@@ -4232,7 +4277,7 @@ func (runtimeBoundary *platformStartRuntime) inspectContainer(
 	}
 	content, err := json.Marshal(map[string]any{
 		"Id": identity, "Image": imageID, "RestartCount": restartCount,
-		"Config": map[string]any{"Labels": labels, "User": user},
+		"Config": map[string]any{"Image": expected.Image, "Labels": labels, "User": user},
 		"State": map[string]any{
 			"Status": "running", "Running": true,
 			"StartedAt": startedAt, "OOMKilled": runtimeBoundary.oomService == serviceName,

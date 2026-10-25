@@ -191,6 +191,27 @@ func recoverBackup(
 	if err := migrateInstallation(ctx, runtimeBoundary, target); err != nil {
 		return err
 	}
+	if target.Bundle.Manifest.IncludesProduct(release.ProductDevOps) {
+		if err := resetRecoveredSourceTrust(target.Root); err != nil {
+			switch {
+			case errors.Is(err, errManagedOutcomeUnknown):
+				return errors.Join(
+					platformcommand.ErrEffectOutcomeUnknown,
+					errors.New("recovered source trust reset outcome is unknown"),
+				)
+			case errors.Is(err, errManagedConflict):
+				return errors.Join(
+					platformcommand.ErrEffectConflict,
+					errors.New("recovered source trust ownership is invalid"),
+				)
+			default:
+				return errors.Join(
+					platformcommand.ErrEffectUnavailable,
+					errors.New("recovered source trust reset is unavailable"),
+				)
+			}
+		}
+	}
 	return effects.reconcileAuthenticationRecovery(ctx, plan)
 }
 

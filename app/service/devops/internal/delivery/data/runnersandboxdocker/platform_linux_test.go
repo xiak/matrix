@@ -15,6 +15,9 @@ import (
 )
 
 func TestLinuxEngineTransportUsesOnlyProtectedUnixSocket(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("positive engine transport requires the production root-owned socket")
+	}
 	root := t.TempDir()
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)

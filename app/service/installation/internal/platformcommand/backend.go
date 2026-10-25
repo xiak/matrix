@@ -244,7 +244,7 @@ func SupportsRecoveryTarget(current, target release.Manifest) bool {
 		current.Release.Version == target.Release.Version
 	immediatePredecessor := current.Release.PreviousID == target.Release.ID &&
 		current.Release.PreviousVersion == target.Release.Version
-	return (sameRelease || immediatePredecessor) && sameOrAcceptedProductlessDatabasePair(target, current)
+	return (sameRelease || immediatePredecessor) && AdmitsLifecycleDatabasePair(target, current)
 }
 
 // CredentialRecoveryInput is the operator's private intent, not an IAM
@@ -864,7 +864,7 @@ func (backend *Backend) upgrade(
 		targetBundle.Manifest.Release.PreviousVersion != sourceBundle.Manifest.Release.Version {
 		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_PREDECESSOR_MISMATCH")
 	}
-	if !sameOrAcceptedProductlessDatabasePair(sourceBundle.Manifest, targetBundle.Manifest) {
+	if !AdmitsLifecycleDatabasePair(sourceBundle.Manifest, targetBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_SCHEMA_INCOMPATIBLE")
 	}
 
@@ -981,7 +981,7 @@ func (backend *Backend) rollback(
 		currentBundle.Manifest.Release.PreviousVersion != previousBundle.Manifest.Release.Version {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_PREDECESSOR_MISMATCH")
 	}
-	if !sameOrAcceptedProductlessDatabasePair(previousBundle.Manifest, currentBundle.Manifest) {
+	if !AdmitsLifecycleDatabasePair(previousBundle.Manifest, currentBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_SCHEMA_INCOMPATIBLE")
 	}
 	if state.Active == nil {
@@ -1123,7 +1123,7 @@ func (backend *Backend) recover(
 	if !sameRelease && !immediatePredecessor {
 		return cli.Result{}, fault(cli.FaultPrecondition, "RECOVERY_TARGET_UNSUPPORTED")
 	}
-	if !sameOrAcceptedProductlessDatabasePair(targetBundle.Manifest, currentBundle.Manifest) {
+	if !AdmitsLifecycleDatabasePair(targetBundle.Manifest, currentBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "RECOVERY_SCHEMA_INCOMPATIBLE")
 	}
 	destinationOrigin, err := releaseNorthboundOrigin(
@@ -1671,10 +1671,10 @@ func randomIdentity(entropy io.Reader, prefix string) (string, error) {
 	return prefix + "-" + hex.EncodeToString(random[:]), nil
 }
 
-// sameOrAcceptedProductlessDatabasePair keeps the full authority profile
+// AdmitsLifecycleDatabasePair keeps the full authority profile
 // exact, apart from the one authenticated productless predecessor transition
 // that has retained-state runtime evidence in the current release owner.
-func sameOrAcceptedProductlessDatabasePair(left, right release.Manifest) bool {
+func AdmitsLifecycleDatabasePair(left, right release.Manifest) bool {
 	if left.Database == right.Database {
 		return true
 	}
