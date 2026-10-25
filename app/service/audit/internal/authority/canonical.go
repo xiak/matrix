@@ -86,5 +86,6 @@ func validateReplayState(value ReplayState) error {
 }
 
 func knownSource(value auditv1.Source) bool {
-	return value == auditv1.SourceIAM || value == auditv1.SourcePaaS || value == auditv1.SourceAudit
+	return value == auditv1.SourceIAM || value == auditv1.SourcePaaS ||
+		value == auditv1.SourceDevOps || value == auditv1.SourceAudit
 }

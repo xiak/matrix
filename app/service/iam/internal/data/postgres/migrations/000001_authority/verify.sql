@@ -102,6 +102,41 @@ BEGIN
         RAISE EXCEPTION 'IAM schema contains plaintext credential columns';
     END IF;
 
+    IF to_regprocedure(
+            'iam.ensure_release_service(text,text,text,text,text)'
+       ) IS NULL
+       OR to_regprocedure(
+            'iam.verify_release_service(text,text,text,text)'
+       ) IS NULL
+       OR to_regprocedure(
+            'iam.ensure_platform_service(text,text,text,text,text)'
+       ) IS NOT NULL
+       OR to_regprocedure(
+            'iam.verify_platform_service(text,text,text,text)'
+       ) IS NOT NULL
+       OR iam.resource_kind_for_action('platform.product.read')
+            IS DISTINCT FROM 'INSTALLATION'
+       OR iam.resource_kind_for_action('devops.pipeline.activate')
+            IS DISTINCT FROM 'PIPELINE'
+       OR NOT EXISTS (
+            SELECT 1
+              FROM pg_catalog.pg_constraint AS constraint_row
+              JOIN pg_catalog.pg_class AS class
+                ON class.oid = constraint_row.conrelid
+              JOIN pg_catalog.pg_namespace AS namespace
+                ON namespace.oid = class.relnamespace
+             WHERE namespace.nspname = 'iam'
+               AND class.relname = 'service_credentials'
+               AND constraint_row.conname = 'service_credentials_values_valid'
+               AND constraint_row.contype = 'c'
+               AND constraint_row.convalidated
+               AND position(
+                    'DEVOPS' IN pg_catalog.pg_get_constraintdef(constraint_row.oid)
+               ) > 0
+       ) THEN
+        RAISE EXCEPTION 'IAM release authority schema is invalid';
+    END IF;
+
     IF NOT has_function_privilege(
             'matrix_iam_api',
             'iam.apply_bootstrap(text,text,text,text,text,text,text,text,jsonb,jsonb)',
@@ -183,6 +218,26 @@ BEGIN
        )
        OR has_function_privilege(
             'matrix_iam_api', 'iam.assert_user_audit_actor(text,text,jsonb)', 'EXECUTE'
+       )
+        OR has_function_privilege(
+            'matrix_iam_api',
+            'iam.ensure_release_service(text,text,text,text,text)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_worker',
+            'iam.ensure_release_service(text,text,text,text,text)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_api',
+            'iam.verify_release_service(text,text,text,text)',
+            'EXECUTE'
+       )
+       OR has_function_privilege(
+            'matrix_iam_worker',
+            'iam.verify_release_service(text,text,text,text)',
+            'EXECUTE'
        ) THEN
         RAISE EXCEPTION 'IAM API/worker function authority is invalid';
     END IF;
@@ -295,7 +350,7 @@ DECLARE
     seed jsonb;
     entry regprocedure;
 BEGIN
-    IF (SELECT schema_version FROM iam.readiness())<>87 OR NOT iam.authorization_decision_contract_ready()
+    IF (SELECT schema_version FROM iam.readiness())<>88 OR NOT iam.authorization_decision_contract_ready()
         OR NOT iam.login_session_contract_ready()
         OR NOT iam.policy_attachment_contract_ready() THEN
         RAISE EXCEPTION 'IAM profile registry schema is invalid';

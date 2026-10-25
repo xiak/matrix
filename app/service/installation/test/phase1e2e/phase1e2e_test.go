@@ -260,7 +260,7 @@ func TestOfflinePhase1UpgradeFault(t *testing.T) {
 	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
 		t.Fatal(safeFailure(err))
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		t.Fatal(safeFailure(err))
 	}
 	if err := assertNoExternalRoute(); err != nil {
@@ -316,7 +316,7 @@ func TestOfflinePhase1Rollback(t *testing.T) {
 	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
 		t.Fatal(safeFailure(err))
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		t.Fatal(safeFailure(err))
 	}
 	if err := assertNoExternalRoute(); err != nil {
@@ -396,14 +396,16 @@ func TestInjectedUpgradeWaitBounds(t *testing.T) {
 func TestReleasePairAllowsReleaseSpecificWorkloadImages(t *testing.T) {
 	a := release.VerifiedBundle{Manifest: release.Manifest{
 		Release:  release.ReleaseIdentity{ID: "release-a", Version: "v0.1.0", SourceCommit: "commit"},
+		Products: []release.Product{release.DevOpsProduct("v0.1.0")},
 		Images:   []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:a"}},
 		Database: release.CurrentDatabaseProfile(),
 	}}
 	b := release.VerifiedBundle{Manifest: release.Manifest{
 		Release: release.ReleaseIdentity{
-			ID: "release-b", Version: "v0.2.0", SourceCommit: "commit",
+			ID: "release-b", Version: "v0.2.0", SourceCommit: "different-commit",
 			PreviousID: "release-a", PreviousVersion: "v0.1.0",
 		},
+		Products: []release.Product{release.DevOpsProduct("v0.2.0")},
 		Images:   []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:b"}},
 		Database: release.CurrentDatabaseProfile(),
 	}}
@@ -1655,6 +1657,88 @@ func TestRetainedAccessKeyDirectoryAllowsSameTenantGrowthOnly(t *testing.T) {
 	}
 }
 
+func TestSignedWorkloadImageRequiresMatchedReferenceAndResolvedIdentity(t *testing.T) {
+	imageA := release.Image{
+		Purpose: release.ImageWorkload, LocalReference: "matrix.local/workload:a", ImageID: "sha256:a",
+	}
+	imageB := release.Image{
+		Purpose: release.ImageWorkload, LocalReference: "matrix.local/workload:b", ImageID: "sha256:b",
+	}
+	acceptance := gate{releases: releasePair{
+		a: release.VerifiedBundle{Manifest: release.Manifest{Images: []release.Image{imageA}}},
+		b: release.VerifiedBundle{Manifest: release.Manifest{Images: []release.Image{imageB}}},
+	}}
+	for _, accepted := range []release.Image{imageA, imageB} {
+		if !acceptance.signedWorkloadImage(accepted.LocalReference, accepted.ImageID) {
+			t.Fatalf("signed workload identity rejected: %#v", accepted)
+		}
+	}
+	for _, rejected := range []struct{ reference, imageID string }{
+		{imageA.LocalReference, imageB.ImageID},
+		{imageB.LocalReference, imageA.ImageID},
+		{"matrix.local/workload:unknown", imageA.ImageID},
+		{imageA.LocalReference, "sha256:unknown"},
+	} {
+		if acceptance.signedWorkloadImage(rejected.reference, rejected.imageID) {
+			t.Fatalf("mismatched workload identity accepted: %#v", rejected)
+		}
+	}
+}
+
+func TestReleasePairRequiresDevOpsInBothSignedLifecycles(t *testing.T) {
+	baseA := release.VerifiedBundle{Manifest: release.Manifest{
+		Release:  release.ReleaseIdentity{ID: "release-a", Version: "v0.1.0", SourceCommit: "commit-a"},
+		Products: []release.Product{release.DevOpsProduct("v0.1.0")},
+		Images:   []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:a"}},
+	}}
+	baseB := release.VerifiedBundle{Manifest: release.Manifest{
+		Release: release.ReleaseIdentity{
+			ID: "release-b", Version: "v0.2.0", SourceCommit: "commit-b",
+			PreviousID: "release-a", PreviousVersion: "v0.1.0",
+		},
+		Products: []release.Product{release.DevOpsProduct("v0.2.0")},
+		Images:   []release.Image{{Purpose: release.ImageWorkload, SourceDigest: "sha256:b"}},
+	}}
+	for _, test := range []struct {
+		name string
+		a    release.VerifiedBundle
+		b    release.VerifiedBundle
+	}{
+		{name: "release a", a: release.VerifiedBundle{Manifest: withoutProducts(baseA.Manifest)}, b: baseB},
+		{name: "release b", a: baseA, b: release.VerifiedBundle{Manifest: withoutProducts(baseB.Manifest)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateReleasePair(test.a, test.b); err == nil {
+				t.Fatal("release pair without DevOps was accepted")
+			}
+		})
+	}
+}
+
+func TestExpectedPublishedPortBindingsTracksSelectedProducts(t *testing.T) {
+	paasOnly := release.Manifest{Products: []release.Product{
+		release.ApplicationPaaSProduct("v0.1.0"),
+	}}
+	if bindings := expectedPublishedPortBindings(paasOnly); len(bindings) != 1 ||
+		bindings["apisix"] != 1 {
+		t.Fatalf("PaaS-only published bindings=%v", bindings)
+	}
+	withDevOps := paasOnly
+	withDevOps.Products = append(
+		append([]release.Product(nil), paasOnly.Products...),
+		release.DevOpsProduct("v0.1.0"),
+	)
+	if bindings := expectedPublishedPortBindings(withDevOps); len(bindings) != 2 ||
+		bindings["apisix"] != 1 || bindings["devops-executor-gateway"] != 1 {
+		t.Fatalf("DevOps published bindings=%v", bindings)
+	}
+}
+
+func withoutProducts(manifest release.Manifest) release.Manifest {
+	manifest.Products = nil
+	return manifest
+}
+
 func optionsFromEnvironment() (options, error) {
 	phase := os.Getenv("MATRIX_PHASE1_E2E_PHASE")
 	if phase != "run" && phase != "after-restart" {
@@ -1734,7 +1818,7 @@ func authenticatedGate(config options) (*gate, error) {
 		return nil, fail("release-authentication")
 	}
 	defer clear(trust)
-	a, err := release.VerifyDirectory(config.releaseA, trust)
+	a, err := release.VerifyInstalledDirectory(config.releaseA, trust)
 	if err != nil {
 		return nil, fail("release-a-authentication")
 	}

@@ -1,6 +1,6 @@
 # Donor adoption records
 
-- [Fixed donor sources](sources.yaml)
+- [Donor and product-reference baselines](sources.yaml)
 - [FEAT-001 Application-hosting contracts](FEAT-001-apphosting-contracts.md)
 - [FEAT-002 LocalMachine adapter](FEAT-002-localmachine-adapter.md)
 - [FEAT-003 Tenant placement and isolation](FEAT-003-placement-isolation.md)
@@ -9,3 +9,4 @@
 - [FEAT-006 Platform IAM and Audit authorities](FEAT-006-platform-authorities.md)
 - [FEAT-007 Control-plane console and managed-service activation](FEAT-007-control-plane-console.md)
 - [FEAT-008 Existing Linux hosts and remote application delivery](FEAT-008-linux-host-management.md)
+- [FEAT-009 Repository change validation](FEAT-009-repository-delivery.md)

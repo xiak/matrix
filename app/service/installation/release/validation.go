@@ -22,6 +22,7 @@ const (
 
 	mediaExecutable    = "application/vnd.matrix.executable"
 	mediaDockerArchive = "application/vnd.docker.image.archive"
+	mediaGVisorArchive = "application/vnd.matrix.gvisor.tar+zstd"
 	mediaMarkdown      = "text/markdown"
 	mediaPlainText     = "text/plain"
 )
@@ -62,6 +63,31 @@ func DecodeCanonical(content []byte) (Manifest, error) {
 	return manifest, nil
 }
 
+// DecodeInstalledCanonical authenticates the current manifest contract or the
+// one fixed, accepted productless predecessor contract. It must never be used
+// for a new installation or an upgrade target.
+func DecodeInstalledCanonical(content []byte) (Manifest, error) {
+	if manifest, err := DecodeCanonical(content); err == nil {
+		return manifest, nil
+	}
+	if len(content) == 0 || len(content) > maximumManifestBytes {
+		return Manifest{}, errors.New("installed release manifest size is invalid")
+	}
+	var legacy legacyProductlessManifest
+	if err := decodeStrict(content, &legacy); err != nil {
+		return Manifest{}, errors.New("installed release manifest is invalid")
+	}
+	manifest := manifestFromLegacyProductless(legacy)
+	if err := validateLegacyProductlessManifest(manifest); err != nil {
+		return Manifest{}, errors.New("installed release manifest is unsupported")
+	}
+	encoded, err := json.Marshal(legacy)
+	if err != nil || !bytes.Equal(encoded, content) {
+		return Manifest{}, errors.New("installed release manifest is not canonical")
+	}
+	return manifest, nil
+}
+
 func ValidateManifest(manifest Manifest) error {
 	var problems []error
 	if (manifest.APIVersion != ManifestAPIVersion && manifest.APIVersion != LegacyManifestAPIVersion) ||
@@ -76,15 +102,110 @@ func ValidateManifest(manifest Manifest) error {
 		validateSigner(manifest.Signer),
 		validateHost(manifest.Host),
 		ValidateDatabaseProfile(manifest.Database),
+		validateProducts(manifest.Products, manifest.Images),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
 		validateFiles(manifest.Files),
+		validateRunnerPayloads(manifest.Products, manifest.Files),
 		validateRequiredReleaseFiles(manifest),
-		validateImages(manifest.Images, manifest.Files),
+		validateImages(manifest.Products, manifest.Images, manifest.Files),
 	)
 	if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
 		problems = append(problems, errors.New("minimum free space is outside the supported range"))
 	}
 	return errors.Join(problems...)
+}
+
+func validateRunnerPayloads(products []Product, files []File) error {
+	wantsRunner := false
+	for _, product := range products {
+		if product.ID == ProductDevOps {
+			wantsRunner = true
+			break
+		}
+	}
+	declared := make(map[string]File, len(RunnerPayloadPaths()))
+	for _, file := range files {
+		for _, runnerPath := range RunnerPayloadPaths() {
+			if file.Path == runnerPath {
+				declared[file.Path] = file
+				break
+			}
+		}
+	}
+	if !wantsRunner {
+		if len(declared) != 0 {
+			return errors.New("unselected DevOps runner payload is present")
+		}
+		return nil
+	}
+	if len(declared) != len(RunnerPayloadPaths()) {
+		return errors.New("selected DevOps runner payload is incomplete")
+	}
+	return nil
+}
+
+// ValidateInstalledManifest retains exactly one signed predecessor contract
+// for N-1 lifecycle operations. Candidate releases always use ValidateManifest.
+func ValidateInstalledManifest(manifest Manifest) error {
+	if err := ValidateManifest(manifest); err == nil {
+		return nil
+	}
+	return validateLegacyProductlessManifest(manifest)
+}
+
+// IsLegacyProductlessManifest reports only manifests that satisfy the complete
+// fixed predecessor release contract. The topology package separately pins its
+// accepted contract digest before compiling provider configuration.
+func IsLegacyProductlessManifest(manifest Manifest) bool {
+	return validateLegacyProductlessManifest(manifest) == nil
+}
+
+func validateLegacyProductlessManifest(manifest Manifest) error {
+	var problems []error
+	if manifest.APIVersion != LegacyManifestAPIVersion || manifest.Kind != ManifestKind {
+		problems = append(problems, errors.New("release type is unsupported"))
+	}
+	if manifest.Release.SourceCommit != legacyProductlessSourceCommit {
+		problems = append(problems, errors.New("legacy release lineage is unsupported"))
+	}
+	if manifest.Products != nil {
+		problems = append(problems, errors.New("legacy release product inventory must be absent"))
+	}
+	if manifest.Host != (HostProfile{
+		OS: "linux", Architecture: "amd64",
+		MinimumDocker: legacyProductlessDocker, MinimumCompose: legacyProductlessCompose,
+		CommandContract: "v1",
+	}) || manifest.MinimumFreeBytes != legacyProductlessFreeBytes ||
+		manifest.Database != (DatabaseProfile{
+			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
+		}) || len(manifest.Files) != len(legacyProductlessRequiredImages())+1 {
+		problems = append(problems, errors.New("legacy release build profile is unsupported"))
+	}
+	problems = append(problems,
+		validateReleaseIdentity(manifest.Release),
+		validateSigner(manifest.Signer),
+		validateHost(manifest.Host),
+		ValidateDatabaseProfile(manifest.Database),
+		validateDigest("topologyDigest", manifest.TopologyDigest),
+		validateFiles(manifest.Files),
+		validateImagesAgainst(
+			manifest.Images, manifest.Files, legacyProductlessRequiredImages(), false,
+		),
+	)
+	if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
+		problems = append(problems, errors.New("minimum free space is outside the supported range"))
+	}
+	return errors.Join(problems...)
+}
+
+func manifestFromLegacyProductless(value legacyProductlessManifest) Manifest {
+	return Manifest{
+		APIVersion: value.APIVersion, Kind: value.Kind, Release: value.Release,
+		Signer: value.Signer, Host: value.Host,
+		MinimumFreeBytes: value.MinimumFreeBytes, Database: value.Database,
+		Products: nil, TopologyDigest: value.TopologyDigest,
+		Files: value.Files, Images: value.Images,
+	}
 }
 
 func validateReleaseIdentity(value ReleaseIdentity) error {
@@ -259,6 +380,98 @@ func ValidateDatabaseProfile(value DatabaseProfile) error {
 	return nil
 }
 
+func validateProducts(products []Product, images []Image) error {
+	if len(products) == 0 || len(products) > 16 ||
+		products[0].ID != ProductApplicationPaaS {
+		return errors.New("release product inventory is invalid")
+	}
+	availableComponents := make(map[string]struct{}, len(images))
+	for _, image := range images {
+		if image.Purpose == ImagePlatform {
+			availableComponents[image.Component] = struct{}{}
+		}
+	}
+	knownProducts := make(map[ProductID]struct{}, len(products))
+	previous := ProductID("")
+	for _, product := range products {
+		if _, duplicate := knownProducts[product.ID]; duplicate || previous >= product.ID {
+			return errors.New("release products are duplicated or not sorted")
+		}
+		knownProducts[product.ID] = struct{}{}
+		previous = product.ID
+		expected, known := productContract(product.ID, product.Version)
+		if !known || !versionPattern.MatchString(product.Version) ||
+			product.RouteKey != expected.RouteKey ||
+			product.ReadinessContract != expected.ReadinessContract ||
+			!slices.Equal(product.RequiredComponents, expected.RequiredComponents) ||
+			!slices.Equal(product.Dependencies, expected.Dependencies) {
+			return errors.New("release product declaration is invalid")
+		}
+		for _, component := range product.RequiredComponents {
+			if _, available := availableComponents[component]; !available {
+				return errors.New("release product component is unavailable")
+			}
+		}
+	}
+	for _, product := range products {
+		for _, dependency := range product.Dependencies {
+			if _, installed := knownProducts[dependency]; !installed || dependency == product.ID {
+				return errors.New("release product dependency is unavailable")
+			}
+		}
+	}
+	if productDependenciesCycle(products) {
+		return errors.New("release product dependencies contain a cycle")
+	}
+	return nil
+}
+
+func productContract(id ProductID, version string) (Product, bool) {
+	switch id {
+	case ProductApplicationPaaS:
+		return ApplicationPaaSProduct(version), true
+	case ProductDevOps:
+		return DevOpsProduct(version), true
+	default:
+		return Product{}, false
+	}
+}
+
+func productDependenciesCycle(products []Product) bool {
+	dependencies := make(map[ProductID][]ProductID, len(products))
+	for _, product := range products {
+		dependencies[product.ID] = product.Dependencies
+	}
+	const (
+		visiting = uint8(1)
+		visited  = uint8(2)
+	)
+	state := make(map[ProductID]uint8, len(products))
+	var visit func(ProductID) bool
+	visit = func(id ProductID) bool {
+		switch state[id] {
+		case visiting:
+			return true
+		case visited:
+			return false
+		}
+		state[id] = visiting
+		for _, dependency := range dependencies[id] {
+			if visit(dependency) {
+				return true
+			}
+		}
+		state[id] = visited
+		return false
+	}
+	for id := range dependencies {
+		if visit(id) {
+			return true
+		}
+	}
+	return false
+}
+
 func validateFiles(files []File) error {
 	if len(files) < 7 || len(files) > 128 {
 		return errors.New("release payload inventory size is invalid")
@@ -288,6 +501,23 @@ func validateFiles(files []File) error {
 		case strings.HasPrefix(file.Path, "images/") && strings.HasSuffix(file.Path, ".tar"):
 			if file.MediaType != mediaDockerArchive || file.Executable {
 				return errors.New("release image archive payload is invalid")
+			}
+		case file.Path == RunnerBinaryPath:
+			if file.MediaType != mediaExecutable || !file.Executable {
+				return errors.New("release runner executable payload is invalid")
+			}
+		case file.Path == RunnerToolchainArchivePath:
+			if file.MediaType != mediaDockerArchive || file.Executable {
+				return errors.New("release runner toolchain payload is invalid")
+			}
+		case file.Path == RunnerGVisorArchivePath:
+			if file.MediaType != mediaGVisorArchive || file.Executable {
+				return errors.New("release runner gVisor payload is invalid")
+			}
+		case file.Path == RunnerGVisorChecksumPath:
+			if file.MediaType != mediaPlainText || file.Executable ||
+				file.Size > maximumManifestBytes {
+				return errors.New("release runner gVisor checksum payload is invalid")
 			}
 		case strings.HasPrefix(file.Path, "docs/") && strings.HasSuffix(file.Path, ".md"):
 			if file.MediaType != mediaMarkdown || file.Executable || file.Size > maximumManifestBytes {
@@ -323,8 +553,16 @@ func validateRequiredReleaseFiles(manifest Manifest) error {
 	return errors.New("release IAM product authorization catalog is missing")
 }
 
-func validateImages(images []Image, files []File) error {
-	required := RequiredImages()
+func validateImages(products []Product, images []Image, files []File) error {
+	return validateImagesAgainst(images, files, RequiredImages(products), true)
+}
+
+func validateImagesAgainst(
+	images []Image,
+	files []File,
+	required []ImageRequirement,
+	requireLocalReference bool,
+) error {
 	if len(images) != len(required) {
 		return errors.New("release image inventory is incomplete")
 	}
@@ -334,12 +572,20 @@ func validateImages(images []Image, files []File) error {
 	}
 	seenImageIDs := make(map[string]struct{}, len(images))
 	seenSourceDigests := make(map[string]struct{}, len(images))
+	seenLocalReferences := make(map[string]struct{}, len(images))
 	for index, image := range images {
 		requirement := required[index]
+		localReferenceValid := image.LocalReference == ""
+		if requireLocalReference {
+			localReferenceValid = image.LocalReference == LocalImageReference(
+				requirement.Component, image.SourceDigest,
+			)
+		}
 		if image.Component != requirement.Component || image.Purpose != requirement.Purpose ||
 			image.ArchivePath != "images/"+requirement.Component+".tar" ||
 			!digestPattern.MatchString(image.ImageID) ||
 			!digestPattern.MatchString(image.SourceDigest) ||
+			!localReferenceValid ||
 			image.OS != "linux" || image.Architecture != "amd64" ||
 			image.HealthContract != requirement.HealthContract {
 			return errors.New("release image declaration is invalid")
@@ -353,6 +599,12 @@ func validateImages(images []Image, files []File) error {
 		}
 		if _, duplicate := seenSourceDigests[image.SourceDigest]; duplicate {
 			return errors.New("release image source identities are duplicated")
+		}
+		if image.LocalReference != "" {
+			if _, duplicate := seenLocalReferences[image.LocalReference]; duplicate {
+				return errors.New("release image local references are duplicated")
+			}
+			seenLocalReferences[image.LocalReference] = struct{}{}
 		}
 		seenImageIDs[image.ImageID] = struct{}{}
 		seenSourceDigests[image.SourceDigest] = struct{}{}

@@ -1,7 +1,9 @@
 package localmachine
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,14 +14,47 @@ import (
 	"strings"
 	"testing"
 
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	"github.com/xiak/matrix/app/service/devops/sourcetrust"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 const recoveryProbeConfigHash = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+func TestLegacyProductlessRestoreUsesOneFixedDatabaseTransaction(t *testing.T) {
+	runtimeBoundary := &legacyRestorePipelineRuntime{
+		archive: []byte("authenticated productless archive"),
+	}
+	if err := restoreLegacyProductlessDatabaseDump(
+		context.Background(), runtimeBoundary,
+		bytes.NewReader(runtimeBoundary.archive), "postgres-productless",
+	); err != nil {
+		t.Fatalf("restore productless database: %v", err)
+	}
+	if !hasArgumentPair(runtimeBoundary.generatorArguments, "--user", "postgres") ||
+		!hasArgumentPair(runtimeBoundary.generatorArguments, "--file", "-") ||
+		!slices.Contains(runtimeBoundary.generatorArguments, "--clean") ||
+		!slices.Contains(runtimeBoundary.generatorArguments, "--if-exists") ||
+		slices.Contains(runtimeBoundary.generatorArguments, "--dbname") ||
+		slices.Contains(runtimeBoundary.generatorArguments, "--single-transaction") {
+		t.Fatalf("productless restore generator arguments = %v", runtimeBoundary.generatorArguments)
+	}
+	if !hasArgumentPair(runtimeBoundary.restoreArguments, "--user", "postgres") ||
+		!hasArgumentPair(runtimeBoundary.restoreArguments, "--set", "ON_ERROR_STOP=1") ||
+		!hasArgumentPair(runtimeBoundary.restoreArguments, "--dbname", "matrix") ||
+		!slices.Contains(runtimeBoundary.restoreArguments, "--single-transaction") ||
+		!slices.Contains(runtimeBoundary.restoreArguments, "--no-psqlrc") {
+		t.Fatalf("productless transactional restore arguments = %v", runtimeBoundary.restoreArguments)
+	}
+	want := legacyProductlessRestorePrelude + "DROP SCHEMA iam;\n"
+	if string(runtimeBoundary.restoreInput) != want {
+		t.Fatalf("productless transactional restore input = %q, want %q", runtimeBoundary.restoreInput, want)
+	}
+}
 
 func TestRecoveryRemovesOnlyTheProvedFixedVerificationProjectAndReplays(t *testing.T) {
 	plan := newInstallPlan(t)
@@ -127,10 +162,158 @@ func TestRecoveredVerificationRequiresExactProviderGenerationAndReadiness(t *tes
 	}
 }
 
+func TestRecoveryResetsSelectedSourceTrustInPlaceAndReplays(t *testing.T) {
+	plan := newDevOpsInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage selected DevOps installation: %v", err)
+	}
+	trustRoot := filepath.Join(
+		plan.Root, filepath.FromSlash(layout.DevOpsSourceTrustRoot),
+	)
+	before, err := os.Stat(trustRoot)
+	if err != nil {
+		t.Fatalf("inspect source trust root before recovery: %v", err)
+	}
+	bundle := readTestFile(t, plan.Root, layout.DevOpsExecutorServerCA)
+	defer clear(bundle)
+	records := []struct {
+		tenant devopsv1.TenantID
+		origin string
+	}{
+		{tenant: "tenant-one", origin: "https://git.one.internal"},
+		{tenant: "tenant-two", origin: "https://git.two.internal:8443"},
+	}
+	for _, record := range records {
+		_, relative, pathErr := sourceTrustPaths(
+			devopsv1.ResourceScope{TenantID: record.tenant}, record.origin,
+		)
+		if pathErr != nil {
+			t.Fatalf("write recovery source trust record %s: %v", record.tenant, pathErr)
+		}
+		if err := writeManagedOnce(plan.Root, relative, bundle); err != nil {
+			t.Fatalf("write recovery source trust record %s: %v", record.tenant, err)
+		}
+		if record.tenant == "tenant-two" {
+			if err := writeManagedOnce(
+				plan.Root, relative+".replacement", []byte("interrupted replacement"),
+			); err != nil {
+				t.Fatalf("write interrupted source trust replacement: %v", err)
+			}
+		}
+	}
+	siblingRelative := filepath.Join("config", "devops", "recovery-sibling")
+	if err := writeManagedOnce(plan.Root, siblingRelative, []byte("preserve")); err != nil {
+		t.Fatalf("write recovery sibling: %v", err)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := resetRecoveredSourceTrust(plan.Root); err != nil {
+			t.Fatalf("reset recovered source trust attempt %d: %v", attempt, err)
+		}
+	}
+	after, err := os.Stat(trustRoot)
+	entries, readErr := os.ReadDir(trustRoot)
+	if err != nil || readErr != nil || !os.SameFile(before, after) || len(entries) != 0 {
+		t.Fatalf(
+			"recovered trust root changed: stat=%v read=%v same=%t entries=%d",
+			err, readErr, err == nil && os.SameFile(before, after), len(entries),
+		)
+	}
+	if sibling := readTestFile(t, plan.Root, siblingRelative); string(sibling) != "preserve" {
+		clear(sibling)
+		t.Fatal("source trust reset changed its configuration sibling")
+	} else {
+		clear(sibling)
+	}
+}
+
+func TestRecoveryRejectsSourceTrustConflictBeforeDeletingAnyRecord(t *testing.T) {
+	plan := newDevOpsInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage selected DevOps installation: %v", err)
+	}
+	bundle := readTestFile(t, plan.Root, layout.DevOpsExecutorServerCA)
+	defer clear(bundle)
+	stored := make([]string, 0, 2)
+	for index, origin := range []string{
+		"https://git.safe.internal", "https://git.conflict.internal",
+	} {
+		directory, relative, err := sourceTrustPaths(
+			devopsv1.ResourceScope{TenantID: "tenant-one"}, origin,
+		)
+		if err != nil {
+			t.Fatalf("write source trust fixture %d: %v", index, err)
+		}
+		if err := writeManagedOnce(plan.Root, relative, bundle); err != nil {
+			t.Fatalf("write source trust fixture %d: %v", index, err)
+		}
+		stored = append(stored, relative)
+		if index == 1 {
+			if err := writeManagedOnce(
+				plan.Root, filepath.Join(directory, "unexpected"), []byte("conflict"),
+			); err != nil {
+				t.Fatalf("write conflicting source trust entry: %v", err)
+			}
+		}
+	}
+
+	if err := resetRecoveredSourceTrust(plan.Root); !errors.Is(err, errManagedConflict) {
+		t.Fatalf("conflicting recovered source trust reset error=%v", err)
+	}
+	for _, relative := range stored {
+		content, err := readManagedFile(plan.Root, relative, sourcetrust.MaximumBundleBytes)
+		if err != nil || !bytes.Equal(content, bundle) {
+			clear(content)
+			t.Fatalf("conflict deleted a proved source trust record: %v", err)
+		}
+		clear(content)
+	}
+}
+
 type recoveryProbeInspector struct {
 	installationRoot string
 	root             string
 	state            RecoveryProjectState
+}
+
+type legacyRestorePipelineRuntime struct {
+	archive            []byte
+	generatorArguments []string
+	restoreArguments   []string
+	restoreInput       []byte
+}
+
+func (runtimeBoundary *legacyRestorePipelineRuntime) Run(
+	context.Context,
+	io.Reader,
+	...string,
+) ([]byte, bool, error) {
+	return nil, false, errors.New("productless restore test does not use buffered Docker commands")
+}
+
+func (runtimeBoundary *legacyRestorePipelineRuntime) RunTo(
+	_ context.Context,
+	input io.Reader,
+	output io.Writer,
+	arguments ...string,
+) (bool, error) {
+	switch {
+	case slices.Contains(arguments, "pg_restore"):
+		runtimeBoundary.generatorArguments = slices.Clone(arguments)
+		archive, err := io.ReadAll(input)
+		if err != nil || !bytes.Equal(archive, runtimeBoundary.archive) {
+			return true, errors.New("productless restore archive changed")
+		}
+		_, err = io.WriteString(output, "DROP SCHEMA iam;\n")
+		return true, err
+	case slices.Contains(arguments, "psql"):
+		runtimeBoundary.restoreArguments = slices.Clone(arguments)
+		content, err := io.ReadAll(input)
+		runtimeBoundary.restoreInput = append([]byte(nil), content...)
+		return true, err
+	default:
+		return false, errors.New("productless restore command is unexpected")
+	}
 }
 
 func newRecoveryProbeInspector(
@@ -173,7 +356,7 @@ func newRecoveryProbeInspector(
 	state.ContentDigest = "sha256:" + strings.Repeat("d", 64)
 	state.Services = []RecoveryProjectService{{
 		Name:     recoveryVerificationComponent,
-		Image:    recoveryVerificationImage(t, plan.Bundle.Manifest).ImageID,
+		Image:    recoveryVerificationImage(t, plan.Bundle.Manifest).RuntimeReference(),
 		Replicas: 1,
 	}}
 	return &recoveryProbeInspector{
@@ -306,9 +489,9 @@ func newRecoveryProbeRuntime(
 	networkName := state.ProjectName + "_default"
 	container := platformContainerInspection{
 		ID: "container-recovery-probe", Name: "/" + state.ProjectName + "-probe-1",
-		Image: image.ImageID,
+		Image: image.RuntimeImageIDs()[0],
 		Config: platformContainerConfig{
-			Labels: labels,
+			Labels: labels, Image: image.RuntimeReference(),
 			Env: []string{
 				"PATH=/usr/local/bin:/usr/bin:/bin",
 				"MATRIX_INSTALLATION_ID=" + plan.InstallationID,

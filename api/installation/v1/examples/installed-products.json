@@ -1,0 +1,1 @@
+{"apiVersion":"installation.matrix.xiak.com/v1","kind":"InstalledProductList","releaseId":"matrix-v0.1.0-0123456789ab","releaseVersion":"v0.1.0","products":[{"id":"APPLICATION_PAAS","version":"v0.1.0","routeKey":"paas","state":"READY","observedAt":"2026-09-07T03:04:05.000000Z"}],"observedAt":"2026-09-07T03:04:05.000000Z"}

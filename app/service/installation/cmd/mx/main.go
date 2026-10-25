@@ -11,6 +11,9 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/internal/localmachine"
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/internal/runnernodecommand"
+	"github.com/xiak/matrix/app/service/installation/internal/sourcecredentialcommand"
+	"github.com/xiak/matrix/app/service/installation/internal/sourcetrustcommand"
 )
 
 type composeRecoveryProjectInspector struct{}
@@ -50,9 +53,26 @@ func (composeRecoveryProjectInspector) InspectRecoveryProject(
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 
-	backend, err := platformcommand.NewBackend(
-		localmachine.NewEffects(composeRecoveryProjectInspector{}),
-	)
+	effects := localmachine.NewEffects(composeRecoveryProjectInspector{})
+	platformBackend, err := platformcommand.NewBackend(effects)
+	if err != nil {
+		stop()
+		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
+		os.Exit(cli.ExitInternal)
+	}
+	sourceCredentialBackend, err := sourcecredentialcommand.NewBackend(effects)
+	if err != nil {
+		stop()
+		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
+		os.Exit(cli.ExitInternal)
+	}
+	sourceTrustBackend, err := sourcetrustcommand.NewBackend(effects)
+	if err != nil {
+		stop()
+		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
+		os.Exit(cli.ExitInternal)
+	}
+	runnerNodeBackend, err := runnernodecommand.NewBackend(effects)
 	if err != nil {
 		stop()
 		_, _ = os.Stderr.WriteString("Matrix CLI initialization failed\n")
@@ -60,7 +80,10 @@ func main() {
 	}
 	exitCode := cli.Run(ctx, os.Args[1:], cli.Streams{
 		In: os.Stdin, Out: os.Stdout, ErrOut: os.Stderr,
-	}, backend)
+	}, cli.Backends{
+		Platform: platformBackend, SourceCredential: sourceCredentialBackend,
+		SourceTrust: sourceTrustBackend, RunnerNode: runnerNodeBackend,
+	})
 	stop()
 	os.Exit(exitCode)
 }

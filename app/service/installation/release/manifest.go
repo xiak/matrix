@@ -2,7 +2,13 @@
 // Matrix installation lifecycle commands.
 package release
 
-import "time"
+import (
+	"slices"
+	"strings"
+	"time"
+
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+)
 
 const (
 	ManifestAPIVersion = "installation.matrix.xiak.com/v2"
@@ -21,9 +27,54 @@ const (
 
 	IAMProductAuthorizationPath      = "config/iam/product-authorization.json"
 	IAMProductAuthorizationMediaType = "application/vnd.matrix.iam.product-authorization-catalog+json"
+
+	// The productless predecessor is accepted only as an authenticated
+	// installed source. New release assembly always emits the current product
+	// inventory and never recreates this legacy shape.
+	legacyProductlessSourceCommit = "c88a84f379afcf94431e2aca7332fe6ec3136dc7"
+	legacyProductlessDocker       = "27.5.1"
+	legacyProductlessCompose      = "2.33.0"
+	legacyProductlessFreeBytes    = uint64(4 * 1024 * 1024 * 1024)
+
+	RunnerBinaryPath                    = "runner/linux-amd64/bin/matrix-devops-runner"
+	RunnerToolchainArchivePath          = "runner/linux-amd64/images/go-1.26-offline-v1.tar"
+	RunnerGVisorArchivePath             = "runner/linux-amd64/runtime/gvisor-x86_64.tar.zstd"
+	RunnerGVisorChecksumPath            = "runner/linux-amd64/runtime/gvisor-x86_64.tar.zstd.sha256"
+	RunnerGVisorRelease                 = "release-20260831.0"
+	RunnerGVisorArchiveSHA256           = "sha256:b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891"
+	RunnerToolchainID                   = "GO_1_26_OFFLINE_V1"
+	RunnerToolchainSourceReference      = "docker.io/library/golang@" + devopsv1.Go126OfflineToolchainImageDigest
+	RunnerToolchainSourceDigest         = devopsv1.Go126OfflineToolchainImageDigest
+	RunnerToolchainArchiveConfigDigest  = devopsv1.Go126OfflineToolchainArchiveConfigDigest
+	RunnerToolchainLocalReference       = devopsv1.Go126OfflineToolchainLocalReference
+	RunnerToolchainLocalDigestReference = devopsv1.Go126OfflineToolchainLocalDigestReference
+	RunnerEngineAPIVersion              = "1.46"
+	RunnerDockerRelease                 = "29.x"
+	RunnerRuntimeName                   = "runsc"
+	RunnerMaximumSlots                  = uint8(4)
+	RunnerMinimumLogicalCPUs            = uint16(4)
+	RunnerMinimumMemoryBytes            = uint64(8 * 1024 * 1024 * 1024)
+	RunnerMinimumStorageBytes           = uint64(20 * 1024 * 1024 * 1024)
 )
 
 type Manifest struct {
+	APIVersion       string          `json:"apiVersion"`
+	Kind             string          `json:"kind"`
+	Release          ReleaseIdentity `json:"release"`
+	Signer           Signer          `json:"signer"`
+	Host             HostProfile     `json:"host"`
+	MinimumFreeBytes uint64          `json:"minimumFreeBytes"`
+	Database         DatabaseProfile `json:"database"`
+	Products         []Product       `json:"products"`
+	TopologyDigest   string          `json:"topologyDigest"`
+	Files            []File          `json:"files"`
+	Images           []Image         `json:"images"`
+}
+
+// legacyProductlessManifest preserves the exact canonical wire shape emitted
+// by the accepted Phase 1 release builder. Do not add fields: its sole purpose
+// is signature-preserving authentication of an installed predecessor.
+type legacyProductlessManifest struct {
 	APIVersion       string          `json:"apiVersion"`
 	Kind             string          `json:"kind"`
 	Release          ReleaseIdentity `json:"release"`
@@ -81,9 +132,25 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 87, Audit: 39, PaaS: 7},
-		ContractRevision: 37,
+		Authorities:      AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 7},
+		ContractRevision: 38,
 	}
+}
+
+type ProductID string
+
+const (
+	ProductApplicationPaaS ProductID = "APPLICATION_PAAS"
+	ProductDevOps          ProductID = "DEVOPS"
+)
+
+type Product struct {
+	ID                 ProductID   `json:"id"`
+	Version            string      `json:"version"`
+	RouteKey           string      `json:"routeKey"`
+	ReadinessContract  string      `json:"readinessContract"`
+	RequiredComponents []string    `json:"requiredComponents"`
+	Dependencies       []ProductID `json:"dependencies"`
 }
 
 type File struct {
@@ -100,9 +167,38 @@ type Image struct {
 	ArchivePath    string       `json:"archivePath"`
 	ImageID        string       `json:"imageId"`
 	SourceDigest   string       `json:"sourceDigest"`
+	LocalReference string       `json:"localReference,omitempty"`
 	OS             string       `json:"os"`
 	Architecture   string       `json:"architecture"`
 	HealthContract string       `json:"healthContract"`
+}
+
+// LocalImageReference is the deterministic installation-owned Docker
+// reference for one authenticated release image. The signed source digest is
+// retained in the tag so two releases cannot silently reuse a mutable name.
+func LocalImageReference(component, sourceDigest string) string {
+	return "matrix.local/matrix/" + component + ":sha256-" +
+		strings.TrimPrefix(sourceDigest, "sha256:")
+}
+
+// RuntimeReference returns the provider reference used by Compose and direct
+// Docker effects. The image ID fallback exists only for the one accepted
+// productless predecessor contract.
+func (image Image) RuntimeReference() string {
+	if image.LocalReference != "" {
+		return image.LocalReference
+	}
+	return image.ImageID
+}
+
+// RuntimeImageIDs returns the exact content identities to which the runtime
+// reference may resolve. Docker's containerd and classic image stores restore
+// the same authenticated archive under different immutable IDs.
+func (image Image) RuntimeImageIDs() []string {
+	if image.LocalReference == "" || image.SourceDigest == image.ImageID {
+		return []string{image.ImageID}
+	}
+	return []string{image.SourceDigest, image.ImageID}
 }
 
 type ImagePurpose string
@@ -127,7 +223,38 @@ type TrustRoot struct {
 	PublicKeyFingerprint string `json:"publicKeyFingerprint"`
 }
 
-func RequiredImages() []ImageRequirement {
+func RequiredImages(products []Product) []ImageRequirement {
+	required := []ImageRequirement{
+		{Component: "apisix", Purpose: ImagePlatform, HealthContract: "northbound-ready-v1"},
+		{Component: "audit", Purpose: ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
+		{Component: "iam", Purpose: ImagePlatform, HealthContract: "iam-ready-authorize-v1"},
+		{Component: "matrix-ui", Purpose: ImagePlatform, HealthContract: "matrix-ui-ready-v1"},
+		{Component: "platform", Purpose: ImagePlatform, HealthContract: "product-discovery-ready-v1"},
+		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
+	}
+	for _, product := range products {
+		switch product.ID {
+		case ProductApplicationPaaS:
+			required = append(required,
+				ImageRequirement{Component: "elasticsearch", Purpose: ImagePlatform, HealthContract: "elasticsearch-ready-protocol-v1"},
+				ImageRequirement{Component: "mysql", Purpose: ImagePlatform, HealthContract: "mysql-ready-protocol-v1"},
+				ImageRequirement{Component: "paas", Purpose: ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
+				ImageRequirement{Component: "rabbitmq", Purpose: ImagePlatform, HealthContract: "rabbitmq-ready-protocol-v1"},
+				ImageRequirement{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
+			)
+		case ProductDevOps:
+			required = append(required, ImageRequirement{
+				Component: "devops", Purpose: ImagePlatform, HealthContract: "devops-ready-v1",
+			})
+		}
+	}
+	slices.SortFunc(required, func(left, right ImageRequirement) int {
+		return strings.Compare(left.Component, right.Component)
+	})
+	return required
+}
+
+func legacyProductlessRequiredImages() []ImageRequirement {
 	return []ImageRequirement{
 		{Component: "apisix", Purpose: ImagePlatform, HealthContract: "northbound-ready-v1"},
 		{Component: "audit", Purpose: ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
@@ -135,11 +262,62 @@ func RequiredImages() []ImageRequirement {
 		{Component: "paas", Purpose: ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
 		{Component: "paas-ui", Purpose: ImagePlatform, HealthContract: "paas-ui-ready-v1"},
 		{Component: "postgres", Purpose: ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
-		{Component: "mysql", Purpose: ImagePlatform, HealthContract: "mysql-ready-protocol-v1"},
-		{Component: "elasticsearch", Purpose: ImagePlatform, HealthContract: "elasticsearch-ready-protocol-v1"},
-		{Component: "rabbitmq", Purpose: ImagePlatform, HealthContract: "rabbitmq-ready-protocol-v1"},
 		{Component: "verification", Purpose: ImageWorkload, HealthContract: "application-probe-v1"},
 	}
+}
+
+func ApplicationPaaSProduct(version string) Product {
+	return Product{
+		ID:                 ProductApplicationPaaS,
+		Version:            version,
+		RouteKey:           "paas",
+		ReadinessContract:  "application-paas-ready-v1",
+		RequiredComponents: []string{"elasticsearch", "mysql", "paas", "rabbitmq"},
+		Dependencies:       []ProductID{},
+	}
+}
+
+func DevOpsProduct(version string) Product {
+	return Product{
+		ID:                 ProductDevOps,
+		Version:            version,
+		RouteKey:           "devops",
+		ReadinessContract:  "devops-ready-v1",
+		RequiredComponents: []string{"devops"},
+		Dependencies:       []ProductID{},
+	}
+}
+
+// IncludesProduct reports membership in the authenticated product inventory.
+// Callers must validate the manifest before using the result as authority.
+func (manifest Manifest) IncludesProduct(id ProductID) bool {
+	for _, product := range manifest.Products {
+		if product.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// RunnerPayloadPaths is the closed independently transferable payload carried
+// by every DevOps-selected release. bin/mx is shared with the platform bundle
+// and is added by RunnerReleasePayloadPaths for node-side verification.
+func RunnerPayloadPaths() []string {
+	return []string{
+		RunnerBinaryPath,
+		RunnerToolchainArchivePath,
+		RunnerGVisorArchivePath,
+		RunnerGVisorChecksumPath,
+	}
+}
+
+// RunnerReleasePayloadPaths returns the exact signed subset required on a
+// dedicated runner node. Callers receive a new slice and cannot mutate the
+// release package's static contract.
+func RunnerReleasePayloadPaths() []string {
+	paths := append([]string{"bin/mx"}, RunnerPayloadPaths()...)
+	slices.Sort(paths)
+	return paths
 }
 
 // BuiltImageLabels is the authenticated build-metadata surface inherited by

@@ -24,6 +24,21 @@ import (
 
 const ContractVersion = "matrix-platform-compose/v1"
 
+const (
+	DevOpsExecutorGatewayServerName = "devops-executor-gateway"
+	devOpsExecutorAdminPort         = uint16(8443)
+	devOpsExecutorRunnerPort        = uint16(8444)
+)
+
+const legacyProductlessContractDigest = "sha256:6f8e3bd951426da4033b3234f2b8fcebd053a9b809d98c8a3476962062a0cf2f"
+
+type compileProfile uint8
+
+const (
+	currentProfile compileProfile = iota
+	legacyProductlessProfile
+)
+
 type Options struct {
 	InstallationID   string
 	Root             string
@@ -45,8 +60,21 @@ type contract struct {
 }
 
 var platformServiceNames = []string{
-	"apisix", "audit", "iam", "iam-access-analysis-worker", "iam-audit-dispatcher", "iam-notification-dispatcher", "paas-api",
-	"paas-audit-dispatcher", "paas-ui", "paas-worker", "postgres",
+	"apisix", "audit", "devops-api", "devops-audit-dispatcher",
+	"devops-build-worker", "devops-check-reporter", "devops-executor-gateway",
+	"devops-source-fetcher", "devops-source-observer", "iam",
+	"iam-access-analysis-worker", "iam-audit-dispatcher", "iam-notification-dispatcher",
+	"matrix-ui", "paas-api", "paas-audit-dispatcher", "paas-worker", "platform-api", "postgres",
+}
+
+func DevOpsBuildWorkerIdentity(installationID string) string {
+	return "spiffe://matrix.xiak.com/installations/" +
+		strings.TrimPrefix(installationID, "mxi-") + "/devops/build-worker"
+}
+
+func DevOpsRunnerNamespace(installationID string) string {
+	return "spiffe://matrix.xiak.com/installations/" +
+		strings.TrimPrefix(installationID, "mxi-") + "/devops/runners"
 }
 
 func ContractDigest() string {
@@ -70,21 +98,31 @@ func contractDescription() contract {
 		ID: "matrix-v0.0.0-000000000000", SourceCommit: strings.Repeat("0", 40),
 		BuildID: "matrix-release-build",
 	}}
-	images := make(map[string]string, len(release.RequiredImages()))
-	for _, requirement := range release.RequiredImages() {
-		images[requirement.Component] = "sha256:" + strings.Repeat("0", 64)
-		manifest.Images = append(manifest.Images, release.Image{
+	manifest.Products = []release.Product{
+		release.ApplicationPaaSProduct("v0.0.0"),
+		release.DevOpsProduct("v0.0.0"),
+	}
+	images := make(map[string]string, len(release.RequiredImages(manifest.Products)))
+	for _, requirement := range release.RequiredImages(manifest.Products) {
+		sourceDigest := "sha256:" + strings.Repeat("0", 64)
+		image := release.Image{
 			Component: requirement.Component, Purpose: requirement.Purpose,
-			SourceDigest: "sha256:" + strings.Repeat("0", 64),
-		})
+			ImageID: sourceDigest, SourceDigest: sourceDigest,
+			LocalReference: release.LocalImageReference(
+				requirement.Component, sourceDigest,
+			),
+		}
+		images[requirement.Component] = image.RuntimeReference()
+		manifest.Images = append(manifest.Images, image)
 	}
 	document := composeDocument{
 		Name:     "matrix-00000000000000000000000000000000",
-		Services: compileServices(manifest, images, options),
+		Services: compileServices(manifest, images, options, currentProfile),
 		Networks: map[string]networkConfig{
 			"control":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":        {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
 			"mail-egress": {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-mail-egress")},
+			"source":      {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-source")},
 			"web":         {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
 	}
@@ -109,19 +147,31 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	if err := validateOptions(options); err != nil {
 		return Result{}, err
 	}
+	if manifest.IncludesProduct(release.ProductDevOps) &&
+		options.Port == devOpsExecutorRunnerPort {
+		return Result{}, errors.New("platform listener port conflicts with the DevOps runner listener")
+	}
 	images := make(map[string]string, len(manifest.Images))
 	for _, image := range manifest.Images {
-		images[image.Component] = image.ImageID
+		images[image.Component] = image.RuntimeReference()
 	}
 	document := composeDocument{
 		Name:     "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
-		Services: compileServices(manifest, images, options),
+		Services: compileServices(manifest, images, options, currentProfile),
 		Networks: map[string]networkConfig{
 			"control":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
 			"edge":        {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
 			"mail-egress": {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-mail-egress")},
 			"web":         {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
 		},
+	}
+	if manifest.IncludesProduct(release.ProductDevOps) {
+		document.Networks["source"] = networkConfig{
+			Internal: false,
+			Labels: ownershipLabels(
+				options.InstallationID, manifest.Release.ID, "network-source",
+			),
+		}
 	}
 	content, err := json.Marshal(document)
 	if err != nil {
@@ -132,7 +182,129 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	}, nil
 }
 
+// ValidateInstalledContract admits only the current topology contract or the
+// exact accepted productless predecessor. Candidate releases must compare
+// directly with ContractDigest instead.
+func ValidateInstalledContract(manifest release.Manifest) error {
+	if err := release.ValidateInstalledManifest(manifest); err != nil {
+		return errors.New("installed release manifest contract is unsupported")
+	}
+	expected := ContractDigest()
+	if release.IsLegacyProductlessManifest(manifest) {
+		expected = legacyProductlessContractDigest
+		if legacyProductlessImplementationDigest() != expected {
+			return errors.New("installed release topology implementation is unsupported")
+		}
+	}
+	if manifest.TopologyDigest != expected {
+		return errors.New("installed release topology contract digest is unsupported")
+	}
+	return nil
+}
+
+// CompileInstalled reconstructs provider input for authenticated lifecycle
+// source, rollback, and recovery releases. It is intentionally separate from
+// the strict current Compile entry point used by installation candidates.
+func CompileInstalled(manifest release.Manifest, options Options) (Result, error) {
+	if err := ValidateInstalledContract(manifest); err != nil {
+		return Result{}, err
+	}
+	if !release.IsLegacyProductlessManifest(manifest) {
+		return Compile(manifest, options)
+	}
+	if err := validateLegacyOptions(options); err != nil {
+		return Result{}, err
+	}
+	images := make(map[string]string, len(manifest.Images))
+	for _, image := range manifest.Images {
+		images[image.Component] = image.ImageID
+	}
+	document := composeDocument{
+		Name: "matrix-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		Services: compileServices(
+			manifest, images, options, legacyProductlessProfile,
+		),
+		Networks: map[string]networkConfig{
+			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
+			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+		},
+	}
+	content, err := json.Marshal(document)
+	if err != nil {
+		return Result{}, errors.New("encode installed platform Compose topology failed")
+	}
+	return Result{
+		ProjectName: document.Name, ContractDigest: legacyProductlessContractDigest,
+		ComposeJSON: content,
+	}, nil
+}
+
+func legacyProductlessImplementationDigest() string {
+	content, err := json.Marshal(legacyProductlessContractDescription())
+	if err != nil {
+		panic("static legacy platform topology contract cannot be encoded")
+	}
+	digest := sha256.Sum256(content)
+	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func legacyProductlessContractDescription() contract {
+	options := Options{
+		InstallationID: "mxi-00000000000000000000000000000000",
+		Root:           "/matrix-installation-root",
+		Listener:       "0.0.0.0",
+		Port:           1,
+	}
+	manifest := release.Manifest{Release: release.ReleaseIdentity{
+		ID: "matrix-v0.0.0-000000000000", SourceCommit: strings.Repeat("0", 40),
+		BuildID: "matrix-release-build",
+	}}
+	components := []string{
+		"apisix", "audit", "iam", "paas", "paas-ui", "postgres", "verification",
+	}
+	images := make(map[string]string, len(components))
+	for _, component := range components {
+		images[component] = "sha256:" + strings.Repeat("0", 64)
+		purpose := release.ImagePlatform
+		if component == "verification" {
+			purpose = release.ImageWorkload
+		}
+		manifest.Images = append(manifest.Images, release.Image{
+			Component: component, Purpose: purpose,
+			SourceDigest: "sha256:" + strings.Repeat("0", 64),
+		})
+	}
+	document := composeDocument{
+		Name: "matrix-00000000000000000000000000000000",
+		Services: compileServices(
+			manifest, images, options, legacyProductlessProfile,
+		),
+		Networks: map[string]networkConfig{
+			"control": {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-control")},
+			"edge":    {Internal: false, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-edge")},
+			"web":     {Internal: true, Labels: ownershipLabels(options.InstallationID, manifest.Release.ID, "network-web")},
+		},
+	}
+	return contract{
+		Version: ContractVersion,
+		Substitutions: []string{
+			"installationId", "installationRoot", "listenerAddress", "listenerPort",
+			"releaseId", "releaseBuildId", "sourceCommit", "signedImageIds",
+			"verificationArtifactDigest",
+		},
+		Compose: document,
+	}
+}
+
 func validateOptions(options Options) error {
+	return errors.Join(
+		validateLegacyOptions(options),
+		ValidateNorthboundOrigin(options.NorthboundOrigin, options.Port),
+	)
+}
+
+func validateLegacyOptions(options Options) error {
 	var problems []error
 	problems = append(problems, lifecycle.ValidateInstallationID(options.InstallationID))
 	if options.Root == "" || len(options.Root) > 4096 || !path.IsAbs(options.Root) ||
@@ -147,7 +319,6 @@ func validateOptions(options Options) error {
 	if options.Port == 0 {
 		problems = append(problems, errors.New("platform listener port is invalid"))
 	}
-	problems = append(problems, ValidateNorthboundOrigin(options.NorthboundOrigin, options.Port))
 	return errors.Join(problems...)
 }
 
@@ -239,6 +410,7 @@ func compileServices(
 	manifest release.Manifest,
 	images map[string]string,
 	options Options,
+	profile compileProfile,
 ) map[string]serviceConfig {
 	root := options.Root
 	postgresPassword := path.Join(root, layout.PostgresPassword)
@@ -254,12 +426,24 @@ func compileServices(
 	auditRuntimeDSN := path.Join(root, layout.AuditRuntime)
 	paasAPIDSN := path.Join(root, layout.PaaSAPI)
 	paasWorkerDSN := path.Join(root, layout.PaaSWorker)
+	devopsAPIDSN := path.Join(root, layout.DevOpsAPI)
+	devopsCheckReporterDSN := path.Join(root, layout.DevOpsCheckReporter)
+	devopsWorkerDSN := path.Join(root, layout.DevOpsWorker)
+	devopsSourceFetcherDSN := path.Join(root, layout.DevOpsSourceFetcher)
+	devopsSourceObserverDSN := path.Join(root, layout.DevOpsSourceObserver)
 	bootstrapIAM := path.Join(root, layout.IAMBootstrap)
 	auditIAMCredential := path.Join(root, layout.AuditIAMCredential)
 	iamAuditCredential := path.Join(root, layout.IAMAuditCredential)
 	paasIAMCredential := path.Join(root, layout.PaaSIAMCredential)
 	paasAuditCredential := path.Join(root, layout.PaaSAuditCredential)
+	devopsIAMCredential := path.Join(root, layout.DevOpsIAMCredential)
+	devopsAuditCredential := path.Join(root, layout.DevOpsAuditCredential)
+	platformIAMCredential := path.Join(root, layout.PlatformIAMCredential)
 	auditCursorKey := path.Join(root, layout.AuditCursorKey)
+	releaseTrust := path.Join(root, layout.ReleaseTrust)
+	releaseRoot := path.Join(root, layout.ReleaseDirectory(manifest.Release.ID))
+	releaseManifest := path.Join(releaseRoot, release.ManifestFilename)
+	releaseSignature := path.Join(releaseRoot, release.SignatureFilename)
 	paasCursorKey := path.Join(root, layout.PaaSCursorKey)
 	auditEdgeAssertion := path.Join(root, layout.AuditEdgeAssertion)
 	paasEdgeAssertion := path.Join(root, layout.PaaSEdgeAssertion)
@@ -270,6 +454,19 @@ func compileServices(
 	artifactCatalog := path.Join(root, layout.ArtifactCatalog)
 	executorRoot := path.Join(root, layout.ExecutorRoot)
 	workloadSecretRoot := path.Join(root, layout.WorkloadSecretRoot)
+	devopsWebhookCredentialRoot := path.Join(root, layout.DevOpsWebhookCredentialRoot)
+	devopsFetchCredentialRoot := path.Join(root, layout.DevOpsFetchCredentialRoot)
+	devopsReportCredentialRoot := path.Join(root, layout.DevOpsReportCredentialRoot)
+	devopsSourceTrustRoot := path.Join(root, layout.DevOpsSourceTrustRoot)
+	devopsSourceArchiveRoot := path.Join(root, layout.DevOpsSourceArchiveRoot)
+	devopsExecutorSpoolRoot := path.Join(root, layout.DevOpsExecutorSpoolRoot)
+	devopsExecutorServerCA := path.Join(root, layout.DevOpsExecutorServerCA)
+	devopsExecutorServerCert := path.Join(root, layout.DevOpsExecutorServerCert)
+	devopsExecutorServerKey := path.Join(root, layout.DevOpsExecutorServerKey)
+	devopsExecutorAdminCA := path.Join(root, layout.DevOpsExecutorAdminCA)
+	devopsExecutorRunnerCA := path.Join(root, layout.DevOpsExecutorRunnerCA)
+	devopsBuildWorkerClientCert := path.Join(root, layout.DevOpsBuildWorkerClientCert)
+	devopsBuildWorkerClientKey := path.Join(root, layout.DevOpsBuildWorkerClientKey)
 	service := func(
 		name string,
 		component string,
@@ -323,21 +520,25 @@ func compileServices(
 		"1.0", "512M", "http://127.0.0.1:8080/ready",
 	)
 	iam.Environment = map[string]string{
-		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE": "/run/matrix/iam-access-key-wrapping-keyring.json",
-		"MATRIX_IAM_TOTP_KEYRING_FILE":                "/run/matrix/iam-totp-keyring.json",
-		"MATRIX_IAM_DATABASE_DSN_FILE":                "/run/matrix/iam-api-dsn",
-		"MATRIX_IAM_BOOTSTRAP_FILE":                   "/run/matrix/iam-bootstrap.json",
-		"MATRIX_IAM_CURSOR_KEY_FILE":                  "/run/matrix/iam-cursor-key",
-		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE":  "/run/matrix/iam-email-verification-keyring.json",
-		"MATRIX_IAM_LISTEN_ADDRESS":                   "0.0.0.0:8080",
+		"MATRIX_IAM_DATABASE_DSN_FILE": "/run/matrix/iam-api-dsn",
+		"MATRIX_IAM_BOOTSTRAP_FILE":    "/run/matrix/iam-bootstrap.json",
+		"MATRIX_IAM_LISTEN_ADDRESS":    "0.0.0.0:8080",
 	}
 	iam.Volumes = []mount{
 		bind(iamAPIDSN, "/run/matrix/iam-api-dsn", true),
 		bind(bootstrapIAM, "/run/matrix/iam-bootstrap.json", true),
-		bind(accessKeyWrappingKeyring, "/run/matrix/iam-access-key-wrapping-keyring.json", true),
-		bind(totpKeyring, "/run/matrix/iam-totp-keyring.json", true),
-		bind(emailKeyring, "/run/matrix/iam-email-verification-keyring.json", true),
-		bind(iamCursorKey, "/run/matrix/iam-cursor-key", true),
+	}
+	if profile == currentProfile {
+		iam.Environment["MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE"] = "/run/matrix/iam-access-key-wrapping-keyring.json"
+		iam.Environment["MATRIX_IAM_TOTP_KEYRING_FILE"] = "/run/matrix/iam-totp-keyring.json"
+		iam.Environment["MATRIX_IAM_CURSOR_KEY_FILE"] = "/run/matrix/iam-cursor-key"
+		iam.Environment["MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE"] = "/run/matrix/iam-email-verification-keyring.json"
+		iam.Volumes = append(iam.Volumes,
+			bind(accessKeyWrappingKeyring, "/run/matrix/iam-access-key-wrapping-keyring.json", true),
+			bind(totpKeyring, "/run/matrix/iam-totp-keyring.json", true),
+			bind(emailKeyring, "/run/matrix/iam-email-verification-keyring.json", true),
+			bind(iamCursorKey, "/run/matrix/iam-cursor-key", true),
+		)
 	}
 	iam.DependsOn = healthy("postgres")
 
@@ -350,16 +551,20 @@ func compileServices(
 		"MATRIX_AUDIT_IAM_ENDPOINT":            "http://iam:8080",
 		"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE": "/run/matrix/audit-iam-credential",
 		"MATRIX_AUDIT_CURSOR_KEY_FILE":         "/run/matrix/audit-cursor-key",
-		"MATRIX_AUDIT_EDGE_ASSERTION_FILE":     "/run/matrix/audit-edge-assertion",
-		"MATRIX_AUDIT_INSTALLATION_ID":         options.InstallationID,
-		"MATRIX_AUDIT_NORTHBOUND_ORIGIN":       options.NorthboundOrigin,
 		"MATRIX_AUDIT_LISTEN_ADDRESS":          "0.0.0.0:8080",
 	}
 	audit.Volumes = []mount{
 		bind(auditRuntimeDSN, "/run/matrix/audit-runtime-dsn", true),
 		bind(auditIAMCredential, "/run/matrix/audit-iam-credential", true),
 		bind(auditCursorKey, "/run/matrix/audit-cursor-key", true),
-		bind(auditEdgeAssertion, "/run/matrix/audit-edge-assertion", true),
+	}
+	if profile == currentProfile {
+		audit.Environment["MATRIX_AUDIT_EDGE_ASSERTION_FILE"] = "/run/matrix/audit-edge-assertion"
+		audit.Environment["MATRIX_AUDIT_INSTALLATION_ID"] = options.InstallationID
+		audit.Environment["MATRIX_AUDIT_NORTHBOUND_ORIGIN"] = options.NorthboundOrigin
+		audit.Volumes = append(audit.Volumes,
+			bind(auditEdgeAssertion, "/run/matrix/audit-edge-assertion", true),
+		)
 	}
 	audit.DependsOn = healthy("postgres", "iam")
 
@@ -423,19 +628,23 @@ func compileServices(
 		"MATRIX_PAAS_DATABASE_DSN_FILE":            "/run/matrix/paas-api-dsn",
 		"MATRIX_PAAS_IAM_ENDPOINT":                 "http://iam:8080",
 		"MATRIX_PAAS_INSTALLATION_ID":              options.InstallationID,
-		"MATRIX_PAAS_NORTHBOUND_ORIGIN":            options.NorthboundOrigin,
 		"MATRIX_PAAS_RELEASE_ID":                   manifest.Release.ID,
 		"MATRIX_PAAS_SERVICE_CREDENTIAL_FILE":      "/run/matrix/paas-iam-credential",
-		"MATRIX_PAAS_CURSOR_KEY_FILE":              "/run/matrix/paas-cursor-key",
-		"MATRIX_PAAS_EDGE_ASSERTION_FILE":          "/run/matrix/paas-edge-assertion",
 		"MATRIX_PAAS_VERIFICATION_ARTIFACT_DIGEST": verificationArtifactDigest(manifest),
 		"MATRIX_PAAS_LISTEN_ADDRESS":               "0.0.0.0:8080",
 	}
 	paasAPI.Volumes = []mount{
 		bind(paasAPIDSN, "/run/matrix/paas-api-dsn", true),
 		bind(paasIAMCredential, "/run/matrix/paas-iam-credential", true),
-		bind(paasCursorKey, "/run/matrix/paas-cursor-key", true),
-		bind(paasEdgeAssertion, "/run/matrix/paas-edge-assertion", true),
+	}
+	if profile == currentProfile {
+		paasAPI.Environment["MATRIX_PAAS_NORTHBOUND_ORIGIN"] = options.NorthboundOrigin
+		paasAPI.Environment["MATRIX_PAAS_CURSOR_KEY_FILE"] = "/run/matrix/paas-cursor-key"
+		paasAPI.Environment["MATRIX_PAAS_EDGE_ASSERTION_FILE"] = "/run/matrix/paas-edge-assertion"
+		paasAPI.Volumes = append(paasAPI.Volumes,
+			bind(paasCursorKey, "/run/matrix/paas-cursor-key", true),
+			bind(paasEdgeAssertion, "/run/matrix/paas-edge-assertion", true),
+		)
 	}
 	paasAPI.Tmpfs = append(paasAPI.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAPI.DependsOn = healthy("postgres", "iam")
@@ -446,21 +655,23 @@ func compileServices(
 		"2.0", "1G", "http://127.0.0.1:8080/ready",
 	)
 	paasWorker.Environment = map[string]string{
-		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE":           "/run/matrix/paas-worker-dsn",
-		"MATRIX_PAAS_WORKER_ID":                          "paas-worker-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
-		"MATRIX_PAAS_WORKER_BINDING_REF":                 "compose-local-v1",
-		"MATRIX_PAAS_WORKER_BINDING_ROOT":                executorRoot,
-		"MATRIX_PAAS_WORKER_SECRET_ROOT":                 workloadSecretRoot,
-		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE":       "/run/matrix/artifact-catalog.json",
-		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID":         "organization-default",
-		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF":         "local-machine-v1",
-		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS":              "0.0.0.0:8080",
-		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE":      images["postgres"],
-		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE":         images["mysql"],
-		"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE": images["elasticsearch"],
-		"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE":      images["rabbitmq"],
-		"DOCKER_HOST":   "unix:///var/run/docker.sock",
-		"DOCKER_CONFIG": "/tmp/docker-config",
+		"MATRIX_PAAS_WORKER_DATABASE_DSN_FILE":     "/run/matrix/paas-worker-dsn",
+		"MATRIX_PAAS_WORKER_ID":                    "paas-worker-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		"MATRIX_PAAS_WORKER_BINDING_REF":           "compose-local-v1",
+		"MATRIX_PAAS_WORKER_BINDING_ROOT":          executorRoot,
+		"MATRIX_PAAS_WORKER_SECRET_ROOT":           workloadSecretRoot,
+		"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE": "/run/matrix/artifact-catalog.json",
+		"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID":   "organization-default",
+		"MATRIX_PAAS_WORKER_MACHINE_BINDING_REF":   "local-machine-v1",
+		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS":        "0.0.0.0:8080",
+		"DOCKER_HOST":                              "unix:///var/run/docker.sock",
+		"DOCKER_CONFIG":                            "/tmp/docker-config",
+	}
+	if profile == currentProfile {
+		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE"] = images["postgres"]
+		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE"] = images["mysql"]
+		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE"] = images["elasticsearch"]
+		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE"] = images["rabbitmq"]
 	}
 	paasWorker.Volumes = []mount{
 		bind(paasWorkerDSN, "/run/matrix/paas-worker-dsn", true),
@@ -491,14 +702,22 @@ func compileServices(
 	paasAudit.Tmpfs = append(paasAudit.Tmpfs, "/var/lib/docker:rw,noexec,nosuid,size=16m")
 	paasAudit.DependsOn = healthy("postgres", "audit")
 
+	uiName := "matrix-ui"
+	uiComponent := "matrix-ui"
+	uiEntrypoint := "/matrix/bin/matrix-ui"
+	uiEnvironmentKey := "MATRIX_PAAS_UI_LISTEN_ADDRESS"
+	if profile == legacyProductlessProfile {
+		uiName = "paas-ui"
+		uiComponent = "paas-ui"
+		uiEntrypoint = "/matrix/bin/matrix-paas-ui"
+		uiEnvironmentKey = "MATRIX_PAAS_UI_LISTEN_ADDRESS"
+	}
 	ui := service(
-		"paas-ui", "paas-ui", images["paas-ui"], []string{"web"},
-		[]string{"/matrix/bin/matrix-paas-ui"},
+		uiName, uiComponent, images[uiComponent], []string{"web"},
+		[]string{uiEntrypoint},
 		"0.5", "256M", "http://127.0.0.1:8080/ready",
 	)
-	ui.Environment = map[string]string{
-		"MATRIX_PAAS_UI_LISTEN_ADDRESS": "0.0.0.0:8080",
-	}
+	ui.Environment = map[string]string{uiEnvironmentKey: "0.0.0.0:8080"}
 
 	apisix := service(
 		"apisix", "apisix", images["apisix"], []string{"control", "edge", "web"}, nil,
@@ -512,23 +731,233 @@ func compileServices(
 		bind(apisixRoutes, "/usr/local/apisix/conf/apisix.yaml", true),
 		bind(apisixUID, "/usr/local/apisix/conf/apisix.uid", true),
 		bind(apisixNginx, "/usr/local/apisix/conf/nginx.conf", false),
-		bind(auditEdgeAssertion, "/run/matrix/audit-edge-assertion", true),
-		bind(paasEdgeAssertion, "/run/matrix/paas-edge-assertion", true),
+	}
+	if profile == currentProfile {
+		apisix.Volumes = append(apisix.Volumes,
+			bind(auditEdgeAssertion, "/run/matrix/audit-edge-assertion", true),
+			bind(paasEdgeAssertion, "/run/matrix/paas-edge-assertion", true),
+		)
 	}
 	apisix.Tmpfs = append(
 		apisix.Tmpfs,
 		"/usr/local/apisix/logs:rw,nosuid,size=16m,mode=0700,uid=0,gid=0",
 	)
 	apisix.CapAdd = []string{"CAP_CHOWN", "CAP_SETGID", "CAP_SETUID"}
-	apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")
-
-	return map[string]serviceConfig{
+	services := map[string]serviceConfig{
 		"apisix": apisix, "audit": audit, "iam": iam,
-		"iam-access-analysis-worker": iamAccessAnalysis, "iam-audit-dispatcher": iamAudit,
-		"iam-notification-dispatcher": iamNotification, "paas-api": paasAPI,
-		"paas-audit-dispatcher": paasAudit, "paas-ui": ui, "paas-worker": paasWorker,
+		"iam-audit-dispatcher": iamAudit, "paas-api": paasAPI,
+		"paas-audit-dispatcher": paasAudit, uiName: ui, "paas-worker": paasWorker,
 		"postgres": postgres,
 	}
+	if profile == currentProfile {
+		services["iam-access-analysis-worker"] = iamAccessAnalysis
+		services["iam-notification-dispatcher"] = iamNotification
+	}
+	if profile == currentProfile && manifest.IncludesProduct(release.ProductDevOps) {
+		devopsAPI := service(
+			"devops-api", "devops", images["devops"], []string{"control"},
+			[]string{"/matrix/bin/matrix-devops"},
+			"1.0", "768M", "http://127.0.0.1:8080/ready",
+		)
+		devopsAPI.Environment = map[string]string{
+			"MATRIX_DEVOPS_DATABASE_DSN_FILE":       "/run/matrix/devops-api-dsn",
+			"MATRIX_DEVOPS_IAM_ENDPOINT":            "http://iam:8080",
+			"MATRIX_DEVOPS_LISTEN_ADDRESS":          "0.0.0.0:8080",
+			"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE": "/run/matrix/devops-iam-credential",
+			"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT":     "/run/matrix/devops-source-secrets",
+		}
+		devopsAPI.Volumes = []mount{
+			bind(devopsAPIDSN, "/run/matrix/devops-api-dsn", true),
+			bind(devopsIAMCredential, "/run/matrix/devops-iam-credential", true),
+			bind(devopsWebhookCredentialRoot, "/run/matrix/devops-source-secrets", true),
+		}
+		devopsAPI.DependsOn = healthy("postgres", "iam")
+
+		devopsAudit := service(
+			"devops-audit-dispatcher", "devops", images["devops"], []string{"control"},
+			[]string{"/matrix/bin/matrix-devops-audit-dispatcher"},
+			"0.5", "384M", "http://127.0.0.1:8080/ready",
+		)
+		devopsAudit.Environment = map[string]string{
+			"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE":   "/run/matrix/devops-audit-credential",
+			"MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE": "/run/matrix/devops-worker-dsn",
+			"MATRIX_DEVOPS_AUDIT_ENDPOINT":          "http://audit:8080",
+			"MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS":    "0.0.0.0:8080",
+			"MATRIX_DEVOPS_AUDIT_WORKER_ID":         "devops-audit-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		}
+		devopsAudit.Volumes = []mount{
+			bind(devopsWorkerDSN, "/run/matrix/devops-worker-dsn", true),
+			bind(devopsAuditCredential, "/run/matrix/devops-audit-credential", true),
+		}
+		devopsAudit.DependsOn = healthy("postgres", "audit")
+
+		devopsExecutorGateway := service(
+			"devops-executor-gateway", "devops", images["devops"], []string{"control", "edge"},
+			[]string{"/matrix/bin/matrix-devops-executor-gateway"},
+			"1.0", "512M", "http://127.0.0.1:8080/ready",
+		)
+		devopsExecutorGateway.Environment = map[string]string{
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_CA_FILE":     "/run/matrix/executor-admin-client-ca.crt",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_IDENTITY":    DevOpsBuildWorkerIdentity(options.InstallationID),
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_LISTEN_ADDRESS":     fmt.Sprintf("0.0.0.0:%d", devOpsExecutorAdminPort),
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_READINESS_LISTEN_ADDRESS": "127.0.0.1:8080",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_CLIENT_CA_FILE":    "/run/matrix/executor-runner-client-ca.crt",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_LISTEN_ADDRESS":    fmt.Sprintf("0.0.0.0:%d", devOpsExecutorRunnerPort),
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_NAMESPACE":         DevOpsRunnerNamespace(options.InstallationID),
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_CERT_FILE":         "/run/matrix/executor-gateway-server.crt",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_KEY_FILE":          "/run/matrix/executor-gateway-server.key",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_SPOOL_ROOT":               "/var/lib/matrix/executor-spool",
+		}
+		devopsExecutorGateway.Ports = []string{
+			net.JoinHostPort(options.Listener, fmt.Sprint(devOpsExecutorRunnerPort)) +
+				fmt.Sprintf(":%d/tcp", devOpsExecutorRunnerPort),
+		}
+		devopsExecutorGateway.Volumes = []mount{
+			bind(devopsExecutorSpoolRoot, "/var/lib/matrix/executor-spool", false),
+			bind(devopsExecutorServerCert, "/run/matrix/executor-gateway-server.crt", true),
+			bind(devopsExecutorServerKey, "/run/matrix/executor-gateway-server.key", true),
+			bind(devopsExecutorAdminCA, "/run/matrix/executor-admin-client-ca.crt", true),
+			bind(devopsExecutorRunnerCA, "/run/matrix/executor-runner-client-ca.crt", true),
+		}
+
+		devopsBuildWorker := service(
+			"devops-build-worker", "devops", images["devops"], []string{"control"},
+			[]string{"/matrix/bin/matrix-devops-build-worker"},
+			"1.0", "512M", "http://127.0.0.1:8080/ready",
+		)
+		devopsBuildWorker.Environment = map[string]string{
+			"MATRIX_DEVOPS_BUILD_WORKER_CLIENT_CERT_FILE":    "/run/matrix/build-worker.crt",
+			"MATRIX_DEVOPS_BUILD_WORKER_CLIENT_IDENTITY":     DevOpsBuildWorkerIdentity(options.InstallationID),
+			"MATRIX_DEVOPS_BUILD_WORKER_CLIENT_KEY_FILE":     "/run/matrix/build-worker.key",
+			"MATRIX_DEVOPS_BUILD_WORKER_DATABASE_DSN_FILE":   "/run/matrix/devops-worker-dsn",
+			"MATRIX_DEVOPS_BUILD_WORKER_GATEWAY_ORIGIN":      fmt.Sprintf("https://devops-executor-gateway:%d", devOpsExecutorAdminPort),
+			"MATRIX_DEVOPS_BUILD_WORKER_GATEWAY_SERVER_NAME": DevOpsExecutorGatewayServerName,
+			"MATRIX_DEVOPS_BUILD_WORKER_ID":                  "devops-build-worker-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+			"MATRIX_DEVOPS_BUILD_WORKER_LISTEN_ADDRESS":      "0.0.0.0:8080",
+			"MATRIX_DEVOPS_BUILD_WORKER_SERVER_CA_FILE":      "/run/matrix/executor-server-ca.crt",
+			"MATRIX_DEVOPS_BUILD_WORKER_SOURCE_ARCHIVE_ROOT": "/var/lib/matrix/source-archives",
+		}
+		devopsBuildWorker.Volumes = []mount{
+			bind(devopsWorkerDSN, "/run/matrix/devops-worker-dsn", true),
+			bind(devopsSourceArchiveRoot, "/var/lib/matrix/source-archives", true),
+			bind(devopsBuildWorkerClientCert, "/run/matrix/build-worker.crt", true),
+			bind(devopsBuildWorkerClientKey, "/run/matrix/build-worker.key", true),
+			bind(devopsExecutorServerCA, "/run/matrix/executor-server-ca.crt", true),
+		}
+		devopsBuildWorker.DependsOn = healthy("postgres", "devops-executor-gateway")
+
+		devopsCheckReporter := service(
+			"devops-check-reporter", "devops", images["devops"],
+			[]string{"control", "source"},
+			[]string{"/matrix/bin/matrix-devops-check-reporter"},
+			"0.5", "384M", "http://127.0.0.1:8080/ready",
+		)
+		devopsCheckReporter.Environment = map[string]string{
+			"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE": "/run/matrix/devops-check-reporter-dsn",
+			"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS":    "0.0.0.0:8080",
+			"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT":       "/run/matrix/devops-source-report",
+			"MATRIX_DEVOPS_CHECK_REPORTER_TRUST_ROOT":        "/run/matrix/devops-source-trust",
+			"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID":         "devops-check-reporter-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		}
+		devopsCheckReporter.Volumes = []mount{
+			bind(devopsCheckReporterDSN, "/run/matrix/devops-check-reporter-dsn", true),
+			bind(devopsReportCredentialRoot, "/run/matrix/devops-source-report", true),
+			bind(devopsSourceTrustRoot, "/run/matrix/devops-source-trust", true),
+		}
+		devopsCheckReporter.DependsOn = healthy("postgres")
+
+		devopsSourceFetcher := service(
+			"devops-source-fetcher", "devops", images["devops"],
+			[]string{"control", "source"},
+			[]string{"/matrix/bin/matrix-devops-source-fetcher"},
+			"1.0", "1536M", "http://127.0.0.1:8080/ready",
+		)
+		devopsSourceFetcher.Environment = map[string]string{
+			"MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT":      "/var/lib/matrix/source-archives",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_DATABASE_DSN_FILE": "/run/matrix/devops-source-fetcher-dsn",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_FETCH_ROOT":        "/run/matrix/devops-source-fetch",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_LISTEN_ADDRESS":    "0.0.0.0:8080",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_TRUST_ROOT":        "/run/matrix/devops-source-trust",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_WORKER_ID":         "devops-source-fetcher-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		}
+		devopsSourceFetcher.Volumes = []mount{
+			bind(devopsSourceFetcherDSN, "/run/matrix/devops-source-fetcher-dsn", true),
+			bind(devopsFetchCredentialRoot, "/run/matrix/devops-source-fetch", true),
+			bind(devopsSourceTrustRoot, "/run/matrix/devops-source-trust", true),
+			bind(devopsSourceArchiveRoot, "/var/lib/matrix/source-archives", false),
+		}
+		devopsSourceFetcher.DependsOn = healthy("postgres")
+
+		devopsSourceObserver := service(
+			"devops-source-observer", "devops", images["devops"],
+			[]string{"control", "source"},
+			[]string{"/matrix/bin/matrix-devops-source-observer"},
+			"0.5", "384M", "http://127.0.0.1:8080/ready",
+		)
+		devopsSourceObserver.Environment = map[string]string{
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_DATABASE_DSN_FILE": "/run/matrix/devops-source-observer-dsn",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT":        "/run/matrix/devops-source-fetch",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS":    "0.0.0.0:8080",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT":       "/run/matrix/devops-source-report",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_TRUST_ROOT":        "/run/matrix/devops-source-trust",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT":      "/run/matrix/devops-source-webhooks",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID":         "devops-source-observer-" + strings.TrimPrefix(options.InstallationID, "mxi-"),
+		}
+		devopsSourceObserver.Volumes = []mount{
+			bind(devopsSourceObserverDSN, "/run/matrix/devops-source-observer-dsn", true),
+			bind(devopsWebhookCredentialRoot, "/run/matrix/devops-source-webhooks", true),
+			bind(devopsFetchCredentialRoot, "/run/matrix/devops-source-fetch", true),
+			bind(devopsReportCredentialRoot, "/run/matrix/devops-source-report", true),
+			bind(devopsSourceTrustRoot, "/run/matrix/devops-source-trust", true),
+		}
+		devopsSourceObserver.DependsOn = healthy("postgres")
+		services["devops-api"] = devopsAPI
+		services["devops-audit-dispatcher"] = devopsAudit
+		services["devops-build-worker"] = devopsBuildWorker
+		services["devops-check-reporter"] = devopsCheckReporter
+		services["devops-executor-gateway"] = devopsExecutorGateway
+		services["devops-source-fetcher"] = devopsSourceFetcher
+		services["devops-source-observer"] = devopsSourceObserver
+	}
+	if profile == legacyProductlessProfile {
+		apisix.DependsOn = healthy("audit", "iam", "paas-api", "paas-ui")
+		services["apisix"] = apisix
+		return services
+	}
+
+	platformAPI := service(
+		"platform-api", "platform", images["platform"], []string{"control"},
+		[]string{"/matrix/bin/matrix-platform"},
+		"0.5", "256M", "http://127.0.0.1:8080/ready",
+	)
+	platformAPI.Environment = map[string]string{
+		"MATRIX_PLATFORM_IAM_CREDENTIAL_FILE":    "/run/matrix/platform-iam-credential",
+		"MATRIX_PLATFORM_IAM_ENDPOINT":           "http://iam:8080",
+		"MATRIX_PLATFORM_INSTALLATION_ID":        options.InstallationID,
+		"MATRIX_PLATFORM_LISTEN_ADDRESS":         "0.0.0.0:8080",
+		"MATRIX_PLATFORM_PAAS_ENDPOINT":          "http://paas-api:8080",
+		"MATRIX_PLATFORM_RELEASE_ID":             manifest.Release.ID,
+		"MATRIX_PLATFORM_RELEASE_MANIFEST_FILE":  "/run/matrix/release.json",
+		"MATRIX_PLATFORM_RELEASE_SIGNATURE_FILE": "/run/matrix/release.sig",
+		"MATRIX_PLATFORM_RELEASE_TRUST_FILE":     "/run/matrix/release-trust.json",
+	}
+	platformAPI.Volumes = []mount{
+		bind(platformIAMCredential, "/run/matrix/platform-iam-credential", true),
+		bind(releaseManifest, "/run/matrix/release.json", true),
+		bind(releaseSignature, "/run/matrix/release.sig", true),
+		bind(releaseTrust, "/run/matrix/release-trust.json", true),
+	}
+	platformAPI.DependsOn = healthy("iam", "paas-api")
+	apisixDependencies := []string{"audit", "iam", "matrix-ui", "paas-api", "platform-api"}
+	if manifest.IncludesProduct(release.ProductDevOps) {
+		platformAPI.Environment["MATRIX_PLATFORM_DEVOPS_ENDPOINT"] = "http://devops-api:8080"
+		platformAPI.DependsOn["devops-api"] = dependency{Condition: "service_healthy"}
+		apisixDependencies = append(apisixDependencies, "devops-api")
+	}
+	apisix.DependsOn = healthy(apisixDependencies...)
+	services["apisix"] = apisix
+	services["platform-api"] = platformAPI
+	return services
 }
 
 func platformServiceLabels(

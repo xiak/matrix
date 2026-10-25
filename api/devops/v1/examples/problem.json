@@ -1,0 +1,16 @@
+{
+  "type": "https://errors.matrix.xiak.com/devops/precondition-failed",
+  "title": "The Pipeline draft is stale",
+  "status": 412,
+  "code": "PRECONDITION_FAILED",
+  "detail": "Reload the Pipeline before activating its draft.",
+  "instance": "/v1/pipelines/pipeline-verify-change/activate",
+  "traceId": "trace-01JZZZZZZZZZZZZZZZZZZZZZZZ",
+  "retryable": false,
+  "violations": [
+    {
+      "field": "draft.contentDigest",
+      "description": "The draft changed after it was loaded."
+    }
+  ]
+}

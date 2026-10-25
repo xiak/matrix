@@ -210,6 +210,30 @@ func ValidateNotificationContactVerification(value NotificationContactVerificati
 }
 
 func ValidateBootstrapDocument(value BootstrapDocument) error {
+	return validateBootstrapDocument(value, BootstrapServicePurposes())
+}
+
+// ValidateBootstrapReplayDocument accepts either the current bootstrap
+// contract or the exact pre-product bootstrap inventory. The legacy shape is
+// only for replaying an already-applied installation during upgrade; callers
+// must not use it to seed a new authority.
+func ValidateBootstrapReplayDocument(value BootstrapDocument) error {
+	expected := BootstrapServicePurposes()
+	if len(value.Services) == len(legacyBootstrapServicePurposes) {
+		expected = legacyBootstrapServicePurposes
+	}
+	return validateBootstrapDocument(value, expected)
+}
+
+// IsLegacyBootstrapReplayDocument reports whether value is the one supported
+// pre-product bootstrap shape. Invalid documents are never classified as
+// legacy replays.
+func IsLegacyBootstrapReplayDocument(value BootstrapDocument) bool {
+	return len(value.Services) == len(legacyBootstrapServicePurposes) &&
+		validateBootstrapDocument(value, legacyBootstrapServicePurposes) == nil
+}
+
+func validateBootstrapDocument(value BootstrapDocument, expected []ServicePurpose) error {
 	var problems []error
 	if value.APIVersion != APIVersion || value.Kind != "IAMBootstrap" {
 		problems = append(problems, errors.New("bootstrap type metadata is invalid"))
@@ -225,7 +249,6 @@ func ValidateBootstrapDocument(value BootstrapDocument) error {
 	if !value.Administrator.Password.Present() {
 		problems = append(problems, ErrInvalidSecret)
 	}
-	expected := AllServicePurposes()
 	if len(value.Services) != len(expected) {
 		problems = append(problems, errors.New("bootstrap service inventory is invalid"))
 	} else {
@@ -269,7 +292,8 @@ func ValidateResolveAuditProducerRequest(value ResolveAuditProducerRequest) erro
 
 func ValidateAuditProducerAuthorization(value AuditProducerAuthorization) error {
 	if value.APIVersion != APIVersion || value.Kind != "AuditProducerAuthorization" ||
-		(value.Producer.Purpose != ServiceIAM && value.Producer.Purpose != ServicePaaS && value.Producer.Purpose != ServiceAudit) {
+		(value.Producer.Purpose != ServiceIAM && value.Producer.Purpose != ServicePaaS &&
+			value.Producer.Purpose != ServiceDevOps && value.Producer.Purpose != ServiceAudit) {
 		return errors.New("audit producer authorization is invalid")
 	}
 	if (value.TenantID == "") == (value.InstallationID == "") ||

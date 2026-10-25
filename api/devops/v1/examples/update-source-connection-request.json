@@ -1,0 +1,9 @@
+{
+  "spec": {
+    "adapterId": "source-adapter-change-v1",
+    "endpointOrigin": "https://git.internal.example",
+    "webhookSecretRef": "secret-webhook-rotated",
+    "fetchCredentialRef": "credential-fetch-rotated",
+    "reportCredentialRef": "credential-report-rotated"
+  }
+}

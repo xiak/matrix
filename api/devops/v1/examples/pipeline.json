@@ -1,0 +1,30 @@
+{
+  "apiVersion": "devops.matrix.xiak.com/v1",
+  "kind": "Pipeline",
+  "metadata": {
+    "id": "pipeline-verify-change",
+    "name": "verify-change",
+    "scope": {
+      "tenantId": "organization-acme"
+    },
+    "resourceVersion": 2,
+    "createdAt": "2026-09-07T04:05:06Z",
+    "updatedAt": "2026-09-07T04:06:06Z"
+  },
+  "projectId": "devops-project-platform",
+  "draft": {
+    "spec": {
+      "repositoryBindingId": "repository-binding-api",
+      "triggerPolicy": "CHANGE",
+      "verificationProfile": "GO_1_26_OFFLINE_V1",
+      "dependencyEgress": "NONE",
+      "reporterPolicy": "CHANGE_CHECK_V1"
+    },
+    "contentDigest": "sha256:ad45bb2d16b6b680b77d9222651b17f4f78066f29b494064ff2da48e656c3871"
+  },
+  "activeRevision": {
+      "id": "pipeline-revision-8c089bacd77776938bdfa0c1cbc79e67e4d5041fa0543de8",
+    "revision": 1,
+      "contentDigest": "sha256:6f1da2f9846fe523241dc8f55200727fac79342a14baaa2bd5727e5485c03926"
+  }
+}

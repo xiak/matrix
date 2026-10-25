@@ -106,8 +106,10 @@ type ActionDefinition struct {
 const (
 	ProductIAM            ProductID = "iam"
 	ProductPaaS           ProductID = "paas"
+	ProductDevOps         ProductID = "devops"
 	ProductManagedService ProductID = "managedservice"
 	ProductAudit          ProductID = "audit"
+	ProductPlatform       ProductID = "platform"
 	ProductInstallation   ProductID = "installation"
 )
 
@@ -313,6 +315,25 @@ const (
 	ActionPaaSDeploymentRead              Action = "paas.deployment.read"
 	ActionPaaSOperationRead               Action = "paas.operation.read"
 
+	ActionDevOpsProjectCreate            Action = "devops.project.create"
+	ActionDevOpsProjectRead              Action = "devops.project.read"
+	ActionDevOpsSourceConnectionCreate   Action = "devops.source-connection.create"
+	ActionDevOpsSourceConnectionRead     Action = "devops.source-connection.read"
+	ActionDevOpsSourceConnectionUpdate   Action = "devops.source-connection.update"
+	ActionDevOpsSourceConnectionRecheck  Action = "devops.source-connection.recheck"
+	ActionDevOpsRepositoryBindingCreate  Action = "devops.repository-binding.create"
+	ActionDevOpsRepositoryBindingRead    Action = "devops.repository-binding.read"
+	ActionDevOpsRepositoryBindingUpdate  Action = "devops.repository-binding.update"
+	ActionDevOpsRepositoryBindingRecheck Action = "devops.repository-binding.recheck"
+	ActionDevOpsPipelineCreate           Action = "devops.pipeline.create"
+	ActionDevOpsPipelineRead             Action = "devops.pipeline.read"
+	ActionDevOpsPipelineUpdate           Action = "devops.pipeline.update"
+	ActionDevOpsPipelineActivate         Action = "devops.pipeline.activate"
+	ActionDevOpsRunRead                  Action = "devops.run.read"
+	ActionDevOpsRunReplay                Action = "devops.run.replay"
+	ActionDevOpsRunCancel                Action = "devops.run.cancel"
+	ActionDevOpsLogRead                  Action = "devops.log.read"
+
 	ActionManagedServiceOfferingRead             Action = "managedservice.offering.read"
 	ActionManagedServiceDefinitionRead           Action = "managedservice.service-definition.read"
 	ActionManagedServiceActivationRead           Action = "managedservice.service-activation.read"
@@ -330,6 +351,7 @@ const (
 	ActionAuditIntegrityVerify         Action = "audit.integrity.verify"
 	ActionAuditPlatformRecordRead      Action = "audit.platform-record.read"
 	ActionAuditPlatformIntegrityVerify Action = "audit.platform-integrity.verify"
+	ActionPlatformProductRead          Action = "platform.product.read"
 	ActionInstallationVerify           Action = "installation.verify"
 )
 
@@ -388,6 +410,11 @@ const (
 	ResourceExecutionPool         ResourceKind = "EXECUTION_POOL"
 	ResourceExecutionTarget       ResourceKind = "EXECUTION_TARGET"
 	ResourceNodeEnrollment        ResourceKind = "NODE_ENROLLMENT"
+	ResourceDevOpsProject         ResourceKind = "DEVOPS_PROJECT"
+	ResourceSourceConnection      ResourceKind = "SOURCE_CONNECTION"
+	ResourceRepositoryBinding     ResourceKind = "REPOSITORY_BINDING"
+	ResourcePipeline              ResourceKind = "PIPELINE"
+	ResourcePipelineRun           ResourceKind = "PIPELINE_RUN"
 )
 
 const (
@@ -402,7 +429,9 @@ const (
 
 const (
 	ServiceIAM                  ServicePurpose = "IAM"
+	ServicePlatform             ServicePurpose = "PLATFORM"
 	ServicePaaS                 ServicePurpose = "PAAS"
+	ServiceDevOps               ServicePurpose = "DEVOPS"
 	ServiceAudit                ServicePurpose = "AUDIT"
 	ServiceInstallationVerifier ServicePurpose = "INSTALLATION_VERIFIER"
 )
@@ -474,10 +503,18 @@ var retiredActionDefinitions = [...]ActionDefinition{
 	{ActionIAMPlatformRoleBindingRevoke, ProductIAM, ServiceIAM, ResourceRoleBinding, AuthorityScopeInstallation, false},
 }
 
-// AllServicePurposes returns the exact installer bootstrap order. The order is
-// part of the IAMBootstrap wire contract, not merely an enum inventory.
+// AllServicePurposes returns the closed service identity catalog. Optional
+// product services are included even though Foundation bootstrap does not
+// provision their credentials.
 func AllServicePurposes() []ServicePurpose {
 	return append([]ServicePurpose(nil), allServicePurposes...)
+}
+
+// BootstrapServicePurposes returns the exact installer bootstrap order. The
+// optional DevOps product is deliberately absent until an installation
+// selects it and provisions its credential through the product lifecycle.
+func BootstrapServicePurposes() []ServicePurpose {
+	return append([]ServicePurpose(nil), bootstrapServicePurposes...)
 }
 
 // These release-owned declarations are the only current action catalog.
@@ -486,8 +523,12 @@ func AllServicePurposes() []ServicePurpose {
 var authorizationProfiles = authorizationProfilesForBuild([]AuthorizationProfile{
 	iamPolicyAttachmentChangeProfile(),
 	paasProfileRevisionThirteen,
+	devOpsProfileRevisionOne,
 	managedServiceProfileRevisionSeven,
 	auditProfileRevisionFour,
+	declaredProductProfile(ProductPlatform, ServicePlatform, 1,
+		declaredProfileAction(ActionPlatformProductRead, ResourceInstallation, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	),
 	declaredProductProfile(ProductInstallation, ServiceInstallationVerifier, 1,
 		declaredProfileAction(ActionInstallationVerify, ResourceInstallation, AuthorityScopeInstallationProbe, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
 	),
@@ -603,6 +644,27 @@ var paasProfileRevisionTen = paasInstanceReadAccessKeyProfile(paasProfileRevisio
 var paasProfileRevisionEleven = paasDeploymentMutationAccessKeyProfile(paasProfileRevisionTen)
 var paasProfileRevisionTwelve = applicationLabelAccessKeyProfile(paasProfileRevisionEleven)
 var paasProfileRevisionThirteen = applicationListBatchProfile(paasProfileRevisionTwelve)
+
+var devOpsProfileRevisionOne = declaredProductProfile(ProductDevOps, ServiceDevOps, 1,
+	declaredProfileAction(ActionDevOpsProjectCreate, ResourceDevOpsProject, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsProjectRead, ResourceDevOpsProject, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsSourceConnectionCreate, ResourceSourceConnection, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsSourceConnectionRead, ResourceSourceConnection, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsSourceConnectionUpdate, ResourceSourceConnection, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsSourceConnectionRecheck, ResourceSourceConnection, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsRepositoryBindingCreate, ResourceRepositoryBinding, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsRepositoryBindingRead, ResourceRepositoryBinding, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsRepositoryBindingUpdate, ResourceRepositoryBinding, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsRepositoryBindingRecheck, ResourceRepositoryBinding, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsPipelineCreate, ResourcePipeline, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsPipelineRead, ResourcePipeline, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsPipelineUpdate, ResourcePipeline, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsPipelineActivate, ResourcePipeline, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsRunRead, ResourcePipelineRun, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsRunReplay, ResourcePipelineRun, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsRunCancel, ResourcePipelineRun, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+	declaredProfileAction(ActionDevOpsLogRead, ResourcePipelineRun, AuthorityScopeTenant, "", []AuthorizationResourceShape{{Mode: AuthorizationResourceInstance}}),
+)
 
 func applicationListBatchProfile(previous AuthorizationProfile) AuthorizationProfile {
 	profile := cloneAuthorizationProfile(previous)
@@ -1232,6 +1294,26 @@ func projectActionDefinitions(profiles []AuthorizationProfile) []ActionDefinitio
 }
 
 var allServicePurposes = []ServicePurpose{
+	ServiceIAM,
+	ServicePlatform,
+	ServicePaaS,
+	ServiceDevOps,
+	ServiceAudit,
+	ServiceInstallationVerifier,
+}
+
+var bootstrapServicePurposes = []ServicePurpose{
+	ServiceIAM,
+	ServicePlatform,
+	ServicePaaS,
+	ServiceAudit,
+	ServiceInstallationVerifier,
+}
+
+// legacyBootstrapServicePurposes is the fixed v0.1 inventory retained only so
+// an accepted installation can replay its original signed-in-place authority
+// seed while upgrading. It is deliberately excluded from public enumeration.
+var legacyBootstrapServicePurposes = []ServicePurpose{
 	ServiceIAM,
 	ServicePaaS,
 	ServiceAudit,

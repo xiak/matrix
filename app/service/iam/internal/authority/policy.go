@@ -657,6 +657,7 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 	switch id {
 	case iamv1.SystemPolicyAccountAdministrator:
 		actions = []iamv1.Action{
+			iamv1.ActionPlatformProductRead,
 			iamv1.ActionIAMAccountAliasSet, iamv1.ActionIAMUserList, iamv1.ActionIAMPolicyList,
 			iamv1.ActionIAMPolicyCreate, iamv1.ActionIAMPolicyRead,
 			iamv1.ActionIAMPolicyVersionList, iamv1.ActionIAMPolicyVersionRead, iamv1.ActionIAMPolicyVersionCreate, iamv1.ActionIAMPolicySetDefaultVersion,
@@ -697,6 +698,15 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 			iamv1.ActionManagedServiceQuotaEntitlementActivate, iamv1.ActionManagedServiceQuotaEntitlementRead,
 			iamv1.ActionManagedServiceInstallationCreate, iamv1.ActionManagedServiceInstallationRead,
 			iamv1.ActionManagedServiceInstallationTerminate,
+			iamv1.ActionDevOpsProjectCreate, iamv1.ActionDevOpsProjectRead,
+			iamv1.ActionDevOpsSourceConnectionCreate, iamv1.ActionDevOpsSourceConnectionRead,
+			iamv1.ActionDevOpsSourceConnectionUpdate, iamv1.ActionDevOpsSourceConnectionRecheck,
+			iamv1.ActionDevOpsRepositoryBindingCreate, iamv1.ActionDevOpsRepositoryBindingRead,
+			iamv1.ActionDevOpsRepositoryBindingUpdate, iamv1.ActionDevOpsRepositoryBindingRecheck,
+			iamv1.ActionDevOpsPipelineCreate, iamv1.ActionDevOpsPipelineRead,
+			iamv1.ActionDevOpsPipelineUpdate, iamv1.ActionDevOpsPipelineActivate,
+			iamv1.ActionDevOpsRunRead, iamv1.ActionDevOpsRunReplay,
+			iamv1.ActionDevOpsRunCancel, iamv1.ActionDevOpsLogRead,
 			iamv1.ActionAuditRecordRead, iamv1.ActionAuditIntegrityVerify,
 		}
 	case iamv1.SystemPolicyPlatformOperator:
@@ -716,6 +726,7 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 		}
 	case iamv1.SystemPolicyPaaSDeveloper:
 		actions = []iamv1.Action{
+			iamv1.ActionPlatformProductRead,
 			iamv1.ActionPaaSApplicationCreate, iamv1.ActionPaaSApplicationRead,
 			iamv1.ActionPaaSApplicationLabelSet, iamv1.ActionPaaSApplicationLabelDelete,
 			iamv1.ActionPaaSConfigurationCreate, iamv1.ActionPaaSConfigurationRead,
@@ -733,6 +744,7 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 		}
 	case iamv1.SystemPolicyPaaSViewer:
 		actions = []iamv1.Action{
+			iamv1.ActionPlatformProductRead,
 			iamv1.ActionPaaSApplicationRead, iamv1.ActionPaaSConfigurationRead,
 			iamv1.ActionPaaSConfigurationRevisionRead, iamv1.ActionPaaSApplicationRevisionRead,
 			iamv1.ActionPaaSDeploymentRead, iamv1.ActionPaaSOperationRead,
@@ -742,7 +754,7 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 			iamv1.ActionManagedServiceQuotaEntitlementRead, iamv1.ActionManagedServiceInstallationRead,
 		}
 	case iamv1.SystemPolicyAuditReader:
-		actions = []iamv1.Action{iamv1.ActionAuditRecordRead, iamv1.ActionAuditIntegrityVerify}
+		actions = []iamv1.Action{iamv1.ActionPlatformProductRead, iamv1.ActionAuditRecordRead, iamv1.ActionAuditIntegrityVerify}
 	case iamv1.SystemPolicyInstallationVerifier:
 		scope = iamv1.AuthorityScopeInstallationProbe
 		actions = []iamv1.Action{iamv1.ActionInstallationVerify}

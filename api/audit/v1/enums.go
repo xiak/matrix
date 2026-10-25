@@ -5,6 +5,8 @@ type ActorType string
 type Action string
 type TargetKind string
 type Result string
+type Outcome string
+type Reason string
 type IngestionOutcome string
 type RetentionPolicy string
 type VerificationState string
@@ -12,9 +14,10 @@ type ReadinessState string
 type InstallationVerificationState string
 
 const (
-	SourceIAM   Source = "IAM"
-	SourcePaaS  Source = "PAAS"
-	SourceAudit Source = "AUDIT"
+	SourceIAM    Source = "IAM"
+	SourcePaaS   Source = "PAAS"
+	SourceDevOps Source = "DEVOPS"
+	SourceAudit  Source = "AUDIT"
 )
 
 const (
@@ -142,6 +145,25 @@ const (
 	ActionManagedServiceInstallationTerminationRequested Action = "managedservice.service-installation.termination-requested"
 	ActionManagedServiceInstallationTerminated           Action = "managedservice.service-installation.terminated"
 
+	ActionDevOpsProjectCreated                      Action = "devops.project.created"
+	ActionDevOpsSourceConnectionCreated             Action = "devops.source-connection.created"
+	ActionDevOpsSourceConnectionUpdated             Action = "devops.source-connection.updated"
+	ActionDevOpsSourceConnectionRecheckScheduled    Action = "devops.source-connection.recheck-scheduled"
+	ActionDevOpsSourceConnectionHealthTransitioned  Action = "devops.source-connection.health-transitioned"
+	ActionDevOpsRepositoryBindingCreated            Action = "devops.repository-binding.created"
+	ActionDevOpsRepositoryBindingUpdated            Action = "devops.repository-binding.updated"
+	ActionDevOpsRepositoryBindingRecheckScheduled   Action = "devops.repository-binding.recheck-scheduled"
+	ActionDevOpsRepositoryBindingHealthTransitioned Action = "devops.repository-binding.health-transitioned"
+	ActionDevOpsPipelineCreated                     Action = "devops.pipeline.created"
+	ActionDevOpsPipelineDraftUpdated                Action = "devops.pipeline.draft-updated"
+	ActionDevOpsPipelineRevisionActivated           Action = "devops.pipeline-revision.activated"
+	ActionDevOpsSourceEventAdmitted                 Action = "devops.source-event.admitted"
+	ActionDevOpsPipelineRunCreated                  Action = "devops.pipeline-run.created"
+	ActionDevOpsPipelineRunReplayed                 Action = "devops.pipeline-run.replayed"
+	ActionDevOpsPipelineRunCancellationRequested    Action = "devops.pipeline-run.cancellation-requested"
+	ActionDevOpsPipelineRunCompleted                Action = "devops.pipeline-run.completed"
+	ActionDevOpsPipelineRunLogsRead                 Action = "devops.pipeline-run.logs-read"
+
 	ActionAuditRecordsRead               Action = "audit.records.read"
 	ActionAuditIntegrityVerified         Action = "audit.integrity.verified"
 	ActionAuditPlatformRecordsRead       Action = "audit.platform-records.read"
@@ -178,6 +200,13 @@ const (
 	TargetQuotaEntitlement      TargetKind = "QUOTA_ENTITLEMENT"
 	TargetServiceActivation     TargetKind = "SERVICE_ACTIVATION"
 	TargetServiceInstallation   TargetKind = "SERVICE_INSTALLATION"
+	TargetDevOpsProject         TargetKind = "DEVOPS_PROJECT"
+	TargetSourceConnection      TargetKind = "SOURCE_CONNECTION"
+	TargetRepositoryBinding     TargetKind = "REPOSITORY_BINDING"
+	TargetPipeline              TargetKind = "PIPELINE"
+	TargetPipelineRevision      TargetKind = "PIPELINE_REVISION"
+	TargetSourceEvent           TargetKind = "SOURCE_EVENT"
+	TargetPipelineRun           TargetKind = "PIPELINE_RUN"
 	TargetAuditRecords          TargetKind = "AUDIT_RECORDS"
 	TargetAuditChain            TargetKind = "AUDIT_CHAIN"
 )
@@ -187,6 +216,26 @@ const (
 	ResultSucceeded Result = "SUCCEEDED"
 	ResultAllowed   Result = "ALLOWED"
 	ResultDenied    Result = "DENIED"
+)
+
+const (
+	OutcomeSucceeded          Outcome = "SUCCEEDED"
+	OutcomeFailed             Outcome = "FAILED"
+	OutcomeCancelled          Outcome = "CANCELLED"
+	OutcomeManualIntervention Outcome = "MANUAL_INTERVENTION"
+)
+
+const (
+	ReasonCompleted               Reason = "COMPLETED"
+	ReasonSourceUnavailable       Reason = "SOURCE_UNAVAILABLE"
+	ReasonCommitMismatch          Reason = "COMMIT_MISMATCH"
+	ReasonExecutorUnavailable     Reason = "EXECUTOR_UNAVAILABLE"
+	ReasonVerificationFailed      Reason = "VERIFICATION_FAILED"
+	ReasonDeadlineExceeded        Reason = "DEADLINE_EXCEEDED"
+	ReasonReportUnavailable       Reason = "REPORT_UNAVAILABLE"
+	ReasonReportConflict          Reason = "REPORT_CONFLICT"
+	ReasonCancelled               Reason = "CANCELLED"
+	ReasonReconciliationExhausted Reason = "RECONCILIATION_EXHAUSTED"
 )
 
 const (
@@ -223,7 +272,8 @@ type ActionContract struct {
 	RoleActorRequired         bool
 	ServiceActorRequired      bool
 	AccessKeyActorPermitted   bool
-	SystemActorID             ActorID
+	OutcomeRequired           bool
+	SystemActorIDs            []ActorID
 	TargetMatchesInstallation bool
 }
 
@@ -234,6 +284,7 @@ func AllActions() []Action {
 func ContractForAction(action Action) (ActionContract, bool) {
 	contract, known := actionContracts[action]
 	contract.Results = append([]Result(nil), contract.Results...)
+	contract.SystemActorIDs = append([]ActorID(nil), contract.SystemActorIDs...)
 	if contract.IAMDecisionRequired {
 		contract.IAMDecisionPermitted = true
 	}
@@ -353,6 +404,24 @@ var allActions = []Action{
 	ActionManagedServiceInstallationReady,
 	ActionManagedServiceInstallationTerminationRequested,
 	ActionManagedServiceInstallationTerminated,
+	ActionDevOpsProjectCreated,
+	ActionDevOpsSourceConnectionCreated,
+	ActionDevOpsSourceConnectionUpdated,
+	ActionDevOpsSourceConnectionRecheckScheduled,
+	ActionDevOpsSourceConnectionHealthTransitioned,
+	ActionDevOpsRepositoryBindingCreated,
+	ActionDevOpsRepositoryBindingUpdated,
+	ActionDevOpsRepositoryBindingRecheckScheduled,
+	ActionDevOpsRepositoryBindingHealthTransitioned,
+	ActionDevOpsPipelineCreated,
+	ActionDevOpsPipelineDraftUpdated,
+	ActionDevOpsPipelineRevisionActivated,
+	ActionDevOpsSourceEventAdmitted,
+	ActionDevOpsPipelineRunCreated,
+	ActionDevOpsPipelineRunReplayed,
+	ActionDevOpsPipelineRunCancellationRequested,
+	ActionDevOpsPipelineRunCompleted,
+	ActionDevOpsPipelineRunLogsRead,
 	ActionAuditRecordsRead,
 	ActionAuditIntegrityVerified,
 	ActionAuditPlatformRecordsRead,
@@ -443,11 +512,11 @@ var actionContracts = map[Action]ActionContract{
 	ActionIAMAccessAnalyzerCreated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessAnalyzerUpdated:               {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessAnalyzerDispositionUpdated:    {Source: SourceIAM, Target: TargetAccessAnalyzer, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMAccessFindingDetected:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
-	ActionIAMAccessFindingResolved:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
+	ActionIAMAccessFindingDetected:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorIDs: []ActorID{"iam.access-analyzer"}},
+	ActionIAMAccessFindingResolved:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, SystemActorIDs: []ActorID{"iam.access-analyzer"}},
 	ActionIAMAccessFindingArchived:               {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
 	ActionIAMAccessFindingUnarchived:             {Source: SourceIAM, Target: TargetAccessFinding, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true},
-	ActionIAMAccessKeyAutomaticallyDisabled:      {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, SystemActorID: "iam.access-analyzer"},
+	ActionIAMAccessKeyAutomaticallyDisabled:      {Source: SourceIAM, Target: TargetAccessKey, Results: []Result{ResultSucceeded}, SystemActorIDs: []ActorID{"iam.access-analyzer"}},
 	ActionIAMPolicyCreated: {
 		Source: SourceIAM, Target: TargetPolicy, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true, UserActorRequired: true,
 	},
@@ -492,19 +561,19 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionIAMInstallationPrimaryCredentialsRecovered: {
 		Source: SourceIAM, Target: TargetPrincipal, Results: []Result{ResultSucceeded}, PlatformOnly: true,
-		SystemActorID: "iam-local-recovery",
+		SystemActorIDs: []ActorID{"iam-local-recovery"},
 	},
 	ActionIAMAuthenticationRecoveryClosed: {
 		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
-		SystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+		SystemActorIDs: []ActorID{"iam-authentication-recovery"}, TargetMatchesInstallation: true,
 	},
 	ActionIAMAuthenticationRecoveryReconciled: {
 		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
-		SystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+		SystemActorIDs: []ActorID{"iam-authentication-recovery"}, TargetMatchesInstallation: true,
 	},
 	ActionIAMAuthenticationRecoveryReopened: {
 		Source: SourceIAM, Target: TargetInstallation, Results: []Result{ResultSucceeded}, PlatformOnly: true,
-		SystemActorID: "iam-authentication-recovery", TargetMatchesInstallation: true,
+		SystemActorIDs: []ActorID{"iam-authentication-recovery"}, TargetMatchesInstallation: true,
 	},
 	ActionIAMOrganizationCreated: {
 		Source: SourceIAM, Target: TargetOrganization, Results: []Result{ResultSucceeded}, IAMDecisionRequired: true,
@@ -651,6 +720,79 @@ var actionContracts = map[Action]ActionContract{
 	},
 	ActionManagedServiceInstallationTerminated: {
 		Source: SourcePaaS, Target: TargetServiceInstallation, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsProjectCreated: {
+		Source: SourceDevOps, Target: TargetDevOpsProject, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsSourceConnectionCreated: {
+		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsSourceConnectionUpdated: {
+		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsSourceConnectionRecheckScheduled: {
+		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsSourceConnectionHealthTransitioned: {
+		Source: SourceDevOps, Target: TargetSourceConnection, Results: []Result{ResultSucceeded},
+		OperationRequired: true, SystemActorIDs: []ActorID{"system-devops-source-observer"},
+	},
+	ActionDevOpsRepositoryBindingCreated: {
+		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsRepositoryBindingUpdated: {
+		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsRepositoryBindingRecheckScheduled: {
+		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsRepositoryBindingHealthTransitioned: {
+		Source: SourceDevOps, Target: TargetRepositoryBinding, Results: []Result{ResultSucceeded},
+		OperationRequired: true, SystemActorIDs: []ActorID{"system-devops-source-observer"},
+	},
+	ActionDevOpsPipelineCreated: {
+		Source: SourceDevOps, Target: TargetPipeline, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsPipelineDraftUpdated: {
+		Source: SourceDevOps, Target: TargetPipeline, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsPipelineRevisionActivated: {
+		Source: SourceDevOps, Target: TargetPipelineRevision, Results: []Result{ResultSucceeded},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsSourceEventAdmitted: {
+		Source: SourceDevOps, Target: TargetSourceEvent, Results: []Result{ResultAccepted},
+		OperationRequired: true, SystemActorIDs: []ActorID{"system-devops-source-ingress"},
+	},
+	ActionDevOpsPipelineRunCreated: {
+		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultAccepted},
+		OperationRequired: true, SystemActorIDs: []ActorID{"system-devops-source-ingress"},
+	},
+	ActionDevOpsPipelineRunReplayed: {
+		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultAccepted},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsPipelineRunCancellationRequested: {
+		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultAccepted},
+		IAMDecisionRequired: true, OperationRequired: true,
+	},
+	ActionDevOpsPipelineRunCompleted: {
+		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultSucceeded},
+		OperationRequired: true, OutcomeRequired: true,
+		SystemActorIDs: []ActorID{"system-devops-run-worker", "system-devops-run-control"},
+	},
+	ActionDevOpsPipelineRunLogsRead: {
+		Source: SourceDevOps, Target: TargetPipelineRun, Results: []Result{ResultSucceeded},
 		IAMDecisionRequired: true, OperationRequired: true,
 	},
 	ActionAuditRecordsRead: {

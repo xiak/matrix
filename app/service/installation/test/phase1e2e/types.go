@@ -150,7 +150,6 @@ func validateReleasePair(a, b release.VerifiedBundle) error {
 		b.Manifest.Release.PreviousVersion != a.Manifest.Release.Version ||
 		a.Manifest.Release.ID == b.Manifest.Release.ID ||
 		a.Manifest.Release.Version == b.Manifest.Release.Version ||
-		a.Manifest.Release.SourceCommit != b.Manifest.Release.SourceCommit ||
 		a.Manifest.Database != release.CurrentDatabaseProfile() ||
 		b.Manifest.Database != a.Manifest.Database {
 		return fail("release-pair-contract")
@@ -160,6 +159,10 @@ func validateReleasePair(a, b release.VerifiedBundle) error {
 	}
 	if _, ok := workloadImage(b.Manifest); !ok {
 		return fail("release-b-workload")
+	}
+	if !a.Manifest.IncludesProduct(release.ProductDevOps) ||
+		!b.Manifest.IncludesProduct(release.ProductDevOps) {
+		return fail("release-devops-product")
 	}
 	return nil
 }

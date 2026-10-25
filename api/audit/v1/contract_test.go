@@ -287,6 +287,7 @@ func TestAuditExamplesPassDomainValidation(t *testing.T) {
 		run  func(*testing.T)
 	}{
 		{"PaaS event", validAuditEvent("examples/event-paas.json", SourcePaaS)},
+		{"DevOps event", validAuditEvent("examples/event-devops.json", SourceDevOps)},
 		{"denied IAM event", validAuditEvent("examples/event-iam-denied.json", SourceIAM)},
 		{"ingestion result", validAuditExample[IngestionResult]("examples/ingestion-result.json", ValidateIngestionResult)},
 		{"query request", validAuditExample[QueryRecordsRequest]("examples/query-records-request.json", ValidateQueryRecordsRequest)},
@@ -357,17 +358,20 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if contract.OperationRequired {
 			event.OperationID = "operation-example"
 		}
+		if contract.OutcomeRequired {
+			event.Outcome, event.Reason = OutcomeSucceeded, ReasonCompleted
+		}
 		if contract.PlatformOnly {
 			event.TenantID, event.InstallationID = "", "installation-example"
-			if contract.SystemActorID == "" {
+			if len(contract.SystemActorIDs) == 0 {
 				event.Actor.Type = ActorUser
 			}
 			if contract.TargetMatchesInstallation {
 				event.Target.ID = event.InstallationID
 			}
 		}
-		if contract.SystemActorID != "" {
-			event.Actor = ActorReference{Type: ActorSystem, ID: contract.SystemActorID}
+		if len(contract.SystemActorIDs) > 0 {
+			event.Actor = ActorReference{Type: ActorSystem, ID: contract.SystemActorIDs[0]}
 		}
 		if contract.UserActorRequired {
 			event.Actor.Type = ActorUser
@@ -388,7 +392,7 @@ func TestAuditActionCatalogIsClosedAndSourceBound(t *testing.T) {
 		if err := ValidateEventForSource(contract.Source, event); err != nil {
 			t.Fatalf("valid action contract %q rejected: %v", action, err)
 		}
-		if contract.SystemActorID != "" {
+		if len(contract.SystemActorIDs) > 0 {
 			for _, mutation := range []func(*Event){
 				func(candidate *Event) { candidate.Actor.Type = ActorUser },
 				func(candidate *Event) { candidate.Actor.ID = "another-system" },

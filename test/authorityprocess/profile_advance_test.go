@@ -567,7 +567,7 @@ func TestIAMUserManagementCompletionPredecessorProcess(t *testing.T) {
 	var schema uint64
 	var ready, contractReady bool
 	var completionCount int
-	if err := admin.QueryRow(ctx, "SELECT schema_version, ready, iam.user_management_completion_contract_ready() FROM iam.readiness()").Scan(&schema, &ready, &contractReady); err != nil || schema != 87 || !ready || !contractReady {
+	if err := admin.QueryRow(ctx, "SELECT schema_version, ready, iam.user_management_completion_contract_ready() FROM iam.readiness()").Scan(&schema, &ready, &contractReady); err != nil || schema != 88 || !ready || !contractReady {
 		t.Fatal("IAM87 user management completion schema is not ready", err)
 	}
 	if err := admin.QueryRow(ctx, "SELECT count(*) FROM iam.user_management_completions").Scan(&completionCount); err != nil || completionCount != 0 {

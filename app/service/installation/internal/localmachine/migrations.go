@@ -15,6 +15,8 @@ import (
 
 const migrationWaitSeconds = "120"
 
+const migrationInstallationIDEnvironment = "MATRIX_MIGRATION_INSTALLATION_ID"
+
 type migrationMount struct {
 	relative    string
 	destination string
@@ -22,11 +24,12 @@ type migrationMount struct {
 }
 
 type migrationDefinition struct {
-	component     string
-	name          string
-	entrypoint    string
-	mounts        []migrationMount
-	releaseMounts []releaseMigrationMount
+	component          string
+	name               string
+	entrypoint         string
+	bindInstallationID bool
+	mounts             []migrationMount
+	releaseMounts      []releaseMigrationMount
 }
 
 type releaseMigrationMount struct {
@@ -39,10 +42,12 @@ type releaseMigrationMount struct {
 var platformMigrations = []migrationDefinition{
 	{
 		component: "iam", name: "iam", entrypoint: "/matrix/bin/matrix-iam-migrate",
+		bindInstallationID: true,
 		mounts: []migrationMount{
 			{layout.PostgresMigration, "/run/matrix/migration-dsn", "MATRIX_MIGRATION_DATABASE_DSN_FILE"},
 			{layout.IAMAPI, "/run/matrix/iam-api-dsn", "MATRIX_MIGRATION_IAM_API_DSN_FILE"},
 			{layout.IAMWorker, "/run/matrix/iam-worker-dsn", "MATRIX_MIGRATION_IAM_WORKER_DSN_FILE"},
+			{layout.PlatformIAMCredential, "/run/matrix/platform-iam-credential", "MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE"},
 			{layout.IAMCredentialRecovery, "/run/matrix/iam-recovery-dsn", "MATRIX_MIGRATION_IAM_RECOVERY_DSN_FILE"},
 			{layout.IAMAuthenticationRecovery, "/run/matrix/iam-authentication-recovery-dsn", installationv1.AuthenticationRecoveryMigrationDSNFileEnvironment},
 			{layout.IAMBackupCustody, "/run/matrix/iam-backup-custody-dsn", installationv1.TOTPBackupCustodyMigrationDSNFileEnvironment},
@@ -72,6 +77,45 @@ var platformMigrations = []migrationDefinition{
 	},
 }
 
+func platformMigrationsFor(manifest release.Manifest) []migrationDefinition {
+	if !release.IsLegacyProductlessManifest(manifest) {
+		result := append([]migrationDefinition(nil), platformMigrations...)
+		result[0].mounts = append([]migrationMount(nil), platformMigrations[0].mounts...)
+		if manifest.IncludesProduct(release.ProductDevOps) {
+			result[0].mounts = append(result[0].mounts, migrationMount{
+				layout.DevOpsIAMCredential,
+				"/run/matrix/devops-iam-credential",
+				"MATRIX_MIGRATION_DEVOPS_IAM_CREDENTIAL_FILE",
+			})
+			result = append(result, migrationDefinition{
+				component: "devops", name: "devops",
+				entrypoint: "/matrix/bin/matrix-devops-migrate",
+				mounts: []migrationMount{
+					{layout.PostgresMigration, "/run/matrix/migration-dsn", "MATRIX_MIGRATION_DATABASE_DSN_FILE"},
+					{layout.DevOpsAPI, "/run/matrix/devops-api-dsn", "MATRIX_MIGRATION_DEVOPS_API_DSN_FILE"},
+					{layout.DevOpsCheckReporter, "/run/matrix/devops-check-reporter-dsn", "MATRIX_MIGRATION_DEVOPS_CHECK_REPORTER_DSN_FILE"},
+					{layout.DevOpsSourceFetcher, "/run/matrix/devops-source-fetcher-dsn", "MATRIX_MIGRATION_DEVOPS_SOURCE_FETCHER_DSN_FILE"},
+					{layout.DevOpsSourceObserver, "/run/matrix/devops-source-observer-dsn", "MATRIX_MIGRATION_DEVOPS_SOURCE_OBSERVER_DSN_FILE"},
+					{layout.DevOpsWorker, "/run/matrix/devops-worker-dsn", "MATRIX_MIGRATION_DEVOPS_WORKER_DSN_FILE"},
+				},
+			})
+		}
+		return result
+	}
+	return []migrationDefinition{
+		{
+			component: "iam", name: "iam", entrypoint: "/matrix/bin/matrix-iam-migrate",
+			mounts: []migrationMount{
+				{layout.PostgresMigration, "/run/matrix/migration-dsn", "MATRIX_MIGRATION_DATABASE_DSN_FILE"},
+				{layout.IAMAPI, "/run/matrix/iam-api-dsn", "MATRIX_MIGRATION_IAM_API_DSN_FILE"},
+				{layout.IAMWorker, "/run/matrix/iam-worker-dsn", "MATRIX_MIGRATION_IAM_WORKER_DSN_FILE"},
+			},
+		},
+		platformMigrations[1],
+		platformMigrations[2],
+	}
+}
+
 func migrateInstallation(
 	ctx context.Context,
 	runtimeBoundary dockerRuntime,
@@ -94,8 +138,56 @@ func migrateInstallation(
 		}
 		return errors.Join(platformcommand.ErrEffectUnavailable, err)
 	}
-	return runMigrationModes(
+	if err := runMigrationModes(
 		ctx, runtimeBoundary, plan, installation, "apply", "verify",
+	); err != nil {
+		return err
+	}
+	if !installation.bundle.Manifest.IncludesProduct(release.ProductDevOps) {
+		return nil
+	}
+	return enrollReleaseServicesAfterBootstrap(ctx, runtimeBoundary, plan, installation)
+}
+
+func enrollReleaseServicesAfterBootstrap(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+	installation verifiedInstallation,
+) error {
+	_, started, err := runtimeBoundary.Run(
+		ctx, nil,
+		"compose", "--file", installation.composePath,
+		"--project-name", installation.topology.ProjectName,
+		"up", "--detach", "--wait", "--wait-timeout", migrationWaitSeconds,
+		"--no-build", "--pull", "never", "iam",
+	)
+	if err != nil {
+		if !started {
+			return errors.Join(platformcommand.ErrEffectUnavailable, err)
+		}
+		if ctx.Err() != nil {
+			return errors.Join(platformcommand.ErrEffectOutcomeUnknown, err)
+		}
+		return errors.Join(platformcommand.ErrEffectVerification, err)
+	}
+	networkID, err := controlNetworkID(
+		ctx, runtimeBoundary, installation.topology.ProjectName,
+		plan.InstallationID, installation.bundle.Manifest.Release.ID,
+	)
+	if err != nil {
+		return err
+	}
+	migrations := platformMigrationsFor(installation.bundle.Manifest)
+	if len(migrations) == 0 || migrations[0].name != "iam" {
+		return errors.Join(
+			platformcommand.ErrEffectVerification,
+			errors.New("IAM release service migration is unavailable"),
+		)
+	}
+	return runMigrationDefinitionsOnNetwork(
+		ctx, runtimeBoundary, plan, installation, networkID,
+		migrations[:1], "apply", "verify",
 	)
 }
 
@@ -164,15 +256,30 @@ func runMigrationModesOnNetwork(
 	networkID string,
 	modes ...string,
 ) error {
+	return runMigrationDefinitionsOnNetwork(
+		ctx, runtimeBoundary, plan, installation, networkID,
+		platformMigrationsFor(installation.bundle.Manifest), modes...,
+	)
+}
+
+func runMigrationDefinitionsOnNetwork(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	plan platformcommand.InstallPlan,
+	installation verifiedInstallation,
+	networkID string,
+	migrations []migrationDefinition,
+	modes ...string,
+) error {
 	if !providerIdentity.MatchString(networkID) {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
 			errors.New("migration network identity is invalid"),
 		)
 	}
-	images := make(map[string]string, len(installation.bundle.Manifest.Images))
+	images := make(map[string]release.Image, len(installation.bundle.Manifest.Images))
 	for _, image := range installation.bundle.Manifest.Images {
-		images[image.Component] = image.ImageID
+		images[image.Component] = image
 	}
 	for _, mode := range modes {
 		if mode != "apply" && mode != "verify" {
@@ -181,15 +288,15 @@ func runMigrationModesOnNetwork(
 				errors.New("migration action is unsupported"),
 			)
 		}
-		for _, migration := range platformMigrations {
-			imageID, found := images[migration.component]
+		for _, migration := range migrations {
+			image, found := images[migration.component]
 			if !found {
 				return errors.Join(
 					platformcommand.ErrEffectVerification,
 					errors.New("migration image is absent from authenticated release"),
 				)
 			}
-			present, err := inspectExactImage(ctx, runtimeBoundary, imageID)
+			_, present, err := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 			if err != nil {
 				return err
 			}
@@ -200,7 +307,8 @@ func runMigrationModesOnNetwork(
 				)
 			}
 			arguments, err := migrationArguments(
-				plan, installation.bundle, installation.topology.ProjectName, networkID, imageID, migration, mode,
+				plan, installation.bundle, installation.topology.ProjectName, networkID,
+				image.RuntimeReference(), migration, mode,
 			)
 			if err != nil {
 				return errors.Join(platformcommand.ErrEffectVerification, err)
@@ -271,7 +379,7 @@ func migrationArguments(
 	bundle release.VerifiedBundle,
 	project string,
 	networkID string,
-	imageID string,
+	imageReference string,
 	migration migrationDefinition,
 	mode string,
 ) ([]string, error) {
@@ -327,6 +435,12 @@ func migrationArguments(
 			"--env", mount.environment+"="+mount.destination,
 		)
 	}
-	arguments = append(arguments, "--entrypoint", migration.entrypoint, imageID, mode)
+	if migration.bindInstallationID {
+		arguments = append(
+			arguments,
+			"--env", migrationInstallationIDEnvironment+"="+plan.InstallationID,
+		)
+	}
+	arguments = append(arguments, "--entrypoint", migration.entrypoint, imageReference, mode)
 	return arguments, nil
 }

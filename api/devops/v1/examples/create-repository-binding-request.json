@@ -1,0 +1,11 @@
+{
+  "id": "repository-binding-api",
+  "name": "api",
+  "projectId": "devops-project-platform",
+  "spec": {
+    "sourceConnectionId": "source-connection-primary",
+    "externalRepositoryId": "42",
+    "repositoryPath": "platform/api",
+    "trustedDefaultBranch": "main"
+  }
+}

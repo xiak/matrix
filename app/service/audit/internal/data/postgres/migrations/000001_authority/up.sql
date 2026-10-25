@@ -124,6 +124,14 @@ CREATE TABLE IF NOT EXISTS audit.event_registry (
     ) REFERENCES audit.records (chain_id, sequence)
 );
 
+-- The event contract is the source catalog owner. Rebuild these two closed
+-- source constraints on every idempotent migration replay so a retained
+-- pre-DevOps database admits the same sources as the current functions. The
+-- migration runs under the installation migration lock, before runtime
+-- processes are admitted.
+ALTER TABLE audit.records DROP CONSTRAINT IF EXISTS records_values_valid;
+ALTER TABLE audit.event_registry DROP CONSTRAINT IF EXISTS event_registry_values_valid;
+
 DO $matrix_audit_values$
 DECLARE
     table_name text;
@@ -159,7 +167,7 @@ BEGIN
         WHERE conrelid = 'audit.records'::regclass AND conname = 'records_values_valid') THEN
         ALTER TABLE audit.records ADD CONSTRAINT records_values_valid CHECK ((
             sequence BETWEEN 1 AND 9007199254740991
-            AND source IN ('IAM', 'PAAS', 'AUDIT')
+            AND source IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
             AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
             AND length(canonical_document) BETWEEN 1 AND 131072
             AND canonical_document LIKE '{"canonicalVersion":"matrix.audit.canonical-event.v1",%'
@@ -179,7 +187,7 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint
         WHERE conrelid = 'audit.event_registry'::regclass AND conname = 'event_registry_values_valid') THEN
         ALTER TABLE audit.event_registry ADD CONSTRAINT event_registry_values_valid CHECK (
-            source IN ('IAM', 'PAAS', 'AUDIT')
+            source IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
             AND event_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
             AND sequence BETWEEN 1 AND 9007199254740991
             AND content_digest COLLATE "C" ~ '^sha256:[0-9a-f]{64}$'
@@ -454,6 +462,24 @@ BEGIN
         ('managedservice.service-installation.ready', 'PAAS', 'SERVICE_INSTALLATION', 'SUCCEEDED', true, true, false, false, false),
         ('managedservice.service-installation.termination-requested', 'PAAS', 'SERVICE_INSTALLATION', 'ACCEPTED', true, true, true, false, false),
         ('managedservice.service-installation.terminated', 'PAAS', 'SERVICE_INSTALLATION', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.project.created', 'DEVOPS', 'DEVOPS_PROJECT', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.source-connection.created', 'DEVOPS', 'SOURCE_CONNECTION', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.source-connection.updated', 'DEVOPS', 'SOURCE_CONNECTION', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.source-connection.recheck-scheduled', 'DEVOPS', 'SOURCE_CONNECTION', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.source-connection.health-transitioned', 'DEVOPS', 'SOURCE_CONNECTION', 'SUCCEEDED', false, false, true, false, false),
+        ('devops.repository-binding.created', 'DEVOPS', 'REPOSITORY_BINDING', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.repository-binding.updated', 'DEVOPS', 'REPOSITORY_BINDING', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.repository-binding.recheck-scheduled', 'DEVOPS', 'REPOSITORY_BINDING', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.repository-binding.health-transitioned', 'DEVOPS', 'REPOSITORY_BINDING', 'SUCCEEDED', false, false, true, false, false),
+        ('devops.pipeline.created', 'DEVOPS', 'PIPELINE', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.pipeline.draft-updated', 'DEVOPS', 'PIPELINE', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.pipeline-revision.activated', 'DEVOPS', 'PIPELINE_REVISION', 'SUCCEEDED', true, true, true, false, false),
+        ('devops.source-event.admitted', 'DEVOPS', 'SOURCE_EVENT', 'ACCEPTED', false, false, true, false, false),
+        ('devops.pipeline-run.created', 'DEVOPS', 'PIPELINE_RUN', 'ACCEPTED', false, false, true, false, false),
+        ('devops.pipeline-run.replayed', 'DEVOPS', 'PIPELINE_RUN', 'ACCEPTED', true, true, true, false, false),
+        ('devops.pipeline-run.cancellation-requested', 'DEVOPS', 'PIPELINE_RUN', 'ACCEPTED', true, true, true, false, false),
+        ('devops.pipeline-run.completed', 'DEVOPS', 'PIPELINE_RUN', 'SUCCEEDED', false, false, true, false, false),
+        ('devops.pipeline-run.logs-read', 'DEVOPS', 'PIPELINE_RUN', 'SUCCEEDED', true, true, true, false, false),
         ('audit.records.read', 'AUDIT', 'AUDIT_RECORDS', 'SUCCEEDED', true, true, false, true, true),
         ('audit.integrity.verified', 'AUDIT', 'AUDIT_CHAIN', 'SUCCEEDED', true, true, false, true, true),
         ('paas.execution-pool.created', 'PAAS', 'EXECUTION_POOL', 'SUCCEEDED', true, true, true, false, false),
@@ -500,7 +526,7 @@ BEGIN
             'iamDecisionId', 'action', 'target', 'result', 'requestDigest',
             'authorityEvidenceDigest',
             'requestId', 'correlationId', 'operationId', 'traceparent',
-            'occurredAt'
+            'outcome', 'reason', 'occurredAt'
        ]) <> '{}'::jsonb
        OR NOT audit.actor_reference_valid(submitted_event->'actor')
        OR (submitted_event#>>'{actor,type}'='ROLE'
@@ -521,6 +547,10 @@ BEGIN
             AND jsonb_typeof(submitted_event->'operationId') <> 'string')
        OR (submitted_event ? 'traceparent'
             AND jsonb_typeof(submitted_event->'traceparent') <> 'string')
+       OR (submitted_event ? 'outcome'
+            AND jsonb_typeof(submitted_event->'outcome') <> 'string')
+       OR (submitted_event ? 'reason'
+            AND jsonb_typeof(submitted_event->'reason') <> 'string')
        OR octet_length(submitted_event::text) > 131072
        OR submitted_event->>'apiVersion' IS DISTINCT FROM 'audit.matrix.xiak.com/v1'
        OR submitted_event->>'kind' IS DISTINCT FROM 'AuditEvent'
@@ -569,6 +599,15 @@ BEGIN
        OR (action_name IN ('iam.access-finding.detected','iam.access-finding.resolved','iam.access-key.automatically-disabled') AND (
              submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
              OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'iam.access-analyzer'))
+       OR (action_name IN ('devops.source-connection.health-transitioned','devops.repository-binding.health-transitioned') AND (
+             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+             OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'system-devops-source-observer'))
+       OR (action_name IN ('devops.source-event.admitted','devops.pipeline-run.created') AND (
+             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+             OR submitted_event#>>'{actor,id}' IS DISTINCT FROM 'system-devops-source-ingress'))
+       OR (action_name = 'devops.pipeline-run.completed' AND (
+             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'SYSTEM'
+             OR submitted_event#>>'{actor,id}' NOT IN ('system-devops-run-worker','system-devops-run-control')))
        OR (action_name IN ('iam.user.password-reset-required','iam.session.others-revoked','iam.notification-contact.verification-started','iam.notification-contact.verified','iam.notification-contact.replaced','iam.authenticator.bound','iam.authenticator.replaced','iam.authenticator.removed',
             'iam.authenticator.recovery-started','iam.authenticator.recovered','iam.recovery-codes.regenerated') AND (
             submitted_event#>>'{actor,type}' IS DISTINCT FROM 'USER'
@@ -622,6 +661,26 @@ BEGIN
        OR (NOT iam_decision_permitted AND submitted_event ? 'iamDecisionId')
        OR (operation_required AND NOT (submitted_event ? 'operationId'))
        OR (NOT operation_required AND submitted_event ? 'operationId')
+       OR (action_name = 'devops.pipeline-run.completed' AND (
+            NOT (submitted_event ?& ARRAY['outcome', 'reason'])
+            OR NOT (
+                (submitted_event->>'outcome' = 'SUCCEEDED'
+                    AND submitted_event->>'reason' = 'COMPLETED')
+                OR (submitted_event->>'outcome' = 'FAILED'
+                    AND submitted_event->>'reason' IN (
+                        'SOURCE_UNAVAILABLE', 'COMMIT_MISMATCH',
+                        'EXECUTOR_UNAVAILABLE', 'VERIFICATION_FAILED',
+                        'DEADLINE_EXCEEDED', 'REPORT_UNAVAILABLE',
+                        'REPORT_CONFLICT'
+                    ))
+                OR (submitted_event->>'outcome' = 'CANCELLED'
+                    AND submitted_event->>'reason' = 'CANCELLED')
+                OR (submitted_event->>'outcome' = 'MANUAL_INTERVENTION'
+                    AND submitted_event->>'reason' = 'RECONCILIATION_EXHAUSTED')
+            )
+       ))
+       OR (action_name <> 'devops.pipeline-run.completed'
+            AND (submitted_event ? 'outcome' OR submitted_event ? 'reason'))
        OR (action_name = 'iam.authorization.decided'
             AND submitted_event#>>'{target,id}' IS DISTINCT FROM
                 submitted_event->>'iamDecisionId') THEN
@@ -667,7 +726,7 @@ AS $function$
         AND to_regclass('audit.records') IS NOT NULL
         AND to_regclass('audit.event_registry') IS NOT NULL
         AND audit.role_actor_contract_ready(),
-        39::bigint,
+        40::bigint,
         transaction_timestamp()
 $function$;
 
@@ -681,7 +740,7 @@ SECURITY DEFINER
 SET search_path = pg_catalog, pg_temp
 AS $function$
 BEGIN
-    IF submitted_source NOT IN ('IAM', 'PAAS', 'AUDIT')
+    IF submitted_source NOT IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
        OR COALESCE(submitted_event_id, '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit event identity is invalid';
@@ -710,7 +769,7 @@ DECLARE
     stored_chain_id text;
     stored_sequence bigint;
 BEGIN
-    IF submitted_source NOT IN ('IAM', 'PAAS', 'AUDIT')
+    IF submitted_source NOT IN ('IAM', 'PAAS', 'DEVOPS', 'AUDIT')
        OR COALESCE(submitted_event_id, '') COLLATE "C"
             !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'Audit event identity is invalid';
@@ -1007,7 +1066,18 @@ BEGIN
             'managedservice.service-installation.created',
             'managedservice.service-installation.ready',
             'managedservice.service-installation.termination-requested',
-            'managedservice.service-installation.terminated', 'audit.records.read',
+            'managedservice.service-installation.terminated',
+            'devops.project.created',
+            'devops.source-connection.created', 'devops.source-connection.updated',
+            'devops.source-connection.recheck-scheduled', 'devops.source-connection.health-transitioned',
+            'devops.repository-binding.created', 'devops.repository-binding.updated',
+            'devops.repository-binding.recheck-scheduled', 'devops.repository-binding.health-transitioned',
+            'devops.pipeline.created', 'devops.pipeline.draft-updated',
+            'devops.pipeline-revision.activated', 'devops.source-event.admitted',
+            'devops.pipeline-run.created', 'devops.pipeline-run.replayed',
+            'devops.pipeline-run.cancellation-requested', 'devops.pipeline-run.completed',
+            'devops.pipeline-run.logs-read',
+            'audit.records.read',
             'audit.integrity.verified',
             'paas.execution-pool.created', 'paas.execution-target.registered',
             'paas.execution-target.drained', 'paas.execution-target.activated', 'paas.execution-target.removed',

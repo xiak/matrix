@@ -10,6 +10,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
+	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 )
 
@@ -31,8 +33,21 @@ const (
 	formatJSON  outputFormat = "json"
 )
 
+type commandAction string
+
+const (
+	actionSourceCredentialApply          commandAction = "SOURCE_CREDENTIAL_APPLY"
+	actionSourceCredentialRetirePrevious commandAction = "SOURCE_CREDENTIAL_RETIRE_PREVIOUS"
+	actionSourceTrustApply               commandAction = "SOURCE_TRUST_APPLY"
+	actionSourceTrustRemove              commandAction = "SOURCE_TRUST_REMOVE"
+	actionRunnerNodeExportRelease        commandAction = "RUNNER_NODE_EXPORT_RELEASE"
+	actionRunnerNodeRequest              commandAction = "RUNNER_NODE_REQUEST"
+	actionRunnerNodeEnroll               commandAction = "RUNNER_NODE_ENROLL"
+	actionRunnerNodeInstall              commandAction = "RUNNER_NODE_INSTALL"
+)
+
 type invocationError struct {
-	action lifecycle.Action
+	action commandAction
 	usage  bool
 	err    error
 }
@@ -50,12 +65,43 @@ type commandOptions struct {
 	supportOutput             string
 }
 
-func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
+type sourceCredentialOptions struct {
+	root      string
+	tenantID  string
+	purpose   string
+	reference string
+	fromFile  string
+}
+
+type sourceTrustOptions struct {
+	root           string
+	tenantID       string
+	endpointOrigin string
+	fromFile       string
+}
+
+type runnerNodeOptions struct {
+	root           string
+	release        string
+	trustKey       string
+	installationID string
+	nodeID         string
+	slots          uint8
+	gatewayOrigin  string
+	serverCAPin    string
+	runnerCAPin    string
+	requestFile    string
+	enrollmentFile string
+	output         string
+}
+
+func NewCommand(streams Streams, backends Backends) (*cobra.Command, error) {
 	if err := validateStreams(streams); err != nil {
 		return nil, err
 	}
-	if backend == nil {
-		return nil, errors.New("platform CLI backend is required")
+	if backends.Platform == nil || backends.SourceCredential == nil ||
+		backends.SourceTrust == nil || backends.RunnerNode == nil {
+		return nil, errors.New("Matrix CLI backends are required")
 	}
 	format := string(formatHuman)
 	root := &cobra.Command{
@@ -72,6 +118,15 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 	root.SetOut(streams.Out)
 	root.SetErr(streams.ErrOut)
 	root.PersistentFlags().StringVar(&format, "format", string(formatHuman), "output format: human or json")
+	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
+		if outputFormat(format) != formatHuman && outputFormat(format) != formatJSON {
+			return &invocationError{
+				action: actionForCommand(command), usage: true,
+				err: errors.New("output format must be human or json"),
+			}
+		}
+		return nil
+	}
 	root.SetFlagErrorFunc(func(command *cobra.Command, err error) error {
 		return &invocationError{action: actionForCommand(command), usage: true, err: err}
 	})
@@ -80,36 +135,31 @@ func NewCommand(streams Streams, backend Backend) (*cobra.Command, error) {
 		Use:   "platform",
 		Short: "Install and operate the private Matrix platform",
 		Args:  cobra.NoArgs,
-		PersistentPreRunE: func(command *cobra.Command, _ []string) error {
-			if outputFormat(format) != formatHuman && outputFormat(format) != formatJSON {
-				return &invocationError{
-					action: actionForCommand(command), usage: true,
-					err: errors.New("output format must be human or json"),
-				}
-			}
-			return nil
-		},
 		RunE: func(command *cobra.Command, _ []string) error {
 			return command.Help()
 		},
 	}
 	root.AddCommand(platform)
 	platform.AddCommand(
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionInstall, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionVerify, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionStatus, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionBackup, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionUpgrade, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionRollback, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionRecover, &format),
-		newPlatformCommand(streams.Out, backend, lifecycle.ActionSupport, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionInstall, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionVerify, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionStatus, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionBackup, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionUpgrade, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionRollback, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionRecover, &format),
+		newPlatformCommand(streams.Out, backends.Platform, lifecycle.ActionSupport, &format),
 	)
+	root.AddCommand(newDevOpsCommand(
+		streams.Out, backends.SourceCredential, backends.SourceTrust,
+		backends.RunnerNode, &format,
+	))
 	return root, nil
 }
 
 func newPlatformCommand(
 	out io.Writer,
-	backend Backend,
+	backend PlatformBackend,
 	action lifecycle.Action,
 	format *string,
 ) *cobra.Command {
@@ -121,7 +171,7 @@ func newPlatformCommand(
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := validateCommandFlags(action, options); err != nil {
-				return &invocationError{action: action, usage: true, err: err}
+				return &invocationError{action: commandAction(action), usage: true, err: err}
 			}
 			request := Request{
 				Action: action, Root: options.root, Bundle: options.bundle, TrustKey: options.trustKey,
@@ -131,19 +181,393 @@ func newPlatformCommand(
 			}
 			result, err := backend.Run(command.Context(), request)
 			if err != nil {
-				return &invocationError{action: action, err: err}
+				return &invocationError{action: commandAction(action), err: err}
 			}
 			if err := validateResult(result); err != nil {
-				return &invocationError{action: action, err: err}
+				return &invocationError{action: commandAction(action), err: err}
 			}
 			if err := writeSuccess(out, outputFormat(*format), action, result); err != nil {
-				return &invocationError{action: action, err: err}
+				return &invocationError{action: commandAction(action), err: err}
 			}
 			return nil
 		},
 	}
 	bindCommandFlags(command.Flags(), action, options)
 	return command
+}
+
+func newDevOpsCommand(
+	out io.Writer,
+	sourceBackend SourceCredentialBackend,
+	trustBackend SourceTrustBackend,
+	runnerBackend RunnerNodeBackend,
+	format *string,
+) *cobra.Command {
+	devops := &cobra.Command{
+		Use:   "devops",
+		Short: "Operate Matrix DevOps products",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
+	}
+	source := &cobra.Command{
+		Use:   "source-credential",
+		Short: "Manage installation-owned source credentials",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
+	}
+	source.AddCommand(
+		newSourceCredentialOperationCommand(
+			out, sourceBackend, SourceCredentialApply, format,
+		),
+		newSourceCredentialOperationCommand(
+			out, sourceBackend, SourceCredentialRetirePrevious, format,
+		),
+	)
+	trust := &cobra.Command{
+		Use:   "source-trust",
+		Short: "Manage endpoint-scoped source provider trust",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
+	}
+	trust.AddCommand(
+		newSourceTrustOperationCommand(out, trustBackend, SourceTrustApply, format),
+		newSourceTrustOperationCommand(out, trustBackend, SourceTrustRemove, format),
+	)
+	devops.AddCommand(source, trust, newRunnerNodeCommand(out, runnerBackend, format))
+	return devops
+}
+
+func newRunnerNodeCommand(
+	out io.Writer,
+	backend RunnerNodeBackend,
+	format *string,
+) *cobra.Command {
+	runner := &cobra.Command{
+		Use:   "runner-node",
+		Short: "Provision dedicated Matrix DevOps runner nodes",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return command.Help()
+		},
+	}
+	for _, operation := range []RunnerNodeOperation{
+		RunnerNodeExportRelease, RunnerNodeCreateRequest, RunnerNodeEnroll, RunnerNodeInstall,
+	} {
+		runner.AddCommand(newRunnerNodeOperationCommand(out, backend, operation, format))
+	}
+	return runner
+}
+
+func newRunnerNodeOperationCommand(
+	out io.Writer,
+	backend RunnerNodeBackend,
+	operation RunnerNodeOperation,
+	format *string,
+) *cobra.Command {
+	options := &runnerNodeOptions{}
+	name := map[RunnerNodeOperation]string{
+		RunnerNodeExportRelease: "export-release",
+		RunnerNodeCreateRequest: "request",
+		RunnerNodeEnroll:        "enroll",
+		RunnerNodeInstall:       "install",
+	}[operation]
+	short := map[RunnerNodeOperation]string{
+		RunnerNodeExportRelease: "Export the authenticated dedicated-runner release subset",
+		RunnerNodeCreateRequest: "Create node-local runner keys and a CSR request",
+		RunnerNodeEnroll:        "Enroll a runner CSR request into this installation",
+		RunnerNodeInstall:       "Install an enrolled dedicated runner node",
+	}[operation]
+	action := runnerNodeAction(operation)
+	command := &cobra.Command{
+		Use: name, Short: short, Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if err := validateRunnerNodeFlags(operation, options); err != nil {
+				return &invocationError{action: action, usage: true, err: err}
+			}
+			result, err := backend.RunRunnerNode(command.Context(), RunnerNodeRequest{
+				Operation: operation, Root: options.root, Release: options.release,
+				TrustKey: options.trustKey, InstallationID: options.installationID,
+				NodeID: options.nodeID, Slots: options.slots,
+				GatewayOrigin: options.gatewayOrigin, ServerCAPin: options.serverCAPin,
+				RunnerCAPin: options.runnerCAPin, RequestFile: options.requestFile,
+				EnrollmentFile: options.enrollmentFile, Output: options.output,
+			})
+			if err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			request := RunnerNodeRequest{
+				Operation: operation, Root: options.root, Release: options.release,
+				TrustKey: options.trustKey, InstallationID: options.installationID,
+				NodeID: options.nodeID, Slots: options.slots,
+				GatewayOrigin: options.gatewayOrigin, ServerCAPin: options.serverCAPin,
+				RunnerCAPin: options.runnerCAPin, RequestFile: options.requestFile,
+				EnrollmentFile: options.enrollmentFile, Output: options.output,
+			}
+			if err := validateRunnerNodeResult(request, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := writeRunnerNodeSuccess(out, outputFormat(*format), action, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			return nil
+		},
+	}
+	flags := command.Flags()
+	switch operation {
+	case RunnerNodeExportRelease:
+		flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
+		flags.StringVar(&options.output, "output", "", "new dedicated-runner release directory")
+	case RunnerNodeCreateRequest:
+		flags.StringVar(&options.root, "root", "", "new private runner-node root")
+		flags.StringVar(&options.release, "release", "", "authenticated dedicated-runner release directory")
+		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
+		flags.StringVar(&options.installationID, "installation", "", "target Matrix installation identity")
+		flags.StringVar(&options.nodeID, "node", "", "runner node identity")
+		flags.Uint8Var(&options.slots, "slots", 0, "independent execution slots (1-4)")
+		flags.StringVar(&options.gatewayOrigin, "gateway-origin", "", "outbound HTTPS executor gateway origin")
+		flags.StringVar(&options.serverCAPin, "server-ca-fingerprint", "", "server CA fingerprint from the trusted platform export")
+		flags.StringVar(&options.runnerCAPin, "runner-ca-fingerprint", "", "runner CA fingerprint from the trusted platform export")
+	case RunnerNodeEnroll:
+		flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
+		flags.StringVar(&options.requestFile, "request", "", "runner-node enrollment request file")
+		flags.StringVar(&options.output, "output", "", "new signed enrollment response file")
+	case RunnerNodeInstall:
+		flags.StringVar(&options.root, "root", "", "private runner-node root created by request")
+		flags.StringVar(&options.release, "release", "", "authenticated dedicated-runner release directory")
+		flags.StringVar(&options.trustKey, "trust-key", "", "out-of-band release trust root")
+		flags.StringVar(&options.enrollmentFile, "enrollment", "", "signed runner enrollment response file")
+	}
+	return command
+}
+
+func validateRunnerNodeFlags(operation RunnerNodeOperation, options *runnerNodeOptions) error {
+	if options == nil || strings.TrimSpace(options.root) == "" {
+		return errors.New("runner node root is required")
+	}
+	switch operation {
+	case RunnerNodeExportRelease:
+		if strings.TrimSpace(options.output) == "" {
+			return errors.New("runner release output is required")
+		}
+	case RunnerNodeCreateRequest:
+		if strings.TrimSpace(options.release) == "" || strings.TrimSpace(options.trustKey) == "" ||
+			strings.TrimSpace(options.installationID) == "" || strings.TrimSpace(options.nodeID) == "" ||
+			options.slots == 0 || options.slots > 4 || strings.TrimSpace(options.gatewayOrigin) == "" ||
+			strings.TrimSpace(options.serverCAPin) == "" || strings.TrimSpace(options.runnerCAPin) == "" {
+			return errors.New("runner enrollment request identity is required")
+		}
+	case RunnerNodeEnroll:
+		if strings.TrimSpace(options.requestFile) == "" || strings.TrimSpace(options.output) == "" {
+			return errors.New("runner enrollment request and output are required")
+		}
+	case RunnerNodeInstall:
+		if strings.TrimSpace(options.release) == "" || strings.TrimSpace(options.trustKey) == "" ||
+			strings.TrimSpace(options.enrollmentFile) == "" {
+			return errors.New("runner release, trust, and enrollment are required")
+		}
+	default:
+		return errors.New("runner node operation is invalid")
+	}
+	return nil
+}
+
+func runnerNodeAction(operation RunnerNodeOperation) commandAction {
+	switch operation {
+	case RunnerNodeExportRelease:
+		return actionRunnerNodeExportRelease
+	case RunnerNodeCreateRequest:
+		return actionRunnerNodeRequest
+	case RunnerNodeEnroll:
+		return actionRunnerNodeEnroll
+	case RunnerNodeInstall:
+		return actionRunnerNodeInstall
+	default:
+		return ""
+	}
+}
+
+func newSourceCredentialOperationCommand(
+	out io.Writer,
+	backend SourceCredentialBackend,
+	operation SourceCredentialOperation,
+	format *string,
+) *cobra.Command {
+	options := &sourceCredentialOptions{}
+	name := "apply"
+	short := "Apply source credential material"
+	if operation == SourceCredentialRetirePrevious {
+		name = "retire-previous"
+		short = "Retire the previous webhook credential"
+	}
+	action := sourceCredentialAction(operation)
+	command := &cobra.Command{
+		Use:   name,
+		Short: short,
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if err := validateSourceCredentialFlags(operation, options); err != nil {
+				return &invocationError{action: action, usage: true, err: err}
+			}
+			request := SourceCredentialRequest{
+				Operation: operation,
+				Root:      options.root,
+				TenantID:  options.tenantID,
+				Purpose:   sourcecredential.Purpose(options.purpose),
+				Reference: options.reference,
+				FromFile:  options.fromFile,
+			}
+			result, err := backend.RunSourceCredential(command.Context(), request)
+			if err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := validateSourceCredentialResult(request, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := writeSourceCredentialSuccess(
+				out, outputFormat(*format), action, result,
+			); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			return nil
+		},
+	}
+	flags := command.Flags()
+	flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
+	flags.StringVar(&options.tenantID, "tenant", "", "Matrix tenant identity")
+	flags.StringVar(&options.purpose, "purpose", "", "credential purpose: WEBHOOK, FETCH, or REPORT")
+	flags.StringVar(&options.reference, "reference", "", "opaque source credential reference")
+	if operation == SourceCredentialApply {
+		flags.StringVar(&options.fromFile, "from-file", "", "private source credential input file")
+	}
+	return command
+}
+
+func validateSourceCredentialFlags(
+	operation SourceCredentialOperation,
+	options *sourceCredentialOptions,
+) error {
+	if options == nil || strings.TrimSpace(options.root) == "" ||
+		strings.TrimSpace(options.tenantID) == "" ||
+		strings.TrimSpace(options.reference) == "" {
+		return errors.New("source credential identity is required")
+	}
+	purpose := sourcecredential.Purpose(options.purpose)
+	if sourcecredential.ValidatePurpose(purpose) != nil {
+		return errors.New("source credential purpose is invalid")
+	}
+	switch operation {
+	case SourceCredentialApply:
+		if strings.TrimSpace(options.fromFile) == "" {
+			return errors.New("source credential input file is required")
+		}
+	case SourceCredentialRetirePrevious:
+		if purpose != sourcecredential.PurposeWebhook || options.fromFile != "" {
+			return errors.New("only a webhook previous credential can be retired")
+		}
+	default:
+		return errors.New("source credential operation is invalid")
+	}
+	return nil
+}
+
+func sourceCredentialAction(operation SourceCredentialOperation) commandAction {
+	switch operation {
+	case SourceCredentialApply:
+		return actionSourceCredentialApply
+	case SourceCredentialRetirePrevious:
+		return actionSourceCredentialRetirePrevious
+	default:
+		return ""
+	}
+}
+
+func newSourceTrustOperationCommand(
+	out io.Writer,
+	backend SourceTrustBackend,
+	operation SourceTrustOperation,
+	format *string,
+) *cobra.Command {
+	options := &sourceTrustOptions{}
+	name := "apply"
+	short := "Apply endpoint-scoped source provider trust"
+	if operation == SourceTrustRemove {
+		name = "remove"
+		short = "Remove endpoint-scoped source provider trust"
+	}
+	action := sourceTrustAction(operation)
+	command := &cobra.Command{
+		Use: name, Short: short, Args: cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			if err := validateSourceTrustFlags(operation, options); err != nil {
+				return &invocationError{action: action, usage: true, err: err}
+			}
+			request := SourceTrustRequest{
+				Operation: operation, Root: options.root, TenantID: options.tenantID,
+				EndpointOrigin: options.endpointOrigin, FromFile: options.fromFile,
+			}
+			result, err := backend.RunSourceTrust(command.Context(), request)
+			if err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := validateSourceTrustResult(request, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			if err := writeSourceTrustSuccess(out, outputFormat(*format), action, result); err != nil {
+				return &invocationError{action: action, err: err}
+			}
+			return nil
+		},
+	}
+	flags := command.Flags()
+	flags.StringVar(&options.root, "root", "", "absolute Matrix installation root")
+	flags.StringVar(&options.tenantID, "tenant", "", "Matrix tenant identity")
+	flags.StringVar(
+		&options.endpointOrigin, "endpoint-origin", "", "exact canonical HTTPS provider origin",
+	)
+	if operation == SourceTrustApply {
+		flags.StringVar(&options.fromFile, "from-file", "", "private source CA bundle input file")
+	}
+	return command
+}
+
+func validateSourceTrustFlags(operation SourceTrustOperation, options *sourceTrustOptions) error {
+	if options == nil || strings.TrimSpace(options.root) == "" ||
+		strings.TrimSpace(options.tenantID) == "" ||
+		devopsv1.ValidateResourceScope(devopsv1.ResourceScope{
+			TenantID: devopsv1.TenantID(options.tenantID),
+		}) != nil || devopsv1.ValidateEndpointOrigin(options.endpointOrigin) != nil {
+		return errors.New("source trust identity is invalid")
+	}
+	switch operation {
+	case SourceTrustApply:
+		if strings.TrimSpace(options.fromFile) == "" {
+			return errors.New("source trust input file is required")
+		}
+	case SourceTrustRemove:
+		if options.fromFile != "" {
+			return errors.New("source trust removal cannot accept input material")
+		}
+	default:
+		return errors.New("source trust operation is invalid")
+	}
+	return nil
+}
+
+func sourceTrustAction(operation SourceTrustOperation) commandAction {
+	switch operation {
+	case SourceTrustApply:
+		return actionSourceTrustApply
+	case SourceTrustRemove:
+		return actionSourceTrustRemove
+	default:
+		return ""
+	}
 }
 
 func bindCommandFlags(flags *pflag.FlagSet, action lifecycle.Action, options *commandOptions) {
@@ -213,27 +637,55 @@ func commandDescription(action lifecycle.Action) string {
 	}
 }
 
-func actionForCommand(command *cobra.Command) lifecycle.Action {
+func actionForCommand(command *cobra.Command) commandAction {
 	if command == nil {
 		return ""
 	}
+	if command.Parent() != nil && command.Parent().Name() == "source-credential" {
+		switch command.Name() {
+		case "apply":
+			return actionSourceCredentialApply
+		case "retire-previous":
+			return actionSourceCredentialRetirePrevious
+		}
+	}
+	if command.Parent() != nil && command.Parent().Name() == "source-trust" {
+		switch command.Name() {
+		case "apply":
+			return actionSourceTrustApply
+		case "remove":
+			return actionSourceTrustRemove
+		}
+	}
+	if command.Parent() != nil && command.Parent().Name() == "runner-node" {
+		switch command.Name() {
+		case "export-release":
+			return actionRunnerNodeExportRelease
+		case "request":
+			return actionRunnerNodeRequest
+		case "enroll":
+			return actionRunnerNodeEnroll
+		case "install":
+			return actionRunnerNodeInstall
+		}
+	}
 	switch command.Name() {
 	case "install":
-		return lifecycle.ActionInstall
+		return commandAction(lifecycle.ActionInstall)
 	case "verify":
-		return lifecycle.ActionVerify
+		return commandAction(lifecycle.ActionVerify)
 	case "status":
-		return lifecycle.ActionStatus
+		return commandAction(lifecycle.ActionStatus)
 	case "backup":
-		return lifecycle.ActionBackup
+		return commandAction(lifecycle.ActionBackup)
 	case "upgrade":
-		return lifecycle.ActionUpgrade
+		return commandAction(lifecycle.ActionUpgrade)
 	case "rollback":
-		return lifecycle.ActionRollback
+		return commandAction(lifecycle.ActionRollback)
 	case "recover":
-		return lifecycle.ActionRecover
+		return commandAction(lifecycle.ActionRecover)
 	case "support":
-		return lifecycle.ActionSupport
+		return commandAction(lifecycle.ActionSupport)
 	default:
 		return ""
 	}
@@ -242,11 +694,11 @@ func actionForCommand(command *cobra.Command) lifecycle.Action {
 // Run is the process boundary used by cmd/mx. Subcommands return errors; this
 // boundary alone renders a normalized failure and selects the stable exit
 // class.
-func Run(ctx context.Context, arguments []string, streams Streams, backend Backend) int {
+func Run(ctx context.Context, arguments []string, streams Streams, backends Backends) int {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	command, err := NewCommand(streams, backend)
+	command, err := NewCommand(streams, backends)
 	if err != nil {
 		if streams.ErrOut != nil {
 			_, _ = io.WriteString(streams.ErrOut, "Matrix CLI initialization failed\n")
@@ -269,8 +721,8 @@ func Run(ctx context.Context, arguments []string, streams Streams, backend Backe
 	return exitCode(fault.Class)
 }
 
-func normalizeFailure(err error, ctx context.Context) (lifecycle.Action, *Fault) {
-	action := lifecycle.Action("")
+func normalizeFailure(err error, ctx context.Context) (commandAction, *Fault) {
+	action := commandAction("")
 	var invocation *invocationError
 	if !errors.As(err, &invocation) {
 		return action, mustFault(FaultInvalidArgument, "INVALID_COMMAND_INPUT")
@@ -317,19 +769,43 @@ func exitCode(class FaultClass) int {
 }
 
 type successEnvelope struct {
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Action     commandAction `json:"action"`
+	Status     string        `json:"status"`
+	Result     Result        `json:"result"`
+}
+
+type sourceCredentialSuccessEnvelope struct {
+	APIVersion string                 `json:"apiVersion"`
+	Kind       string                 `json:"kind"`
+	Action     commandAction          `json:"action"`
+	Status     string                 `json:"status"`
+	Result     SourceCredentialResult `json:"result"`
+}
+
+type sourceTrustSuccessEnvelope struct {
+	APIVersion string            `json:"apiVersion"`
+	Kind       string            `json:"kind"`
+	Action     commandAction     `json:"action"`
+	Status     string            `json:"status"`
+	Result     SourceTrustResult `json:"result"`
+}
+
+type runnerNodeSuccessEnvelope struct {
 	APIVersion string           `json:"apiVersion"`
 	Kind       string           `json:"kind"`
-	Action     lifecycle.Action `json:"action"`
+	Action     commandAction    `json:"action"`
 	Status     string           `json:"status"`
-	Result     Result           `json:"result"`
+	Result     RunnerNodeResult `json:"result"`
 }
 
 type failureEnvelope struct {
-	APIVersion string           `json:"apiVersion"`
-	Kind       string           `json:"kind"`
-	Action     lifecycle.Action `json:"action,omitempty"`
-	Status     string           `json:"status"`
-	Error      failureBody      `json:"error"`
+	APIVersion string        `json:"apiVersion"`
+	Kind       string        `json:"kind"`
+	Action     commandAction `json:"action,omitempty"`
+	Status     string        `json:"status"`
+	Error      failureBody   `json:"error"`
 }
 
 type failureBody struct {
@@ -341,7 +817,7 @@ type failureBody struct {
 func writeSuccess(out io.Writer, format outputFormat, action lifecycle.Action, result Result) error {
 	if format == formatJSON {
 		return writeJSONLine(out, successEnvelope{
-			APIVersion: OutputAPIVersion, Kind: "PlatformCommandResult", Action: action,
+			APIVersion: OutputAPIVersion, Kind: "PlatformCommandResult", Action: commandAction(action),
 			Status: "SUCCEEDED", Result: result,
 		})
 	}
@@ -358,11 +834,87 @@ func writeSuccess(out io.Writer, format outputFormat, action lifecycle.Action, r
 	return err
 }
 
-func writeFailure(out io.Writer, format outputFormat, action lifecycle.Action, fault *Fault) error {
+func writeSourceCredentialSuccess(
+	out io.Writer,
+	format outputFormat,
+	action commandAction,
+	result SourceCredentialResult,
+) error {
+	if format == formatJSON {
+		return writeJSONLine(out, sourceCredentialSuccessEnvelope{
+			APIVersion: OutputAPIVersion, Kind: "SourceCredentialCommandResult",
+			Action: action, Status: "SUCCEEDED", Result: result,
+		})
+	}
+	_, err := fmt.Fprintf(
+		out, "%s SUCCEEDED state=%s purpose=%s tenant=%s reference=%s\n",
+		action, result.State, result.Purpose, result.TenantID, result.Reference,
+	)
+	return err
+}
+
+func writeSourceTrustSuccess(
+	out io.Writer,
+	format outputFormat,
+	action commandAction,
+	result SourceTrustResult,
+) error {
+	if format == formatJSON {
+		return writeJSONLine(out, sourceTrustSuccessEnvelope{
+			APIVersion: OutputAPIVersion, Kind: "SourceTrustCommandResult",
+			Action: action, Status: "SUCCEEDED", Result: result,
+		})
+	}
+	_, err := fmt.Fprintf(
+		out, "%s SUCCEEDED state=%s tenant=%s endpoint-origin=%s\n",
+		action, result.State, result.TenantID, result.EndpointOrigin,
+	)
+	return err
+}
+
+func writeRunnerNodeSuccess(
+	out io.Writer,
+	format outputFormat,
+	action commandAction,
+	result RunnerNodeResult,
+) error {
+	if format == formatJSON {
+		return writeJSONLine(out, runnerNodeSuccessEnvelope{
+			APIVersion: OutputAPIVersion, Kind: "RunnerNodeCommandResult",
+			Action: action, Status: "SUCCEEDED", Result: result,
+		})
+	}
+	_, err := fmt.Fprintf(
+		out, "%s SUCCEEDED state=%s release=%s", action, result.State, result.ReleaseID,
+	)
+	if err == nil && result.ServerCAPin != "" {
+		_, err = fmt.Fprintf(
+			out, " server-ca=%s runner-ca=%s", result.ServerCAPin, result.RunnerCAPin,
+		)
+	}
+	if err == nil && result.NodeID != "" {
+		_, err = fmt.Fprintf(out, " node=%s slots=%d request=%s", result.NodeID, result.Slots, result.RequestDigest)
+	}
+	if err == nil {
+		_, err = io.WriteString(out, "\n")
+	}
+	return err
+}
+
+func writeFailure(out io.Writer, format outputFormat, action commandAction, fault *Fault) error {
 	message := faultMessage(fault.Class)
 	if format == formatJSON {
+		kind := "PlatformCommandFailure"
+		if action == actionSourceCredentialApply || action == actionSourceCredentialRetirePrevious {
+			kind = "SourceCredentialCommandFailure"
+		} else if action == actionSourceTrustApply || action == actionSourceTrustRemove {
+			kind = "SourceTrustCommandFailure"
+		} else if action == actionRunnerNodeExportRelease || action == actionRunnerNodeRequest ||
+			action == actionRunnerNodeEnroll || action == actionRunnerNodeInstall {
+			kind = "RunnerNodeCommandFailure"
+		}
 		return writeJSONLine(out, failureEnvelope{
-			APIVersion: OutputAPIVersion, Kind: "PlatformCommandFailure", Action: action,
+			APIVersion: OutputAPIVersion, Kind: kind, Action: action,
 			Status: "FAILED", Error: failureBody{Class: fault.Class, Code: fault.Code, Message: message},
 		})
 	}
@@ -375,13 +927,13 @@ func faultMessage(class FaultClass) string {
 	case FaultInvalidArgument:
 		return "Command input is invalid"
 	case FaultPrecondition:
-		return "Platform preconditions are not satisfied"
+		return "Matrix preconditions are not satisfied"
 	case FaultConflict:
-		return "Platform state conflicts with this command"
+		return "Matrix state conflicts with this command"
 	case FaultVerification:
-		return "Platform verification failed"
+		return "Matrix verification failed"
 	case FaultUnavailable:
-		return "A required platform dependency is unavailable"
+		return "A required Matrix dependency is unavailable"
 	case FaultInterrupted:
 		return "Command was interrupted"
 	default:

@@ -22,6 +22,7 @@ type Effects struct {
 	readinessTimeout time.Duration
 	readinessPoll    time.Duration
 	projectInspector RecoveryProjectInspector
+	runnerSystem     runnerNodeSystem
 }
 
 func NewEffects(projectInspector RecoveryProjectInspector) *Effects {
@@ -32,6 +33,7 @@ func NewEffects(projectInspector RecoveryProjectInspector) *Effects {
 		readinessTimeout: platformVerificationReadinessTimeout,
 		readinessPoll:    platformVerificationReadinessPollInterval,
 		projectInspector: projectInspector,
+		runnerSystem:     newRunnerNodeSystem(),
 	}
 }
 

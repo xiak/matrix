@@ -80,6 +80,22 @@ func (bundle VerifiedBundle) OpenVerifiedPayload(relative string) (*os.File, Fil
 // bounded release-builder path; installation consumes this regular-file-only
 // representation.
 func VerifyDirectory(root string, trustBytes []byte) (VerifiedBundle, error) {
+	return verifyDirectory(root, trustBytes, Verify)
+}
+
+// VerifyInstalledDirectory is the lifecycle-only counterpart to
+// VerifyDirectory. It additionally admits the exact accepted productless
+// predecessor while retaining signature, canonical-byte, path, mode, size,
+// digest, and complete-inventory verification.
+func VerifyInstalledDirectory(root string, trustBytes []byte) (VerifiedBundle, error) {
+	return verifyDirectory(root, trustBytes, VerifyInstalled)
+}
+
+func verifyDirectory(
+	root string,
+	trustBytes []byte,
+	verify func([]byte, []byte, []byte) (Manifest, error),
+) (VerifiedBundle, error) {
 	cleanRoot, err := validateBundleRoot(root)
 	if err != nil {
 		return VerifiedBundle{}, err
@@ -92,7 +108,7 @@ func VerifyDirectory(root string, trustBytes []byte) (VerifiedBundle, error) {
 	if err != nil || len(signature) != ed25519SignatureBytes {
 		return VerifiedBundle{}, errors.New("read release signature failed")
 	}
-	manifest, err := Verify(manifestBytes, signature, trustBytes)
+	manifest, err := verify(manifestBytes, signature, trustBytes)
 	if err != nil {
 		return VerifiedBundle{}, err
 	}

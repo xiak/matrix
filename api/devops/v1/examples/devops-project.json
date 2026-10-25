@@ -1,0 +1,14 @@
+{
+  "apiVersion": "devops.matrix.xiak.com/v1",
+  "kind": "DevOpsProject",
+  "metadata": {
+    "id": "devops-project-platform",
+    "name": "platform",
+    "scope": {
+      "tenantId": "organization-acme"
+    },
+    "resourceVersion": 1,
+    "createdAt": "2026-09-07T04:05:06Z",
+    "updatedAt": "2026-09-07T04:05:06Z"
+  }
+}

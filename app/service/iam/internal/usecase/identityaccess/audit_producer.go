@@ -15,6 +15,10 @@ type AuditEvidence struct {
 	InstallationID string
 	Event          auditv1.Event
 	Decision       *iamv1.AuthorizationDecision
+	// ScopeOnly is returned only for a closed source-owned SYSTEM fact. IAM
+	// proves the current producer, installation, and registered target tenant;
+	// the source transaction/outbox remains the authority for business payload.
+	ScopeOnly bool
 	// Both fields come only from protected storage metadata and exact archive lookup.
 	DecisionContractVersion int
 	DecisionProfile         *iamv1.AuthorizationProfile
@@ -32,6 +36,8 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		source = auditv1.SourceIAM
 	case iamv1.ServicePaaS:
 		source = auditv1.SourcePaaS
+	case iamv1.ServiceDevOps:
+		source = auditv1.SourceDevOps
 	case iamv1.ServiceAudit:
 		source = auditv1.SourceAudit
 	default:
@@ -46,6 +52,11 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		if err != nil || digest != storedDigest {
 			return "", ErrForbidden
 		}
+		return digest, nil
+	}
+	if source == auditv1.SourceDevOps && evidence.ScopeOnly && evidence.Decision == nil &&
+		evidence.DecisionProfile == nil && evidence.DecisionContractVersion == 0 &&
+		closedSourceSystemFact(source, event) {
 		return digest, nil
 	}
 	decision := evidence.Decision
@@ -83,7 +94,7 @@ func auditContentDigest(identity iamv1.ServiceIdentity, event auditv1.Event, evi
 		}
 		return digest, nil
 	}
-	expectedAction, expectedID, mode, usage := auditDecisionTarget(event, decision.Action, evidence.DecisionContractVersion)
+	expectedAction, expectedID, mode, usage := auditDecisionTarget(event, decision.Action, decision.Resource.ID, evidence.DecisionContractVersion)
 	if (decision.Subject.Type != iamv1.SubjectUser && !((evidence.DecisionContractVersion == 3 || evidence.DecisionContractVersion == 4 || evidence.DecisionContractVersion == 5 || evidence.DecisionContractVersion == 6 || evidence.DecisionContractVersion == 7) && decision.Subject.Type == iamv1.SubjectRole)) || decision.Action != expectedAction ||
 		decision.Resource.ID != expectedID || !historicalProducerMatches(evidence, identity.Purpose) {
 		return "", ErrForbidden
@@ -137,7 +148,13 @@ func validHistoricalDecision(evidence AuditEvidence) bool {
 	}
 }
 
-func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action, contractVersion int) (iamv1.Action, string, iamv1.AuthorizationResourceMode, iamv1.AuthorizationCollectionUsage) {
+func closedSourceSystemFact(source auditv1.Source, event auditv1.Event) bool {
+	contract, known := auditv1.ContractForAction(event.Action)
+	return known && contract.Source == source && !contract.IAMDecisionPermitted &&
+		len(contract.SystemActorIDs) > 0 && event.Actor.Type == auditv1.ActorSystem
+}
+
+func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action, decisionResourceID string, contractVersion int) (iamv1.Action, string, iamv1.AuthorizationResourceMode, iamv1.AuthorizationCollectionUsage) {
 	records, chain := "collection", "collection"
 	if contractVersion == 1 {
 		records, chain = "records", "chain"
@@ -188,6 +205,35 @@ func auditDecisionTarget(event auditv1.Event, decisionAction iamv1.Action, contr
 	case auditv1.ActionManagedServiceInstallationTerminationRequested,
 		auditv1.ActionManagedServiceInstallationTerminated:
 		return iamv1.ActionManagedServiceInstallationTerminate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsProjectCreated:
+		return iamv1.ActionDevOpsProjectCreate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsSourceConnectionCreated:
+		return iamv1.ActionDevOpsSourceConnectionCreate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsSourceConnectionUpdated:
+		return iamv1.ActionDevOpsSourceConnectionUpdate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsSourceConnectionRecheckScheduled:
+		return iamv1.ActionDevOpsSourceConnectionRecheck, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsRepositoryBindingCreated:
+		return iamv1.ActionDevOpsRepositoryBindingCreate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsRepositoryBindingUpdated:
+		return iamv1.ActionDevOpsRepositoryBindingUpdate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsRepositoryBindingRecheckScheduled:
+		return iamv1.ActionDevOpsRepositoryBindingRecheck, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsPipelineCreated:
+		return iamv1.ActionDevOpsPipelineCreate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsPipelineDraftUpdated:
+		return iamv1.ActionDevOpsPipelineUpdate, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsPipelineRevisionActivated:
+		// The authorization protects the parent Pipeline. The source transaction
+		// atomically binds the resulting immutable revision and Audit outbox fact.
+		// As with collection creates, IAM does not claim to prove that payload.
+		return iamv1.ActionDevOpsPipelineActivate, decisionResourceID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsPipelineRunReplayed:
+		return iamv1.ActionDevOpsRunReplay, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsPipelineRunCancellationRequested:
+		return iamv1.ActionDevOpsRunCancel, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
+	case auditv1.ActionDevOpsPipelineRunLogsRead:
+		return iamv1.ActionDevOpsLogRead, event.Target.ID, iamv1.AuthorizationResourceInstance, ""
 	case auditv1.ActionAuditRecordsRead:
 		return iamv1.ActionAuditRecordRead, records, iamv1.AuthorizationResourceCollection, iamv1.AuthorizationCollectionList
 	case auditv1.ActionAuditIntegrityVerified:
@@ -241,7 +287,8 @@ func (service *Authority) ResolveAuditProducer(
 		if err != nil {
 			return err
 		}
-		if binding.Identity.Purpose != iamv1.ServiceIAM && binding.Identity.Purpose != iamv1.ServicePaaS && binding.Identity.Purpose != iamv1.ServiceAudit {
+		if binding.Identity.Purpose != iamv1.ServiceIAM && binding.Identity.Purpose != iamv1.ServicePaaS &&
+			binding.Identity.Purpose != iamv1.ServiceDevOps && binding.Identity.Purpose != iamv1.ServiceAudit {
 			return ErrForbidden
 		}
 		evidence, found, err := transaction.ReadAuditEvidence(transactionContext, binding.Identity, request.Event)

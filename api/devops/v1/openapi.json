@@ -1,0 +1,3574 @@
+{
+  "components": {
+    "headers": {
+      "ETag": {
+        "description": "Strong validator for the returned resource representation.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Location": {
+        "description": "Canonical URI of the created resource.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "RetryAfter": {
+        "description": "Seconds the caller should wait before retrying the command.",
+        "schema": {
+          "pattern": "^[1-9][0-9]*$",
+          "type": "string"
+        }
+      }
+    },
+    "parameters": {
+      "IdempotencyKey": {
+        "in": "header",
+        "name": "Idempotency-Key",
+        "required": true,
+        "schema": {
+          "maxLength": 128,
+          "minLength": 1,
+          "type": "string"
+        }
+      },
+      "IfMatch": {
+        "description": "Strong ETag containing the current positive resourceVersion.",
+        "in": "header",
+        "name": "If-Match",
+        "required": true,
+        "schema": {
+          "maxLength": 22,
+          "minLength": 3,
+          "pattern": "^\"[1-9][0-9]*\"$",
+          "type": "string"
+        }
+      }
+    },
+    "responses": {
+      "ProblemResponse": {
+        "content": {
+          "application/problem+json": {
+            "schema": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          }
+        },
+        "description": "Normalized RFC 9457-style DevOps problem."
+      }
+    },
+    "schemas": {
+      "ChangeAction": {
+        "enum": [
+          "OPENED",
+          "REOPENED",
+          "UPDATED"
+        ],
+        "type": "string"
+      },
+      "ChangeIdentity": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ChangeAction"
+          },
+          "headCommit": {
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+            "type": "string"
+          },
+          "number": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "trustedBaseCommit": {
+            "pattern": "^(?:[0-9a-f]{40}|[0-9a-f]{64})$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "headCommit",
+          "number",
+          "trustedBaseCommit"
+        ],
+        "type": "object"
+      },
+      "CreateDevOpsProjectRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "name": {
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
+      "CreatePipelineRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/PipelineDraftSpec"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "name": {
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          }
+        },
+        "required": [
+          "draft",
+          "id",
+          "name",
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "CreateRepositoryBindingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "name": {
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RepositoryBindingSpec"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "projectId",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "CreateSourceConnectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "name": {
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SourceConnectionSpec"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "DependencyEgressPolicy": {
+        "enum": [
+          "NONE"
+        ],
+        "type": "string"
+      },
+      "DevOpsProject": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "DevOpsProject"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata"
+        ],
+        "type": "object"
+      },
+      "ErrorCode": {
+        "enum": [
+          "INVALID_ARGUMENT",
+          "UNAUTHENTICATED",
+          "FORBIDDEN",
+          "NOT_FOUND",
+          "METHOD_NOT_ALLOWED",
+          "CONFLICT",
+          "RESOURCE_EXHAUSTED",
+          "PAYLOAD_TOO_LARGE",
+          "UNSUPPORTED_MEDIA_TYPE",
+          "PRECONDITION_REQUIRED",
+          "PRECONDITION_FAILED",
+          "INTERNAL",
+          "UNAVAILABLE"
+        ],
+        "type": "string"
+      },
+      "ExecutorProfile": {
+        "enum": [
+          "MATRIX_NATIVE_ISOLATED_V1"
+        ],
+        "type": "string"
+      },
+      "FieldViolation": {
+        "additionalProperties": false,
+        "properties": {
+          "description": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "field": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z][A-Za-z0-9.\\[\\]-]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "description",
+          "field"
+        ],
+        "type": "object"
+      },
+      "Pipeline": {
+        "additionalProperties": false,
+        "properties": {
+          "activeRevision": {
+            "$ref": "#/components/schemas/PipelineRevisionReference"
+          },
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/PipelineDraft"
+          },
+          "kind": {
+            "const": "Pipeline"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "draft",
+          "kind",
+          "metadata",
+          "projectId"
+        ],
+        "type": "object"
+      },
+      "PipelineActivation": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "PipelineActivation"
+          },
+          "pipeline": {
+            "$ref": "#/components/schemas/Pipeline"
+          },
+          "revision": {
+            "$ref": "#/components/schemas/PipelineRevision",
+            "maximum": 9007199254740991,
+            "minimum": 1
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "pipeline",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "PipelineDraft": {
+        "additionalProperties": false,
+        "properties": {
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/PipelineDraftSpec"
+          }
+        },
+        "required": [
+          "contentDigest",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "PipelineDraftSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "dependencyEgress": {
+            "$ref": "#/components/schemas/DependencyEgressPolicy"
+          },
+          "reporterPolicy": {
+            "$ref": "#/components/schemas/ReporterPolicy"
+          },
+          "repositoryBindingId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "triggerPolicy": {
+            "$ref": "#/components/schemas/TriggerPolicy"
+          },
+          "verificationProfile": {
+            "$ref": "#/components/schemas/VerificationProfile"
+          }
+        },
+        "required": [
+          "dependencyEgress",
+          "reporterPolicy",
+          "repositoryBindingId",
+          "triggerPolicy",
+          "verificationProfile"
+        ],
+        "type": "object"
+      },
+      "PipelineRevision": {
+        "additionalProperties": false,
+        "properties": {
+          "activatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "activatedBy": {
+            "$ref": "#/components/schemas/SubjectRef"
+          },
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "kind": {
+            "const": "PipelineRevision"
+          },
+          "pipelineId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/PipelineRevisionSpec"
+          }
+        },
+        "required": [
+          "activatedAt",
+          "activatedBy",
+          "apiVersion",
+          "contentDigest",
+          "id",
+          "kind",
+          "pipelineId",
+          "projectId",
+          "revision",
+          "scope",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "PipelineRevisionReference": {
+        "additionalProperties": false,
+        "properties": {
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "revision": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "contentDigest",
+          "id",
+          "revision"
+        ],
+        "type": "object"
+      },
+      "PipelineRevisionSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "dependencyEgress": {
+            "$ref": "#/components/schemas/DependencyEgressPolicy"
+          },
+          "executorProfile": {
+            "const": "MATRIX_NATIVE_ISOLATED_V1"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/VerificationLimits"
+          },
+          "reporterPolicy": {
+            "$ref": "#/components/schemas/ReporterPolicy"
+          },
+          "repositoryBindingDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "repositoryBindingId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "steps": {
+            "items": false,
+            "maxItems": 2,
+            "minItems": 2,
+            "prefixItems": [
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "GO_TEST"
+                  },
+                  "ordinal": {
+                    "const": 1
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ordinal"
+                ],
+                "type": "object"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "const": "GO_VET"
+                  },
+                  "ordinal": {
+                    "const": 2
+                  }
+                },
+                "required": [
+                  "kind",
+                  "ordinal"
+                ],
+                "type": "object"
+              }
+            ],
+            "type": "array"
+          },
+          "toolchainImageDigest": {
+            "const": "sha256:07558d5472e9acb5fc5656b485e963602e925e00111b8ad676a804306e711ba3"
+          },
+          "triggerPolicy": {
+            "$ref": "#/components/schemas/TriggerPolicy"
+          },
+          "verificationProfile": {
+            "$ref": "#/components/schemas/VerificationProfile"
+          }
+        },
+        "required": [
+          "dependencyEgress",
+          "executorProfile",
+          "limits",
+          "reporterPolicy",
+          "repositoryBindingDigest",
+          "repositoryBindingId",
+          "steps",
+          "toolchainImageDigest",
+          "triggerPolicy",
+          "verificationProfile"
+        ],
+        "type": "object"
+      },
+      "PipelineRun": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "input": {
+            "$ref": "#/components/schemas/PipelineRunInput"
+          },
+          "inputDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "PipelineRun"
+          },
+          "pipelineId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "replay": {
+            "$ref": "#/components/schemas/PipelineRunReplay"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PipelineRunStatus"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "createdAt",
+          "id",
+          "input",
+          "inputDigest",
+          "kind",
+          "pipelineId",
+          "projectId",
+          "scope",
+          "status",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "PipelineRunInput": {
+        "additionalProperties": false,
+        "properties": {
+          "change": {
+            "$ref": "#/components/schemas/ChangeIdentity"
+          },
+          "pipelineRevisionDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "pipelineRevisionId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "repositoryBindingDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "repositoryBindingId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "sourceEventDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "sourceEventId": {
+            "$ref": "#/components/schemas/ResourceID"
+          }
+        },
+        "required": [
+          "change",
+          "pipelineRevisionDigest",
+          "pipelineRevisionId",
+          "repositoryBindingDigest",
+          "repositoryBindingId",
+          "sourceEventDigest",
+          "sourceEventId"
+        ],
+        "type": "object"
+      },
+      "PipelineRunLogChunk": {
+        "additionalProperties": false,
+        "properties": {
+          "content": {
+            "maxLength": 65536,
+            "minLength": 1,
+            "type": "string"
+          },
+          "expiresAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "sequence": {
+            "maximum": 8388608,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "step": {
+            "$ref": "#/components/schemas/VerificationStep"
+          }
+        },
+        "required": [
+          "content",
+          "expiresAt",
+          "sequence",
+          "step"
+        ],
+        "type": "object"
+      },
+      "PipelineRunLogPage": {
+        "additionalProperties": false,
+        "properties": {
+          "afterSequence": {
+            "maximum": 8388608,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "chunks": {
+            "items": {
+              "$ref": "#/components/schemas/PipelineRunLogChunk"
+            },
+            "maxItems": 4,
+            "type": "array"
+          },
+          "hasMore": {
+            "type": "boolean"
+          },
+          "kind": {
+            "const": "PipelineRunLogPage"
+          },
+          "nextSequence": {
+            "maximum": 8388608,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "readAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "runId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "afterSequence",
+          "apiVersion",
+          "chunks",
+          "hasMore",
+          "kind",
+          "nextSequence",
+          "readAt",
+          "runId",
+          "truncated"
+        ],
+        "type": "object"
+      },
+      "PipelineRunReason": {
+        "enum": [
+          "EVENT_ADMITTED",
+          "COMPLETED",
+          "SOURCE_UNAVAILABLE",
+          "COMMIT_MISMATCH",
+          "EXECUTOR_UNAVAILABLE",
+          "VERIFICATION_FAILED",
+          "DEADLINE_EXCEEDED",
+          "REPORT_UNAVAILABLE",
+          "REPORT_CONFLICT",
+          "CANCELLED",
+          "EXTERNAL_EFFECT_UNCERTAIN",
+          "RECONCILIATION_EXHAUSTED"
+        ],
+        "type": "string"
+      },
+      "PipelineRunReplay": {
+        "additionalProperties": false,
+        "properties": {
+          "commandId": {
+            "pattern": "^operation-[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "requestedBy": {
+            "$ref": "#/components/schemas/SubjectRef"
+          },
+          "sourceRunId": {
+            "pattern": "^pipeline-run-[0-9a-f]{48}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "commandId",
+          "requestedBy",
+          "sourceRunId"
+        ],
+        "type": "object"
+      },
+      "PipelineRunStage": {
+        "enum": [
+          "RECEIVE",
+          "FETCH",
+          "VERIFY",
+          "REPORT"
+        ],
+        "type": "string"
+      },
+      "PipelineRunState": {
+        "enum": [
+          "QUEUED",
+          "FETCHING",
+          "VERIFYING",
+          "REPORTING",
+          "SUCCEEDED",
+          "FAILED",
+          "CANCELLED",
+          "RECONCILING",
+          "MANUAL_INTERVENTION"
+        ],
+        "type": "string"
+      },
+      "PipelineRunStatus": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "QUEUED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "completedAt"
+                ]
+              },
+              "properties": {
+                "cancellationRequestedAt": false,
+                "reason": {
+                  "enum": [
+                    "EVENT_ADMITTED"
+                  ]
+                },
+                "resourceVersion": {
+                  "const": 1
+                },
+                "stage": {
+                  "enum": [
+                    "RECEIVE"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "FETCHING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "reason"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "completedAt"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "stage": {
+                  "enum": [
+                    "FETCH"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "VERIFYING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "reason"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "completedAt"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "stage": {
+                  "enum": [
+                    "VERIFY"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "REPORTING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "anyOf": [
+                  {
+                    "required": [
+                      "reason"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "completedAt"
+                    ]
+                  }
+                ]
+              },
+              "properties": {
+                "stage": {
+                  "enum": [
+                    "REPORT"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "SUCCEEDED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "COMPLETED"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason",
+                "completedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "FAILED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "SOURCE_UNAVAILABLE",
+                    "COMMIT_MISMATCH",
+                    "EXECUTOR_UNAVAILABLE",
+                    "VERIFICATION_FAILED",
+                    "DEADLINE_EXCEEDED",
+                    "REPORT_UNAVAILABLE",
+                    "REPORT_CONFLICT"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "RECEIVE",
+                    "FETCH",
+                    "VERIFY",
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason",
+                "completedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "CANCELLED"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "CANCELLED"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "RECEIVE",
+                    "FETCH",
+                    "VERIFY",
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason",
+                "cancellationRequestedAt",
+                "completedAt"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "RECONCILING"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "completedAt"
+                ]
+              },
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "EXTERNAL_EFFECT_UNCERTAIN"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "state": {
+                  "const": "MANUAL_INTERVENTION"
+                }
+              },
+              "required": [
+                "state"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "RECONCILIATION_EXHAUSTED"
+                  ]
+                },
+                "stage": {
+                  "enum": [
+                    "REPORT"
+                  ]
+                }
+              },
+              "required": [
+                "reason",
+                "completedAt"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "cancellationRequestedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "completedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/PipelineRunReason"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/PipelineRunStage"
+          },
+          "state": {
+            "$ref": "#/components/schemas/PipelineRunState"
+          }
+        },
+        "required": [
+          "observedAt",
+          "resourceVersion",
+          "stage",
+          "state"
+        ],
+        "type": "object"
+      },
+      "Problem": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "INVALID_ARGUMENT"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    400,
+                    422
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "UNAUTHENTICATED"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    401
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "FORBIDDEN"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    403
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "NOT_FOUND"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    404
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "METHOD_NOT_ALLOWED"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    405
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "CONFLICT"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    409
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "RESOURCE_EXHAUSTED"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    429
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "PAYLOAD_TOO_LARGE"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    413
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "UNSUPPORTED_MEDIA_TYPE"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    415
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "PRECONDITION_REQUIRED"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    428
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "PRECONDITION_FAILED"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    412
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "INTERNAL"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    500
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "code": {
+                  "const": "UNAVAILABLE"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    503
+                  ]
+                }
+              }
+            }
+          }
+        ],
+        "properties": {
+          "code": {
+            "$ref": "#/components/schemas/ErrorCode"
+          },
+          "detail": {
+            "maxLength": 512,
+            "minLength": 1,
+            "type": "string"
+          },
+          "instance": {
+            "maxLength": 256,
+            "minLength": 1,
+            "pattern": "^/",
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "status": {
+            "maximum": 599,
+            "minimum": 400,
+            "type": "integer"
+          },
+          "title": {
+            "maxLength": 160,
+            "minLength": 1,
+            "type": "string"
+          },
+          "traceId": {
+            "maxLength": 128,
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+            "type": "string"
+          },
+          "type": {
+            "format": "uri",
+            "pattern": "^https://errors\\.matrix\\.xiak\\.com/",
+            "type": "string"
+          },
+          "violations": {
+            "items": {
+              "$ref": "#/components/schemas/FieldViolation"
+            },
+            "maxItems": 32,
+            "type": "array",
+            "uniqueItems": true
+          }
+        },
+        "required": [
+          "code",
+          "retryable",
+          "status",
+          "title",
+          "traceId",
+          "type"
+        ],
+        "type": "object"
+      },
+      "Readiness": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "type": "string"
+          },
+          "checkedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "schemaVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReadinessState"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "checkedAt",
+          "kind",
+          "schemaVersion",
+          "state"
+        ],
+        "type": "object"
+      },
+      "ReadinessState": {
+        "enum": [
+          "READY",
+          "NOT_READY"
+        ],
+        "type": "string"
+      },
+      "ReporterPolicy": {
+        "enum": [
+          "CHANGE_CHECK_V1"
+        ],
+        "type": "string"
+      },
+      "RepositoryBinding": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "kind": {
+            "const": "RepositoryBinding"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/RepositoryBindingSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/RepositoryBindingStatus"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "contentDigest",
+          "kind",
+          "metadata",
+          "projectId",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "RepositoryBindingHealth": {
+        "enum": [
+          "PENDING",
+          "READY",
+          "UNAVAILABLE"
+        ],
+        "type": "string"
+      },
+      "RepositoryBindingHealthReason": {
+        "enum": [
+          "CONFIGURATION_CHANGED",
+          "CONNECTION_NOT_READY",
+          "OBSERVED",
+          "REPOSITORY_UNAVAILABLE",
+          "IDENTITY_MISMATCH",
+          "FETCH_PERMISSION_DENIED",
+          "REPORT_PERMISSION_DENIED"
+        ],
+        "type": "string"
+      },
+      "RepositoryBindingSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "externalRepositoryId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "repositoryPath": {
+            "maxLength": 257,
+            "minLength": 3,
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}/[A-Za-z0-9][A-Za-z0-9._-]{0,127}$",
+            "type": "string"
+          },
+          "sourceConnectionId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "trustedDefaultBranch": {
+            "maxLength": 128,
+            "minLength": 1,
+            "not": {
+              "pattern": "(?:\\.\\.|//|@\\{|(?:^|/)\\.|\\.lock(?:/|$)|[/.]$)"
+            },
+            "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$",
+            "type": "string"
+          }
+        },
+        "required": [
+          "externalRepositoryId",
+          "repositoryPath",
+          "sourceConnectionId",
+          "trustedDefaultBranch"
+        ],
+        "type": "object"
+      },
+      "RepositoryBindingStatus": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "PENDING"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "CONFIGURATION_CHANGED",
+                    "CONNECTION_NOT_READY"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "READY"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "OBSERVED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "UNAVAILABLE"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "REPOSITORY_UNAVAILABLE",
+                    "IDENTITY_MISMATCH",
+                    "FETCH_PERMISSION_DENIED",
+                    "REPORT_PERMISSION_DENIED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/RepositoryBindingHealth"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RepositoryBindingHealthReason"
+          }
+        },
+        "required": [
+          "health",
+          "observedAt",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "ResourceID": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        "type": "string"
+      },
+      "ResourceMetadata": {
+        "additionalProperties": false,
+        "properties": {
+          "createdAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "name": {
+            "maxLength": 63,
+            "minLength": 1,
+            "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$",
+            "type": "string"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "updatedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          }
+        },
+        "required": [
+          "createdAt",
+          "id",
+          "name",
+          "resourceVersion",
+          "scope",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "ResourceScope": {
+        "additionalProperties": false,
+        "properties": {
+          "tenantId": {
+            "$ref": "#/components/schemas/TenantID"
+          }
+        },
+        "required": [
+          "tenantId"
+        ],
+        "type": "object"
+      },
+      "SourceConnection": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "kind": {
+            "const": "SourceConnection"
+          },
+          "metadata": {
+            "$ref": "#/components/schemas/ResourceMetadata"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SourceConnectionSpec"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SourceConnectionStatus"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "kind",
+          "metadata",
+          "spec",
+          "status"
+        ],
+        "type": "object"
+      },
+      "SourceConnectionHealth": {
+        "enum": [
+          "PENDING",
+          "READY",
+          "UNAVAILABLE"
+        ],
+        "type": "string"
+      },
+      "SourceConnectionHealthReason": {
+        "enum": [
+          "CONFIGURATION_CHANGED",
+          "OBSERVED",
+          "SECRET_UNAVAILABLE",
+          "PROVIDER_UNAVAILABLE",
+          "PROVIDER_UNSUPPORTED",
+          "CREDENTIAL_REJECTED"
+        ],
+        "type": "string"
+      },
+      "SourceConnectionSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "adapterId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "endpointOrigin": {
+            "format": "uri",
+            "maxLength": 512,
+            "minLength": 1,
+            "not": {
+              "pattern": "^https://(?:[a-z0-9-]+\\.)*localhost(?::|$)"
+            },
+            "pattern": "^https://[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?(?::(?:[1-9][0-9]{0,3}|[1-5][0-9]{4}|6[0-4][0-9]{3}|65[0-4][0-9]{2}|655[0-2][0-9]|6553[0-5]))?$",
+            "type": "string"
+          },
+          "fetchCredentialRef": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "reportCredentialRef": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "webhookSecretRef": {
+            "$ref": "#/components/schemas/ResourceID"
+          }
+        },
+        "required": [
+          "adapterId",
+          "endpointOrigin",
+          "fetchCredentialRef",
+          "reportCredentialRef",
+          "webhookSecretRef"
+        ],
+        "type": "object"
+      },
+      "SourceConnectionStatus": {
+        "additionalProperties": false,
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "PENDING"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "CONFIGURATION_CHANGED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "READY"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "OBSERVED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "health": {
+                  "const": "UNAVAILABLE"
+                }
+              },
+              "required": [
+                "health"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason": {
+                  "enum": [
+                    "SECRET_UNAVAILABLE",
+                    "PROVIDER_UNAVAILABLE",
+                    "PROVIDER_UNSUPPORTED",
+                    "CREDENTIAL_REJECTED"
+                  ]
+                }
+              },
+              "required": [
+                "reason"
+              ]
+            }
+          }
+        ],
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/SourceConnectionHealth"
+          },
+          "observedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/SourceConnectionHealthReason"
+          }
+        },
+        "required": [
+          "health",
+          "observedAt",
+          "reason"
+        ],
+        "type": "object"
+      },
+      "SourceEvent": {
+        "additionalProperties": false,
+        "properties": {
+          "apiVersion": {
+            "const": "devops.matrix.xiak.com/v1"
+          },
+          "contentDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "kind": {
+            "const": "SourceEvent"
+          },
+          "receivedAt": {
+            "$ref": "#/components/schemas/Timestamp"
+          },
+          "scope": {
+            "$ref": "#/components/schemas/ResourceScope"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SourceEventSpec"
+          }
+        },
+        "required": [
+          "apiVersion",
+          "contentDigest",
+          "id",
+          "kind",
+          "receivedAt",
+          "scope",
+          "spec"
+        ],
+        "type": "object"
+      },
+      "SourceEventSpec": {
+        "additionalProperties": false,
+        "properties": {
+          "canonicalPayloadDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "change": {
+            "$ref": "#/components/schemas/ChangeIdentity"
+          },
+          "deliveryId": {
+            "format": "uuid",
+            "not": {
+              "const": "00000000-0000-0000-0000-000000000000"
+            },
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "type": "string"
+          },
+          "externalRepositoryId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "projectId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "repositoryBindingDigest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "repositoryBindingId": {
+            "$ref": "#/components/schemas/ResourceID"
+          },
+          "sourceConnectionId": {
+            "$ref": "#/components/schemas/ResourceID"
+          }
+        },
+        "required": [
+          "canonicalPayloadDigest",
+          "change",
+          "deliveryId",
+          "externalRepositoryId",
+          "projectId",
+          "repositoryBindingDigest",
+          "repositoryBindingId",
+          "sourceConnectionId"
+        ],
+        "type": "object"
+      },
+      "SubjectKind": {
+        "enum": [
+          "USER",
+          "SERVICE_ACCOUNT"
+        ],
+        "type": "string"
+      },
+      "SubjectRef": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/SubjectKind"
+          }
+        },
+        "required": [
+          "id",
+          "kind"
+        ],
+        "type": "object"
+      },
+      "TenantID": {
+        "maxLength": 128,
+        "minLength": 1,
+        "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+        "type": "string"
+      },
+      "Timestamp": {
+        "format": "date-time",
+        "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$",
+        "type": "string"
+      },
+      "TriggerPolicy": {
+        "enum": [
+          "CHANGE"
+        ],
+        "type": "string"
+      },
+      "UpdatePipelineDraftRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "draft": {
+            "$ref": "#/components/schemas/PipelineDraftSpec"
+          }
+        },
+        "required": [
+          "draft"
+        ],
+        "type": "object"
+      },
+      "UpdateRepositoryBindingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/RepositoryBindingSpec"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "UpdateSourceConnectionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "spec": {
+            "$ref": "#/components/schemas/SourceConnectionSpec"
+          }
+        },
+        "required": [
+          "spec"
+        ],
+        "type": "object"
+      },
+      "VerificationLimits": {
+        "additionalProperties": false,
+        "properties": {
+          "cpuMillis": {
+            "const": 2000
+          },
+          "maxLogBytes": {
+            "const": 8388608
+          },
+          "memoryBytes": {
+            "const": 2147483648
+          },
+          "processLimit": {
+            "const": 256
+          },
+          "runTimeoutSeconds": {
+            "const": 1200
+          },
+          "stepTimeoutSeconds": {
+            "const": 600
+          },
+          "writableBytes": {
+            "const": 2147483648
+          }
+        },
+        "required": [
+          "cpuMillis",
+          "maxLogBytes",
+          "memoryBytes",
+          "processLimit",
+          "runTimeoutSeconds",
+          "stepTimeoutSeconds",
+          "writableBytes"
+        ],
+        "type": "object"
+      },
+      "VerificationProfile": {
+        "enum": [
+          "GO_1_26_OFFLINE_V1"
+        ],
+        "type": "string"
+      },
+      "VerificationStep": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "$ref": "#/components/schemas/VerificationStepKind"
+          },
+          "ordinal": {
+            "maximum": 2,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "ordinal"
+        ],
+        "type": "object"
+      },
+      "VerificationStepKind": {
+        "enum": [
+          "GO_TEST",
+          "GO_VET"
+        ],
+        "type": "string"
+      }
+    },
+    "securitySchemes": {
+      "MatrixIAM": {
+        "description": "Matrix IAM credential resolved by the server-side DevOps Authorizer.",
+        "scheme": "bearer",
+        "type": "http"
+      }
+    }
+  },
+  "info": {
+    "title": "Matrix DevOps v1 contracts",
+    "version": "0.1.0"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/ready": {
+      "get": {
+        "operationId": "getDevOpsReadiness",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Readiness"
+                }
+              }
+            },
+            "description": "DevOps is ready."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [],
+        "summary": "Get DevOps readiness"
+      }
+    },
+    "/v1/pipelines": {
+      "post": {
+        "operationId": "createPipeline",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePipelineRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pipeline"
+                }
+              }
+            },
+            "description": "Created resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a Pipeline with a mutable draft"
+      }
+    },
+    "/v1/pipelines/{pipelineId}": {
+      "get": {
+        "operationId": "getPipeline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipelineId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pipeline"
+                }
+              }
+            },
+            "description": "Current authorized resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get a Pipeline"
+      }
+    },
+    "/v1/pipelines/{pipelineId}/activate": {
+      "post": {
+        "description": "No caller body is accepted; IAM supplies the actor and If-Match selects the exact draft resource version.",
+        "operationId": "activatePipeline",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipelineId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineActivation"
+                }
+              }
+            },
+            "description": "Atomic Pipeline and immutable revision result.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Activate the current Pipeline draft"
+      }
+    },
+    "/v1/pipelines/{pipelineId}/draft": {
+      "put": {
+        "operationId": "updatePipelineDraft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipelineId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePipelineDraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Pipeline"
+                }
+              }
+            },
+            "description": "Pipeline with the updated mutable draft.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Replace a Pipeline draft"
+      }
+    },
+    "/v1/pipelines/{pipelineId}/revisions/{pipelineRevisionId}": {
+      "get": {
+        "operationId": "getPipelineRevision",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "pipelineId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "in": "path",
+            "name": "pipelineRevisionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineRevision"
+                }
+              }
+            },
+            "description": "Current authorized resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get an immutable Pipeline revision"
+      }
+    },
+    "/v1/projects": {
+      "post": {
+        "operationId": "createDevOpsProject",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDevOpsProjectRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevOpsProject"
+                }
+              }
+            },
+            "description": "Created resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a DevOps project"
+      }
+    },
+    "/v1/projects/{projectId}": {
+      "get": {
+        "operationId": "getDevOpsProject",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "projectId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DevOpsProject"
+                }
+              }
+            },
+            "description": "Current authorized resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get a DevOps project"
+      }
+    },
+    "/v1/repository-bindings": {
+      "post": {
+        "operationId": "createRepositoryBinding",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRepositoryBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBinding"
+                }
+              }
+            },
+            "description": "Created resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a repository binding"
+      }
+    },
+    "/v1/repository-bindings/{repositoryBindingId}": {
+      "get": {
+        "operationId": "getRepositoryBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repositoryBindingId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBinding"
+                }
+              }
+            },
+            "description": "Current authorized resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get a repository binding"
+      },
+      "put": {
+        "operationId": "updateRepositoryBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repositoryBindingId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRepositoryBindingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBinding"
+                }
+              }
+            },
+            "description": "Updated resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Replace a repository binding specification"
+      }
+    },
+    "/v1/repository-bindings/{repositoryBindingId}/recheck": {
+      "post": {
+        "description": "No caller body or health observation is accepted. If-Match selects the exact current resource version; the observer remains the only authority that can change health, reason, and observedAt.",
+        "operationId": "recheckRepositoryBinding",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "repositoryBindingId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RepositoryBinding"
+                }
+              }
+            },
+            "description": "Reconciliation was scheduled without changing resource state.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Schedule a repository binding recheck"
+      }
+    },
+    "/v1/runs/{runId}": {
+      "get": {
+        "operationId": "getPipelineRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "pattern": "^pipeline-run-[0-9a-f]{48}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineRun"
+                }
+              }
+            },
+            "description": "Current authorized resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get a PipelineRun"
+      }
+    },
+    "/v1/runs/{runId}/cancel": {
+      "post": {
+        "description": "No caller body is accepted. A run with a possible external effect remains nonterminal with cancellationRequestedAt until the fenced worker observes the same intent.",
+        "operationId": "cancelPipelineRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "pattern": "^pipeline-run-[0-9a-f]{48}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineRun"
+                }
+              }
+            },
+            "description": "PipelineRun with its durable cancellation request.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Request PipelineRun cancellation"
+      }
+    },
+    "/v1/runs/{runId}/logs": {
+      "get": {
+        "description": "Authorization is evaluated against the exact PipelineRun. The fixed page contains no executor identity, native output, command, environment, credential, digest, or host path; each successful read commits one sanitized Audit fact.",
+        "operationId": "getPipelineRunLogs",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "pattern": "^pipeline-run-[0-9a-f]{48}$",
+              "type": "string"
+            }
+          },
+          {
+            "description": "Exclusive normalized-log sequence cursor; omitted means zero.",
+            "in": "query",
+            "name": "afterSequence",
+            "required": false,
+            "schema": {
+              "default": 0,
+              "format": "int64",
+              "maximum": 8388608,
+              "minimum": 0,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineRunLogPage"
+                }
+              }
+            },
+            "description": "One authorized, fixed-size page of retained normalized log chunks."
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Read retained normalized PipelineRun logs"
+      }
+    },
+    "/v1/runs/{runId}/replay": {
+      "post": {
+        "description": "No caller body is accepted. If-Match selects the exact terminal source version; the new run copies its immutable executor input without consulting mutable configuration.",
+        "operationId": "replayPipelineRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "runId",
+            "required": true,
+            "schema": {
+              "pattern": "^pipeline-run-[0-9a-f]{48}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineRun"
+                }
+              }
+            },
+            "description": "New queued PipelineRun with the selected run's immutable input.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "429": {
+            "content": {
+              "application/problem+json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            },
+            "description": "Queued PipelineRun capacity is exhausted.",
+            "headers": {
+              "Retry-After": {
+                "$ref": "#/components/headers/RetryAfter"
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Replay a terminal PipelineRun"
+      }
+    },
+    "/v1/source-connections": {
+      "post": {
+        "operationId": "createSourceConnection",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSourceConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceConnection"
+                }
+              }
+            },
+            "description": "Created resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Create a source connection"
+      }
+    },
+    "/v1/source-connections/{sourceConnectionId}": {
+      "get": {
+        "operationId": "getSourceConnection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sourceConnectionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceConnection"
+                }
+              }
+            },
+            "description": "Current authorized resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Get a source connection"
+      },
+      "put": {
+        "operationId": "updateSourceConnection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sourceConnectionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateSourceConnectionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceConnection"
+                }
+              }
+            },
+            "description": "Updated resource.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "413": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "415": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Replace source connection credential references"
+      }
+    },
+    "/v1/source-connections/{sourceConnectionId}/recheck": {
+      "post": {
+        "description": "No caller body or health observation is accepted. If-Match selects the exact current resource version; the observer remains the only authority that can change health, reason, and observedAt.",
+        "operationId": "recheckSourceConnection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sourceConnectionId",
+            "required": true,
+            "schema": {
+              "maxLength": 128,
+              "minLength": 1,
+              "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
+              "type": "string"
+            }
+          },
+          {
+            "$ref": "#/components/parameters/IdempotencyKey"
+          },
+          {
+            "$ref": "#/components/parameters/IfMatch"
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceConnection"
+                }
+              }
+            },
+            "description": "Reconciliation was scheduled without changing resource state.",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Location": {
+                "$ref": "#/components/headers/Location"
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "404": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "405": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "409": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "412": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "422": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "428": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "summary": "Schedule a source connection recheck"
+      }
+    }
+  },
+  "security": [
+    {
+      "MatrixIAM": []
+    }
+  ]
+}

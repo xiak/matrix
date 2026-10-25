@@ -3005,6 +3005,18 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 		{auditv1.ActionManagedServiceInstallationReady, iamv1.ActionManagedServiceInstallationCreate, "collection"},
 		{auditv1.ActionManagedServiceInstallationTerminationRequested, iamv1.ActionManagedServiceInstallationTerminate, "resource-proof"},
 		{auditv1.ActionManagedServiceInstallationTerminated, iamv1.ActionManagedServiceInstallationTerminate, "resource-proof"},
+		{auditv1.ActionDevOpsProjectCreated, iamv1.ActionDevOpsProjectCreate, "resource-proof"},
+		{auditv1.ActionDevOpsSourceConnectionCreated, iamv1.ActionDevOpsSourceConnectionCreate, "resource-proof"},
+		{auditv1.ActionDevOpsSourceConnectionUpdated, iamv1.ActionDevOpsSourceConnectionUpdate, "resource-proof"},
+		{auditv1.ActionDevOpsSourceConnectionRecheckScheduled, iamv1.ActionDevOpsSourceConnectionRecheck, "resource-proof"},
+		{auditv1.ActionDevOpsRepositoryBindingCreated, iamv1.ActionDevOpsRepositoryBindingCreate, "resource-proof"},
+		{auditv1.ActionDevOpsRepositoryBindingUpdated, iamv1.ActionDevOpsRepositoryBindingUpdate, "resource-proof"},
+		{auditv1.ActionDevOpsRepositoryBindingRecheckScheduled, iamv1.ActionDevOpsRepositoryBindingRecheck, "resource-proof"},
+		{auditv1.ActionDevOpsPipelineCreated, iamv1.ActionDevOpsPipelineCreate, "resource-proof"},
+		{auditv1.ActionDevOpsPipelineDraftUpdated, iamv1.ActionDevOpsPipelineUpdate, "resource-proof"},
+		{auditv1.ActionDevOpsPipelineRunReplayed, iamv1.ActionDevOpsRunReplay, "resource-proof"},
+		{auditv1.ActionDevOpsPipelineRunCancellationRequested, iamv1.ActionDevOpsRunCancel, "resource-proof"},
+		{auditv1.ActionDevOpsPipelineRunLogsRead, iamv1.ActionDevOpsLogRead, "resource-proof"},
 		{auditv1.ActionAuditRecordsRead, iamv1.ActionAuditRecordRead, "records"},
 		{auditv1.ActionAuditIntegrityVerified, iamv1.ActionAuditIntegrityVerify, "chain"},
 		{auditv1.ActionAuditPlatformRecordsRead, iamv1.ActionAuditPlatformRecordRead, "records"},
@@ -3028,7 +3040,7 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 			decision := *evidence.Decision
 			current.Decision = &decision
 			current.DecisionContractVersion = 2
-			action, id, mode, usage := auditDecisionTarget(event, decision.Action, 2)
+			action, id, mode, usage := auditDecisionTarget(event, decision.Action, decision.Resource.ID, 2)
 			request := coreAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: action,
 				Resource:  iamv1.ResourceReference{Kind: decision.Resource.Kind, ID: id},
 				RequestID: event.RequestID, CorrelationID: event.CorrelationID}, mode, usage)
@@ -3217,6 +3229,124 @@ func TestAuditProofClosedHistoricalMappings(t *testing.T) {
 	}
 }
 
+func TestAuditProofDevOpsActivationUsesParentPipelineAuthority(t *testing.T) {
+	identity, event, evidence := historicalAuditFixture(
+		auditv1.ActionDevOpsPipelineRevisionActivated,
+		iamv1.ActionDevOpsPipelineActivate,
+		"pipeline-parent",
+	)
+	event.Target.ID = "pipeline-revision-result"
+	_, expected, err := auditv1.CanonicalizeEvent(auditv1.SourceDevOps, event)
+	if got, proofErr := auditContentDigest(identity, event, evidence); err != nil || proofErr != nil || got != expected {
+		t.Fatalf("parent Pipeline activation proof rejected: digest=%q canonical=%v proof=%v", got, err, proofErr)
+	}
+
+	// The source transaction/outbox, not IAM's original decision, binds the
+	// resulting immutable revision. IAM still fixes the action, caller, parent
+	// resource kind, request, actor, tenant, and historical product profile.
+	otherRevision := event
+	otherRevision.Target.ID = "pipeline-revision-another"
+	if _, err := auditContentDigest(identity, otherRevision, evidence); err != nil {
+		t.Fatal("IAM incorrectly claimed the final revision payload was decision-bound", err)
+	}
+	wrongAction := evidence
+	decision := *evidence.Decision
+	wrongAction.Decision = &decision
+	wrongAction.Decision.Action = iamv1.ActionDevOpsPipelineUpdate
+	if _, err := auditContentDigest(identity, event, wrongAction); !errors.Is(err, ErrForbidden) {
+		t.Fatal("pipeline update authority was reused for activation")
+	}
+	wrongKind := evidence
+	decision = *evidence.Decision
+	wrongKind.Decision = &decision
+	wrongKind.Decision.Resource.Kind = iamv1.ResourcePipelineRun
+	if _, err := auditContentDigest(identity, event, wrongKind); !errors.Is(err, ErrForbidden) {
+		t.Fatal("non-Pipeline authority was reused for revision activation")
+	}
+}
+
+func TestAuditProofDevOpsSystemFactsUseClosedProducerScope(t *testing.T) {
+	for _, action := range []auditv1.Action{
+		auditv1.ActionDevOpsSourceConnectionHealthTransitioned,
+		auditv1.ActionDevOpsRepositoryBindingHealthTransitioned,
+		auditv1.ActionDevOpsSourceEventAdmitted,
+		auditv1.ActionDevOpsPipelineRunCreated,
+		auditv1.ActionDevOpsPipelineRunCompleted,
+	} {
+		t.Run(string(action), func(t *testing.T) {
+			contract, known := auditv1.ContractForAction(action)
+			if !known || len(contract.SystemActorIDs) == 0 {
+				t.Fatal("DevOps SYSTEM fact lacks a closed actor catalog")
+			}
+			identity := iamv1.ServiceIdentity{
+				APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity",
+				InstallationID: "installation-proof", AccountID: "tenant-platform",
+				PrincipalID: "service-devops", Purpose: iamv1.ServiceDevOps,
+			}
+			event := auditv1.Event{
+				APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-system-proof",
+				TenantID: "tenant-customer", Actor: auditv1.ActorReference{Type: auditv1.ActorSystem, ID: contract.SystemActorIDs[0]},
+				Action: action, Target: auditv1.TargetReference{Kind: contract.Target, ID: "resource-proof"},
+				Result: contract.Results[0], RequestDigest: "sha256:" + strings.Repeat("a", 64),
+				RequestID: "request-proof", CorrelationID: "correlation-proof", OperationID: "operation-proof",
+				OccurredAt: time.Date(2026, 10, 25, 1, 2, 3, 0, time.UTC),
+			}
+			if contract.OutcomeRequired {
+				event.Outcome, event.Reason = auditv1.OutcomeSucceeded, auditv1.ReasonCompleted
+			}
+			evidence := AuditEvidence{InstallationID: identity.InstallationID, ScopeOnly: true}
+			_, expected, canonicalErr := auditv1.CanonicalizeEvent(auditv1.SourceDevOps, event)
+			if got, err := auditContentDigest(identity, event, evidence); canonicalErr != nil || err != nil || got != expected {
+				t.Fatalf("closed SYSTEM fact rejected: digest=%q canonical=%v proof=%v", got, canonicalErr, err)
+			}
+			for _, actorID := range contract.SystemActorIDs {
+				candidate := event
+				candidate.Actor.ID = actorID
+				if _, err := auditContentDigest(identity, candidate, evidence); err != nil {
+					t.Fatalf("declared SYSTEM actor %q rejected: %v", actorID, err)
+				}
+			}
+			for name, mutate := range map[string]func(*iamv1.ServiceIdentity, *auditv1.Event, *AuditEvidence){
+				"producer": func(value *iamv1.ServiceIdentity, _ *auditv1.Event, _ *AuditEvidence) {
+					value.Purpose = iamv1.ServicePaaS
+				},
+				"installation": func(_ *iamv1.ServiceIdentity, _ *auditv1.Event, proof *AuditEvidence) {
+					proof.InstallationID = "installation-other"
+				},
+				"scope proof": func(_ *iamv1.ServiceIdentity, _ *auditv1.Event, proof *AuditEvidence) { proof.ScopeOnly = false },
+				"actor type": func(_ *iamv1.ServiceIdentity, fact *auditv1.Event, _ *AuditEvidence) {
+					fact.Actor.Type = auditv1.ActorUser
+				},
+				"actor id": func(_ *iamv1.ServiceIdentity, fact *auditv1.Event, _ *AuditEvidence) { fact.Actor.ID = "system-forged" },
+				"decision": func(_ *iamv1.ServiceIdentity, fact *auditv1.Event, _ *AuditEvidence) {
+					fact.IAMDecisionID = "decision-forged"
+				},
+			} {
+				t.Run(name, func(t *testing.T) {
+					candidateIdentity, candidateEvent, candidateEvidence := identity, event, evidence
+					mutate(&candidateIdentity, &candidateEvent, &candidateEvidence)
+					if _, err := auditContentDigest(candidateIdentity, candidateEvent, candidateEvidence); !errors.Is(err, ErrForbidden) {
+						t.Fatalf("forged source-owned fact accepted: %v", err)
+					}
+				})
+			}
+		})
+	}
+
+	identity, event, evidence := historicalAuditFixture(
+		auditv1.ActionDevOpsProjectCreated,
+		iamv1.ActionDevOpsProjectCreate,
+		"resource-proof",
+	)
+	evidence.Event, evidence.Decision, evidence.DecisionProfile = auditv1.Event{}, nil, nil
+	evidence.DecisionContractVersion, evidence.ScopeOnly = 0, true
+	event.IAMDecisionID = ""
+	event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "system-devops-source-ingress"}
+	if _, err := auditContentDigest(identity, event, evidence); !errors.Is(err, ErrForbidden) {
+		t.Fatal("user-authorized DevOps mutation was downgraded to producer scope")
+	}
+}
+
 func TestAuditProofServiceActivationRetainsRoleSessionLineage(t *testing.T) {
 	identity, event, evidence := historicalAuditFixture(
 		auditv1.ActionManagedServiceServiceActivationActivated,
@@ -3359,6 +3489,8 @@ func historicalAuditFixture(eventAction auditv1.Action, decisionAction iamv1.Act
 	identity := iamv1.ServiceIdentity{APIVersion: iamv1.APIVersion, Kind: "ServiceIdentity", InstallationID: "installation-proof", AccountID: "tenant-platform", PrincipalID: "service-producer", Purpose: iamv1.ServicePaaS}
 	if contract.Source == auditv1.SourceAudit {
 		identity.Purpose = iamv1.ServiceAudit
+	} else if contract.Source == auditv1.SourceDevOps {
+		identity.Purpose = iamv1.ServiceDevOps
 	}
 	decision := iamv1.AuthorizationDecision{APIVersion: iamv1.APIVersion, Kind: "AuthorizationDecision", ID: "decision-proof", Allowed: true, Reason: iamv1.DecisionAllowed, TenantID: "tenant-customer", Subject: &iamv1.Subject{Type: iamv1.SubjectUser, ID: "principal-actor"}, Action: decisionAction, Resource: iamv1.ResourceReference{Kind: resourceKind, ID: resource}, RequestID: "request-proof", DecidedAt: now}
 	event := auditv1.Event{APIVersion: auditv1.APIVersion, Kind: "AuditEvent", EventID: "event-proof", TenantID: auditv1.TenantID(decision.TenantID), Actor: auditv1.ActorReference{Type: auditv1.ActorUser, ID: "principal-actor"}, IAMDecisionID: "decision-proof", Action: eventAction, Target: auditv1.TargetReference{Kind: contract.Target, ID: "resource-proof"}, Result: contract.Results[0], RequestDigest: "sha256:" + strings.Repeat("a", 64), RequestID: "request-proof", CorrelationID: "correlation-proof", OccurredAt: now.Add(time.Second)}
@@ -3861,6 +3993,55 @@ func TestIAMCoreUsecasesBindCredentialsAndRecordClosedAuthorization(t *testing.T
 	readiness, err := service.Readiness(context.Background())
 	if !errors.Is(err, ErrUnavailable) || readiness.State == iamv1.ReadinessReady {
 		t.Fatal("local authority without AccessKey custody advertised network readiness")
+	}
+}
+
+func TestIAMLegacyBootstrapCanOnlyReplayAnExactReadyReceipt(t *testing.T) {
+	transaction := newCoreTransaction()
+	repository := &coreRepository{transaction: transaction}
+	service, err := NewAuthority(repository, Config{})
+	if err != nil {
+		t.Fatalf("create IAM authority: %v", err)
+	}
+	current := coreBootstrap(t)
+	legacy := current
+	legacy.Services = append(
+		[]iamv1.BootstrapServiceCredential(nil),
+		current.Services[:1]...,
+	)
+	legacy.Services = append(legacy.Services, current.Services[2:]...)
+	digest, err := iamv1.BootstrapDigest(legacy)
+	if err != nil {
+		t.Fatalf("digest legacy bootstrap: %v", err)
+	}
+	if _, err := service.Bootstrap(context.Background(), legacy); !errors.Is(err, ErrConflict) {
+		t.Fatalf("uninitialized legacy bootstrap error=%v, want conflict", err)
+	}
+	if transaction.contentDigest != "" {
+		t.Fatal("legacy bootstrap seeded an uninitialized authority")
+	}
+	appliedAt := transaction.now
+	transaction.status = iamv1.BootstrapStatus{
+		APIVersion: iamv1.APIVersion, Kind: "BootstrapStatus", State: iamv1.BootstrapReady,
+		InstallationID: legacy.InstallationID, AccountID: legacy.Organization.ID,
+		ContentDigest: digest, AppliedAt: &appliedAt,
+	}
+	transaction.contentDigest = digest
+	replayed, err := service.Bootstrap(context.Background(), legacy)
+	if err != nil || replayed != transaction.status {
+		t.Fatalf("replay legacy bootstrap: status=%#v err=%v", replayed, err)
+	}
+
+	changed := legacy
+	changed.Services = append([]iamv1.BootstrapServiceCredential(nil), legacy.Services...)
+	changed.Services[1].Credential = coreSecret(t, "mx1.ChangedLegacyCredential0000000000000000001")
+	if _, err := service.Bootstrap(context.Background(), changed); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed legacy bootstrap error=%v, want conflict", err)
+	}
+	wrongOrganization := legacy
+	wrongOrganization.Organization.ID = "organization-other"
+	if _, err := service.Bootstrap(context.Background(), wrongOrganization); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cross-organization legacy bootstrap error=%v, want conflict", err)
 	}
 }
 
@@ -5372,6 +5553,7 @@ func coreBootstrap(t *testing.T) iamv1.BootstrapDocument {
 		},
 		Services: []iamv1.BootstrapServiceCredential{
 			service(iamv1.ServiceIAM, "service-iam", "mx1.IAMCoreCredential00000000000000000000001"),
+			service(iamv1.ServicePlatform, "service-platform", "mx1.PlatformCoreCredential00000000000000000001"),
 			service(iamv1.ServicePaaS, "service-paas", "mx1.PaaSCoreCredential0000000000000000000001"),
 			service(iamv1.ServiceAudit, "service-audit", "mx1.AuditCoreCredential000000000000000000001"),
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", "mx1.VerifierCoreCredential000000000000000001"),

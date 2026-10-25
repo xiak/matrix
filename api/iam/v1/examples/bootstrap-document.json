@@ -19,6 +19,11 @@
       "credential": "example-only-iam-credential-00000000000000001"
     },
     {
+      "purpose": "PLATFORM",
+      "principalId": "service-platform",
+      "credential": "example-only-platform-credential-00000000000001"
+    },
+    {
       "purpose": "PAAS",
       "principalId": "service-paas",
       "credential": "example-only-paas-credential-0000000000000001"

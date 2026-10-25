@@ -12,8 +12,9 @@ import (
 )
 
 type migrationCleanupIdentity struct {
-	imageID string
-	labels  map[string]string
+	imageReference string
+	imageIDs       []string
+	labels         map[string]string
 }
 
 func rollbackInstallation(
@@ -31,7 +32,7 @@ func rollbackInstallation(
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	expectation, err := decodePlatformExpectation(compiled.ComposeJSON)
+	expectation, err := decodePlatformExpectation(compiled.ComposeJSON, plan.Bundle.Manifest)
 	if err != nil || expectation.Name != compiled.ProjectName {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -153,7 +154,9 @@ func inspectOwnedMigrationContainers(
 		}
 		name := strings.TrimPrefix(inspection.Name, "/")
 		cleanup, found := expected[name]
-		if !found || inspection.Name != "/"+name || inspection.Image != cleanup.imageID ||
+		if !found || inspection.Name != "/"+name ||
+			inspection.Config.Image != cleanup.imageReference ||
+			!slices.Contains(cleanup.imageIDs, inspection.Image) ||
 			inspection.Config.Labels["com.docker.compose.project"] != "" ||
 			!ownershipLabelsMatch(inspection.Config.Labels, cleanup.labels) {
 			return nil, errors.Join(
@@ -177,14 +180,15 @@ func expectedMigrationCleanupIdentities(
 	plan platformcommand.InstallPlan,
 	projectName string,
 ) (map[string]migrationCleanupIdentity, error) {
-	images := make(map[string]string, len(plan.Bundle.Manifest.Images))
+	images := make(map[string]release.Image, len(plan.Bundle.Manifest.Images))
 	for _, image := range plan.Bundle.Manifest.Images {
-		images[image.Component] = image.ImageID
+		images[image.Component] = image
 	}
-	result := make(map[string]migrationCleanupIdentity, len(platformMigrations)*2)
-	for _, migration := range platformMigrations {
-		imageID := images[migration.component]
-		if imageID == "" {
+	migrations := platformMigrationsFor(plan.Bundle.Manifest)
+	result := make(map[string]migrationCleanupIdentity, len(migrations)*2)
+	for _, migration := range migrations {
+		image, found := images[migration.component]
+		if !found {
 			return nil, errors.New("migration cleanup image identity is absent")
 		}
 		for _, mode := range []string{"apply", "verify"} {
@@ -205,8 +209,9 @@ func expectedMigrationCleanupIdentities(
 				labels[key] = value
 			}
 			result[name] = migrationCleanupIdentity{
-				imageID: imageID,
-				labels:  labels,
+				imageReference: image.RuntimeReference(),
+				imageIDs:       image.RuntimeImageIDs(),
+				labels:         labels,
 			}
 		}
 	}

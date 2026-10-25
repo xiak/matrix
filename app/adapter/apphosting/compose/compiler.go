@@ -9,17 +9,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 
+	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 const maxComposeDocumentBytes = 4 * 1024 * 1024
-
-var localImageDigestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 
 // ArtifactResolver proves that a public artifact digest is already present
 // and returns a Docker-local immutable image reference. It must not pull or
@@ -218,7 +216,7 @@ func (compiler *Compiler) Compile(
 			return ExecutionPlan{}, fmt.Errorf("component %q artifact resolution failed", prepared.Name)
 		}
 		if image.ArtifactDigest != prepared.Artifact.Digest ||
-			!localImageDigestPattern.MatchString(image.LocalReference) {
+			apphostingv1.ValidateLocalImageReference(image.LocalReference) != nil {
 			return ExecutionPlan{}, fmt.Errorf("component %q artifact resolver returned an unverified image", prepared.Name)
 		}
 		prepared.Service.Image = image.LocalReference

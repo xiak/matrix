@@ -1,0 +1,12 @@
+{
+  "id": "pipeline-verify-change",
+  "name": "verify-change",
+  "projectId": "devops-project-platform",
+  "draft": {
+    "repositoryBindingId": "repository-binding-api",
+    "triggerPolicy": "CHANGE",
+    "verificationProfile": "GO_1_26_OFFLINE_V1",
+    "dependencyEgress": "NONE",
+    "reporterPolicy": "CHANGE_CHECK_V1"
+  }
+}

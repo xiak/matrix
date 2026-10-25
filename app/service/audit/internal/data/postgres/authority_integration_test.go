@@ -529,7 +529,7 @@ func assertAuditContractCatalog(
 				invalid = append(invalid, candidate)
 			}
 		}
-		if contract.SystemActorID != "" {
+		if len(contract.SystemActorIDs) > 0 {
 			candidate := event
 			candidate.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: "another-system-actor"}
 			invalid = append(invalid, candidate)
@@ -590,7 +590,7 @@ func assertAuditContractCatalog(
 						forged.TenantID, forged.InstallationID = auditv1.TenantID(forged.InstallationID), ""
 					case "actor":
 						forged.Actor.Type = auditv1.ActorSystem
-						if contract.SystemActorID != "" {
+						if len(contract.SystemActorIDs) > 0 {
 							forged.Actor.Type = auditv1.ActorUser
 						}
 					case "installation":
@@ -735,6 +735,19 @@ func TestAuditDirectPredecessorUpgrade(t *testing.T) {
 		t.Fatal("unnamespaced authority bypassed RLS")
 	}
 	assertAuditImmutability(t, ctx, migrator, event.TenantID)
+
+	devopsEvent := authorityAuditEvent(
+		"event-new-devops",
+		event.TenantID,
+		"source-connection-upgrade",
+		auditv1.ActionDevOpsSourceConnectionHealthTransitioned,
+	)
+	devopsRecord, _ := appendAcceptedAuditRecord(t, ctx, runtimeConnection, auditv1.SourceDevOps, devopsEvent)
+	upgradedRows := readAuditRecords(t, ctx, runtimeConnection, event.TenantID)
+	if len(upgradedRows) != 2 || upgradedRows[0] != devopsRecord || upgradedRows[1] != retained ||
+		devopsRecord.Source != auditv1.SourceDevOps || devopsRecord.Sequence != 2 {
+		t.Fatal("retained Audit database did not admit the current DevOps source without rewriting its prior chain")
+	}
 }
 
 func assertPostgres18(t *testing.T, ctx context.Context, connection *pgx.Conn) {
@@ -1032,7 +1045,7 @@ func applyIAMBootstrap(
 		PasswordHash: "$matrix-iam-v1$argon2id$v=19$m=65536,t=3,p=1$" +
 			strings.Repeat("A", 22) + "$" + strings.Repeat("A", 43),
 	}
-	for _, purpose := range iamv1.AllServicePurposes() {
+	for _, purpose := range iamv1.BootstrapServicePurposes() {
 		purposeText := string(purpose)
 		fixture.Services = append(fixture.Services, iamBootstrapService{
 			Purpose:            purposeText,
@@ -2442,12 +2455,16 @@ func authorityAuditEvent(
 	if contract.OperationRequired {
 		event.OperationID = auditv1.OperationID("operation-" + eventID)
 	}
-	if contract.SystemActorID != "" {
-		event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: contract.SystemActorID}
+	if contract.OutcomeRequired {
+		event.Outcome = auditv1.OutcomeSucceeded
+		event.Reason = auditv1.ReasonCompleted
+	}
+	if len(contract.SystemActorIDs) > 0 {
+		event.Actor = auditv1.ActorReference{Type: auditv1.ActorSystem, ID: contract.SystemActorIDs[0]}
 	}
 	if contract.PlatformOnly {
 		event.TenantID, event.InstallationID = "", string(tenantID)
-		if contract.SystemActorID == "" {
+		if len(contract.SystemActorIDs) == 0 {
 			event.Actor.Type = auditv1.ActorUser
 		}
 		if contract.TargetMatchesInstallation {

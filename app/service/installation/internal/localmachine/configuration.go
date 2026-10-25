@@ -28,7 +28,7 @@ func configureInstallation(
 		)
 	}
 	for _, image := range staged.Manifest.Images {
-		present, err := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		_, present, err := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if err != nil {
 			return err
 		}
@@ -67,7 +67,7 @@ func configureUpgrade(
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
 	for _, image := range target.Manifest.Images {
-		present, err := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		_, present, err := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if err != nil {
 			return err
 		}
@@ -113,11 +113,11 @@ func replaceReleaseConfiguration(
 		InstallationID: plan.InstallationID, Root: plan.Root,
 		Listener: plan.Listener, Port: plan.Port, NorthboundOrigin: plan.NorthboundOrigin,
 	}
-	beforeTopology, err := topology.Compile(before, options)
+	beforeTopology, err := topology.CompileInstalled(before, options)
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	afterTopology, err := topology.Compile(after, options)
+	afterTopology, err := topology.CompileInstalled(after, options)
 	if err != nil || afterTopology.ProjectName != beforeTopology.ProjectName {
 		return errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -132,12 +132,15 @@ func replaceReleaseConfiguration(
 	if err != nil {
 		return errors.Join(platformcommand.ErrEffectVerification, err)
 	}
+	beforeRoutes := installedAPISIXStandaloneConfig(before, plan.NorthboundOrigin)
+	afterRoutes := installedAPISIXStandaloneConfig(after, plan.NorthboundOrigin)
 	for _, replacement := range []struct {
 		path          string
 		before, after []byte
 	}{
 		{layout.Compose, beforeTopology.ComposeJSON, afterTopology.ComposeJSON},
 		{layout.ArtifactCatalog, beforeCatalog, afterCatalog},
+		{layout.APISIXRoutes, beforeRoutes, afterRoutes},
 	} {
 		if err := replaceManagedExpected(
 			plan.Root, filepath.FromSlash(replacement.path),
@@ -169,6 +172,16 @@ func replaceReleaseConfiguration(
 		return errors.Join(platformcommand.ErrEffectConflict, err)
 	}
 	return nil
+}
+
+func installedAPISIXStandaloneConfig(
+	manifest release.Manifest,
+	northboundOrigin string,
+) []byte {
+	if release.IsLegacyProductlessManifest(manifest) {
+		return legacyProductlessAPISIXStandaloneConfig()
+	}
+	return apisixStandaloneConfig(northboundOrigin)
 }
 
 func publishInstallationConfiguration(
@@ -219,8 +232,12 @@ func artifactCatalogConfig(manifest release.Manifest) ([]byte, error) {
 	entries := make([]apphostingv1.ArtifactCatalogEntry, 0)
 	for _, image := range manifest.Images {
 		if image.Purpose == release.ImageWorkload {
+			imageIDs := image.RuntimeImageIDs()
+			slices.Sort(imageIDs)
 			entries = append(entries, apphostingv1.ArtifactCatalogEntry{
-				ArtifactDigest: image.SourceDigest, ImageID: image.ImageID,
+				ArtifactDigest: image.SourceDigest,
+				LocalReference: image.RuntimeReference(),
+				ImageIDs:       imageIDs,
 			})
 		}
 	}
@@ -369,6 +386,21 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
       nodes:
         "audit:8080": 1
   -
+    id: matrix-platform
+    uri: /api/platform/*
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/platform/(.*)"
+          - "/$1"
+        headers:
+          remove:
+            - Matrix-Subject-Credential
+    upstream:
+      type: roundrobin
+      nodes:
+        "platform-api:8080": 1
+  -
     id: matrix-paas-installation-verification
     uri: /api/paas/v1/installation:verify
     priority: 100
@@ -471,7 +503,7 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
     upstream:
       type: roundrobin
       nodes:
-        "paas-ui:8080": 1
+        "matrix-ui:8080": 1
 #END
 `, northboundOrigin, northboundOrigin))
 }

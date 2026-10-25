@@ -1,0 +1,34 @@
+{
+  "apiVersion": "devops.matrix.xiak.com/v1",
+  "kind": "PipelineRun",
+  "id": "pipeline-run-8e39a66557a3d2c93f6909a3598aeb478872435bd4bac674",
+  "scope": {
+    "tenantId": "organization-acme"
+  },
+  "projectId": "devops-project-platform",
+  "pipelineId": "pipeline-verify-change",
+  "input": {
+    "sourceEventId": "source-event-c4de7a55ee49a4b5212f3d29272f7be310105fbc9b300d62",
+    "sourceEventDigest": "sha256:45ea0910bd3873f69b167184c9883a4007ea997024f27f7ddd1b273fc9b1a2cf",
+    "pipelineRevisionId": "pipeline-revision-8c089bacd77776938bdfa0c1cbc79e67e4d5041fa0543de8",
+    "pipelineRevisionDigest": "sha256:6f1da2f9846fe523241dc8f55200727fac79342a14baaa2bd5727e5485c03926",
+    "repositoryBindingId": "repository-binding-api",
+    "repositoryBindingDigest": "sha256:ba641c4f85296cb2b0a43014403aeb941fe7dd233f15c9296e0d3bc1bac7b453",
+    "change": {
+      "number": 42,
+      "action": "OPENED",
+      "headCommit": "1111111111111111111111111111111111111111",
+      "trustedBaseCommit": "2222222222222222222222222222222222222222"
+    }
+  },
+  "inputDigest": "sha256:b01a7a6057f9faa74c2c7d6fb929ec3da255f06c2500802b848913b35bd8d41f",
+  "status": {
+    "state": "QUEUED",
+    "stage": "RECEIVE",
+    "reason": "EVENT_ADMITTED",
+    "resourceVersion": 1,
+    "observedAt": "2026-09-07T04:07:06Z"
+  },
+  "createdAt": "2026-09-07T04:07:06Z",
+  "updatedAt": "2026-09-07T04:07:06Z"
+}

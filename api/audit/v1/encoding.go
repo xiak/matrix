@@ -88,6 +88,8 @@ func CanonicalizeEvent(source Source, event Event) (document, contentDigest stri
 			Action:                  event.Action,
 			Target:                  event.Target,
 			Result:                  event.Result,
+			Outcome:                 event.Outcome,
+			Reason:                  event.Reason,
 			RequestDigest:           event.RequestDigest,
 			AuthorityEvidenceDigest: event.AuthorityEvidenceDigest,
 			RequestID:               event.RequestID,
@@ -122,6 +124,8 @@ type canonicalEvent struct {
 	Action                  Action          `json:"action"`
 	Target                  TargetReference `json:"target"`
 	Result                  Result          `json:"result"`
+	Outcome                 Outcome         `json:"outcome,omitempty"`
+	Reason                  Reason          `json:"reason,omitempty"`
 	RequestDigest           string          `json:"requestDigest"`
 	AuthorityEvidenceDigest string          `json:"authorityEvidenceDigest,omitempty"`
 	RequestID               string          `json:"requestId"`

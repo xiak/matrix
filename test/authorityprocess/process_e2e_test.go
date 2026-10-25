@@ -51,6 +51,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	localcontaineradapter "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 	auditmigration "github.com/xiak/matrix/app/service/audit/migration"
+	devopsmigration "github.com/xiak/matrix/app/service/devops/migration"
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
@@ -65,6 +66,11 @@ const (
 	auditRuntimeLogin                 = "matrix_authority_process_audit_runtime"
 	paasAPILogin                      = "matrix_authority_process_paas_api"
 	paasWorkerLogin                   = "matrix_authority_process_paas_worker"
+	devopsAPILogin                    = "matrix_authority_process_devops_api"
+	devopsCheckReporterLogin          = "matrix_authority_process_devops_check_reporter"
+	devopsSourceFetcherLogin          = "matrix_authority_process_devops_source_fetcher"
+	devopsSourceObserverLogin         = "matrix_authority_process_devops_source_observer"
+	devopsWorkerLogin                 = "matrix_authority_process_devops_worker"
 	processDBPassword                 = "matrix-authority-process-test-only"
 	initialAdminPassword              = "Initial-Process-Admin-Password-49!"
 	changedAdminPassword              = "Changed-Process-Admin-Password-73!"
@@ -80,10 +86,12 @@ const (
 	browserUserLoginName              = "browser.live.user"
 	browserSecurityEmail              = "browser.live.user@matrix.test"
 
-	iamServiceCredential   = "mx1.ProcessIAMServiceCredential00000000000000001"
-	paasServiceCredential  = "mx1.ProcessPaaSServiceCredential0000000000000001"
-	auditServiceCredential = "mx1.ProcessAuditServiceCredential000000000000001"
-	verifierCredential     = "mx1.ProcessVerifierCredential0000000000000001"
+	iamServiceCredential      = "mx1.ProcessIAMServiceCredential00000000000000001"
+	platformServiceCredential = "mx1.PlatformProcessCredential0000000000000001"
+	paasServiceCredential     = "mx1.ProcessPaaSServiceCredential0000000000000001"
+	auditServiceCredential    = "mx1.ProcessAuditServiceCredential000000000000001"
+	devopsServiceCredential   = "mx1.ProcessDevOpsServiceCredential00000000000001"
+	verifierCredential        = "mx1.ProcessVerifierCredential0000000000000001"
 
 	// Real product lanes resolve and pass already-loaded linux/amd64 image IDs
 	// because classic and containerd Docker stores expose different IDs for the
@@ -128,6 +136,22 @@ func TestRuntimeDSNBindsLeastPrivilegeLogin(t *testing.T) {
 	}
 	if admin.User != "postgres" || admin.Password != "query-admin" {
 		t.Fatal("runtime DSN mutated migration configuration")
+	}
+	for _, login := range []string{
+		devopsAPILogin,
+		devopsCheckReporterLogin,
+		devopsSourceFetcherLogin,
+		devopsSourceObserverLogin,
+		devopsWorkerLogin,
+	} {
+		applicationName := devopsProcessApplicationName(login)
+		config, parseErr := pgxpool.ParseConfig(runtimeDSNWithApplication(
+			t, admin, login, "runtime-password", applicationName,
+		))
+		if parseErr != nil || len(applicationName) > 63 ||
+			config.ConnConfig.RuntimeParams["application_name"] != applicationName {
+			t.Fatalf("DevOps process DSN does not preserve exact PostgreSQL application identity for %s", login)
+		}
 	}
 	direct, err := pgx.ParseConfig(localRecoveryMigrationDSN(t, dsn))
 	if err != nil || direct.User != parsed.ConnConfig.User || direct.Password != parsed.ConnConfig.Password || direct.Host != admin.Host || direct.Port != admin.Port || direct.Database != admin.Database || direct.RuntimeParams["pool_max_conns"] != "" {
@@ -837,6 +861,25 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	}
 
 	temporary := t.TempDir()
+	devopsRuntimeRoots := make(map[string]string, 5)
+	for _, name := range []string{
+		"devops-webhook-secrets",
+		"devops-fetch-credentials",
+		"devops-report-credentials",
+		"devops-source-archives",
+		"devops-source-trust",
+	} {
+		path := filepath.Join(temporary, name)
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatalf("create protected DevOps process directory %s: %v", name, err)
+		}
+		devopsRuntimeRoots[name] = path
+	}
+	webhookSecretRoot := devopsRuntimeRoots["devops-webhook-secrets"]
+	fetchCredentialRoot := devopsRuntimeRoots["devops-fetch-credentials"]
+	reportCredentialRoot := devopsRuntimeRoots["devops-report-credentials"]
+	sourceArchiveRoot := devopsRuntimeRoots["devops-source-archives"]
+	sourceTrustRoot := devopsRuntimeRoots["devops-source-trust"]
 	binaries := buildAuthorityBinaries(t, ctx, root, temporary, mode == authorityProcessFull)
 	bootstrap := processBootstrap(t)
 	bootstrapBytes, err := iamv1.EncodeBootstrapDocument(bootstrap)
@@ -869,7 +912,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		t,
 		temporary,
 		"iam-access-analysis-dsn",
-		[]byte(runtimeDSN(t, adminConfig, iamAccessAnalysisLogin, processDBPassword)),
+		[]byte(runtimeDSNWithApplication(t, adminConfig, iamAccessAnalysisLogin, processDBPassword,
+			iamAccessAnalysisApplicationName)),
 	)
 	auditDSNPath := writeProtectedFile(
 		t,
@@ -889,6 +933,41 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"paas-worker-dsn",
 		[]byte(runtimeDSN(t, adminConfig, paasWorkerLogin, processDBPassword)),
 	)
+	devopsDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-dsn",
+		[]byte(runtimeDSNWithApplication(t, adminConfig, devopsAPILogin, processDBPassword,
+			devopsProcessApplicationName(devopsAPILogin))),
+	)
+	devopsCheckReporterDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-check-reporter-dsn",
+		[]byte(runtimeDSNWithApplication(t, adminConfig, devopsCheckReporterLogin, processDBPassword,
+			devopsProcessApplicationName(devopsCheckReporterLogin))),
+	)
+	devopsSourceFetcherDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-source-fetcher-dsn",
+		[]byte(runtimeDSNWithApplication(t, adminConfig, devopsSourceFetcherLogin, processDBPassword,
+			devopsProcessApplicationName(devopsSourceFetcherLogin))),
+	)
+	devopsSourceObserverDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-source-observer-dsn",
+		[]byte(runtimeDSNWithApplication(t, adminConfig, devopsSourceObserverLogin, processDBPassword,
+			devopsProcessApplicationName(devopsSourceObserverLogin))),
+	)
+	devopsWorkerDSNPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-worker-dsn",
+		[]byte(runtimeDSNWithApplication(t, adminConfig, devopsWorkerLogin, processDBPassword,
+			devopsProcessApplicationName(devopsWorkerLogin))),
+	)
 	auditCredentialPath := writeProtectedFile(
 		t,
 		temporary,
@@ -906,6 +985,12 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		temporary,
 		"paas-service-credential",
 		[]byte(paasServiceCredential),
+	)
+	devopsCredentialPath := writeProtectedFile(
+		t,
+		temporary,
+		"devops-service-credential",
+		[]byte(devopsServiceCredential),
 	)
 	wrongCredentialPath := writeProtectedFile(
 		t,
@@ -932,7 +1017,7 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	// Keep every authority port reserved until its owning process starts. Calling
 	// freeAddress repeatedly can return the same just-released port, allowing a
 	// readiness probe for one service to observe another service (for example,
-	// Audit schema 39 at the PaaS endpoint) before the intended child is checked.
+	// Audit schema 40 at the PaaS endpoint) before the intended child is checked.
 	iamReservation := reserveProcessAddress(t)
 	auditReservation := reserveProcessAddress(t)
 	paasReservation := reserveProcessAddress(t)
@@ -940,9 +1025,16 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	iamAccessAnalysisReservationA := reserveProcessAddress(t)
 	iamAccessAnalysisReservationB := reserveProcessAddress(t)
 	paasDispatcherReservation := reserveProcessAddress(t)
+	devopsReservation := reserveProcessAddress(t)
+	devopsCheckReporterReservation := reserveProcessAddress(t)
+	devopsSourceFetcherReservation := reserveProcessAddress(t)
+	devopsSourceObserverReservation := reserveProcessAddress(t)
+	devopsDispatcherReservation := reserveProcessAddress(t)
 	reservations := []*reservedProcessAddress{
 		iamReservation, auditReservation, paasReservation, iamDispatcherReservation,
 		iamAccessAnalysisReservationA, iamAccessAnalysisReservationB, paasDispatcherReservation,
+		devopsReservation, devopsCheckReporterReservation, devopsSourceFetcherReservation,
+		devopsSourceObserverReservation, devopsDispatcherReservation,
 	}
 	defer func() {
 		for _, reservation := range reservations {
@@ -956,9 +1048,15 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	iamAccessAnalysisAddressA := iamAccessAnalysisReservationA.address
 	iamAccessAnalysisAddressB := iamAccessAnalysisReservationB.address
 	paasDispatcherAddress := paasDispatcherReservation.address
+	devopsAddress := devopsReservation.address
+	devopsCheckReporterAddress := devopsCheckReporterReservation.address
+	devopsSourceFetcherAddress := devopsSourceFetcherReservation.address
+	devopsSourceObserverAddress := devopsSourceObserverReservation.address
+	devopsDispatcherAddress := devopsDispatcherReservation.address
 	iamEndpoint := "http://" + iamAddress
 	auditEndpoint := "http://" + auditAddress
 	paasEndpoint := "http://" + paasAddress
+	devopsEndpoint := "http://" + devopsAddress
 	iamEnvironment := []string{
 		"MATRIX_IAM_DATABASE_DSN_FILE=" + iamDSNPath,
 		"MATRIX_IAM_BOOTSTRAP_FILE=" + bootstrapPath,
@@ -1015,6 +1113,44 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 			"MATRIX_PAAS_AUDIT_LISTEN_ADDRESS=" + paasDispatcherAddress,
 		}
 	}
+	devopsEnvironment := []string{
+		"MATRIX_DEVOPS_DATABASE_DSN_FILE=" + devopsDSNPath,
+		"MATRIX_DEVOPS_IAM_ENDPOINT=" + iamEndpoint,
+		"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE=" + devopsCredentialPath,
+		"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT=" + webhookSecretRoot,
+		"MATRIX_DEVOPS_LISTEN_ADDRESS=" + devopsAddress,
+	}
+	devopsCheckReporterEnvironment := []string{
+		"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE=" + devopsCheckReporterDSNPath,
+		"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT=" + reportCredentialRoot,
+		"MATRIX_DEVOPS_CHECK_REPORTER_TRUST_ROOT=" + sourceTrustRoot,
+		"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID=devops-check-reporter-process",
+		"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS=" + devopsCheckReporterAddress,
+	}
+	devopsSourceFetcherEnvironment := []string{
+		"MATRIX_DEVOPS_SOURCE_FETCHER_DATABASE_DSN_FILE=" + devopsSourceFetcherDSNPath,
+		"MATRIX_DEVOPS_SOURCE_FETCHER_FETCH_ROOT=" + fetchCredentialRoot,
+		"MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT=" + sourceArchiveRoot,
+		"MATRIX_DEVOPS_SOURCE_FETCHER_TRUST_ROOT=" + sourceTrustRoot,
+		"MATRIX_DEVOPS_SOURCE_FETCHER_WORKER_ID=devops-source-fetcher-process",
+		"MATRIX_DEVOPS_SOURCE_FETCHER_LISTEN_ADDRESS=" + devopsSourceFetcherAddress,
+	}
+	devopsSourceObserverEnvironment := []string{
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_DATABASE_DSN_FILE=" + devopsSourceObserverDSNPath,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT=" + webhookSecretRoot,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT=" + fetchCredentialRoot,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT=" + reportCredentialRoot,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_TRUST_ROOT=" + sourceTrustRoot,
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID=devops-source-observer-process",
+		"MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS=" + devopsSourceObserverAddress,
+	}
+	devopsDispatcherEnvironment := []string{
+		"MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE=" + devopsWorkerDSNPath,
+		"MATRIX_DEVOPS_AUDIT_ENDPOINT=" + auditEndpoint,
+		"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE=" + devopsCredentialPath,
+		"MATRIX_DEVOPS_AUDIT_WORKER_ID=devops-audit-worker-a",
+		"MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS=" + devopsDispatcherAddress,
+	}
 	children := make([]*childProcess, 0)
 	sensitive := []string{
 		initialAdminPassword,
@@ -1028,8 +1164,10 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		"Initial-Outage-User-Password-68!",
 		"Initial-Dead-Letter-Password-79!",
 		iamServiceCredential,
+		platformServiceCredential,
 		paasServiceCredential,
 		auditServiceCredential,
+		devopsServiceCredential,
 		paasEdgeAssertion,
 		auditEdgeAssertion,
 		"mx1.ProcessWrongIAMCredential000000000000000001",
@@ -1105,6 +1243,8 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 	waitAllIAMOutboxDelivered(t, ctx, admin)
 	assertIAMEventsStoredOnce(t, ctx, admin)
 	if mode == authorityProcessFull {
+		enrollDevOpsService(t, ctx, dsn, bootstrap.InstallationID)
+		waitAllIAMOutboxDelivered(t, ctx, admin)
 		iamAccessAnalysisReservationA.release(t)
 		analysisWorkerA := start(binaries.accessAnalysis,
 			iamAccessAnalysisEnvironment("iam-access-analysis-a", iamAccessAnalysisAddressA))
@@ -1113,6 +1253,11 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		analysisWorkerB := start(binaries.accessAnalysis,
 			iamAccessAnalysisEnvironment("iam-access-analysis-b", iamAccessAnalysisAddressB))
 		waitHTTPStatus(t, ctx, analysisWorkerB, "http://"+iamAccessAnalysisAddressB+"/ready", http.StatusOK)
+		assertRuntimeProcessApplicationLogin(
+			// Each of the two real workers owns a three-connection pool: two
+			// bounded scan loops plus readiness/transaction coordination.
+			t, ctx, admin, iamAccessAnalysisLogin, iamAccessAnalysisApplicationName, 6,
+		)
 	}
 	paasReservation.release(t)
 	paasProcess := start(binaries.paas, paasEnvironment)
@@ -1150,7 +1295,48 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		paasDispatcherEnvironment(paasCredentialPath, "paas-audit-worker-a"),
 	)
 	waitHTTPStatus(t, ctx, paasDispatcher, "http://"+paasDispatcherAddress+"/ready", http.StatusOK)
-	assertRuntimeProcessLogins(t, ctx, admin, iamAPILogin, iamWorkerLogin, auditRuntimeLogin, paasAPILogin, paasWorkerLogin)
+	runtimeLogins := []string{iamAPILogin, iamWorkerLogin, auditRuntimeLogin, paasAPILogin, paasWorkerLogin}
+	if mode == authorityProcessFull {
+		devopsCheckReporterReservation.release(t)
+		devopsCheckReporter := start(binaries.devopsCheckReporter, devopsCheckReporterEnvironment)
+		waitHTTPStatus(t, ctx, devopsCheckReporter, "http://"+devopsCheckReporterAddress+"/ready", http.StatusOK)
+		devopsSourceFetcherReservation.release(t)
+		devopsSourceFetcher := start(binaries.devopsSourceFetcher, devopsSourceFetcherEnvironment)
+		waitHTTPStatus(t, ctx, devopsSourceFetcher, "http://"+devopsSourceFetcherAddress+"/ready", http.StatusOK)
+		devopsSourceObserverReservation.release(t)
+		devopsSourceObserver := start(binaries.devopsSourceObserver, devopsSourceObserverEnvironment)
+		waitHTTPStatus(t, ctx, devopsSourceObserver, "http://"+devopsSourceObserverAddress+"/ready", http.StatusOK)
+		devopsReservation.release(t)
+		devopsProcess := start(binaries.devops, devopsEnvironment)
+		waitHTTPStatus(t, ctx, devopsProcess, devopsEndpoint+"/ready", http.StatusOK)
+		devopsDispatcherReservation.release(t)
+		devopsDispatcher := start(binaries.devopsDispatcher, devopsDispatcherEnvironment)
+		waitHTTPStatus(t, ctx, devopsDispatcher, "http://"+devopsDispatcherAddress+"/ready", http.StatusOK)
+		for _, process := range []struct {
+			name  string
+			child *childProcess
+		}{
+			{"DevOps check reporter", devopsCheckReporter},
+			{"DevOps source fetcher", devopsSourceFetcher},
+			{"DevOps source observer", devopsSourceObserver},
+			{"DevOps API", devopsProcess},
+			{"DevOps Audit dispatcher", devopsDispatcher},
+		} {
+			assertAuthorityProcessRunning(t, process.name, process.child)
+		}
+		for _, login := range []string{
+			devopsAPILogin,
+			devopsCheckReporterLogin,
+			devopsSourceFetcherLogin,
+			devopsSourceObserverLogin,
+			devopsWorkerLogin,
+		} {
+			assertRuntimeProcessApplicationLogin(
+				t, ctx, admin, login, devopsProcessApplicationName(login), 2,
+			)
+		}
+	}
+	assertRuntimeProcessLogins(t, ctx, admin, runtimeLogins...)
 	paasInstallationVerification := verifyPaaSInstallation(
 		t,
 		paasEndpoint,
@@ -1192,6 +1378,11 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		changedAdminPassword,
 		"request-admin-password",
 	)
+	if mode == authorityProcessFull {
+		exerciseDevOpsConfigurationJourney(t, ctx, admin, devopsEndpoint, adminLogin.Credential)
+		assertDevOpsAuditProducerProofs(t, ctx, admin, iamEndpoint)
+		waitAllDevOpsOutboxDelivered(t, ctx, admin)
+	}
 	if mode == authorityProcessIdentityBrowser {
 		runIAMIdentityConsoleBrowser(t, ctx, admin, root, temporary,
 			iamEndpoint, auditEndpoint, paasEndpoint, adminLogin.Credential, start)
@@ -2242,6 +2433,13 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 		changedReaderPassword,
 		"request-reader-password",
 	)
+	grantDevOpsPipelineReaderPolicy(
+		t,
+		iamEndpoint,
+		adminLogin.Credential,
+		reader.ID,
+	)
+	assertDevOpsViewerAccess(t, ctx, admin, devopsEndpoint, readerLogin.Credential)
 	createPaaSApplication(
 		t,
 		paasEndpoint,
@@ -2679,13 +2877,18 @@ func testIndependentAuthorityProcesses(t *testing.T, mode authorityProcessMode) 
 }
 
 type binarySet struct {
-	iam            string
-	accessAnalysis string
-	localRecovery  string
-	audit          string
-	dispatcher     string
-	paas           string
-	paasDispatcher string
+	iam                  string
+	accessAnalysis       string
+	localRecovery        string
+	audit                string
+	dispatcher           string
+	paas                 string
+	paasDispatcher       string
+	devops               string
+	devopsCheckReporter  string
+	devopsSourceFetcher  string
+	devopsSourceObserver string
+	devopsDispatcher     string
 }
 
 type managedProductFixture struct {
@@ -15896,7 +16099,8 @@ func startManagedProductWorker(
 		Kind:       apphostingv1.ArtifactCatalogKind,
 		Entries: []apphostingv1.ArtifactCatalogEntry{{
 			ArtifactDigest: images.postgres,
-			ImageID:        images.postgres,
+			LocalReference: images.postgres,
+			ImageIDs:       []string{images.postgres},
 		}},
 	})
 	if err != nil {
@@ -18522,6 +18726,23 @@ func buildAuthorityBinaries(
 	}
 	if withAccessAnalysis {
 		binaries.accessAnalysis = build("matrix-iam-access-analysis-worker", "./app/service/iam/cmd/matrix-iam-access-analysis-worker")
+		binaries.devops = build("matrix-devops", "./app/service/devops/cmd/matrix-devops")
+		binaries.devopsCheckReporter = build(
+			"matrix-devops-check-reporter",
+			"./app/service/devops/cmd/matrix-devops-check-reporter",
+		)
+		binaries.devopsSourceFetcher = build(
+			"matrix-devops-source-fetcher",
+			"./app/service/devops/cmd/matrix-devops-source-fetcher",
+		)
+		binaries.devopsSourceObserver = build(
+			"matrix-devops-source-observer",
+			"./app/service/devops/cmd/matrix-devops-source-observer",
+		)
+		binaries.devopsDispatcher = build(
+			"matrix-devops-audit-dispatcher",
+			"./app/service/devops/cmd/matrix-devops-audit-dispatcher",
+		)
 	}
 	return binaries
 }
@@ -18675,6 +18896,16 @@ func (child *childProcess) stop() {
 
 func (child *childProcess) output() string {
 	return child.stdout.String() + child.stderr.String()
+}
+
+func assertAuthorityProcessRunning(t *testing.T, name string, child *childProcess) {
+	t.Helper()
+	if child == nil {
+		t.Fatalf("%s process was not started", name)
+	}
+	if exited, err := child.poll(); exited {
+		t.Fatalf("%s process exited after readiness: %v output=%q", name, err, child.output())
+	}
 }
 
 func waitHTTPStatus(
@@ -28081,6 +28312,7 @@ func processBootstrap(t *testing.T) iamv1.BootstrapDocument {
 		},
 		Services: []iamv1.BootstrapServiceCredential{
 			service(iamv1.ServiceIAM, "service-iam", iamServiceCredential),
+			service(iamv1.ServicePlatform, "service-platform", platformServiceCredential),
 			service(iamv1.ServicePaaS, "service-paas", paasServiceCredential),
 			service(iamv1.ServiceAudit, "service-audit", auditServiceCredential),
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", verifierCredential),
@@ -28119,16 +28351,17 @@ func assertPostgres18(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 
 func assertCleanSchemas(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
-	var iamExists, auditExists, paasExists bool
+	var iamExists, auditExists, paasExists, deliveryExists bool
 	if err := admin.QueryRow(
 		ctx,
 		`SELECT to_regnamespace('iam') IS NOT NULL,
 		        to_regnamespace('audit') IS NOT NULL,
-		        to_regnamespace('paas') IS NOT NULL`,
-	).Scan(&iamExists, &auditExists, &paasExists); err != nil {
+		        to_regnamespace('paas') IS NOT NULL,
+		        to_regnamespace('delivery') IS NOT NULL`,
+	).Scan(&iamExists, &auditExists, &paasExists, &deliveryExists); err != nil {
 		t.Fatalf("inspect platform process schemas: %v", err)
 	}
-	if iamExists || auditExists || paasExists {
+	if iamExists || auditExists || paasExists || deliveryExists {
 		t.Fatal("platform process integration database is not clean")
 	}
 }
@@ -28145,6 +28378,9 @@ func applyPlatformSchemas(
 	if err := auditmigration.Bootstrap(ctx, admin); err != nil {
 		t.Fatalf("bootstrap platform Audit schema: %v", err)
 	}
+	if err := devopsmigration.Bootstrap(ctx, admin); err != nil {
+		t.Fatalf("bootstrap platform DevOps schema: %v", err)
+	}
 	if err := iammigration.Up(ctx, admin); err != nil {
 		t.Fatalf("apply platform IAM schema: %v", err)
 	}
@@ -28154,6 +28390,9 @@ func applyPlatformSchemas(
 	if err := paasmigration.Up(ctx, admin); err != nil {
 		t.Fatalf("apply platform PaaS schema: %v", err)
 	}
+	if err := devopsmigration.Up(ctx, admin); err != nil {
+		t.Fatalf("apply platform DevOps schema: %v", err)
+	}
 	if err := iammigration.Verify(ctx, admin); err != nil {
 		t.Fatalf("verify platform IAM schema: %v", err)
 	}
@@ -28162,6 +28401,9 @@ func applyPlatformSchemas(
 	}
 	if err := paasmigration.Verify(ctx, admin); err != nil {
 		t.Fatalf("verify platform PaaS schema: %v", err)
+	}
+	if err := devopsmigration.Verify(ctx, admin); err != nil {
+		t.Fatalf("verify platform DevOps schema: %v", err)
 	}
 }
 
@@ -28179,6 +28421,11 @@ func createProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 		{auditRuntimeLogin, "matrix_audit_runtime"},
 		{paasAPILogin, "matrix_paas_api"},
 		{paasWorkerLogin, "matrix_paas_worker"},
+		{devopsAPILogin, "matrix_devops_api"},
+		{devopsCheckReporterLogin, "matrix_devops_check_reporter"},
+		{devopsSourceFetcherLogin, "matrix_devops_source_fetcher"},
+		{devopsSourceObserverLogin, "matrix_devops_source_observer"},
+		{devopsWorkerLogin, "matrix_devops_worker"},
 	} {
 		createProcessLogin(t, ctx, admin, binding.login, binding.group)
 	}
@@ -28387,6 +28634,8 @@ func runtimeDSN(t *testing.T, admin *pgx.ConnConfig, user string, password strin
 	return runtimeDSNWithApplication(t, admin, user, password, "matrix-authority-process:"+user)
 }
 
+const iamAccessAnalysisApplicationName = "matrix-iam-analysis-worker"
+
 func runtimeDSNWithApplication(
 	t *testing.T,
 	admin *pgx.ConnConfig,
@@ -28395,6 +28644,9 @@ func runtimeDSNWithApplication(
 	applicationName string,
 ) string {
 	t.Helper()
+	if applicationName == "" || len(applicationName) > 63 {
+		t.Fatal("authority process application name exceeds PostgreSQL's exact identity boundary")
+	}
 	// ConnString returns the original parse input, not changes to Config fields.
 	value, err := url.Parse(admin.ConnString())
 	if err != nil || (value.Scheme != "postgres" && value.Scheme != "postgresql") || value.Host == "" {
@@ -28411,6 +28663,10 @@ func runtimeDSNWithApplication(
 	query.Set("pool_max_conns", "2")
 	value.RawQuery = query.Encode()
 	return value.String()
+}
+
+func devopsProcessApplicationName(login string) string {
+	return "matrix-devops:" + login
 }
 
 func assertRuntimeProcessLogins(t *testing.T, ctx context.Context, admin *pgx.Conn, users ...string) {
@@ -28434,12 +28690,13 @@ func assertRuntimeProcessApplicationLogin(
 	maximumConnections int,
 ) {
 	t.Helper()
-	config, err := pgxpool.ParseConfig(runtimeDSN(t, admin.Config(), user, processDBPassword))
+	config, err := pgxpool.ParseConfig(runtimeDSNWithApplication(
+		t, admin.Config(), user, processDBPassword, "matrix-authority-identity-probe",
+	))
 	if err != nil {
 		t.Fatal("parse authority process identity probe")
 	}
 	// The probe must not satisfy the independent running-process assertion.
-	config.ConnConfig.RuntimeParams["application_name"] += ":identity-probe"
 	probe, err := pgx.ConnectConfig(ctx, config.ConnConfig)
 	if err != nil {
 		t.Fatalf("connect authority identity probe for %s", user)
@@ -28463,8 +28720,13 @@ func assertRuntimeProcessApplicationLogin(
 			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("running authority %s did not use its bounded non-superuser database login (connections=%d max=%d confined=%t queryError=%t)",
-				user, connections, maximumConnections, confined, queryErr != nil)
+			var observedApplications string
+			var observedConnections int
+			observationErr := admin.QueryRow(ctx, `SELECT COALESCE(string_agg(DISTINCT application_name, ',' ORDER BY application_name), ''), count(*)
+            FROM pg_stat_activity WHERE datname=current_database() AND usename=$1`, user).Scan(&observedApplications, &observedConnections)
+			t.Fatalf("running authority %s did not use its bounded non-superuser database login (connections=%d max=%d confined=%t queryError=%t observedConnections=%d observedApplications=%q observationError=%t)",
+				user, connections, maximumConnections, confined, queryErr != nil,
+				observedConnections, observedApplications, observationErr != nil)
 		}
 		time.Sleep(50 * time.Millisecond)
 	}

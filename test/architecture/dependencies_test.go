@@ -310,10 +310,11 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 	root := repositoryRoot(t)
 	installationRoot := filepath.Join(root, "app", "service", "installation")
 	allowedExternal := map[string]struct{}{
-		"github.com/spf13/cobra":   {},
-		"github.com/spf13/pflag":   {},
-		"golang.org/x/sys/unix":    {},
-		"golang.org/x/sys/windows": {},
+		"github.com/klauspost/compress/zstd": {},
+		"github.com/spf13/cobra":             {},
+		"github.com/spf13/pflag":             {},
+		"golang.org/x/sys/unix":              {},
+		"golang.org/x/sys/windows":           {},
 	}
 	err := filepath.WalkDir(installationRoot, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -399,6 +400,7 @@ func TestInstallationKeepsGoOnlyClosedLifecycleBoundaries(t *testing.T) {
 			if _, isOS := osAliases[identifier.Name]; isOS &&
 				relative != "app/service/installation/cmd/mx/main.go" &&
 				relative != "app/service/installation/cmd/matrix-health/main.go" &&
+				relative != "app/service/installation/cmd/matrix-platform/main.go" &&
 				relative != "app/service/installation/cmd/matrix-verification/main.go" {
 				t.Errorf("%s: only installation process entry points may call os.Exit", relative)
 			}
@@ -549,6 +551,184 @@ func assertAllowedDependency(
 			imported,
 		)
 	}
+
+	if !strings.HasSuffix(source, "_test.go") &&
+		strings.HasPrefix(source, "app/service/devops/internal/delivery/usecase/") &&
+		strings.HasPrefix(imported, modulePath+"app/service/devops/internal/delivery/data/") {
+		t.Errorf(
+			"%s: DevOps delivery use case cannot import concrete data adapter %q",
+			source,
+			imported,
+		)
+	}
+
+	if executorGatewaySource(source) && executorGatewayAuthority(imported) {
+		t.Errorf(
+			"%s: executor gateway boundary cannot import authority-bearing package %q",
+			source,
+			imported,
+		)
+	}
+
+	if buildWorkerSource(source) && buildWorkerAuthority(imported) {
+		t.Errorf(
+			"%s: build worker boundary cannot import unrelated authority-bearing package %q",
+			source,
+			imported,
+		)
+	}
+
+	if checkReporterSource(source) && checkReporterAuthority(imported) {
+		t.Errorf(
+			"%s: check reporter boundary cannot import unrelated authority-bearing package %q",
+			source,
+			imported,
+		)
+	}
+
+	if runnerSource(source) && runnerAuthority(imported) {
+		t.Errorf(
+			"%s: runner boundary cannot import unrelated authority-bearing package %q",
+			source,
+			imported,
+		)
+	}
+}
+
+func buildWorkerSource(source string) bool {
+	return !strings.HasSuffix(source, "_test.go") && strings.HasPrefix(
+		source,
+		"app/service/devops/cmd/matrix-devops-build-worker/",
+	)
+}
+
+func buildWorkerAuthority(imported string) bool {
+	if imported == "os/exec" || strings.HasPrefix(imported, "github.com/docker/") ||
+		strings.HasPrefix(imported, "k8s.io/") {
+		return true
+	}
+	for _, forbidden := range []string{
+		modulePath + "app/service/paas/",
+		modulePath + "app/service/iam/",
+		modulePath + "app/service/audit/",
+		modulePath + "app/service/devops/internal/delivery/data/audithttp",
+		modulePath + "app/service/devops/internal/delivery/data/executorspoolfile",
+		modulePath + "app/service/devops/internal/delivery/data/gitea",
+		modulePath + "app/service/devops/internal/delivery/data/iamhttp",
+		modulePath + "app/service/devops/internal/delivery/data/runnerjournalfile",
+		modulePath + "app/service/devops/internal/delivery/data/sourcecredentialfile",
+	} {
+		if strings.HasPrefix(imported, forbidden) {
+			return true
+		}
+	}
+	return false
+}
+
+func checkReporterSource(source string) bool {
+	return !strings.HasSuffix(source, "_test.go") && strings.HasPrefix(
+		source,
+		"app/service/devops/cmd/matrix-devops-check-reporter/",
+	)
+}
+
+func checkReporterAuthority(imported string) bool {
+	if imported == "os/exec" || strings.HasPrefix(imported, "github.com/docker/") ||
+		strings.HasPrefix(imported, "k8s.io/") {
+		return true
+	}
+	for _, forbidden := range []string{
+		modulePath + "app/service/paas/",
+		modulePath + "app/service/iam/",
+		modulePath + "app/service/audit/",
+		modulePath + "app/service/devops/internal/delivery/data/audithttp",
+		modulePath + "app/service/devops/internal/delivery/data/executorgatewayhttp",
+		modulePath + "app/service/devops/internal/delivery/data/executorspoolfile",
+		modulePath + "app/service/devops/internal/delivery/data/iamhttp",
+		modulePath + "app/service/devops/internal/delivery/data/runnerjournalfile",
+		modulePath + "app/service/devops/internal/delivery/data/runnersandboxdocker",
+		modulePath + "app/service/devops/internal/delivery/data/runnerworkspacefile",
+		modulePath + "app/service/devops/internal/delivery/data/sourcearchivefile",
+	} {
+		if strings.HasPrefix(imported, forbidden) {
+			return true
+		}
+	}
+	return false
+}
+
+func executorGatewaySource(source string) bool {
+	if strings.HasSuffix(source, "_test.go") {
+		return false
+	}
+	return strings.HasPrefix(
+		source,
+		"app/service/devops/cmd/matrix-devops-executor-gateway/",
+	) || strings.HasPrefix(
+		source,
+		"app/service/devops/internal/delivery/data/executorgatewayhttp/",
+	) || strings.HasPrefix(
+		source,
+		"app/service/devops/internal/delivery/data/executorspoolfile/",
+	)
+}
+
+func executorGatewayAuthority(imported string) bool {
+	if imported == "os/exec" || strings.HasPrefix(imported, "github.com/jackc/pgx/") ||
+		strings.HasPrefix(imported, "github.com/docker/") ||
+		strings.HasPrefix(imported, "k8s.io/") {
+		return true
+	}
+	for _, forbidden := range []string{
+		modulePath + "app/service/paas/",
+		modulePath + "app/service/iam/",
+		modulePath + "app/service/audit/",
+		modulePath + "app/service/devops/internal/delivery/usecase/",
+		modulePath + "app/service/devops/internal/delivery/data/audithttp",
+		modulePath + "app/service/devops/internal/delivery/data/gitea",
+		modulePath + "app/service/devops/internal/delivery/data/iamhttp",
+		modulePath + "app/service/devops/internal/delivery/data/postgres",
+		modulePath + "app/service/devops/internal/delivery/data/sourcearchivefile",
+		modulePath + "app/service/devops/internal/delivery/data/sourcecredentialfile",
+	} {
+		if strings.HasPrefix(imported, forbidden) {
+			return true
+		}
+	}
+	return false
+}
+
+func runnerSource(source string) bool {
+	return !strings.HasSuffix(source, "_test.go") && strings.HasPrefix(
+		source,
+		"app/service/devops/cmd/matrix-devops-runner/",
+	)
+}
+
+func runnerAuthority(imported string) bool {
+	if imported == "database/sql" || imported == "os/exec" ||
+		strings.HasPrefix(imported, "github.com/jackc/pgx/") ||
+		strings.HasPrefix(imported, "github.com/docker/") ||
+		strings.HasPrefix(imported, "k8s.io/") {
+		return true
+	}
+	if !strings.HasPrefix(imported, modulePath+"app/service/") {
+		return false
+	}
+	for _, allowed := range []string{
+		modulePath + "app/service/devops/internal/delivery/data/executorgatewayhttp",
+		modulePath + "app/service/devops/internal/delivery/data/runnerjournalfile",
+		modulePath + "app/service/devops/internal/delivery/data/runnersandboxdocker",
+		modulePath + "app/service/devops/internal/delivery/data/runnerworkspacefile",
+		modulePath + "app/service/devops/internal/delivery/usecase/runnerexecution",
+		modulePath + "app/service/internal/processhttp",
+		modulePath + "app/service/internal/processmtls",
+	} {
+		if imported == allowed {
+			return false
+		}
+	}
+	return true
 }
 
 func isThirdPartyImport(imported string) bool {

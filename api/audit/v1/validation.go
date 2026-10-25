@@ -88,8 +88,8 @@ func ValidateEvent(value Event) error {
 			problems = append(problems, errors.New("self-service event must target the actual actor"))
 		}
 		if contract.PlatformOnly != (value.InstallationID != "") ||
-			contract.PlatformOnly && contract.SystemActorID == "" && value.Actor.Type != ActorUser ||
-			contract.SystemActorID != "" && (value.Actor.Type != ActorSystem || value.Actor.ID != contract.SystemActorID) ||
+			contract.PlatformOnly && len(contract.SystemActorIDs) == 0 && value.Actor.Type != ActorUser ||
+			len(contract.SystemActorIDs) > 0 && (value.Actor.Type != ActorSystem || !containsActorID(contract.SystemActorIDs, value.Actor.ID)) ||
 			contract.TargetMatchesInstallation && value.Target.ID != value.InstallationID {
 			problems = append(problems, errors.New("Audit action and authority differ"))
 		}
@@ -110,6 +110,11 @@ func ValidateEvent(value Event) error {
 		}
 		if !contract.OperationRequired && value.OperationID != "" {
 			problems = append(problems, errors.New("Audit action cannot contain an Operation"))
+		}
+		if contract.OutcomeRequired {
+			problems = append(problems, validatePipelineRunOutcome(value.Outcome, value.Reason))
+		} else if value.Outcome != "" || value.Reason != "" {
+			problems = append(problems, errors.New("Audit action cannot contain an outcome or reason"))
 		}
 	}
 	authorityEvidence := value.Action == ActionIAMRoleUpdated ||
@@ -148,6 +153,40 @@ func ValidateEvent(value Event) error {
 		problems = append(problems, validateTraceParent(value.TraceParent))
 	}
 	return errors.Join(problems...)
+}
+
+func containsActorID(values []ActorID, candidate ActorID) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func validatePipelineRunOutcome(outcome Outcome, reason Reason) error {
+	switch outcome {
+	case OutcomeSucceeded:
+		if reason == ReasonCompleted {
+			return nil
+		}
+	case OutcomeFailed:
+		switch reason {
+		case ReasonSourceUnavailable, ReasonCommitMismatch, ReasonExecutorUnavailable,
+			ReasonVerificationFailed, ReasonDeadlineExceeded, ReasonReportUnavailable,
+			ReasonReportConflict:
+			return nil
+		}
+	case OutcomeCancelled:
+		if reason == ReasonCancelled {
+			return nil
+		}
+	case OutcomeManualIntervention:
+		if reason == ReasonReconciliationExhausted {
+			return nil
+		}
+	}
+	return errors.New("Audit PipelineRun outcome and reason differ")
 }
 
 func ValidateEventForSource(source Source, value Event) error {
@@ -398,7 +437,7 @@ func ValidateProblem(value Problem) error {
 }
 
 func knownSource(value Source) bool {
-	return value == SourceIAM || value == SourcePaaS || value == SourceAudit
+	return value == SourceIAM || value == SourcePaaS || value == SourceDevOps || value == SourceAudit
 }
 
 func containsResult(values []Result, target Result) bool {

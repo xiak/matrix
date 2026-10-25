@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/xiak/matrix/app/service/installation/internal/platformcommand"
+	"github.com/xiak/matrix/app/service/installation/release"
 )
 
 const (
@@ -37,6 +38,7 @@ type platformComposeExpectation struct {
 
 type platformExpectedService struct {
 	Image       string                 `json:"image"`
+	ImageIDs    []string               `json:"-"`
 	Restart     string                 `json:"restart"`
 	User        string                 `json:"user"`
 	ReadOnly    bool                   `json:"read_only"`
@@ -93,6 +95,7 @@ type platformContainerInspection struct {
 
 type platformContainerConfig struct {
 	Labels     map[string]string `json:"Labels"`
+	Image      string            `json:"Image"`
 	User       string            `json:"User"`
 	Env        []string          `json:"Env"`
 	Entrypoint []string          `json:"Entrypoint"`
@@ -304,7 +307,7 @@ func verifyPlatformImages(
 	expectation platformComposeExpectation,
 ) (verifiedInstallation, platformComposeExpectation, error) {
 	for _, image := range installation.bundle.Manifest.Images {
-		present, inspectErr := inspectExactImage(ctx, runtimeBoundary, image.ImageID)
+		_, present, inspectErr := inspectInstalledReleaseImage(ctx, runtimeBoundary, image)
 		if inspectErr != nil {
 			return verifiedInstallation{}, platformComposeExpectation{}, inspectErr
 		}
@@ -351,7 +354,9 @@ func preparePlatformExpectationFromInstallation(
 	runtimeBoundary dockerRuntime,
 	installation verifiedInstallation,
 ) (verifiedInstallation, platformComposeExpectation, error) {
-	expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
+	expectation, err := decodePlatformExpectation(
+		installation.topology.ComposeJSON, installation.bundle.Manifest,
+	)
 	if err != nil || expectation.Name != installation.topology.ProjectName {
 		return verifiedInstallation{}, platformComposeExpectation{}, errors.Join(
 			platformcommand.ErrEffectVerification,
@@ -596,11 +601,34 @@ func validComposeConfigHash(value string) bool {
 	return err == nil && len(decoded) == 32
 }
 
-func decodePlatformExpectation(content []byte) (platformComposeExpectation, error) {
+func decodePlatformExpectation(
+	content []byte,
+	manifest release.Manifest,
+) (platformComposeExpectation, error) {
 	var expectation platformComposeExpectation
 	if err := json.Unmarshal(content, &expectation); err != nil || expectation.Name == "" ||
 		len(expectation.Services) == 0 || len(expectation.Networks) == 0 {
 		return platformComposeExpectation{}, errors.New("platform topology expectation is invalid")
+	}
+	images := make(map[string]release.Image, len(manifest.Images))
+	for _, image := range manifest.Images {
+		images[image.RuntimeReference()] = image
+	}
+	for name, service := range expectation.Services {
+		image, found := images[service.Image]
+		componentLabel := service.Labels[release.BuiltImageLabelComponent]
+		componentMatches := componentLabel == image.Component
+		if image.Component == "postgres" {
+			componentMatches = componentLabel == ""
+		}
+		if !found || service.Image != image.RuntimeReference() ||
+			len(image.RuntimeImageIDs()) == 0 || !componentMatches {
+			return platformComposeExpectation{}, errors.New(
+				"platform service image expectation is invalid",
+			)
+		}
+		service.ImageIDs = image.RuntimeImageIDs()
+		expectation.Services[name] = service
 	}
 	return expectation, nil
 }
@@ -764,7 +792,8 @@ func inspectOwnedPlatformProject(
 				errors.New("platform project contains duplicate service containers"),
 			)
 		}
-		if inspection.Image != expected.Image ||
+		if inspection.Config.Image != expected.Image ||
+			!slices.Contains(expected.ImageIDs, inspection.Image) ||
 			!ownershipLabelsMatch(inspection.Config.Labels, expected.Labels) ||
 			inspection.Config.Labels["com.docker.compose.project"] != expectation.Name ||
 			!strings.EqualFold(inspection.Config.Labels["com.docker.compose.oneoff"], "false") {
@@ -873,7 +902,9 @@ func validatePlatformContainer(
 	if err != nil {
 		return errors.New("platform expected tmpfs inventory is invalid")
 	}
-	if inspection.Image != expected.Image || inspection.Config.User != expected.User ||
+	if inspection.Config.Image != expected.Image ||
+		!slices.Contains(expected.ImageIDs, inspection.Image) ||
+		inspection.Config.User != expected.User ||
 		inspection.HostConfig.Privileged ||
 		inspection.HostConfig.ReadonlyRootfs != expected.ReadOnly ||
 		inspection.HostConfig.RestartPolicy.Name != expected.Restart ||

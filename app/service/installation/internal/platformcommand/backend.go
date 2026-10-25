@@ -17,6 +17,7 @@ import (
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
+	"github.com/xiak/matrix/app/service/installation/internal/installedrelease"
 	"github.com/xiak/matrix/app/service/installation/internal/journal"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
@@ -46,6 +47,7 @@ type InstallPlan struct {
 	Root             string
 	InstallationID   string
 	CorrelationID    string
+	CommandStartedAt time.Time
 	Listener         string
 	Port             uint16
 	NorthboundOrigin string
@@ -583,8 +585,8 @@ func (backend *Backend) install(
 
 	plan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: request.NorthboundOrigin, Bundle: verified,
+		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
+		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: request.NorthboundOrigin, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 		SecurityMail: securityMail,
 	}
@@ -638,7 +640,7 @@ func (backend *Backend) upgrade(
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	defer clear(trustBytes)
-	sourceBundle, err := authenticateJournalRelease(
+	sourceBundle, err := installedrelease.Authenticate(
 		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
 	)
 	if err != nil {
@@ -681,7 +683,7 @@ func (backend *Backend) upgrade(
 		targetBundle.Manifest.Release.PreviousVersion != sourceBundle.Manifest.Release.Version {
 		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_PREDECESSOR_MISMATCH")
 	}
-	if targetBundle.Manifest.Database != sourceBundle.Manifest.Database {
+	if !sameOrAcceptedProductlessDatabasePair(sourceBundle.Manifest, targetBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "UPGRADE_SCHEMA_INCOMPATIBLE")
 	}
 
@@ -721,8 +723,8 @@ func (backend *Backend) upgrade(
 	}
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: targetBundle,
+		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
+		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: targetBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 		SecurityMail: securityMail,
 	}
@@ -779,13 +781,13 @@ func (backend *Backend) rollback(
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	defer clear(trustBytes)
-	currentBundle, err := authenticateJournalRelease(
+	currentBundle, err := installedrelease.Authenticate(
 		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
 	)
 	if err != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
-	previousBundle, err := authenticateJournalRelease(
+	previousBundle, err := installedrelease.Authenticate(
 		session.Root(), state.PreviousRelease, state.PreviousReleaseDigest, trustBytes,
 	)
 	if err != nil {
@@ -795,7 +797,7 @@ func (backend *Backend) rollback(
 		currentBundle.Manifest.Release.PreviousVersion != previousBundle.Manifest.Release.Version {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_PREDECESSOR_MISMATCH")
 	}
-	if previousBundle.Manifest.Database != currentBundle.Manifest.Database {
+	if !sameOrAcceptedProductlessDatabasePair(previousBundle.Manifest, currentBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_SCHEMA_INCOMPATIBLE")
 	}
 
@@ -895,7 +897,7 @@ func (backend *Backend) recover(
 		return cli.Result{}, fault(cli.FaultVerification, "INSTALLATION_RELEASE_INVALID")
 	}
 	defer clear(trustBytes)
-	currentBundle, err := authenticateJournalRelease(
+	currentBundle, err := installedrelease.Authenticate(
 		session.Root(), state.CurrentReleaseID, state.CurrentReleaseDigest, trustBytes,
 	)
 	if err != nil {
@@ -917,13 +919,13 @@ func (backend *Backend) recover(
 		release.ValidateDatabaseProfile(source.Database) != nil {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_SOURCE_INVALID")
 	}
-	targetBundle, err := authenticateJournalRelease(
+	targetBundle, err := installedrelease.Authenticate(
 		session.Root(), source.ReleaseID, source.ReleaseDigest, trustBytes,
 	)
 	if err != nil || targetBundle.Manifest.Database != source.Database {
 		return cli.Result{}, fault(cli.FaultVerification, "RECOVERY_RELEASE_INVALID")
 	}
-	if currentBundle.Manifest.Database != targetBundle.Manifest.Database {
+	if !sameOrAcceptedProductlessDatabasePair(targetBundle.Manifest, currentBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "RECOVERY_SCHEMA_INCOMPATIBLE")
 	}
 
@@ -982,8 +984,8 @@ func (backend *Backend) recover(
 	defer clear(currentPlan.TrustBytes)
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
-		CorrelationID: commandID,
-		Listener:      defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: targetBundle,
+		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
+		Listener: defaultListener, Port: defaultPort, NorthboundOrigin: started.Journal.NorthboundOrigin, Bundle: targetBundle,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 	}
 	defer clear(targetPlan.TrustBytes)
@@ -1013,24 +1015,6 @@ func (backend *Backend) recover(
 		},
 		nil,
 	)
-}
-
-func authenticateJournalRelease(
-	root string,
-	releaseID string,
-	digest string,
-	trustBytes []byte,
-) (release.VerifiedBundle, error) {
-	releaseRoot := filepath.Join(
-		root, filepath.FromSlash(layout.ReleaseDirectory(releaseID)),
-	)
-	bundle, err := release.VerifyDirectory(releaseRoot, trustBytes)
-	if err != nil || bundle.Manifest.Release.ID != releaseID ||
-		bundle.ManifestSHA256 != digest ||
-		bundle.Manifest.TopologyDigest != topology.ContractDigest() {
-		return release.VerifiedBundle{}, errors.New("committed release authentication failed")
-	}
-	return bundle, nil
 }
 
 func (backend *Backend) driveReleaseChange(
@@ -1272,6 +1256,26 @@ func randomIdentity(entropy io.Reader, prefix string) (string, error) {
 	return prefix + "-" + hex.EncodeToString(random[:]), nil
 }
 
+// sameOrAcceptedProductlessDatabasePair keeps the release-profile fence exact
+// while preserving the one cross-profile lifecycle that has runtime evidence:
+// the authenticated c88a84f productless predecessor and its immediate current
+// product-foundation successor. It is deliberately symmetric because upgrade,
+// rollback, and protected-backup recovery traverse the same signed pair in
+// different directions.
+func sameOrAcceptedProductlessDatabasePair(left, right release.Manifest) bool {
+	if left.Database == right.Database {
+		return true
+	}
+	legacy, current := left, right
+	if !release.IsLegacyProductlessManifest(legacy) {
+		legacy, current = right, left
+	}
+	return release.IsLegacyProductlessManifest(legacy) &&
+		current.Database == release.CurrentDatabaseProfile() &&
+		current.Release.PreviousID == legacy.Release.ID &&
+		current.Release.PreviousVersion == legacy.Release.Version
+}
+
 func canonicalNow(value time.Time) time.Time {
 	value = value.UTC().Truncate(time.Microsecond)
 	if value.IsZero() {
@@ -1288,4 +1292,4 @@ func nextJournalTime(now time.Time, previous time.Time) time.Time {
 	return next
 }
 
-var _ cli.Backend = (*Backend)(nil)
+var _ cli.PlatformBackend = (*Backend)(nil)

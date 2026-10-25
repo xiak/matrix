@@ -74,7 +74,8 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	if err != nil {
 		return err
 	}
-	if _, err := release.StageDirectory(plan.Bundle, plan.TrustBytes, destination); err != nil {
+	staged, err := release.StageDirectory(plan.Bundle, plan.TrustBytes, destination)
+	if err != nil {
 		if errors.Is(err, release.ErrStageConflict) {
 			return errors.Join(platformcommand.ErrEffectConflict, err)
 		}
@@ -102,6 +103,7 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 	}
 	serviceFiles := map[iamv1.ServicePurpose][]string{
 		iamv1.ServiceIAM:                  {layout.IAMAuditCredential},
+		iamv1.ServicePlatform:             {layout.PlatformIAMCredential},
 		iamv1.ServicePaaS:                 {layout.PaaSIAMCredential, layout.PaaSAuditCredential},
 		iamv1.ServiceAudit:                {layout.AuditIAMCredential},
 		iamv1.ServiceInstallationVerifier: {layout.InstallationVerifierCredential},
@@ -118,6 +120,35 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 			if err := writeManagedOnce(plan.Root, filepath.FromSlash(path), credential); err != nil {
 				return errors.Join(platformcommand.ErrEffectConflict, err)
 			}
+		}
+	}
+	if staged.Manifest.IncludesProduct(release.ProductDevOps) {
+		for _, directory := range []string{
+			"config/devops", layout.DevOpsSourceTrustRoot,
+			"data/devops", layout.DevOpsSourceArchiveRoot,
+			layout.DevOpsExecutorSpoolRoot,
+			"secrets/devops", layout.DevOpsWebhookCredentialRoot,
+			layout.DevOpsFetchCredentialRoot, layout.DevOpsReportCredentialRoot,
+			layout.DevOpsExecutorPKIRoot,
+		} {
+			if _, err := ensureManagedDirectory(plan.Root, filepath.FromSlash(directory)); err != nil {
+				return err
+			}
+		}
+		credential, err := ensureGeneratedCredential(
+			plan.Root, layout.DevOpsIAMCredential, entropy, "mx1.", false,
+		)
+		if err != nil {
+			return err
+		}
+		defer clear(credential)
+		if err := writeManagedOnce(
+			plan.Root, filepath.FromSlash(layout.DevOpsAuditCredential), credential,
+		); err != nil {
+			return errors.Join(platformcommand.ErrEffectConflict, err)
+		}
+		if err := ensureDevOpsExecutorPKI(plan, entropy); err != nil {
+			return err
 		}
 	}
 	if err := writeManagedOnce(
@@ -192,6 +223,22 @@ func stageInstallation(plan platformcommand.InstallPlan, entropy io.Reader) erro
 			return err
 		}
 	}
+	if staged.Manifest.IncludesProduct(release.ProductDevOps) {
+		for _, login := range []struct {
+			path string
+			role string
+		}{
+			{path: layout.DevOpsAPI, role: "matrix_devops_api_login"},
+			{path: layout.DevOpsCheckReporter, role: "matrix_devops_check_reporter_login"},
+			{path: layout.DevOpsSourceFetcher, role: "matrix_devops_source_fetcher_login"},
+			{path: layout.DevOpsSourceObserver, role: "matrix_devops_source_observer_login"},
+			{path: layout.DevOpsWorker, role: "matrix_devops_worker_login"},
+		} {
+			if err := ensureRuntimeDSN(plan.Root, login.path, login.role, entropy); err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
@@ -206,7 +253,7 @@ func ensureIAMBootstrap(root, installationID string, entropy io.Reader) (stagedC
 		if err != nil {
 			return stagedCredentials{}, errors.Join(platformcommand.ErrEffectVerification, err)
 		}
-		document, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(content))
+		document, err := iamv1.DecodeBootstrapReplayDocument(bytes.NewReader(content))
 		clear(content)
 		if err != nil || document.InstallationID != installationID {
 			return stagedCredentials{}, errors.Join(
@@ -214,7 +261,18 @@ func ensureIAMBootstrap(root, installationID string, entropy io.Reader) (stagedC
 				errors.New("stored IAM bootstrap is invalid"),
 			)
 		}
-		return credentialsFromBootstrap(document), nil
+		credentials := credentialsFromBootstrap(document)
+		if iamv1.IsLegacyBootstrapReplayDocument(document) {
+			platformCredential, err := ensureGeneratedCredential(
+				root, layout.PlatformIAMCredential, entropy, "mx1.", false,
+			)
+			if err != nil {
+				credentials.clear()
+				return stagedCredentials{}, err
+			}
+			credentials.services[iamv1.ServicePlatform] = platformCredential
+		}
+		return credentials, nil
 	}
 
 	administratorText, err := randomCredential(entropy, "mxp1.", true)
@@ -225,8 +283,8 @@ func ensureIAMBootstrap(root, installationID string, entropy io.Reader) (stagedC
 	if err != nil {
 		return stagedCredentials{}, errors.Join(platformcommand.ErrEffectVerification, err)
 	}
-	services := make([]iamv1.BootstrapServiceCredential, 0, len(iamv1.AllServicePurposes()))
-	for _, purpose := range iamv1.AllServicePurposes() {
+	services := make([]iamv1.BootstrapServiceCredential, 0, len(iamv1.BootstrapServicePurposes()))
+	for _, purpose := range iamv1.BootstrapServicePurposes() {
 		credentialText, err := randomCredential(entropy, "mx1.", false)
 		if err != nil {
 			return stagedCredentials{}, errors.Join(platformcommand.ErrEffectUnavailable, err)
@@ -591,8 +649,12 @@ func servicePrincipalID(purpose iamv1.ServicePurpose) iamv1.PrincipalID {
 	switch purpose {
 	case iamv1.ServiceIAM:
 		return "service-iam"
+	case iamv1.ServicePlatform:
+		return "service-platform"
 	case iamv1.ServicePaaS:
 		return "service-paas"
+	case iamv1.ServiceDevOps:
+		return "service-devops"
 	case iamv1.ServiceAudit:
 		return "service-audit"
 	case iamv1.ServiceInstallationVerifier:

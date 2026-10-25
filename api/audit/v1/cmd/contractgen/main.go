@@ -261,6 +261,7 @@ func applySemanticOverlays(schemas object) {
 	}
 
 	eventRules, recordRules := actionRules()
+	eventRules = append(eventRules, pipelineRunOutcomeRules()...)
 	schemas["Event"].(object)["allOf"] = eventRules
 	schemas["AuditRecord"].(object)["allOf"] = recordRules
 	schemas["RecordPage"].(object)["properties"].(object)["records"].(object)["maxItems"] = auditv1.MaxPageSize
@@ -350,17 +351,21 @@ func actionRules() (eventRules []any, recordRules []any) {
 		if contract.PlatformOnly {
 			thenRequired = append(thenRequired, "installationId")
 			thenProperties["tenantId"] = false
-			if contract.SystemActorID == "" {
+			if len(contract.SystemActorIDs) == 0 {
 				thenProperties["actor"] = object{"properties": object{"type": object{"const": string(auditv1.ActorUser)}}}
 			}
 		} else {
 			thenRequired = append(thenRequired, "tenantId")
 			thenProperties["installationId"] = false
 		}
-		if contract.SystemActorID != "" {
+		if len(contract.SystemActorIDs) > 0 {
+			actorIDSchema := object{"enum": openapi31.StringValues(contract.SystemActorIDs)}
+			if len(contract.SystemActorIDs) == 1 {
+				actorIDSchema = object{"const": string(contract.SystemActorIDs[0])}
+			}
 			thenProperties["actor"] = object{"properties": object{
 				"type": object{"const": string(auditv1.ActorSystem)},
-				"id":   object{"const": string(contract.SystemActorID)},
+				"id":   actorIDSchema,
 			}}
 		}
 		if !contract.AccessKeyActorPermitted {
@@ -380,6 +385,12 @@ func actionRules() (eventRules []any, recordRules []any) {
 			thenRequired = append(thenRequired, "operationId")
 		} else {
 			thenProperties["operationId"] = false
+		}
+		if contract.OutcomeRequired {
+			thenRequired = append(thenRequired, "outcome", "reason")
+		} else {
+			thenProperties["outcome"] = false
+			thenProperties["reason"] = false
 		}
 		then := object{"properties": thenProperties}
 		if len(thenRequired) > 0 {
@@ -408,6 +419,35 @@ func actionRules() (eventRules []any, recordRules []any) {
 		})
 	}
 	return eventRules, recordRules
+}
+
+func pipelineRunOutcomeRules() []any {
+	failureReasons := []any{
+		string(auditv1.ReasonSourceUnavailable), string(auditv1.ReasonCommitMismatch),
+		string(auditv1.ReasonExecutorUnavailable), string(auditv1.ReasonVerificationFailed),
+		string(auditv1.ReasonDeadlineExceeded), string(auditv1.ReasonReportUnavailable),
+		string(auditv1.ReasonReportConflict),
+	}
+	pairs := []struct {
+		outcome auditv1.Outcome
+		reasons []any
+	}{
+		{auditv1.OutcomeSucceeded, []any{string(auditv1.ReasonCompleted)}},
+		{auditv1.OutcomeFailed, failureReasons},
+		{auditv1.OutcomeCancelled, []any{string(auditv1.ReasonCancelled)}},
+		{auditv1.OutcomeManualIntervention, []any{string(auditv1.ReasonReconciliationExhausted)}},
+	}
+	rules := make([]any, 0, len(pairs))
+	for _, pair := range pairs {
+		rules = append(rules, object{
+			"if": object{
+				"properties": object{"outcome": object{"const": string(pair.outcome)}},
+				"required":   []string{"outcome"},
+			},
+			"then": object{"properties": object{"reason": object{"enum": pair.reasons}}},
+		})
+	}
+	return rules
 }
 
 func appendUnique(values []string, value string) []string {

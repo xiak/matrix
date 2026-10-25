@@ -2090,7 +2090,7 @@ func applySemanticOverlays(schemas object) {
 
 	bootstrap := schemas["BootstrapDocument"].(object)
 	bootstrapProperties := bootstrap["properties"].(object)
-	servicePurposes := iamv1.AllServicePurposes()
+	servicePurposes := iamv1.BootstrapServicePurposes()
 	prefixItems := make([]any, len(servicePurposes))
 	for index, purpose := range servicePurposes {
 		prefixItems[index] = object{

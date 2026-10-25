@@ -8,3 +8,8 @@
 - [FEAT-006: Platform IAM and Audit authorities](FEAT-006-platform-authorities.md)
 - [FEAT-007: Control-plane console and managed-service activation](FEAT-007-control-plane-console.md)
 - [FEAT-008: Existing Linux hosts and remote application delivery](FEAT-008-linux-host-management.md)
+- [FEAT-009: Repository change validation](FEAT-009-repository-delivery.md)
+- [FEAT-010: Private-cloud product foundation and unified shell](FEAT-010-product-foundation-shell.md)
+- [FEAT-011: Mainline OCI publication](FEAT-011-mainline-oci-publication.md)
+- [FEAT-012: Application PaaS continuous delivery](FEAT-012-paas-continuous-delivery.md)
+- [FEAT-013: CODING connected execution provider](FEAT-013-coding-connected-provider.md)

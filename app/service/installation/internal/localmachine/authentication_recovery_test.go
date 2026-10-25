@@ -170,7 +170,9 @@ func authenticationRecoveryInvocationFixture(mode string) (purposeOnlyIAMContain
 		},
 	}
 	expected.service = platformExpectedService{
-		Image: "sha256:" + strings.Repeat("a", 64), User: "0:0", ReadOnly: true, Restart: "no",
+		Image:    "sha256:" + strings.Repeat("a", 64),
+		ImageIDs: []string{"sha256:" + strings.Repeat("a", 64)},
+		User:     "0:0", ReadOnly: true, Restart: "no",
 		Networks: []string{"control"}, CapDrop: []string{"ALL"},
 		SecurityOpt: []string{"no-new-privileges:true"}, Tmpfs: []string{"/tmp:rw,noexec,nosuid,size=64m"},
 		Volumes: []platformMount{
@@ -184,7 +186,8 @@ func authenticationRecoveryInvocationFixture(mode string) (purposeOnlyIAMContain
 	actual := platformContainerInspection{
 		ID: strings.Repeat("c", 64), Name: "/" + expected.name, Image: expected.service.Image,
 		Config: platformContainerConfig{
-			User: "0:0", Labels: cloneTestLabels(expected.service.Labels), Env: slices.Clone(expected.environment),
+			Image: expected.service.Image, User: "0:0",
+			Labels: cloneTestLabels(expected.service.Labels), Env: slices.Clone(expected.environment),
 			Entrypoint: []string{authenticationRecoveryEntrypoint}, Cmd: []string{mode},
 		},
 		State: platformContainerState{Status: "created"},

@@ -1,6 +1,7 @@
 package authority
 
 import (
+	"bytes"
 	"errors"
 	"strings"
 	"testing"
@@ -47,6 +48,80 @@ func TestBootstrapDigestIsStableForAnExactDocument(t *testing.T) {
 	}
 }
 
+func TestBootstrapDigestPreservesLegacyReplayIdentity(t *testing.T) {
+	document := authorityBootstrap(t)
+	legacy := document
+	legacy.Services = append(
+		[]iamv1.BootstrapServiceCredential(nil),
+		document.Services[:1]...,
+	)
+	legacy.Services = append(legacy.Services, document.Services[2:]...)
+	if iamv1.ValidateBootstrapDocument(legacy) == nil ||
+		iamv1.ValidateBootstrapReplayDocument(legacy) != nil {
+		t.Fatal("legacy bootstrap validation boundary is invalid")
+	}
+	first, err := iamv1.BootstrapDigest(legacy)
+	if err != nil {
+		t.Fatalf("digest legacy bootstrap replay: %v", err)
+	}
+	second, err := iamv1.BootstrapDigest(legacy)
+	if err != nil || second != first {
+		t.Fatalf("repeat legacy digest = %q err=%v, want %q", second, err, first)
+	}
+}
+
+func TestBootstrapDigestMatchesAcceptedLegacyCanonicalDocument(t *testing.T) {
+	const legacyJSON = `{
+  "apiVersion": "iam.matrix.xiak.com/v1",
+  "kind": "IAMBootstrap",
+  "installationId": "installation-example",
+  "organization": {
+    "id": "organization-example",
+    "displayName": "Example Organization"
+  },
+  "administrator": {
+    "id": "principal-admin",
+    "loginName": "admin",
+    "displayName": "Initial Administrator",
+    "password": "Example-Only-Admin-Password-49!"
+  },
+  "services": [
+    {
+      "purpose": "IAM",
+      "principalId": "service-iam",
+      "credential": "example-only-iam-credential-00000000000000001"
+    },
+    {
+      "purpose": "PAAS",
+      "principalId": "service-paas",
+      "credential": "example-only-paas-credential-0000000000000001"
+    },
+    {
+      "purpose": "AUDIT",
+      "principalId": "service-audit",
+      "credential": "example-only-audit-credential-0000000000000001"
+    },
+    {
+      "purpose": "INSTALLATION_VERIFIER",
+      "principalId": "service-installation-verifier",
+      "credential": "example-only-verifier-credential-00000000000001"
+    }
+  ]
+}`
+	document, err := iamv1.DecodeBootstrapReplayDocument(bytes.NewBufferString(legacyJSON))
+	if err != nil {
+		t.Fatalf("decode accepted legacy bootstrap: %v", err)
+	}
+	digest, err := iamv1.BootstrapDigest(document)
+	if err != nil {
+		t.Fatalf("digest accepted legacy bootstrap: %v", err)
+	}
+	const acceptedDigest = "sha256:f2e63e7bcdfc75be50f40247ac0245ace26bbc27952026db538327b59b82ac7c"
+	if digest != acceptedDigest {
+		t.Fatalf("legacy bootstrap digest=%q want=%q", digest, acceptedDigest)
+	}
+}
+
 func authorityBootstrap(t *testing.T) iamv1.BootstrapDocument {
 	t.Helper()
 	service := func(purpose iamv1.ServicePurpose, id, credential string) iamv1.BootstrapServiceCredential {
@@ -67,6 +142,7 @@ func authorityBootstrap(t *testing.T) iamv1.BootstrapDocument {
 		},
 		Services: []iamv1.BootstrapServiceCredential{
 			service(iamv1.ServiceIAM, "service-iam", "mx1.IAMExampleCredential000000000000000000001"),
+			service(iamv1.ServicePlatform, "service-platform", "mx1.PlatformExampleCredential0000000000000001"),
 			service(iamv1.ServicePaaS, "service-paas", "mx1.PaaSExampleCredential00000000000000000001"),
 			service(iamv1.ServiceAudit, "service-audit", "mx1.AuditExampleCredential0000000000000000001"),
 			service(iamv1.ServiceInstallationVerifier, "service-verifier", "mx1.VerifierExampleCredential0000000000000001"),

@@ -111,6 +111,35 @@ type mxFailure struct {
 	} `json:"error"`
 }
 
+type mxSourceCredentialEnvelope struct {
+	APIVersion string                   `json:"apiVersion"`
+	Kind       string                   `json:"kind"`
+	Action     string                   `json:"action"`
+	Status     string                   `json:"status"`
+	Result     mxSourceCredentialResult `json:"result"`
+}
+
+type mxSourceCredentialResult struct {
+	State     string `json:"state"`
+	Purpose   string `json:"purpose"`
+	Tenant    string `json:"tenant"`
+	Reference string `json:"reference"`
+}
+
+type mxSourceTrustEnvelope struct {
+	APIVersion string              `json:"apiVersion"`
+	Kind       string              `json:"kind"`
+	Action     string              `json:"action"`
+	Status     string              `json:"status"`
+	Result     mxSourceTrustResult `json:"result"`
+}
+
+type mxSourceTrustResult struct {
+	State          string `json:"state"`
+	Tenant         string `json:"tenant"`
+	EndpointOrigin string `json:"endpointOrigin"`
+}
+
 func mxPath(bundle release.VerifiedBundle) string {
 	return filepath.Join(bundle.Root, filepath.FromSlash("bin/mx"))
 }
@@ -171,6 +200,115 @@ func checkMXOutput(action string, output commandOutput, processErr, contextErr e
 		return mxResult{}, fail(step + "-state")
 	}
 	return envelope.Result, nil
+}
+
+func runMXSourceCredential(
+	ctx context.Context,
+	bundle release.VerifiedBundle,
+	operation, root, tenant, purpose, reference, fromFile, wantState string,
+	forbidden [][]byte,
+) error {
+	action := ""
+	switch operation {
+	case "apply":
+		action = "SOURCE_CREDENTIAL_APPLY"
+		if fromFile == "" {
+			return fail("mx-source-credential-command")
+		}
+	case "retire-previous":
+		action = "SOURCE_CREDENTIAL_RETIRE_PREVIOUS"
+		if fromFile != "" {
+			return fail("mx-source-credential-command")
+		}
+	default:
+		return fail("mx-source-credential-command")
+	}
+	args := []string{
+		"--format", "json", "devops", "source-credential", operation,
+		"--root", root, "--tenant", tenant, "--purpose", purpose,
+		"--reference", reference,
+	}
+	if fromFile != "" {
+		args = append(args, "--from-file", fromFile)
+	}
+	output, err := runProcess(ctx, mxPath(bundle), args...)
+	if err != nil || output.exit != 0 || containsAny(output.stdout, forbidden) ||
+		containsAny(output.stderr, forbidden) || len(output.stderr) != 0 {
+		return fail("mx-source-credential-" + operation)
+	}
+	if !validMXSourceCredentialResult(
+		output.stdout, action, wantState, purpose, tenant, reference,
+	) {
+		return fail("mx-source-credential-" + operation + "-result")
+	}
+	return nil
+}
+
+func validMXSourceCredentialResult(
+	content []byte,
+	action, state, purpose, tenant, reference string,
+) bool {
+	var envelope mxSourceCredentialEnvelope
+	return decodeOne(content, &envelope) == nil &&
+		envelope.APIVersion == "cli.matrix.xiak.com/v1" &&
+		envelope.Kind == "SourceCredentialCommandResult" &&
+		envelope.Action == action && envelope.Status == "SUCCEEDED" &&
+		envelope.Result.State == state && envelope.Result.Purpose == purpose &&
+		envelope.Result.Tenant == tenant && envelope.Result.Reference == reference
+}
+
+func runMXSourceTrust(
+	ctx context.Context,
+	bundle release.VerifiedBundle,
+	operation, root, tenant, endpointOrigin, fromFile, wantState string,
+	forbidden [][]byte,
+) error {
+	action := ""
+	switch operation {
+	case "apply":
+		action = "SOURCE_TRUST_APPLY"
+		if fromFile == "" {
+			return fail("mx-source-trust-command")
+		}
+	case "remove":
+		action = "SOURCE_TRUST_REMOVE"
+		if fromFile != "" {
+			return fail("mx-source-trust-command")
+		}
+	default:
+		return fail("mx-source-trust-command")
+	}
+	args := []string{
+		"--format", "json", "devops", "source-trust", operation,
+		"--root", root, "--tenant", tenant, "--endpoint-origin", endpointOrigin,
+	}
+	if fromFile != "" {
+		args = append(args, "--from-file", fromFile)
+	}
+	output, err := runProcess(ctx, mxPath(bundle), args...)
+	if err != nil || output.exit != 0 || containsAny(output.stdout, forbidden) ||
+		containsAny(output.stderr, forbidden) || len(output.stderr) != 0 {
+		return fail("mx-source-trust-" + operation)
+	}
+	if !validMXSourceTrustResult(
+		output.stdout, action, wantState, tenant, endpointOrigin,
+	) {
+		return fail("mx-source-trust-" + operation + "-result")
+	}
+	return nil
+}
+
+func validMXSourceTrustResult(
+	content []byte,
+	action, state, tenant, endpointOrigin string,
+) bool {
+	var envelope mxSourceTrustEnvelope
+	return decodeOne(content, &envelope) == nil &&
+		envelope.APIVersion == "cli.matrix.xiak.com/v1" &&
+		envelope.Kind == "SourceTrustCommandResult" &&
+		envelope.Action == action && envelope.Status == "SUCCEEDED" &&
+		envelope.Result.State == state && envelope.Result.Tenant == tenant &&
+		envelope.Result.EndpointOrigin == endpointOrigin
 }
 
 // These are diagnostic categories, never recovery permits. Unknown output and
@@ -399,6 +537,7 @@ func assertEmptyDocker(ctx context.Context) error {
 type containerInspection struct {
 	ID     string `json:"Id"`
 	Name   string `json:"Name"`
+	Image  string `json:"Image"`
 	Config struct {
 		Image  string            `json:"Image"`
 		Labels map[string]string `json:"Labels"`
@@ -498,6 +637,11 @@ func assertPlatform(
 	if err != nil {
 		return lifecycle.Journal{}, fail("platform-container-inspection")
 	}
+	expectedBindings := expectedPublishedPortBindings(manifest)
+	expectedPublished := 0
+	for _, count := range expectedBindings {
+		expectedPublished += count
+	}
 	seen := make(map[string]struct{}, len(inspections))
 	published := 0
 	for _, inspection := range inspections {
@@ -512,17 +656,27 @@ func assertPlatform(
 			return lifecycle.Journal{}, fail("platform-container-identity")
 		}
 		seen[role] = struct{}{}
+		rolePublished := 0
 		for _, bindings := range inspection.HostConfig.PortBindings {
-			published += len(bindings)
+			rolePublished += len(bindings)
 		}
-		if role != "apisix" && len(inspection.HostConfig.PortBindings) != 0 {
+		published += rolePublished
+		if rolePublished != expectedBindings[role] {
 			return lifecycle.Journal{}, fail("platform-port-boundary")
 		}
 	}
-	if published != 1 {
+	if published != expectedPublished {
 		return lifecycle.Journal{}, fail("platform-edge-boundary")
 	}
 	return state, nil
+}
+
+func expectedPublishedPortBindings(manifest release.Manifest) map[string]int {
+	result := map[string]int{"apisix": 1}
+	if manifest.IncludesProduct(release.ProductDevOps) {
+		result["devops-executor-gateway"] = 1
+	}
+	return result
 }
 
 func assertNoPlatformReleaseContainers(ctx context.Context, releaseID string) error {

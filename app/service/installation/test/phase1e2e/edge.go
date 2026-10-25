@@ -21,12 +21,15 @@ import (
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	installationv1 "github.com/xiak/matrix/api/installation/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
 const (
 	maximumHTTPBody             = 1024 * 1024
 	maximumAuditAcceptancePages = (auditv1.MaxVerifyRecords + auditv1.MaxPageSize - 1) / auditv1.MaxPageSize
+	jsonMediaType               = "application/json"
+	problemJSONMediaType        = "application/problem+json"
 )
 
 type edgeClient struct {
@@ -522,6 +525,33 @@ func (client *edgeClient) json(
 	headers map[string]string,
 	wantStatus ...int,
 ) (httpResult, error) {
+	return client.jsonWithResponseMediaType(
+		ctx, method, path, bearer, body, headers, "", wantStatus...,
+	)
+}
+
+func (client *edgeClient) problem(
+	ctx context.Context,
+	method, path string,
+	bearer []byte,
+	body any,
+	headers map[string]string,
+	wantStatus ...int,
+) (httpResult, error) {
+	return client.jsonWithResponseMediaType(
+		ctx, method, path, bearer, body, headers, problemJSONMediaType, wantStatus...,
+	)
+}
+
+func (client *edgeClient) jsonWithResponseMediaType(
+	ctx context.Context,
+	method, path string,
+	bearer []byte,
+	body any,
+	headers map[string]string,
+	wantMediaType string,
+	wantStatus ...int,
+) (httpResult, error) {
 	var encoded []byte
 	var err error
 	if body != nil {
@@ -551,9 +581,11 @@ func (client *edgeClient) json(
 	}
 	defer response.Body.Close()
 	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
-	wantMediaType := "application/json"
-	if response.StatusCode >= http.StatusBadRequest {
-		wantMediaType = "application/problem+json"
+	if wantMediaType == "" {
+		wantMediaType = jsonMediaType
+		if response.StatusCode >= http.StatusBadRequest {
+			wantMediaType = problemJSONMediaType
+		}
 	}
 	content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumHTTPBody+1))
 	if readErr != nil || len(content) > maximumHTTPBody || mediaErr != nil ||
@@ -649,11 +681,23 @@ func (client *edgeClient) changePassword(
 	retireBootstrap bool,
 	revokeOtherSessions *bool,
 ) error {
+	return client.changePasswordAs(
+		ctx, bearer, current, next, "phase1-change-password", retireBootstrap, revokeOtherSessions,
+	)
+}
+
+func (client *edgeClient) changePasswordAs(
+	ctx context.Context,
+	bearer, current, next []byte,
+	requestID string,
+	wantBootstrapFileRetirable bool,
+	revokeOtherSessions *bool,
+) error {
 	response, err := client.json(
 		ctx, http.MethodPost, "/api/iam/v1/auth/password", bearer,
 		changePasswordWire{
 			CurrentPassword: string(current), NewPassword: string(next),
-			RequestID: "phase1-change-password", RevokeOtherSessions: revokeOtherSessions,
+			RequestID: requestID, RevokeOtherSessions: revokeOtherSessions,
 		},
 		nil, http.StatusOK,
 	)
@@ -663,7 +707,7 @@ func (client *edgeClient) changePassword(
 	defer clear(response.body)
 	var result iamv1.ChangePasswordResponse
 	if decodeOne(response.body, &result) != nil ||
-		iamv1.ValidateChangePasswordResponse(result) != nil || result.BootstrapFileRetirable != retireBootstrap {
+		iamv1.ValidateChangePasswordResponse(result) != nil || result.BootstrapFileRetirable != wantBootstrapFileRetirable {
 		return errors.New("IAM password change response failed")
 	}
 	return nil
@@ -1033,9 +1077,25 @@ func (client *edgeClient) get(
 	}
 	defer clear(response.body)
 	if decodeOne(response.body, destination) != nil {
-		return nil, errors.New("PaaS read response failed")
+		return nil, errors.New("resource read response failed")
 	}
 	return response.header, nil
+}
+
+func (client *edgeClient) installedProducts(
+	ctx context.Context,
+	bearer []byte,
+) (installationv1.InstalledProductList, error) {
+	var products installationv1.InstalledProductList
+	if _, err := client.get(
+		ctx, "/api/platform/v1/installed-products", bearer, &products,
+	); err != nil {
+		return installationv1.InstalledProductList{}, err
+	}
+	if err := installationv1.ValidateInstalledProductList(products); err != nil {
+		return installationv1.InstalledProductList{}, errors.New("installed-product response failed")
+	}
+	return products, nil
 }
 
 func (client *edgeClient) waitOperation(

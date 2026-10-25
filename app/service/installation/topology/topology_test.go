@@ -1,6 +1,8 @@
 package topology
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"path"
 	"reflect"
@@ -12,6 +14,53 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
+
+func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
+	if actual := ContractDigest(); actual != "sha256:17b4cd782055223a0357b08b63c261f228b7102b58c67cd16f1f3f0fec54dff2" {
+		t.Fatalf("current topology contract digest drifted: %s", actual)
+	}
+	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
+		t.Fatalf("productless topology implementation drifted: %s", actual)
+	}
+	manifest := legacyTopologyManifest()
+	options := Options{
+		InstallationID: "mxi-" + strings.Repeat("a", 32),
+		Root:           "/srv/matrix", Listener: "127.0.0.1", Port: 8443,
+	}
+	if _, err := Compile(manifest, options); err == nil {
+		t.Fatal("strict candidate compiler admitted the productless predecessor")
+	}
+	result, err := CompileInstalled(manifest, options)
+	if err != nil {
+		t.Fatalf("compile installed productless predecessor: %v", err)
+	}
+	digest := sha256.Sum256(result.ComposeJSON)
+	if actual := "sha256:" + hex.EncodeToString(digest[:]); actual != "sha256:885a2478e75f43719f54d89db4f51b653316ee099c8e85be938ba420832b4936" {
+		t.Fatalf("productless Compose bytes drifted: %s", actual)
+	}
+	var document composeDocument
+	if err := json.Unmarshal(result.ComposeJSON, &document); err != nil {
+		t.Fatalf("decode productless Compose: %v", err)
+	}
+	wantServices := []string{
+		"apisix", "audit", "iam", "iam-audit-dispatcher", "paas-api",
+		"paas-audit-dispatcher", "paas-ui", "paas-worker", "postgres",
+	}
+	actualServices := make([]string, 0, len(document.Services))
+	for name := range document.Services {
+		actualServices = append(actualServices, name)
+	}
+	slices.Sort(actualServices)
+	if !slices.Equal(actualServices, wantServices) {
+		t.Fatalf("productless services = %v, want %v", actualServices, wantServices)
+	}
+
+	drifted := manifest
+	drifted.TopologyDigest = digestValue('0')
+	if err := ValidateInstalledContract(drifted); err == nil {
+		t.Fatal("a different productless topology digest must fail")
+	}
+}
 
 func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	manifest := topologyManifest()
@@ -49,7 +98,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	if !ok {
 		t.Fatal("compiled topology has no networks object")
 	}
-	expectedNetworks := map[string]bool{"control": true, "edge": false, "mail-egress": false, "web": true}
+	expectedNetworks := map[string]bool{"control": true, "edge": false, "mail-egress": false, "source": false, "web": true}
 	actualNetworks := make([]string, 0, len(networks))
 	for name, raw := range networks {
 		network, valid := raw.(map[string]any)
@@ -65,7 +114,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		actualNetworks = append(actualNetworks, name)
 	}
 	slices.Sort(actualNetworks)
-	if !slices.Equal(actualNetworks, []string{"control", "edge", "mail-egress", "web"}) {
+	if !slices.Equal(actualNetworks, []string{"control", "edge", "mail-egress", "source", "web"}) {
 		t.Fatalf("compiled networks = %v", actualNetworks)
 	}
 
@@ -74,6 +123,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	foundDockerSocket := false
 	foundPostgresData := false
 	foundAPISIXRuntimeBoundary := false
+	foundDevOpsSourceSecrets := false
+	foundDevOpsSourceFetcherBoundary := false
+	foundDevOpsSourceObserverBoundary := false
+	foundDevOpsBuildWorkerBoundary := false
+	foundDevOpsCheckReporterBoundary := false
+	foundDevOpsExecutorGatewayBoundary := false
 	emailKeyringMounts := 0
 	securityMailChannelMounts := 0
 	notificationDSNMounts := 0
@@ -83,14 +138,22 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	paasEdgeAssertionMounts := 0
 	expectedEntrypoints := map[string]string{
 		"audit":                       "/matrix/bin/matrix-audit",
+		"devops-api":                  "/matrix/bin/matrix-devops",
+		"devops-audit-dispatcher":     "/matrix/bin/matrix-devops-audit-dispatcher",
+		"devops-build-worker":         "/matrix/bin/matrix-devops-build-worker",
+		"devops-check-reporter":       "/matrix/bin/matrix-devops-check-reporter",
+		"devops-executor-gateway":     "/matrix/bin/matrix-devops-executor-gateway",
+		"devops-source-fetcher":       "/matrix/bin/matrix-devops-source-fetcher",
+		"devops-source-observer":      "/matrix/bin/matrix-devops-source-observer",
 		"iam":                         "/matrix/bin/matrix-iam",
 		"iam-access-analysis-worker":  "/matrix/bin/matrix-iam-access-analysis-worker",
 		"iam-audit-dispatcher":        "/matrix/bin/matrix-iam-audit-dispatcher",
 		"iam-notification-dispatcher": "/matrix/bin/matrix-iam-notification-dispatcher",
 		"paas-api":                    "/matrix/bin/matrix-paas",
 		"paas-audit-dispatcher":       "/matrix/bin/matrix-paas-audit-dispatcher",
-		"paas-ui":                     "/matrix/bin/matrix-paas-ui",
 		"paas-worker":                 "/matrix/bin/matrix-paas-worker",
+		"matrix-ui":                   "/matrix/bin/matrix-ui",
+		"platform-api":                "/matrix/bin/matrix-platform",
 	}
 	expectedEnvironmentKeys := map[string][]string{
 		"audit": {
@@ -104,6 +167,64 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_BOOTSTRAP_FILE",
 			"MATRIX_IAM_CURSOR_KEY_FILE", "MATRIX_IAM_DATABASE_DSN_FILE",
 			"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE", "MATRIX_IAM_LISTEN_ADDRESS", "MATRIX_IAM_TOTP_KEYRING_FILE",
+		},
+		"devops-api": {
+			"MATRIX_DEVOPS_DATABASE_DSN_FILE", "MATRIX_DEVOPS_IAM_ENDPOINT",
+			"MATRIX_DEVOPS_LISTEN_ADDRESS", "MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE",
+			"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT",
+		},
+		"devops-audit-dispatcher": {
+			"MATRIX_DEVOPS_AUDIT_CREDENTIAL_FILE", "MATRIX_DEVOPS_AUDIT_DATABASE_DSN_FILE",
+			"MATRIX_DEVOPS_AUDIT_ENDPOINT", "MATRIX_DEVOPS_AUDIT_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_AUDIT_WORKER_ID",
+		},
+		"devops-build-worker": {
+			"MATRIX_DEVOPS_BUILD_WORKER_CLIENT_CERT_FILE",
+			"MATRIX_DEVOPS_BUILD_WORKER_CLIENT_IDENTITY",
+			"MATRIX_DEVOPS_BUILD_WORKER_CLIENT_KEY_FILE",
+			"MATRIX_DEVOPS_BUILD_WORKER_DATABASE_DSN_FILE",
+			"MATRIX_DEVOPS_BUILD_WORKER_GATEWAY_ORIGIN",
+			"MATRIX_DEVOPS_BUILD_WORKER_GATEWAY_SERVER_NAME",
+			"MATRIX_DEVOPS_BUILD_WORKER_ID",
+			"MATRIX_DEVOPS_BUILD_WORKER_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_BUILD_WORKER_SERVER_CA_FILE",
+			"MATRIX_DEVOPS_BUILD_WORKER_SOURCE_ARCHIVE_ROOT",
+		},
+		"devops-check-reporter": {
+			"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE",
+			"MATRIX_DEVOPS_CHECK_REPORTER_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_CHECK_REPORTER_REPORT_ROOT",
+			"MATRIX_DEVOPS_CHECK_REPORTER_TRUST_ROOT",
+			"MATRIX_DEVOPS_CHECK_REPORTER_WORKER_ID",
+		},
+		"devops-executor-gateway": {
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_CA_FILE",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_CLIENT_IDENTITY",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_ADMIN_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_READINESS_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_CLIENT_CA_FILE",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_RUNNER_NAMESPACE",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_CERT_FILE",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_SERVER_KEY_FILE",
+			"MATRIX_DEVOPS_EXECUTOR_GATEWAY_SPOOL_ROOT",
+		},
+		"devops-source-fetcher": {
+			"MATRIX_DEVOPS_SOURCE_FETCHER_ARCHIVE_ROOT",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_DATABASE_DSN_FILE",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_FETCH_ROOT",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_TRUST_ROOT",
+			"MATRIX_DEVOPS_SOURCE_FETCHER_WORKER_ID",
+		},
+		"devops-source-observer": {
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_DATABASE_DSN_FILE",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_FETCH_ROOT",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_LISTEN_ADDRESS",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_REPORT_ROOT",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_TRUST_ROOT",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_WEBHOOK_ROOT",
+			"MATRIX_DEVOPS_SOURCE_OBSERVER_WORKER_ID",
 		},
 		"iam-audit-dispatcher": {
 			"MATRIX_IAM_AUDIT_CREDENTIAL_FILE", "MATRIX_IAM_AUDIT_DATABASE_DSN_FILE",
@@ -132,7 +253,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_AUDIT_ENDPOINT", "MATRIX_PAAS_AUDIT_LISTEN_ADDRESS",
 			"MATRIX_PAAS_AUDIT_WORKER_ID",
 		},
-		"paas-ui": {"MATRIX_PAAS_UI_LISTEN_ADDRESS"},
+		"matrix-ui": {"MATRIX_PAAS_UI_LISTEN_ADDRESS"},
 		"paas-worker": {
 			"DOCKER_CONFIG", "DOCKER_HOST",
 			"MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE", "MATRIX_PAAS_WORKER_BINDING_REF",
@@ -144,12 +265,29 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE",
 			"MATRIX_PAAS_WORKER_SECRET_ROOT",
 		},
+		"platform-api": {
+			"MATRIX_PLATFORM_DEVOPS_ENDPOINT", "MATRIX_PLATFORM_IAM_CREDENTIAL_FILE",
+			"MATRIX_PLATFORM_IAM_ENDPOINT",
+			"MATRIX_PLATFORM_INSTALLATION_ID", "MATRIX_PLATFORM_LISTEN_ADDRESS",
+			"MATRIX_PLATFORM_PAAS_ENDPOINT", "MATRIX_PLATFORM_RELEASE_ID",
+			"MATRIX_PLATFORM_RELEASE_MANIFEST_FILE", "MATRIX_PLATFORM_RELEASE_SIGNATURE_FILE",
+			"MATRIX_PLATFORM_RELEASE_TRUST_FILE",
+		},
 	}
 	expectedImageComponents := map[string]string{
-		"apisix": "apisix", "audit": "audit", "iam": "iam",
-		"iam-access-analysis-worker": "iam", "iam-audit-dispatcher": "iam", "iam-notification-dispatcher": "iam", "paas-api": "paas",
-		"paas-audit-dispatcher": "paas", "paas-ui": "paas-ui",
-		"paas-worker": "paas",
+		"apisix": "apisix", "audit": "audit",
+		"devops-api": "devops", "devops-audit-dispatcher": "devops",
+		"devops-build-worker": "devops", "devops-check-reporter": "devops",
+		"devops-executor-gateway": "devops", "devops-source-fetcher": "devops",
+		"devops-source-observer": "devops", "iam": "iam",
+		"iam-access-analysis-worker": "iam", "iam-audit-dispatcher": "iam",
+		"iam-notification-dispatcher": "iam", "matrix-ui": "matrix-ui",
+		"paas-api": "paas", "paas-audit-dispatcher": "paas",
+		"paas-worker": "paas", "platform-api": "platform",
+	}
+	manifestImages := make(map[string]release.Image, len(manifest.Images))
+	for _, image := range manifest.Images {
+		manifestImages[image.Component] = image
 	}
 	for name, raw := range services {
 		service, ok := raw.(map[string]any)
@@ -162,7 +300,12 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			}
 		}
 		image, ok := service["image"].(string)
-		if !ok || !strings.HasPrefix(image, "sha256:") {
+		component := expectedImageComponents[name]
+		if name == "postgres" {
+			component = "postgres"
+		}
+		expectedImage, found := manifestImages[component]
+		if !ok || !found || image != expectedImage.RuntimeReference() {
 			t.Fatalf("service %q image is not immutable: %#v", name, service["image"])
 		}
 		if name == "apisix" {
@@ -189,8 +332,18 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			if !slices.Equal(actualServiceNetworks, []string{"control", "edge", "web"}) {
 				t.Fatalf("APISIX network boundary=%v", actualServiceNetworks)
 			}
-		} else if slices.Contains(actualServiceNetworks, "edge") {
-			t.Fatalf("service %q can join the northbound edge network", name)
+		} else if name == "devops-executor-gateway" {
+			if !slices.Equal(actualServiceNetworks, []string{"control", "edge"}) {
+				t.Fatalf("DevOps executor gateway network boundary=%v", actualServiceNetworks)
+			}
+		} else if name == "devops-source-fetcher" || name == "devops-source-observer" ||
+			name == "devops-check-reporter" {
+			if !slices.Equal(actualServiceNetworks, []string{"control", "source"}) {
+				t.Fatalf("DevOps source service %q network boundary=%v", name, actualServiceNetworks)
+			}
+		} else if slices.Contains(actualServiceNetworks, "edge") ||
+			slices.Contains(actualServiceNetworks, "source") {
+			t.Fatalf("service %q can join an undeclared external network", name)
 		}
 		if slices.Contains(actualServiceNetworks, "mail-egress") != (name == "iam-notification-dispatcher") {
 			t.Fatalf("service %q crosses the SMTP egress boundary", name)
@@ -316,7 +469,22 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		}
 		if ports, found := service["ports"].([]any); found {
 			portCount += len(ports)
-			if name != "apisix" || len(ports) != 1 || ports[0] != "127.0.0.1:8443:9080/tcp" {
+			joinsExternalNetwork := false
+			for _, network := range actualServiceNetworks {
+				internal, known := expectedNetworks[network]
+				joinsExternalNetwork = joinsExternalNetwork || known && !internal
+			}
+			if !joinsExternalNetwork {
+				t.Fatalf(
+					"service %q publishes a host port without an external network: %v",
+					name, actualServiceNetworks,
+				)
+			}
+			validAPISIX := name == "apisix" && len(ports) == 1 &&
+				ports[0] == "127.0.0.1:8443:9080/tcp"
+			validRunner := name == "devops-executor-gateway" && len(ports) == 1 &&
+				ports[0] == "127.0.0.1:8444:8444/tcp"
+			if !validAPISIX && !validRunner {
 				t.Fatalf("service %q has unexpected northbound ports %#v", name, ports)
 			}
 		}
@@ -386,6 +554,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				if name == "postgres" && source == options.Root+"/data/postgres" {
 					foundPostgresData = target == "/var/lib/postgresql" && mount["read_only"] != true
 				}
+				if name == "devops-api" && source == options.Root+"/secrets/devops/source-webhooks" {
+					foundDevOpsSourceSecrets = target == "/run/matrix/devops-source-secrets" && mount["read_only"] == true
+				}
 			}
 			if name == "apisix" {
 				expected := map[string]struct {
@@ -425,14 +596,180 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				}
 				foundAPISIXRuntimeBoundary = true
 			}
+			if name == "devops-source-observer" {
+				expected := map[string]string{
+					"/run/matrix/devops-source-observer-dsn": options.Root + "/secrets/database/devops-source-observer-dsn",
+					"/run/matrix/devops-source-webhooks":     options.Root + "/secrets/devops/source-webhooks",
+					"/run/matrix/devops-source-fetch":        options.Root + "/secrets/devops/source-fetch",
+					"/run/matrix/devops-source-report":       options.Root + "/secrets/devops/source-report",
+					"/run/matrix/devops-source-trust":        options.Root + "/config/devops/source-trust",
+				}
+				if len(volumes) != len(expected) {
+					t.Fatalf("DevOps source observer mount count=%d", len(volumes))
+				}
+				for _, rawMount := range volumes {
+					mount := rawMount.(map[string]any)
+					target := mount["target"].(string)
+					if expected[target] != mount["source"] || mount["read_only"] != true {
+						t.Fatalf("DevOps source observer mount=%#v", mount)
+					}
+				}
+				dependencies := service["depends_on"].(map[string]any)
+				if len(dependencies) != 1 || dependencies["postgres"] == nil {
+					t.Fatalf("DevOps source observer dependencies=%#v", dependencies)
+				}
+				foundDevOpsSourceObserverBoundary = true
+			}
+			if name == "devops-source-fetcher" {
+				expected := map[string]struct {
+					source   string
+					readOnly bool
+				}{
+					"/run/matrix/devops-source-fetcher-dsn": {
+						options.Root + "/secrets/database/devops-source-fetcher-dsn", true,
+					},
+					"/run/matrix/devops-source-fetch": {
+						options.Root + "/secrets/devops/source-fetch", true,
+					},
+					"/run/matrix/devops-source-trust": {
+						options.Root + "/config/devops/source-trust", true,
+					},
+					"/var/lib/matrix/source-archives": {
+						options.Root + "/data/devops/source-archives", false,
+					},
+				}
+				if len(volumes) != len(expected) {
+					t.Fatalf("DevOps source fetcher mount count=%d", len(volumes))
+				}
+				for _, rawMount := range volumes {
+					mount := rawMount.(map[string]any)
+					target := mount["target"].(string)
+					want, found := expected[target]
+					readOnly, _ := mount["read_only"].(bool)
+					if !found || mount["source"] != want.source || readOnly != want.readOnly {
+						t.Fatalf("DevOps source fetcher mount=%#v", mount)
+					}
+				}
+				dependencies := service["depends_on"].(map[string]any)
+				if len(dependencies) != 1 || dependencies["postgres"] == nil {
+					t.Fatalf("DevOps source fetcher dependencies=%#v", dependencies)
+				}
+				foundDevOpsSourceFetcherBoundary = true
+			}
+			if name == "devops-build-worker" {
+				expected := map[string]struct {
+					source   string
+					readOnly bool
+				}{
+					"/run/matrix/devops-worker-dsn": {
+						options.Root + "/secrets/database/devops-worker-dsn", true,
+					},
+					"/var/lib/matrix/source-archives": {
+						options.Root + "/data/devops/source-archives", true,
+					},
+					"/run/matrix/build-worker.crt": {
+						options.Root + "/secrets/devops/executor-pki/build-worker.crt", true,
+					},
+					"/run/matrix/build-worker.key": {
+						options.Root + "/secrets/devops/executor-pki/build-worker.key", true,
+					},
+					"/run/matrix/executor-server-ca.crt": {
+						options.Root + "/secrets/devops/executor-pki/server-ca.crt", true,
+					},
+				}
+				if len(volumes) != len(expected) {
+					t.Fatalf("DevOps build worker mount count=%d", len(volumes))
+				}
+				for _, rawMount := range volumes {
+					mount := rawMount.(map[string]any)
+					target := mount["target"].(string)
+					want, found := expected[target]
+					readOnly, _ := mount["read_only"].(bool)
+					if !found || mount["source"] != want.source || readOnly != want.readOnly {
+						t.Fatalf("DevOps build worker mount=%#v", mount)
+					}
+				}
+				dependencies := service["depends_on"].(map[string]any)
+				if len(dependencies) != 2 || dependencies["postgres"] == nil ||
+					dependencies["devops-executor-gateway"] == nil {
+					t.Fatalf("DevOps build worker dependencies=%#v", dependencies)
+				}
+				foundDevOpsBuildWorkerBoundary = true
+			}
+			if name == "devops-check-reporter" {
+				expected := map[string]string{
+					"/run/matrix/devops-check-reporter-dsn": options.Root + "/secrets/database/devops-check-reporter-dsn",
+					"/run/matrix/devops-source-report":      options.Root + "/secrets/devops/source-report",
+					"/run/matrix/devops-source-trust":       options.Root + "/config/devops/source-trust",
+				}
+				if len(volumes) != len(expected) {
+					t.Fatalf("DevOps check reporter mount count=%d", len(volumes))
+				}
+				for _, rawMount := range volumes {
+					mount := rawMount.(map[string]any)
+					target := mount["target"].(string)
+					if expected[target] != mount["source"] || mount["read_only"] != true {
+						t.Fatalf("DevOps check reporter mount=%#v", mount)
+					}
+				}
+				dependencies := service["depends_on"].(map[string]any)
+				if len(dependencies) != 1 || dependencies["postgres"] == nil {
+					t.Fatalf("DevOps check reporter dependencies=%#v", dependencies)
+				}
+				foundDevOpsCheckReporterBoundary = true
+			}
+			if name == "devops-executor-gateway" {
+				expected := map[string]struct {
+					source   string
+					readOnly bool
+				}{
+					"/var/lib/matrix/executor-spool": {
+						options.Root + "/data/devops/executor-spool", false,
+					},
+					"/run/matrix/executor-gateway-server.crt": {
+						options.Root + "/secrets/devops/executor-pki/gateway-server.crt", true,
+					},
+					"/run/matrix/executor-gateway-server.key": {
+						options.Root + "/secrets/devops/executor-pki/gateway-server.key", true,
+					},
+					"/run/matrix/executor-admin-client-ca.crt": {
+						options.Root + "/secrets/devops/executor-pki/admin-client-ca.crt", true,
+					},
+					"/run/matrix/executor-runner-client-ca.crt": {
+						options.Root + "/secrets/devops/executor-pki/runner-client-ca.crt", true,
+					},
+				}
+				if len(volumes) != len(expected) {
+					t.Fatalf("DevOps executor gateway mount count=%d", len(volumes))
+				}
+				for _, rawMount := range volumes {
+					mount := rawMount.(map[string]any)
+					target := mount["target"].(string)
+					want, found := expected[target]
+					readOnly, _ := mount["read_only"].(bool)
+					if !found || mount["source"] != want.source || readOnly != want.readOnly {
+						t.Fatalf("DevOps executor gateway mount=%#v", mount)
+					}
+				}
+				if _, found := service["depends_on"]; found {
+					t.Fatal("DevOps executor gateway unexpectedly depends on a product service")
+				}
+				foundDevOpsExecutorGatewayBoundary = true
+			}
 		}
 	}
-	if portCount != 1 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
-		!foundAPISIXRuntimeBoundary {
+	if portCount != 2 || !foundExecutorRoot || !foundDockerSocket || !foundPostgresData ||
+		!foundAPISIXRuntimeBoundary || !foundDevOpsSourceSecrets ||
+		!foundDevOpsSourceFetcherBoundary || !foundDevOpsSourceObserverBoundary ||
+		!foundDevOpsBuildWorkerBoundary || !foundDevOpsCheckReporterBoundary ||
+		!foundDevOpsExecutorGatewayBoundary {
 		t.Fatalf(
-			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t",
+			"platform capability closure: ports=%d executor=%t socket=%t postgres-data=%t apisix=%t devops-source-secrets=%t source-fetcher=%t source-observer=%t build-worker=%t check-reporter=%t executor-gateway=%t",
 			portCount, foundExecutorRoot, foundDockerSocket, foundPostgresData,
-			foundAPISIXRuntimeBoundary,
+			foundAPISIXRuntimeBoundary, foundDevOpsSourceSecrets,
+			foundDevOpsSourceFetcherBoundary, foundDevOpsSourceObserverBoundary,
+			foundDevOpsBuildWorkerBoundary, foundDevOpsCheckReporterBoundary,
+			foundDevOpsExecutorGatewayBoundary,
 		)
 	}
 	if emailKeyringMounts != 2 || securityMailChannelMounts != 1 || notificationDSNMounts != 1 ||
@@ -447,6 +784,67 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 		if strings.Contains(strings.ToLower(encoded), forbidden) {
 			t.Fatalf("compiled topology contains forbidden plaintext/provider input %q", forbidden)
 		}
+	}
+}
+
+func TestCompileOmitsUnselectedDevOpsProduct(t *testing.T) {
+	manifest := topologyManifest()
+	manifest.Products = manifest.Products[:1]
+	manifest.Images = slices.DeleteFunc(manifest.Images, func(image release.Image) bool {
+		return image.Component == "devops"
+	})
+	manifest.Files = slices.DeleteFunc(manifest.Files, func(file release.File) bool {
+		return file.Path == "images/devops.tar" || slices.Contains(release.RunnerPayloadPaths(), file.Path)
+	})
+	result, err := Compile(manifest, Options{
+		InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix",
+		Listener: "127.0.0.1", Port: 8443,
+		NorthboundOrigin: "http://matrix.example.test:8443",
+	})
+	if err != nil {
+		t.Fatalf("compile PaaS-only topology: %v", err)
+	}
+	var document composeDocument
+	if err := json.Unmarshal(result.ComposeJSON, &document); err != nil {
+		t.Fatalf("decode PaaS-only topology: %v", err)
+	}
+	if _, found := document.Services["devops-api"]; found {
+		t.Fatal("PaaS-only topology contains DevOps API")
+	}
+	if _, found := document.Services["devops-audit-dispatcher"]; found {
+		t.Fatal("PaaS-only topology contains DevOps Audit dispatcher")
+	}
+	if _, found := document.Services["devops-build-worker"]; found {
+		t.Fatal("PaaS-only topology contains DevOps build worker")
+	}
+	if _, found := document.Services["devops-check-reporter"]; found {
+		t.Fatal("PaaS-only topology contains DevOps check reporter")
+	}
+	if _, found := document.Services["devops-executor-gateway"]; found {
+		t.Fatal("PaaS-only topology contains DevOps executor gateway")
+	}
+	if _, found := document.Services["devops-source-fetcher"]; found {
+		t.Fatal("PaaS-only topology contains DevOps source fetcher")
+	}
+	if _, found := document.Services["devops-source-observer"]; found {
+		t.Fatal("PaaS-only topology contains DevOps source observer")
+	}
+	if _, found := document.Networks["source"]; found {
+		t.Fatal("PaaS-only topology contains DevOps provider-egress network")
+	}
+	platform := document.Services["platform-api"]
+	if _, found := platform.Environment["MATRIX_PLATFORM_DEVOPS_ENDPOINT"]; found {
+		t.Fatal("PaaS-only product discovery can probe an undeclared DevOps endpoint")
+	}
+	if _, found := document.Services["apisix"].DependsOn["devops-api"]; found {
+		t.Fatal("PaaS-only gateway depends on unselected DevOps")
+	}
+	if _, err := Compile(manifest, Options{
+		InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix",
+		Listener: "127.0.0.1", Port: devOpsExecutorRunnerPort,
+		NorthboundOrigin: "http://matrix.example.test:8444",
+	}); err != nil {
+		t.Fatalf("PaaS-only topology unnecessarily reserved the DevOps runner port: %v", err)
 	}
 }
 
@@ -511,21 +909,44 @@ func topologyManifest() release.Manifest {
 		MediaType: release.IAMProductAuthorizationMediaType,
 		Size:      1024, SHA256: digest('9'),
 	}}
-	required := release.RequiredImages()
+	products := []release.Product{
+		release.ApplicationPaaSProduct("v0.1.0"),
+		release.DevOpsProduct("v0.1.0"),
+	}
+	required := release.RequiredImages(products)
 	images := make([]release.Image, 0, len(required))
-	fileDigests := "2345678abc"
-	imageDigests := "89abcdef01"
-	sourceDigests := "f012345678"
+	runnerDigests := "cdef"
+	for index, runnerPath := range release.RunnerPayloadPaths() {
+		file := release.File{
+			Path: runnerPath, MediaType: "application/vnd.docker.image.archive",
+			Size: 1024, SHA256: digest(runnerDigests[index]),
+		}
+		switch runnerPath {
+		case release.RunnerBinaryPath:
+			file.MediaType = "application/vnd.matrix.executable"
+			file.Executable = true
+		case release.RunnerGVisorArchivePath:
+			file.MediaType = "application/vnd.matrix.gvisor.tar+zstd"
+		case release.RunnerGVisorChecksumPath:
+			file.MediaType = "text/plain"
+		}
+		files = append(files, file)
+	}
+	fileDigests := "02345678abcd"
+	imageDigests := "456789abcdef"
+	sourceDigests := "f0123456789a"
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
+		sourceDigest := digest(sourceDigests[index])
 		files = append(files, release.File{
 			Path: archive, MediaType: "application/vnd.docker.image.archive",
 			Size: 1024 + uint64(index), SHA256: digest(fileDigests[index]),
 		})
 		images = append(images, release.Image{
 			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
-			ImageID: digest(imageDigests[index]), SourceDigest: digest(sourceDigests[index]),
-			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
+			ImageID: digest(imageDigests[index]), SourceDigest: sourceDigest,
+			LocalReference: release.LocalImageReference(requirement.Component, sourceDigest),
+			OS:             "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
 		})
 	}
 	slices.SortFunc(files, func(left, right release.File) int {
@@ -544,8 +965,67 @@ func topologyManifest() release.Manifest {
 		},
 		MinimumFreeBytes: 1 << 30,
 		Database:         release.CurrentDatabaseProfile(),
+		Products:         products,
 		TopologyDigest:   ContractDigest(), Files: files, Images: images,
 	}
+}
+
+func legacyTopologyManifest() release.Manifest {
+	commit := "c88a84f379afcf94431e2aca7332fe6ec3136dc7"
+	requirements := []release.ImageRequirement{
+		{Component: "apisix", Purpose: release.ImagePlatform, HealthContract: "northbound-ready-v1"},
+		{Component: "audit", Purpose: release.ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
+		{Component: "iam", Purpose: release.ImagePlatform, HealthContract: "iam-ready-authorize-v1"},
+		{Component: "paas", Purpose: release.ImagePlatform, HealthContract: "paas-ready-worker-compose-v1"},
+		{Component: "paas-ui", Purpose: release.ImagePlatform, HealthContract: "paas-ui-ready-v1"},
+		{Component: "postgres", Purpose: release.ImagePlatform, HealthContract: "postgres-ready-schema-v1"},
+		{Component: "verification", Purpose: release.ImageWorkload, HealthContract: "application-probe-v1"},
+	}
+	files := []release.File{{
+		Path: "bin/mx", MediaType: "application/vnd.matrix.executable",
+		Size: 1024, SHA256: digestValue('1'), Executable: true,
+	}}
+	images := make([]release.Image, 0, len(requirements))
+	fileDigests := "2345678"
+	imageDigests := "89abcde"
+	sourceDigests := "ef01234"
+	for index, requirement := range requirements {
+		archive := "images/" + requirement.Component + ".tar"
+		files = append(files, release.File{
+			Path: archive, MediaType: "application/vnd.docker.image.archive",
+			Size: 1024 + uint64(index), SHA256: digestValue(fileDigests[index]),
+		})
+		images = append(images, release.Image{
+			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
+			ImageID: digestValue(imageDigests[index]), SourceDigest: digestValue(sourceDigests[index]),
+			OS: "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
+		})
+	}
+	slices.SortFunc(files, func(left, right release.File) int {
+		return strings.Compare(left.Path, right.Path)
+	})
+	return release.Manifest{
+		APIVersion: release.LegacyManifestAPIVersion, Kind: release.ManifestKind,
+		Release: release.ReleaseIdentity{
+			ID: "matrix-v0.1.0-" + commit[:12], Version: "v0.1.0", SourceCommit: commit,
+			BuildID: "build-gate-a", CreatedAt: time.Date(2026, 8, 25, 12, 0, 0, 0, time.UTC),
+		},
+		Signer: release.Signer{KeyID: "xiak-release-2026", Algorithm: release.SignatureAlgorithm},
+		Host: release.HostProfile{
+			OS: "linux", Architecture: "amd64", MinimumDocker: "27.5.1",
+			MinimumCompose: "2.33.0", CommandContract: "v1",
+		},
+		MinimumFreeBytes: 4 * 1024 * 1024 * 1024,
+		Database: release.DatabaseProfile{
+			SchemaVersion: 1, Compatibility: "expand-contract-n-minus-one",
+		},
+		Products: nil, TopologyDigest: legacyProductlessContractDigest,
+		Files: files, Images: images,
+	}
+}
+
+func digestValue(value byte) string {
+	return "sha256:" + strings.Repeat(string(value), 64)
 }
 
 func digest(value byte) string {

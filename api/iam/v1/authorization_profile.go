@@ -133,11 +133,17 @@ type AuthorizationProfileEntry struct {
 	ContentDigest string               `json:"contentDigest"`
 }
 
-const MaxAuthorizationProfileListItems = 16
+const (
+	MaxAuthorizationProfileListItems = 16
+	// A complete product directory carries committed declarations, not a
+	// mutation request. Keep it bounded independently so adding an installed
+	// product cannot make the closed catalog unreadable at 64 KiB.
+	MaxAuthorizationProfileListBytes = MaxAuthorizationProfileBytes*MaxAuthorizationProfileListItems + 64*1024
+)
 
 func DecodeAuthorizationProfileList(reader io.Reader) (AuthorizationProfileList, error) {
 	var value AuthorizationProfileList
-	if contractjson.DecodeObject(reader, MaxRequestBytes, &value) != nil || ValidateAuthorizationProfileList(value) != nil {
+	if contractjson.DecodeObject(reader, MaxAuthorizationProfileListBytes, &value) != nil || ValidateAuthorizationProfileList(value) != nil {
 		return AuthorizationProfileList{}, ErrInvalidAuthorizationProfile
 	}
 	return value, nil
@@ -156,10 +162,10 @@ func ValidateAuthorizationProfileList(value AuthorizationProfileList) error {
 		}
 		previous = entry.Profile.Product
 	}
-	// This endpoint uses the existing ordinary contract/HTTP decode budget,
-	// not the much larger sum of every individual declaration's maximum.
+	// The complete directory has its own finite response budget; request bodies
+	// retain the smaller ordinary contract limit.
 	encoded, err := json.Marshal(value)
-	if err != nil || int64(len(encoded)) > MaxRequestBytes {
+	if err != nil || int64(len(encoded)) > MaxAuthorizationProfileListBytes {
 		return ErrInvalidAuthorizationProfile
 	}
 	return nil

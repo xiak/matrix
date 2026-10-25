@@ -13,7 +13,7 @@ func (service *Authority) Bootstrap(
 	ctx context.Context,
 	document iamv1.BootstrapDocument,
 ) (iamv1.BootstrapStatus, error) {
-	if iamv1.ValidateBootstrapDocument(document) != nil {
+	if iamv1.ValidateBootstrapReplayDocument(document) != nil {
 		return iamv1.BootstrapStatus{}, ErrInvalidArgument
 	}
 	contentDigest, err := iamv1.BootstrapDigest(document)
@@ -42,6 +42,9 @@ func (service *Authority) Bootstrap(
 	})
 	if err != nil {
 		return iamv1.BootstrapStatus{}, err
+	}
+	if iamv1.IsLegacyBootstrapReplayDocument(document) && status.State != iamv1.BootstrapReady {
+		return iamv1.BootstrapStatus{}, ErrConflict
 	}
 	if status.State == iamv1.BootstrapReady {
 		return status, nil

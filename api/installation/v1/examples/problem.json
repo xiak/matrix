@@ -1,0 +1,1 @@
+{"type":"https://errors.matrix.xiak.com/authorization/permission-denied","title":"Permission denied","status":403,"code":"authorization.permission.denied","detail":"The current subject cannot read installed products.","requestId":"request-products-example"}

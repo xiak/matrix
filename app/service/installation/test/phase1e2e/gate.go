@@ -31,7 +31,9 @@ import (
 	amqp "github.com/rabbitmq/amqp091-go"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	installationv1 "github.com/xiak/matrix/api/installation/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -103,7 +105,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("release-a-install")
 
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
 	emit("release-a-status-verify")
@@ -140,6 +142,11 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	defer clear(bearer)
 	preBackupBearer := bearer
 	value.edge.addForbidden(bearer)
+	if err := value.assertCommittedProductDiscovery(
+		ctx, bearer, value.releases.a.Manifest,
+	); err != nil {
+		return err
+	}
 	emit("iam-user-authority-through-apisix")
 	if err := value.prepareTenantRetention(ctx, bearer, newPassword, state.InstallationID); err != nil {
 		return err
@@ -166,6 +173,20 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	emit("security-mail-contact-verification")
 	emit("signed-mfa-binding-login-and-security-notice")
 	emit("access-analyzer-explicit-disposition-baseline")
+	sourceMaterials, err := value.exerciseDevOpsAccess(
+		ctx, bearer,
+	)
+	if err != nil {
+		return err
+	}
+	if len(sourceMaterials) != devOpsSourceMaterialCount {
+		clearDevOpsSourceMaterials(sourceMaterials)
+		return fail("devops-source-material-contract")
+	}
+	defer clearDevOpsSourceMaterials(sourceMaterials)
+	value.sensitive = append(value.sensitive, sourceMaterials...)
+	sourceTrust := sourceMaterials[devOpsSourceTrustMaterialIndex]
+	emit("devops-multi-role-through-apisix")
 
 	secret, secretDigest, err := value.provisionSecret()
 	if err != nil {
@@ -173,7 +194,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	defer clear(secret)
 	value.edge.addForbidden(secret)
-	value.sensitive = [][]byte{initialPassword, newPassword, firstSession, bearer, secret}
+	value.sensitive = append(value.sensitive, initialPassword, newPassword, firstSession, bearer, secret)
 	if err := value.verifySignedManagedProducts(ctx); err != nil {
 		return err
 	}
@@ -240,7 +261,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	backupBaseline := auditRecordHashes(recordsBeforeBackup)
 	emit("audit-query-integrity-through-apisix")
 
-	backup, err := runMX(ctx, value.releases.a, "backup", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
+	backup, err := runMX(ctx, value.releases.b, "backup", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
 	if err != nil || backup.BackupID == "" || !backup.Changed {
 		return fail("protected-backup")
 	}
@@ -261,15 +282,24 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
+	}
+	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
+		return err
+	}
+	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
+		return fail("automatic-upgrade-rollback-devops-state")
+	}
+	if err := value.assertDevOpsSourceTrust(sourceTrust); err != nil {
+		return fail("automatic-upgrade-rollback-source-trust")
 	}
 	emit("automatic-upgrade-rollback")
 	if err := value.assertTenantRetention(ctx, true, false, "automatic-rollback"); err != nil {
 		return err
 	}
 
-	upgrade, err := runMX(ctx, value.releases.a, "upgrade", []string{
+	upgrade, err := runMX(ctx, value.releases.b, "upgrade", []string{
 		"--bundle", value.releases.b.Root, "--root", value.config.root,
 		"--security-mail-configuration", value.config.securityMail,
 	}, value.forbidden(secret, newPassword, bearer))
@@ -293,9 +323,18 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("upgrade-audit-history")
 	}
 	if err := value.repeatedStatusAndVerify(
-		ctx, value.releases.b, value.releases.b.Manifest.Release.ID, value.releases.a.Manifest.Release.ID,
+		ctx, value.releases.b.Manifest, value.releases.b.Manifest.Release.ID, value.releases.a.Manifest.Release.ID,
 	); err != nil {
 		return err
+	}
+	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.b.Manifest); err != nil {
+		return err
+	}
+	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
+		return fail("release-b-devops-state")
+	}
+	if err := value.assertDevOpsSourceTrust(sourceTrust); err != nil {
+		return fail("release-b-source-trust")
 	}
 	emit("release-b-upgrade-preservation")
 	postUpgradeBearer, err := value.edge.login(ctx, newPassword, "phase1-login-after-release-b")
@@ -334,8 +373,17 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
+	}
+	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
+		return err
+	}
+	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
+		return fail("platform-rollback-devops-state")
+	}
+	if err := value.assertDevOpsSourceTrust(sourceTrust); err != nil {
+		return fail("platform-rollback-source-trust")
 	}
 	emit("explicit-platform-rollback")
 	if err := value.assertSecurityReportSnapshot(ctx, bearer, baselineReport, true); err != nil {
@@ -352,7 +400,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 
 	value.workloadRunning = ""
-	recovery, err := runMX(ctx, value.releases.a, "recover", []string{
+	recovery, err := runMX(ctx, value.releases.b, "recover", []string{
 		"--root", value.config.root, "--backup", backup.BackupID,
 	}, value.forbidden(secret, newPassword, bearer))
 	if err != nil || recovery.ReleaseID != value.releases.a.Manifest.Release.ID ||
@@ -391,8 +439,42 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil || !containsAuditHistory(recoveredAudit, backupBaseline) {
 		return fail("recovered-audit-history")
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
+	}
+	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
+		return err
+	}
+	if err := value.assertDevOpsConfiguration(ctx, bearer); err != nil {
+		return fail("recovered-devops-state")
+	}
+	if err := value.assertDevOpsSourceTrust(nil); err != nil {
+		return fail("recovered-source-trust-not-retired")
+	}
+	if err := value.applyDevOpsSourceTrust(
+		ctx, sourceTrust, "APPLIED", sourceMaterials,
+	); err != nil {
+		return fail("recovered-source-trust-reapply")
+	}
+	if err := value.assertDevOpsSourceTrust(sourceTrust); err != nil {
+		return fail("recovered-source-trust-state")
+	}
+	rechecked, err := scheduleDevOpsRecheck(
+		ctx, value.edge,
+		"/api/devops/v1/source-connections/"+string(devOpsSourceConnectionID),
+		"phase1-recheck-devops-source-after-recovery-trust", bearer,
+		devopsv1.ValidateSourceConnection,
+		func(resource devopsv1.SourceConnection) uint64 {
+			return resource.Metadata.ResourceVersion
+		},
+	)
+	if err != nil {
+		return fail("recovered-source-trust-recheck")
+	}
+	if _, err := value.waitDevOpsSourceUnavailable(
+		ctx, bearer, rechecked.Metadata.ResourceVersion,
+	); err != nil {
+		return fail("recovered-source-trust-observation")
 	}
 	emit("backup-recovery")
 	if err := value.assertAccessAnalyzer(
@@ -455,7 +537,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("application-stop-capacity-release")
 
-	if err := value.writeAndScanSupport(ctx, value.releases.a, "phase1-before-restart.json", backup.BackupID, secret, newPassword, bearer); err != nil {
+	if err := value.writeAndScanSupport(ctx, value.releases.a.Manifest, "phase1-before-restart.json", backup.BackupID, secret, newPassword, bearer); err != nil {
 		return err
 	}
 	dataRootAfter, err := os.Stat(filepath.Join(value.config.root, filepath.FromSlash(layout.PostgresData)))
@@ -1479,7 +1561,7 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if _, err := os.Stat(value.config.root); err != nil {
 		return fail("restart-installation-root")
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
 	state, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, "")
@@ -1510,8 +1592,26 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if active, err := value.activeCapacityClaims(ctx, state.InstallationID); err != nil || active != 0 {
 		return fail("restart-capacity-release")
 	}
-	if err := value.writeAndScanSupport(ctx, value.releases.a, "phase1-after-restart.json", nil); err != nil {
+	sourceTrust, err := value.readDevOpsSourceTrust()
+	if err != nil {
+		return fail("restart-source-trust-preservation")
+	}
+	defer clear(sourceTrust)
+	if err := value.writeAndScanSupport(
+		ctx, value.releases.a.Manifest, "phase1-after-restart.json", sourceTrust,
+	); err != nil {
 		return err
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := runMXSourceTrust(
+			ctx, value.releases.a, "remove", value.config.root, string(devOpsTenant),
+			devOpsSourceEndpoint, "", "REMOVED", value.forbidden(sourceTrust),
+		); err != nil {
+			return fail("restart-source-trust-removal")
+		}
+	}
+	if err := value.assertDevOpsSourceTrust(nil); err != nil {
+		return fail("restart-source-trust-removal-state")
 	}
 	if err := assertNoExternalRoute(); err != nil {
 		return err
@@ -3413,8 +3513,8 @@ func (value *gate) assertPlatformAuditRetention(ctx context.Context, bearer []by
 	return fail("platform-lifecycle-outbox-delivery")
 }
 
-func (value *gate) assertSignedProfile(ctx context.Context, bundle release.VerifiedBundle) error {
-	profile := bundle.Manifest.Database
+func (value *gate) assertSignedProfile(ctx context.Context, manifest release.Manifest) error {
+	profile := manifest.Database
 	if profile != release.CurrentDatabaseProfile() {
 		return fail("offline-release-profile")
 	}
@@ -3487,7 +3587,7 @@ func (value *gate) forbidden(values ...[]byte) [][]byte {
 
 func (value *gate) repeatedStatusAndVerify(
 	ctx context.Context,
-	bundle release.VerifiedBundle,
+	manifest release.Manifest,
 	releaseID, previousID string,
 ) error {
 	before, err := readJournal(ctx, value.config.root)
@@ -3495,7 +3595,7 @@ func (value *gate) repeatedStatusAndVerify(
 		return fail("status-journal-before")
 	}
 	for index := 0; index < 2; index++ {
-		result, err := runMX(ctx, bundle, "status", []string{"--root", value.config.root}, value.pathLeakage())
+		result, err := runMX(ctx, value.releases.b, "status", []string{"--root", value.config.root}, value.pathLeakage())
 		if err != nil || result.ReleaseID != releaseID || result.PreviousID != previousID || result.Changed {
 			return fail("repeated-status")
 		}
@@ -3505,15 +3605,58 @@ func (value *gate) repeatedStatusAndVerify(
 		return fail("status-read-only")
 	}
 	for index := 0; index < 2; index++ {
-		result, err := runMX(ctx, bundle, "verify", []string{"--root", value.config.root}, value.pathLeakage())
+		result, err := runMX(ctx, value.releases.b, "verify", []string{"--root", value.config.root}, value.pathLeakage())
 		if err != nil || result.ReleaseID != releaseID || result.PreviousID != previousID {
 			return fail("repeated-verify")
 		}
 	}
-	if _, err := assertPlatform(ctx, value.config.root, bundle.Manifest, previousID); err != nil {
+	if _, err := assertPlatform(ctx, value.config.root, manifest, previousID); err != nil {
 		return err
 	}
-	return value.assertSignedProfile(ctx, bundle)
+	return value.assertSignedProfile(ctx, manifest)
+}
+
+func (value *gate) assertInstalledProducts(
+	ctx context.Context,
+	bearer []byte,
+	manifest release.Manifest,
+) error {
+	products, err := value.edge.installedProducts(ctx, bearer)
+	if err != nil || products.ReleaseID != manifest.Release.ID ||
+		products.ReleaseVersion != manifest.Release.Version ||
+		len(products.Products) != len(manifest.Products) {
+		return fail("installed-product-inventory")
+	}
+	for index, declared := range manifest.Products {
+		observed := products.Products[index]
+		if string(observed.ID) != string(declared.ID) || observed.Version != declared.Version ||
+			observed.RouteKey != declared.RouteKey ||
+			observed.State != installationv1.ProductReady || observed.Reason != "" {
+			return fail("installed-product-inventory")
+		}
+	}
+	return nil
+}
+
+func (value *gate) assertCommittedProductDiscovery(
+	ctx context.Context,
+	bearer []byte,
+	manifest release.Manifest,
+) error {
+	if len(manifest.Products) == 0 {
+		return value.assertProductDiscoveryUnavailable(ctx, bearer)
+	}
+	return value.assertInstalledProducts(ctx, bearer, manifest)
+}
+
+func (value *gate) assertProductDiscoveryUnavailable(
+	ctx context.Context,
+	bearer []byte,
+) error {
+	if _, err := value.edge.installedProducts(ctx, bearer); err == nil {
+		return fail("productless-discovery-boundary")
+	}
+	return nil
 }
 
 func journalsEqual(left, right lifecycle.Journal) bool {
@@ -3907,7 +4050,7 @@ func (value *gate) assertWorkload(
 		len(inspection.HostConfig.PortBindings) != 0 {
 		return fail("workload-container-state")
 	}
-	if !value.signedWorkloadImage(inspection.Config.Image) {
+	if !value.signedWorkloadImage(inspection.Config.Image, inspection.Image) {
 		return fail("workload-image-identity")
 	}
 	if generation == 2 {
@@ -3956,10 +4099,10 @@ func (value *gate) assertWorkload(
 	return nil
 }
 
-func (value *gate) signedWorkloadImage(imageID string) bool {
+func (value *gate) signedWorkloadImage(reference, imageID string) bool {
 	for _, manifest := range []release.Manifest{value.releases.a.Manifest, value.releases.b.Manifest} {
 		workload, ok := workloadImage(manifest)
-		if ok && workload.ImageID == imageID {
+		if ok && workload.LocalReference == reference && workload.ImageID == imageID {
 			return true
 		}
 	}
@@ -3987,36 +4130,58 @@ func (value *gate) assertWorkloadRemoved(ctx context.Context) error {
 }
 
 func (value *gate) activeCapacityClaims(ctx context.Context, installationID string) (int, error) {
-	ids, err := dockerLines(
-		ctx, "container", "ls", "--all", "--quiet",
-		"--filter", "label=com.xiak.matrix.installation="+installationID,
-		"--filter", "label=com.xiak.matrix.role=postgres",
-	)
-	if err != nil || len(ids) != 1 {
-		return 0, errors.New("PostgreSQL container is unavailable")
-	}
 	query := "SELECT count(*) FROM paas.capacity_reservations AS reservation " +
 		"JOIN paas.capacity_claims AS claim ON claim.id = reservation.capacity_claim_id " +
 		"WHERE reservation.tenant_id = 'organization-default' " +
 		"AND reservation.deployment_id = 'phase1-deployment' AND claim.state = 'ACTIVE'"
-	content, err := docker(
-		ctx, "container", "exec", "--user", "postgres", ids[0],
-		"psql", "--no-psqlrc", "--tuples-only", "--no-align", "--set", "ON_ERROR_STOP=1",
-		"--username", "matrix", "--dbname", "matrix", "--command", query,
-	)
+	content, err := value.postgresScalar(ctx, installationID, query)
 	if err != nil {
 		return 0, err
 	}
-	count, err := strconv.Atoi(strings.TrimSpace(string(content)))
+	count, err := strconv.Atoi(content)
 	if err != nil || count < 0 || count > 1 {
 		return 0, errors.New("capacity observation is invalid")
 	}
 	return count, nil
 }
 
+func (value *gate) postgresScalar(
+	ctx context.Context,
+	installationID, query string,
+) (string, error) {
+	ids, err := dockerLines(
+		ctx, "container", "ls", "--all", "--quiet",
+		"--filter", "label=com.xiak.matrix.installation="+installationID,
+		"--filter", "label=com.xiak.matrix.role=postgres",
+	)
+	if err != nil || len(ids) != 1 {
+		return "", errors.New("PostgreSQL container is unavailable")
+	}
+	content, err := docker(
+		ctx, "container", "exec", "--user", "postgres", ids[0],
+		"psql", "--no-psqlrc", "--quiet", "--tuples-only", "--no-align",
+		"--set", "ON_ERROR_STOP=1",
+		"--username", "matrix", "--dbname", "matrix", "--command", query,
+	)
+	if err != nil {
+		return "", err
+	}
+	lines := strings.FieldsFunc(string(content), func(character rune) bool {
+		return character == '\r' || character == '\n'
+	})
+	if len(lines) == 0 {
+		return "", errors.New("PostgreSQL scalar observation is invalid")
+	}
+	result := strings.TrimSpace(lines[len(lines)-1])
+	if result == "" {
+		return "", errors.New("PostgreSQL scalar observation is invalid")
+	}
+	return result, nil
+}
+
 func (value *gate) writeAndScanSupport(
 	ctx context.Context,
-	bundle release.VerifiedBundle,
+	manifest release.Manifest,
 	name string,
 	extra ...any,
 ) error {
@@ -4032,7 +4197,7 @@ func (value *gate) writeAndScanSupport(
 		case nil:
 		}
 	}
-	result, err := runMX(ctx, bundle, "support", []string{
+	result, err := runMX(ctx, value.releases.b, "support", []string{
 		"--root", value.config.root, "--output", output,
 	}, forbidden)
 	if err != nil || !result.Changed {
@@ -4071,9 +4236,9 @@ func (value *gate) writeAndScanSupport(
 		json.Unmarshal(document["kind"], &kind) != nil ||
 		json.Unmarshal(document["state"], &state) != nil ||
 		json.Unmarshal(document["releaseId"], &releaseID) != nil ||
-		decodeOne(document["database"], &database) != nil || database != bundle.Manifest.Database ||
+		decodeOne(document["database"], &database) != nil || database != manifest.Database ||
 		apiVersion != "installation.matrix.xiak.com/v2" || kind != "PlatformSupportEvidence" ||
-		state != "READY" || releaseID != bundle.Manifest.Release.ID {
+		state != "READY" || releaseID != manifest.Release.ID {
 		return fail("support-contract")
 	}
 	return nil
@@ -4099,7 +4264,7 @@ func installedSecretValues(root string) ([][]byte, error) {
 		}
 		values = append(values, content)
 		if strings.HasSuffix(filepath.ToSlash(path), "/"+filepath.ToSlash(layout.IAMBootstrap)) {
-			document, decodeErr := iamv1.DecodeBootstrapDocument(bytes.NewReader(content))
+			document, decodeErr := iamv1.DecodeBootstrapReplayDocument(bytes.NewReader(content))
 			if decodeErr != nil {
 				return decodeErr
 			}

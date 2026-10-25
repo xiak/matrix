@@ -1,0 +1,94 @@
+package devopsv1
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"testing"
+)
+
+func FuzzPipelineDraftDigestIsFramed(f *testing.F) {
+	f.Add("binding-a", "binding-b")
+	f.Add("a", "ab")
+	f.Fuzz(func(t *testing.T, first, second string) {
+		left := validDraftSpec()
+		right := validDraftSpec()
+		left.RepositoryBindingID = ResourceID(first)
+		right.RepositoryBindingID = ResourceID(second)
+		leftDigest := PipelineDraftSpecDigest(left)
+		rightDigest := PipelineDraftSpecDigest(right)
+		if first == second && leftDigest != rightDigest {
+			t.Fatal("equal inputs produced different digests")
+		}
+		if first != second && leftDigest == rightDigest {
+			t.Fatal("distinct framed repository identities produced the same digest")
+		}
+	})
+}
+
+func FuzzRepositoryBindingDigestIsFramed(f *testing.F) {
+	f.Add("platform/api", "platform/worker")
+	f.Add("a/b", "a/bb")
+	f.Fuzz(func(t *testing.T, first, second string) {
+		left := validRepositoryBindingSpec()
+		right := validRepositoryBindingSpec()
+		left.RepositoryPath = first
+		right.RepositoryPath = second
+		leftDigest := RepositoryBindingSpecDigest(left)
+		rightDigest := RepositoryBindingSpecDigest(right)
+		if first == second && leftDigest != rightDigest {
+			t.Fatal("equal inputs produced different repository binding digests")
+		}
+		if first != second && leftDigest == rightDigest {
+			t.Fatal("distinct framed repository identities produced the same digest")
+		}
+	})
+}
+
+func FuzzSourceEventDigestIsFramed(f *testing.F) {
+	f.Add("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+	f.Add("a", "ab")
+	f.Fuzz(func(t *testing.T, first, second string) {
+		left := validSourceEvent(t).Spec
+		right := left
+		left.CanonicalPayloadDigest = first
+		right.CanonicalPayloadDigest = second
+		leftDigest := SourceEventSpecDigest(left)
+		rightDigest := SourceEventSpecDigest(right)
+		if first == second && leftDigest != rightDigest {
+			t.Fatal("equal event inputs produced different digests")
+		}
+		if first != second && leftDigest == rightDigest {
+			t.Fatal("distinct framed payload digests produced the same event digest")
+		}
+	})
+}
+
+func FuzzReplayedPipelineRunIdentityIsFramed(f *testing.F) {
+	f.Add("replay-one", "replay-two")
+	f.Add("a", "ab")
+	f.Fuzz(func(t *testing.T, first, second string) {
+		run := validPipelineRun(t)
+		commandID := func(value string) ResourceID {
+			digest := sha256.Sum256([]byte(value))
+			return ResourceID("operation-" + hex.EncodeToString(digest[:]))
+		}
+		left, err := ReplayedPipelineRunID(
+			run.Scope, run.ID, commandID(first), run.InputDigest,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		right, err := ReplayedPipelineRunID(
+			run.Scope, run.ID, commandID(second), run.InputDigest,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if first == second && left != right {
+			t.Fatal("equal replay commands produced different identities")
+		}
+		if first != second && commandID(first) != commandID(second) && left == right {
+			t.Fatal("distinct framed replay commands produced the same identity")
+		}
+	})
+}

@@ -84,6 +84,7 @@ func runAssemble(ctx context.Context, arguments []string, output io.Writer) erro
 	createdAtText := flags.String("created-at", "", "UTC RFC3339 build time")
 	privatePath := flags.String("private-key", "", "private signing key path")
 	trustPath := flags.String("trust-key", "", "public trust root path")
+	gvisorPath := flags.String("gvisor-archive", "", "fixed offline gVisor x86-64 archive")
 	previousID := flags.String("previous-id", "", "immediate predecessor release ID")
 	previousVersion := flags.String("previous-version", "", "immediate predecessor version")
 	if err := flags.Parse(arguments); err != nil || flags.NArg() != 0 {
@@ -102,6 +103,10 @@ func runAssemble(ctx context.Context, arguments []string, output io.Writer) erro
 		return err
 	}
 	trustAbsolute, err := absolutePath(*trustPath)
+	if err != nil {
+		return err
+	}
+	gvisorAbsolute, err := absolutePath(*gvisorPath)
 	if err != nil {
 		return err
 	}
@@ -136,7 +141,8 @@ func runAssemble(ctx context.Context, arguments []string, output io.Writer) erro
 	clear(suppliedBytes)
 	result, err := releasebuild.Assemble(ctx, releasebuild.Config{
 		RepositoryRoot: repositoryAbsolute, Output: bundleAbsolute,
-		Version: *version, BuildID: *buildID, SourceCommit: sourceCommit,
+		GVisorArchive: gvisorAbsolute,
+		Version:       *version, BuildID: *buildID, SourceCommit: sourceCommit,
 		CreatedAt: createdAt, PreviousID: *previousID,
 		PreviousVersion: *previousVersion, Signer: signer,
 	}, releasebuild.NewLocalEffects())

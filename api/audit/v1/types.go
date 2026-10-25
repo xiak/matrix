@@ -51,6 +51,8 @@ type Event struct {
 	Action         Action          `json:"action"`
 	Target         TargetReference `json:"target"`
 	Result         Result          `json:"result"`
+	Outcome        Outcome         `json:"outcome,omitempty"`
+	Reason         Reason          `json:"reason,omitempty"`
 	RequestDigest  string          `json:"requestDigest"`
 	// AuthorityEvidenceDigest binds action-specific producer evidence without
 	// exposing that evidence or turning it into a reusable authorization permit.

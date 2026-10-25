@@ -24,6 +24,7 @@ import (
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
 	installationv1 "github.com/xiak/matrix/api/adapter/installation/v1"
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
@@ -53,7 +54,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		t.Fatalf("decode staged IAM bootstrap: %v", err)
 	}
 	if bootstrap.InstallationID != plan.InstallationID ||
-		len(bootstrap.Services) != len(iamv1.AllServicePurposes()) {
+		len(bootstrap.Services) != len(iamv1.BootstrapServicePurposes()) {
 		t.Fatalf("staged IAM bootstrap identity = %#v", bootstrap)
 	}
 	bootstrapDigest, err := iamv1.BootstrapDigest(bootstrap)
@@ -143,6 +144,7 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	}()
 	serviceFiles := map[iamv1.ServicePurpose][]string{
 		iamv1.ServiceIAM:                  {layout.IAMAuditCredential},
+		iamv1.ServicePlatform:             {layout.PlatformIAMCredential},
 		iamv1.ServicePaaS:                 {layout.PaaSIAMCredential, layout.PaaSAuditCredential},
 		iamv1.ServiceAudit:                {layout.AuditIAMCredential},
 		iamv1.ServiceInstallationVerifier: {layout.InstallationVerifierCredential},
@@ -212,21 +214,32 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 	var expected []apphostingv1.ArtifactCatalogEntry
 	for _, image := range plan.Bundle.Manifest.Images {
 		if image.Purpose == release.ImageWorkload {
+			imageIDs := image.RuntimeImageIDs()
+			slices.Sort(imageIDs)
 			expected = append(expected, apphostingv1.ArtifactCatalogEntry{
 				ArtifactDigest: image.SourceDigest,
-				ImageID:        image.ImageID,
+				LocalReference: image.RuntimeReference(),
+				ImageIDs:       imageIDs,
 			})
 		}
 	}
 	slices.SortFunc(expected, func(left, right apphostingv1.ArtifactCatalogEntry) int {
 		return strings.Compare(left.ArtifactDigest, right.ArtifactDigest)
 	})
-	if !slices.Equal(catalog.Entries, expected) {
+	if !slices.EqualFunc(
+		catalog.Entries, expected,
+		func(left, right apphostingv1.ArtifactCatalogEntry) bool {
+			return left.ArtifactDigest == right.ArtifactDigest &&
+				left.LocalReference == right.LocalReference &&
+				slices.Equal(left.ImageIDs, right.ImageIDs)
+		},
+	) {
 		t.Fatalf("workload catalog = %#v, want %#v", catalog.Entries, expected)
 	}
 	apisix := readTestFile(t, plan.Root, layout.APISIXRoutes)
 	for _, required := range []string{
 		"uri: /api/audit/v1/installation:verify",
+		"uri: /api/platform/*",
 		"uri: /api/paas/v1/installation:verify",
 		"uri: /api/managed-services/*",
 		`- "/managed-services/$1"`,
@@ -283,8 +296,10 @@ func TestStageAndConfigurePreserveCredentialsAndExposeOnlyWorkload(t *testing.T)
 		}
 	}
 	if bytes.Contains(apisix, []byte("matrix-service-auth")) ||
-		bytes.Contains(apisix, []byte("apisix-iam-credential")) {
-		t.Fatal("APISIX must preserve user Bearer credentials for IAM and Audit")
+		bytes.Contains(apisix, []byte("apisix-iam-credential")) ||
+		bytes.Contains(apisix, []byte("matrix-devops")) ||
+		bytes.Contains(apisix, []byte("devops-api:8080")) {
+		t.Fatal("PaaS-only APISIX routes leak authority or expose unselected DevOps")
 	}
 	readyStart := bytes.Index(apisix, []byte("id: matrix-ready"))
 	readyEnd := bytes.Index(apisix, []byte("id: matrix-iam"))
@@ -505,6 +520,62 @@ func TestUpgradeConfigurationReplacesOnlyReleaseDerivedFilesAndReplaysBothWays(t
 	}
 }
 
+func TestProductFoundationUpgradeRestoresExactProductlessConfiguration(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine product-foundation configuration targets Linux")
+	}
+	plan := newProductFoundationUpgradePlan(t)
+	source, err := authenticateInstalledPlan(plan.Source)
+	if err != nil {
+		t.Fatalf("authenticate productless predecessor: %v", err)
+	}
+	defer clear(source.TrustBytes)
+	beforeCompose := readTestFile(t, source.Root, layout.Compose)
+	beforeRoutes := readTestFile(t, source.Root, layout.APISIXRoutes)
+	legacyBootstrap := readTestFile(t, source.Root, layout.IAMBootstrap)
+	if !release.IsLegacyProductlessManifest(source.Bundle.Manifest) ||
+		bytes.Contains(beforeRoutes, []byte("matrix-platform")) ||
+		!bytes.Contains(beforeRoutes, []byte(`"paas-ui:8080": 1`)) {
+		t.Fatal("installed predecessor does not expose the fixed productless configuration")
+	}
+
+	if err := stageInstallation(
+		plan.Target, bytes.NewReader(bytes.Repeat([]byte{0x42}, 32)),
+	); err != nil {
+		t.Fatalf("stage product-foundation target: %v", err)
+	}
+	if actual := readTestFile(t, source.Root, layout.IAMBootstrap); !bytes.Equal(actual, legacyBootstrap) {
+		t.Fatal("target staging rewrote the rollback-owned productless bootstrap")
+	}
+	if credential := readTestFile(t, source.Root, layout.PlatformIAMCredential); !validGeneratedCredential(
+		credential, "mx1.", false,
+	) {
+		t.Fatal("target staging did not enroll a bounded Platform credential")
+	}
+	runtimeBoundary := newImageRuntime(plan.Target.Bundle.Manifest, true)
+	if err := configureUpgrade(context.Background(), runtimeBoundary, plan); err != nil {
+		t.Fatalf("configure product-foundation upgrade: %v", err)
+	}
+	currentRoutes := readTestFile(t, source.Root, layout.APISIXRoutes)
+	if !bytes.Contains(currentRoutes, []byte("matrix-platform")) ||
+		!bytes.Contains(currentRoutes, []byte(`"matrix-ui:8080": 1`)) ||
+		bytes.Contains(currentRoutes, []byte(`"paas-ui:8080": 1`)) {
+		t.Fatal("target configuration did not publish the unified product shell")
+	}
+	if err := restoreUpgradeConfiguration(plan); err != nil {
+		t.Fatalf("restore productless predecessor configuration: %v", err)
+	}
+	if actual := readTestFile(t, source.Root, layout.Compose); !bytes.Equal(actual, beforeCompose) {
+		t.Fatal("rollback did not restore byte-exact productless Compose input")
+	}
+	if actual := readTestFile(t, source.Root, layout.APISIXRoutes); !bytes.Equal(actual, beforeRoutes) {
+		t.Fatal("rollback did not restore byte-exact productless APISIX input")
+	}
+	if err := restoreUpgradeConfiguration(plan); err != nil {
+		t.Fatalf("replay productless predecessor restoration: %v", err)
+	}
+}
+
 func TestPrepareReleaseRollbackRemovesOnlyCurrentAndRestoresPreviousConfiguration(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine release rollback targets Linux")
@@ -630,36 +701,74 @@ func TestAutomaticUpgradeRollbackAuthenticatesEachReleaseOnceAndReauthenticatesR
 }
 
 func TestLoadInstallImagesUsesAuthenticatedStdinAndExactIdentities(t *testing.T) {
+	for _, store := range []struct {
+		name            string
+		useSourceDigest bool
+	}{
+		{name: "classic-docker"},
+		{name: "containerd-image-store", useSourceDigest: true},
+	} {
+		t.Run(store.name, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			if err := stageInstallation(plan, rand.Reader); err != nil {
+				t.Fatalf("stage installation: %v", err)
+			}
+			runtimeBoundary := newImageRuntimeForStore(
+				plan.Bundle.Manifest, false, store.useSourceDigest,
+			)
+			if err := loadInstallImages(context.Background(), runtimeBoundary, plan); err != nil {
+				t.Fatalf("load installation images: %v", err)
+			}
+			if len(runtimeBoundary.loads) != len(plan.Bundle.Manifest.Images) ||
+				len(runtimeBoundary.tags) != len(plan.Bundle.Manifest.Images) {
+				t.Fatalf(
+					"image load/tag counts = %d/%d, want %d/%d",
+					len(runtimeBoundary.loads), len(runtimeBoundary.tags),
+					len(plan.Bundle.Manifest.Images), len(plan.Bundle.Manifest.Images),
+				)
+			}
+			for _, image := range plan.Bundle.Manifest.Images {
+				actualID := image.ImageID
+				if store.useSourceDigest {
+					actualID = image.SourceDigest
+				}
+				if !runtimeBoundary.present[actualID] ||
+					runtimeBoundary.references[image.LocalReference] != actualID {
+					t.Fatalf("image %s was not published by exact loaded identity", image.Component)
+				}
+			}
+			for _, arguments := range runtimeBoundary.commands {
+				joined := strings.Join(arguments, " ")
+				if strings.Contains(joined, " pull") || strings.Contains(joined, " build") ||
+					strings.Contains(joined, " push") || strings.Contains(joined, " registry") {
+					t.Fatalf("offline image loader used forbidden provider command %q", joined)
+				}
+			}
+			loads, tags := len(runtimeBoundary.loads), len(runtimeBoundary.tags)
+			if err := loadInstallImages(context.Background(), runtimeBoundary, plan); err != nil {
+				t.Fatalf("replay image loading: %v", err)
+			}
+			if len(runtimeBoundary.loads) != loads || len(runtimeBoundary.tags) != tags {
+				t.Fatal("image-loading replay changed already verified images")
+			}
+		})
+	}
+}
+
+func TestLoadInstallImagesRejectsDriftedPublishedReference(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage installation: %v", err)
 	}
 	runtimeBoundary := newImageRuntime(plan.Bundle.Manifest, false)
-	if err := loadInstallImages(context.Background(), runtimeBoundary, plan); err != nil {
-		t.Fatalf("load installation images: %v", err)
-	}
-	if len(runtimeBoundary.loads) != len(plan.Bundle.Manifest.Images) {
-		t.Fatalf("image load count = %d, want %d", len(runtimeBoundary.loads), len(plan.Bundle.Manifest.Images))
-	}
-	for _, image := range plan.Bundle.Manifest.Images {
-		if !runtimeBoundary.present[image.ImageID] {
-			t.Fatalf("image %s was not verified after load", image.Component)
-		}
-	}
-	for _, arguments := range runtimeBoundary.commands {
-		joined := strings.Join(arguments, " ")
-		if strings.Contains(joined, " pull") || strings.Contains(joined, " build") ||
-			strings.Contains(joined, " tag") || strings.Contains(joined, " push") ||
-			strings.Contains(joined, " registry") {
-			t.Fatalf("offline image loader used forbidden provider command %q", joined)
-		}
-	}
-	loads := len(runtimeBoundary.loads)
-	if err := loadInstallImages(context.Background(), runtimeBoundary, plan); err != nil {
-		t.Fatalf("replay image loading: %v", err)
-	}
-	if len(runtimeBoundary.loads) != loads {
-		t.Fatal("image-loading replay imported already verified images")
+	image := plan.Bundle.Manifest.Images[0]
+	driftedID := "sha256:" + strings.Repeat("0", 64)
+	runtimeBoundary.present[driftedID] = true
+	runtimeBoundary.references[image.LocalReference] = driftedID
+	err := loadInstallImages(context.Background(), runtimeBoundary, plan)
+	if !errors.Is(err, platformcommand.ErrEffectVerification) ||
+		len(runtimeBoundary.loads) != 0 || len(runtimeBoundary.tags) != 0 {
+		t.Fatalf("drifted image reference result = %v, loads/tags = %d/%d", err, len(runtimeBoundary.loads), len(runtimeBoundary.tags))
 	}
 }
 
@@ -673,6 +782,108 @@ func TestLoadInstallImagesKeepsStartedFailureOutcomeUnknown(t *testing.T) {
 	err := loadInstallImages(context.Background(), runtimeBoundary, plan)
 	if !errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) {
 		t.Fatalf("started image load failure = %v", err)
+	}
+}
+
+func TestLoadInstallImagesKeepsStartedTagFailureOutcomeUnknown(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage installation: %v", err)
+	}
+	runtimeBoundary := newImageRuntime(plan.Bundle.Manifest, false)
+	runtimeBoundary.failTag = true
+	err := loadInstallImages(context.Background(), runtimeBoundary, plan)
+	if !errors.Is(err, platformcommand.ErrEffectOutcomeUnknown) {
+		t.Fatalf("started image tag failure = %v", err)
+	}
+}
+
+func TestIAMMigrationArgumentsBindInstallationWithoutCredentialValue(t *testing.T) {
+	plan := newInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage IAM migration fixture: %v", err)
+	}
+	var imageReference string
+	for _, image := range plan.Bundle.Manifest.Images {
+		if image.Component == "iam" {
+			imageReference = image.RuntimeReference()
+			break
+		}
+	}
+	if imageReference == "" {
+		t.Fatal("IAM image identity is absent from fixture")
+	}
+	arguments, err := migrationArguments(
+		plan,
+		plan.Bundle,
+		"matrix-test",
+		"network-test",
+		imageReference,
+		platformMigrations[0],
+		"verify",
+	)
+	if err != nil {
+		t.Fatalf("compile IAM migration arguments: %v", err)
+	}
+	if !hasArgumentPair(
+		arguments,
+		"--env",
+		migrationInstallationIDEnvironment+"="+plan.InstallationID,
+	) || !hasArgumentPair(
+		arguments,
+		"--env",
+		"MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE=/run/matrix/platform-iam-credential",
+	) {
+		t.Fatalf("IAM migration arguments lack fixed installation bindings: %q", strings.Join(arguments, " "))
+	}
+	credential := readTestFile(t, plan.Root, layout.PlatformIAMCredential)
+	if bytes.Contains([]byte(strings.Join(arguments, " ")), credential) {
+		t.Fatal("IAM migration arguments contain platform credential material")
+	}
+}
+
+func TestProductlessMigrationProfileDoesNotRequireFuturePlatformCredential(t *testing.T) {
+	hasMount := func(mounts []migrationMount, relative string) bool {
+		return slices.ContainsFunc(mounts, func(mount migrationMount) bool {
+			return mount.relative == relative
+		})
+	}
+	legacy := releasetest.ProductlessManifest()
+	migrations := platformMigrationsFor(legacy)
+	if len(migrations) != 3 || migrations[0].name != "iam" ||
+		migrations[0].bindInstallationID || len(migrations[0].mounts) != 3 {
+		t.Fatalf("productless migration profile = %#v", migrations)
+	}
+	for _, mount := range migrations[0].mounts {
+		if mount.relative == layout.PlatformIAMCredential ||
+			mount.environment == "MATRIX_MIGRATION_PLATFORM_IAM_CREDENTIAL_FILE" {
+			t.Fatal("productless migration profile requires a future Platform credential")
+		}
+	}
+	current := platformMigrationsFor(releasetest.Manifest())
+	if len(current) != len(platformMigrations) || !current[0].bindInstallationID ||
+		!hasMount(current[0].mounts, layout.PlatformIAMCredential) {
+		t.Fatalf("current migration profile lost its Platform authority binding: %#v", current)
+	}
+	devops := platformMigrationsFor(releasetest.DevOpsManifest())
+	if len(devops) != len(platformMigrations)+1 ||
+		!hasMount(devops[0].mounts, layout.PlatformIAMCredential) ||
+		!hasMount(devops[0].mounts, layout.DevOpsIAMCredential) ||
+		devops[3].component != "devops" ||
+		devops[3].entrypoint != "/matrix/bin/matrix-devops-migrate" ||
+		len(devops[3].mounts) != 6 ||
+		devops[3].mounts[2].relative != layout.DevOpsCheckReporter ||
+		devops[3].mounts[3].relative != layout.DevOpsSourceFetcher ||
+		devops[3].mounts[4].relative != layout.DevOpsSourceObserver ||
+		devops[3].mounts[5].relative != layout.DevOpsWorker {
+		t.Fatalf("DevOps migration profile is incomplete: %#v", devops)
+	}
+}
+
+func TestProductlessAPISIXContractRemainsByteExact(t *testing.T) {
+	digest := sha256.Sum256(legacyProductlessAPISIXStandaloneConfig())
+	if actual := "sha256:" + hex.EncodeToString(digest[:]); actual != "sha256:54ab64082c49cf1ca7e3665c72dc0a89b28831ebf94997c6016f3e70f7a1b1a3" {
+		t.Fatalf("productless APISIX contract drifted: %s", actual)
 	}
 }
 
@@ -1453,7 +1664,20 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine recovery effects target Linux")
 	}
-	plan, expectation := configuredPlatformStartFixture(t)
+	plan, expectation := configuredDevOpsPlatformStartFixture(t)
+	_, sourceTrustRelative, err := sourceTrustPaths(
+		devopsv1.ResourceScope{TenantID: "tenant-recovery"},
+		"https://git.recovery.internal",
+	)
+	if err != nil {
+		t.Fatalf("derive recovery source trust fixture: %v", err)
+	}
+	sourceTrustBundle := readTestFile(t, plan.Root, layout.DevOpsExecutorServerCA)
+	if err := writeManagedOnce(plan.Root, sourceTrustRelative, sourceTrustBundle); err != nil {
+		clear(sourceTrustBundle)
+		t.Fatalf("write recovery source trust fixture: %v", err)
+	}
+	clear(sourceTrustBundle)
 	secret := []byte("selected-backup-secret")
 	secretRelative := filepath.Join(
 		filepath.FromSlash(layout.WorkloadSecretRoot),
@@ -1541,6 +1765,12 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 		t.Fatalf("restored secret differs: %v", err)
 	}
 	clear(restored)
+	trustEntries, err := os.ReadDir(filepath.Join(
+		plan.Root, filepath.FromSlash(layout.DevOpsSourceTrustRoot),
+	))
+	if err != nil || len(trustEntries) != 0 {
+		t.Fatalf("recovery retained host source trust: entries=%d err=%v", len(trustEntries), err)
+	}
 	if runtimeBoundary.recoveryRestores != 1 || runtimeBoundary.postgresOnly ||
 		!runtimeBoundary.started || runtimeBoundary.providerRemovals == removals ||
 		verifier.calls != 1 ||
@@ -1576,7 +1806,9 @@ func TestRecoveryRejectsDifferentProfilesBeforeProviderEffects(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
+			expectation, err := decodePlatformExpectation(
+				installation.topology.ComposeJSON, installation.bundle.Manifest,
+			)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -1980,11 +2212,80 @@ func configuredPlatformStartFixture(
 	if err != nil {
 		t.Fatalf("verify installation configuration: %v", err)
 	}
-	expectation, err := decodePlatformExpectation(installation.topology.ComposeJSON)
+	expectation, err := decodePlatformExpectation(
+		installation.topology.ComposeJSON, installation.bundle.Manifest,
+	)
 	if err != nil {
 		t.Fatalf("decode platform expectation: %v", err)
 	}
 	return plan, expectation
+}
+
+func configuredDevOpsPlatformStartFixture(
+	t *testing.T,
+) (platformcommand.InstallPlan, platformComposeExpectation) {
+	t.Helper()
+	plan := newDevOpsInstallPlan(t)
+	if err := stageInstallation(plan, rand.Reader); err != nil {
+		t.Fatalf("stage DevOps installation: %v", err)
+	}
+	images := newImageRuntime(plan.Bundle.Manifest, true)
+	if err := configureInstallation(context.Background(), images, plan); err != nil {
+		t.Fatalf("configure DevOps installation: %v", err)
+	}
+	installation, err := verifiedInstallationConfiguration(plan)
+	if err != nil {
+		t.Fatalf("verify DevOps installation configuration: %v", err)
+	}
+	expectation, err := decodePlatformExpectation(
+		installation.topology.ComposeJSON, installation.bundle.Manifest,
+	)
+	if err != nil {
+		t.Fatalf("decode DevOps platform expectation: %v", err)
+	}
+	return plan, expectation
+}
+
+func TestDecodePlatformExpectationBindsEveryServiceToSignedImageIdentity(t *testing.T) {
+	plan := newInstallPlan(t)
+	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+		InstallationID:   plan.InstallationID,
+		Root:             "/matrix-installation-root",
+		Listener:         plan.Listener,
+		Port:             plan.Port,
+		NorthboundOrigin: plan.NorthboundOrigin,
+	})
+	if err != nil {
+		t.Fatalf("compile platform expectation fixture: %v", err)
+	}
+	expectation, err := decodePlatformExpectation(compiled.ComposeJSON, plan.Bundle.Manifest)
+	if err != nil {
+		t.Fatalf("decode platform expectation: %v", err)
+	}
+	postgres, found := expectation.Services["postgres"]
+	if !found || len(postgres.ImageIDs) == 0 ||
+		postgres.Labels[release.BuiltImageLabelComponent] != "" {
+		t.Fatalf("upstream PostgreSQL image binding = %#v", postgres)
+	}
+	for name, service := range expectation.Services {
+		if service.Image == "" || len(service.ImageIDs) == 0 {
+			t.Fatalf("service %q has no signed runtime image binding", name)
+		}
+	}
+
+	var document map[string]any
+	if err := json.Unmarshal(compiled.ComposeJSON, &document); err != nil {
+		t.Fatalf("decode Compose fixture: %v", err)
+	}
+	services := document["services"].(map[string]any)
+	services["iam"].(map[string]any)["image"] = postgres.Image
+	drifted, err := json.Marshal(document)
+	if err != nil {
+		t.Fatalf("encode drifted Compose fixture: %v", err)
+	}
+	if _, err := decodePlatformExpectation(drifted, plan.Bundle.Manifest); err == nil {
+		t.Fatal("service-to-signed-image component drift was accepted")
+	}
 }
 
 func TestRejectProjectCollisionRequiresExactInstallationOwnership(t *testing.T) {
@@ -2111,9 +2412,39 @@ func newInstallPlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 	return platformcommand.InstallPlan{
 		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
-		CorrelationID: "cmd-11111111111111111111111111111111",
-		Listener:      "0.0.0.0", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080", Bundle: bundle,
+		CorrelationID:    "cmd-11111111111111111111111111111111",
+		CommandStartedAt: time.Date(2026, 8, 26, 1, 2, 3, 0, time.UTC),
+		Listener:         "0.0.0.0", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080", Bundle: bundle,
 		Trust: fixture.Trust, TrustBytes: trustBytes,
+		SecurityMail: testSecurityMailInput(t),
+	}
+}
+
+func newDevOpsInstallPlan(t *testing.T) platformcommand.InstallPlan {
+	t.Helper()
+	fixture, err := releasetest.WriteDevOps(t.TempDir())
+	if err != nil {
+		t.Fatalf("write DevOps release fixture: %v", err)
+	}
+	trustBytes, err := os.ReadFile(fixture.TrustPath)
+	if err != nil {
+		t.Fatalf("read DevOps release trust: %v", err)
+	}
+	bundle, err := release.VerifyDirectory(fixture.Root, trustBytes)
+	if err != nil {
+		t.Fatalf("verify DevOps release fixture: %v", err)
+	}
+	root := filepath.Clean(t.TempDir())
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatalf("protect DevOps installation fixture root: %v", err)
+	}
+	return platformcommand.InstallPlan{
+		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
+		CorrelationID:    "cmd-11111111111111111111111111111111",
+		CommandStartedAt: time.Date(2026, 9, 9, 4, 0, 0, 0, time.UTC),
+		Listener:         "0.0.0.0", Port: 8080,
+		NorthboundOrigin: "http://matrix.example.test:8080",
+		Bundle:           bundle, Trust: fixture.Trust, TrustBytes: trustBytes,
 		SecurityMail: testSecurityMailInput(t),
 	}
 }
@@ -2185,6 +2516,96 @@ func newUpgradePlan(t *testing.T, profiles ...release.DatabaseProfile) platformc
 	}
 }
 
+func newProductFoundationUpgradePlan(t *testing.T) platformcommand.UpgradePlan {
+	t.Helper()
+	fixtures, err := releasetest.WriteProductFoundationUpgrade(t.TempDir())
+	if err != nil {
+		t.Fatalf("write product-foundation release fixtures: %v", err)
+	}
+	trustBytes, err := os.ReadFile(fixtures[0].TrustPath)
+	if err != nil {
+		t.Fatalf("read product-foundation release trust: %v", err)
+	}
+	legacy, err := release.VerifyInstalledDirectory(fixtures[0].Root, trustBytes)
+	if err != nil {
+		t.Fatalf("verify productless predecessor fixture: %v", err)
+	}
+	targetBundle, err := release.VerifyDirectory(fixtures[1].Root, trustBytes)
+	if err != nil {
+		t.Fatalf("verify product-foundation target fixture: %v", err)
+	}
+	root := filepath.Clean(t.TempDir())
+	if err := os.Chmod(root, 0o700); err != nil {
+		t.Fatalf("protect product-foundation installation root: %v", err)
+	}
+	target := platformcommand.InstallPlan{
+		Root: root, InstallationID: "mxi-11111111111111111111111111111111",
+		CorrelationID: "cmd-11111111111111111111111111111111",
+		Listener:      "0.0.0.0", Port: 8080, Bundle: targetBundle,
+		Trust: fixtures[0].Trust, TrustBytes: trustBytes,
+	}
+	if err := stageInstallation(target, rand.Reader); err != nil {
+		t.Fatalf("prepare product-foundation target staging: %v", err)
+	}
+	if err := configureInstallation(
+		context.Background(), newImageRuntime(target.Bundle.Manifest, true), target,
+	); err != nil {
+		t.Fatalf("prepare current configuration fixture: %v", err)
+	}
+	legacyDestination := filepath.Join(
+		root, filepath.FromSlash(layout.ReleaseDirectory(legacy.Manifest.Release.ID)),
+	)
+	if err := os.CopyFS(legacyDestination, os.DirFS(fixtures[0].Root)); err != nil {
+		t.Fatalf("materialize productless predecessor fixture: %v", err)
+	}
+
+	currentBootstrapBytes := readTestFile(t, root, layout.IAMBootstrap)
+	currentBootstrap, err := iamv1.DecodeBootstrapDocument(bytes.NewReader(currentBootstrapBytes))
+	if err != nil {
+		t.Fatalf("decode current bootstrap fixture: %v", err)
+	}
+	legacyBootstrap := currentBootstrap
+	legacyBootstrap.Services = make(
+		[]iamv1.BootstrapServiceCredential, 0, len(currentBootstrap.Services)-1,
+	)
+	for _, service := range currentBootstrap.Services {
+		if service.Purpose != iamv1.ServicePlatform {
+			legacyBootstrap.Services = append(legacyBootstrap.Services, service)
+		}
+	}
+	legacyBootstrapBytes, err := iamv1.EncodeBootstrapReplayDocument(legacyBootstrap)
+	if err != nil {
+		t.Fatalf("encode productless bootstrap fixture: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(root, filepath.FromSlash(layout.IAMBootstrap)),
+		legacyBootstrapBytes, 0o600,
+	); err != nil {
+		t.Fatalf("write productless bootstrap fixture: %v", err)
+	}
+	if err := os.Remove(
+		filepath.Join(root, filepath.FromSlash(layout.PlatformIAMCredential)),
+	); err != nil {
+		t.Fatalf("remove future Platform credential fixture: %v", err)
+	}
+	if err := replaceReleaseConfiguration(
+		target, target.Bundle.Manifest, legacy.Manifest,
+	); err != nil {
+		t.Fatalf("publish productless predecessor configuration: %v", err)
+	}
+	source := platformcommand.InstalledPlan{
+		Root: root, InstallationID: target.InstallationID,
+		CorrelationID: target.CorrelationID, Listener: target.Listener, Port: target.Port,
+		ReleaseID: legacy.Manifest.Release.ID, ReleaseDigest: legacy.ManifestSHA256,
+		TrustKeyID: target.Trust.KeyID, TrustFingerprint: target.Trust.PublicKeyFingerprint,
+	}
+	return platformcommand.UpgradePlan{
+		Source: source, Target: target,
+		BackupID:  "backup-11111111111111111111111111111111",
+		CreatedAt: time.Date(2026, 9, 7, 6, 0, 0, 0, time.UTC),
+	}
+}
+
 func assertReleaseConfiguration(t *testing.T, plan platformcommand.InstallPlan) {
 	t.Helper()
 	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
@@ -2232,7 +2653,8 @@ func snapshotManagedCredentials(t *testing.T, root string) map[string]string {
 	t.Helper()
 	paths := []string{
 		layout.ReleaseTrust, layout.IAMBootstrap, layout.AuditIAMCredential,
-		layout.IAMAuditCredential, layout.PaaSIAMCredential, layout.PaaSAuditCredential,
+		layout.IAMAuditCredential, layout.PlatformIAMCredential,
+		layout.PaaSIAMCredential, layout.PaaSAuditCredential,
 		layout.InstallationVerifierCredential, layout.AuditCursorKey,
 		layout.PaaSCursorKey, layout.AuditEdgeAssertion, layout.PaaSEdgeAssertion,
 		layout.IAMAccessKeyWrappingKeyring, layout.IAMTOTPKeyring,
@@ -2272,20 +2694,39 @@ func (failingEntropy) Read([]byte) (int, error) {
 
 type imageRuntime struct {
 	present          map[string]bool
+	references       map[string]string
 	payloadToImageID map[string]string
 	commands         [][]string
 	loads            []string
+	tags             [][2]string
 	failLoad         bool
+	failTag          bool
 }
 
 func newImageRuntime(manifest release.Manifest, present bool) *imageRuntime {
+	return newImageRuntimeForStore(manifest, present, false)
+}
+
+func newImageRuntimeForStore(
+	manifest release.Manifest,
+	present bool,
+	useSourceDigest bool,
+) *imageRuntime {
 	result := &imageRuntime{
 		present:          make(map[string]bool, len(manifest.Images)),
+		references:       make(map[string]string, len(manifest.Images)),
 		payloadToImageID: make(map[string]string, len(manifest.Images)),
 	}
 	for _, image := range manifest.Images {
-		result.present[image.ImageID] = present
-		result.payloadToImageID["matrix-release-payload:"+image.ArchivePath] = image.ImageID
+		actualID := image.ImageID
+		if useSourceDigest && image.LocalReference != "" {
+			actualID = image.SourceDigest
+		}
+		result.present[actualID] = present
+		if present {
+			result.references[image.RuntimeReference()] = actualID
+		}
+		result.payloadToImageID["matrix-release-payload:"+image.ArchivePath] = actualID
 	}
 	return result
 }
@@ -2301,7 +2742,11 @@ func (runtimeBoundary *imageRuntime) Run(
 		if len(arguments) != 5 || input != nil {
 			return nil, false, errors.New("invalid image inspect command")
 		}
-		imageID := arguments[4]
+		reference := arguments[4]
+		imageID := reference
+		if resolved, found := runtimeBoundary.references[reference]; found {
+			imageID = resolved
+		}
 		if !runtimeBoundary.present[imageID] {
 			return nil, true, errors.New("image absent")
 		}
@@ -2324,6 +2769,18 @@ func (runtimeBoundary *imageRuntime) Run(
 		}
 		runtimeBoundary.present[imageID] = true
 		return nil, true, nil
+	case len(arguments) == 4 && arguments[0] == "image" && arguments[1] == "tag":
+		if input != nil || !runtimeBoundary.present[arguments[2]] {
+			return nil, false, errors.New("image tag source is absent")
+		}
+		runtimeBoundary.tags = append(
+			runtimeBoundary.tags, [2]string{arguments[2], arguments[3]},
+		)
+		if runtimeBoundary.failTag {
+			return nil, true, errors.New("image tag interrupted")
+		}
+		runtimeBoundary.references[arguments[3]] = arguments[2]
+		return nil, true, nil
 	default:
 		return nil, false, fmt.Errorf("unexpected Docker command: %q", strings.Join(arguments, " "))
 	}
@@ -2334,7 +2791,7 @@ type scriptedRuntime struct {
 }
 
 type migrationRuntime struct {
-	images         map[string]bool
+	images         map[string]string
 	project        string
 	installation   string
 	release        string
@@ -2452,7 +2909,8 @@ func newPlatformCleanupRuntime(
 		labels["com.docker.compose.oneoff"] = "False"
 		runtimeBoundary.containers[identity] = platformContainerInspection{
 			ID: identity, Name: "/" + expectation.Name + "-" + serviceName + "-1",
-			Image: expected.Image, Config: platformContainerConfig{Labels: labels},
+			Image:  expected.ImageIDs[0],
+			Config: platformContainerConfig{Labels: labels, Image: expected.Image},
 		}
 	}
 	for logicalName, expected := range expectation.Networks {
@@ -2475,8 +2933,10 @@ func newPlatformCleanupRuntime(
 	slices.Sort(names)
 	selected := migrations[names[0]]
 	runtimeBoundary.containers[runtimeBoundary.migrationID] = platformContainerInspection{
-		ID: runtimeBoundary.migrationID, Name: "/" + names[0], Image: selected.imageID,
-		Config: platformContainerConfig{Labels: cloneTestLabels(selected.labels)},
+		ID: runtimeBoundary.migrationID, Name: "/" + names[0], Image: selected.imageIDs[0],
+		Config: platformContainerConfig{
+			Labels: cloneTestLabels(selected.labels), Image: selected.imageReference,
+		},
 	}
 	return runtimeBoundary
 }
@@ -3002,7 +3462,7 @@ func (runtimeBoundary *platformStartRuntime) authenticationRecoveryContainer(
 	container := platformContainerInspection{
 		ID: identity, Name: "/" + name, Image: runtimeBoundary.iamImageID,
 		Config: platformContainerConfig{
-			Labels: labels, User: user, Env: environment,
+			Image: runtimeBoundary.iamImageID, Labels: labels, User: user, Env: environment,
 			Entrypoint: []string{entrypoint}, Cmd: []string{mode},
 		},
 		State:  platformContainerState{Status: "created"},
@@ -3406,9 +3866,9 @@ func cloneTestLabels(source map[string]string) map[string]string {
 }
 
 func newMigrationRuntime(plan platformcommand.InstallPlan, project string) *migrationRuntime {
-	images := make(map[string]bool, len(plan.Bundle.Manifest.Images))
+	images := make(map[string]string, len(plan.Bundle.Manifest.Images))
 	for _, image := range plan.Bundle.Manifest.Images {
-		images[image.ImageID] = true
+		images[image.RuntimeReference()] = image.RuntimeImageIDs()[0]
 	}
 	return &migrationRuntime{
 		images: images, project: project, installation: plan.InstallationID,
@@ -3429,8 +3889,8 @@ func (runtimeBoundary *migrationRuntime) Run(
 	case "compose":
 		if !hasArgumentPair(arguments, "--pull", "never") ||
 			!slices.Contains(arguments, "--no-build") ||
-			arguments[len(arguments)-1] != "postgres" {
-			return nil, true, errors.New("PostgreSQL Compose start is not offline")
+			(arguments[len(arguments)-1] != "postgres" && arguments[len(arguments)-1] != "iam") {
+			return nil, true, errors.New("migration Compose start is not offline")
 		}
 		runtimeBoundary.composeCalls++
 		return nil, true, nil
@@ -3445,8 +3905,10 @@ func (runtimeBoundary *migrationRuntime) Run(
 			)), true, nil
 		}
 	case "image":
-		if len(arguments) == 5 && arguments[1] == "inspect" && runtimeBoundary.images[arguments[4]] {
-			return []byte(arguments[4] + "|linux|amd64\n"), true, nil
+		if len(arguments) == 5 && arguments[1] == "inspect" {
+			if imageID, found := runtimeBoundary.images[arguments[4]]; found {
+				return []byte(imageID + "|linux|amd64\n"), true, nil
+			}
 		}
 	case "run":
 		runtimeBoundary.runs = append(runtimeBoundary.runs, slices.Clone(arguments))

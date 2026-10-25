@@ -694,10 +694,17 @@ func (value *transaction) ReadAuditEvidence(
 	if err != nil {
 		return identityaccess.AuditEvidence{}, false, mapDatabaseError("read historical IAM Audit evidence", err)
 	}
-	if iamv1.DecodeRequest(bytes.NewReader(storedEvent), &result.Event) != nil {
-		return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+	if len(storedEvent) == 0 {
+		if len(decision) != 0 || decisionContract != nil {
+			return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+		}
+		result.ScopeOnly = true
+	} else {
+		if iamv1.DecodeRequest(bytes.NewReader(storedEvent), &result.Event) != nil {
+			return identityaccess.AuditEvidence{}, false, identityaccess.ErrUnavailable
+		}
+		result.Event.OccurredAt = result.Event.OccurredAt.UTC()
 	}
-	result.Event.OccurredAt = result.Event.OccurredAt.UTC()
 	if len(decision) > 0 {
 		var decoded iamv1.AuthorizationDecision
 		if decisionContract == nil || iamv1.DecodeRequest(bytes.NewReader(decision), &decoded) != nil {

@@ -4288,7 +4288,7 @@ func currentAuthorizationProfileList(t *testing.T) AuthorizationProfileList {
 func TestAuthorizationProfileListCommitmentsAndWholeResponseBudget(t *testing.T) {
 	value := currentAuthorizationProfileList(t)
 	encoded, err := json.Marshal(value)
-	if err != nil || ValidateAuthorizationProfileList(value) != nil || int64(len(encoded)) > MaxRequestBytes {
+	if err != nil || ValidateAuthorizationProfileList(value) != nil || int64(len(encoded)) > MaxAuthorizationProfileListBytes {
 		t.Fatal("current complete product directory exceeds its response contract")
 	}
 	t.Logf("complete current product directory: %d products, %d bytes", len(value.Items), len(encoded))
@@ -4317,7 +4317,7 @@ func TestAuthorizationProfileListCommitmentsAndWholeResponseBudget(t *testing.T)
 	}
 	for _, body := range []string{
 		string(encoded) + `{}`,
-		strings.Repeat(" ", int(MaxRequestBytes)) + string(encoded),
+		strings.Repeat(" ", int(MaxAuthorizationProfileListBytes)) + string(encoded),
 		strings.Replace(string(encoded), `"items":`, `"permit":true,"items":`, 1),
 		strings.Replace(string(encoded), `"items":`, `"items":[],"items":`, 1),
 		strings.Replace(string(encoded), `"contentDigest":`, `"callingService":"FORGED","contentDigest":`, 1),
@@ -4326,26 +4326,6 @@ func TestAuthorizationProfileListCommitmentsAndWholeResponseBudget(t *testing.T)
 		if _, err := DecodeAuthorizationProfileList(strings.NewReader(body)); err == nil {
 			t.Fatal("directory decoder accepted an unknown field, ambiguity or unbounded response")
 		}
-	}
-	// Legitimate individual declarations can collectively exceed the ordinary
-	// wire budget. Reject the whole response; never truncate its product set.
-	value.Items = nil
-	for index := 0; index < MaxAuthorizationProfileListItems; index++ {
-		profile, _ := LookupAuthorizationProfile(ProductIAM)
-		profile.Product = ProductID(fmt.Sprintf("product-%02d", index))
-		for actionIndex := range profile.Actions {
-			_, suffix, _ := strings.Cut(string(profile.Actions[actionIndex].Action), ".")
-			profile.Actions[actionIndex].Action = Action(string(profile.Product) + "." + suffix)
-		}
-		_, digest, err := CanonicalizeAuthorizationProfile(profile)
-		if err != nil {
-			t.Fatal("whole-budget fixture must contain individually valid profiles")
-		}
-		value.Items = append(value.Items, AuthorizationProfileEntry{Profile: profile, ContentDigest: digest})
-	}
-	oversized, _ := json.Marshal(value)
-	if int64(len(oversized)) <= MaxRequestBytes || ValidateAuthorizationProfileList(value) == nil {
-		t.Fatal("per-profile limits replaced the complete response budget")
 	}
 }
 
@@ -6277,6 +6257,9 @@ func TestIAMActionCatalogHasOneResourceKind(t *testing.T) {
 	if _, known := ResourceKindForAction(Action("paas.unregistered.execute")); known {
 		t.Fatal("unregistered action has a resource binding")
 	}
+	if kind, known := ResourceKindForAction(ActionDevOpsLogRead); !known || kind != ResourcePipelineRun {
+		t.Fatalf("DevOps log read resource=%q known=%t, want exact PipelineRun", kind, known)
+	}
 }
 
 func TestIAMActionDefinitionsDeclareProductServiceAndScope(t *testing.T) {
@@ -6303,6 +6286,7 @@ func TestIAMActionDefinitionsDeclareProductServiceAndScope(t *testing.T) {
 		{ActionAuditPlatformRecordRead, ProductAudit, ServiceAudit, ResourceAuditRecord, AuthorityScopeInstallation, false},
 		{ActionAuditIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeTenant, false},
 		{ActionAuditPlatformIntegrityVerify, ProductAudit, ServiceAudit, ResourceAuditChain, AuthorityScopeInstallation, false},
+		{ActionPlatformProductRead, ProductPlatform, ServicePlatform, ResourceInstallation, AuthorityScopeTenant, false},
 		{ActionInstallationVerify, ProductInstallation, ServiceInstallationVerifier, ResourceInstallation, AuthorityScopeInstallationProbe, false},
 	} {
 		if got, known := LookupActionDefinition(want.Action); !known || got != want {
@@ -6312,7 +6296,8 @@ func TestIAMActionDefinitionsDeclareProductServiceAndScope(t *testing.T) {
 
 	callers := map[ProductID]ServicePurpose{
 		ProductIAM: ServiceIAM, ProductPaaS: ServicePaaS, ProductManagedService: ServicePaaS,
-		ProductAudit: ServiceAudit, ProductInstallation: ServiceInstallationVerifier,
+		ProductDevOps: ServiceDevOps, ProductAudit: ServiceAudit, ProductPlatform: ServicePlatform,
+		ProductInstallation: ServiceInstallationVerifier,
 	}
 	seen := make(map[Action]bool)
 	for _, definition := range AllActionDefinitions() {
@@ -9019,6 +9004,68 @@ func TestIAMOpenAPIUserManagementCompletionIsReadOnlyAndExact(t *testing.T) {
 	}
 	if responses["201"] != nil || responses["409"] != nil {
 		t.Fatal("user management completion implies a write or replacement intent")
+	}
+}
+
+func TestIAMLegacyBootstrapIsReplayOnly(t *testing.T) {
+	document := decodeIAMExample[BootstrapDocument](t, "examples/bootstrap-document.json")
+	legacyServices := make([]BootstrapServiceCredential, 0, len(document.Services)-1)
+	for _, service := range document.Services {
+		if service.Purpose != ServicePlatform {
+			legacyServices = append(legacyServices, service)
+		}
+	}
+	document.Services = legacyServices
+
+	encoded, err := EncodeBootstrapReplayDocument(document)
+	if err != nil {
+		t.Fatalf("encode legacy bootstrap replay: %v", err)
+	}
+	if _, err := DecodeBootstrapDocument(bytes.NewReader(encoded)); err == nil {
+		t.Fatal("ordinary bootstrap decoder accepted a legacy service inventory")
+	}
+	decoded, err := DecodeBootstrapReplayDocument(bytes.NewReader(encoded))
+	if err != nil || !IsLegacyBootstrapReplayDocument(decoded) {
+		t.Fatalf("decode legacy bootstrap replay: legacy=%t err=%v", IsLegacyBootstrapReplayDocument(decoded), err)
+	}
+	if _, err := EncodeBootstrapDocument(decoded); err == nil {
+		t.Fatal("ordinary bootstrap encoder accepted a legacy service inventory")
+	}
+
+	reordered := document
+	reordered.Services = append([]BootstrapServiceCredential(nil), document.Services...)
+	reordered.Services[0], reordered.Services[1] = reordered.Services[1], reordered.Services[0]
+	if ValidateBootstrapReplayDocument(reordered) == nil || IsLegacyBootstrapReplayDocument(reordered) {
+		t.Fatal("legacy bootstrap replay accepted a reordered service inventory")
+	}
+	changed := document
+	changed.Services = append([]BootstrapServiceCredential(nil), document.Services...)
+	changed.Services[1].Purpose = ServicePlatform
+	if ValidateBootstrapReplayDocument(changed) == nil {
+		t.Fatal("legacy bootstrap replay accepted a changed service inventory")
+	}
+}
+
+func TestIAMOptionalServiceCatalogDoesNotExpandFoundationBootstrap(t *testing.T) {
+	all := AllServicePurposes()
+	bootstrap := BootstrapServicePurposes()
+	if len(all) != len(bootstrap)+1 || all[3] != ServiceDevOps {
+		t.Fatalf("service purpose catalog = %#v", all)
+	}
+	for _, purpose := range bootstrap {
+		if purpose == ServiceDevOps {
+			t.Fatal("optional DevOps service was included in Foundation bootstrap")
+		}
+	}
+	document := decodeIAMExample[BootstrapDocument](t, "examples/bootstrap-document.json")
+	if err := ValidateBootstrapDocument(document); err != nil {
+		t.Fatalf("fixed Foundation bootstrap rejected after catalog expansion: %v", err)
+	}
+	credential := document.Services[0]
+	credential.Purpose = ServiceDevOps
+	document.Services = append(document.Services, credential)
+	if err := ValidateBootstrapDocument(document); err == nil {
+		t.Fatal("Foundation bootstrap accepted an optional DevOps credential")
 	}
 }
 
