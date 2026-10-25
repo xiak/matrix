@@ -992,6 +992,15 @@ tested same-profile upgrade/rollback counterpart. Neither package admits a
 cross-profile transition, arbitrary historical N-1 operation, installed UI
 journey or production availability claim.
 
+After delivery verification, exact task-label queries on the acceptance host
+returned zero containers, volumes and networks. The single task-owned outer
+engine, its exclusive data volume and the validated 87 GiB temporary task tree
+were removed without `prune`, wildcard or parent-directory deletion. The
+host's `/data` filesystem then reported 303 GiB available; neither the host nor
+its shared Docker service was restarted. The independently rehashed Windows
+delivery archives, public trust and eleven small sanitized runtime-evidence
+files remain outside the removed test boundary.
+
 ### IAM86 Account-lifecycle release-consumer evidence
 
 On 2026-10-16, fixed source
