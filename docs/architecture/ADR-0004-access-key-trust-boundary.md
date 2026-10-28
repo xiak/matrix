@@ -15,7 +15,7 @@ fake login Session or expose that material to every product service.
 This is a distinct cross-context security decision, not a new service or a
 replacement for [ADR-0002](ADR-0002-product-boundary.md). Product lifecycle,
 wire protocol, limits, implementation and evidence belong exclusively to
-[FEAT-IAM-007](../../IAM/FEAT-IAM-007-programmatic-credentials.md).
+[FEAT-IAM-007](../features/iam/FEAT-IAM-007-programmatic-credentials.md).
 
 ## Decision
 

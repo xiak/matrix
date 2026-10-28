@@ -97,7 +97,7 @@ architecture, package or runtime dependency.
 | --- | --- | --- |
 | `Select` Tab/Shift+Tab acceptance and close behavior, with Escape cancellation tests | `REUSE` | Correct the existing themed control's keyboard trap while retaining its dialog portal, disabled choices, form submission and theme ownership. |
 | `TableToolbar` reset focus and behavioral assertions | `REUSE` | Restore focus to the stable filter trigger after its reset button disappears; preserve the keyword and disclosed conditions. |
-| Platform-shell replacement, narrowed product catalogue and CAM/preview omission | `REJECT` | These changes do not preserve the cloud UX release's approved service discovery, complete MOCK workspaces and one-click preview. |
+| Platform-shell replacement, narrowed product catalogue and IAM-preview omission | `REJECT` | These changes do not preserve the cloud UX release's approved service discovery, complete MOCK workspaces and one-click preview. |
 | Viewport-only brand breakpoint and suppression of shell actions by every local heading | `REJECT` | This console already owns container-responsive branding; its local commands and global refresh are not interchangeable. |
 
 ## IAM fixed-contract integration

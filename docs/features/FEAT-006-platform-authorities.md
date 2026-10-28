@@ -1,6 +1,6 @@
 # FEAT-006: Platform IAM and Audit authorities
 
-- Status: Accepted foundation; minimal multi-tenant slice accepted on `feat/iam-xxx`; the independent IAM replacement is owned by `IAM/` on `feat/iam` and is not accepted here
+- Status: Accepted foundation; minimal multi-tenant slice accepted on `feat/iam-xxx`; the independent IAM replacement is owned by `docs/features/iam/` on `feat/iam` and is not accepted here
 - Target release: Private Application PaaS v0.1 multi-tenant extension
 - Target design date: 2026-08-25
 - IAM API contract: `iam.matrix.xiak.com/v1`
@@ -8,7 +8,6 @@
 - Phase 3 extension: installation-scoped IAM authority implemented; host-resource consumption and offline upgrade acceptance remain in FEAT-008
 - Multi-tenant extension: accounts, primary/platform credential protection, historical producer proof, tenant lifecycle, original-primary recovery and password-session policy pass backend, signed lifecycle and installed-browser gates; keyboard-only usability verification is deferred by the user in FEAT-007
 - Follow-up: original installation-primary local credential recovery passes the IAM/Audit backend gates; signed installation/CLI integration remains separate and unaccepted, without reopening the accepted multi-tenant evidence
-- IAM refactor source baseline: fixed product reference `1ad6884ff1f844429b477d5578a039ec809211d7`, independently checked against the public access-management documentation on 2026-09-11
 
 ## Outcome
 
@@ -29,7 +28,7 @@ boundaries remain separate. The target is fixed before donor inspection.
 
 The next IAM product vocabulary, requirements, architecture, detailed designs
 and implementation slices are owned by
-[`IAM/FEAT-IAM-000`](../../IAM/FEAT-IAM-000-product-contract.md) and its linked
+[`docs/features/iam/FEAT-IAM-000`](iam/FEAT-IAM-000-product-contract.md) and its linked
 FEATs. This document retains the accepted foundation, multi-tenant and local
 recovery evidence; it does not claim acceptance of the replacement.
 
@@ -352,12 +351,9 @@ resource groups, per-project/per-instance policies, cross-account role trust,
 SSO, and MFA are outside this password-only slice. IAM isolation is not a claim
 of dedicated host, storage, or network isolation.
 
-This product mapping follows the distinction between
-[AWS accounts and IAM users](https://docs.aws.amazon.com/IAM/latest/UserGuide/id_users.html),
-[Tencent CAM user types](https://cloud.tencent.com/document/product/598/13665),
-and [Alibaba RAM users](https://help.aliyun.com/zh/ram/user-guide/overview-of-ram-users).
-[AWS account isolation](https://docs.aws.amazon.com/accounts/latest/reference/welcome-multiple-accounts.html)
-is a boundary reference, not a claim that Matrix implements AWS Organizations.
+This product mapping is owned by the Matrix Account, RootIdentity and User
+contracts. External provider account and user categories are neither aliases
+nor compatibility targets for these types.
 
 Each organization has one immutable primary account and organization ID.
 Its optional login alias is a separately managed, globally unique lowercase
@@ -1252,9 +1248,9 @@ the current direct-administrator-grant contract. Database engine/data access
 also remains separate from PaaS control-plane authorization.
 
 Local TOTP MFA is now owned by
-[IAM-009](../../IAM/FEAT-IAM-009-security-governance.md), with the approved
+[IAM-009](iam/FEAT-IAM-009-security-governance.md), with the approved
 minimal security-email increment in
-[IAM-012](../../IAM/FEAT-IAM-012-external-integrations.md). These are not
+[IAM-012](iam/FEAT-IAM-012-external-integrations.md). These are not
 accepted by the original password-only milestone; their implementation and
 release evidence remain with those owners, not a blanket MFA deferral here.
 
