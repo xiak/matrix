@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { ConsoleRouteLayout } from "./ConsoleRouteLayout";
 
 const route = vi.hoisted(() => ({ pathname: "/console/" }));
@@ -16,13 +17,16 @@ vi.mock("../renderers/ConsoleShellRenderer", () => ({
 
 afterEach(() => {
   cleanup();
+  localStorage.clear();
   route.pathname = "/console/";
 });
 
 describe("ConsoleRouteLayout", () => {
   it("keeps one console shell while the child route changes its scene", () => {
     const view = render(
-      <ConsoleRouteLayout><span>overview route</span></ConsoleRouteLayout>
+      <LocaleProvider>
+        <ConsoleRouteLayout><span>overview route</span></ConsoleRouteLayout>
+      </LocaleProvider>
     );
     const shell = screen.getByTestId("section");
     expect(screen.getByTestId("section").textContent).toBe("overview");
@@ -30,7 +34,9 @@ describe("ConsoleRouteLayout", () => {
 
     route.pathname = "/console/quotas/";
     view.rerender(
-      <ConsoleRouteLayout><span>quota route</span></ConsoleRouteLayout>
+      <LocaleProvider>
+        <ConsoleRouteLayout><span>quota route</span></ConsoleRouteLayout>
+      </LocaleProvider>
     );
 
     expect(screen.getByTestId("section")).toBe(shell);

@@ -201,7 +201,7 @@ const previewAuthorizationProfiles: AuthorizationProfileEntry[] = [
 
 let account: Account = {
   id: "org-xiak",
-  displayName: "Xiak 科技",
+  displayName: "Xiak Technology",
   status: "ACTIVE",
   rootIdentity: { principalId: "principal-admin", loginName: "admin" },
   loginAlias: "xiak-cloud",
@@ -210,14 +210,14 @@ let account: Account = {
 
 let users: User[] = [
   {
-    id: "principal-lin", accountId: "org-xiak", loginName: "lin", displayName: "林工程师", status: "ACTIVE", mustChangePassword: false, resourceVersion: 3
+    id: "principal-lin", accountId: "org-xiak", loginName: "lin", displayName: "Platform Engineer", status: "ACTIVE", mustChangePassword: false, resourceVersion: 3
   },
   {
-    id: "principal-chen", accountId: "org-xiak", loginName: "chen", displayName: "陈审计员", status: "ACTIVE", mustChangePassword: false, resourceVersion: 2
+    id: "principal-chen", accountId: "org-xiak", loginName: "chen", displayName: "Audit Reviewer", status: "ACTIVE", mustChangePassword: false, resourceVersion: 2
   },
   ...[
-    { loginName: "qiao", displayName: "乔发布工程师" },
-    { loginName: "wu", displayName: "吴新同事" }
+    { loginName: "qiao", displayName: "Release Engineer" },
+    { loginName: "wu", displayName: "New Teammate" }
   ].map(({ loginName, displayName }) => ({
     id: `principal-${loginName}`, accountId: "org-xiak", loginName, displayName, status: "ACTIVE" as const, mustChangePassword: false, resourceVersion: 1
   }))
@@ -227,7 +227,7 @@ let accounts: Account[] = [
   account,
   {
     id: "org-sandbox",
-    displayName: "体验沙箱",
+    displayName: "Preview Sandbox",
     status: "ACTIVE",
     rootIdentity: { principalId: "principal-sandbox-admin", loginName: "sandbox-admin" },
     loginAlias: "sandbox",
@@ -659,7 +659,7 @@ function rootUser(): User {
     id: account.rootIdentity.principalId,
     accountId: account.id,
     loginName: account.rootIdentity.loginName,
-    displayName: "平台管理员",
+    displayName: "Platform Administrator",
     status: "ACTIVE",
     mustChangePassword: false,
     resourceVersion: 5

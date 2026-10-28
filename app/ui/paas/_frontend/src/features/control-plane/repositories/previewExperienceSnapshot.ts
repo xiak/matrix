@@ -202,3 +202,59 @@ export const previewExperienceSnapshot: ExperienceSnapshot = {
     ]
   }
 };
+
+const englishPreviewText = new Map<string, string>([
+  ["Xiak 科技", "Xiak Technology"],
+  ["全部项目", "All projects"],
+  ["电商中台 · 生产", "Commerce platform · Production"],
+  ["平台研发 · 测试", "Platform engineering · Test"],
+  ["全部区域", "All regions"],
+  ["上海私有云 A 区", "Shanghai private cloud · Zone A"],
+  ["上海私有云 B 区", "Shanghai private cloud · Zone B"],
+  ["订单主库", "Orders primary database"],
+  ["托管数据库", "Managed databases"],
+  ["结算 API", "Checkout API"],
+  ["应用托管", "Application hosting"],
+  ["研发效能", "DevOps"],
+  ["全局", "Global"],
+  ["支付服务", "Payment service"],
+  ["可观测平台", "Observability"],
+  ["云基础平台", "Cloud foundation"],
+  ["Matrix 开发库", "Matrix development database"],
+  ["v2.9.0 · 待发布", "v2.9.0 · Pending release"],
+  ["v2.8.0 · 当前", "v2.8.0 · Current"],
+  ["发布应用", "Deploy application"],
+  ["结算 API · v2.8.0", "Checkout API · v2.8.0"],
+  ["运行流水线", "Run pipeline"],
+  ["扩容服务配额", "Scale service quota"],
+  ["订单主库 · 生产型", "Orders primary database · Production"],
+  ["部署基础设施", "Deploy infrastructure"],
+  ["生产", "Production"],
+  ["测试", "Test"],
+  ["电商中台", "Commerce platform"],
+  ["支付服务 5xx 错误率持续升高", "Payment service 5xx error rate is rising"],
+  ["SRE 值班组", "SRE on-call"],
+  ["计算节点磁盘使用率超过 80%", "Compute node disk utilization exceeds 80%"],
+  ["平台运维组", "Platform operations"],
+  ["生产流水线耗时偏离近期基线", "Production pipeline duration is outside its recent baseline"],
+  ["研发效能组", "DevOps team"],
+  ["上海私有云 B 区计划维护通知", "Scheduled maintenance for Shanghai private cloud · Zone B"],
+  ["MOCK 通知：计划于 2026-09-10 02:00–03:00 UTC 进行基础设施维护。请提前检查关键工作负载的冗余配置；此样例不会触发实际维护。", "MOCK notice: infrastructure maintenance is scheduled for Sep 10, 2026, 02:00–03:00 UTC. Review redundancy for critical workloads in advance; this preview never schedules real maintenance."],
+  ["Matrix Cloud 体验环境已就绪", "Matrix Cloud preview environment is ready"],
+  ["欢迎体验统一云控制台。当前服务、告警和任务均为 MOCK 数据，不会写入真实平台。消息已读状态只在当前体验会话保留。", "Welcome to the unified cloud console. Services, alerts and tasks are MOCK data and never write to a real platform. Read state remains in this preview session only."]
+]);
+
+function translatePreviewValue(value: unknown): unknown {
+  if (typeof value === "string") return englishPreviewText.get(value) ?? value;
+  if (Array.isArray(value)) return value.map(translatePreviewValue);
+  if (value && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, translatePreviewValue(item)]));
+  }
+  return value;
+}
+
+const englishPreviewExperienceSnapshot = translatePreviewValue(previewExperienceSnapshot) as ExperienceSnapshot;
+
+export function previewExperienceSnapshotForLocale(locale: "zh-CN" | "en"): ExperienceSnapshot {
+  return locale === "en" ? englishPreviewExperienceSnapshot : previewExperienceSnapshot;
+}
