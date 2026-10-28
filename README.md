@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="app/ui/paas/_frontend/public/brand/matrix-horizontal-cyan.svg" alt="Matrix Cloud" width="420" />
+<img src=".github/assets/readme/matrix-horizontal-black.png" alt="Matrix Cloud" width="420" />
 
 ### Your cloud. In control. Every possibility. Connected.
 
