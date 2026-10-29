@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -38,66 +39,66 @@ import (
 )
 
 const (
-	databaseDSNFileEnvironment           = "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE"
-	workerIDEnvironment                  = "MATRIX_PAAS_WORKER_ID"
-	bindingRefEnvironment                = "MATRIX_PAAS_WORKER_BINDING_REF"
-	bindingRootEnvironment               = "MATRIX_PAAS_WORKER_BINDING_ROOT"
-	secretRootEnvironment                = "MATRIX_PAAS_WORKER_SECRET_ROOT"
-	artifactCatalogEnvironment           = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
-	installationIDEnvironment            = "MATRIX_PAAS_WORKER_INSTALLATION_ID"
-	nodeConnectionsFileEnvironment       = "MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE"
-	enrollmentControllerCertEnvironment  = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
-	enrollmentControllerKeyEnvironment   = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
-	enrollmentControllerTrustEnvironment = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE"
-	executionTenantEnvironment           = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
-	machineBindingEnvironment            = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
-	listenAddressEnvironment             = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
-	managedPostgresImageEnvironment      = "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE"
-	managedMySQLImageEnvironment         = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE"
-	managedElasticsearchImageEnvironment = "MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE"
-	managedRabbitMQImageEnvironment      = "MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE"
-	pollInterval                         = 250 * time.Millisecond
-	executionTargetRefresh               = time.Minute
-	executionTargetMaximumAge            = 5 * time.Minute
-	executionTargetTimeout               = 5 * time.Second
-	executionTargetRefreshBackoff        = time.Second
-	executionProfileStartupAttempts      = 6
-	executionProfileStartupBackoff       = time.Second
-	runtimeObservationInterval           = 5 * time.Second
-	runtimeFailureBackoff                = 2 * time.Second
-	runtimeMaximumObservationAge         = 5 * time.Second
-	runtimeMaximumPastClockSkew          = 30 * time.Second
-	runtimeValidityDuration              = 15 * time.Second
-	operationLeaseDuration               = 30 * time.Second
-	effectTimeout                        = 20 * time.Second
-	reconcileBackoff                     = time.Second
-	maximumOperationAttempts             = 10
-	placementDecisionTTL                 = 5 * time.Minute
-	pendingCapacityClaimTTL              = 10 * time.Minute
-	maximumArtifactCatalogBytes          = 1024 * 1024
+	databaseDSNFileEnvironment              = "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE"
+	workerIDEnvironment                     = "MATRIX_PAAS_WORKER_ID"
+	bindingRefEnvironment                   = "MATRIX_PAAS_WORKER_BINDING_REF"
+	bindingRootEnvironment                  = "MATRIX_PAAS_WORKER_BINDING_ROOT"
+	secretRootEnvironment                   = "MATRIX_PAAS_WORKER_SECRET_ROOT"
+	artifactCatalogEnvironment              = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
+	installationIDEnvironment               = "MATRIX_PAAS_WORKER_INSTALLATION_ID"
+	nodeConnectionsFileEnvironment          = "MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE"
+	enrollmentControllerCertEnvironment     = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
+	enrollmentControllerKeyEnvironment      = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
+	enrollmentControllerTrustEnvironment    = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE"
+	executionTenantEnvironment              = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
+	machineBindingEnvironment               = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
+	listenAddressEnvironment                = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
+	managedPostgresImageIDsEnvironment      = "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS"
+	managedMySQLImageIDsEnvironment         = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS"
+	managedElasticsearchImageIDsEnvironment = "MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS"
+	managedRabbitMQImageIDsEnvironment      = "MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS"
+	pollInterval                            = 250 * time.Millisecond
+	executionTargetRefresh                  = time.Minute
+	executionTargetMaximumAge               = 5 * time.Minute
+	executionTargetTimeout                  = 5 * time.Second
+	executionTargetRefreshBackoff           = time.Second
+	executionProfileStartupAttempts         = 6
+	executionProfileStartupBackoff          = time.Second
+	runtimeObservationInterval              = 5 * time.Second
+	runtimeFailureBackoff                   = 2 * time.Second
+	runtimeMaximumObservationAge            = 5 * time.Second
+	runtimeMaximumPastClockSkew             = 30 * time.Second
+	runtimeValidityDuration                 = 15 * time.Second
+	operationLeaseDuration                  = 30 * time.Second
+	effectTimeout                           = 20 * time.Second
+	reconcileBackoff                        = time.Second
+	maximumOperationAttempts                = 10
+	placementDecisionTTL                    = 5 * time.Minute
+	pendingCapacityClaimTTL                 = 10 * time.Minute
+	maximumArtifactCatalogBytes             = 1024 * 1024
 )
 
 const runtimeObservationTimeout = 10 * time.Second
 
 type configuration struct {
-	databaseDSNFile           string
-	workerID                  string
-	bindingRef                string
-	bindingRoot               string
-	secretRoot                string
-	artifactCatalog           string
-	installationID            string
-	nodeConnectionsFile       string
-	enrollmentControllerCert  string
-	enrollmentControllerKey   string
-	enrollmentControllerTrust string
-	executionTenant           paasv1.TenantID
-	machineBinding            string
-	listenAddress             string
-	managedPostgresImage      string
-	managedMySQLImage         string
-	managedElasticsearchImage string
-	managedRabbitMQImage      string
+	databaseDSNFile              string
+	workerID                     string
+	bindingRef                   string
+	bindingRoot                  string
+	secretRoot                   string
+	artifactCatalog              string
+	installationID               string
+	nodeConnectionsFile          string
+	enrollmentControllerCert     string
+	enrollmentControllerKey      string
+	enrollmentControllerTrust    string
+	executionTenant              paasv1.TenantID
+	machineBinding               string
+	listenAddress                string
+	managedPostgresImageIDs      string
+	managedMySQLImageIDs         string
+	managedElasticsearchImageIDs string
+	managedRabbitMQImageIDs      string
 }
 
 type workerFailureStage string
@@ -295,9 +296,13 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	postgresImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedPostgresImageIDs, ","))
+	if err != nil {
+		return err
+	}
 	managedPostgres, err := localpostgresadapter.New(localpostgresadapter.Config{
 		Root:    managedPostgresRoot,
-		ImageID: config.managedPostgresImage, Runtime: runtime,
+		ImageID: postgresImageID, Runtime: runtime,
 	})
 	if err != nil {
 		return err
@@ -306,9 +311,13 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	mysqlImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedMySQLImageIDs, ","))
+	if err != nil {
+		return err
+	}
 	managedMySQL, err := localmysqladapter.New(localmysqladapter.Config{
 		Root:    managedMySQLRoot,
-		ImageID: config.managedMySQLImage, Runtime: runtime,
+		ImageID: mysqlImageID, Runtime: runtime,
 	})
 	if err != nil {
 		return err
@@ -317,9 +326,13 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	elasticsearchImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedElasticsearchImageIDs, ","))
+	if err != nil {
+		return err
+	}
 	managedElasticsearch, err := localelasticsearchadapter.New(localelasticsearchadapter.Config{
 		Root:    managedElasticsearchRoot,
-		ImageID: config.managedElasticsearchImage, Runtime: runtime,
+		ImageID: elasticsearchImageID, Runtime: runtime,
 	})
 	if err != nil {
 		return err
@@ -328,9 +341,13 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	rabbitmqImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedRabbitMQImageIDs, ","))
+	if err != nil {
+		return err
+	}
 	managedRabbitMQ, err := localrabbitmqadapter.New(localrabbitmqadapter.Config{
 		Root:    managedRabbitMQRoot,
-		ImageID: config.managedRabbitMQImage, Runtime: runtime,
+		ImageID: rabbitmqImageID, Runtime: runtime,
 	})
 	if err != nil {
 		return err
@@ -771,24 +788,24 @@ func runWorkerLoop(
 
 func loadConfiguration() (configuration, error) {
 	config := configuration{
-		databaseDSNFile:           os.Getenv(databaseDSNFileEnvironment),
-		workerID:                  os.Getenv(workerIDEnvironment),
-		bindingRef:                os.Getenv(bindingRefEnvironment),
-		bindingRoot:               os.Getenv(bindingRootEnvironment),
-		secretRoot:                os.Getenv(secretRootEnvironment),
-		artifactCatalog:           os.Getenv(artifactCatalogEnvironment),
-		installationID:            os.Getenv(installationIDEnvironment),
-		nodeConnectionsFile:       os.Getenv(nodeConnectionsFileEnvironment),
-		enrollmentControllerCert:  os.Getenv(enrollmentControllerCertEnvironment),
-		enrollmentControllerKey:   os.Getenv(enrollmentControllerKeyEnvironment),
-		enrollmentControllerTrust: os.Getenv(enrollmentControllerTrustEnvironment),
-		executionTenant:           paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
-		machineBinding:            os.Getenv(machineBindingEnvironment),
-		listenAddress:             os.Getenv(listenAddressEnvironment),
-		managedPostgresImage:      os.Getenv(managedPostgresImageEnvironment),
-		managedMySQLImage:         os.Getenv(managedMySQLImageEnvironment),
-		managedElasticsearchImage: os.Getenv(managedElasticsearchImageEnvironment),
-		managedRabbitMQImage:      os.Getenv(managedRabbitMQImageEnvironment),
+		databaseDSNFile:              os.Getenv(databaseDSNFileEnvironment),
+		workerID:                     os.Getenv(workerIDEnvironment),
+		bindingRef:                   os.Getenv(bindingRefEnvironment),
+		bindingRoot:                  os.Getenv(bindingRootEnvironment),
+		secretRoot:                   os.Getenv(secretRootEnvironment),
+		artifactCatalog:              os.Getenv(artifactCatalogEnvironment),
+		installationID:               os.Getenv(installationIDEnvironment),
+		nodeConnectionsFile:          os.Getenv(nodeConnectionsFileEnvironment),
+		enrollmentControllerCert:     os.Getenv(enrollmentControllerCertEnvironment),
+		enrollmentControllerKey:      os.Getenv(enrollmentControllerKeyEnvironment),
+		enrollmentControllerTrust:    os.Getenv(enrollmentControllerTrustEnvironment),
+		executionTenant:              paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
+		machineBinding:               os.Getenv(machineBindingEnvironment),
+		listenAddress:                os.Getenv(listenAddressEnvironment),
+		managedPostgresImageIDs:      os.Getenv(managedPostgresImageIDsEnvironment),
+		managedMySQLImageIDs:         os.Getenv(managedMySQLImageIDsEnvironment),
+		managedElasticsearchImageIDs: os.Getenv(managedElasticsearchImageIDsEnvironment),
+		managedRabbitMQImageIDs:      os.Getenv(managedRabbitMQImageIDsEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.workerID == "" ||
 		config.bindingRef == "" || config.bindingRoot == "" ||
@@ -797,9 +814,9 @@ func loadConfiguration() (configuration, error) {
 		config.enrollmentControllerCert == "" || config.enrollmentControllerKey == "" ||
 		config.enrollmentControllerTrust == "" ||
 		config.executionTenant == "" || config.machineBinding == "" ||
-		config.listenAddress == "" || config.managedPostgresImage == "" ||
-		config.managedMySQLImage == "" || config.managedElasticsearchImage == "" ||
-		config.managedRabbitMQImage == "" {
+		config.listenAddress == "" || config.managedPostgresImageIDs == "" ||
+		config.managedMySQLImageIDs == "" || config.managedElasticsearchImageIDs == "" ||
+		config.managedRabbitMQImageIDs == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")
 	}
 	if paasv1.ValidateID("workerId", config.workerID) != nil ||

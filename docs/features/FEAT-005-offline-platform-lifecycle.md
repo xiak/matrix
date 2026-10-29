@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The unified mainline candidate is separately composed at `88/40/8+r40` and remains a candidate until its exact combined source, independent CI and signed runtime gate complete. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths
+- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The unified mainline candidate is separately composed at `88/40/8+r40` and remains a candidate until its exact combined source, independent CI and signed runtime gate complete. The fixed `e1145c2c25f5` candidate currently fails fresh installation with `START_VERIFICATION_FAILED`; the [local Docker reproduction](#当前主线本机-docker-安装复核) identifies the managed-service image-reference mismatch and does not count the handbook workflow as accepted. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The unified candidate is exactly IAM 88 / Audit 40 / PaaS 8 at contract revision 40. Its retained PaaS-7-to-8 SQL gate is development migration evidence, not permission for a cross-profile release upgrade; no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -41,8 +41,8 @@ VM. Matrix fixes the local rootful Docker socket and the PaaS worker receives
 that same socket, so a nominally non-root account in the `docker` group is
 still root-equivalent. Every lifecycle command must use the same effective UID
 that owns the `0700` installation root; root and non-root execution cannot be
-mixed. The exact host preparation, command identity and optional locked
-service-account model are owned by the verified
+mixed. The supported host preparation and command identity are owned by the
+verified
 [platform installation runbook](../runbooks/platform-installation.md).
 
 ## Release inventory and ownership
@@ -164,8 +164,8 @@ The following lines define the CLI surface; they are not a shell transcript.
 For the current production operator profile, every one of these commands is
 run in the same `root#` shell after a named administrator executes `sudo -i`.
 The `--root` option names the installation directory and does not select the
-Linux root account. Account creation, password policy and the optional
-non-root evaluation path are specified in the
+Linux root account. Supported host preparation and operator identity are
+specified in the
 [platform installation runbook](../runbooks/platform-installation.md).
 
 - `mx platform install --bundle <path> --root <path> --trust-key <path>
@@ -264,6 +264,73 @@ timestamps, and correlation IDs; it excludes secrets, tokens, configuration
 values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ## Incremental acceptance
+
+### 当前主线本机 Docker 安装复核
+
+2026-10-29，按用户手册验证固定主线
+`e1145c2c25f5a22ae8002ca8e1ffb8f1ed9d1264` 的本地安装。
+从干净的同源检出构建并使用本次私有测试签名生成
+`matrix-v0.3.0-handbook.1-e1145c2c25f5`，构建标识为
+`handbook-local-e1145c2c`，authority profile 为 `88/40/8+r40`。
+这是本地候选包，不是正式接受的发布，也不借用旧版本生命周期的成功结论。
+
+环境为 Windows 上的 Docker Desktop 4.83.0、Docker Engine 29.6.2，使用其
+Linux/amd64 引擎和 containerd 镜像存储。普通 Linux 工具容器内的 Docker CLI 27.5.1
+与 Compose 2.33.0 连接现有主机 socket；其 Engine ID 与 Windows 客户端相同，
+容器内没有 `dockerd`。平台服务直接创建在该引擎上，没有使用 DinD。
+文件位于任务独立的 Linux 命名卷，工具与主机使用相同绝对路径；
+启用 Docker Desktop 主机网络后，工具容器对主机已发布回环端口的实际 TCP 检查通过。
+主机原有镜像保持不变，本轮没有禁止外网，不能算作空镜像、断网的 Gate C。
+
+发布包通过签名和内容检查，数据库及其他平台进程启动；PaaS worker 则重复退出，
+输出 `PAAS_WORKER_MANAGED_SERVICE`，未发生 OOM。两轮实际安装均未达到 `READY`，
+最终错误为 `START_VERIFICATION_FAILED`。第二轮独立尝试的关联编号为
+`cmd-0867d6275a5e3ccea522a28b9744f754`，原始状态记录为
+`outcome: ROLLED_BACK`；随后没有该安装的运行容器。
+状态记录中的流程阶段名称不能代替命令成功或已提交的平台版本。
+
+已定位的契约断点如下：
+
+- `topology.Compile` 使用签名发布清单的 `RuntimeReference()`，并把
+  `matrix.local/matrix/postgres:sha256-…` 等名称写入 worker 的四项托管服务镜像配置。
+  该输入也在本轮真实生成的配置中逐项核对。
+- `matrix-paas-worker` 原样传入托管服务构造函数，而
+  `localcontainer.New` 只接受 `^sha256:[0-9a-f]{64}$`。
+  使用候选清单中的 PostgreSQL 引用调用原生产构造函数，实际返回
+  `local PostgreSQL provisioner configuration is invalid`，与 worker 的失败阶段一致。
+- 基线复核没有修改清单、生成的 Compose、镜像身份检查或 worker 使安装强行通过。
+  修复须协调签名镜像身份与托管服务消费者，再从同源干净包重跑实际安装。
+
+首次回滚还遇到一次由测试附件造成的 `ROLLBACK_OUTCOME_UNKNOWN`：
+本地邮件收件容器仍连接在安装拥有的邮件网络中，阻止网络回收。
+仅断开该测试附件后，用相同安装命令与相同输入完成原回滚，返回原启动失败码。
+第二次尝试未连接该附件，直接完成失败回滚；这一区分避免把测试附件问题归因于主线启动缺陷。
+本轮没有验证邮件投递成功。
+
+安装失败也验证了手册中原来不正确的诊断指引：
+
+- 安装目录以外的诊断输出返回 `SUPPORT_OUTPUT_INVALID`；输出只能位于本安装
+  `support/` 直属目录内，使用普通 `.json` 文件名。
+- 首次安装回滚后，`status` 返回 `PLATFORM_NOT_INSTALLED`；即使用正确输出位置，
+  `support` 仍返回 `INSTALLATION_PRECONDITION_FAILED`，没有生成支持报告。
+  未成功安装的现场应提交规范化错误，由交付人员定位，不能承诺导出一定可用。
+- 现有五项命令边界测试覆盖支持输出绑定、回滚未知结果的继续、失败后新尝试、
+  状态只读及不存在的安装目录，合计 1.775 秒通过。它们验证处理分支，不能替代安装成功。
+
+基线复核结论为**安装失败，图文手册尚未闭环**。当前修复候选把签名清单中精确的
+config/manifest 身份传给 worker；worker 仅以只读 Docker 检查选择本机已存在的身份，
+核对 ID、Linux/amd64 和有界输出后，才交给托管服务消费者。可变标签、额外候选、
+重复身份、意外镜像/平台和不可用引擎均拒绝，不改变托管服务或数据清理的纯 digest 限制。
+拓扑与两个 Docker 镜像存储分支的回归、相关安装/适配器/worker 测试及竞争检测已通过；
+修复后的干净签名包与真实用户流程尚待复验，当前不计为发布接受。
+
+实际交付还缺少可直接领取的已验证包及配套材料；
+本次源码构建、私有签名和本地邮件准备不能转嫁成普通用户的默认安装前提。
+命令与处置已修正在[安装 runbook](../runbooks/platform-installation.md)。
+安装成功后的首次登录、日常操作、平台备份、恢复及重启复验均未在这套环境执行，
+不能用此前独立页面截图或其他固定版本的验收记录补足。
+首次改密的独立浏览器阻塞继续由
+[FEAT-IAM-010](iam/FEAT-IAM-010-console.md#当前主线首次改密阻塞)拥有。
 
 ### Current IAM policy-completion lifecycle candidate
 
@@ -528,13 +595,15 @@ another exposed that successful `postfix status` writes to stderr and therefore
 must be silenced inside the fixture rather than weakening the gate's global
 no-stderr rule. Neither failure is counted as a pass.
 
-Docker 29.6.2 with the containerd image store exposes the loaded OCI manifest
+For this historical revision-7 consumer, Docker 29.6.2 with the containerd image store exposes the loaded OCI manifest
 identity rather than the classic portable config identity authenticated by the
 current signed release contract. The same bundles therefore fail closed at
 image verification. This is an explicit unsupported runtime/store combination,
 not a reason to loosen image identity or claim Docker 29 support. Independent
 CI for the final evidence commit is still required before this revision-7
-combination can be accepted.
+combination can be accepted. This historical restriction is not a conclusion
+about later image-reference handling; the current candidate's actual runtime
+result is recorded in the [local installation check](#当前主线本机-docker-安装复核).
 
 ### Historical multi-tenant authority-profile evidence
 

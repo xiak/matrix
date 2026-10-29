@@ -536,10 +536,10 @@ func TestRunClassifiesIncompleteConfiguration(t *testing.T) {
 		executionTenantEnvironment,
 		machineBindingEnvironment,
 		listenAddressEnvironment,
-		managedPostgresImageEnvironment,
-		managedMySQLImageEnvironment,
-		managedElasticsearchImageEnvironment,
-		managedRabbitMQImageEnvironment,
+		managedPostgresImageIDsEnvironment,
+		managedMySQLImageIDsEnvironment,
+		managedElasticsearchImageIDsEnvironment,
+		managedRabbitMQImageIDsEnvironment,
 	} {
 		t.Setenv(variable, "")
 	}

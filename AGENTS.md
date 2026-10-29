@@ -60,6 +60,10 @@ Every fact has exactly one documentation owner:
   `REUSE`/`ADAPT`/`REFERENCE`/`REJECT` decisions;
 - a runbook owns only commands that have been executed and verified.
 
+User guides own reader-facing workflows and real-interface illustrations.
+They link to the owning FEAT for implementation limits and acceptance evidence,
+and to the existing runbook for operator commands rather than duplicating them.
+
 README and index files are link-only navigation. They must not duplicate FEAT
 status, resource tables, acceptance criteria, commands, or adoption results.
 Research notes, implementation diaries, discussion, and transient progress

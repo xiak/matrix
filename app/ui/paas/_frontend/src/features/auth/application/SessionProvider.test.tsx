@@ -300,6 +300,45 @@ describe("SessionProvider", () => {
     expect(screen.container.textContent).not.toContain(secretCredential);
   });
 
+  it("keeps first-password input and submission outside ordinary session activity until the change succeeds", async () => {
+    const iam = repository({ mustChangePassword: true });
+    const replacement = deferred<void>();
+    iam.changePassword = vi.fn(() => replacement.promise);
+    const touchCurrent = vi.fn().mockRejectedValue(new HttpProblem(401, "SESSION_EXPIRED"));
+    iam.sessions = { touchCurrent, list: vi.fn(), revoke: vi.fn(), revokeOthers: vi.fn() };
+    const documentListeners = vi.spyOn(document, "addEventListener");
+    const windowListeners = vi.spyOn(window, "addEventListener");
+    const screen = render(<SessionProvider repository={iam}><Probe /></SessionProvider>);
+    const reportTrustedInput = async () => {
+      await act(async () => {
+        for (const [type, callback, options] of [...documentListeners.mock.calls, ...windowListeners.mock.calls]) {
+          if (!["pointerdown", "keydown", "popstate"].includes(type) ||
+              typeof options !== "object" || options?.capture !== true || typeof callback !== "function") continue;
+          (callback as EventListener)({ type, isTrusted: true, key: "a" } as unknown as Event);
+        }
+        await Promise.resolve();
+      });
+    };
+    await act(async () => fireEvent.click(screen.getByText("login")));
+    await reportTrustedInput();
+    expect(touchCurrent).not.toHaveBeenCalled();
+    expect(screen.getByTestId("phase").textContent).toBe("password-change-required");
+
+    await act(async () => fireEvent.click(screen.getByText("change")));
+    await reportTrustedInput();
+    expect(touchCurrent).not.toHaveBeenCalled();
+    expect(screen.getByTestId("phase").textContent).toBe("changing-password");
+    expect(iam.changePassword).toHaveBeenCalledExactlyOnceWith(secretCredential, {
+      currentPassword: "Initial-Admin-Password-49!", newPassword: "Changed-Admin-Password-73!", revokeOtherSessions: true
+    });
+
+    await act(async () => replacement.resolve());
+    expect(screen.getByTestId("phase").textContent).toBe("authenticated");
+    await reportTrustedInput();
+    expect(touchCurrent).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("phase").textContent).toBe("anonymous");
+  });
+
   it("does not expire a new login because an older bearer's request returned late", async () => {
     const iam = repository();
     const initial = iam.login;

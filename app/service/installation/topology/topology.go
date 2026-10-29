@@ -721,10 +721,13 @@ func compileServices(
 		paasWorker.Environment[workerEnrollmentControllerCertificateEnvironment] = "/run/matrix/node-controller/enrollment-controller.pem"
 		paasWorker.Environment[workerEnrollmentControllerPrivateKeyEnvironment] = "/run/matrix/node-controller/enrollment-controller-key.pem"
 		paasWorker.Environment[workerEnrollmentControllerTrustEnvironment] = "/run/matrix/node-controller/enrollment-controller-trust.pem"
-		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE"] = images["postgres"]
-		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE"] = images["mysql"]
-		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE"] = images["elasticsearch"]
-		paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE"] = images["rabbitmq"]
+		for _, image := range manifest.Images {
+			switch image.Component {
+			case "postgres", "mysql", "elasticsearch", "rabbitmq":
+				paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_"+strings.ToUpper(image.Component)+"_IMAGE_IDS"] =
+					strings.Join(image.RuntimeImageIDs(), ",")
+			}
+		}
 	}
 	paasWorker.Volumes = []mount{
 		bind(paasWorkerDSN, "/run/matrix/paas-worker-dsn", true),

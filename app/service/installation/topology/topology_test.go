@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:1a0c373817fd0e5e3700193e31a507b3e39de4e827e39dc3c1da9ad0864d18cd" {
+	if actual := ContractDigest(); actual != "sha256:7cb0360dd17ee421b4d4dfbf58e006e236f3f86e9d1495bebeb90f521ebfa73d" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -59,6 +59,31 @@ func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
 	drifted.TopologyDigest = digestValue('0')
 	if err := ValidateInstalledContract(drifted); err == nil {
 		t.Fatal("a different productless topology digest must fail")
+	}
+}
+
+func TestCompilePinsManagedServiceImagesForBothDockerStores(t *testing.T) {
+	manifest := topologyManifest()
+	result, err := Compile(manifest, Options{
+		InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix",
+		Listener: "127.0.0.1", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document composeDocument
+	if err := json.Unmarshal(result.ComposeJSON, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, image := range manifest.Images {
+		switch image.Component {
+		case "postgres", "mysql", "elasticsearch", "rabbitmq":
+			variable := "MATRIX_PAAS_WORKER_MANAGED_" + strings.ToUpper(image.Component) + "_IMAGE_IDS"
+			actual := strings.Split(document.Services["paas-worker"].Environment[variable], ",")
+			if !slices.Equal(actual, image.RuntimeImageIDs()) || len(actual) != 2 {
+				t.Fatalf("managed %s identities = %v, want signed config and manifest identities", image.Component, actual)
+			}
+		}
 	}
 }
 
@@ -276,9 +301,9 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID", "MATRIX_PAAS_WORKER_ID",
 			"MATRIX_PAAS_WORKER_INSTALLATION_ID",
 			"MATRIX_PAAS_WORKER_LISTEN_ADDRESS", "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF",
-			"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE",
-			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE", "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE",
-			"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE",
+			"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS",
+			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS", "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS",
+			"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE",
 			"MATRIX_PAAS_WORKER_SECRET_ROOT",
 		},

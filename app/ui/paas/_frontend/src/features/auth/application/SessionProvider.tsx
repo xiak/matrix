@@ -226,7 +226,7 @@ export function SessionProvider({
 
   useEffect(() => {
     const touchCurrent = repository.sessions?.touchCurrent;
-    if (!credential || !current || !touchCurrent) return;
+    if (phase !== "authenticated" || !credential || !current || !touchCurrent) return;
     const expectedCredential = credential;
     const expectedRevision = sessionRevision;
     const expectedSession = current.session;
@@ -247,7 +247,7 @@ export function SessionProvider({
       document.removeEventListener("keydown", reportDocumentActivity, { capture: true });
       window.removeEventListener("popstate", reportNavigationActivity, { capture: true });
     };
-  }, [credential, current, expire, isCurrentSession, repository, sessionRevision]);
+  }, [credential, current, expire, isCurrentSession, phase, repository, sessionRevision]);
 
   useEffect(() => {
     if (!current) return;

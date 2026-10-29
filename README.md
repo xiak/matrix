@@ -16,6 +16,7 @@ build, secure, and operate it.
 
 [See Matrix in action](#see-matrix-in-action) ·
 [Explore locally](#explore-locally) ·
+[用户手册](docs/user-guide/README.md) ·
 [Install Matrix](docs/runbooks/platform-installation.md) ·
 [Read the architecture](docs/architecture/README.md)
 
@@ -117,6 +118,8 @@ scope, release gates, and evidence.
 
 ## Start here
 
+- **Console users and team administrators:** follow the
+  [图文用户手册](docs/user-guide/README.md).
 - **Platform operators:** use the
   [installation runbook](docs/runbooks/platform-installation.md).
 - **Product and platform engineers:** begin with the

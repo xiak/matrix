@@ -88,6 +88,51 @@ func NewLocalRuntime() *LocalRuntime {
 	}
 }
 
+// ResolveImageID selects a locally available immutable identity from the
+// release-authenticated config/manifest identities. It never resolves a tag,
+// pulls an image, or accepts a different identity returned by the daemon.
+func (*LocalRuntime) ResolveImageID(ctx context.Context, identities []string) (string, error) {
+	return resolveImageID(ctx, identities, runDocker)
+}
+
+func resolveImageID(ctx context.Context, identities []string, run dockerCommandRunner) (string, error) {
+	if ctx == nil || run == nil || len(identities) == 0 || len(identities) > 2 {
+		return "", ErrRuntimeOutputInvalid
+	}
+	for index, identity := range identities {
+		digest, err := hex.DecodeString(strings.TrimPrefix(identity, "sha256:"))
+		if err != nil || len(digest) != sha256.Size || identity != "sha256:"+hex.EncodeToString(digest) ||
+			(index > 0 && identity == identities[0]) {
+			return "", ErrRuntimeOutputInvalid
+		}
+	}
+	for _, identity := range identities {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		var output boundedBuffer
+		output.maximum = 1024
+		started, err := run(ctx, &output, "image", "inspect", "--format", "{{.Id}}|{{.Os}}|{{.Architecture}}", identity)
+		if output.exceeded {
+			return "", ErrRuntimeOutputInvalid
+		}
+		if err != nil {
+			if !started {
+				return "", ErrRuntimeUnavailable
+			}
+			continue
+		}
+		if strings.TrimSpace(output.String()) != identity+"|linux|amd64" {
+			return "", ErrRuntimeOutputInvalid
+		}
+		return identity, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	return "", ErrRuntimeUnavailable
+}
+
 // Ready proves that both the local Docker Engine and the Compose plugin can
 // accept commands. Version/profile admission remains the installation
 // preflight's responsibility; the worker only needs a live effect boundary.
