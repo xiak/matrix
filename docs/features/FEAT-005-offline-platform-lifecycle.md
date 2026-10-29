@@ -267,71 +267,44 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ### 当前主线本机 Docker 安装复核
 
-2026-10-29，按用户手册验证固定主线
-`e1145c2c25f5a22ae8002ca8e1ffb8f1ed9d1264` 的本地安装。
-从干净的同源检出构建并使用本次私有测试签名生成
-`matrix-v0.3.0-handbook.1-e1145c2c25f5`，构建标识为
-`handbook-local-e1145c2c`，authority profile 为 `88/40/8+r40`。
-这是本地候选包，不是正式接受的发布，也不借用旧版本生命周期的成功结论。
+2026-10-29，按用户手册从干净提交
+`bafc3491f441281b24b2e0059d9e3bc5815dd0f5` 构建私有签名候选
+`matrix-v0.3.0-handbook.2-bafc3491f441`，构建标识
+`handbook-fixed-bafc3491f`，authority profile 为 `88/40/8+r40`。
+这是本地测试候选，不是正式接受的发布或完整 Gate C。
 
-环境为 Windows 上的 Docker Desktop 4.83.0、Docker Engine 29.6.2，使用其
-Linux/amd64 引擎和 containerd 镜像存储。普通 Linux 工具容器内的 Docker CLI 27.5.1
-与 Compose 2.33.0 连接现有主机 socket；其 Engine ID 与 Windows 客户端相同，
-容器内没有 `dockerd`。平台服务直接创建在该引擎上，没有使用 DinD。
-文件位于任务独立的 Linux 命名卷，工具与主机使用相同绝对路径；
-启用 Docker Desktop 主机网络后，工具容器对主机已发布回环端口的实际 TCP 检查通过。
-主机原有镜像保持不变，本轮没有禁止外网，不能算作空镜像、断网的 Gate C。
+环境为 Windows 上的 Docker Desktop 4.83.0 / Engine 29.6.2，Linux/amd64、
+containerd 镜像存储。普通 Linux 工具容器中的 Docker CLI 27.5.1 / Compose 2.33.0
+连接主机 socket；其 Engine ID 与 Windows 客户端相同，容器中没有 `dockerd`，
+平台直接运行在该引擎上，没有使用 DinD。安装文件位于任务独立的 Linux 命名卷，
+工具与主机看到同一绝对路径。Docker Desktop 主机网络启用，回环端口实际可达。
+原有镜像未清空、外网未封禁，因此不接受空镜像断网场景。
 
-发布包通过签名和内容检查，数据库及其他平台进程启动；PaaS worker 则重复退出，
-输出 `PAAS_WORKER_MANAGED_SERVICE`，未发生 OOM。两轮实际安装均未达到 `READY`，
-最终错误为 `START_VERIFICATION_FAILED`。第二轮独立尝试的关联编号为
-`cmd-0867d6275a5e3ccea522a28b9744f754`，原始状态记录为
-`outcome: ROLLED_BACK`；随后没有该安装的运行容器。
-状态记录中的流程阶段名称不能代替命令成功或已提交的平台版本。
+| 本机流程 | 实际结果 |
+| --- | --- |
+| 全新安装 | `INSTALL SUCCEEDED / READY`；19 项平台服务健康；关联 `cmd-02b2bae8c07d5c6fdbaa928993d254ed` |
+| 运行验证 | `VERIFY SUCCEEDED / READY`，含实际应用探测；关联 `cmd-bf4af69f30e1e76d599ae9cced89c64c` |
+| 首次使用与日常操作 | 平台管理员、团队 Root、普通 User 及重置后改密通过；真实托管 PostgreSQL 安装与协议读写通过，页面证据归 IAM / 控制台 owner |
+| 支持导出 | 安装内 `support/handbook-support.json` 成功生成；关联 `cmd-da6e85027d09e00da18d9c8b4b84f9aa` |
+| 平台备份与恢复 | 备份返回 `BACKUP_VERIFICATION_FAILED`；镜像识别修复后的重新验证尚未完成，不接受恢复流程 |
 
-已定位的契约断点如下：
+原主线 `e1145c2c25f5a22ae8002ca8e1ffb8f1ed9d1264` 的 worker 把签名命名引用
+传入只接受纯 digest 的托管服务消费者，导致 `START_VERIFICATION_FAILED`。
+当前拓扑传递签名清单的精确 config/manifest 身份，worker 只读核对本机镜像 ID 与
+Linux/amd64 后选择不可变身份；不使用可变标签、不拉取镜像，不放宽托管服务清理边界。
+相应回归、全量 Go 测试/vet、相关 race 测试和完整前端检查通过。
 
-- `topology.Compile` 使用签名发布清单的 `RuntimeReference()`，并把
-  `matrix.local/matrix/postgres:sha256-…` 等名称写入 worker 的四项托管服务镜像配置。
-  该输入也在本轮真实生成的配置中逐项核对。
-- `matrix-paas-worker` 原样传入托管服务构造函数，而
-  `localcontainer.New` 只接受 `^sha256:[0-9a-f]{64}$`。
-  使用候选清单中的 PostgreSQL 引用调用原生产构造函数，实际返回
-  `local PostgreSQL provisioner configuration is invalid`，与 worker 的失败阶段一致。
-- 基线复核没有修改清单、生成的 Compose、镜像身份检查或 worker 使安装强行通过。
-  修复须协调签名镜像身份与托管服务消费者，再从同源干净包重跑实际安装。
+本轮备份又定位到三项专用 IAM 工具仍直接使用 config ID：本机仅存在清单的
+manifest 身份，故备份托管进程未启动。修复将备份、认证恢复和本地凭据恢复统一接入
+现有的已安装签名镜像核对，再用返回的精确身份启动。两类镜像存储的 Linux
+备份/恢复回归在旧代码中复现 containerd 失败；修复后的 localmachine Linux 测试通过。
+该代码结论仍不代替下次真实备份与恢复接受。
 
-首次回滚还遇到一次由测试附件造成的 `ROLLBACK_OUTCOME_UNKNOWN`：
-本地邮件收件容器仍连接在安装拥有的邮件网络中，阻止网络回收。
-仅断开该测试附件后，用相同安装命令与相同输入完成原回滚，返回原启动失败码。
-第二次尝试未连接该附件，直接完成失败回滚；这一区分避免把测试附件问题归因于主线启动缺陷。
-本轮没有验证邮件投递成功。
-
-安装失败也验证了手册中原来不正确的诊断指引：
-
-- 安装目录以外的诊断输出返回 `SUPPORT_OUTPUT_INVALID`；输出只能位于本安装
-  `support/` 直属目录内，使用普通 `.json` 文件名。
-- 首次安装回滚后，`status` 返回 `PLATFORM_NOT_INSTALLED`；即使用正确输出位置，
-  `support` 仍返回 `INSTALLATION_PRECONDITION_FAILED`，没有生成支持报告。
-  未成功安装的现场应提交规范化错误，由交付人员定位，不能承诺导出一定可用。
-- 现有五项命令边界测试覆盖支持输出绑定、回滚未知结果的继续、失败后新尝试、
-  状态只读及不存在的安装目录，合计 1.775 秒通过。它们验证处理分支，不能替代安装成功。
-
-基线复核结论为**安装失败，图文手册尚未闭环**。当前修复候选把签名清单中精确的
-config/manifest 身份传给 worker；worker 仅以只读 Docker 检查选择本机已存在的身份，
-核对 ID、Linux/amd64 和有界输出后，才交给托管服务消费者。可变标签、额外候选、
-重复身份、意外镜像/平台和不可用引擎均拒绝，不改变托管服务或数据清理的纯 digest 限制。
-拓扑与两个 Docker 镜像存储分支的回归、相关安装/适配器/worker 测试及竞争检测已通过；
-修复后的干净签名包与真实用户流程尚待复验，当前不计为发布接受。
-
-实际交付还缺少可直接领取的已验证包及配套材料；
-本次源码构建、私有签名和本地邮件准备不能转嫁成普通用户的默认安装前提。
-命令与处置已修正在[安装 runbook](../runbooks/platform-installation.md)。
-安装成功后的首次登录、日常操作、平台备份、恢复及重启复验均未在这套环境执行，
-不能用此前独立页面截图或其他固定版本的验收记录补足。
-首次改密的独立浏览器阻塞继续由
-[FEAT-IAM-010](iam/FEAT-IAM-010-console.md#当前主线首次改密阻塞)拥有。
-
+失败现场也确认了 runbook 的诊断边界：支持输出必须在本安装 `support/` 直属目录，
+否则 `SUPPORT_OUTPUT_INVALID`；首次安装回滚后 `status` 为
+`PLATFORM_NOT_INSTALLED`，此时 `support` 无法生成报告。
+测试用外部收件容器若附着安装网络，会阻止整网回收；恢复演练前须断开该测试附件，
+不能将其作为产品启动缺陷，也不能删除其他工作负载来绕过。
 ### Current IAM policy-completion lifecycle candidate
 
 The fixed production source `8abbea36da422fdb758233b68221ad8139b00904`

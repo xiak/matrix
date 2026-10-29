@@ -2006,36 +2006,33 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### 用户手册界面复核
 
-[用户手册](../user-guide/README.md)的界面复核固定于主线
-`e1145c2c25f5a22ae8002ca8e1ffb8f1ed9d1264`。截图使用该提交已入库的 Go 嵌入生产界面，
-通过既有 `TestIAMIdentityConsoleBrowser` 同源入口连接真实 IAM/Audit/PaaS
-与任务独立的 PostgreSQL 18.6。进程运行在 Windows，数据库运行在本机 Docker；
-这不是 Linux 签名离线安装或 APISIX 发布门禁，也没有把独立开发预览的 MOCK 截图混入手册。
-同源候选包随后在本机 Docker 的真实安装中未通过启动检查，准确结果归
-[FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)；
-该失败环境没有补拍可用控制台，也没有完成首次登录或日常使用，原十张截图的证据范围保持不变。
+2026-10-29，[用户手册](../user-guide/README.md)的十二张真实截图更新为
+`bafc3491f441281b24b2e0059d9e3bc5815dd0f5` 的生产嵌入界面。
+私有签名候选 `matrix-v0.3.0-handbook.2-bafc3491f441` 实际安装在本机 Docker，
+浏览器经 APISIX 连接安装内的 IAM/Audit/PaaS；没有使用 MOCK 或独立开发预览。
+安装版本、主机及备份恢复边界归
+[FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)。
 
-十张截图覆盖登录、首次改密页面、Account 开通、账号概览、User 创建表单、登录会话、
-服务开通、配额激活、实例安装表单及真实读取错误。浏览器实际完成 Account 开通、
-PostgreSQL 租户服务开通与一个规格的配额激活；User 向导只核对两步表单后取消，
-实例安装停留表单未提交。因此图片不证明新 User 入职、实例 READY、协议连接或业务恢复成功。
-秘密输入为空时取图；未保存初始密码、Bearer、数据库密码或认证器材料。
+页面实际完成 Account 开通、Root 首次登录、User 创建与策略关联、普通成员首次改密、
+管理员重置后再次改密、安全通知地址验证、PostgreSQL 服务开通、配额激活及实例安装。
+首次改密和会话后验归 [FEAT-IAM-010](iam/FEAT-IAM-010-console.md#首次改密修复与验证)。
+只读成员可读取实例，配额激活返回精确操作无权限；页面出现按钮不能替代服务端授权。
 
-当前主线的可交付边界如下：
+`handbook-postgres` 使用 `postgresql-18 / pg-small / local-primary`，页面进入
+`RUNNING`，端点 `127.0.0.1:22785`，操作
+`operation-47f8be0e0aa197869e789ec18464d0a2`。独立客户端经发布端点、受保护业务凭据
+连接，实际建表、写入、读取成功；服务返回 PostgreSQL `180004`。这证明本机协议连接，
+不外推为远程网络交付或业务数据备份。用户流程不展示明文数据库密码。
 
-- 新 Account Root 在首次改密页输入即退出，准确过程与失败后验由
-  [FEAT-IAM-010](iam/FEAT-IAM-010-console.md#当前主线首次改密阻塞)拥有。
-- 审计页面实际显示“审计服务返回了不符合契约的数据，页面已拒绝展示”。
-  此观察证明读取不可用，不能解释为空审计目录或数据已丢失；原因尚未确定。
-  修复后须在同一实际交付界面与后端版本上完成 Audit 读取复验。
-- 该提交生产模式源码生成的 build ID 为 `matrix-71ad061afa1e22f746d7`，
-  已入库嵌入资源目录为 `matrix-8a7c76618a140da51c66`。相关源码与 Git 索引均为 LF，
-  此处记录摘要不一致，要求在发布前重新核对源码/导出等价；未据此推定前述审计错误的原因。
+审计页面正常返回当前账号记录；显式完整性校验通过序列 1–55。
+旧基线的审计契约错误截图已移除，以成功读取和真实权限拒绝替代。
+重新生成的嵌入 build ID 为 `matrix-8aa0fc578d85ccd1fc49`；
+完整前端检查证明 322 个导出文件与生产源码一致。未把重建本身当作审计错误的根因证明。
 
-上述观察属于修复前基线。当前修复候选已更新首次改密的活动处理并重新导出生产嵌入资源，
-前端源码与导出等价由生产导出检查约束；仍须沿真实安装复验首次使用及审计读取。
-不将基线 UI 观察或单元回归提升为 FEAT 完成、独立 CI 通过或新版本签名生命周期验收。
-
+截图覆盖登录、首次改密、开通账号、账号概览、创建成员、会话、开通服务、配额、
+安装表单、运行实例、审计和权限拒绝。密码表单在秘密字段为空时取图，
+没有保存密码、Bearer、验证码或认证器材料。本轮不将这些旅程扩张为整个 FEAT、
+应用发布、所有服务产品或独立 CI 已接受。
 ### Current release-consumer milestone
 
 The current release consumes the frozen UX/UI source

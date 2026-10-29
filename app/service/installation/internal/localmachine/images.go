@@ -107,6 +107,37 @@ func inspectInstalledReleaseImage(
 	return parts[0], true, nil
 }
 
+// Purpose-only IAM processes must execute the immutable identity verified from
+// the installed release, including on Docker's containerd image store.
+func inspectInstalledIAMImage(
+	ctx context.Context,
+	runtimeBoundary dockerRuntime,
+	manifest release.Manifest,
+) (string, error) {
+	var selected release.Image
+	found := false
+	for _, image := range manifest.Images {
+		if image.Component != "iam" {
+			continue
+		}
+		if found {
+			return "", errors.Join(platformcommand.ErrEffectVerification, errors.New("installed IAM image is ambiguous"))
+		}
+		selected, found = image, true
+	}
+	if !found {
+		return "", errors.Join(platformcommand.ErrEffectVerification, errors.New("installed IAM image is undeclared"))
+	}
+	imageID, present, err := inspectInstalledReleaseImage(ctx, runtimeBoundary, selected)
+	if err != nil {
+		return "", err
+	}
+	if !present {
+		return "", errors.Join(platformcommand.ErrEffectVerification, errors.New("installed IAM image is unavailable"))
+	}
+	return imageID, nil
+}
+
 func inspectReleaseImageID(
 	ctx context.Context,
 	runtimeBoundary dockerRuntime,

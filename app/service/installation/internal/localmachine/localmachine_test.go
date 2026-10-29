@@ -1050,6 +1050,67 @@ func TestLoadInstallImagesRejectsDriftedPublishedReference(t *testing.T) {
 	}
 }
 
+func TestInstalledIAMImageRejectsUnprovedReleaseIdentity(t *testing.T) {
+	for _, scenario := range []string{"missing-declaration", "duplicate-declaration", "absent", "drifted"} {
+		t.Run(scenario, func(t *testing.T) {
+			plan := newInstallPlan(t)
+			manifest := plan.Bundle.Manifest
+			runtimeBoundary := newImageRuntimeForStore(manifest, true, true)
+			var iamImage release.Image
+			for _, image := range manifest.Images {
+				if image.Component == "iam" {
+					iamImage = image
+				}
+			}
+			switch scenario {
+			case "missing-declaration":
+				manifest.Images = slices.DeleteFunc(slices.Clone(manifest.Images), func(image release.Image) bool { return image.Component == "iam" })
+			case "duplicate-declaration":
+				manifest.Images = append(slices.Clone(manifest.Images), iamImage)
+			case "absent":
+				delete(runtimeBoundary.references, iamImage.RuntimeReference())
+			case "drifted":
+				runtimeBoundary.references[iamImage.RuntimeReference()] = "sha256:" + strings.Repeat("0", 64)
+			}
+			if imageID, err := inspectInstalledIAMImage(context.Background(), runtimeBoundary, manifest); imageID != "" || !errors.Is(err, platformcommand.ErrEffectVerification) {
+				t.Fatalf("unproved IAM identity accepted: %q / %v", imageID, err)
+			}
+			for _, command := range runtimeBoundary.commands {
+				if len(command) < 2 || command[0] != "image" || command[1] != "inspect" {
+					t.Fatal("IAM image selection performed a provider mutation")
+				}
+			}
+		})
+	}
+}
+
+func TestCredentialRecoveryUsesInstalledImmutableIAMImage(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("local-machine recovery effects target Linux")
+	}
+	for _, store := range []string{"classic", "containerd"} {
+		t.Run(store, func(t *testing.T) {
+			plan, expectation := configuredPlatformStartFixture(t, release.CurrentDatabaseProfile())
+			runtimeBoundary := newPlatformStartRuntimeForStore(plan, expectation, store == "containerd")
+			runtimeBoundary.started = true
+			effects := &Effects{runtime: runtimeBoundary}
+			request := platformcommand.CredentialRecoveryPlan{
+				InstalledPlan: installedPlanFrom(plan), CommandID: plan.CorrelationID,
+				InputCommitment: "sha256:" + strings.Repeat("a", 64),
+			}
+			for _, mode := range []string{"inspect", "apply"} {
+				arguments, expected, err := effects.credentialRecoveryContainer(context.Background(), request, mode, true)
+				if err != nil || !slices.Contains(arguments, runtimeBoundary.iamImageID) ||
+					expected.service.Image != runtimeBoundary.iamImageID ||
+					!slices.Equal(expected.service.ImageIDs, []string{runtimeBoundary.iamImageID}) ||
+					!hasArgumentPair(arguments, "--pull", "never") {
+					t.Fatalf("%s recovery did not bind the installed immutable IAM image: %v", mode, err)
+				}
+			}
+		})
+	}
+}
+
 func TestLoadInstallImagesKeepsStartedFailureOutcomeUnknown(t *testing.T) {
 	plan := newInstallPlan(t)
 	if err := stageInstallation(plan, rand.Reader); err != nil {
@@ -1817,6 +1878,14 @@ func TestAuthenticateInstalledPlanPinsSealedTrustAndRelease(t *testing.T) {
 }
 
 func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
+	for _, store := range []string{"classic", "containerd"} {
+		t.Run(store, func(t *testing.T) {
+			testCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t, store == "containerd")
+		})
+	}
+}
+
+func testCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T, useSourceDigest bool) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine backup effects target Linux")
 	}
@@ -1829,7 +1898,7 @@ func TestCreateBackupSealsDatabaseAndWorkloadSecretsAndReplays(t *testing.T) {
 	if err := writeManagedOnce(plan.Root, secretRelative, secret); err != nil {
 		t.Fatalf("provision workload secret fixture: %v", err)
 	}
-	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary := newPlatformStartRuntimeForStore(plan, expectation, useSourceDigest)
 	runtimeBoundary.started = true
 	managedInventory := "sha256:" + strings.Repeat("a", 64)
 	effects := &Effects{
@@ -1992,6 +2061,14 @@ func TestBackupRejectsManagedInventoryChangeDuringSnapshot(t *testing.T) {
 }
 
 func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
+	for _, store := range []string{"classic", "containerd"} {
+		t.Run(store, func(t *testing.T) {
+			testRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t, store == "containerd")
+		})
+	}
+}
+
+func testRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T, useSourceDigest bool) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine recovery effects target Linux")
 	}
@@ -2017,7 +2094,7 @@ func TestRecoverBackupRestoresSelectedSnapshotAndConvergesTarget(t *testing.T) {
 	if err := writeManagedOnce(plan.Root, secretRelative, secret); err != nil {
 		t.Fatalf("provision recovery secret fixture: %v", err)
 	}
-	runtimeBoundary := newPlatformStartRuntime(plan, expectation)
+	runtimeBoundary := newPlatformStartRuntimeForStore(plan, expectation, useSourceDigest)
 	runtimeBoundary.started = true
 	projectInspector := newRecoveryProbeInspector(t, plan)
 	verifier := &recordingInstallationVerifier{}
@@ -3321,18 +3398,27 @@ func newPlatformStartRuntime(
 	plan platformcommand.InstallPlan,
 	expectation platformComposeExpectation,
 ) *platformStartRuntime {
+	return newPlatformStartRuntimeForStore(plan, expectation, false)
+}
+
+func newPlatformStartRuntimeForStore(
+	plan platformcommand.InstallPlan,
+	expectation platformComposeExpectation,
+	useSourceDigest bool,
+) *platformStartRuntime {
 	images := make(map[string]string, len(plan.Bundle.Manifest.Images))
 	iamImageID := ""
 	iamImages := 0
 	for _, image := range plan.Bundle.Manifest.Images {
-		imageIDs := image.RuntimeImageIDs()
-		images[image.RuntimeReference()] = imageIDs[0]
-		for _, imageID := range imageIDs {
-			images[imageID] = imageID
+		actualID := image.ImageID
+		if useSourceDigest && image.LocalReference != "" {
+			actualID = image.SourceDigest
 		}
+		images[image.RuntimeReference()] = actualID
+		images[actualID] = actualID
 		if image.Component == "iam" {
 			iamImages++
-			iamImageID = image.ImageID
+			iamImageID = actualID
 		}
 	}
 	if iamImages != 1 {

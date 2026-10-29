@@ -405,15 +405,9 @@ func (effects *Effects) credentialRecoveryContainer(ctx context.Context, plan pl
 	if err != nil || !network.Internal || network.Name == "" {
 		return nil, expected, platformcommand.ErrEffectVerification
 	}
-	imageID := ""
-	for _, image := range installed.Bundle.Manifest.Images {
-		if image.Component == "iam" {
-			imageID = image.ImageID
-		}
-	}
-	present, err := inspectExactImage(ctx, effects.runtime, imageID)
-	if err != nil || !present {
-		return nil, expected, platformcommand.ErrEffectVerification
+	imageID, err := inspectInstalledIAMImage(ctx, effects.runtime, installed.Bundle.Manifest)
+	if err != nil {
+		return nil, expected, err
 	}
 	imageEnvironment, _, err := effects.runtime.Run(ctx, nil, "image", "inspect", "--format", "{{json .Config.Env}}", imageID)
 	defer clear(imageEnvironment)

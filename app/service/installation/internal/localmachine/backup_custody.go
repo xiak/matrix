@@ -100,34 +100,9 @@ func startTOTPBackupCustody(
 			errors.New("TOTP backup custody release profile is unsupported"),
 		)
 	}
-	imageID := ""
-	for _, image := range installation.bundle.Manifest.Images {
-		if image.Component != "iam" {
-			continue
-		}
-		if imageID != "" {
-			return nil, installationv1.TOTPBackupSnapshotLease{}, errors.Join(
-				platformcommand.ErrEffectVerification,
-				errors.New("TOTP backup custody image identity is ambiguous"),
-			)
-		}
-		imageID = image.ImageID
-	}
-	if imageID == "" {
-		return nil, installationv1.TOTPBackupSnapshotLease{}, errors.Join(
-			platformcommand.ErrEffectVerification,
-			errors.New("TOTP backup custody image is unavailable"),
-		)
-	}
-	present, err := inspectExactImage(ctx, runtimeBoundary, imageID)
+	imageID, err := inspectInstalledIAMImage(ctx, runtimeBoundary, installation.bundle.Manifest)
 	if err != nil {
 		return nil, installationv1.TOTPBackupSnapshotLease{}, err
-	}
-	if !present {
-		return nil, installationv1.TOTPBackupSnapshotLease{}, errors.Join(
-			platformcommand.ErrEffectVerification,
-			errors.New("TOTP backup custody image is unavailable"),
-		)
 	}
 	networkID, err := controlNetworkID(
 		ctx, runtimeBoundary, installation.topology.ProjectName,
