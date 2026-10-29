@@ -2033,6 +2033,9 @@ and `git diff --check` gates must pass on the same committed worktree.
 安装表单、运行实例、审计和权限拒绝。密码表单在秘密字段为空时取图，
 没有保存密码、Bearer、验证码或认证器材料。本轮不将这些旅程扩张为整个 FEAT、
 应用发布、所有服务产品或独立 CI 已接受。
+后继 `.3` 候选只修复安装域的专用 IAM 工具镜像选择，`app/ui` 与上述截图版本无差异；
+升级及恢复后的登录、配额读取和原实例核对由 FEAT-005 的同机演练拥有。
+
 ### Current release-consumer milestone
 
 The current release consumes the frozen UX/UI source

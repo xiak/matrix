@@ -271,7 +271,10 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 `bafc3491f441281b24b2e0059d9e3bc5815dd0f5` 构建私有签名候选
 `matrix-v0.3.0-handbook.2-bafc3491f441`，构建标识
 `handbook-fixed-bafc3491f`，authority profile 为 `88/40/8+r40`。
-这是本地测试候选，不是正式接受的发布或完整 Gate C。
+后继修复来自干净提交 `63e5a02d69f7b09495a4f922bbfef5fb033307a7`，
+签名候选 `matrix-v0.3.0-handbook.3-63e5a02d69f7`，构建标识
+`handbook-recovery-63e5a02d6`，保持同一 authority profile，以 `.2` 为直接前驱。
+它们是本地测试候选，不是正式接受的发布或完整 Gate C。
 
 环境为 Windows 上的 Docker Desktop 4.83.0 / Engine 29.6.2，Linux/amd64、
 containerd 镜像存储。普通 Linux 工具容器中的 Docker CLI 27.5.1 / Compose 2.33.0
@@ -286,7 +289,11 @@ containerd 镜像存储。普通 Linux 工具容器中的 Docker CLI 27.5.1 / Co
 | 运行验证 | `VERIFY SUCCEEDED / READY`，含实际应用探测；关联 `cmd-bf4af69f30e1e76d599ae9cced89c64c` |
 | 首次使用与日常操作 | 平台管理员、团队 Root、普通 User 及重置后改密通过；真实托管 PostgreSQL 安装与协议读写通过，页面证据归 IAM / 控制台 owner |
 | 支持导出 | 安装内 `support/handbook-support.json` 成功生成；关联 `cmd-da6e85027d09e00da18d9c8b4b84f9aa` |
-| 平台备份与恢复 | 备份返回 `BACKUP_VERIFICATION_FAILED`；镜像识别修复后的重新验证尚未完成，不接受恢复流程 |
+| 容器重启 | 仅重启本安装 19 项平台服务和 1 个托管数据库；服务健康、成员重新登录和原数据库记录读取通过；复验关联 `cmd-e3eec870da83ebff7d8b2f3e73317f0a`，不外推为主机重启 |
+| 原地升级 | `.2` → `.3` 返回 `UPGRADE SUCCEEDED / READY`，包含自动备份；关联 `cmd-7c3c6ee66f556e63efa4b3b7c89bca13` |
+| 显式备份 | `.3` 返回 `BACKUP SUCCEEDED / READY`，编号 `backup-618e4b554c28a544656ed9e4a967fe0e`；关联 `cmd-ea3ff28c97b24ea9c31c83c480c24b5a` |
+| 平台恢复 | `RECOVER SUCCEEDED / READY`，使用上述备份；关联 `cmd-0916d305cb0b448fad54a1bc8886519b` |
+| 恢复后复验与诊断 | `VERIFY SUCCEEDED / READY`，关联 `cmd-d9f17abe49743bbb445b9a8908ed60ff`；`support/handbook-final.json` 导出成功，关联 `cmd-2dd7f86f1f0c83317d6460382e3060df` |
 
 原主线 `e1145c2c25f5a22ae8002ca8e1ffb8f1ed9d1264` 的 worker 把签名命名引用
 传入只接受纯 digest 的托管服务消费者，导致 `START_VERIFICATION_FAILED`。
@@ -298,13 +305,28 @@ Linux/amd64 后选择不可变身份；不使用可变标签、不拉取镜像�
 manifest 身份，故备份托管进程未启动。修复将备份、认证恢复和本地凭据恢复统一接入
 现有的已安装签名镜像核对，再用返回的精确身份启动。两类镜像存储的 Linux
 备份/恢复回归在旧代码中复现 containerd 失败；修复后的 localmachine Linux 测试通过。
-该代码结论仍不代替下次真实备份与恢复接受。
+新增缺失、重复、漂移镜像的拒绝用例及两类存储的本地凭据恢复用例通过；
+安装域与架构测试、安装域 vet 通过。真实升级中的自动备份与独立备份均已成功。
+
+恢复的负向演练证明身份核对边界：备份后只修改成员显示名称，用户版本从 4 推进到 5，
+原备份恢复在预检返回 `OWNERSHIP_CONFLICT`；安装日志仍停留于成功备份，19 项服务健康。
+通过页面改回名称后重新备份，两份备份的托管资源清单相同、认证状态摘要不同。
+用户版本属于认证投影，不能把改回文字视为恢复了旧身份版本；runbook 已明确该限制。
+正向演练因此使用未消费的配额作为平台数据回退标记，保持 IAM 状态和托管资源清单不变。
+`.3` 的备份完成后，从页面激活 `postgresql-18 / pg-medium` 的 1 个未使用配额，
+确认 201 及页面两项配额；恢复成功后，Root 原会话 touch 返回 401，用当前密码重新登录，
+页面只剩备份时的 `pg-small` 配额。托管 PostgreSQL 实例保持，独立客户端仍读取到
+备份前后写入的三行测试数据，包括本次备份之后的 `after-verified-backup`。
+普通成员的原会话同样失效，使用当前密码重新登录后仍能读取原 `RUNNING` 实例。
+这接受同机、同身份状态与相同托管清单的受保护平台恢复；不接受任意旧身份状态、
+业务数据回退、磁盘丢失或异机迁移。
 
 失败现场也确认了 runbook 的诊断边界：支持输出必须在本安装 `support/` 直属目录，
 否则 `SUPPORT_OUTPUT_INVALID`；首次安装回滚后 `status` 为
 `PLATFORM_NOT_INSTALLED`，此时 `support` 无法生成报告。
 测试用外部收件容器若附着安装网络，会阻止整网回收；恢复演练前须断开该测试附件，
 不能将其作为产品启动缺陷，也不能删除其他工作负载来绕过。
+
 ### Current IAM policy-completion lifecycle candidate
 
 The fixed production source `8abbea36da422fdb758233b68221ad8139b00904`
