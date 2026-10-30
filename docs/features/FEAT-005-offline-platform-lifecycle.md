@@ -295,6 +295,13 @@ containerd 镜像存储。普通 Linux 工具容器中的 Docker CLI 27.5.1 / Co
 | 平台恢复 | `RECOVER SUCCEEDED / READY`，使用上述备份；关联 `cmd-0916d305cb0b448fad54a1bc8886519b` |
 | 恢复后复验与诊断 | `VERIFY SUCCEEDED / READY`，关联 `cmd-d9f17abe49743bbb445b9a8908ed60ff`；`support/handbook-final.json` 导出成功，关联 `cmd-2dd7f86f1f0c83317d6460382e3060df` |
 
+2026-10-30，Docker Desktop VM 重新启动后，`vm.max_map_count` 回到 262144，
+worker 报 `PAAS_WORKER_READINESS_MANAGED_SERVICE`，平台未就绪。实际逐项探测
+定位为 Elasticsearch provider 的共享主机前置检查；即使安装 MySQL 也会执行。
+按[主机参数流程](../runbooks/platform-installation.md#检查托管服务的主机参数)
+设置为 1048576，重启原 worker 后平台 `status` 返回 `READY`，随后 MySQL 安装及
+独立协议读写通过。该设置没有被持久化，不能外推为下一次 VM 重启自动恢复。
+
 原主线 `e1145c2c25f5a22ae8002ca8e1ffb8f1ed9d1264` 的 worker 把签名命名引用
 传入只接受纯 digest 的托管服务消费者，导致 `START_VERIFICATION_FAILED`。
 当前拓扑传递签名清单的精确 config/manifest 身份，worker 只读核对本机镜像 ID 与

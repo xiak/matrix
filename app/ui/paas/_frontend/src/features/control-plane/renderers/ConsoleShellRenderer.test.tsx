@@ -2506,6 +2506,49 @@ describe("ConsoleShellRenderer", () => {
       expect(service.assume).toHaveBeenCalledTimes(1);
     });
 
+    it("keeps Role instance reads usable without probing User-only service authorization", async () => {
+      const service = selfService();
+      const installation: ServiceInstallation = {
+        id: "mysql-role-reader", name: "角色可读数据库", offeringId: "mysql-8.4", engineVersion: "8.4",
+        quotaEntitlementId: "quota-primary", regionId: "local-primary", phase: "READY",
+        endpoint: "mysql-role-reader.service.local:3306", credentialReference: null, resourceVersion: 3,
+        operation: { id: "operation-role-reader", kind: "PROVISION", phase: "READY", safeFailureCode: null, observedAt: "2026-08-26T12:00:04Z" },
+        createdAt: "2026-08-26T12:00:00Z"
+      };
+      const getInstallation = vi.fn().mockResolvedValue(installation);
+      const inspectServiceAuthorization = vi.fn(async (credential: string) => {
+        if (credential === "synthetic-role-bearer") throw new HttpProblem(401, "iam.authentication.failed");
+        return { template: liveServiceRoleTemplate, relation: null, binding: null };
+      });
+      const result = await renderConsole({
+        section: "access", view: "role-access", roleSelfService: service,
+        load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] }),
+        getInstallation, inspectServiceAuthorization
+      });
+      await result.user.click(await screen.findByRole("button", { name: "审阅并承担 Signed UI Support Reader" }));
+      await result.user.click(screen.getByRole("button", { name: "承担角色" }));
+      await screen.findByRole("heading", { name: "当前角色身份" });
+      await act(async () => result.commitRoute("/console/installations/"));
+      await result.user.click(await screen.findByRole("button", { name: installation.name }));
+
+      expect(await screen.findByText(/服务访问授权需在用户身份下查看/)).toBeTruthy();
+      expect(screen.getByText(installation.endpoint!)).toBeTruthy();
+      expect(getInstallation).toHaveBeenCalledWith("synthetic-role-bearer", installation.id);
+      expect(getInstallation.mock.calls.every(([credential]) => credential === "synthetic-role-bearer")).toBe(true);
+      expect(inspectServiceAuthorization).not.toHaveBeenCalled();
+      expect(service.revalidateSource).not.toHaveBeenCalled();
+      expect(screen.queryByRole("button", { name: "验证并返回用户模式" })).toBeNull();
+
+      await result.user.click(screen.getByRole("button", { name: /打开账号菜单/ }));
+      await result.user.click(screen.getByRole("menuitem", { name: "结束当前角色会话" }));
+      await waitFor(() => expect(service.revalidateSource).toHaveBeenCalledTimes(1));
+      await result.user.click(await screen.findByRole("button", { name: installation.name }));
+      await waitFor(() => expect(inspectServiceAuthorization).toHaveBeenCalledWith(
+        "renderer-test-memory-only-session", "organization-test", installation.id
+      ));
+      expect(service.assume).toHaveBeenCalledTimes(1);
+    });
+
     it("blocks a rejected Role bearer and restores the User only after explicit source validation", async () => {
       let restoreSource!: () => void;
       const service = selfService({ revalidateSource: vi.fn(() => new Promise<void>(resolve => { restoreSource = resolve; })) });

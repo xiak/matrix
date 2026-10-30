@@ -2006,7 +2006,7 @@ and `git diff --check` gates must pass on the same committed worktree.
 
 ### 用户手册界面复核
 
-2026-10-29，[用户手册](../user-guide/README.md)的十二张真实截图更新为
+2026-10-29，[用户手册](../user-guide/README.md)首批十二张真实截图更新为
 `bafc3491f441281b24b2e0059d9e3bc5815dd0f5` 的生产嵌入界面。
 私有签名候选 `matrix-v0.3.0-handbook.2-bafc3491f441` 实际安装在本机 Docker，
 浏览器经 APISIX 连接安装内的 IAM/Audit/PaaS；没有使用 MOCK 或独立开发预览。
@@ -2035,6 +2035,15 @@ and `git diff --check` gates must pass on the same committed worktree.
 应用发布、所有服务产品或独立 CI 已接受。
 后继 `.3` 候选只修复安装域的专用 IAM 工具镜像选择，`app/ui` 与上述截图版本无差异；
 升级及恢复后的登录、配额读取和原实例核对由 FEAT-005 的同机演练拥有。
+
+2026-10-30，同一 `.3` 安装继续完成 MySQL 页面旅程：服务开通 201、
+`mysql-8.4 / mysql-small` 配额激活 201、`handbook-mysql` 安装 202，
+最终 `RUNNING`，端点 `127.0.0.1:30043`，操作
+`operation-afb46018da024e1d5fb663423d273c0b`。独立协议客户端从主机网络连接
+发布端点，以受保护业务凭据在 `service` 数据库建表、写入并读取一条准确记录，
+返回 MySQL `8.4.11`。新增安装表单与运行详情两张真实截图；密码不进入图片或文档。
+本次未执行 MySQL 终止、备份或远程连接，不以 PostgreSQL 旅程代替这些验收。
+Docker VM 重启后的主机参数前置条件归 FEAT-005，IAM 扩展旅程归 FEAT-IAM-010。
 
 ### Current release-consumer milestone
 

@@ -66,6 +66,29 @@ Docker Desktop 的主机网络功能并重启 Docker Desktop。
 `/usr/local/sbin/mx`，后续参数与路径均按容器中的实际位置填写。
 不要把 Windows 盘符路径直接传给 Linux 安装工具，也不要重建另一套 Docker 引擎。
 
+### 检查托管服务的主机参数
+
+当前托管服务执行器会一起检查四个产品的运行条件。即使只准备使用 MySQL 或 PostgreSQL，
+Docker 所在 Linux 主机的 `vm.max_map_count` 也须不低于 `1048576`。
+在 Docker Desktop 上，以下命令已在 PowerShell 中执行验证：
+
+```powershell
+wsl -d docker-desktop -- sysctl vm.max_map_count
+```
+
+低于要求时，由运维人员执行下列命令，再确认输出值：
+
+```powershell
+wsl -d docker-desktop -- sysctl -w vm.max_map_count=1048576
+wsl -d docker-desktop -- sysctl vm.max_map_count
+```
+
+这是 Docker 虚拟机的主机参数，不是数据库连接参数。上述设置只改变当前运行状态；
+Docker Desktop 或其虚拟机重启后须重新检查，不能假定它已经永久保存。
+独立 Linux 主机由主机管理员按同一要求配置并负责持久化。
+当执行器报 `PAAS_WORKER_READINESS_MANAGED_SERVICE`、平台为 `NOT_READY` 时，
+先核对这个前置条件；恢复后仍须用 `status` 确认平台就绪。
+
 ## 安装平台
 
 ### 1. 进入安装身份并检查主机
@@ -154,7 +177,7 @@ root# /usr/local/sbin/mx --format json platform verify --root /var/lib/matrix
 
 ### 主机重启后
 
-1. 等待主机与 Docker 恢复，再用原目录运行 `status`。
+1. 等待主机与 Docker 恢复，核对[托管服务主机参数](#检查托管服务的主机参数)，再用原目录运行 `status`。
 2. 平台恢复后执行 `verify`，并从实际用户网络验证登录与资源读取。
 3. 核对原有实例及未完成任务的状态，再通知用户继续操作。
 4. 平台未恢复时，记录错误并导出支持信息；保留原安装，不重新执行全新安装或删除数据卷。
