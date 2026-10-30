@@ -1,40 +1,36 @@
 # Codex working checkpoint
 
-> Non-authoritative portable memory. Validate it against Git and the owning
-> FEAT before continuing.
+> Non-authoritative portable memory. Validate against Git and the owning FEAT.
 
 - Updated: 2026-10-30
 - Repository: `https://github.com/xiak/matrix.git`
-- Branch: `feat/user-handbook`
-- Committed and pushed milestone: `23b5ab48e`
-- Outcome: local Docker installation without DinD, first use, daily operations,
-  upgrade, protected backup/recovery, and the illustrated Chinese handbook are
-  validated within the scope recorded by their existing owners.
+- Branch: `feat/handbook-mysql-iam`
+- Committed and pushed milestone: `5f9aed721`
+- Review: [PR #11](https://github.com/xiak/matrix/pull/11); check GitHub for current review and CI status.
+- Outcome: the existing Chinese handbook now includes a real MySQL installation
+  and connection example, plus IAM team access and credential workflows with
+  real screenshots. DevOps is explicitly deferred by the user.
 
-## Durable context
+Follow `AGENTS.md` and the repository-local Git identity. User workflows belong
+to the existing handbook, evidence to the owning FEAT, and executed operator
+commands to the existing runbook. Secrets and machine-local deployment state
+are excluded from Git and this checkpoint.
 
-Follow `AGENTS.md`, including pragmatic DDD, replacement-first changes, exact
-documentation ownership, and repository-local commit identity. The handbook
-uses real installed UI screenshots. Secrets and machine-local deployment
-details are excluded from Git and from this portable checkpoint.
-
-The fixes are committed as `bafc3491f` (managed-service image selection and
-first-password Session activity) and `63e5a02d6` (purpose-only IAM image
-selection for backup/recovery). The final installed signed test candidate is
-`matrix-v0.3.0-handbook.3-63e5a02d69f7`, built from the latter clean commit.
-First password change succeeds directly into the console. Check Git and the
-repository pull request for merge status. These local candidates are not an
-accepted public release or a complete offline Gate C.
+The Role instance-read fix is `cb08643262d93fd312e6f4abebcbc956c074bd05`.
+The private signed candidate `matrix-v0.3.0-handbook.4-cb08643262d9` was built
+from that clean commit and upgraded over `.3` on local Docker without DinD.
+Its bounded runtime checks passed; it is not a public release or complete
+Gate C. The exact code commit's full push CI passed. Consult the PR for the
+separate PR-check result rather than inferring status from an earlier run.
 
 ## Reading route
 
 - Reader workflows: [user handbook](../../docs/user-guide/README.md).
-- Executed operator commands: [installation runbook](../../docs/runbooks/platform-installation.md).
-- Installation, upgrade, recovery, negative identity-drift check, and exact
-  runtime evidence: [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核).
-- First-use regression and browser evidence: [FEAT-IAM-010](../../docs/features/iam/FEAT-IAM-010-console.md#首次改密修复与验证).
-- Screenshot scope and real service/UI observations: [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#用户手册界面复核).
+- MySQL page and protocol evidence: [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#用户手册界面复核).
+- IAM flows, Role fix, cleanup and remaining validation limits: [FEAT-IAM-010](../../docs/features/iam/FEAT-IAM-010-console.md#用户手册的团队授权与凭据复核).
+- Signed upgrade and local fixture recovery evidence: [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核).
+- Verified operator workflow: [installation runbook](../../docs/runbooks/platform-installation.md).
 
-Do not infer that platform recovery restores managed business data, admits
-arbitrary older IAM state, or supports a different machine. Consult the
-existing owners before extending any of those boundaries.
+Do not generalize these journeys to all release features, managed-data backup,
+external SMTP delivery, physical phone authenticator compatibility, or a full
+IAM test matrix. The owning FEAT records the actual acceptance scope.
