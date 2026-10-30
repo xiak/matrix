@@ -3,10 +3,10 @@
 > Non-authoritative portable memory. Validate it against Git and the owning
 > FEAT before continuing.
 
-- Updated: 2026-10-29
+- Updated: 2026-10-30
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/user-handbook`
-- Committed and pushed milestone: `d5c42b769`
+- Committed and pushed milestone: `23b5ab48e`
 - Outcome: local Docker installation without DinD, first use, daily operations,
   upgrade, protected backup/recovery, and the illustrated Chinese handbook are
   validated within the scope recorded by their existing owners.
@@ -14,17 +14,17 @@
 ## Durable context
 
 Follow `AGENTS.md`, including pragmatic DDD, replacement-first changes, exact
- documentation ownership, and repository-local commit identity. The handbook
+documentation ownership, and repository-local commit identity. The handbook
 uses real installed UI screenshots. Secrets and machine-local deployment
- details are excluded from Git and from this portable checkpoint.
+details are excluded from Git and from this portable checkpoint.
 
 The fixes are committed as `bafc3491f` (managed-service image selection and
 first-password Session activity) and `63e5a02d6` (purpose-only IAM image
 selection for backup/recovery). The final installed signed test candidate is
 `matrix-v0.3.0-handbook.3-63e5a02d69f7`, built from the latter clean commit.
-First password change succeeds directly into the console. The branch has not
-been merged into main; these local candidates are not an accepted public
-release or a complete offline Gate C.
+First password change succeeds directly into the console. Check Git and the
+repository pull request for merge status. These local candidates are not an
+accepted public release or a complete offline Gate C.
 
 ## Reading route
 
