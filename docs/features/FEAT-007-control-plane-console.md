@@ -2044,6 +2044,11 @@ and `git diff --check` gates must pass on the same committed worktree.
 返回 MySQL `8.4.11`。新增安装表单与运行详情两张真实截图；密码不进入图片或文档。
 本次未执行 MySQL 终止、备份或远程连接，不以 PostgreSQL 旅程代替这些验收。
 Docker VM 重启后的主机参数前置条件归 FEAT-005，IAM 扩展旅程归 FEAT-IAM-010。
+后继 `.4` 签名候选从 `cb08643262d93fd312e6f4abebcbc956c074bd05` 构建，修复
+Role 读取实例时附带 IAM 管理请求造成的误失效，真实复验归
+[IAM 手册复核](iam/FEAT-IAM-010-console.md#用户手册的团队授权与凭据复核)。
+升级后 MySQL 原端点再次完成独立协议写入读取，原 PostgreSQL 与 MySQL 容器健康；
+本轮不增加 DevOps 或其他产品旅程。
 
 ### Current release-consumer milestone
 

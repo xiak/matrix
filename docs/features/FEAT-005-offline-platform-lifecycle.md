@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The unified mainline candidate is separately composed at `88/40/8+r40` and remains a candidate until its exact combined source, independent CI and signed runtime gate complete. The fixed `e1145c2c25f5` candidate currently fails fresh installation with `START_VERIFICATION_FAILED`; the [local Docker reproduction](#当前主线本机-docker-安装复核) identifies the managed-service image-reference mismatch and does not count the handbook workflow as accepted. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths
+- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The unified mainline candidate is separately composed at `88/40/8+r40` and remains a candidate until its exact combined source, independent CI and signed runtime gate complete. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. These bounded private-candidate results do not constitute complete Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The unified candidate is exactly IAM 88 / Audit 40 / PaaS 8 at contract revision 40. Its retained PaaS-7-to-8 SQL gate is development migration evidence, not permission for a cross-profile release upgrade; no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -274,6 +274,9 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 后继修复来自干净提交 `63e5a02d69f7b09495a4f922bbfef5fb033307a7`，
 签名候选 `matrix-v0.3.0-handbook.3-63e5a02d69f7`，构建标识
 `handbook-recovery-63e5a02d6`，保持同一 authority profile，以 `.2` 为直接前驱。
+2026-10-30 的后继候选来自干净提交 `cb08643262d93fd312e6f4abebcbc956c074bd05`，
+发布标识 `matrix-v0.3.0-handbook.4-cb08643262d9`，构建标识
+`handbook-mysql-iam-cb0864326`，同一 authority profile，以 `.3` 为直接前驱。
 它们是本地测试候选，不是正式接受的发布或完整 Gate C。
 
 环境为 Windows 上的 Docker Desktop 4.83.0 / Engine 29.6.2，Linux/amd64、
@@ -301,6 +304,19 @@ worker 报 `PAAS_WORKER_READINESS_MANAGED_SERVICE`，平台未就绪。实际逐
 按[主机参数流程](../runbooks/platform-installation.md#检查托管服务的主机参数)
 设置为 1048576，重启原 worker 后平台 `status` 返回 `READY`，随后 MySQL 安装及
 独立协议读写通过。该设置没有被持久化，不能外推为下一次 VM 重启自动恢复。
+
+`.3` → `.4` 升级先被 `RELEASE_BUNDLE_INVALID` 拒绝：Windows 复制使非执行
+文件也带执行位；按已签名清单恢复全部文件的执行位后通过完整包验证。实际升级
+随后在 `STARTING` 返回 `EFFECT_OUTCOME_UNKNOWN`：本地 Mailpit 测试容器占用
+旧安装的 mail-egress 网络，旧平台容器已移除而网络回收未完成。核对标签、准确
+对象及空网络，解除该测试容器连接并清理已无端点的旧网络后，以相同包、输入和
+原命令继续，返回 `UPGRADE SUCCEEDED / READY`，原关联
+`cmd-d1df2ce50eb1ae99940252bd66db222e`、自动备份
+`backup-b66715f0251ebeb2d53b1cf63b03a8e0` 保持。没有重装、恢复旧数据库、删除
+业务容器或修改 journal。测试邮箱随后接入新网络用于本地通知演练；这项占用在
+后续替换平台网络前仍须由测试维护者解除，不能外推为外部 SMTP 的正式交付拓扑。
+升级后 `VERIFY SUCCEEDED / READY`，关联 `cmd-23ae2affb17512ef3073a4dcf31b8f15`；
+真实 Role 实例读取和 MySQL 协议读写通过，截图及流程由控制台与 IAM owner 维护。
 
 原主线 `e1145c2c25f5a22ae8002ca8e1ffb8f1ed9d1264` 的 worker 把签名命名引用
 传入只接受纯 digest 的托管服务消费者，导致 `START_VERIFICATION_FAILED`。
