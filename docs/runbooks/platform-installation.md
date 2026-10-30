@@ -31,7 +31,8 @@
 领取材料时请交付人员同时给出发布标识、校验方式、邮件服务的连通性确认和支持联系人。
 邮件配置需要真实可用的服务器、认证信息及 TLS 信任材料；不能拿空文件或示例密码代替。
 没有配套发布包时，先由发布人员完成构建与交付，不要求普通用户从源码拼装安装材料。
-通过 Windows 中转文件时，须保留目录结构，并按已验证的发布清单恢复可执行权限。
+通过 Windows 中转文件时，须保留目录结构，并按已验证的发布清单恢复所有文件的执行位：
+工具程序需要可执行，镜像归档等非执行文件则不能带执行位；仅给 `mx` 加执行权限还不够。
 
 **不需要另起 DinD 容器才能安装。** 当前部署使用主机上的 Docker Engine，
 通过本机 `/var/run/docker.sock` 管理工作负载。远程 Docker、Rootless Docker、
@@ -65,6 +66,32 @@ Docker Desktop 的主机网络功能并重启 Docker Desktop。
 在 PowerShell 中可用 `docker exec <工具容器名称> <mx绝对路径>` 替代下文的
 `/usr/local/sbin/mx`，后续参数与路径均按容器中的实际位置填写。
 不要把 Windows 盘符路径直接传给 Linux 安装工具，也不要重建另一套 Docker 引擎。
+安装器管理的网络会在版本替换时回收，不要把自建或测试容器长期挂在这些网络上。
+本地测试收件服务若采用了这类接入，维护前由测试负责人核对并解除连接；
+正式环境使用交付方案中的外部邮件服务。
+
+### 检查托管服务的主机参数
+
+当前托管服务执行器会一起检查四个产品的运行条件。即使只准备使用 MySQL 或 PostgreSQL，
+Docker 所在 Linux 主机的 `vm.max_map_count` 也须不低于 `1048576`。
+在 Docker Desktop 上，以下命令已在 PowerShell 中执行验证：
+
+```powershell
+wsl -d docker-desktop -- sysctl vm.max_map_count
+```
+
+低于要求时，由运维人员执行下列命令，再确认输出值：
+
+```powershell
+wsl -d docker-desktop -- sysctl -w vm.max_map_count=1048576
+wsl -d docker-desktop -- sysctl vm.max_map_count
+```
+
+这是 Docker 虚拟机的主机参数，不是数据库连接参数。上述设置只改变当前运行状态；
+Docker Desktop 或其虚拟机重启后须重新检查，不能假定它已经永久保存。
+独立 Linux 主机由主机管理员按同一要求配置并负责持久化。
+当执行器报 `PAAS_WORKER_READINESS_MANAGED_SERVICE`、平台为 `NOT_READY` 时，
+先核对这个前置条件；恢复后仍须用 `status` 确认平台就绪。
 
 ## 安装平台
 
@@ -154,7 +181,7 @@ root# /usr/local/sbin/mx --format json platform verify --root /var/lib/matrix
 
 ### 主机重启后
 
-1. 等待主机与 Docker 恢复，再用原目录运行 `status`。
+1. 等待主机与 Docker 恢复，核对[托管服务主机参数](#检查托管服务的主机参数)，再用原目录运行 `status`。
 2. 平台恢复后执行 `verify`，并从实际用户网络验证登录与资源读取。
 3. 核对原有实例及未完成任务的状态，再通知用户继续操作。
 4. 平台未恢复时，记录错误并导出支持信息；保留原安装，不重新执行全新安装或删除数据卷。
@@ -244,6 +271,8 @@ root# /usr/local/sbin/mx --format json platform recover \
 
 | 提示或状态 | 如何处理 |
 | --- | --- |
+| `RELEASE_BUNDLE_INVALID` | 先核对完整发布包、信任材料和文件权限。Windows 中转后按签名清单核对全部执行位，不修改清单或跳过验证 |
+| `EFFECT_OUTCOME_UNKNOWN`／`STARTING` | 原命令结果未确认。由交付人员核对原安装与对象占用，排除测试容器占用平台网络等原因，再以相同命令和输入继续；不重装、不删除状态记录 |
 | `START_VERIFICATION_FAILED` | 平台服务未通过启动检查。保留原命令与错误，不发放登录信息；先由交付人员定位失败服务 |
 | `ROLLBACK_OUTCOME_UNKNOWN`／`ROLLING_BACK` | 回滚还没有确认完成。核对阻塞原因后，用相同安装命令与相同输入继续原回滚，不清空目录重装 |
 | 首次安装失败后，`status` 返回 `PLATFORM_NOT_INSTALLED` | 当前没有成功提交的安装。即使目录仍有文件，也不能开始备份、升级或首次登录；保留原目录供定位 |

@@ -3896,6 +3896,7 @@
     "authorizationUnavailableState": "Unavailable",
     "authorizationLoading": "Loading the exact template and current instance binding",
     "authorizationErrors": {
+      "userRequired": "Service authorization requires a User identity. You can continue viewing this instance as the current Role; end the Role session before managing service authorization.",
       "expired": "The current session has expired. Sign in again before checking service authorization.",
       "forbidden": "This identity cannot read the service template or account binding state. The page will not fall back to MOCK data.",
       "unavailable": "Service authorization state is temporarily unavailable. Instance details remain usable, and only this data region can be retried."

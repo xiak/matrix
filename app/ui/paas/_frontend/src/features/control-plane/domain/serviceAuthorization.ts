@@ -22,7 +22,7 @@ export type ManagedServiceAuthorizationObservation = {
 
 export type ManagedServiceAuthorizationLoad =
   | { status: "ready"; observation: ManagedServiceAuthorizationObservation }
-  | { status: "expired" | "forbidden" | "unavailable" };
+  | { status: "expired" | "forbidden" | "unavailable" | "userRequired" };
 
 export type BindManagedServiceRoleCommand = {
   template: ServiceRoleTemplateReference;

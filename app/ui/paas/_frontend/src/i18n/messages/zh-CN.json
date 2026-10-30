@@ -3896,6 +3896,7 @@
     "authorizationUnavailableState": "不可用",
     "authorizationLoading": "正在读取精确模板与当前实例绑定",
     "authorizationErrors": {
+      "userRequired": "服务访问授权需在用户身份下查看。你可以继续使用当前角色查看实例；如需管理服务授权，请先结束角色会话。",
       "expired": "当前会话已失效。请重新登录后再核对服务授权。",
       "forbidden": "当前身份不能读取服务授权模板或账号绑定状态；页面不会回退到 MOCK 数据。",
       "unavailable": "暂时无法读取服务授权状态。实例详情仍可使用，你可以稍后只重试这一数据区。"

@@ -377,6 +377,7 @@ function LiveServiceAuthorizationCard({ accountId, installationId, authorization
     </Card.Header>
     <Card.Body className={styles.authorizationBody} aria-busy={result.status === "loading"}>
       {result.status === "loading" ? <TableSkeleton header={false} label={t("authorizationLoading")} rows={2} /> : null}
+      {result.status === "userRequired" ? <Alert status="info">{t("authorizationErrors.userRequired")}</Alert> : null}
       {result.status === "expired" || result.status === "forbidden" || result.status === "unavailable" ? <>
         <Alert status={result.status === "forbidden" ? "warning" : "danger"}>{t(`authorizationErrors.${result.status}`)}</Alert>
         {result.status === "unavailable" ? <div><Button onClick={inspect} variant="secondary">{t("retryAuthorization")}</Button></div> : null}

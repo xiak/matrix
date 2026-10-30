@@ -852,6 +852,9 @@ export function ControlPlaneProvider({
     accountId: string,
     installationId: string
   ): Promise<ManagedServiceAuthorizationLoad> => {
+    // IAM service-authorization management accepts User sessions only. A
+    // valid Role may still read the installation through the product API.
+    if (roleSession.mode !== "USER") return { status: "userRequired" };
     if (!credential || !repository.inspectServiceAuthorization) return { status: "unavailable" };
     const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
     try {
@@ -864,7 +867,7 @@ export function ControlPlaneProvider({
       if (inspectionError instanceof HttpProblem && inspectionError.status === 403) return { status: "forbidden" };
       return { status: "unavailable" };
     }
-  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision, sourceCredential]);
+  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, roleSession.mode, sessionRevision, sourceCredential]);
 
   const readApplication = useCallback(async (applicationId: string): Promise<ApplicationReadLoad> => {
     if (!validApplicationId(applicationId)) return { status: "invalid" };
