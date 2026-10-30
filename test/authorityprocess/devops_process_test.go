@@ -412,12 +412,26 @@ func grantDevOpsPipelineReaderPolicy(
 func waitAllDevOpsOutboxDelivered(t *testing.T, ctx context.Context, admin *pgx.Conn) {
 	t.Helper()
 	waitDatabase(t, ctx, "DevOps Audit outbox delivery", func() (bool, error) {
-		var outstanding int
+		// The observer produces health facts asynchronously. A momentarily
+		// drained outbox does not prove that both expected facts exist yet.
+		var delivered bool
 		err := admin.QueryRow(
 			ctx,
-			"SELECT count(*) FROM delivery.audit_outbox WHERE status <> 'DELIVERED'",
-		).Scan(&outstanding)
-		return outstanding == 0, err
+			`SELECT NOT EXISTS (
+			    SELECT 1 FROM delivery.audit_outbox WHERE status <> 'DELIVERED'
+			  ) AND EXISTS (
+			    SELECT 1 FROM delivery.audit_outbox
+			    WHERE document->>'action' = $1 AND document#>>'{target,id}' = $2
+			      AND status = 'DELIVERED'
+			  ) AND EXISTS (
+			    SELECT 1 FROM delivery.audit_outbox
+			    WHERE document->>'action' = $3 AND document#>>'{target,id}' = $4
+			      AND status = 'DELIVERED'
+			  )`,
+			string(auditv1.ActionDevOpsSourceConnectionHealthTransitioned), devopsSourceConnectionID,
+			string(auditv1.ActionDevOpsRepositoryBindingHealthTransitioned), devopsRepositoryBindingID,
+		).Scan(&delivered)
+		return delivered, err
 	})
 	assertDevOpsConfigurationAudit(t, ctx, admin)
 }

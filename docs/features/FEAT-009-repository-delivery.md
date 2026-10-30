@@ -484,6 +484,11 @@ kind, target ID, resulting health, reason, resource version, and observation
 time. Provider text and credential-derived identity are absent from both
 status and Audit.
 
+The joined authority-process gate waits for both exact source-health target
+facts to be produced and delivered before checking their complete Audit
+documents and unique counts. A temporarily drained outbox does not establish
+that the asynchronous observer has finished producing those facts.
+
 The observer writes its first database heartbeat before any claim, refreshes it
 after completing work, and writes at least once every 10 seconds while idle.
 Its own readiness requires
