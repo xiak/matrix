@@ -6,6 +6,7 @@ import type { IamRepository } from "@/features/auth/repositories/iamRepository";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { ControlPlaneSnapshot, ServiceInstallation } from "../domain/resources";
 import type { ControlPlaneRouteSelection } from "../domain/selection";
+import { managedServiceProducts } from "../domain/managedServiceProduct";
 import { managedServiceCommandType, type ManagedServiceCommandIntent, type ManagedServiceCommandResult } from "../domain/managedServiceCommand";
 import type {
   ControlPlaneRepository,
@@ -677,7 +678,7 @@ describe("ControlPlaneProvider", () => {
     ]));
     expect(load.mock.calls.every(([, resources]) => resources.length === 1)).toBe(true);
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
-      "regions", "resources", "managed-product", "managed-product", "managed-product", "managed-product", "devops", "observability", "logs", "audit", "access"
+      "regions", "resources", ...managedServiceProducts.map(() => "managed-product"), "devops", "observability", "logs", "audit", "access"
     ]);
   });
   it.each([
@@ -736,10 +737,7 @@ describe("ControlPlaneProvider", () => {
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
       "none",
       "resources",
-      "managed-product",
-      "managed-product",
-      "managed-product",
-      "managed-product",
+      ...managedServiceProducts.map(() => "managed-product"),
       "devops",
       "observability",
       "logs",
@@ -755,10 +753,7 @@ describe("ControlPlaneProvider", () => {
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
       "none",
       "resources",
-      "managed-product",
-      "managed-product",
-      "managed-product",
-      "managed-product",
+      ...managedServiceProducts.map(() => "managed-product"),
       "devops",
       "observability",
       "logs",
@@ -779,7 +774,7 @@ describe("ControlPlaneProvider", () => {
       await Promise.resolve();
     });
     expect(JSON.parse(screen.getByTestId("projections").textContent ?? "[]")).toEqual([
-      "regions", "resources", "managed-product", "managed-product", "managed-product", "managed-product", "devops", "observability", "logs", "audit", "access"
+      "regions", "resources", ...managedServiceProducts.map(() => "managed-product"), "devops", "observability", "logs", "audit", "access"
     ]);
     await waitFor(() => expect(load).toHaveBeenCalledTimes(4));
     expect(load.mock.calls.map(([, resources]) => resources)).toEqual(expect.arrayContaining([
