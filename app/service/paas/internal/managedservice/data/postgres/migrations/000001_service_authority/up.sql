@@ -126,14 +126,7 @@ CREATE TABLE IF NOT EXISTS managedservice.quota_entitlements (
         AND request_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
     ),
     CONSTRAINT quota_entitlements_catalog_valid CHECK (
-        (offering_id = 'postgresql-18'
-            AND quota_shape_id IN ('pg-small', 'pg-medium'))
-        OR (offering_id = 'mysql-8.4'
-            AND quota_shape_id IN ('mysql-small', 'mysql-medium'))
-        OR (offering_id = 'elasticsearch-8.19'
-            AND quota_shape_id IN ('elasticsearch-small', 'elasticsearch-medium'))
-        OR (offering_id = 'rabbitmq-4.1'
-            AND quota_shape_id IN ('rabbitmq-small', 'rabbitmq-medium'))
+        {{managedservice.quota_catalog}}
     ),
     CONSTRAINT quota_entitlements_counts_valid CHECK (
         purchased_count BETWEEN 1 AND 100
@@ -172,10 +165,7 @@ CREATE TABLE IF NOT EXISTS managedservice.service_installations (
         tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND id COLLATE "C" ~ '^[a-z0-9][a-z0-9._-]{1,62}$'
         AND (
-            (offering_id = 'postgresql-18' AND engine_version = '18')
-            OR (offering_id = 'mysql-8.4' AND engine_version = '8.4')
-            OR (offering_id = 'elasticsearch-8.19' AND engine_version = '8.19.23')
-            OR (offering_id = 'rabbitmq-4.1' AND engine_version = '4.1.8')
+            {{managedservice.engine_catalog}}
         )
         AND quota_entitlement_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND region_id = 'local-primary'
@@ -206,20 +196,13 @@ CREATE TABLE IF NOT EXISTS managedservice.service_installations (
 
 -- This repository is pre-v1 and owns one replayable current schema instead of
 -- a chain of obsolete development migrations. Re-applying the current source
--- must upgrade the immediately preceding PostgreSQL-only catalog without
--- changing any existing row.
+-- expands the installed catalog from the same compiled domain definitions.
+-- Existing rows and tenant/shape/version constraints remain protected.
 ALTER TABLE managedservice.quota_entitlements
     DROP CONSTRAINT IF EXISTS quota_entitlements_catalog_valid;
 ALTER TABLE managedservice.quota_entitlements
     ADD CONSTRAINT quota_entitlements_catalog_valid CHECK (
-        (offering_id = 'postgresql-18'
-            AND quota_shape_id IN ('pg-small', 'pg-medium'))
-        OR (offering_id = 'mysql-8.4'
-            AND quota_shape_id IN ('mysql-small', 'mysql-medium'))
-        OR (offering_id = 'elasticsearch-8.19'
-            AND quota_shape_id IN ('elasticsearch-small', 'elasticsearch-medium'))
-        OR (offering_id = 'rabbitmq-4.1'
-            AND quota_shape_id IN ('rabbitmq-small', 'rabbitmq-medium'))
+        {{managedservice.quota_catalog}}
     );
 
 ALTER TABLE managedservice.service_installations
@@ -229,10 +212,7 @@ ALTER TABLE managedservice.service_installations
         tenant_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND id COLLATE "C" ~ '^[a-z0-9][a-z0-9._-]{1,62}$'
         AND (
-            (offering_id = 'postgresql-18' AND engine_version = '18')
-            OR (offering_id = 'mysql-8.4' AND engine_version = '8.4')
-            OR (offering_id = 'elasticsearch-8.19' AND engine_version = '8.19.23')
-            OR (offering_id = 'rabbitmq-4.1' AND engine_version = '4.1.8')
+            {{managedservice.engine_catalog}}
         )
         AND quota_entitlement_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND region_id = 'local-primary'

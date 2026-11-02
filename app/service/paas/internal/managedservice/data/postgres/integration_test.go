@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
@@ -322,6 +323,7 @@ func TestManagedServicePostgresJourneyAndTenantIsolation(t *testing.T) {
 		t.Fatal("open managed-service API pool")
 	}
 	defer pool.Close()
+	assertCompiledCatalogConstraints(t, ctx, pool)
 	repository, err := managedservicepostgres.NewRepository(pool)
 	if err != nil {
 		t.Fatal("create managed-service repository")
@@ -886,4 +888,53 @@ type managedServiceAuditIngestor struct {
 func (ingestor *managedServiceAuditIngestor) Ingest(_ context.Context, event audit.Event) error {
 	ingestor.events = append(ingestor.events, event)
 	return nil
+}
+
+// Prove the generated database contract with real writes through the restricted
+// API login. Each probe rolls back, so it cannot become reconciliation work.
+func assertCompiledCatalogConstraints(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	probe := func(offeringID, shapeID, engineVersion, expectedConstraint string) {
+		t.Helper()
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(context.Background())
+		if _, err := tx.Exec(ctx, "SELECT pg_catalog.set_config('matrix.tenant_id', 'organization-catalog-contract', true)"); err != nil {
+			t.Fatal(err)
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO managedservice.quota_entitlements (
+			tenant_id, id, offering_id, quota_shape_id, purchased_count, idempotency_key, request_digest,
+			activated_by_type, activated_by_id, iam_decision_id, request_id
+		) VALUES (managedservice.current_tenant_id(), 'catalog-quota', $1, $2, 1, 'catalog-request', $3,
+			'USER', 'catalog-principal', 'catalog-decision', 'catalog-request')`,
+			offeringID, shapeID, "sha256:"+strings.Repeat("a", 64))
+		if err == nil {
+			_, err = tx.Exec(ctx, `INSERT INTO managedservice.service_installations (
+				tenant_id, id, name, offering_id, engine_version, quota_entitlement_id, region_id, current_operation_id
+			) VALUES (managedservice.current_tenant_id(), 'catalog-installation', 'Catalog constraint probe',
+				$1, $2, 'catalog-quota', 'local-primary', 'catalog-operation')`, offeringID, engineVersion)
+		}
+		if expectedConstraint == "" {
+			if err != nil {
+				t.Fatalf("released catalog pair %s/%s cannot persist: %v", offeringID, shapeID, err)
+			}
+			return
+		}
+		var failure *pgconn.PgError
+		if !errors.As(err, &failure) || failure.Code != "23514" || failure.ConstraintName != expectedConstraint {
+			t.Fatalf("catalog mismatch did not fail its owning constraint %s", expectedConstraint)
+		}
+	}
+	offerings := domain.DefaultCatalog().List()
+	for index, offering := range offerings {
+		for _, shape := range offering.QuotaShapes {
+			probe(offering.ID, shape.ID, offering.EngineVersion, "")
+		}
+		foreignShape := offerings[(index+1)%len(offerings)].QuotaShapes[0].ID
+		probe(offering.ID, foreignShape, offering.EngineVersion, "quota_entitlements_catalog_valid")
+		probe(offering.ID, offering.QuotaShapes[0].ID, "0.0.0", "service_installations_ids_valid")
+	}
+	probe("unreleased-1", offerings[0].QuotaShapes[0].ID, "1", "quota_entitlements_catalog_valid")
 }

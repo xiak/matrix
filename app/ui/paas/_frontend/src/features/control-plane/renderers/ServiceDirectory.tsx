@@ -3,13 +3,20 @@
 import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslations } from "next-intl";
-import { ArrowUpRight, Boxes, ChartNoAxesCombined, Clock3, Database, Grid2X2, Layers3, MapPin, PackageSearch, Settings2, ShieldCheck, Star, Workflow, X } from "lucide-react";
+import { ArrowUpRight, Boxes, ChartNoAxesCombined, Clock3, Database, Grid2X2, Layers3, MapPin, MessagesSquare, PackageSearch, ScrollText, Search, Settings2, ShieldCheck, Star, Workflow, X } from "lucide-react";
 import { Alert, Button, EmptyState, Progress, SearchInput } from "@ui/xiak";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import { useLiveServiceDefinitionDirectory } from "../application/liveServiceActivation";
+import { managedServiceProducts, type ManagedServiceProductId } from "../domain/managedServiceProduct";
 import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
 import { matchesService, serviceCategories, serviceDirectory, type ServiceCategory, type ServiceDirectoryItem } from "../scenes/serviceDirectory";
 import styles from "./ServiceDirectory.module.css";
+
+const productGlyphs = { database: Database, search: Search, messages: MessagesSquare, logs: ScrollText };
+
+export const managedProductIcons = Object.fromEntries(
+  managedServiceProducts.map(({ id, glyph }) => [id, productGlyphs[glyph]])
+) as Record<ManagedServiceProductId, typeof Database>;
 
 const categoryIcons = {
   infrastructure: MapPin,

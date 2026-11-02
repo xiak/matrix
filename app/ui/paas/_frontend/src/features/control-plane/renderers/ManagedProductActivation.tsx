@@ -1,7 +1,7 @@
 "use client";
 
 import { useTranslations } from "next-intl";
-import { Database, MessagesSquare, Search } from "lucide-react";
+import { managedProductIcons } from "./ServiceDirectory";
 import { Alert, Badge, Button, FormField, Select } from "@ui/xiak";
 import type { ReactNode } from "react";
 import type { usePreviewServiceActivation } from "../application/previewServiceActivation";
@@ -21,7 +21,7 @@ export function ManagedProductActivation({ account, activation, children, previe
 }) {
   const t = useTranslations("ServiceActivation");
   const directory = useTranslations("ServiceDirectory");
-  const Icon = product === "elasticsearch" ? Search : product === "rabbitmq" ? MessagesSquare : Database;
+  const Icon = managedProductIcons[product];
   const activationVersion = activation.state.status === "enabled"
     ? "enabledAt" in activation.state.activation ? activation.state.activation.enabledAt : activation.state.activation.activatedAt
     : "first-use";

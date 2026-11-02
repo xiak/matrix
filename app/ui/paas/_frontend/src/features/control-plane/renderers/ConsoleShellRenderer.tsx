@@ -38,11 +38,9 @@ import {
   PanelRightClose,
   RefreshCcw,
   ScrollText,
-  Search,
   ServerCog,
   Settings2,
   ShieldCheck,
-  MessagesSquare,
   Users,
   Workflow,
   X
@@ -86,7 +84,7 @@ import { ManagedProductActivation } from "./ManagedProductActivation";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
 import { ManagedServiceCommandNotice } from "./ManagedServiceCommandNotice";
 import styles from "./ConsoleShellRenderer.module.css";
-import { useServiceDirectory } from "./ServiceDirectory";
+import { managedProductIcons, useServiceDirectory } from "./ServiceDirectory";
 import { serviceForSelection, type ServiceId } from "../scenes/serviceDirectory";
 import { ConsoleNavigationProvider, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { buildConsoleFrame } from "../scenes/buildConsoleScene";
@@ -103,10 +101,7 @@ const railIcons = {
 const favoriteIcons = {
   regions: MapPin,
   applications: Boxes,
-  postgresql: Database,
-  mysql: Database,
-  elasticsearch: Search,
-  rabbitmq: MessagesSquare,
+  ...managedProductIcons,
   devops: GitBranch,
   monitoring: ChartNoAxesCombined,
   logs: FileText,

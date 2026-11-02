@@ -21,6 +21,9 @@ const (
 	ElasticsearchReference         = "docker.elastic.co/elasticsearch/elasticsearch:8.19.23"
 	ElasticsearchManifestDigest    = "sha256:4d0724bb8d78d7a2330693623e26ca4d621079d062ecc8a30b3e1fc180ec14c1"
 	ElasticsearchPinnedReference   = ElasticsearchReference + "@" + ElasticsearchManifestDigest
+	LogstashReference              = "docker.elastic.co/logstash/logstash:8.19.23"
+	LogstashManifestDigest         = "sha256:a77c29e406ddc6311b302703889f0953b5620dd5aa2445b0cdbcf7f88e285766"
+	LogstashPinnedReference        = LogstashReference + "@" + LogstashManifestDigest
 	RabbitMQReference              = "rabbitmq:4.1.8"
 	RabbitMQManifestDigest         = "sha256:a82b5a24f4434a33cd15e1e47c444d1e07440261358e46c179539998557d4e29"
 	RabbitMQPinnedReference        = RabbitMQReference + "@" + RabbitMQManifestDigest
@@ -46,6 +49,7 @@ var baseImageSpecifications = []baseImageSpecification{
 	{MySQLPinnedReference, "mysql", MySQLManifestDigest},
 	{ElasticsearchPinnedReference, "docker.elastic.co/elasticsearch/elasticsearch", ElasticsearchManifestDigest},
 	{RabbitMQPinnedReference, "rabbitmq", RabbitMQManifestDigest},
+	{LogstashPinnedReference, "docker.elastic.co/logstash/logstash", LogstashManifestDigest},
 	{RunnerToolchainReference, "golang", RunnerToolchainSourceID},
 }
 
@@ -80,6 +84,7 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-paas-migrate", packagePath: "./app/service/paas/cmd/matrix-paas-migrate"},
 	{name: "matrix-paas-worker", packagePath: "./app/service/paas/cmd/matrix-paas-worker"},
 	{name: "matrix-mysql-endpoint", packagePath: "./app/service/paas/cmd/matrix-mysql-endpoint"},
+	{name: "matrix-product-endpoint", packagePath: "./app/service/paas/cmd/matrix-product-endpoint"},
 	{name: "matrix-platform", packagePath: "./app/service/installation/cmd/matrix-platform"},
 	{name: "matrix-verification", packagePath: "./app/service/installation/cmd/matrix-verification"},
 	{name: "mx", packagePath: "./app/service/installation/cmd/mx"},
@@ -124,7 +129,7 @@ var imageRecipes = []imageRecipe{
 		component: "paas", baseReference: DockerBasePinnedReference,
 		binaries: []string{
 			"matrix-paas", "matrix-paas-audit-dispatcher", "matrix-paas-migrate",
-			"matrix-paas-worker", "matrix-mysql-endpoint", "matrix-health",
+			"matrix-paas-worker", "matrix-mysql-endpoint", "matrix-product-endpoint", "matrix-health",
 		},
 	},
 	{

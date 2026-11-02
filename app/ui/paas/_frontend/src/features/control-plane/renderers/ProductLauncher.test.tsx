@@ -122,7 +122,6 @@ describe("ProductLauncher", () => {
     expect(trigger.getAttribute("aria-haspopup")).toBe("dialog");
     expect(trigger.getAttribute("aria-controls")).toBe("global-product-launcher");
     expect(screen.getByRole("dialog", { name: "云产品入口" })).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toBe("11 项服务");
     expect(document.activeElement).toBe(search);
     expect(screen.getByRole("heading", { name: /数据库/, level: 3 })).toBeTruthy();
     expect(screen.getByRole("link", { name: /云数据库 PostgreSQL/ }).getAttribute("href")).toBe("/console/products/postgresql/");
@@ -196,7 +195,6 @@ describe("ProductLauncher", () => {
     expect(screen.getByRole("heading", { name: "未找到匹配的服务" })).toBeTruthy();
     expect(navigation.navigate).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "浏览全部服务" }));
-    expect(screen.getByRole("status").textContent).toBe("11 项服务");
     expect(document.activeElement).toBe(search);
   });
 

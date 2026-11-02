@@ -212,10 +212,23 @@ by both current and previous binaries. Only after migration, start, health,
 authorization, Audit, data, and application-execution verification succeed is
 the new release committed.
 
-Failed upgrade automatically restores the previous Compose release and leaves
-the current pointer unchanged. Explicit rollback returns to that immediate
-previous release without discarding data written after upgrade; the previous
-binary must pass verification against the expanded schema. Recovery is the
+A failed upgrade restores the previous Compose release before the candidate
+starts, or when that previous release retains the candidate's product inventory.
+Once an expanded-product candidate may have started accepting requests, a start
+or verification failure instead leaves the same phase, command and backup active
+and returns `EFFECT_OUTCOME_UNKNOWN`. Repair the reported cause and resume the
+same authenticated upgrade; automatically starting an authority that cannot
+manage newly accepted products would orphan resources. The current release
+pointer advances only after successful verification. Explicit rollback returns
+to the immediate previous release without discarding data written after upgrade; the previous
+binary must pass verification against the expanded schema and retain every
+currently declared product component and readiness contract. Equal authority
+schema numbers alone cannot authorize a rollback which removes a product. The
+Logstash candidate rejects that downgrade with
+`ROLLBACK_PRODUCT_INVENTORY_INCOMPATIBLE` before journal advancement, observation
+or provider effects; the previously accepted four-product/productless boundary
+is retained only for its authenticated predecessor profile. This candidate rule
+has unit coverage; signed-runtime acceptance remains outstanding. Recovery is the
 separate destructive path that restores a selected verified backup after an
 operator request. The recovery engine comes from an authenticated, supported
 operator bundle compatible with the installation profile; the selected backup

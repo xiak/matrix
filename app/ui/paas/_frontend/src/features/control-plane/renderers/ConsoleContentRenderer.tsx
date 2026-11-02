@@ -11,9 +11,7 @@ import {
   Database,
   HardDrive,
   MapPin,
-  MessagesSquare,
   PackageCheck,
-  Search,
   Server,
   ShieldCheck,
   Trash2
@@ -53,6 +51,7 @@ import type {
   ManagedServiceAuthorizationLoad
 } from "../domain/serviceAuthorization";
 import type { InstallationReadLoad, InstallationTerminationIntent, ServiceInstallation, ServiceOffering } from "../domain/resources";
+import { managedProductIcons } from "./ServiceDirectory";
 import { isManagedServiceProductId } from "../domain/managedServiceProduct";
 import { consoleRouteHref } from "../domain/selection";
 
@@ -86,9 +85,8 @@ function installationDetailScene(summary: InstallationScene, installation: Servi
 }
 
 function OfferingIcon({ serviceId }: { serviceId: ServiceOffering["service"]["id"] }) {
-  if (serviceId === "elasticsearch") return <Search aria-hidden="true" />;
-  if (serviceId === "rabbitmq") return <MessagesSquare aria-hidden="true" />;
-  return <Database aria-hidden="true" />;
+  const Icon = isManagedServiceProductId(serviceId) ? managedProductIcons[serviceId] : Database;
+  return <Icon aria-hidden="true" />;
 }
 
 function InstallationRows({ items, onOpen, triggerRefs }: {

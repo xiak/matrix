@@ -66,7 +66,7 @@ func DecodeCanonical(content []byte) (Manifest, error) {
 }
 
 // DecodeInstalledCanonical authenticates the current manifest contract or the
-// one fixed, accepted productless predecessor contract. It must never be used
+// fixed installed predecessor contracts. It must never be used
 // for a new installation or an upgrade target.
 func DecodeInstalledCanonical(content []byte) (Manifest, error) {
 	if manifest, err := DecodeCanonical(content); err == nil {
@@ -74,6 +74,14 @@ func DecodeInstalledCanonical(content []byte) (Manifest, error) {
 	}
 	if len(content) == 0 || len(content) > maximumManifestBytes {
 		return Manifest{}, errors.New("installed release manifest size is invalid")
+	}
+	var previous Manifest
+	if decodeStrict(content, &previous) == nil && IsFourManagedProductsManifest(previous) {
+		encoded, err := json.Marshal(previous)
+		if err == nil && bytes.Equal(encoded, content) {
+			return previous, nil
+		}
+		return Manifest{}, errors.New("installed release manifest is not canonical")
 	}
 	var legacy legacyProductlessManifest
 	if err := decodeStrict(content, &legacy); err != nil {
@@ -91,6 +99,10 @@ func DecodeInstalledCanonical(content []byte) (Manifest, error) {
 }
 
 func ValidateManifest(manifest Manifest) error {
+	return validateManifest(manifest, currentReleaseProfile)
+}
+
+func validateManifest(manifest Manifest, profile releaseProfile) error {
 	var problems []error
 	if manifest.Kind == NodeManifestKind {
 		if manifest.APIVersion != ManifestAPIVersion || manifest.Database != (DatabaseProfile{}) ||
@@ -126,12 +138,12 @@ func ValidateManifest(manifest Manifest) error {
 		validateSigner(manifest.Signer),
 		validateHost(manifest.Host),
 		ValidateDatabaseProfile(manifest.Database),
-		validateProducts(manifest.Products, manifest.Images),
+		validateProducts(manifest.Products, manifest.Images, profile),
 		validateDigest("topologyDigest", manifest.TopologyDigest),
 		validateFiles(manifest.Files, false),
 		validateRunnerPayloads(manifest.Products, manifest.Files),
 		validateRequiredReleaseFiles(manifest),
-		validateImages(manifest.Products, manifest.Images, manifest.Files),
+		validateImagesAgainst(manifest.Images, manifest.Files, requiredImages(manifest.Products, profile), true),
 	)
 	if manifest.MinimumFreeBytes < minimumFreeBytes || manifest.MinimumFreeBytes > maximumFreeBytes {
 		problems = append(problems, errors.New("minimum free space is outside the supported range"))
@@ -168,13 +180,22 @@ func validateRunnerPayloads(products []Product, files []File) error {
 	return nil
 }
 
-// ValidateInstalledManifest retains exactly one signed predecessor contract
-// for N-1 lifecycle operations. Candidate releases always use ValidateManifest.
+// ValidateInstalledManifest supports authenticated installed predecessors for
+// lifecycle operations. Candidate releases always use ValidateManifest.
 func ValidateInstalledManifest(manifest Manifest) error {
 	if err := ValidateManifest(manifest); err == nil {
 		return nil
 	}
+	if IsFourManagedProductsManifest(manifest) {
+		return nil
+	}
 	return validateLegacyProductlessManifest(manifest)
+}
+
+// IsFourManagedProductsManifest checks the complete installed product contract.
+// Its exact accepted topology is checked independently by the installed compiler.
+func IsFourManagedProductsManifest(manifest Manifest) bool {
+	return manifest.Kind == ManifestKind && validateManifest(manifest, fourManagedProductsProfile) == nil
 }
 
 // IsLegacyProductlessManifest reports only manifests that satisfy the complete
@@ -404,7 +425,7 @@ func ValidateDatabaseProfile(value DatabaseProfile) error {
 	return nil
 }
 
-func validateProducts(products []Product, images []Image) error {
+func validateProducts(products []Product, images []Image, profile releaseProfile) error {
 	if len(products) == 0 || len(products) > 16 ||
 		products[0].ID != ProductApplicationPaaS {
 		return errors.New("release product inventory is invalid")
@@ -423,7 +444,7 @@ func validateProducts(products []Product, images []Image) error {
 		}
 		knownProducts[product.ID] = struct{}{}
 		previous = product.ID
-		expected, known := productContract(product.ID, product.Version)
+		expected, known := productContract(product.ID, product.Version, profile)
 		if !known || !versionPattern.MatchString(product.Version) ||
 			product.RouteKey != expected.RouteKey ||
 			product.ReadinessContract != expected.ReadinessContract ||
@@ -450,10 +471,10 @@ func validateProducts(products []Product, images []Image) error {
 	return nil
 }
 
-func productContract(id ProductID, version string) (Product, bool) {
+func productContract(id ProductID, version string, profile releaseProfile) (Product, bool) {
 	switch id {
 	case ProductApplicationPaaS:
-		return ApplicationPaaSProduct(version), true
+		return applicationPaaSProduct(version, profile), true
 	case ProductDevOps:
 		return DevOpsProduct(version), true
 	default:
@@ -589,10 +610,6 @@ func validateRequiredReleaseFiles(manifest Manifest) error {
 		}
 	}
 	return errors.New("release IAM product authorization catalog is missing")
-}
-
-func validateImages(products []Product, images []Image, files []File) error {
-	return validateImagesAgainst(images, files, RequiredImages(products), true)
 }
 
 func validateImagesAgainst(

@@ -100,6 +100,7 @@ const (
 	managedMySQLImageIDEnv         = "MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID"
 	managedElasticsearchImageIDEnv = "MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID"
 	managedRabbitMQImageIDEnv      = "MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID"
+	managedLogstashImageIDEnv      = "MATRIX_IAM_MANAGED_LOGSTASH_IMAGE_ID"
 	// Match the published PaaS client environment on every host. Resolve this
 	// manifest reference to the local image ID; classic and containerd stores
 	// need not expose the manifest digest as their runtime image ID.
@@ -812,7 +813,7 @@ func TestManagedProductProviderProcesses(t *testing.T) {
 	}
 	for _, environment := range []string{
 		managedPostgresImageIDEnv, managedMySQLImageIDEnv,
-		managedElasticsearchImageIDEnv, managedRabbitMQImageIDEnv,
+		managedElasticsearchImageIDEnv, managedRabbitMQImageIDEnv, managedLogstashImageIDEnv,
 	} {
 		if os.Getenv(environment) == "" {
 			t.Skipf("set %s to the already-loaded immutable product image ID", environment)
@@ -2973,9 +2974,10 @@ type managedProductFixture struct {
 type managedProductImages struct {
 	postgres      string
 	mysql         string
-	mysqlEndpoint string
+	endpoint      string
 	elasticsearch string
 	rabbitmq      string
+	logstash      string
 }
 
 func managedPostgresFixture(t *testing.T, owner string, imageID string) managedProductFixture {
@@ -3024,6 +3026,16 @@ func managedRabbitMQFixture(t *testing.T, owner string, imageID string) managedP
 	}
 }
 
+func managedLogstashFixture(t *testing.T, owner string, imageID string) managedProductFixture {
+	t.Helper()
+	return managedProductFixture{
+		tenantID: "organization-process", name: "Logstash 8.19", serviceID: managedservicev1.LogstashServiceID,
+		offeringID: managedservicev1.LogstashOfferingID, quotaShapeID: "logstash-small", engineVersion: "8.19.23",
+		installationID: newManagedProductID(t, owner, "logstash"), imageID: imageID,
+		runtimeDirectory: "managed-logstash", credentialFile: "logstash-secret",
+	}
+}
+
 func runManagedProductProviderProcesses(
 	t *testing.T,
 	ctx context.Context,
@@ -3041,6 +3053,7 @@ func runManagedProductProviderProcesses(
 		managedMySQLFixture(t, "provider", managedRuntime.images.mysql),
 		managedElasticsearchFixture(t, "provider", managedRuntime.images.elasticsearch),
 		managedRabbitMQFixture(t, "provider", managedRuntime.images.rabbitmq),
+		managedLogstashFixture(t, "provider", managedRuntime.images.logstash),
 	}
 	quotasByID := make(map[string]managedservicev1.QuotaEntitlement, len(products))
 	installationsByID := make(map[string]managedservicev1.ServiceInstallation, len(products))
@@ -3310,7 +3323,7 @@ func runManagedProductProviderProcesses(
 	}
 	finishTenantIsolation()
 	waitAllPaaSOutboxDelivered(t, ctx, database)
-	t.Log("real PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19 and RabbitMQ 4.1 providers completed create-to-READY-to-TERMINATED, protocol read/write, data and credential deletion, quota return, Operation, exact group authorization, next-request revocation, tenant isolation and verified Audit")
+	t.Log("real PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19, RabbitMQ 4.1 and Logstash 8.19 providers completed create-to-READY-to-TERMINATED, protocol read/write, data and credential deletion, quota return, Operation, exact group authorization, next-request revocation, tenant isolation and verified Audit")
 	return []string{member.Credential, foreign.Credential}
 }
 
@@ -16216,7 +16229,7 @@ func startManagedProductWorker(
 	}
 	workerImageID := resolveManagedWorkerImage(t, ctx)
 	workerBinary := buildAuthorityLinuxBinary(t, ctx, root, inputRoot, "matrix-paas-worker-linux-amd64", "./app/service/paas/cmd/matrix-paas-worker")
-	images.mysqlEndpoint = buildManagedMySQLEndpointImage(t, ctx, root, temporary)
+	images.endpoint = buildManagedProductEndpointImage(t, ctx, root, temporary)
 	containerDSNPath := writeProtectedFile(t, inputRoot, "browser-paas-worker-container-dsn", []byte(containerDSN))
 	volumeName := "matrix-iam-managed-products-runtime-" + newManagedHexSuffix(t)
 	workerContainer := "matrix-iam-managed-products-worker-" + newManagedHexSuffix(t)
@@ -16540,9 +16553,11 @@ func managedProductWorkerEnvironment(
 		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS=" + workerAddress,
 		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS=" + images.postgres,
 		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS=" + images.mysql,
-		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS=" + images.mysqlEndpoint,
+		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS=" + images.endpoint,
 		"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS=" + images.elasticsearch,
 		"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS=" + images.rabbitmq,
+		"MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS=" + images.logstash,
+		"MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS=" + images.endpoint,
 	}
 }
 
@@ -16553,6 +16568,7 @@ func managedProductImagesFromEnvironment(t *testing.T) managedProductImages {
 		mysql:         managedProductImageID(t, managedMySQLImageIDEnv),
 		elasticsearch: managedProductImageID(t, managedElasticsearchImageIDEnv),
 		rabbitmq:      managedProductImageID(t, managedRabbitMQImageIDEnv),
+		logstash:      managedProductImageID(t, managedLogstashImageIDEnv),
 	}
 }
 
@@ -16683,8 +16699,9 @@ func assertManagedProductRuntime(
 	t.Helper()
 	filter := "label=com.xiak.matrix.managedservice.installation=" + installation.ID
 	arguments := []string{"container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}"}
-	if product.offeringID == managedservicev1.MySQLOfferingID {
-		arguments = append(arguments, "--filter", "label=com.docker.compose.service=mysql")
+	arguments = append(arguments, "--filter", "label=com.docker.compose.project="+localcontaineradapter.ProjectName(product.tenantID, product.installationID))
+	if product.offeringID == managedservicev1.MySQLOfferingID || product.offeringID == managedservicev1.LogstashOfferingID {
+		arguments = append(arguments, "--filter", "label=com.docker.compose.service="+product.serviceID)
 	}
 	list := exec.CommandContext(ctx, "docker", arguments...)
 	content, err := list.Output()
@@ -16722,6 +16739,8 @@ func assertManagedProductRuntime(
 		assertManagedElasticsearchHTTP(t, ctx, installation, password)
 	case managedservicev1.RabbitMQOfferingID:
 		assertManagedRabbitMQAMQP(t, ctx, installation, password)
+	case managedservicev1.LogstashOfferingID:
+		assertManagedLogstashHTTP(t, ctx, installation, password, containerID)
 	default:
 		t.Fatal("managed product fixture is unsupported")
 	}
@@ -16738,7 +16757,7 @@ func assertManagedProductDeleted(
 ) {
 	t.Helper()
 	filter := "label=com.xiak.matrix.managedservice.installation=" + product.installationID
-	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}")
+	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--filter", "label=com.docker.compose.project="+localcontaineradapter.ProjectName(product.tenantID, product.installationID), "--format", "{{.ID}}")
 	content, err := list.Output()
 	if err != nil || len(strings.Fields(string(content))) != 0 {
 		t.Fatalf("terminated %s still has a runtime container", product.name)
@@ -17086,7 +17105,7 @@ func cleanupManagedProduct(t *testing.T, product managedProductFixture) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	filter := "label=com.xiak.matrix.managedservice.installation=" + product.installationID
-	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}")
+	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--filter", "label=com.docker.compose.project="+localcontaineradapter.ProjectName(product.tenantID, product.installationID), "--format", "{{.ID}}")
 	content, err := list.Output()
 	if err != nil {
 		t.Errorf("list owned managed-product containers")
@@ -29097,4 +29116,84 @@ func freeAddress(t *testing.T) string {
 		t.Fatalf("release authority process address: %v", err)
 	}
 	return address
+}
+
+// This fixture packages the production entry process at its signed-release
+// path. It has no test protocol, credential, Docker socket or host mount.
+func buildManagedProductEndpointImage(t *testing.T, ctx context.Context, root, temporary string) string {
+	t.Helper()
+	directory := filepath.Join(temporary, "product-endpoint-image")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	buildAuthorityLinuxBinary(t, ctx, root, directory, "matrix-mysql-endpoint", "./app/service/paas/cmd/matrix-mysql-endpoint")
+	buildAuthorityLinuxBinary(t, ctx, root, directory, "matrix-product-endpoint", "./app/service/paas/cmd/matrix-product-endpoint")
+	if err := os.WriteFile(filepath.Join(directory, "Dockerfile"), []byte("FROM scratch\nCOPY --chmod=0555 matrix-mysql-endpoint /matrix/bin/matrix-mysql-endpoint\nCOPY --chmod=0555 matrix-product-endpoint /matrix/bin/matrix-product-endpoint\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tag := "matrix-test-product-endpoint:" + newManagedHexSuffix(t)
+	if err := exec.CommandContext(ctx, "docker", "build", "--network", "none", "--pull=false", "--tag", tag, directory).Run(); err != nil {
+		t.Fatal("build production product endpoint image")
+	}
+	t.Cleanup(func() {
+		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+		if err := exec.CommandContext(cleanup, "docker", "image", "rm", tag).Run(); err != nil {
+			t.Error("remove owned product endpoint image")
+		}
+	})
+	content, err := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", tag).Output()
+	if err != nil {
+		t.Fatal("inspect product endpoint image")
+	}
+	return strings.TrimSpace(string(content))
+}
+
+func assertManagedLogstashHTTP(t *testing.T, ctx context.Context, installation managedservicev1.ServiceInstallation, password []byte, containerID string) {
+	t.Helper()
+	client := &http.Client{Timeout: 10 * time.Second}
+	defer client.CloseIdleConnections()
+	marker := "authority-" + newManagedHexSuffix(t)
+	body, _ := json.Marshal(map[string]string{"probe": marker})
+	for _, authenticated := range []bool{false, true} {
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, *installation.Endpoint, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal("construct Logstash input request")
+		}
+		request.Header.Set("Content-Type", "application/json")
+		want := http.StatusUnauthorized
+		if authenticated {
+			request.SetBasicAuth("matrix", string(password))
+			want = http.StatusOK
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal("connect to managed Logstash input")
+		}
+		_ = response.Body.Close()
+		if response.StatusCode != want {
+			t.Fatalf("Logstash authentication status=%d", response.StatusCode)
+		}
+	}
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		content, err := exec.CommandContext(ctx, "docker", "exec", containerID, "head", "-c", "1048577", "/usr/share/logstash/data/events.jsonl").Output()
+		if err == nil && len(content) <= 1048576 {
+			for _, line := range bytes.Split(content, []byte("\n")) {
+				var event map[string]any
+				if json.Unmarshal(line, &event) == nil && event["probe"] == marker && event["matrix_profile"] == "http-json-file-v1" {
+					if _, present := event["headers"]; present {
+						t.Fatal("Logstash retained request authentication headers")
+					}
+					return
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal("Logstash durable output cancelled")
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	t.Fatal("authenticated Logstash event was not durably written")
 }

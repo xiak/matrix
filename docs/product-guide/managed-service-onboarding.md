@@ -5,7 +5,8 @@
 普通用户开通已经发布的产品，请看[托管服务使用手册](../user-guide/services-and-applications.md)。
 
 本仓库提供两个可执行接入样例。它们通过与 PG、MySQL 相同的部署接口运行，
-使用真实 Logstash、Kibana 制品。**样例没有进入默认产品目录，也没有发布 L/K 的租户管理 API。**
+使用真实 Logstash、Kibana 制品。**Logstash 正在进行平台集成验收；Kibana 仍为接入样例。
+两者都不能仅凭样例成功宣称已完成正式发布。**
 完成样例测试后，还须由平台团队完成正式集成和发布验收。
 
 ## 1. 先分清双方交付什么
@@ -69,7 +70,8 @@ Docker 产品可以从 [Logstash 适配器](../../app/adapter/managedservice/loc
 提供封闭的规格与删除校验、固定配置和健康检查，再通过现有本地容器适配层组装。
 目录创建、凭据保护、重复执行、状态观察、精确删除与恢复清单由共享实现处理，
 产品团队无需重写一遍。产品自己的真实协议测试仍须保留。
-这个适配器目前用于接入验收；源码进入适配器目录不代表产品已经上架。
+同一适配器也由 Logstash 平台候选的 worker 调用，不需要维护两份生命周期。
+正式交付状态以 [FEAT-007](../features/FEAT-007-control-plane-console.md#logstash-平台集成候选)为准。
 
 ## 4. 明确产品配置与依赖
 
@@ -135,10 +137,10 @@ L/K 样例不会自动获得 MySQL 的网络保证，Kibana 到 Elasticsearch �
 
 | 集成点 | 代码或规范入口 |
 | --- | --- |
-| 产品定义、规格与开通/实例契约 | [managed-service API](../../api/managedservice/v1/README.md)、[目录](../../app/service/paas/internal/managedservice/domain/catalog.go) |
+| 产品定义、规格与开通/实例契约 | [managed-service API](../../api/managedservice/v1/README.md)、[目录](../../app/service/paas/internal/managedservice/domain/catalog.go)；数据库规格与版本约束从目录生成，无需另写产品名单 |
 | 配置解析、依赖授权与持久化 | [managedservice 业务实现](../../app/service/paas/internal/managedservice)、[权限接入要求](../features/iam/FEAT-IAM-008-product-enforcement.md) |
 | 目录与运行实现一一对应 | [worker 组装](../../app/service/paas/cmd/matrix-paas-worker/main.go)、[注册校验](../../app/service/paas/internal/managedservice/usecase/reconcileinstallation/providers.go) |
-| 产品入口与真实页面 | [产品路由定义](../../app/ui/paas/_frontend/src/features/control-plane/domain/managedServiceProduct.ts)、[控制台 owner](../features/FEAT-007-control-plane-console.md) |
+| 产品入口与真实页面 | [产品描述](../../app/ui/paas/_frontend/src/features/control-plane/domain/managedServiceProduct.ts)统一登记路由、发现入口、导航与图标；配套中英文说明由同一前端维护 |
 | 固定制品、安装与恢复 | [发布组装](../../deploy/releasebuild)、[生命周期 owner](../features/FEAT-005-offline-platform-lifecycle.md) |
 
 只新增目录项会被运行实现校验拒绝。只放入镜像或增加页面，也不能完成接入。
@@ -151,6 +153,7 @@ L/K 样例不会自动获得 MySQL 的网络保证，Kibana 到 Elasticsearch �
 浏览器使用以及签名包生命周期。全部必要检查通过后，产品才能进入正式目录。
 
 以下状态应分别记录：**样例已验证 → 集成待验收 → 发布已验收**。
-本手册当前交付到第一阶段的可执行验收。ELK 完成正式纳管后，将用 Redis 复用
+L/K 已有可执行的适配器验收；Logstash 的真实平台进程验证正在补齐发布交接。
+ELK 完成正式纳管后，将用 Redis 复用
 同一条接入路径，验证它也适用于另一种产品家族。未完成验收的产品不显示为已发布。
 HA、产品引擎升级、业务数据备份和任意 Pipeline 编辑需要各自的明确接入范围。

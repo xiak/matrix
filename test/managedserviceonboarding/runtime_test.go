@@ -521,6 +521,9 @@ func deleteAndProve(t *testing.T, ctx context.Context, provider adapterv1.Provis
 	if remaining != "" {
 		t.Fatal("deleted product retains runtime objects")
 	}
+	if dockerOutput(t, "network", "ls", "-q", "--filter", "label=com.docker.compose.project="+project.Name) != "" {
+		t.Fatal("deleted product retains an owned network")
+	}
 }
 func awaitHealthy(t *testing.T, ctx context.Context, r compose.Runtime, p compose.RuntimeProject) {
 	t.Helper()

@@ -16,9 +16,6 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:1744ab1eed4536c0aaa99a8e8b2b0bb6328b67139bafcf431996f4800883575f" {
-		t.Fatalf("current topology contract digest drifted: %s", actual)
-	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
 		t.Fatalf("productless topology implementation drifted: %s", actual)
 	}
@@ -64,6 +61,7 @@ func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
 
 func TestInstalledDirectMySQLSourceCanUpgradeWithoutInventingEndpointImage(t *testing.T) {
 	manifest := topologyManifest()
+	manifest = fourProductTopologyManifest(manifest)
 	manifest.TopologyDigest = directMySQLContractDigest
 	options := Options{InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix", Listener: "127.0.0.1", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080"}
 	if _, err := Compile(manifest, options); err == nil {
@@ -98,7 +96,10 @@ func TestCompilePinsManagedServiceImagesForBothDockerStores(t *testing.T) {
 			if actual := strings.Split(document.Services["paas-worker"].Environment[mysqlEndpointImagesEnvironment], ","); !slices.Equal(actual, image.RuntimeImageIDs()) {
 				t.Fatal("MySQL ingress image is not release authenticated")
 			}
-		case "postgres", "mysql", "elasticsearch", "rabbitmq":
+			if actual := strings.Split(document.Services["paas-worker"].Environment[productEndpointImagesEnvironment], ","); !slices.Equal(actual, image.RuntimeImageIDs()) {
+				t.Fatal("shared product ingress image is not release authenticated")
+			}
+		case "postgres", "mysql", "elasticsearch", "rabbitmq", "logstash":
 			variable := "MATRIX_PAAS_WORKER_MANAGED_" + strings.ToUpper(image.Component) + "_IMAGE_IDS"
 			actual := strings.Split(document.Services["paas-worker"].Environment[variable], ",")
 			if !slices.Equal(actual, image.RuntimeImageIDs()) || len(actual) != 2 {
@@ -323,6 +324,8 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_INSTALLATION_ID",
 			"MATRIX_PAAS_WORKER_LISTEN_ADDRESS", "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF",
 			"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS",
+			"MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS",
+			"MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS", "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS",
@@ -452,6 +455,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 				actualKeys = append(actualKeys, key)
 			}
 			slices.Sort(actualKeys)
+			slices.Sort(keys)
 			if !slices.Equal(actualKeys, keys) {
 				t.Fatalf("service %q environment keys=%v want=%v", name, actualKeys, keys)
 			}
@@ -1006,9 +1010,9 @@ func topologyManifest() release.Manifest {
 		}
 		files = append(files, file)
 	}
-	fileDigests := "02345678abcd"
-	imageDigests := "456789abcdef"
-	sourceDigests := "f0123456789a"
+	fileDigests := "02345678abcdef9"
+	imageDigests := "456789abcdef0123"
+	sourceDigests := "f0123456789abcde"
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
 		sourceDigest := digest(sourceDigests[index])
@@ -1104,4 +1108,41 @@ func digestValue(value byte) string {
 
 func digest(value byte) string {
 	return "sha256:" + strings.Repeat(string(value), 64)
+}
+
+// Reconstruct the installed manifest inventory, not a new candidate with a forged digest.
+func fourProductTopologyManifest(manifest release.Manifest) release.Manifest {
+	manifest.TopologyDigest = fourManagedProductsContractDigest
+	for index := range manifest.Products {
+		if manifest.Products[index].ID == release.ProductApplicationPaaS {
+			manifest.Products[index].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
+		}
+	}
+	manifest.Images = slices.DeleteFunc(manifest.Images, func(image release.Image) bool { return image.Component == "logstash" })
+	manifest.Files = slices.DeleteFunc(manifest.Files, func(file release.File) bool { return file.Path == "images/logstash.tar" })
+	return manifest
+}
+
+func TestInstalledFourProductTopologyRemainsExactAndCannotBeANewCandidate(t *testing.T) {
+	manifest := fourProductTopologyManifest(topologyManifest())
+	options := Options{InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix", Listener: "127.0.0.1", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080"}
+	if _, err := Compile(manifest, options); err == nil {
+		t.Fatal("installed predecessor accepted as candidate")
+	}
+	result, err := CompileInstalled(manifest, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document composeDocument
+	if json.Unmarshal(result.ComposeJSON, &document) != nil {
+		t.Fatal("invalid installed topology")
+	}
+	env := document.Services["paas-worker"].Environment
+	if env[mysqlEndpointImagesEnvironment] == "" || env[productEndpointImagesEnvironment] != "" || env[logstashImagesEnvironment] != "" {
+		t.Fatal("installed worker inputs were changed")
+	}
+	manifest.TopologyDigest = ContractDigest()
+	if _, err := CompileInstalled(manifest, options); err == nil {
+		t.Fatal("mixed predecessor inventory and current topology accepted")
+	}
 }

@@ -80,6 +80,8 @@ func (fake *fakeEffects) InspectImage(_ context.Context, reference string) (Imag
 		return fake.baseImage("mysql", MySQLManifestDigest), nil
 	case ElasticsearchPinnedReference:
 		return fake.baseImage("docker.elastic.co/elasticsearch/elasticsearch", ElasticsearchManifestDigest), nil
+	case LogstashPinnedReference:
+		return fake.baseImage("docker.elastic.co/logstash/logstash", LogstashManifestDigest), nil
 	case RabbitMQPinnedReference:
 		return fake.baseImage("rabbitmq", RabbitMQManifestDigest), nil
 	case RunnerToolchainReference:

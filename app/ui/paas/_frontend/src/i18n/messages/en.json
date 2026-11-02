@@ -131,6 +131,11 @@
         "description": "Managed search, indexing and analytics",
         "keywords": "elasticsearch elastic es search analytics index 搜索 分析 索引 大数据"
       },
+      "logstash": {
+        "name": "Logstash",
+        "description": "Authenticated HTTP JSON input, durable event files and instance management",
+        "keywords": "logstash elastic elk pipeline logs events ingestion 日志 处理"
+      },
       "rabbitmq": {
         "name": "RabbitMQ Message Queue",
         "description": "Managed message brokers, queues and endpoints",

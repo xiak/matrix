@@ -1,4 +1,4 @@
-import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
+import { managedServiceProducts, type ManagedServiceProductId } from "../domain/managedServiceProduct";
 import type { ConsoleSection, ControlPlaneRouteSelection, ServiceView } from "../domain/selection";
 import type { ConsoleNavigationItemScene, ExperienceIconKind, NavigationIconKind } from "./consoleScene";
 
@@ -10,10 +10,10 @@ export type ServiceCategory = typeof serviceCategories[number];
 export const serviceDirectory = [
   { id: "regions", discovery: "preview", category: "infrastructure", group: "foundation", icon: "foundation", href: "/console/regions/", sections: ["regions"] },
   { id: "applications", discovery: "platform", category: "applications", group: "hosting", icon: "paas", href: "/console/applications/", sections: ["applications"] },
-  { id: "postgresql", discovery: "managed", category: "databases", group: "relational", icon: "paas", href: "/console/products/postgresql/", sections: ["catalog", "quotas", "installations"] },
-  { id: "mysql", discovery: "managed", category: "databases", group: "relational", icon: "paas", href: "/console/products/mysql/", sections: ["catalog", "quotas", "installations"] },
-  { id: "elasticsearch", discovery: "managed", category: "analytics", group: "searchAnalytics", icon: "observability", href: "/console/products/elasticsearch/", sections: ["catalog", "quotas", "installations"] },
-  { id: "rabbitmq", discovery: "managed", category: "middleware", group: "messageQueue", icon: "paas", href: "/console/products/rabbitmq/", sections: ["catalog", "quotas", "installations"] },
+  ...managedServiceProducts.map(({ id, category, group, icon }) => ({
+    id, category, group, icon, discovery: "managed" as const,
+    href: `/console/products/${id}/`, sections: ["catalog", "quotas", "installations"] as const
+  })),
   { id: "devops", discovery: "preview", category: "delivery", group: "delivery", icon: "devops", href: "/console/devops/", sections: ["devops"] },
   { id: "monitoring", discovery: "preview", category: "management", group: "monitoring", icon: "observability", href: "/console/observability/", sections: ["observability"] },
   { id: "logs", discovery: "preview", category: "management", group: "logData", icon: "observability", href: "/console/logs/", sections: ["logs"] },
@@ -43,10 +43,7 @@ function managedProductPages(product: ManagedServiceProductId) {
 export const serviceNavigation = {
   regions: [{ id: "regions", section: "regions", icon: "region" }],
   applications: [{ id: "applications", section: "applications", icon: "resources" }],
-  postgresql: managedProductPages("postgresql"),
-  mysql: managedProductPages("mysql"),
-  elasticsearch: managedProductPages("elasticsearch"),
-  rabbitmq: managedProductPages("rabbitmq"),
+  ...Object.fromEntries(managedServiceProducts.map(({ id }) => [id, managedProductPages(id)])) as Record<ManagedServiceProductId, ReturnType<typeof managedProductPages>>,
   devops: [
     { id: "devops", section: "devops", icon: "overview" },
     { id: "pipelines", section: "devops", view: "pipelines", icon: "pipeline" },

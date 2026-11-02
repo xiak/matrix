@@ -503,3 +503,48 @@ func legacyProductlessFromManifest(manifest Manifest) legacyProductlessManifest 
 func digest(value byte) string {
 	return "sha256:" + strings.Repeat(string(value), 64)
 }
+
+func TestInstalledFourProductManifestRetainsSignatureAndCannotOmitNewArtifactsFromCandidates(t *testing.T) {
+	previous := validManifest()
+	previous.Products[0].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
+	previous.Images = slices.DeleteFunc(previous.Images, func(image Image) bool { return image.Component == "logstash" })
+	previous.Files = slices.DeleteFunc(previous.Files, func(file File) bool { return file.Path == "images/logstash.tar" })
+	previous.TopologyDigest = "sha256:1744ab1eed4536c0aaa99a8e8b2b0bb6328b67139bafcf431996f4800883575f"
+	if ValidateManifest(previous) == nil {
+		t.Fatal("new release omitted the required Logstash image")
+	}
+	if err := ValidateInstalledManifest(previous); err != nil {
+		t.Fatal(err)
+	}
+	content, err := json.Marshal(previous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trust, err := NewTrustRoot(previous.Signer.KeyID, publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	trustBytes, err := EncodeTrustRoot(trust)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature := ed25519.Sign(privateKey, content)
+	if _, err := VerifyInstalled(content, signature, trustBytes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Verify(content, signature, trustBytes); err == nil {
+		t.Fatal("installed predecessor became a new candidate")
+	}
+	signature[0] ^= 1
+	if _, err := VerifyInstalled(content, signature, trustBytes); err == nil {
+		t.Fatal("installed predecessor bypassed signature verification")
+	}
+	previous.Products[0].RequiredComponents = ApplicationPaaSProduct(previous.Products[0].Version).RequiredComponents
+	if ValidateInstalledManifest(previous) == nil {
+		t.Fatal("current product declaration with missing image accepted")
+	}
+}

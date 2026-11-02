@@ -42,6 +42,11 @@ const legacyProductlessContractDigest = "sha256:6f8e3bd951426da4033b3234f2b8fceb
 // Retain only its missing endpoint-image input for upgrade/rollback inspection.
 const directMySQLContractDigest = "sha256:7cb0360dd17ee421b4d4dfbf58e006e236f3f86e9d1495bebeb90f521ebfa73d"
 const mysqlEndpointImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS"
+const productEndpointImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS"
+const logstashImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS"
+
+// Installed handbook.5 already uses isolated MySQL, without Logstash.
+const fourManagedProductsContractDigest = "sha256:1744ab1eed4536c0aaa99a8e8b2b0bb6328b67139bafcf431996f4800883575f"
 
 type compileProfile uint8
 
@@ -223,20 +228,25 @@ func compileProductTopology(manifest release.Manifest, options Options, isolated
 }
 
 // ValidateInstalledContract admits only the current topology contract or the
-// exact accepted productless predecessor. Candidate releases must compare
+// exact accepted installed predecessors. Candidate releases must compare
 // directly with ContractDigest instead.
 func ValidateInstalledContract(manifest release.Manifest) error {
 	if err := release.ValidateInstalledManifest(manifest); err != nil {
 		return errors.New("installed release manifest contract is unsupported")
 	}
 	expected := ContractDigest()
-	if manifest.TopologyDigest == directMySQLContractDigest && !release.IsLegacyProductlessManifest(manifest) {
+	if release.IsFourManagedProductsManifest(manifest) {
 		previous := contractDescription()
-		delete(previous.Compose.Services["paas-worker"].Environment, mysqlEndpointImagesEnvironment)
-		if contractDescriptionDigest(previous) != directMySQLContractDigest {
-			return errors.New("installed MySQL source topology implementation is unsupported")
+		delete(previous.Compose.Services["paas-worker"].Environment, logstashImagesEnvironment)
+		delete(previous.Compose.Services["paas-worker"].Environment, productEndpointImagesEnvironment)
+		expected = fourManagedProductsContractDigest
+		if manifest.TopologyDigest == directMySQLContractDigest {
+			delete(previous.Compose.Services["paas-worker"].Environment, mysqlEndpointImagesEnvironment)
+			expected = directMySQLContractDigest
 		}
-		expected = directMySQLContractDigest
+		if contractDescriptionDigest(previous) != expected {
+			return errors.New("installed four-product topology implementation is unsupported")
+		}
 	}
 	if release.IsLegacyProductlessManifest(manifest) {
 		expected = legacyProductlessContractDigest
@@ -258,8 +268,8 @@ func CompileInstalled(manifest release.Manifest, options Options) (Result, error
 		return Result{}, err
 	}
 	if !release.IsLegacyProductlessManifest(manifest) {
-		if manifest.TopologyDigest == directMySQLContractDigest {
-			return compileProductTopology(manifest, options, false)
+		if release.IsFourManagedProductsManifest(manifest) {
+			return compileProductTopology(manifest, options, manifest.TopologyDigest != directMySQLContractDigest)
 		}
 		return Compile(manifest, options)
 	}
@@ -748,7 +758,10 @@ func compileServices(
 			switch image.Component {
 			case "paas":
 				paasWorker.Environment[mysqlEndpointImagesEnvironment] = strings.Join(image.RuntimeImageIDs(), ",")
-			case "postgres", "mysql", "elasticsearch", "rabbitmq":
+				if images["logstash"] != "" {
+					paasWorker.Environment[productEndpointImagesEnvironment] = strings.Join(image.RuntimeImageIDs(), ",")
+				}
+			case "postgres", "mysql", "elasticsearch", "rabbitmq", "logstash":
 				paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_"+strings.ToUpper(image.Component)+"_IMAGE_IDS"] =
 					strings.Join(image.RuntimeImageIDs(), ",")
 			}

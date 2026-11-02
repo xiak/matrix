@@ -232,7 +232,19 @@ type TrustRoot struct {
 	PublicKeyFingerprint string `json:"publicKeyFingerprint"`
 }
 
+type releaseProfile uint8
+
+const (
+	currentReleaseProfile releaseProfile = iota
+	// The installed handbook.4/.5 releases contain four managed products.
+	fourManagedProductsProfile
+)
+
 func RequiredImages(products []Product) []ImageRequirement {
+	return requiredImages(products, currentReleaseProfile)
+}
+
+func requiredImages(products []Product, profile releaseProfile) []ImageRequirement {
 	required := []ImageRequirement{
 		{Component: "apisix", Purpose: ImagePlatform, HealthContract: "northbound-ready-v1"},
 		{Component: "audit", Purpose: ImagePlatform, HealthContract: "audit-ready-deduplicate-v1"},
@@ -244,6 +256,9 @@ func RequiredImages(products []Product) []ImageRequirement {
 	for _, product := range products {
 		switch product.ID {
 		case ProductApplicationPaaS:
+			if profile == currentReleaseProfile {
+				required = append(required, ImageRequirement{Component: "logstash", Purpose: ImagePlatform, HealthContract: "logstash-ready-protocol-v1"})
+			}
 			required = append(required,
 				ImageRequirement{Component: "elasticsearch", Purpose: ImagePlatform, HealthContract: "elasticsearch-ready-protocol-v1"},
 				ImageRequirement{Component: "mysql", Purpose: ImagePlatform, HealthContract: "mysql-ready-protocol-v1"},
@@ -276,12 +291,21 @@ func legacyProductlessRequiredImages() []ImageRequirement {
 }
 
 func ApplicationPaaSProduct(version string) Product {
+	return applicationPaaSProduct(version, currentReleaseProfile)
+}
+
+func applicationPaaSProduct(version string, profile releaseProfile) Product {
+	components := []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
+	if profile == currentReleaseProfile {
+		components = append(components, "logstash")
+		slices.Sort(components)
+	}
 	return Product{
 		ID:                 ProductApplicationPaaS,
 		Version:            version,
 		RouteKey:           "paas",
 		ReadinessContract:  "application-paas-ready-v1",
-		RequiredComponents: []string{"elasticsearch", "mysql", "paas", "rabbitmq"},
+		RequiredComponents: components,
 		Dependencies:       []ProductID{},
 	}
 }

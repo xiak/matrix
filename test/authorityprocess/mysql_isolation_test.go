@@ -9,9 +9,7 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"strings"
@@ -21,36 +19,6 @@ import (
 	mysql "github.com/go-sql-driver/mysql"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 )
-
-// This fixture packages the production entry process at its signed-release
-// path. It has no test protocol, credential, Docker socket or host mount.
-func buildManagedMySQLEndpointImage(t *testing.T, ctx context.Context, root, temporary string) string {
-	t.Helper()
-	directory := filepath.Join(temporary, "mysql-endpoint-image")
-	if err := os.Mkdir(directory, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	buildAuthorityLinuxBinary(t, ctx, root, directory, "matrix-mysql-endpoint", "./app/service/paas/cmd/matrix-mysql-endpoint")
-	if err := os.WriteFile(filepath.Join(directory, "Dockerfile"), []byte("FROM scratch\nCOPY --chmod=0555 matrix-mysql-endpoint /matrix/bin/matrix-mysql-endpoint\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	tag := "matrix-test-mysql-endpoint:" + newManagedHexSuffix(t)
-	if err := exec.CommandContext(ctx, "docker", "build", "--network", "none", "--pull=false", "--tag", tag, directory).Run(); err != nil {
-		t.Fatal("build production MySQL endpoint image")
-	}
-	t.Cleanup(func() {
-		cleanup, cancel := context.WithTimeout(context.Background(), time.Minute)
-		defer cancel()
-		if err := exec.CommandContext(cleanup, "docker", "image", "rm", tag).Run(); err != nil {
-			t.Error("remove owned MySQL endpoint image")
-		}
-	})
-	content, err := exec.CommandContext(ctx, "docker", "image", "inspect", "--format", "{{.Id}}", tag).Output()
-	if err != nil {
-		t.Fatal("inspect MySQL endpoint image")
-	}
-	return strings.TrimSpace(string(content))
-}
 
 func beginManagedMySQLTenantIsolation(t *testing.T, ctx context.Context, runtime managedProductRuntime, endpoint, owner, foreign, foreignTenantID string,
 	productA managedProductFixture, instanceA managedservicev1.ServiceInstallation, projectA string) func() {

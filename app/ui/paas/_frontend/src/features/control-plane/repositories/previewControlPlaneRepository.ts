@@ -14,7 +14,7 @@ let snapshot: ControlPlaneSnapshot = {
     id: "postgresql-18",
     service: { id: "postgresql", revision: 1, contentDigest: `sha256:${"1".repeat(64)}` },
     displayName: "PostgreSQL 18",
-    description: "平台托管的高可用关系数据库，制品、凭据与生命周期策略均由服务端管理。",
+    description: "平台托管的关系数据库，制品、凭据与生命周期策略均由服务端管理。",
     engineFamily: "PostgreSQL",
     engineVersion: "18",
     state: "AVAILABLE",
@@ -57,6 +57,16 @@ let snapshot: ControlPlaneSnapshot = {
     quotaShapes: [
       { id: "rabbitmq-small", displayName: "开发型", cpuMillicores: 500, memoryMiB: 768, storageGiB: 10 },
       { id: "rabbitmq-medium", displayName: "标准型", cpuMillicores: 1000, memoryMiB: 1536, storageGiB: 20 }
+    ]
+  }, {
+    id: "logstash-8.19",
+    service: { id: "logstash", revision: 1, contentDigest: `sha256:${"5".repeat(64)}` },
+    displayName: "Logstash 8.19",
+    description: "通过认证 HTTP 接收 JSON 事件并持久保存；配置固定为 http-json-file-v1。",
+    engineFamily: "Logstash", engineVersion: "8.19.23", state: "AVAILABLE",
+    quotaShapes: [
+      { id: "logstash-small", displayName: "开发型", cpuMillicores: 1000, memoryMiB: 1536, storageGiB: 10 },
+      { id: "logstash-medium", displayName: "标准型", cpuMillicores: 2000, memoryMiB: 3072, storageGiB: 20 }
     ]
   }],
   regions: [
@@ -141,7 +151,7 @@ function currentTime(): string {
 
 function previewEndpoint(installation: ServiceInstallation): string {
   const serviceId = snapshot.offerings.find((offering) => offering.id === installation.offeringId)?.service.id;
-  const port = serviceId === "mysql" ? 3306 : serviceId === "elasticsearch" ? 9200 : serviceId === "rabbitmq" ? 5672 : 5432;
+  const port = serviceId === "mysql" ? 3306 : serviceId === "elasticsearch" ? 9200 : serviceId === "rabbitmq" ? 5672 : serviceId === "logstash" ? 8080 : 5432;
   return `${installation.id}.service.local:${port}`;
 }
 

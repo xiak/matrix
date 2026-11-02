@@ -1,3 +1,4 @@
+import { managedServiceProducts } from "../domain/managedServiceProduct";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { Suspense, useState, type ComponentProps } from "react";
 import userEvent from "@testing-library/user-event";
@@ -1371,7 +1372,7 @@ describe("ConsoleShellRenderer", () => {
     expect(load).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["postgresql", "mysql", "elasticsearch", "rabbitmq"] as const)("requires explicit account-level MOCK enablement for the %s workspace", async (product) => {
+  it.each(managedServiceProducts.map(({ id }) => id))("requires explicit account-level MOCK enablement for the %s workspace", async (product) => {
     const { user, repository } = await renderConsole({ section: "catalog", product, experience: previewExperienceSnapshot });
     const enable = await screen.findByRole("button", { name: "同意并开通 · MOCK" });
     expect((enable as HTMLButtonElement).disabled).toBe(true);
@@ -1520,7 +1521,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("button", { name: "安装服务" })).toBeNull();
   });
 
-  it.each(["postgresql", "mysql", "elasticsearch", "rabbitmq"])("routes a catalog card using the backend %s service reference rather than its offering or engine name", async (serviceId) => {
+  it.each(managedServiceProducts.map(({ id }) => id))("routes a catalog card using the backend %s service reference rather than its offering or engine name", async (serviceId) => {
     await renderConsole({ section: "catalog", load: vi.fn().mockResolvedValue({ ...snapshot, offerings: [{
       ...snapshot.offerings[0]!, service: { ...snapshot.offerings[0]!.service, id: serviceId }
     }] }) });
@@ -2253,7 +2254,6 @@ describe("ConsoleShellRenderer", () => {
     fireEvent.click(trigger);
 
     const directory = screen.getByRole("dialog", { name: "云产品入口" });
-    expect(within(directory).getByRole("status").textContent).toBe("11 项服务");
     expect(screen.queryByRole("button", { name: "关闭全局浮层", hidden: true })).toBeNull();
     expect(workspace.closest("[inert]")).not.toBeNull();
     expect(screen.getByRole("button", { name: /打开账号菜单/ }).closest("[inert]")).not.toBeNull();

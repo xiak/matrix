@@ -1,3 +1,4 @@
+import { managedServiceProducts } from "../domain/managedServiceProduct";
 import { describe, expect, it } from "vitest";
 import { previewCredential } from "@/features/auth/repositories/previewIamRepository";
 import { previewControlPlaneRepository } from "./previewControlPlaneRepository";
@@ -5,12 +6,10 @@ import { previewControlPlaneRepository } from "./previewControlPlaneRepository";
 describe("previewControlPlaneRepository", () => {
   it("provides a mutable but isolated end-to-end installation journey", async () => {
     const initial = await previewControlPlaneRepository.load(previewCredential, ["offerings"]);
-    expect(initial.offerings?.map(({ id }) => id)).toEqual([
-      "postgresql-18", "mysql-8.4", "elasticsearch-8.19", "rabbitmq-4.1"
-    ]);
+    expect(initial.offerings?.map(({ id }) => id)).toEqual(managedServiceProducts.map(({ offeringId }) => offeringId));
     expect(initial.offerings![0]?.quotaShapes).toHaveLength(2);
     initial.offerings!.length = 0;
-    expect((await previewControlPlaneRepository.load(previewCredential, ["offerings"])).offerings).toHaveLength(4);
+    expect((await previewControlPlaneRepository.load(previewCredential, ["offerings"])).offerings).toHaveLength(managedServiceProducts.length);
 
     const id = "pg-ux-journey";
     const pending = await previewControlPlaneRepository.createInstallation(previewCredential, {

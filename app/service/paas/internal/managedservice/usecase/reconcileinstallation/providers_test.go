@@ -11,24 +11,15 @@ import (
 
 func TestProviderRegistryRequiresAndRoutesEveryReleasedOffering(t *testing.T) {
 	catalog := domain.DefaultCatalog()
-	postgres := &registryProvider{result: managedserviceadapterv1.ProvisionResult{
-		Endpoint: "127.0.0.1:25432", CredentialReference: "credential-postgres",
-	}}
-	mysql := &registryProvider{result: managedserviceadapterv1.ProvisionResult{
-		Endpoint: "127.0.0.1:23306", CredentialReference: "credential-mysql",
-	}}
-	elasticsearch := &registryProvider{result: managedserviceadapterv1.ProvisionResult{
-		Endpoint: "http://127.0.0.1:29200", CredentialReference: "credential-elasticsearch",
-	}}
-	rabbitmq := &registryProvider{result: managedserviceadapterv1.ProvisionResult{
-		Endpoint: "amqp://127.0.0.1:25672/matrix", CredentialReference: "credential-rabbitmq",
-	}}
-	registry, err := NewProviderRegistry(catalog, map[string]managedserviceadapterv1.Provisioner{
-		managedservicev1.PostgreSQLOfferingID:    postgres,
-		managedservicev1.MySQLOfferingID:         mysql,
-		managedservicev1.ElasticsearchOfferingID: elasticsearch,
-		managedservicev1.RabbitMQOfferingID:      rabbitmq,
-	})
+	providers := map[string]managedserviceadapterv1.Provisioner{}
+	for _, offering := range catalog.List() {
+		providers[offering.ID] = &registryProvider{result: managedserviceadapterv1.ProvisionResult{
+			Endpoint: "127.0.0.1:25432", CredentialReference: "credential-" + offering.ID,
+		}}
+	}
+	mysql := providers[managedservicev1.MySQLOfferingID].(*registryProvider)
+	postgres := providers[managedservicev1.PostgreSQLOfferingID].(*registryProvider)
+	registry, err := NewProviderRegistry(catalog, providers)
 	if err != nil {
 		t.Fatalf("new provider registry: %v", err)
 	}
@@ -46,38 +37,37 @@ func TestProviderRegistryRequiresAndRoutesEveryReleasedOffering(t *testing.T) {
 		mysql.deleteRequest != deprovision || postgres.deleteCalls != 0 {
 		t.Fatalf("delete route err=%v mysql=%#v postgres=%#v", err, mysql, postgres)
 	}
-	if err := registry.Ready(context.Background()); err != nil || mysql.readyCalls != 1 || postgres.readyCalls != 1 ||
-		elasticsearch.readyCalls != 1 || rabbitmq.readyCalls != 1 {
-		t.Fatalf("registry readiness err=%v mysql=%d postgres=%d elasticsearch=%d rabbitmq=%d",
-			err, mysql.readyCalls, postgres.readyCalls, elasticsearch.readyCalls, rabbitmq.readyCalls)
+	if err := registry.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for id, value := range providers {
+		if value.(*registryProvider).readyCalls != 1 {
+			t.Fatalf("provider %s was not checked", id)
+		}
 	}
 }
 
 func TestProviderRegistryRejectsMissingExtraAndUnknownProviders(t *testing.T) {
 	catalog := domain.DefaultCatalog()
 	provider := &registryProvider{}
-	for name, providers := range map[string]map[string]managedserviceadapterv1.Provisioner{
-		"missing": {managedservicev1.PostgreSQLOfferingID: provider},
-		"extra": {
-			managedservicev1.PostgreSQLOfferingID:    provider,
-			managedservicev1.MySQLOfferingID:         provider,
-			managedservicev1.ElasticsearchOfferingID: provider,
-			managedservicev1.RabbitMQOfferingID:      provider,
-			"unreleased":                             provider,
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			if _, err := NewProviderRegistry(catalog, providers); err == nil {
-				t.Fatal("provider/catalog mismatch was accepted")
-			}
-		})
+	providers := map[string]managedserviceadapterv1.Provisioner{}
+	for _, offering := range catalog.List() {
+		providers[offering.ID] = provider
 	}
-	registry, err := NewProviderRegistry(catalog, map[string]managedserviceadapterv1.Provisioner{
-		managedservicev1.PostgreSQLOfferingID:    provider,
-		managedservicev1.MySQLOfferingID:         provider,
-		managedservicev1.ElasticsearchOfferingID: provider,
-		managedservicev1.RabbitMQOfferingID:      provider,
-	})
+	for _, offering := range catalog.List() {
+		id := offering.ID
+		delete(providers, id)
+		if _, err := NewProviderRegistry(catalog, providers); err == nil {
+			t.Fatal("missing provider accepted")
+		}
+		providers[id] = provider
+	}
+	providers["unreleased"] = provider
+	if _, err := NewProviderRegistry(catalog, providers); err == nil {
+		t.Fatal("unreleased provider accepted")
+	}
+	delete(providers, "unreleased")
+	registry, err := NewProviderRegistry(catalog, providers)
 	if err != nil {
 		t.Fatal(err)
 	}

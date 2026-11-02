@@ -20,6 +20,7 @@ import (
 	localmachineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	localcontaineradapter "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 	localelasticsearchadapter "github.com/xiak/matrix/app/adapter/managedservice/localelasticsearch"
+	locallogstashadapter "github.com/xiak/matrix/app/adapter/managedservice/locallogstash"
 	localmysqladapter "github.com/xiak/matrix/app/adapter/managedservice/localmysql"
 	localpostgresadapter "github.com/xiak/matrix/app/adapter/managedservice/localpostgres"
 	localrabbitmqadapter "github.com/xiak/matrix/app/adapter/managedservice/localrabbitmq"
@@ -40,68 +41,72 @@ import (
 )
 
 const (
-	databaseDSNFileEnvironment              = "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE"
-	workerIDEnvironment                     = "MATRIX_PAAS_WORKER_ID"
-	bindingRefEnvironment                   = "MATRIX_PAAS_WORKER_BINDING_REF"
-	bindingRootEnvironment                  = "MATRIX_PAAS_WORKER_BINDING_ROOT"
-	secretRootEnvironment                   = "MATRIX_PAAS_WORKER_SECRET_ROOT"
-	artifactCatalogEnvironment              = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
-	installationIDEnvironment               = "MATRIX_PAAS_WORKER_INSTALLATION_ID"
-	nodeConnectionsFileEnvironment          = "MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE"
-	enrollmentControllerCertEnvironment     = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
-	enrollmentControllerKeyEnvironment      = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
-	enrollmentControllerTrustEnvironment    = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE"
-	executionTenantEnvironment              = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
-	machineBindingEnvironment               = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
-	listenAddressEnvironment                = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
-	managedPostgresImageIDsEnvironment      = "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS"
-	managedMySQLImageIDsEnvironment         = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS"
-	managedMySQLEndpointImageIDsEnvironment = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS"
-	managedElasticsearchImageIDsEnvironment = "MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS"
-	managedRabbitMQImageIDsEnvironment      = "MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS"
-	pollInterval                            = 250 * time.Millisecond
-	executionTargetRefresh                  = time.Minute
-	executionTargetMaximumAge               = 5 * time.Minute
-	executionTargetTimeout                  = 5 * time.Second
-	executionTargetRefreshBackoff           = time.Second
-	executionProfileStartupAttempts         = 6
-	executionProfileStartupBackoff          = time.Second
-	runtimeObservationInterval              = 5 * time.Second
-	runtimeFailureBackoff                   = 2 * time.Second
-	runtimeMaximumObservationAge            = 5 * time.Second
-	runtimeMaximumPastClockSkew             = 30 * time.Second
-	runtimeValidityDuration                 = 15 * time.Second
-	operationLeaseDuration                  = 30 * time.Second
-	effectTimeout                           = 20 * time.Second
-	reconcileBackoff                        = time.Second
-	maximumOperationAttempts                = 10
-	placementDecisionTTL                    = 5 * time.Minute
-	pendingCapacityClaimTTL                 = 10 * time.Minute
-	maximumArtifactCatalogBytes             = 1024 * 1024
+	databaseDSNFileEnvironment                = "MATRIX_PAAS_WORKER_DATABASE_DSN_FILE"
+	workerIDEnvironment                       = "MATRIX_PAAS_WORKER_ID"
+	bindingRefEnvironment                     = "MATRIX_PAAS_WORKER_BINDING_REF"
+	bindingRootEnvironment                    = "MATRIX_PAAS_WORKER_BINDING_ROOT"
+	secretRootEnvironment                     = "MATRIX_PAAS_WORKER_SECRET_ROOT"
+	artifactCatalogEnvironment                = "MATRIX_PAAS_WORKER_ARTIFACT_CATALOG_FILE"
+	installationIDEnvironment                 = "MATRIX_PAAS_WORKER_INSTALLATION_ID"
+	nodeConnectionsFileEnvironment            = "MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE"
+	enrollmentControllerCertEnvironment       = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE"
+	enrollmentControllerKeyEnvironment        = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE"
+	enrollmentControllerTrustEnvironment      = "MATRIX_PAAS_WORKER_ENROLLMENT_CONTROLLER_TRUST_FILE"
+	executionTenantEnvironment                = "MATRIX_PAAS_WORKER_EXECUTION_TENANT_ID"
+	machineBindingEnvironment                 = "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF"
+	listenAddressEnvironment                  = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
+	managedPostgresImageIDsEnvironment        = "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS"
+	managedMySQLImageIDsEnvironment           = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS"
+	managedMySQLEndpointImageIDsEnvironment   = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS"
+	managedElasticsearchImageIDsEnvironment   = "MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS"
+	managedRabbitMQImageIDsEnvironment        = "MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS"
+	managedLogstashImageIDsEnvironment        = "MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS"
+	managedProductEndpointImageIDsEnvironment = "MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS"
+	pollInterval                              = 250 * time.Millisecond
+	executionTargetRefresh                    = time.Minute
+	executionTargetMaximumAge                 = 5 * time.Minute
+	executionTargetTimeout                    = 5 * time.Second
+	executionTargetRefreshBackoff             = time.Second
+	executionProfileStartupAttempts           = 6
+	executionProfileStartupBackoff            = time.Second
+	runtimeObservationInterval                = 5 * time.Second
+	runtimeFailureBackoff                     = 2 * time.Second
+	runtimeMaximumObservationAge              = 5 * time.Second
+	runtimeMaximumPastClockSkew               = 30 * time.Second
+	runtimeValidityDuration                   = 15 * time.Second
+	operationLeaseDuration                    = 30 * time.Second
+	effectTimeout                             = 20 * time.Second
+	reconcileBackoff                          = time.Second
+	maximumOperationAttempts                  = 10
+	placementDecisionTTL                      = 5 * time.Minute
+	pendingCapacityClaimTTL                   = 10 * time.Minute
+	maximumArtifactCatalogBytes               = 1024 * 1024
 )
 
 const runtimeObservationTimeout = 10 * time.Second
 
 type configuration struct {
-	databaseDSNFile              string
-	workerID                     string
-	bindingRef                   string
-	bindingRoot                  string
-	secretRoot                   string
-	artifactCatalog              string
-	installationID               string
-	nodeConnectionsFile          string
-	enrollmentControllerCert     string
-	enrollmentControllerKey      string
-	enrollmentControllerTrust    string
-	executionTenant              paasv1.TenantID
-	machineBinding               string
-	listenAddress                string
-	managedPostgresImageIDs      string
-	managedMySQLImageIDs         string
-	managedMySQLEndpointImageIDs string
-	managedElasticsearchImageIDs string
-	managedRabbitMQImageIDs      string
+	databaseDSNFile                string
+	workerID                       string
+	bindingRef                     string
+	bindingRoot                    string
+	secretRoot                     string
+	artifactCatalog                string
+	installationID                 string
+	nodeConnectionsFile            string
+	enrollmentControllerCert       string
+	enrollmentControllerKey        string
+	enrollmentControllerTrust      string
+	executionTenant                paasv1.TenantID
+	machineBinding                 string
+	listenAddress                  string
+	managedPostgresImageIDs        string
+	managedMySQLImageIDs           string
+	managedMySQLEndpointImageIDs   string
+	managedElasticsearchImageIDs   string
+	managedRabbitMQImageIDs        string
+	managedLogstashImageIDs        string
+	managedProductEndpointImageIDs string
 }
 
 type workerFailureStage string
@@ -362,6 +367,24 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	managedLogstashRoot, err := managedRoot("logstash")
+	if err != nil {
+		return err
+	}
+	logstashImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedLogstashImageIDs, ","))
+	if err != nil {
+		return err
+	}
+	productEndpointImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedProductEndpointImageIDs, ","))
+	if err != nil {
+		return err
+	}
+	managedLogstash, err := locallogstashadapter.New(locallogstashadapter.Config{
+		Root: managedLogstashRoot, ImageID: logstashImageID, EndpointImageID: productEndpointImageID, Runtime: runtime,
+	})
+	if err != nil {
+		return err
+	}
 	providerRegistry, err := reconcileinstallation.NewProviderRegistry(
 		domain.DefaultCatalog(),
 		map[string]managedserviceadapterv1.Provisioner{
@@ -369,6 +392,7 @@ func run(ctx context.Context) (result error) {
 			domain.MySQLOfferingID:         managedMySQL,
 			domain.ElasticsearchOfferingID: managedElasticsearch,
 			domain.RabbitMQOfferingID:      managedRabbitMQ,
+			domain.LogstashOfferingID:      managedLogstash,
 		},
 	)
 	if err != nil {
@@ -798,25 +822,27 @@ func runWorkerLoop(
 
 func loadConfiguration() (configuration, error) {
 	config := configuration{
-		databaseDSNFile:              os.Getenv(databaseDSNFileEnvironment),
-		workerID:                     os.Getenv(workerIDEnvironment),
-		bindingRef:                   os.Getenv(bindingRefEnvironment),
-		bindingRoot:                  os.Getenv(bindingRootEnvironment),
-		secretRoot:                   os.Getenv(secretRootEnvironment),
-		artifactCatalog:              os.Getenv(artifactCatalogEnvironment),
-		installationID:               os.Getenv(installationIDEnvironment),
-		nodeConnectionsFile:          os.Getenv(nodeConnectionsFileEnvironment),
-		enrollmentControllerCert:     os.Getenv(enrollmentControllerCertEnvironment),
-		enrollmentControllerKey:      os.Getenv(enrollmentControllerKeyEnvironment),
-		enrollmentControllerTrust:    os.Getenv(enrollmentControllerTrustEnvironment),
-		executionTenant:              paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
-		machineBinding:               os.Getenv(machineBindingEnvironment),
-		listenAddress:                os.Getenv(listenAddressEnvironment),
-		managedPostgresImageIDs:      os.Getenv(managedPostgresImageIDsEnvironment),
-		managedMySQLImageIDs:         os.Getenv(managedMySQLImageIDsEnvironment),
-		managedMySQLEndpointImageIDs: os.Getenv(managedMySQLEndpointImageIDsEnvironment),
-		managedElasticsearchImageIDs: os.Getenv(managedElasticsearchImageIDsEnvironment),
-		managedRabbitMQImageIDs:      os.Getenv(managedRabbitMQImageIDsEnvironment),
+		databaseDSNFile:                os.Getenv(databaseDSNFileEnvironment),
+		workerID:                       os.Getenv(workerIDEnvironment),
+		bindingRef:                     os.Getenv(bindingRefEnvironment),
+		bindingRoot:                    os.Getenv(bindingRootEnvironment),
+		secretRoot:                     os.Getenv(secretRootEnvironment),
+		artifactCatalog:                os.Getenv(artifactCatalogEnvironment),
+		installationID:                 os.Getenv(installationIDEnvironment),
+		nodeConnectionsFile:            os.Getenv(nodeConnectionsFileEnvironment),
+		enrollmentControllerCert:       os.Getenv(enrollmentControllerCertEnvironment),
+		enrollmentControllerKey:        os.Getenv(enrollmentControllerKeyEnvironment),
+		enrollmentControllerTrust:      os.Getenv(enrollmentControllerTrustEnvironment),
+		executionTenant:                paasv1.TenantID(os.Getenv(executionTenantEnvironment)),
+		machineBinding:                 os.Getenv(machineBindingEnvironment),
+		listenAddress:                  os.Getenv(listenAddressEnvironment),
+		managedPostgresImageIDs:        os.Getenv(managedPostgresImageIDsEnvironment),
+		managedMySQLImageIDs:           os.Getenv(managedMySQLImageIDsEnvironment),
+		managedMySQLEndpointImageIDs:   os.Getenv(managedMySQLEndpointImageIDsEnvironment),
+		managedElasticsearchImageIDs:   os.Getenv(managedElasticsearchImageIDsEnvironment),
+		managedRabbitMQImageIDs:        os.Getenv(managedRabbitMQImageIDsEnvironment),
+		managedLogstashImageIDs:        os.Getenv(managedLogstashImageIDsEnvironment),
+		managedProductEndpointImageIDs: os.Getenv(managedProductEndpointImageIDsEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.workerID == "" ||
 		config.bindingRef == "" || config.bindingRoot == "" ||
@@ -827,7 +853,7 @@ func loadConfiguration() (configuration, error) {
 		config.executionTenant == "" || config.machineBinding == "" ||
 		config.listenAddress == "" || config.managedPostgresImageIDs == "" ||
 		config.managedMySQLImageIDs == "" || config.managedMySQLEndpointImageIDs == "" || config.managedElasticsearchImageIDs == "" ||
-		config.managedRabbitMQImageIDs == "" {
+		config.managedRabbitMQImageIDs == "" || config.managedLogstashImageIDs == "" || config.managedProductEndpointImageIDs == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")
 	}
 	if paasv1.ValidateID("workerId", config.workerID) != nil ||

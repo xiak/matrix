@@ -271,7 +271,7 @@ func TestUpgradeBindsImmediatePredecessorAndBackupBeforePublishing(t *testing.T)
 	}
 }
 
-func TestUpgradeAndRollbackAuthenticateOnlyTheFixedProductlessPredecessor(t *testing.T) {
+func TestProductlessSourceCanUpgradeButNewProductsPreventUnsafeRollback(t *testing.T) {
 	fixtures, err := releasetest.WriteProductFoundationUpgrade(t.TempDir())
 	if err != nil {
 		t.Fatalf("write product-foundation upgrade fixtures: %v", err)
@@ -301,13 +301,15 @@ func TestUpgradeAndRollbackAuthenticateOnlyTheFixedProductlessPredecessor(t *tes
 	}
 
 	materializeInstalledRelease(t, root, target)
-	result, err = backend.Run(context.Background(), cli.Request{
+	before := readJournal(t, root)
+	observations := effects.observeCalls
+	_, err = backend.Run(context.Background(), cli.Request{
 		Action: lifecycle.ActionRollback, Root: root,
 	})
-	if err != nil || result.ReleaseID != legacy.Manifest.Release.ID ||
-		result.PreviousID != "" ||
-		effects.explicitRollbackPlan.Previous.ReleaseID != legacy.Manifest.Release.ID {
-		t.Fatalf("rollback productless predecessor = %#v / %v", result, err)
+	assertFault(t, err, cli.FaultPrecondition, "ROLLBACK_PRODUCT_INVENTORY_INCOMPATIBLE")
+	if after := readJournal(t, root); !reflect.DeepEqual(after, before) ||
+		effects.observeCalls != observations || len(effects.explicitRollbackCalls) != 0 {
+		t.Fatal("unsupported product rollback advanced state or reached provider effects")
 	}
 }
 
@@ -1591,5 +1593,61 @@ func initializeInstalledReleaseJournal(
 	defer session.Close()
 	if err := session.Initialize(state); err != nil {
 		t.Fatalf("initialize installed predecessor journal: %v", err)
+	}
+}
+
+func TestRollbackRequiresEveryCurrentProductComponent(t *testing.T) {
+	current := release.Manifest{Products: []release.Product{release.ApplicationPaaSProduct("v0.3.0"), release.DevOpsProduct("v0.3.0")}}
+	target := release.Manifest{Products: []release.Product{release.ApplicationPaaSProduct("v0.2.0"), release.DevOpsProduct("v0.2.0")}}
+	if !retainsProductInventory(current, target) {
+		t.Fatal("unchanged product inventory cannot roll back")
+	}
+	target.Products[0].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
+	if retainsProductInventory(current, target) {
+		t.Fatal("Logstash would lose its management path after rollback")
+	}
+	target.Products = []release.Product{release.ApplicationPaaSProduct("v0.2.0")}
+	if retainsProductInventory(current, target) {
+		t.Fatal("optional product would lose its authority after rollback")
+	}
+}
+
+func TestProductExpansionFailureResumesAfterCandidateMayAcceptResources(t *testing.T) {
+	for _, phase := range []lifecycle.Phase{lifecycle.PhaseLoadingImages, lifecycle.PhaseStarting, lifecycle.PhaseVerifying} {
+		t.Run(string(phase), func(t *testing.T) {
+			fixtures, err := releasetest.WriteProductFoundationUpgrade(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			legacy, target := fixtures[0], fixtures[1]
+			effects := &installEffects{upgradeFailPhase: phase, upgradeFailErr: ErrEffectVerification, upgradeFailOnce: true}
+			backend := newTestBackend(t, effects)
+			root := filepath.Join(t.TempDir(), "matrix")
+			initializeInstalledReleaseJournal(t, root, legacy)
+			materializeProductlessInstalledRelease(t, root, legacy)
+			request := upgradeRequest(root, target)
+			_, err = backend.Run(context.Background(), request)
+			state := readJournal(t, root)
+			if phase == lifecycle.PhaseLoadingImages {
+				assertFault(t, err, cli.FaultVerification, "IMAGE_VERIFICATION_FAILED")
+				if state.Active != nil || state.Last == nil || state.Last.Outcome != lifecycle.OutcomeRolledBack || effects.upgradeRollbackCalls != 1 {
+					t.Fatal("pre-start failure did not restore the source")
+				}
+				return
+			}
+			assertFault(t, err, cli.FaultUnavailable, "EFFECT_OUTCOME_UNKNOWN")
+			if state.Active == nil || state.Active.Phase != phase || state.CurrentReleaseID != legacy.Manifest.Release.ID || effects.upgradeRollbackCalls != 0 {
+				t.Fatal("product expansion discarded the candidate or advanced its release")
+			}
+			commandID, backupID := state.Active.Command.ID, state.Active.Command.BackupID
+			result, err := backend.Run(context.Background(), request)
+			if err != nil || result.ReleaseID != target.Manifest.Release.ID {
+				t.Fatalf("resume candidate: %#v / %v", result, err)
+			}
+			state = readJournal(t, root)
+			if state.Active != nil || state.Last == nil || state.Last.Command.ID != commandID || state.Last.Command.BackupID != backupID || state.Last.Outcome != lifecycle.OutcomeSucceeded || effects.upgradeRollbackCalls != 0 {
+				t.Fatal("resumed upgrade replaced intent or attempted unsafe rollback")
+			}
+		})
 	}
 }

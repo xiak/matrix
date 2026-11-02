@@ -131,6 +131,11 @@
         "description": "托管搜索、索引与分析服务",
         "keywords": "elasticsearch elastic es search analytics index 搜索 分析 索引 大数据"
       },
+      "logstash": {
+        "name": "Logstash 日志处理",
+        "description": "认证 HTTP JSON 输入、持久事件文件与实例管理",
+        "keywords": "logstash elastic elk pipeline 日志 接收 处理 事件"
+      },
       "rabbitmq": {
         "name": "RabbitMQ 消息队列",
         "description": "托管消息代理、队列与连接端点",

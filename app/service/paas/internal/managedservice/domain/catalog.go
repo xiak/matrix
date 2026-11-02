@@ -12,6 +12,7 @@ const PostgreSQLOfferingID = managedservicev1.PostgreSQLOfferingID
 const MySQLOfferingID = managedservicev1.MySQLOfferingID
 const ElasticsearchOfferingID = managedservicev1.ElasticsearchOfferingID
 const RabbitMQOfferingID = managedservicev1.RabbitMQOfferingID
+const LogstashOfferingID = managedservicev1.LogstashOfferingID
 
 type Catalog struct {
 	definitions []managedservicev1.ServiceDefinition
@@ -24,6 +25,7 @@ func DefaultCatalog() Catalog {
 		newDefinition(managedservicev1.MySQLServiceID, "MySQL", "由 Matrix 管理的关系数据库服务。"),
 		newDefinition(managedservicev1.ElasticsearchServiceID, "Elasticsearch", "由 Matrix 管理的搜索与分析服务。"),
 		newDefinition(managedservicev1.RabbitMQServiceID, "RabbitMQ", "由 Matrix 管理的消息队列服务。"),
+		newDefinition(managedservicev1.LogstashServiceID, "Logstash", "由 Matrix 管理的日志接收与处理服务。"),
 	}
 	references := make(map[string]managedservicev1.ServiceDefinitionReference, len(definitions))
 	for _, definition := range definitions {
@@ -61,6 +63,17 @@ func DefaultCatalog() Catalog {
 			QuotaShapes: []managedservicev1.QuotaShape{
 				{ID: "elasticsearch-small", DisplayName: "开发型", CPUMillicores: 1000, MemoryMiB: 1536, StorageGiB: 10},
 				{ID: "elasticsearch-medium", DisplayName: "标准型", CPUMillicores: 2000, MemoryMiB: 3072, StorageGiB: 20},
+			},
+		},
+		{
+			ID: LogstashOfferingID, Service: references[managedservicev1.LogstashServiceID],
+			DisplayName:  "Logstash 8.19",
+			Description:  "通过认证 HTTP 接收 JSON 事件并持久保存；配置固定为 http-json-file-v1。",
+			EngineFamily: "logstash", EngineVersion: "8.19.23",
+			State: managedservicev1.OfferingAvailable,
+			QuotaShapes: []managedservicev1.QuotaShape{
+				{ID: "logstash-small", DisplayName: "开发型", CPUMillicores: 1000, MemoryMiB: 1536, StorageGiB: 10},
+				{ID: "logstash-medium", DisplayName: "标准型", CPUMillicores: 2000, MemoryMiB: 3072, StorageGiB: 20},
 			},
 		},
 		{

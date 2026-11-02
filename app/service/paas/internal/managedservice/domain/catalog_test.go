@@ -10,20 +10,33 @@ func TestDefaultCatalogContainsOnlyImplementedProvidersAndIsDefensivelyCopied(t 
 	catalog := DefaultCatalog()
 	definitions := catalog.ListServices()
 	offerings := catalog.List()
-	if len(definitions) != 4 || len(offerings) != 4 ||
-		offerings[0].ID != ElasticsearchOfferingID || offerings[0].Service.ID != managedservicev1.ElasticsearchServiceID ||
-		offerings[1].ID != MySQLOfferingID || offerings[1].Service.ID != managedservicev1.MySQLServiceID ||
-		offerings[2].ID != PostgreSQLOfferingID || offerings[2].Service.ID != managedservicev1.PostgreSQLServiceID ||
-		offerings[3].ID != RabbitMQOfferingID || offerings[3].Service.ID != managedservicev1.RabbitMQServiceID {
-		t.Fatalf("unexpected catalog: %#v", offerings)
+	expected := map[string]string{
+		PostgreSQLOfferingID:    managedservicev1.PostgreSQLServiceID,
+		MySQLOfferingID:         managedservicev1.MySQLServiceID,
+		ElasticsearchOfferingID: managedservicev1.ElasticsearchServiceID,
+		RabbitMQOfferingID:      managedservicev1.RabbitMQServiceID,
+		LogstashOfferingID:      managedservicev1.LogstashServiceID,
+	}
+	if len(definitions) != len(expected) || len(offerings) != len(expected) {
+		t.Fatal("released service and offering inventories disagree")
+	}
+	for _, offering := range offerings {
+		if expected[offering.ID] != offering.Service.ID {
+			t.Fatalf("unimplemented or mismatched offering %q", offering.ID)
+		}
+		definition, found := catalog.ResolveService(offering.Service.ID)
+		if !found || referenceOf(definition) != offering.Service {
+			t.Fatal("offering does not bind the exact current service definition")
+		}
 	}
 	definitions[0].DisplayName = "forged"
 	if current, found := catalog.ResolveService(managedservicev1.ElasticsearchServiceID); !found || current.DisplayName == "forged" {
 		t.Fatal("caller mutated the service-definition catalog")
 	}
+	originalShape := offerings[0].QuotaShapes[0]
 	offerings[0].QuotaShapes[0].ID = "forged"
-	_, shape, found := catalog.Resolve(PostgreSQLOfferingID, "pg-medium")
-	if !found || shape.ID != "pg-medium" {
+	_, shape, found := catalog.Resolve(offerings[0].ID, originalShape.ID)
+	if !found || shape != originalShape {
 		t.Fatal("caller mutated the catalog")
 	}
 }

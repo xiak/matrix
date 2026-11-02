@@ -308,9 +308,13 @@ func buildImages(
 	if !found || validateImageMetadata(rabbitmq) != nil {
 		return nil, nil, errors.New("fixed RabbitMQ image identity is unavailable")
 	}
+	logstash, found := baseImages[LogstashPinnedReference]
+	if !found || validateImageMetadata(logstash) != nil {
+		return nil, nil, errors.New("fixed Logstash image identity is unavailable")
+	}
 	metadata := map[string]ImageMetadata{
 		"postgres": postgres, "mysql": mysql,
-		"elasticsearch": elasticsearch, "rabbitmq": rabbitmq,
+		"elasticsearch": elasticsearch, "rabbitmq": rabbitmq, "logstash": logstash,
 	}
 	tags := make([]string, 0, len(imageRecipes))
 	for _, recipe := range imageRecipes {

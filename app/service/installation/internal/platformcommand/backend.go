@@ -11,6 +11,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -924,7 +925,16 @@ func (backend *Backend) upgrade(
 	return backend.driveReleaseChange(
 		ctx, session, lifecycle.ActionUpgrade,
 		func(ctx context.Context, phase lifecycle.Phase) error {
-			return backend.effects.ApplyUpgradePhase(ctx, plan, phase)
+			err := backend.effects.ApplyUpgradePhase(ctx, plan, phase)
+			if err != nil && (phase == lifecycle.PhaseStarting || phase == lifecycle.PhaseVerifying) &&
+				!retainsProductInventory(targetBundle.Manifest, sourceBundle.Manifest) {
+				// A started candidate may already own new-product resources. Their
+				// outcome is unknown to the old authority, even if a health probe
+				// failed definitively. Retain this phase and resume the same signed
+				// upgrade instead of making those resources unmanageable.
+				return errors.Join(ErrEffectOutcomeUnknown, err)
+			}
+			return err
 		},
 		func(ctx context.Context) error {
 			return backend.effects.RollbackUpgrade(ctx, plan)
@@ -983,6 +993,9 @@ func (backend *Backend) rollback(
 	}
 	if !AdmitsLifecycleDatabasePair(previousBundle.Manifest, currentBundle.Manifest) {
 		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_SCHEMA_INCOMPATIBLE")
+	}
+	if !retainsProductInventory(currentBundle.Manifest, previousBundle.Manifest) {
+		return cli.Result{}, fault(cli.FaultPrecondition, "ROLLBACK_PRODUCT_INVENTORY_INCOMPATIBLE")
 	}
 	if state.Active == nil {
 		ready, observeErr := backend.effects.ObserveInstallation(
@@ -1705,3 +1718,34 @@ func nextJournalTime(now time.Time, previous time.Time) time.Time {
 }
 
 var _ cli.PlatformBackend = (*Backend)(nil)
+
+// Rollback retains authority rows and workload data. A previous binary which
+// cannot manage a currently published product is not a safe rollback target,
+// even when both releases report the same authority schema version.
+func retainsProductInventory(current, target release.Manifest) bool {
+	if release.IsLegacyProductlessManifest(target) {
+		// Preserve only the already accepted four-product foundation transition.
+		return release.IsFourManagedProductsManifest(current)
+	}
+	for _, product := range current.Products {
+		found := false
+		for _, previous := range target.Products {
+			if product.ID != previous.ID {
+				continue
+			}
+			found = true
+			if product.ReadinessContract != previous.ReadinessContract {
+				return false
+			}
+			for _, component := range product.RequiredComponents {
+				if !slices.Contains(previous.RequiredComponents, component) {
+					return false
+				}
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}

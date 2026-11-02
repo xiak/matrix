@@ -541,6 +541,8 @@ func TestRunClassifiesIncompleteConfiguration(t *testing.T) {
 		managedMySQLEndpointImageIDsEnvironment,
 		managedElasticsearchImageIDsEnvironment,
 		managedRabbitMQImageIDsEnvironment,
+		managedLogstashImageIDsEnvironment,
+		managedProductEndpointImageIDsEnvironment,
 	} {
 		t.Setenv(variable, "")
 	}
