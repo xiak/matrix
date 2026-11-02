@@ -1404,7 +1404,8 @@ running Verification 38997696246, or accept the later Account
 The [offline release workflow](../../.github/workflows/offline-release.yml)
 owns a reproducible disposable Linux execution of this gate. It builds signed
 fresh-install A and exact successor B while online, then runs a native Docker
-daemon with an empty data root inside private mount, PID and network namespaces.
+daemon with an empty data root inside private mount and network namespaces.
+Native runtime processes retain the host PID/proc/cgroup view.
 The runner and its build daemon remain outside those namespaces; no container
 hosts a daemon. The effectful gate independently rejects external routes and
 nonempty Docker state. Private signers, SMTP credentials and installation data

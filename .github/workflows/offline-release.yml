@@ -82,7 +82,7 @@ jobs:
           # build daemon and host networking stay online and unchanged. No
           # container hosts a daemon; the acceptance daemon starts with no data.
           sudo env MATRIX_OFFLINE_WORK="$MATRIX_OFFLINE_WORK" \
-            unshare --net --mount --pid --fork --kill-child bash -s <<'OFFLINE'
+            unshare --net --mount bash -s <<'OFFLINE'
           set -euo pipefail
           umask 077
           work="$MATRIX_OFFLINE_WORK"
@@ -92,7 +92,8 @@ jobs:
           chown -R root:root "$work/private"
           mkdir "$work/run"
           mount --bind "$work/run" /run
-          mount -t proc proc /proc
+          # Keep native runtime PID/proc/cgroup observation in the host's PID
+          # namespace. Network and filesystem mounts remain private.
           ip link set lo up
           export DOCKER_HOST=unix:///var/run/docker.sock
           export DOCKER_CONFIG="$work/private/docker-client"
