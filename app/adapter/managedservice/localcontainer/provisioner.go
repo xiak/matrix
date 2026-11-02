@@ -61,6 +61,7 @@ type Config struct {
 	DataDirectoryMode   os.FileMode
 	Runtime             composeadapter.Runtime
 	ValidateRequest     func(managedserviceadapterv1.ProvisionRequest) error
+	ValidateDeletion    func(managedserviceadapterv1.DeprovisionRequest) error
 	CompileDocument     func(DocumentInput) ([]byte, error)
 	Endpoint            func(int) string
 	NewSecret           func() ([]byte, error)
@@ -76,6 +77,7 @@ type Provisioner struct {
 	runtime             composeadapter.Runtime
 	dataPurger          composeadapter.DataPurger
 	validateRequest     func(managedserviceadapterv1.ProvisionRequest) error
+	validateDeletion    func(managedserviceadapterv1.DeprovisionRequest) error
 	compileDocument     func(DocumentInput) ([]byte, error)
 	endpoint            func(int) string
 	newSecret           func() ([]byte, error)
@@ -125,7 +127,8 @@ func New(config Config) (*Provisioner, error) {
 		endpointServiceName: config.EndpointServiceName,
 		credentialFiles:     credentialFiles, dataDirectoryMode: dataMode,
 		runtime: config.Runtime, dataPurger: dataPurger, validateRequest: config.ValidateRequest,
-		compileDocument: config.CompileDocument, endpoint: config.Endpoint,
+		validateDeletion: config.ValidateDeletion,
+		compileDocument:  config.CompileDocument, endpoint: config.Endpoint,
 		newSecret: config.NewSecret,
 	}, nil
 }
@@ -200,6 +203,7 @@ func (provisioner *Provisioner) Delete(
 ) error {
 	if provisioner == nil || ctx == nil ||
 		managedserviceadapterv1.ValidateDeprovisionRequest(request) != nil ||
+		(provisioner.validateDeletion != nil && provisioner.validateDeletion(request) != nil) ||
 		request.OfferingID == "" || request.RegionID != "local-primary" {
 		return errors.New("local managed-service deletion request is invalid")
 	}

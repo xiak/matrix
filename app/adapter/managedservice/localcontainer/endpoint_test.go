@@ -1,4 +1,4 @@
-package localmysql
+package localcontainer
 
 import (
 	"context"
@@ -95,5 +95,13 @@ func TestEndpointClosesIdleStreams(t *testing.T) {
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestEndpointRejectsUnboundedNativeTargetsBeforeListening(t *testing.T) {
+	for _, target := range []string{"", "logstash", "http://logstash:8080", "127.0.0.1:8080", "host.docker.internal:8080", "logstash:0", "logstash:65536", "logstash:08080", "logstash:service", "logstash;command:8080"} {
+		if err := ServeEndpoint(t.Context(), target); err == nil {
+			t.Fatal("accepted an invalid trusted target")
+		}
 	}
 }

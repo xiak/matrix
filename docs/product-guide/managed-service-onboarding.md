@@ -37,7 +37,7 @@ flowchart LR
 
 | 示例 | 它实际证明什么 | 实现入口 |
 | --- | --- | --- |
-| Logstash | 带认证的 HTTP 输入被处理并写入持久文件；重启后数据保留 | [Logstash 样例](../../test/managedserviceonboarding/logstash.go) |
+| Logstash | 带认证的 HTTP 输入被处理并写入持久文件；重启后数据保留 | [Logstash 适配器](../../app/adapter/managedservice/locallogstash/provisioner.go) |
 | Kibana | 连接准确的同租户 Elasticsearch 依赖；通过真实接口创建、读取数据视图 | [Kibana 样例](../../test/managedserviceonboarding/kibana.go) |
 
 Logstash 样例不依赖 Elasticsearch。Kibana 验收临时准备自己的 Elasticsearch，
@@ -65,8 +65,11 @@ Logstash 样例不依赖 Elasticsearch。Kibana 验收临时准备自己的 Elas
 密码不会通过部署结果直接交给页面。产品的版本识别、健康检查、数据目录和实际协议
 由产品团队负责；不能只用“容器正在运行”证明产品已经可用。
 
-先阅读 [MySQL 正式适配器](../../app/adapter/managedservice/localmysql/provisioner.go)，
-再对照 L/K 样例。共同执行能力由现有本地容器适配层提供；产品实现负责自己的配置和语义。
+Docker 产品可以从 [Logstash 适配器](../../app/adapter/managedservice/locallogstash/provisioner.go) 开始：
+提供封闭的规格与删除校验、固定配置和健康检查，再通过现有本地容器适配层组装。
+目录创建、凭据保护、重复执行、状态观察、精确删除与恢复清单由共享实现处理，
+产品团队无需重写一遍。产品自己的真实协议测试仍须保留。
+这个适配器目前用于接入验收；源码进入适配器目录不代表产品已经上架。
 
 ## 4. 明确产品配置与依赖
 
@@ -148,5 +151,6 @@ L/K 样例不会自动获得 MySQL 的网络保证，Kibana 到 Elasticsearch �
 浏览器使用以及签名包生命周期。全部必要检查通过后，产品才能进入正式目录。
 
 以下状态应分别记录：**样例已验证 → 集成待验收 → 发布已验收**。
-本手册提供的 L/K 样例只负责第一阶段的可执行交付。
+本手册当前交付到第一阶段的可执行验收。ELK 完成正式纳管后，将用 Redis 复用
+同一条接入路径，验证它也适用于另一种产品家族。未完成验收的产品不显示为已发布。
 HA、产品引擎升级、业务数据备份和任意 Pipeline 编辑需要各自的明确接入范围。

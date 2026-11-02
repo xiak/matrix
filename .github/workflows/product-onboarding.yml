@@ -7,6 +7,7 @@ on:
       - 'api/adapter/managedservice/**'
       - 'app/adapter/managedservice/**'
       - 'app/adapter/apphosting/compose/**'
+      - 'app/service/paas/cmd/matrix-product-endpoint/**'
       - 'test/managedserviceonboarding/**'
       - '.github/workflows/product-onboarding.yml'
 

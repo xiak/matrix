@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"regexp"
@@ -102,11 +101,12 @@ func compileDocument(input localcontaineradapter.DocumentInput, endpointImageID 
 		"com.xiak.matrix.managedservice.offering":     request.OfferingID,
 		"com.xiak.matrix.managedservice.region":       request.RegionID,
 	}
+	endpoint := endpointService(endpointImageID, input.PublishedPort, labels)
 	document := map[string]any{
 		"name":     input.ProjectName,
-		"networks": privateNetworks(),
+		"networks": localcontaineradapter.PrivateNetworks(),
 		"services": map[string]any{
-			endpointServiceName: endpointService(endpointImageID, input.PublishedPort, labels),
+			endpointServiceName: endpoint,
 			mysqlServiceName: map[string]any{
 				"image": input.ImageID, "pull_policy": "never", "restart": "unless-stopped",
 				"read_only": false, "init": false, "pids_limit": 192,
@@ -154,46 +154,20 @@ func compileDocument(input localcontaineradapter.DocumentInput, endpointImageID 
 	return encoded, nil
 }
 
-func privateNetworks() map[string]any {
-	return map[string]any{
-		"private": map[string]any{
-			"internal": true, "driver": "bridge", "enable_ipv6": false,
-			"driver_opts": map[string]string{"com.docker.network.bridge.gateway_mode_ipv4": "isolated"},
-		},
-		// Keep Compose's implicit bridge configuration. Explicitly adding the
-		// same driver changes its network hash; Compose would try to remove
-		// the still-attached predecessor network before recreating MySQL.
-		"default": map[string]any{},
-	}
-}
-
-func endpointService(imageID string, port int, labels map[string]string) map[string]any {
-	return map[string]any{
-		"image": imageID, "pull_policy": "never", "restart": "unless-stopped",
-		"entrypoint": []string{endpointBinary}, "command": []string{},
-		"user": "65532:65532", "read_only": true, "pids_limit": 32,
-		// The signed PaaS image inherits a Docker data VOLUME. Override it
-		// with bounded tmpfs so this socket-free process creates no volume.
-		"tmpfs":    []string{"/var/lib/docker:rw,noexec,nosuid,nodev,size=1m"},
-		"networks": []string{"private", "default"},
-		"ports":    []string{fmt.Sprintf("127.0.0.1:%d:13306/tcp", port)},
-		"cap_drop": []string{"ALL"}, "security_opt": []string{"no-new-privileges:true"},
-		"sysctls":     map[string]string{"net.ipv4.ip_forward": "0", "net.ipv6.conf.all.forwarding": "0"},
-		"environment": map[string]string{"GOMAXPROCS": "1", "GOMEMLIMIT": "48MiB"},
-		"depends_on":  map[string]any{mysqlServiceName: map[string]string{"condition": "service_healthy"}},
-		"healthcheck": map[string]any{
-			"test":     []string{"CMD", endpointBinary, "--check"},
-			"interval": "5s", "timeout": "4s", "retries": 6,
-		},
-		"deploy": map[string]any{"resources": map[string]any{"limits": map[string]any{"cpus": "0.25", "memory": "64M", "pids": 32}}},
-		"labels": labels,
-	}
-}
-
 func validateRequest(request managedserviceadapterv1.ProvisionRequest) error {
 	if request.OfferingID != managedservicev1.MySQLOfferingID ||
 		request.EngineVersion != "8.4" || request.RegionID != "local-primary" {
 		return errors.New("local MySQL installation profile is invalid")
 	}
 	return nil
+}
+
+func endpointService(imageID string, port int, labels map[string]string) map[string]any {
+	// Existing installed releases carry this entrypoint. Keep the authenticated
+	// MySQL deployment document stable while sharing the endpoint implementation.
+	endpoint := localcontaineradapter.EndpointService(imageID, port, mysqlServiceName, 3306, labels)
+	endpoint["entrypoint"] = []string{endpointBinary}
+	endpoint["command"] = []string{}
+	endpoint["healthcheck"].(map[string]any)["test"] = []string{"CMD", endpointBinary, "--check"}
+	return endpoint
 }

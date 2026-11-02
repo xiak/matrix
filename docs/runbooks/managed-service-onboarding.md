@@ -46,11 +46,14 @@ MATRIX_ONBOARDING_RUNTIME=1 go test -count=1 -timeout=20m -v ./test/managedservi
 cat "$MATRIX_ONBOARDING_REPORT"
 ```
 
-判定必须同时满足：测试退出码为零，报告 `status` 为 `PASSED`，包含 L、K 两组共十项运行检查。
+判定必须同时满足：测试退出码为零，报告 `status` 为 `PASSED`，包含 L、K 两组共十一项运行检查。
+其中 Logstash 包含两个租户作用域的网络、数据、凭据、重启及独立删除检查。
 报告写 `INCOMPLETE` 时，常见原因是仅运行了某个子测试；不能交付为完整样例验收。
 `platformAndReleaseGates` 保持 `NOT_RUN`，不表示平台目录、IAM、浏览器或签名发布包已经验收。
 
 门禁创建独立实例身份，验证结束后调用产品自己的 `Delete`，确认数据、凭据和运行资源删除。
+门禁会先从当前源码编译并构建隔离入口的临时镜像，再交给 Logstash 适配器；产品
+镜像仍须提前准备，适配器不会自行构建或下载。临时入口镜像按本次归属标签清理。
 Kibana 的 Elasticsearch 依赖先被证明仍在，再由依赖自身的清理流程删除。
 无法证明精确清理成功时，测试失败并保留本次运行目录，不全局清理 Docker。
 

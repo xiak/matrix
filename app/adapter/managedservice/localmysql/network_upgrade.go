@@ -14,6 +14,7 @@ import (
 
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	localcontaineradapter "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 )
 
 var errNetworkUpgrade = errors.New("local MySQL network upgrade requires operator recovery")
@@ -162,7 +163,7 @@ func (provisioner *Provisioner) upgradeProjectNetwork(ctx context.Context, proje
 	_ = json.Unmarshal(encodedEndpoint, &endpoint)
 	services[endpointServiceName] = endpoint
 	document["services"], _ = json.Marshal(services)
-	document["networks"], _ = json.Marshal(privateNetworks())
+	document["networks"], _ = json.Marshal(localcontaineradapter.PrivateNetworks())
 	updated, err := json.Marshal(document)
 	if err != nil {
 		return errNetworkUpgrade

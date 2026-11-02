@@ -23,6 +23,8 @@ const (
 	ElasticsearchOfferingID = "elasticsearch-8.19"
 	RabbitMQServiceID       = "rabbitmq"
 	RabbitMQOfferingID      = "rabbitmq-4.1"
+	LogstashServiceID       = "logstash"
+	LogstashOfferingID      = "logstash-8.19"
 )
 
 const (

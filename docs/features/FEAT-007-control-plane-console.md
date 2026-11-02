@@ -385,6 +385,9 @@ Kibana 的团队应能按同一份手册，交付产品定义、固定制品、�
 
 按独立纵向切片推进：先将无外部服务依赖的 Logstash 接入真实平台，再以 Kibana
 验证已授权 Elasticsearch 依赖的选择、不可变绑定、专用服务凭据和删除保护。
+ELK 闭环后，再以 Redis 作为第二种产品家族复用相同接入路径，检验契约与工具没有
+绑定 Elastic 产品。Redis 的版本、持久化、凭据与实际运行证据由后继切片明确，
+完成验收前不加入已发布能力声明。
 每片都须补齐 P1/P2 证据后才可标为已发布；现有 S1/S2 证据仍只证明样例。
 验收还须从产品团队视角复跑手册，列明实际需要改动的 owner，并解释每个接入点的
 责任；重复登记和重复实现应在其现有 owner 内收敛，不能用一个不受约束的通用
@@ -423,9 +426,12 @@ quota 均来自已经接受的权威事实，`ProvisionResult` 只返回端点�
 
 ### L/K 样例配置契约
 
-样例 owner 为 `test/managedserviceonboarding`，版本固定为 Elastic `8.19.23`。
-配置由测试中的受信交付方解析后注入构造器；它不是已发布的租户 API，也不假装
-已经通过真实 IAM。样例分别实现两种产品，并通过上述同一个公开接口驱动生命周期。
+运行验收 owner 为 `test/managedserviceonboarding`，版本固定为 Elastic `8.19.23`。
+Logstash 实现由 `app/adapter/managedservice/locallogstash` 拥有，验收直接调用同一
+适配器；Kibana 的依赖解析仍由接入样例提供。配置来自受信交付方，尚未成为已发布
+的租户 API，也没有替代真实 IAM 验收。两者通过同一个公开接口驱动生命周期。
+Logstash 复用现有容器生命周期、受保护配置文件与固定网络入口；后两项由
+`localcontainer` 维护，MySQL 的已安装入口及升级编译保持原契约。
 
 | 项目 | Logstash 样例 | Kibana 样例 |
 | --- | --- | --- |

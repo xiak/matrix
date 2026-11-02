@@ -12,14 +12,25 @@ import (
 
 	adapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
 	compose "github.com/xiak/matrix/app/adapter/apphosting/compose"
+	locallogstash "github.com/xiak/matrix/app/adapter/managedservice/locallogstash"
 )
 
 func requestFor(service string) adapterv1.ProvisionRequest {
-	return adapterv1.ProvisionRequest{
+	request := adapterv1.ProvisionRequest{
 		TenantID: "onboarding-account", InstallationID: service + "-example", OperationID: "operation-create",
 		OfferingID: service + "-8.19-onboarding", EngineVersion: Version,
 		RegionID: "local-primary", QuotaShape: Shape(service),
 	}
+	if service == "logstash" {
+		request.OfferingID = "logstash-8.19"
+		request.QuotaShape.ID = "logstash-small"
+		request.QuotaShape.DisplayName = "开发型"
+	}
+	return request
+}
+
+func newLogstash(config InstallationConfig) (adapterv1.Provisioner, error) {
+	return locallogstash.New(locallogstash.Config{Root: config.Root, ImageID: config.ImageID, EndpointImageID: config.EndpointImageID, Runtime: config.Runtime})
 }
 
 func deletionFor(request adapterv1.ProvisionRequest) adapterv1.DeprovisionRequest {
@@ -31,13 +42,13 @@ func deletionFor(request adapterv1.ProvisionRequest) adapterv1.DeprovisionReques
 func TestProductContractIdentityReplayAndSecrets(t *testing.T) {
 	for _, service := range []string{"logstash", "kibana"} {
 		t.Run(service, func(t *testing.T) {
-			runtime := &recordingRuntime{containers: make(map[string]compose.RuntimeContainer)}
+			runtime := &recordingRuntime{containers: make(map[string][]compose.RuntimeContainer)}
 			config := InstallationConfig{Root: filepath.Join(t.TempDir(), "provider"),
-				ImageID: "sha256:" + strings.Repeat("a", 64), Runtime: runtime, Request: requestFor(service)}
+				ImageID: "sha256:" + strings.Repeat("a", 64), EndpointImageID: "sha256:" + strings.Repeat("e", 64), Runtime: runtime, Request: requestFor(service)}
 			dependency := testDependency(t, config.Request.TenantID)
 			construct := func() (adapterv1.Provisioner, error) {
 				if service == "logstash" {
-					return NewLogstash(config)
+					return newLogstash(config)
 				}
 				return NewKibana(config, dependency)
 			}
@@ -48,9 +59,20 @@ func TestProductContractIdentityReplayAndSecrets(t *testing.T) {
 			if err := provider.Ready(context.Background()); err != nil || runtime.applies != 0 {
 				t.Fatal("provider readiness created an installation")
 			}
+			for _, change := range []func(*adapterv1.DeprovisionRequest){
+				func(r *adapterv1.DeprovisionRequest) { r.OfferingID = "another-product" },
+				func(r *adapterv1.DeprovisionRequest) { r.EngineVersion = "8.18.0" },
+				func(r *adapterv1.DeprovisionRequest) { r.RegionID = "another-region" },
+			} {
+				request := deletionFor(config.Request)
+				change(&request)
+				if err := provider.Delete(context.Background(), request); err == nil || runtime.stops != 0 {
+					t.Fatal("another product's deletion profile was accepted")
+				}
+			}
 			for name, change := range map[string]func(*adapterv1.ProvisionRequest){
-				"tenant":   func(r *adapterv1.ProvisionRequest) { r.TenantID = "other-account" },
-				"instance": func(r *adapterv1.ProvisionRequest) { r.InstallationID = "other-instance" },
+				"tenant":   func(r *adapterv1.ProvisionRequest) { r.TenantID = "" },
+				"instance": func(r *adapterv1.ProvisionRequest) { r.InstallationID = "" },
 				"offering": func(r *adapterv1.ProvisionRequest) { r.OfferingID = "unreleased" },
 				"version":  func(r *adapterv1.ProvisionRequest) { r.EngineVersion = "8.18.0" },
 				"quota":    func(r *adapterv1.ProvisionRequest) { r.QuotaShape.MemoryMiB++ },
@@ -74,6 +96,14 @@ func TestProductContractIdentityReplayAndSecrets(t *testing.T) {
 			if err != nil || first != replayed || runtime.applies != 1 {
 				t.Fatal("equal replay did not preserve the installation")
 			}
+			if service == "logstash" {
+				request := config.Request
+				request.OperationID = "operation-observe-again"
+				request.QuotaShape.DisplayName = "A translated label"
+				if observed, err := provider.Ensure(context.Background(), request); err != nil || observed != first || runtime.applies != 1 {
+					t.Fatal("presentation metadata changed the deployed configuration")
+				}
+			}
 			content, err := os.ReadFile(runtime.project.EffectDocument)
 			if err != nil {
 				t.Fatal(err)
@@ -94,7 +124,7 @@ func TestProductContractIdentityReplayAndSecrets(t *testing.T) {
 			changed.ImageID = "sha256:" + strings.Repeat("b", 64)
 			var drifted adapterv1.Provisioner
 			if service == "logstash" {
-				drifted, err = NewLogstash(changed)
+				drifted, err = newLogstash(changed)
 			} else {
 				drifted, err = NewKibana(changed, dependency)
 			}
@@ -106,7 +136,7 @@ func TestProductContractIdentityReplayAndSecrets(t *testing.T) {
 			}
 			badDelete := deletionFor(config.Request)
 			badDelete.TenantID = "other-account"
-			if err := provider.Delete(context.Background(), badDelete); err == nil || runtime.stops != 0 {
+			if err := provider.Delete(context.Background(), badDelete); (service == "kibana" && err == nil) || (service == "logstash" && err != nil) || runtime.stops != 0 {
 				t.Fatal("cross-tenant deletion reached runtime")
 			}
 			if err := provider.Delete(context.Background(), deletionFor(config.Request)); err != nil {
@@ -139,27 +169,6 @@ func TestKibanaDependencyIsBoundBeforeEffects(t *testing.T) {
 	}
 }
 
-func TestConfigurationRejectsReplacementAndSymlink(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "configuration")
-	if err := writeImmutable(path, []byte("original"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := writeImmutable(path, []byte("changed"), 0o600); err == nil {
-		t.Fatal("replaced immutable configuration")
-	}
-	content, _ := os.ReadFile(path)
-	if string(content) != "original" {
-		t.Fatal("changed existing configuration")
-	}
-	link := path + ".link"
-	if err := os.Symlink(path, link); err != nil {
-		t.Skip("symlink creation unavailable on this host")
-	}
-	if err := writeImmutable(link, []byte("original"), 0o600); err == nil {
-		t.Fatal("accepted a symlink")
-	}
-}
-
 func testDependency(t *testing.T, tenant string) ElasticsearchDependency {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "password")
@@ -171,7 +180,7 @@ func testDependency(t *testing.T, tenant string) ElasticsearchDependency {
 }
 
 type recordingRuntime struct {
-	containers             map[string]compose.RuntimeContainer
+	containers             map[string][]compose.RuntimeContainer
 	project                compose.RuntimeProject
 	applies, stops, purges int
 }
@@ -185,14 +194,15 @@ func (r *recordingRuntime) Apply(_ context.Context, p compose.RuntimeProject) er
 	var doc struct {
 		Services map[string]struct {
 			Labels map[string]string `json:"labels"`
+			Ports  []string          `json:"ports"`
 		} `json:"services"`
 	}
-	if json.Unmarshal(content, &doc) != nil || len(doc.Services) != 1 {
+	if json.Unmarshal(content, &doc) != nil || len(doc.Services) == 0 {
 		return errors.New("invalid fixture document")
 	}
+	r.containers[p.Name] = nil
 	for service, value := range doc.Services {
-		r.containers[p.Name] = compose.RuntimeContainer{ID: p.Name, Project: p.Name, Service: service,
-			State: "running", Health: "healthy", PublishedPorts: 1, Labels: value.Labels}
+		r.containers[p.Name] = append(r.containers[p.Name], compose.RuntimeContainer{ID: p.Name + "-" + service, Project: p.Name, Service: service, State: "running", Health: "healthy", PublishedPorts: uint32(len(value.Ports)), Labels: value.Labels})
 	}
 	r.project = p
 	r.applies++
@@ -200,7 +210,7 @@ func (r *recordingRuntime) Apply(_ context.Context, p compose.RuntimeProject) er
 }
 func (r *recordingRuntime) Observe(_ context.Context, p compose.RuntimeProject) ([]compose.RuntimeContainer, error) {
 	if c, ok := r.containers[p.Name]; ok {
-		return []compose.RuntimeContainer{c}, nil
+		return c, nil
 	}
 	return nil, nil
 }

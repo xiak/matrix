@@ -35,7 +35,7 @@ func NewKibana(config InstallationConfig, dependency ElasticsearchDependency) (a
 		!fixtureNetwork.MatchString(dependency.Network) || dependency.Endpoint != "http://elasticsearch:9200" {
 		return nil, errors.New("Kibana dependency binding is invalid")
 	}
-	credential, err := readProtectedSecret(dependency.PasswordFile)
+	credential, err := localcontainer.ReadProtectedSecret(dependency.PasswordFile)
 	clear(credential)
 	if err != nil {
 		return nil, err
@@ -44,12 +44,12 @@ func NewKibana(config InstallationConfig, dependency ElasticsearchDependency) (a
 		if err := commitConfiguration(input, "elasticsearch-ui-v1", dependency); err != nil {
 			return nil, err
 		}
-		password, err := readProtectedSecret(dependency.PasswordFile)
+		password, err := localcontainer.ReadProtectedSecret(dependency.PasswordFile)
 		if err != nil {
 			return nil, err
 		}
 		defer clear(password)
-		encryptionKey, err := readProtectedSecret(input.CredentialPaths["kibana-secret"])
+		encryptionKey, err := localcontainer.ReadProtectedSecret(input.CredentialPaths["kibana-secret"])
 		if err != nil {
 			return nil, err
 		}
@@ -70,7 +70,7 @@ func NewKibana(config InstallationConfig, dependency ElasticsearchDependency) (a
 		}
 		defer clear(settings)
 		settingsPath := filepath.Join(filepath.Dir(input.DataDirectory), "kibana.yml")
-		if err := writeImmutable(settingsPath, settings, 0o640); err != nil {
+		if err := localcontainer.WriteImmutable(settingsPath, settings, 0o640); err != nil {
 			return nil, err
 		}
 		service := serviceDocument(input, "kibana", 5601)

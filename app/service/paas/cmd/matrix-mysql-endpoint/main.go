@@ -6,7 +6,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/xiak/matrix/app/adapter/managedservice/localmysql"
+	"github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 )
 
 func main() {
@@ -15,9 +15,9 @@ func main() {
 	var err error
 	switch {
 	case len(os.Args) == 1:
-		err = localmysql.ServeEndpoint(ctx)
+		err = localcontainer.ServeEndpoint(ctx, "mysql:3306")
 	case len(os.Args) == 2 && os.Args[1] == "--check":
-		err = localmysql.CheckEndpoint(ctx)
+		err = localcontainer.CheckEndpoint(ctx)
 	default:
 		os.Exit(2)
 	}

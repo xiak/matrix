@@ -10,7 +10,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -64,7 +66,7 @@ func TestElasticRuntime(t *testing.T) {
 		report.CompletedAt = time.Now().UTC()
 		if !t.Failed() {
 			report.Status = "INCOMPLETE"
-			if len(report.Checks) == 10 {
+			if len(report.Checks) == 11 {
 				report.Status = "PASSED"
 			}
 		}
@@ -111,15 +113,19 @@ func TestElasticRuntime(t *testing.T) {
 			}
 		}
 	})
-	t.Run("Logstash", func(t *testing.T) { verifyLogstash(t, ctx, root, imageIDs["logstash"], &clean, &report) })
+	endpointImageID := buildEndpointFixture(t, ctx, runID, &clean)
+	report.Artifacts["endpoint"] = endpointImageID
+	t.Run("Logstash", func(t *testing.T) {
+		verifyLogstash(t, ctx, root, imageIDs["logstash"], endpointImageID, &clean, &report)
+	})
 	t.Run("Kibana", func(t *testing.T) { verifyKibana(t, ctx, root, runID, imageIDs, &clean, &report) })
 }
 
-func verifyLogstash(t *testing.T, ctx context.Context, root, imageID string, clean *bool, report *sampleReport) {
+func verifyLogstash(t *testing.T, ctx context.Context, root, imageID, endpointImageID string, clean *bool, report *sampleReport) {
 	r := &lostResponseRuntime{LocalRuntime: compose.NewLocalRuntime(), loseNextApply: true}
-	config := InstallationConfig{Root: filepath.Join(root, "managed-logstash"), ImageID: imageID, Runtime: r, Request: requestFor("logstash")}
+	config := InstallationConfig{Root: filepath.Join(root, "managed-logstash"), ImageID: imageID, EndpointImageID: endpointImageID, Runtime: r, Request: requestFor("logstash")}
 	config.Request.TenantID = filepath.Base(root)
-	provider, err := NewLogstash(config)
+	provider, err := newLogstash(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +137,7 @@ func verifyLogstash(t *testing.T, ctx context.Context, root, imageID string, cle
 	if _, err := provider.Ensure(ctx, config.Request); err == nil || !r.lost {
 		t.Fatal("lost-response injection did not observe a real completed effect")
 	}
-	provider, err = NewLogstash(config)
+	provider, err = newLogstash(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,9 +191,46 @@ func verifyLogstash(t *testing.T, ctx context.Context, root, imageID string, cle
 	if err != nil {
 		t.Fatal("cannot inspect durable test output")
 	}
+
+	// A second tenant deliberately reuses the same public installation ID.
+	peerConfig := config
+	peerConfig.Request.TenantID += "-peer"
+	peerConfig.Runtime = compose.NewLocalRuntime()
+	peer, err := newLogstash(peerConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registerCleanup(t, peer, peerConfig.Request, clean)
+	peerResult, err := peer.Ensure(ctx, peerConfig.Request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerProject := projectFor(peerConfig)
+	peerContainer := ownedContainer(t, ctx, peerConfig.Runtime, peerProject, peerConfig.Request)
+	peerSecret := readSecret(t, filepath.Join(peerProject.Directory, "logstash-secret"))
+	defer clear(peerSecret)
+	if bytes.Equal(secret, peerSecret) || result.Endpoint == peerResult.Endpoint || result.CredentialReference == peerResult.CredentialReference || project.Directory == peerProject.Directory {
+		t.Fatal("tenant resource or credential identity was shared")
+	}
+	peerDataPath := filepath.Join(peerProject.Directory, "data", "events.jsonl")
+	assertLogstashWrite(t, ctx, peerResult.Endpoint, peerSecret, peerDataPath, "matrix-peer-retained")
+	peerData, err := os.ReadFile(peerDataPath)
+	if err != nil || bytes.Contains(peerData, []byte("matrix-onboarding-retained")) {
+		t.Fatal("peer data boundary is invalid")
+	}
+	for _, attempt := range []struct {
+		endpoint string
+		password []byte
+	}{{result.Endpoint, peerSecret}, {peerResult.Endpoint, secret}} {
+		status, _ := callHTTP(t, http.MethodPost, attempt.endpoint, "matrix", attempt.password, map[string]string{"message": "foreign-password-must-not-write"})
+		if status != http.StatusUnauthorized {
+			t.Fatal("another tenant's credential was accepted")
+		}
+	}
+	assertLogstashNetworkIsolation(t, ctx, config, result, peerConfig, peerResult)
 	dockerOutput(t, "restart", "--time", "10", container.ID)
 	awaitHealthy(t, ctx, r, project)
-	provider, err = NewLogstash(config)
+	provider, err = newLogstash(config)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -199,13 +242,39 @@ func verifyLogstash(t *testing.T, ctx context.Context, root, imageID string, cle
 	if !bytes.Equal(priorData, currentData) || !bytes.Equal(secret, readSecret(t, secretPath)) {
 		t.Fatal("restart changed Logstash data or credential")
 	}
+
+	dockerOutput(t, "restart", "--time", "10", peerContainer.ID)
+	awaitHealthy(t, ctx, peerConfig.Runtime, peerProject)
+	if got, err := peer.Ensure(ctx, peerConfig.Request); err != nil || got != peerResult {
+		t.Fatal("peer replay changed identity")
+	}
+	currentPeerData, _ := os.ReadFile(peerDataPath)
+	if !bytes.Equal(peerData, currentPeerData) || !bytes.Equal(peerSecret, readSecret(t, filepath.Join(peerProject.Directory, "logstash-secret"))) {
+		t.Fatal("peer restart changed data or credential")
+	}
+	assertLogstashNetworkIsolation(t, ctx, config, result, peerConfig, peerResult)
+	peerBeforeDeletion := logstashRuntimeWitness(t, peerContainer.ID)
 	bad := deletionFor(config.Request)
 	bad.TenantID = "other-account"
-	if err := provider.Delete(ctx, bad); err == nil {
-		t.Fatal("accepted cross-tenant deletion")
+	if err := provider.Delete(ctx, bad); err != nil {
+		t.Fatal("deletion of an absent independently scoped identity did not converge")
 	}
 	_ = ownedContainer(t, ctx, r, project, config.Request)
 	deleteAndProve(t, ctx, provider, config.Request, project, r)
+
+	if logstashRuntimeWitness(t, peerContainer.ID) != peerBeforeDeletion {
+		t.Fatal("deleting one tenant changed the other tenant's runtime")
+	}
+	preservedPeerData, _ := os.ReadFile(peerDataPath)
+	if !bytes.Equal(peerData, preservedPeerData) || !bytes.Equal(peerSecret, readSecret(t, filepath.Join(peerProject.Directory, "logstash-secret"))) {
+		t.Fatal("deleting one tenant changed the other's data or credential")
+	}
+	assertLogstashWrite(t, ctx, peerResult.Endpoint, peerSecret, peerDataPath, "matrix-peer-after-other-delete")
+	if logstashRuntimeWitness(t, peerContainer.ID) != peerBeforeDeletion {
+		t.Fatal("peer runtime was recreated while verifying continued use")
+	}
+	deleteAndProve(t, ctx, peer, peerConfig.Request, peerProject, peerConfig.Runtime)
+	report.Checks = append(report.Checks, "logstash/two-tenant-network-data-credentials-and-independent-delete")
 	if inventory(t, root) != before {
 		t.Fatal("deleted Logstash remains in recovery inventory")
 	}
@@ -417,10 +486,19 @@ func projectFor(config InstallationConfig) compose.RuntimeProject {
 func ownedContainer(t *testing.T, ctx context.Context, r compose.Runtime, project compose.RuntimeProject, request adapterv1.ProvisionRequest) compose.RuntimeContainer {
 	t.Helper()
 	containers, err := r.Observe(ctx, project)
-	if err != nil || len(containers) != 1 {
-		t.Fatal("expected one owned runtime instance")
+	if err != nil {
+		t.Fatal("cannot observe owned product")
 	}
-	c := containers[0]
+	var product []compose.RuntimeContainer
+	for _, item := range containers {
+		if !strings.HasSuffix(item.Service, "-endpoint") {
+			product = append(product, item)
+		}
+	}
+	if len(product) != 1 {
+		t.Fatal("expected one owned product instance")
+	}
+	c := product[0]
 	if c.ID == "" || c.Project != project.Name || c.Labels["com.xiak.matrix.managedservice.installation"] != request.InstallationID ||
 		c.Labels["com.xiak.matrix.managedservice.offering"] != request.OfferingID || c.Labels["com.xiak.matrix.managedservice.region"] != request.RegionID {
 		t.Fatal("runtime identity does not belong to the requested installation")
@@ -448,7 +526,15 @@ func awaitHealthy(t *testing.T, ctx context.Context, r compose.Runtime, p compos
 	t.Helper()
 	await(t, ctx, "product restart readiness", func() bool {
 		c, e := r.Observe(ctx, p)
-		return e == nil && len(c) == 1 && c[0].State == "running" && c[0].Health == "healthy"
+		if e != nil || len(c) == 0 {
+			return false
+		}
+		for _, item := range c {
+			if item.State != "running" || item.Health != "healthy" {
+				return false
+			}
+		}
+		return true
 	})
 }
 func await(t *testing.T, ctx context.Context, what string, ready func() bool) {
@@ -480,7 +566,7 @@ func inventory(t *testing.T, root string) string {
 }
 func readSecret(t *testing.T, path string) []byte {
 	t.Helper()
-	v, e := readProtectedSecret(path)
+	v, e := localcontainer.ReadProtectedSecret(path)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -534,4 +620,137 @@ func callHTTP(t *testing.T, method, endpoint, user string, secret []byte, value 
 		t.Fatal("cannot read product protocol result")
 	}
 	return response.StatusCode, content
+}
+
+// The trusted ingress fixture is built explicitly from this test's source before
+// any product provisioning. Providers never download or build artifacts.
+func buildEndpointFixture(t *testing.T, ctx context.Context, runID string, clean *bool) string {
+	t.Helper()
+	buildRoot := t.TempDir()
+	binary := filepath.Join(buildRoot, "matrix-product-endpoint")
+	command := exec.CommandContext(ctx, "go", "build", "-trimpath", "-o", binary, "../../app/service/paas/cmd/matrix-product-endpoint")
+	command.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH=amd64")
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("build trusted endpoint fixture: %s", output)
+	}
+	dockerfile := "FROM scratch\nCOPY matrix-product-endpoint /matrix/bin/matrix-product-endpoint\nUSER 65532:65532\n"
+	if err := os.WriteFile(filepath.Join(buildRoot, "Dockerfile"), []byte(dockerfile), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tag := "matrix-onboarding-endpoint:" + runID
+	build := exec.CommandContext(ctx, "docker", "build", "--network=none", "--pull=false", "--label", "com.xiak.matrix.onboarding="+runID, "-t", tag, buildRoot)
+	if _, err := build.CombinedOutput(); err != nil {
+		t.Fatal("build isolated endpoint image failed")
+	}
+	id := dockerOutput(t, "image", "inspect", "--format", "{{.Id}}", tag)
+	t.Cleanup(func() {
+		if !*clean {
+			return
+		}
+		if owner := dockerOutput(t, "image", "inspect", "--format", `{{index .Config.Labels "com.xiak.matrix.onboarding"}}`, tag); owner != runID {
+			t.Error("endpoint image ownership changed")
+			return
+		}
+		dockerOutput(t, "image", "rm", tag)
+	})
+	return id
+}
+
+func assertLogstashWrite(t *testing.T, ctx context.Context, endpoint string, secret []byte, path, marker string) {
+	t.Helper()
+	status, _ := callHTTP(t, http.MethodPost, endpoint, "matrix", secret, map[string]string{"message": marker})
+	if status != http.StatusOK {
+		t.Fatal("authenticated Logstash input failed")
+	}
+	await(t, ctx, "Logstash output persistence", func() bool {
+		content, err := os.ReadFile(path)
+		return err == nil && bytes.Contains(content, []byte(marker))
+	})
+}
+func logstashRuntimeWitness(t *testing.T, id string) string {
+	t.Helper()
+	return dockerOutput(t, "inspect", "--format", "{{.Id}} {{.State.StartedAt}} {{.RestartCount}} {{json .NetworkSettings.Networks}} {{json .Mounts}}", id)
+}
+
+type productNetwork struct{ IPAddress, Gateway, NetworkID string }
+
+func productNetworks(t *testing.T, id string) map[string]productNetwork {
+	t.Helper()
+	var networks map[string]productNetwork
+	if json.Unmarshal([]byte(dockerOutput(t, "inspect", "--format", "{{json .NetworkSettings.Networks}}", id)), &networks) != nil {
+		t.Fatal("cannot inspect product networks")
+	}
+	return networks
+}
+func assertLogstashNetworkIsolation(t *testing.T, ctx context.Context, left InstallationConfig, leftResult adapterv1.ProvisionResult, right InstallationConfig, rightResult adapterv1.ProvisionResult) {
+	t.Helper()
+	type route struct{ container, address, network, gateway, hostPort string }
+	routes := make([]route, 0, 2)
+	for _, item := range []struct {
+		config InstallationConfig
+		result adapterv1.ProvisionResult
+	}{{left, leftResult}, {right, rightResult}} {
+		status, _ := callHTTP(t, http.MethodGet, item.result.Endpoint, "", nil, nil)
+		if status != http.StatusUnauthorized {
+			t.Fatal("positive host connectivity control failed")
+		}
+		project := projectFor(item.config)
+		product := ownedContainer(t, ctx, item.config.Runtime, project, item.config.Request)
+		networks := productNetworks(t, product.ID)
+		if len(networks) != 1 {
+			t.Fatal("tenant product has an unexpected network attachment")
+		}
+		value := route{container: product.ID}
+		for name, network := range networks {
+			if net.ParseIP(network.IPAddress) == nil || network.Gateway != "" {
+				t.Fatal("tenant product has a host route or lacks its private address")
+			}
+			var config struct {
+				Internal bool
+				Options  map[string]string
+			}
+			if json.Unmarshal([]byte(dockerOutput(t, "network", "inspect", "--format", "{{json .}}", name)), &config) != nil || !config.Internal || config.Options["com.docker.network.bridge.gateway_mode_ipv4"] != "isolated" {
+				t.Fatal("private network isolation contract is missing")
+			}
+			value.address, value.network = network.IPAddress, network.NetworkID
+		}
+		containers, err := item.config.Runtime.Observe(ctx, project)
+		if err != nil || len(containers) != 2 {
+			t.Fatal("trusted ingress inventory is invalid")
+		}
+		for _, c := range containers {
+			if c.Service == "logstash-endpoint" {
+				for _, network := range productNetworks(t, c.ID) {
+					if network.Gateway != "" {
+						if value.gateway != "" {
+							t.Fatal("ingress has multiple host paths")
+						}
+						value.gateway = network.Gateway
+					}
+				}
+			}
+		}
+		parsed, err := url.Parse(item.result.Endpoint)
+		if err != nil || parsed.Hostname() != "127.0.0.1" || parsed.Port() == "" || net.ParseIP(value.gateway) == nil {
+			t.Fatal("trusted ingress route is invalid")
+		}
+		value.hostPort = parsed.Port()
+		routes = append(routes, value)
+	}
+	if routes[0].network == routes[1].network || routes[0].address == routes[1].address {
+		t.Fatal("tenants share a private network")
+	}
+	for _, direction := range [][2]route{{routes[0], routes[1]}, {routes[1], routes[0]}} {
+		for _, target := range []string{"http://" + net.JoinHostPort(direction[1].address, "8080"), "http://" + net.JoinHostPort(direction[1].gateway, direction[1].hostPort)} {
+			probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			probe := exec.CommandContext(probeCtx, "docker", "exec", direction[0].container, "curl", "--silent", "--connect-timeout", "1", "--max-time", "2", "--output", "/dev/null", target)
+			err := probe.Run()
+			expired := probeCtx.Err() != nil
+			cancel()
+			var exit *exec.ExitError
+			if expired || !errors.As(err, &exit) || (exit.ExitCode() != 7 && exit.ExitCode() != 28) {
+				t.Fatal("inter-tenant path was reachable or the connectivity probe could not be trusted")
+			}
+		}
+	}
 }
