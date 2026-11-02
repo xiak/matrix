@@ -58,7 +58,7 @@ func NewService(queue Queue, provisioner managedserviceadapterv1.Provisioner, co
 		config.Catalog = domain.DefaultCatalog()
 	}
 	if config.LeaseDuration == 0 {
-		config.LeaseDuration = 30 * time.Second
+		config.LeaseDuration = 3 * time.Minute
 	}
 	if config.EffectTimeout == 0 {
 		config.EffectTimeout = 2 * time.Minute
@@ -71,6 +71,7 @@ func NewService(queue Queue, provisioner managedserviceadapterv1.Provisioner, co
 	}
 	if config.LeaseDuration < time.Second || config.LeaseDuration > 5*time.Minute ||
 		config.EffectTimeout < time.Second || config.EffectTimeout > 5*time.Minute ||
+		config.EffectTimeout > config.LeaseDuration ||
 		config.RetryBackoff < time.Second || config.RetryBackoff > time.Minute ||
 		config.MaximumAttempts < 1 || config.MaximumAttempts > 100 {
 		return nil, errors.New("managed-service reconciler configuration is invalid")
@@ -86,9 +87,22 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 	if ctx == nil || managedservicev1.ValidateID("workerId", workerID) != nil {
 		return false, ErrQueueUnavailable
 	}
+	// Start before Claim so transport/lock delay consumes, rather than extends,
+	// the authority's lease. Provision and compensation share this deadline;
+	// a stale attempt must not acquire a new destructive-effect budget.
+	ctx, cancelClaim := context.WithTimeout(ctx, service.leaseDuration)
+	defer cancelClaim()
+	claimDeadline, _ := ctx.Deadline()
+	expired := func() bool {
+		// Timer delivery can lag the absolute deadline on a busy process.
+		return ctx.Err() != nil || !time.Now().Before(claimDeadline)
+	}
 	work, found, err := service.queue.Claim(ctx, workerID, service.leaseDuration)
 	if err != nil || !found {
 		return found, err
+	}
+	if expired() {
+		return true, ErrQueueUnavailable
 	}
 	offering, shape, resolved := service.catalog.Resolve(
 		work.Installation.OfferingID,
@@ -109,6 +123,9 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 			EngineVersion: offering.EngineVersion, RegionID: work.Installation.RegionID,
 		})
 		cancel()
+		if expired() {
+			return true, ErrQueueUnavailable
+		}
 		if effectErr == nil {
 			return true, service.queue.CompleteTermination(ctx, work)
 		}
@@ -128,6 +145,9 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 		QuotaShape: shape,
 	})
 	cancel()
+	if expired() {
+		return true, ErrQueueUnavailable
+	}
 	if effectErr == nil {
 		if err := service.queue.CompleteProvision(ctx, work, result); err != nil {
 			return true, err
@@ -142,6 +162,9 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 			EngineVersion: offering.EngineVersion, RegionID: work.Installation.RegionID,
 		})
 		cleanupCancel()
+		if expired() {
+			return true, ErrQueueUnavailable
+		}
 		if cleanupErr != nil {
 			return true, service.queue.FailCleanup(ctx, work, "PROVIDER_CLEANUP_FAILED")
 		}

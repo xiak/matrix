@@ -2,16 +2,26 @@ package compose
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 type projectLock struct {
 	file *os.File
 }
 
-func acquireProjectLock(ctx context.Context, root, project string) (*projectLock, error) {
+// AcquireProjectLock serializes exact local project effects across processes.
+// Its protected lock outlives runtime/data removal; closing releases the lease.
+func AcquireProjectLock(ctx context.Context, root, project string) (io.Closer, error) {
+	identity, identityErr := hex.DecodeString(strings.TrimPrefix(project, "matrix-"))
+	if !strings.HasPrefix(project, "matrix-") || identityErr != nil || len(identity) != 12 ||
+		!filepath.IsAbs(root) || filepath.Clean(root) != root || filepath.Dir(root) == root {
+		return nil, errors.New("project lock identity is invalid")
+	}
 	if ctx == nil {
 		return nil, errors.New("project lock context is required")
 	}

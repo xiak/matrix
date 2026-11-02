@@ -57,37 +57,51 @@ type Config struct {
 	// EndpointServiceName names a trusted ingress process when the product
 	// itself has no published port. It is fixed by the product adapter.
 	EndpointServiceName string
-	CredentialFiles     []CredentialFile
-	DataDirectoryMode   os.FileMode
-	Runtime             composeadapter.Runtime
-	ValidateRequest     func(managedserviceadapterv1.ProvisionRequest) error
-	ValidateDeletion    func(managedserviceadapterv1.DeprovisionRequest) error
-	CompileDocument     func(DocumentInput) ([]byte, error)
+	// DependencyServiceName is an optional owned relay with no published port.
+	// Its only destination is compiled from a verified product dependency.
+	DependencyServiceName string
+	CredentialFiles       []CredentialFile
+	DataDirectoryMode     os.FileMode
+	Runtime               composeadapter.Runtime
+	ValidateRequest       func(managedserviceadapterv1.ProvisionRequest) error
+	ValidateDeletion      func(managedserviceadapterv1.DeprovisionRequest) error
+	CompileDocument       func(DocumentInput) ([]byte, error)
+	// PrepareConfiguration runs after owned observation documents are durable,
+	// before any Apply. Partial dependency effects remain observable/deletable.
+	PrepareConfiguration func(context.Context, DocumentInput) error
+	// ReleaseDependencies runs after owned containers are proved absent and
+	// before data/custody removal. Failure keeps the instance recoverable.
+	ReleaseDependencies func(context.Context, managedserviceadapterv1.DeprovisionRequest, string) error
 	Endpoint            func(int) string
 	NewSecret           func() ([]byte, error)
 }
 
 type Provisioner struct {
-	root                string
-	imageID             string
-	serviceName         string
-	endpointServiceName string
-	credentialFiles     []CredentialFile
-	dataDirectoryMode   os.FileMode
-	runtime             composeadapter.Runtime
-	dataPurger          composeadapter.DataPurger
-	validateRequest     func(managedserviceadapterv1.ProvisionRequest) error
-	validateDeletion    func(managedserviceadapterv1.DeprovisionRequest) error
-	compileDocument     func(DocumentInput) ([]byte, error)
-	endpoint            func(int) string
-	newSecret           func() ([]byte, error)
-	locks               sync.Map
+	root                  string
+	imageID               string
+	serviceName           string
+	endpointServiceName   string
+	dependencyServiceName string
+	credentialFiles       []CredentialFile
+	dataDirectoryMode     os.FileMode
+	runtime               composeadapter.Runtime
+	dataPurger            composeadapter.DataPurger
+	validateRequest       func(managedserviceadapterv1.ProvisionRequest) error
+	validateDeletion      func(managedserviceadapterv1.DeprovisionRequest) error
+	compileDocument       func(DocumentInput) ([]byte, error)
+	prepareConfiguration  func(context.Context, DocumentInput) error
+	releaseDependencies   func(context.Context, managedserviceadapterv1.DeprovisionRequest, string) error
+	endpoint              func(int) string
+	newSecret             func() ([]byte, error)
+	locks                 sync.Map
 }
 
 func New(config Config) (*Provisioner, error) {
 	if !imageIDPattern.MatchString(config.ImageID) ||
 		!serviceNamePattern.MatchString(config.ServiceName) ||
 		(config.EndpointServiceName != "" && (!serviceNamePattern.MatchString(config.EndpointServiceName) || config.EndpointServiceName == config.ServiceName)) ||
+		(config.DependencyServiceName != "" && (!serviceNamePattern.MatchString(config.DependencyServiceName) ||
+			config.EndpointServiceName == "" || config.DependencyServiceName == config.ServiceName || config.DependencyServiceName == config.EndpointServiceName)) ||
 		len(config.CredentialFiles) == 0 || len(config.CredentialFiles) > 4 ||
 		config.Runtime == nil || config.ValidateRequest == nil ||
 		config.CompileDocument == nil || config.Endpoint == nil {
@@ -124,11 +138,13 @@ func New(config Config) (*Provisioner, error) {
 	}
 	return &Provisioner{
 		root: root, imageID: config.ImageID, serviceName: config.ServiceName,
-		endpointServiceName: config.EndpointServiceName,
-		credentialFiles:     credentialFiles, dataDirectoryMode: dataMode,
+		endpointServiceName:   config.EndpointServiceName,
+		dependencyServiceName: config.DependencyServiceName,
+		credentialFiles:       credentialFiles, dataDirectoryMode: dataMode,
 		runtime: config.Runtime, dataPurger: dataPurger, validateRequest: config.ValidateRequest,
 		validateDeletion: config.ValidateDeletion,
 		compileDocument:  config.CompileDocument, endpoint: config.Endpoint,
+		prepareConfiguration: config.PrepareConfiguration, releaseDependencies: config.ReleaseDependencies,
 		newSecret: config.NewSecret,
 	}, nil
 }
@@ -160,7 +176,7 @@ func (provisioner *Provisioner) Ensure(
 	lock := lockValue.(*sync.Mutex)
 	lock.Lock()
 	defer lock.Unlock()
-	project, endpoint, credentialReference, err := provisioner.prepareProject(projectName, request)
+	project, endpoint, credentialReference, err := provisioner.prepareProject(ctx, projectName, request)
 	if err != nil {
 		return managedserviceadapterv1.ProvisionResult{}, err
 	}
@@ -257,6 +273,11 @@ func (provisioner *Provisioner) Delete(
 			return errors.New("local managed-service deletion outcome is unknown")
 		}
 	}
+	if provisioner.releaseDependencies != nil {
+		if err := provisioner.releaseDependencies(ctx, request, directory); err != nil {
+			return errors.New("local managed-service dependency cleanup is unavailable")
+		}
+	}
 	if err := provisioner.dataPurger.PurgeData(ctx, project, provisioner.imageID); err != nil {
 		return errors.New("local managed-service data cleanup is unavailable")
 	}
@@ -271,6 +292,7 @@ func (provisioner *Provisioner) Delete(
 }
 
 func (provisioner *Provisioner) prepareProject(
+	ctx context.Context,
 	projectName string,
 	request managedserviceadapterv1.ProvisionRequest,
 ) (composeadapter.RuntimeProject, string, string, error) {
@@ -304,11 +326,12 @@ func (provisioner *Provisioner) prepareProject(
 	if err != nil {
 		return composeadapter.RuntimeProject{}, "", "", err
 	}
-	document, err := provisioner.compileDocument(DocumentInput{
+	input := DocumentInput{
 		ProjectName: projectName, ImageID: provisioner.imageID, Request: request,
 		DataDirectory: dataDirectory, CredentialPaths: credentialPaths,
 		CredentialGroupIDs: credentialGroupIDs, PublishedPort: port,
-	})
+	}
+	document, err := provisioner.compileDocument(input)
 	if err != nil {
 		return composeadapter.RuntimeProject{}, "", "", err
 	}
@@ -319,6 +342,11 @@ func (provisioner *Provisioner) prepareProject(
 	}
 	if err := writeManagedFile(provisioner.root, observationPath, document, 0o600); err != nil {
 		return composeadapter.RuntimeProject{}, "", "", err
+	}
+	if provisioner.prepareConfiguration != nil {
+		if err := provisioner.prepareConfiguration(ctx, input); err != nil {
+			return composeadapter.RuntimeProject{}, "", "", errors.New("local managed-service configuration preparation is unavailable")
+		}
 	}
 	return composeadapter.RuntimeProject{
 		Name: projectName, Directory: directory,
@@ -369,6 +397,9 @@ func (provisioner *Provisioner) ready(
 		expected[provisioner.serviceName] = 0
 		expected[provisioner.endpointServiceName] = 1
 	}
+	if provisioner.dependencyServiceName != "" {
+		expected[provisioner.dependencyServiceName] = 0
+	}
 	if len(containers) != len(expected) {
 		return false
 	}
@@ -388,7 +419,8 @@ func (provisioner *Provisioner) owns(
 	projectName, installationID, offeringID, regionID string,
 ) bool {
 	return container.Project == projectName &&
-		(container.Service == provisioner.serviceName || (provisioner.endpointServiceName != "" && container.Service == provisioner.endpointServiceName)) &&
+		(container.Service == provisioner.serviceName || (provisioner.endpointServiceName != "" && container.Service == provisioner.endpointServiceName) ||
+			(provisioner.dependencyServiceName != "" && container.Service == provisioner.dependencyServiceName)) &&
 		!container.OneOff &&
 		container.Labels["com.xiak.matrix.managed"] == "true" &&
 		container.Labels["com.xiak.matrix.managedservice.installation"] == installationID &&

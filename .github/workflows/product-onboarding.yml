@@ -21,7 +21,7 @@ concurrency:
 jobs:
   elastic-product-contract:
     runs-on: ubuntu-24.04
-    timeout-minutes: 25
+    timeout-minutes: 45
     env:
       GOMAXPROCS: '2'
       GOMEMLIMIT: '1GiB'
@@ -37,17 +37,17 @@ jobs:
           cache-dependency-path: go.sum
       - name: Check adapter contracts and architecture
         run: |
-          go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./test/architecture
+          go test -count=1 ./api/adapter/managedservice/v1 ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localcontainer ./test/managedserviceonboarding ./test/architecture
       - name: Prepare exact local artifacts on host Docker
         run: |
           sudo sysctl -w vm.max_map_count=1048576
           docker info --format '{{.ServerVersion}}'
           mkdir -m 700 "$MATRIX_ONBOARDING_ROOT"
           go run ./test/managedserviceonboarding/cmd/prepare -pull
-      - name: Run real Logstash and Kibana product-team acceptance
+      - name: Run real ELK product-team acceptance
         env:
           MATRIX_ONBOARDING_RUNTIME: '1'
-        run: go test -count=1 -timeout=20m -v ./test/managedserviceonboarding
+        run: go test -count=1 -timeout=40m -v ./test/managedserviceonboarding
       - name: Preserve non-secret acceptance result
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

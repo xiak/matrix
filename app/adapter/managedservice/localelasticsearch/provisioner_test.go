@@ -26,7 +26,7 @@ func TestEnsureCreatesRealElasticsearchShapeWithoutEmbeddingCredentials(t *testi
 	imageID := "sha256:" + strings.Repeat("d", 64)
 	root := t.TempDir()
 	provisioner, err := New(Config{
-		Root: root, ImageID: imageID, Runtime: runtime,
+		Root: root, ImageID: imageID, EndpointImageID: "sha256:" + strings.Repeat("f", 64), Runtime: runtime,
 		NewSecret: func() ([]byte, error) {
 			secretCalls++
 			return append([]byte(nil), secret...), nil
@@ -46,7 +46,14 @@ func TestEnsureCreatesRealElasticsearchShapeWithoutEmbeddingCredentials(t *testi
 		t.Fatal(err)
 	}
 	var effect struct {
+		Networks map[string]struct {
+			Internal      bool              `json:"internal"`
+			DriverOptions map[string]string `json:"driver_opts"`
+		} `json:"networks"`
 		Services map[string]struct {
+			Networks    []string          `json:"networks"`
+			Ports       []string          `json:"ports"`
+			User        string            `json:"user"`
 			Image       string            `json:"image"`
 			PullPolicy  string            `json:"pull_policy"`
 			GroupAdd    []string          `json:"group_add"`
@@ -61,6 +68,13 @@ func TestEnsureCreatesRealElasticsearchShapeWithoutEmbeddingCredentials(t *testi
 		t.Fatal(err)
 	}
 	service := effect.Services[elasticsearchServiceName]
+	endpoint := effect.Services[endpointServiceName]
+	if len(effect.Services) != 2 || len(service.Ports) != 0 || !reflect.DeepEqual(service.Networks, []string{"private"}) ||
+		!effect.Networks["private"].Internal || effect.Networks["private"].DriverOptions["com.docker.network.bridge.gateway_mode_ipv4"] != "isolated" ||
+		endpoint.User != "65532:65532" || len(endpoint.Ports) != 1 || !strings.HasPrefix(endpoint.Ports[0], "127.0.0.1:") ||
+		!reflect.DeepEqual(endpoint.Networks, []string{"private", "default"}) {
+		t.Fatal("Elasticsearch network boundary is invalid")
+	}
 	if service.Image != imageID || service.PullPolicy != "never" ||
 		service.Environment["ELASTIC_PASSWORD_FILE"] != "/tmp/matrix-elasticsearch-password" ||
 		service.Environment["xpack.security.enabled"] != "true" ||
@@ -131,7 +145,7 @@ func credentialFileGroupIDForTest(path string) (uint64, bool, error) {
 
 func TestEnsureRejectsAnotherOfferingBeforeRuntime(t *testing.T) {
 	runtime := &fakeRuntime{t: t}
-	provisioner, err := New(Config{Root: t.TempDir(), ImageID: "sha256:" + strings.Repeat("e", 64), Runtime: runtime})
+	provisioner, err := New(Config{Root: t.TempDir(), ImageID: "sha256:" + strings.Repeat("e", 64), EndpointImageID: "sha256:" + strings.Repeat("f", 64), Runtime: runtime})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,18 +189,25 @@ func testProvisionRequest() managedserviceadapterv1.ProvisionRequest {
 }
 
 type fakeRuntime struct {
-	t          *testing.T
-	project    composeadapter.RuntimeProject
-	listener   net.Listener
-	applyCalls int
-	stopCalls  int
-	purgeCalls int
+	t           *testing.T
+	project     composeadapter.RuntimeProject
+	listener    net.Listener
+	applyCalls  int
+	stopCalls   int
+	purgeCalls  int
+	observed    func([]composeadapter.RuntimeContainer) []composeadapter.RuntimeContainer
+	beforeApply func() error
 }
 
 func (runtime *fakeRuntime) Ready(context.Context) error { return nil }
 
 func (runtime *fakeRuntime) Apply(_ context.Context, project composeadapter.RuntimeProject) error {
 	runtime.applyCalls++
+	if runtime.beforeApply != nil {
+		if err := runtime.beforeApply(); err != nil {
+			return err
+		}
+	}
 	runtime.project = project
 	content, err := os.ReadFile(project.EffectDocument)
 	if err != nil {
@@ -197,10 +218,13 @@ func (runtime *fakeRuntime) Apply(_ context.Context, project composeadapter.Runt
 			Ports []string `json:"ports"`
 		} `json:"services"`
 	}
-	if json.Unmarshal(content, &document) != nil || len(document.Services[elasticsearchServiceName].Ports) != 1 {
+	if json.Unmarshal(content, &document) != nil || len(document.Services[endpointServiceName].Ports) != 1 {
 		runtime.t.Fatalf("invalid Elasticsearch effect document: %s", content)
 	}
-	published := strings.Split(document.Services[elasticsearchServiceName].Ports[0], ":")
+	published := strings.Split(document.Services[endpointServiceName].Ports[0], ":")
+	if runtime.listener != nil {
+		_ = runtime.listener.Close()
+	}
 	runtime.listener, err = net.Listen("tcp4", net.JoinHostPort("127.0.0.1", published[1]))
 	if err != nil {
 		runtime.t.Fatal(err)
@@ -212,16 +236,23 @@ func (runtime *fakeRuntime) Observe(_ context.Context, project composeadapter.Ru
 	if runtime.listener == nil {
 		return []composeadapter.RuntimeContainer{}, nil
 	}
-	return []composeadapter.RuntimeContainer{{
+	backend := composeadapter.RuntimeContainer{
 		Project: project.Name, Service: elasticsearchServiceName,
-		State: "running", Health: "healthy", PublishedPorts: 1,
+		State: "running", Health: "healthy", PublishedPorts: 0,
 		Labels: map[string]string{
 			"com.xiak.matrix.managed":                     "true",
 			"com.xiak.matrix.managedservice.installation": "elasticsearch-primary",
 			"com.xiak.matrix.managedservice.offering":     managedservicev1.ElasticsearchOfferingID,
 			"com.xiak.matrix.managedservice.region":       "local-primary",
 		},
-	}}, nil
+	}
+	endpoint := backend
+	endpoint.Service, endpoint.PublishedPorts = endpointServiceName, 1
+	containers := []composeadapter.RuntimeContainer{backend, endpoint}
+	if runtime.observed != nil {
+		containers = runtime.observed(containers)
+	}
+	return containers, nil
 }
 
 func (runtime *fakeRuntime) Stop(context.Context, composeadapter.RuntimeProject) error {
@@ -241,5 +272,49 @@ func (runtime *fakeRuntime) PurgeData(context.Context, composeadapter.RuntimePro
 func (runtime *fakeRuntime) close() {
 	if runtime.listener != nil {
 		_ = runtime.listener.Close()
+	}
+}
+
+func TestEnsureRequiresBothOwnedServicesAndPrivateBackend(t *testing.T) {
+	for _, mutation := range []struct {
+		name   string
+		change func([]composeadapter.RuntimeContainer) []composeadapter.RuntimeContainer
+	}{
+		{"missing ingress", func(c []composeadapter.RuntimeContainer) []composeadapter.RuntimeContainer { return c[:1] }},
+		{"published backend", func(c []composeadapter.RuntimeContainer) []composeadapter.RuntimeContainer {
+			c[0].PublishedPorts = 1
+			return c
+		}},
+		{"unhealthy ingress", func(c []composeadapter.RuntimeContainer) []composeadapter.RuntimeContainer {
+			c[1].Health = "unhealthy"
+			return c
+		}},
+		{"duplicate backend", func(c []composeadapter.RuntimeContainer) []composeadapter.RuntimeContainer {
+			return []composeadapter.RuntimeContainer{c[0], c[0]}
+		}},
+		{"foreign ingress", func(c []composeadapter.RuntimeContainer) []composeadapter.RuntimeContainer {
+			c[1].Project = "foreign"
+			return c
+		}},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			runtime := &fakeRuntime{t: t, observed: mutation.change}
+			defer runtime.close()
+			provider, err := New(Config{Root: t.TempDir(), ImageID: "sha256:" + strings.Repeat("b", 64), EndpointImageID: "sha256:" + strings.Repeat("d", 64), Runtime: runtime})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := provider.Ensure(t.Context(), testProvisionRequest()); err == nil {
+				t.Fatal("invalid network boundary reported ready")
+			}
+		})
+	}
+}
+
+func TestEndpointImageMustBePinned(t *testing.T) {
+	for _, image := range []string{"", "matrix-paas:latest", "sha256:invalid"} {
+		if _, err := New(Config{Root: t.TempDir(), ImageID: "sha256:" + strings.Repeat("b", 64), EndpointImageID: image, Runtime: &fakeRuntime{t: t}}); err == nil {
+			t.Fatal("untrusted endpoint identity accepted")
+		}
 	}
 }

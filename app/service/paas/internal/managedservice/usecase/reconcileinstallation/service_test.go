@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
@@ -101,6 +102,70 @@ func TestProcessNextRejectsChangedInstallationProfileWithoutEffect(t *testing.T)
 	}
 }
 
+func TestExpiredClaimCannotBeginCompensatingDelete(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		queue := &stubQueue{work: testWorkItem(1), found: true}
+		provider := &stubProvisioner{onEnsure: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}}
+		service, err := NewService(queue, provider, Config{LeaseDuration: 2 * time.Second, EffectTimeout: 2 * time.Second, MaximumAttempts: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		processed, err := service.ProcessNext(t.Context(), "worker-test")
+		if !processed || !errors.Is(err, ErrQueueUnavailable) || provider.deleteCalls != 0 ||
+			queue.failed != 0 || queue.completed != 0 || queue.retried != 0 {
+			t.Fatal("expired worker began compensation or published a stale outcome")
+		}
+	})
+}
+
+func TestCompensationCannotExtendItsOriginalClaim(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		queue := &stubQueue{work: testWorkItem(1), found: true}
+		provider := &stubProvisioner{
+			onEnsure: func(context.Context) error {
+				time.Sleep(2 * time.Second)
+				return errors.New("uncertain provision")
+			},
+			onDelete: func(ctx context.Context) error {
+				deadline, ok := ctx.Deadline()
+				if !ok || time.Until(deadline) > time.Second {
+					t.Error("compensation acquired time beyond the original claim")
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			},
+		}
+		service, err := NewService(queue, provider, Config{LeaseDuration: 3 * time.Second, EffectTimeout: 2 * time.Second, MaximumAttempts: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		processed, err := service.ProcessNext(t.Context(), "worker-test")
+		if !processed || !errors.Is(err, ErrQueueUnavailable) || time.Since(start) != 3*time.Second ||
+			provider.deleteCalls != 1 || queue.failed != 0 || queue.completed != 0 {
+			t.Fatal("compensation outlived its claim or published a stale outcome")
+		}
+	})
+}
+
+func TestSlowClaimConsumesTheSameEffectBudget(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		queue := &stubQueue{work: testWorkItem(1), found: true, onClaim: func() { time.Sleep(2 * time.Second) }}
+		provider := &stubProvisioner{}
+		service, err := NewService(queue, provider, Config{LeaseDuration: 2 * time.Second, EffectTimeout: time.Second})
+		if err != nil {
+			t.Fatal(err)
+		}
+		processed, err := service.ProcessNext(t.Context(), "worker-test")
+		if !processed || !errors.Is(err, ErrQueueUnavailable) || provider.calls != 0 || provider.deleteCalls != 0 {
+			t.Fatal("a delayed claim response started effects outside its lease")
+		}
+	})
+}
+
 func testReconciler(
 	t *testing.T,
 	queue Queue,
@@ -146,9 +211,13 @@ type stubQueue struct {
 	retried     int
 	failed      int
 	failureCode string
+	onClaim     func()
 }
 
 func (queue *stubQueue) Claim(context.Context, string, time.Duration) (WorkItem, bool, error) {
+	if queue.onClaim != nil {
+		queue.onClaim()
+	}
 	return queue.work, queue.found, nil
 }
 
@@ -187,23 +256,31 @@ type stubProvisioner struct {
 	deleteErr     error
 	calls         int
 	deleteCalls   int
+	onEnsure      func(context.Context) error
+	onDelete      func(context.Context) error
 }
 
 func (provisioner *stubProvisioner) Ensure(
-	_ context.Context,
+	ctx context.Context,
 	request managedserviceadapterv1.ProvisionRequest,
 ) (managedserviceadapterv1.ProvisionResult, error) {
 	provisioner.calls++
 	provisioner.request = request
+	if provisioner.onEnsure != nil {
+		return provisioner.result, provisioner.onEnsure(ctx)
+	}
 	return provisioner.result, provisioner.err
 }
 
 func (provisioner *stubProvisioner) Delete(
-	_ context.Context,
+	ctx context.Context,
 	request managedserviceadapterv1.DeprovisionRequest,
 ) error {
 	provisioner.deleteCalls++
 	provisioner.deleteRequest = request
+	if provisioner.onDelete != nil {
+		return provisioner.onDelete(ctx)
+	}
 	return provisioner.deleteErr
 }
 

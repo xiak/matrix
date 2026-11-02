@@ -337,6 +337,10 @@ func run(ctx context.Context) (result error) {
 	if err := managedMySQL.UpgradeNetwork(ctx); err != nil {
 		return err
 	}
+	productEndpointImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedProductEndpointImageIDs, ","))
+	if err != nil {
+		return err
+	}
 	managedElasticsearchRoot, err := managedRoot("elasticsearch")
 	if err != nil {
 		return err
@@ -347,9 +351,12 @@ func run(ctx context.Context) (result error) {
 	}
 	managedElasticsearch, err := localelasticsearchadapter.New(localelasticsearchadapter.Config{
 		Root:    managedElasticsearchRoot,
-		ImageID: elasticsearchImageID, Runtime: runtime,
+		ImageID: elasticsearchImageID, EndpointImageID: productEndpointImageID, Runtime: runtime,
 	})
 	if err != nil {
+		return err
+	}
+	if err := managedElasticsearch.UpgradeNetwork(ctx); err != nil {
 		return err
 	}
 	managedRabbitMQRoot, err := managedRoot("rabbitmq")
@@ -372,10 +379,6 @@ func run(ctx context.Context) (result error) {
 		return err
 	}
 	logstashImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedLogstashImageIDs, ","))
-	if err != nil {
-		return err
-	}
-	productEndpointImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedProductEndpointImageIDs, ","))
 	if err != nil {
 		return err
 	}

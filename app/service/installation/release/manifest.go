@@ -136,13 +136,13 @@ type AuthoritySchemas struct {
 
 // CurrentDatabaseProfile is the release composition supported by this source.
 // Cross-profile upgrades need a separately proven retained-data/N-1 path.
-// ContractRevision changes for incompatible function/wire contracts even when
-// their owning services retain the same schema-version numbers.
+// ContractRevision changes for incompatible function, wire or managed-runtime
+// contracts even when services retain the same schema-version numbers.
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
 		Authorities:      AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8},
-		ContractRevision: 40,
+		ContractRevision: 41,
 	}
 }
 

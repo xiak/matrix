@@ -446,6 +446,10 @@ func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.
 		Compatibility: "identical-authority-profile", ContractRevision: 2,
 		Authorities: release.AuthoritySchemas{IAM: 2, Audit: 2, PaaS: 1},
 	}
+	directElasticsearch := release.DatabaseProfile{
+		Compatibility: "identical-authority-profile", ContractRevision: 40,
+		Authorities: release.AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8},
+	}
 	revised := current
 	revised.ContractRevision++
 	beforeSecurityMail := current
@@ -463,6 +467,8 @@ func TestDifferentDatabaseProfilesRejectBeforeEffectsOrJournalChange(t *testing.
 		{name: "session lineage to prior tenant release", source: current, target: previousTenantProfile},
 		{name: "legacy scalar increase", source: legacy, target: release.DatabaseProfile{SchemaVersion: 2, Compatibility: legacy.Compatibility}},
 		{name: "same schemas different authority contract", source: current, target: revised},
+		{name: "direct Elasticsearch predecessor has no accepted release migration", source: directElasticsearch, target: current},
+		{name: "private Elasticsearch cannot fall back to direct-port worker", source: current, target: directElasticsearch},
 		{name: "same schemas before security mail topology", source: beforeSecurityMail, target: current},
 		{name: "same schemas before tenant lifecycle", source: proofOnly, target: current},
 		{name: "host proof composition to tenant lifecycle", source: hostProof, target: current},

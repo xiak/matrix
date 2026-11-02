@@ -16700,9 +16700,9 @@ func assertManagedProductRuntime(
 	filter := "label=com.xiak.matrix.managedservice.installation=" + installation.ID
 	arguments := []string{"container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}"}
 	arguments = append(arguments, "--filter", "label=com.docker.compose.project="+localcontaineradapter.ProjectName(product.tenantID, product.installationID))
-	if product.offeringID == managedservicev1.MySQLOfferingID || product.offeringID == managedservicev1.LogstashOfferingID {
-		arguments = append(arguments, "--filter", "label=com.docker.compose.service="+product.serviceID)
-	}
+	// Every product fixture names its provider directory from the runtime service.
+	// Observe the exact backend; fixed ingress/dependency services are distinct.
+	arguments = append(arguments, "--filter", "label=com.docker.compose.service="+strings.TrimPrefix(product.runtimeDirectory, "managed-"))
 	list := exec.CommandContext(ctx, "docker", arguments...)
 	content, err := list.Output()
 	identities := strings.Fields(string(content))

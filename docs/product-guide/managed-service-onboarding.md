@@ -4,10 +4,11 @@
 目标是交付能够安装、验证、恢复和删除的产品实现，并给平台团队一份可复核的验收材料。
 普通用户开通已经发布的产品，请看[托管服务使用手册](../user-guide/services-and-applications.md)。
 
-本仓库提供两个可执行接入样例。它们通过与 PG、MySQL 相同的部署接口运行，
-使用真实 Logstash、Kibana 制品。**Logstash 已完成本机私有候选的功能闭环；Kibana 仍为接入样例。
-实际版本与发布限制以 [FEAT-007](../features/FEAT-007-control-plane-console.md#logstash-平台集成候选)为准。**
-完成样例测试后，还须由平台团队完成正式集成和发布验收。
+本仓库提供 Logstash、Kibana 适配器及 ELK 的真实运行验收入口，使用与 PG、MySQL
+相同的部署接口。你可以先跑通这两个例子，再交付自己的产品实现。
+**控制台能否开通、哪些版本可以发布，以安装版本的目录和
+[FEAT-007 的验收状态](../features/FEAT-007-control-plane-console.md#产品团队接入契约)为准。**
+适配器测试通过后，还须由平台团队完成正式集成和发布验收。
 
 ## 1. 先分清双方交付什么
 
@@ -39,7 +40,7 @@ flowchart LR
 | 示例 | 它实际证明什么 | 实现入口 |
 | --- | --- | --- |
 | Logstash | 带认证的 HTTP 输入被处理并写入持久文件；重启后数据保留 | [Logstash 适配器](../../app/adapter/managedservice/locallogstash/provisioner.go) |
-| Kibana | 连接准确的同租户 Elasticsearch 依赖；通过真实接口创建、读取数据视图 | [Kibana 样例](../../test/managedserviceonboarding/kibana.go) |
+| Kibana | 连接准确的同租户 Elasticsearch 依赖；通过真实接口创建、读取数据视图 | [Kibana 适配器](../../app/adapter/managedservice/localkibana/provisioner.go) |
 
 Logstash 样例不依赖 Elasticsearch。Kibana 验收临时准备自己的 Elasticsearch，
 用于证明依赖管理及删除边界；不要将它替换成生产数据库。
@@ -76,20 +77,34 @@ Docker 产品可以从 [Logstash 适配器](../../app/adapter/managedservice/loc
 ## 4. 明确产品配置与依赖
 
 开始编码前，双方应确认配置中哪些内容属于用户选择、哪些必须由平台解析。
-样例的[配置与绑定实现](../../test/managedserviceonboarding/configuration.go)采用固定修订，
+Logstash 与 Kibana 各自的适配器拥有配置与不可变绑定；运行测试直接使用这些实现。
 第一次安装后不能悄悄改写同一实例的配置。
 
 **Logstash 示例**采用 `http-json-file-v1`：输入协议、输出位置和处理步骤固定。
 平台生成输入认证材料，保护配置文件；测试发送一条数据，并验证处理结果落盘。
 输入请求中的认证头不会写入示例输出数据。
 
-**Kibana 示例**采用 `elasticsearch-ui-v1`：明确依赖实例、所属租户、版本及修订。
-受信交付方提供专用服务身份的凭据引用，Kibana 不使用 Elasticsearch 管理员作为
-自己的后台连接身份。删除 Kibana 必须保留依赖实例及其中的数据。
+**Kibana 示例**采用 `elasticsearch-ui-v1`，按以下顺序处理依赖：
 
-本例通过受信构造参数提供这些信息。正式接入需要可编辑配置或依赖选择时，平台团队
-还要把相应的有界字段、不可变配置引用、依赖使用权限和恢复行为接入业务 API 与持久化。
-**样例构造参数不是可以直接添加到租户请求中的 JSON 字段。**
+1. 平台核对所选 Elasticsearch 的账号、当前使用权限、READY 状态、观察版本和区域。
+   接受后，把准确的依赖引用写入实例记录，再交给 worker；产品团队不能自行跳过这一步。
+2. 适配器从受保护的实例记录解析连接入口，为当前 Kibana 发行自己的服务凭据。
+   两个 Kibana 共用 Elasticsearch 时，各自的凭据和浏览器会话材料独立。
+3. 保存对象和报表使用 Elasticsearch 所属的共享加密材料。删除 Kibana 会撤销它
+   自己的服务凭据并清理自己的运行资源，保留 Elasticsearch 数据与共享密钥。
+4. 创建或撤销凭据时断线，保留现场，用相同实例身份重试；不会把断线当作删除成功。
+   已经运行的实例缺失凭据文件时会明确失败，不自动换密码掩盖问题。
+
+第一步的业务 API、当前权限、依赖绑定和删除保护属于平台集成验收；后续步骤由
+[Kibana 依赖实现](../../app/adapter/managedservice/localkibana/dependency.go)与真实运行门禁证明。
+各步是否已验收，请核对 [Kibana 切片](../features/FEAT-007-control-plane-console.md#kibana-依赖接入切片)。
+**适配器的受信构造参数不是可以直接添加到租户请求中的 JSON 字段。**
+产品团队不传入任意 URL、密码文件路径或 Docker 网络名。
+
+Kibana 的后台服务凭据用于连接 Elasticsearch。打开 Kibana 后，用户仍使用
+Elasticsearch 的业务账号登录；Matrix 登录态和后台服务凭据都不是 Kibana 用户密码。
+依据见 Elastic 的[服务账号说明](https://www.elastic.co/guide/en/elasticsearch/reference/8.19/service-accounts.html)
+和[共享保存对象加密材料](https://www.elastic.co/guide/en/kibana/8.19/xpack-security-secure-saved-objects.html)。
 
 例如，准备支持更多 Pipeline 时，应先确定允许的配置结构、校验、版本与秘密引用，
 再实现配置生命周期。不要把任意原生 DSL、URL、镜像或宿主机路径作为通用透传字段。
@@ -104,8 +119,9 @@ Docker 产品可以从 [Logstash 适配器](../../app/adapter/managedservice/loc
 如果交付承诺网络隔离，应增加两个真实租户的正反向测试，覆盖私有地址、主机发布
 入口、数据、凭据、重启和独立删除。当前可复用的验收路线及适用范围见
 [MySQL 租户隔离](../features/FEAT-007-control-plane-console.md#docker-mysql-租户隔离)。
-L/K 样例不会自动获得 MySQL 的网络保证，Kibana 到 Elasticsearch 的授权依赖也
-需要在自己的目标 Provider 上单独证明。
+ELK 运行门禁分别验证 Logstash、Elasticsearch 的双作用域隔离，以及 Kibana 的私有网络
+和准确依赖通路。不要因一个产品通过，就省略新产品在目标 Provider 上的验证。
+这些适配器作用域测试仍须配合真实账号、权限和删除保护验收。
 
 按运行手册依次执行[契约检查](../runbooks/managed-service-onboarding.md#契约检查)
 和[真实运行验收](../runbooks/managed-service-onboarding.md#真实运行验收)。
@@ -115,12 +131,21 @@ L/K 样例不会自动获得 MySQL 的网络保证，Kibana 到 Elasticsearch �
 测试结束会检查实例的数据、凭据及运行资源已经清理；Kibana 删除后还会验证依赖仍可用。
 
 结果文件只有非秘密的版本、制品身份、时间、检查项和结论。
-确认测试命令成功、结果为 `PASSED`，且两个产品的预期检查项齐全。
+确认测试命令成功、结果为 `PASSED`，且 ELK 的预期检查项齐全。
 默认的普通单元测试会跳过 Docker 运行；出现 `SKIP` 不能填写真实运行验收通过。
 实际样例运行必须显式开启运行门禁，缺少镜像或环境会失败。
 
 结果中的 `platformAndReleaseGates` 仍标记 `NOT_RUN`，表示该报告仅证明产品团队样例。
 源码、接口或模拟测试成功，都不能替代后续真实用户权限和签名发布包验收。
+
+Kibana 接入中断后，按结果选择恢复动作：
+
+| 现象 | 产品团队应如何处理 |
+| --- | --- |
+| 创建或删除返回超时，结果未知 | 保留准确实例身份、依赖引用和保护文件，用原请求重试；先核对原生效果 |
+| Elasticsearch 暂时不可用，Kibana 删除未完成 | 先恢复同一依赖，使凭据能够确认撤销，再重试删除；不要清空目录假装成功 |
+| 正在运行的 Kibana 缺失凭据文件 | 从受保护托管材料中恢复准确凭据，交由维护者核查；不自动轮换共享身份 |
+| Elasticsearch 已有保存对象，但共享密钥缺失 | 恢复对应密钥后再接入；不能生成新密钥冒充原密钥。平台备份不能替代产品数据和密钥备份 |
 
 ## 6. 把合格实现交给平台团队
 
@@ -153,7 +178,7 @@ L/K 样例不会自动获得 MySQL 的网络保证，Kibana 到 Elasticsearch �
 浏览器使用以及签名包生命周期。全部必要检查通过后，产品才能进入正式目录。
 
 以下状态应分别记录：**样例已验证 → 集成待验收 → 发布已验收**。
-L/K 已有可执行的适配器验收；Logstash 交接还应核对私有候选与正式发布的边界，
+交接时核对当前源码、当前报告和私有候选与正式发布的边界，
 不能只读取适配器报告中的 `PASSED`。
 ELK 完成正式纳管后，将用 Redis 复用
 同一条接入路径，验证它也适用于另一种产品家族。未完成验收的产品不显示为已发布。

@@ -25,6 +25,8 @@ const (
 	RabbitMQOfferingID      = "rabbitmq-4.1"
 	LogstashServiceID       = "logstash"
 	LogstashOfferingID      = "logstash-8.19"
+	KibanaServiceID         = "kibana"
+	KibanaOfferingID        = "kibana-8.19"
 )
 
 const (

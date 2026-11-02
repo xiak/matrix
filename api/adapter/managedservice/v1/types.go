@@ -34,6 +34,19 @@ type ProvisionRequest struct {
 	EngineVersion  string
 	RegionID       string
 	QuotaShape     managedservicev1.QuotaShape
+	// Elasticsearch is the exact dependency accepted by the authority. Its
+	// tenant is always this request's TenantID; it contains no native selector.
+	Elasticsearch *ElasticsearchDependency "json:\"elasticsearch,omitempty\""
+}
+
+// ElasticsearchDependency binds a Kibana installation to an immutable current
+// object observation. The authority owns permission, existence and delete
+// protection; the provider cannot infer those facts from an endpoint.
+type ElasticsearchDependency struct {
+	InstallationID  string
+	ResourceVersion uint64
+	EngineVersion   string
+	RegionID        string
 }
 
 type ProvisionResult struct {
@@ -51,4 +64,5 @@ type DeprovisionRequest struct {
 	OfferingID     string
 	EngineVersion  string
 	RegionID       string
+	Elasticsearch  *ElasticsearchDependency "json:\"elasticsearch,omitempty\""
 }

@@ -20,7 +20,7 @@ func TestProjectLockExcludesAnotherProcess(t *testing.T) {
 		t.Fatalf("prepare lock root: %v", err)
 	}
 	project := "matrix-0123456789abcdef01234567"
-	lock, err := acquireProjectLock(context.Background(), root, project)
+	lock, err := AcquireProjectLock(context.Background(), root, project)
 	if err != nil {
 		t.Fatalf("acquire parent project lock: %v", err)
 	}
@@ -43,7 +43,7 @@ func TestProjectLockChild(t *testing.T) {
 	project := "matrix-0123456789abcdef01234567"
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	lock, err := acquireProjectLock(ctx, root, project)
+	lock, err := AcquireProjectLock(ctx, root, project)
 	switch mode {
 	case "blocked":
 		if !errors.Is(err, context.DeadlineExceeded) {

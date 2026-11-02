@@ -171,7 +171,7 @@ func (executor *Executor) apply(
 	if err != nil {
 		return paasv1.AdapterResult{}, invalidRequestFault()
 	}
-	lock, err := acquireProjectLock(operationContext, executor.root, plan.ProjectName)
+	lock, err := AcquireProjectLock(operationContext, executor.root, plan.ProjectName)
 	if err != nil {
 		return paasv1.AdapterResult{}, boundaryFault(err)
 	}
@@ -241,7 +241,7 @@ func (executor *Executor) StopDeployment(
 	}
 	defer cancel()
 	project := projectName(request.Command.Scope.TenantID, request.Generation.DeploymentID)
-	lock, err := acquireProjectLock(operationContext, executor.root, project)
+	lock, err := AcquireProjectLock(operationContext, executor.root, project)
 	if err != nil {
 		return paasv1.AdapterResult{}, boundaryFault(err)
 	}
@@ -313,7 +313,7 @@ func (executor *Executor) ObserveDeployment(
 	operationContext, cancel := context.WithDeadline(ctx, request.Command.Deadline)
 	defer cancel()
 	project := projectName(request.Command.Scope.TenantID, request.Command.DeploymentID)
-	lock, err := acquireProjectLock(operationContext, executor.root, project)
+	lock, err := AcquireProjectLock(operationContext, executor.root, project)
 	if err != nil {
 		return paasv1.DeploymentObservation{}, boundaryFault(err)
 	}
@@ -469,7 +469,7 @@ func (executor *Executor) withCurrentRuntime(
 	operationContext, cancel := context.WithDeadline(ctx, request.Deadline)
 	defer cancel()
 	project := projectName(request.Scope.TenantID, request.DeploymentID)
-	lock, err := acquireProjectLock(operationContext, executor.root, project)
+	lock, err := AcquireProjectLock(operationContext, executor.root, project)
 	if err != nil {
 		return boundaryFault(err)
 	}

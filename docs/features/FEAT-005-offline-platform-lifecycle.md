@@ -285,6 +285,12 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ### 当前主线本机 Docker 安装复核
 
+后继 ELK 接入候选把运行契约推进到 `88/40/8+r41`：Elasticsearch 增加私有网络及
+固定入口，旧直连端口 worker 无法据此承诺兼容管理。当前候选对 `r40 ↔ r41` 的
+升级、回滚和恢复均在效果及 journal 变更前拒绝；保留数据的适配器迁移测试不能
+替代签名包迁移验收。下列已验收 Logstash 签名包仍为 `r40`，本机未切换到后继候选。
+Kibana 的正式平台绑定与发布组合完成后，另按本 owner 的门禁开放准确的受支持路径。
+
 2026-10-29，按用户手册从干净提交
 `bafc3491f441281b24b2e0059d9e3bc5815dd0f5` 构建私有签名候选
 `matrix-v0.3.0-handbook.2-bafc3491f441`，构建标识

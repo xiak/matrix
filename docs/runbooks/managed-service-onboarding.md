@@ -1,4 +1,4 @@
-# 受管产品接入验证：Logstash 与 Kibana
+# 受管产品接入验证：ELK
 
 本运行手册负责可执行检查与排错命令。接入顺序见[产品接入手册](../product-guide/managed-service-onboarding.md)，
 合同、验收要求和实际结果由 [FEAT-007](../features/FEAT-007-control-plane-console.md#产品团队接入契约)维护。
@@ -14,7 +14,7 @@ Windows 用户使用下文的 Docker Desktop 工具容器流程。
 从仓库根目录执行：
 
 ```sh
-go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
+go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
 ```
 
 这一步不启动产品。`TestElasticRuntime` 的跳过提示是预期结果，不能把它当作真实验收。
@@ -42,17 +42,18 @@ go run ./test/managedserviceonboarding/cmd/prepare
 ```sh
 export MATRIX_ONBOARDING_ROOT="$(mktemp -d /tmp/matrix-onboarding.XXXXXX)"
 export MATRIX_ONBOARDING_REPORT="$MATRIX_ONBOARDING_ROOT/acceptance.json"
-MATRIX_ONBOARDING_RUNTIME=1 go test -count=1 -timeout=20m -v ./test/managedserviceonboarding
+MATRIX_ONBOARDING_RUNTIME=1 go test -count=1 -timeout=40m -v ./test/managedserviceonboarding
 cat "$MATRIX_ONBOARDING_REPORT"
 ```
 
-判定必须同时满足：测试退出码为零，报告 `status` 为 `PASSED`，包含 L、K 两组共十一项运行检查。
-其中 Logstash 包含两个租户作用域的网络、数据、凭据、重启及独立删除检查。
+判定必须同时满足：测试退出码为零，报告 `status` 为 `PASSED`，包含 ELK 三组共十二项运行检查。
+Logstash、Elasticsearch 包含两个作用域的隔离、重启与独立删除；Kibana 包含准确依赖
+通路、两个实例的凭据与共享数据，以及发行/撤销凭据时丢失响应后的重试。
 报告写 `INCOMPLETE` 时，常见原因是仅运行了某个子测试；不能交付为完整样例验收。
 `platformAndReleaseGates` 保持 `NOT_RUN`，不表示平台目录、IAM、浏览器或签名发布包已经验收。
 
 门禁创建独立实例身份，验证结束后调用产品自己的 `Delete`，确认数据、凭据和运行资源删除。
-门禁会先从当前源码编译并构建隔离入口的临时镜像，再交给 Logstash 适配器；产品
+门禁会先从当前源码编译并构建隔离入口的临时镜像，再交给实际产品适配器；产品
 镜像仍须提前准备，适配器不会自行构建或下载。临时入口镜像按本次归属标签清理。
 Kibana 的 Elasticsearch 依赖先被证明仍在，再由依赖自身的清理流程删除。
 无法证明精确清理成功时，测试失败并保留本次运行目录，不全局清理 Docker。
@@ -88,9 +89,9 @@ docker run -d --name $taskOperator --label "com.xiak.matrix.onboarding=$taskName
 工具链和模块缓存写入专用卷，仓库只读挂载。确认工具容器里的契约检查也通过，再执行真实门禁：
 
 ```powershell
-docker exec $taskOperator go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
+docker exec $taskOperator go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
 docker exec $taskOperator go run ./test/managedserviceonboarding/cmd/prepare
-docker exec --env MATRIX_ONBOARDING_RUNTIME=1 --env "MATRIX_ONBOARDING_ROOT=$taskVolumeRoot/runs" --env "MATRIX_ONBOARDING_REPORT=$taskVolumeRoot/acceptance.json" $taskOperator go test -count=1 -timeout=20m -v ./test/managedserviceonboarding
+docker exec --env MATRIX_ONBOARDING_RUNTIME=1 --env "MATRIX_ONBOARDING_ROOT=$taskVolumeRoot/runs" --env "MATRIX_ONBOARDING_REPORT=$taskVolumeRoot/acceptance.json" $taskOperator go test -count=1 -timeout=40m -v ./test/managedserviceonboarding
 New-Item -ItemType Directory -Force .cache/product-onboarding | Out-Null
 docker cp "${taskOperator}:$taskVolumeRoot/acceptance.json" .cache/product-onboarding/runtime-evidence.json
 ```
@@ -114,8 +115,9 @@ docker volume rm $taskVolume
 | 镜像缺失或架构不符 | 重新执行准备工具；网络中断后可以再次显式使用 `-pull`，保留准确摘要，不换成浮动 tag |
 | Elasticsearch 主机参数不满足 | 在 Docker Engine 所在主机检查参数；在普通工具容器里改参数不能代替修改实际主机 |
 | 绑定挂载找不到文件 | 核对测试进程与 Docker Engine 的路径；Windows 盘符目录不能冒充 Linux 引擎路径 |
-| Kibana 健康检查成功但没有宿主机端口 | 核对是否只连接了 internal 网络；样例保留产品自己的网络用于本机端点，依赖网络单独接入 |
+| Kibana 就绪但本机入口不可用 | 核对该实例自己的固定入口是否健康；Kibana 只连私网，禁止临时把整个产品接入共享网络 |
 | Kibana HTTP 为 200，但状态仍非 `available` | 等待真实产品就绪；样例检查状态内容，HTTP 成功本身不构成可用证明 |
+| Kibana 删除失败，依赖不可用 | 先恢复同一 Elasticsearch，保留 Kibana 的凭据和意图文件，再用原请求重试撤销；不手工删除目录 |
 | 配置漂移被拒绝 | 保留旧实例；审阅制品、配置和依赖修订的变化。不要删除绑定记录强行重放 |
 | 子测试失败或报告为 `INCOMPLETE` | 根据明确失败项修复，再跑完整门禁；不修改报告结论 |
 | 精确清理失败 | 保留本次运行目录，核对准确实例身份、所有权及运行对象，再通过 owning provider 处理；不运行全局 prune 或删除业务卷 |

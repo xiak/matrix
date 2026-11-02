@@ -7,6 +7,8 @@ import (
 	"regexp"
 )
 
+const Version = "8.19.23"
+
 //go:embed artifacts.json
 var artifactCatalog []byte
 
