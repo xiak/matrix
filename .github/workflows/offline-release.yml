@@ -141,8 +141,16 @@ jobs:
           work="$MATRIX_OFFLINE_WORK"
           # This uses the online build engine, never the cold acceptance root.
           docker image load --input "$work/release-a/images/apisix.tar" > /dev/null
-          apisix_ref="$(jq -r '.images[] | select(.component == "apisix") | .localReference' "$work/release-a/release.json")"
-          apisix_identity="$(docker image inspect "$apisix_ref" --format '{{.Id}}')"
+          # A raw archive load does not create the installer's derived alias.
+          # Classic and containerd stores expose different signed identities.
+          apisix_identity=''
+          for candidate in $(jq -r '.images[] | select(.component == "apisix") | .imageId, .sourceDigest' "$work/release-a/release.json"); do
+            if observed="$(docker image inspect "$candidate" --format '{{.Id}}' 2>/dev/null)" && [[ "$observed" == "$candidate" ]]; then
+              apisix_identity="$observed"
+              break
+            fi
+          done
+          test -n "$apisix_identity"
           MATRIX_APISIX_TLS_TEST_IMAGE="$apisix_identity" go test -count=1 -v \
             -run '^TestAPISIXServesInstallationAuthenticatedEnrollmentTLS$' \
             ./app/service/installation/internal/localmachine
