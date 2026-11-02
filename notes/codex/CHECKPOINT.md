@@ -5,25 +5,34 @@
 - Updated: 2026-11-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/product-onboarding-release`
-- Verified implementation: `67a8dee905b060d24ec510609bcb0fac865f4e7a`.
-- Active goal: finish ELK product onboarding and release closure, then reuse the same contract for Redis.
-- PRs #11, #12 and #13 are merged. [PR #14](https://github.com/xiak/matrix/pull/14) remains draft. Do not merge a later implementation on the strength of earlier CI.
+- Pushed implementation: `c34eec1a1cd8472afbbb842a656e232cb2834838`.
+- Active goal: finish ELK onboarding and release closure, then reuse the same product contract for Redis.
+- [PR #14](https://github.com/xiak/matrix/pull/14) remains draft; the current candidate is not a public release.
 
 Follow `AGENTS.md` and repository-local Git identity. Read the relevant owner only:
 
-- [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#产品团队接入契约): product contract, current Logstash acceptance and pending Kibana dependency slice.
-- [Product-team guide](../../docs/product-guide/managed-service-onboarding.md) and [executed onboarding commands](../../docs/runbooks/managed-service-onboarding.md).
-- [FEAT-IAM-008](../../docs/features/iam/FEAT-IAM-008-product-enforcement.md): product authorization and dependency use.
-- [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核): exact signed candidates, upgrade/rollback/recovery evidence and remaining Gate C limits.
+- [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#产品团队接入契约): contract, completed Logstash candidate, Kibana platform implementation and actual local acceptance.
+- [Product-team guide](../../docs/product-guide/managed-service-onboarding.md) and [verified commands](../../docs/runbooks/managed-service-onboarding.md).
+- [FEAT-IAM-008](../../docs/features/iam/FEAT-IAM-008-product-enforcement.md): current dependency-use permission; [FEAT-IAM-001](../../docs/features/iam/FEAT-IAM-001-authorization-profile.md) owns the Profile declaration.
+- [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核): signed runtime profile and lifecycle admission.
 
-Logstash's fixed implementation passed all 19 jobs in [Verification 41420489245](https://github.com/xiak/matrix/actions/runs/41420489245), including 2,141 console tests and five-product authority processes. [Product onboarding 41420489173](https://github.com/xiak/matrix/actions/runs/41420489173) passed; artifact 13130505645 was read and contains all 11 checks, with platform/release explicitly NOT_RUN in that adapter-only report. A separate local Logstash run passed six checks; its concurrent Kibana dependency did not become ready in time, so that local full run remains failed.
+Kibana is now composed through the public typed Elasticsearch reference, current instance-use authorization, immutable same-Account/version/region database binding, serialized dependency reservation/termination, queue, production worker, catalog, release inventory and shared console. Read permission is insufficient; even equal replay rechecks current use permission. Failed provisioning may terminate without endpoint references, and cleanup retries retain the original reserved/consumed quota kind. Dependency protection remains until actual cleanup.
 
-Signed Logstash .3 from the fixed source passed upgrade from .2, compatible rollback to .2, re-upgrade, explicit backup, recovery and final verify/status on host Docker without DinD. Recovery removed an unused quota created after backup, invalidated the old browser session and retained product events written after backup. Exact identities and command correlations belong to FEAT-005. Real installation/running/termination screenshots and user workflows are in the existing guide. This accepts the bounded private-candidate functionality, not cold-cache disconnected installation, public release or automatic expanded-upgrade failure injection.
+The actual adapter manages native Elasticsearch credentials through bounded HTTP inside the exact observed dependency container. The earlier worker-loopback failure is fixed. Kibana data traffic still uses the dedicated exact-dependency entry. There is no generic plugin engine or IAM evaluator product-name branch.
 
-The real terminated detail currently says the instance will disappear from the visible catalog, while authorized terminal records remain listed. Correct that wording in the next shared UI slice.
+Local six-product production-process P1 passed in 611.82 seconds, including Kibana exact-resource authorization, revocation, shared data-view use and dependency deletion protection. Three final real PostgreSQL 18 storage gates passed with race. The full frontend suite passed 83 files / 2164 tests, nine export checks, type/lint/architecture/style gates and deterministic 352-file embedded output. Affected Go packages, race, vet and generation checks passed. Their boundaries and older S2 evidence stay in FEAT-007.
 
-Current design work proceeds to Kibana: add a typed immutable same-tenant READY Elasticsearch dependency; separately authorize current dependency use; lock reserve/delete transactions against dangling dependencies. Preserve dependency-owned saved-object keys; issue and revoke only each Kibana's own service credential. Isolate Elasticsearch first and route only the exact allowed Kibana-to-Elasticsearch connection. The existing sample still relies on trusted test fixtures and is not a platform product. Redis follows accepted ELK. Reuse existing lifecycle, IAM evaluation and UI owners rather than creating a generic plugin or workflow engine.
+Independent CI for that exact pushed implementation is pending:
+- [push Verification 41452216037](https://github.com/xiak/matrix/actions/runs/41452216037)
+- [PR Verification 41452227411](https://github.com/xiak/matrix/actions/runs/41452227411)
+- [Product onboarding 41452227464](https://github.com/xiak/matrix/actions/runs/41452227464)
 
-Before a risky replacement, keep this verified predecessor committed and pushed. Preserve user installations and data; do not use global Docker prune, remove user images for an offline test, enable DinD or change host-wide network security. Shared-host Docker isolation is not physical isolation.
+Read actual conclusions and the twelve-check report before accepting them. The previous deb7287 adapter baseline had a successful push suite and product report but a PR MySQL runtime-state failure; the current fixture reports safe observed runtime details if it recurs. Do not hide a failed run behind another successful run.
 
-Secrets, account credentials, absolute checkout paths and uncommitted machine-local state are excluded.
+Current source is IAM/Audit/PaaS 88/40/9 at runtime revision 41. The accepted private Logstash candidate remains 88/40/8+r40. Cross-profile upgrade and rollback remain rejected: the old worker cannot manage the new Elasticsearch network/dependency topology. The new source has not been installed over that candidate.
+
+Next finish exact-source independent CI, signed current-profile runtime and real browser/handbook acceptance, including lifecycle/data/credential retention. Preserve the accepted installation and do not infer a complete cold-cache disconnected Gate C or public release from bounded local tests. Then implement Redis as the next vertical product slice. Redis has no implementation yet.
+
+Preserve user installations/data. No global Docker prune, user-image removal, DinD or host-wide security changes. Shared-host Docker isolation is not physical isolation. No legacy repository inspection occurred in this slice.
+
+Secrets, absolute checkout paths and uncommitted machine-local state are excluded.
