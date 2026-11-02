@@ -97,7 +97,10 @@ jobs:
             python3 - "$work/probe-exec.txt" > "$work/evidence/native-runtime-error.txt" <<'PY'
           import re, sys
           text = open(sys.argv[1]).read(8192)
-          text = re.sub(r'/[^\s:\x27";]+', '[path]', text)
+          # Keep a closed vocabulary of standard runtime path segments so an
+          # absent proc namespace and an absent runtime state file are distinct.
+          segments = {'run','var','docker','containerd','daemon','runtime-runc','moby','runc','proc','self','exe','fd','root','ns','pid','mnt','net','ipc','uts','user','cgroup','state.json','config.json','exec.fifo','init.pid','log.json','io.containerd.runtime.v2.task','io.containerd.runtime.v1.linux'}
+          text = re.sub(r'/[^\s:\x27";]+', lambda m: '/'.join(p if p in segments or not p else '[redacted]' for p in m.group().split('/')), text)
           text = re.sub(r'\b[0-9a-f]{12,}\b', '[identity]', text)
           print(text)
           PY
