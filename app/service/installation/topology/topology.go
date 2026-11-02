@@ -38,6 +38,11 @@ const (
 
 const legacyProductlessContractDigest = "sha256:6f8e3bd951426da4033b3234f2b8fcebd053a9b809d98c8a3476962062a0cf2f"
 
+// Already installed handbook.4 uses this authenticated source topology.
+// Retain only its missing endpoint-image input for upgrade/rollback inspection.
+const directMySQLContractDigest = "sha256:7cb0360dd17ee421b4d4dfbf58e006e236f3f86e9d1495bebeb90f521ebfa73d"
+const mysqlEndpointImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS"
+
 type compileProfile uint8
 
 const (
@@ -168,6 +173,10 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 	if manifest.TopologyDigest != ContractDigest() {
 		return Result{}, errors.New("release topology contract digest is unsupported")
 	}
+	return compileProductTopology(manifest, options, true)
+}
+
+func compileProductTopology(manifest release.Manifest, options Options, isolatedMySQL bool) (Result, error) {
 	if err := validateOptions(options); err != nil {
 		return Result{}, err
 	}
@@ -201,12 +210,15 @@ func Compile(manifest release.Manifest, options Options) (Result, error) {
 			),
 		}
 	}
+	if !isolatedMySQL {
+		delete(document.Services["paas-worker"].Environment, mysqlEndpointImagesEnvironment)
+	}
 	content, err := json.Marshal(document)
 	if err != nil {
 		return Result{}, errors.New("encode platform Compose topology failed")
 	}
 	return Result{
-		ProjectName: document.Name, ContractDigest: ContractDigest(), ComposeJSON: content,
+		ProjectName: document.Name, ContractDigest: manifest.TopologyDigest, ComposeJSON: content,
 	}, nil
 }
 
@@ -218,6 +230,14 @@ func ValidateInstalledContract(manifest release.Manifest) error {
 		return errors.New("installed release manifest contract is unsupported")
 	}
 	expected := ContractDigest()
+	if manifest.TopologyDigest == directMySQLContractDigest && !release.IsLegacyProductlessManifest(manifest) {
+		previous := contractDescription()
+		delete(previous.Compose.Services["paas-worker"].Environment, mysqlEndpointImagesEnvironment)
+		if contractDescriptionDigest(previous) != directMySQLContractDigest {
+			return errors.New("installed MySQL source topology implementation is unsupported")
+		}
+		expected = directMySQLContractDigest
+	}
 	if release.IsLegacyProductlessManifest(manifest) {
 		expected = legacyProductlessContractDigest
 		if legacyProductlessImplementationDigest() != expected {
@@ -238,6 +258,9 @@ func CompileInstalled(manifest release.Manifest, options Options) (Result, error
 		return Result{}, err
 	}
 	if !release.IsLegacyProductlessManifest(manifest) {
+		if manifest.TopologyDigest == directMySQLContractDigest {
+			return compileProductTopology(manifest, options, false)
+		}
 		return Compile(manifest, options)
 	}
 	if err := validateLegacyOptions(options); err != nil {
@@ -723,6 +746,8 @@ func compileServices(
 		paasWorker.Environment[workerEnrollmentControllerTrustEnvironment] = "/run/matrix/node-controller/enrollment-controller-trust.pem"
 		for _, image := range manifest.Images {
 			switch image.Component {
+			case "paas":
+				paasWorker.Environment[mysqlEndpointImagesEnvironment] = strings.Join(image.RuntimeImageIDs(), ",")
 			case "postgres", "mysql", "elasticsearch", "rabbitmq":
 				paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_"+strings.ToUpper(image.Component)+"_IMAGE_IDS"] =
 					strings.Join(image.RuntimeImageIDs(), ",")

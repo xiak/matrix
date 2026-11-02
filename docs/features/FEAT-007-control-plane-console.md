@@ -285,6 +285,62 @@ operator intervention; automatic availability recovery is not claimed.
 Backups lacking this required witness are rejected rather than interpreted as
 an empty inventory.
 
+## Docker MySQL 租户隔离
+
+本切片先覆盖 `mysql-8.4` / `local-primary`。目标是两个真实 IAM 租户各自创建
+MySQL 后，容器身份、网络、数据、业务凭据和删除效果各自独立。它是共享宿主机
+上的运行隔离，不是独立物理机、独立内核、完整 VPC 或全平台隔离认证。
+
+### 保证及实现边界
+
+- Matrix 拥有租户身份、授权、实例、配额、Operation、审计及产品声明的隔离要求；
+  Provider 实现这些要求。不能满足要求时失败，不回退到直接发布数据库端口。
+- MySQL 每实例独立私有网络；数据库容器只有该网络、没有主机发布端口与默认出口。
+  Docker 实现使用 `internal` 加 `gateway_mode_ipv4=isolated`。交付包的最低 Engine
+  要求归 [FEAT-005](FEAT-005-offline-platform-lifecycle.md#supported-phase-1-profile)，
+  实际保证以本节运行验收为准。
+- 平台受信 TCP 入口只转发到本实例 `mysql:3306`，保留原宿主机回环端点。
+  入口没有数据、凭据或 Docker socket 挂载，关闭 IP 转发，使用非 root、只读根、
+  有界资源与最多 128 条连接；空闲或阻塞 I/O 上限 8 小时。MySQL 认证和协议内容
+  端到端传递，不由入口读取密码、终止 TLS 或记录载荷。
+- 本机管理员和平台执行器属于受信边界。宿主机入口仍需数据库凭据；不能将
+  回环地址视为面向任意其他容器、远程电脑的授权策略。未授权的跨租户路径应拒绝，
+  不要求所有 Docker、K8s、VM 工作负载互相可达。
+- PostgreSQL、Elasticsearch、RabbitMQ、L/K 样例及应用托管不自动继承此保证。
+  同租户实例间授权连接、跨运行环境的依赖路由、K8s/VM Provider 和通用网络策略
+  为后续真实产品切片；本次不增加空的 Provider 框架、VPC API 或 CNI 组件。
+
+### 已安装实例的迁移
+
+本地 worker 在独占启动、领取任务前迁移已有 MySQL 部署文件。运行中的旧实例
+原位重建网络与入口，保留数据库镜像、数据、密码、端点和平台资源身份；连接会短暂
+中断。迁移只处理受保护目录内、身份与挂载均匹配的资源。未知归属或失败使 worker
+启动失败，保留数据供恢复，不能调用创建失败的数据清理逻辑。
+
+原先停止的实例不自动启动；撤除旧网络与容器，保留新部署文件及数据，运维恢复时
+按新文件重新创建。迁移重试须恢复中断的网络效果，不重新生成密码或重新扣配额。
+兼容已安装手册 `.4` 的平台拓扑仅用于升级源、回退与恢复识别；它不能作为新安装
+候选。回退到旧 worker 不提供新 MySQL 网络拓扑的生命周期保证。
+
+### 验收与证据
+
+验收 owner 是现有 `TestManagedProductProviderProcesses`，增加第二个真实 IAM
+租户的 MySQL。必须同时证明：
+
+1. 两租户经真实 API 开通、领取独立配额并创建，数据库业务协议可读写。
+2. 双向错误密码由 MySQL 返回 1045；列表、实例、Operation 和删除保持租户边界。
+3. 数据与凭据挂载不共享，容器无法读取对方文件及 Docker socket。
+4. 自身 TCP 探测成功；双向对方私有 IP、容器 DNS、Desktop 主机入口和实际
+   宿主机桥地址的发布端口均不通。重启后重复正反向检查及数据读取。
+5. 删除 A 后其容器、网络、数据、凭据清除；B 的容器、网络、端点、密码、原数据
+   及配额保持，且仍可完成新的写入。等值重放与 B 自身清理成功。
+6. 旧网络迁移保留数据，已停止实例不启动，失败不删除数据，可重试恢复。
+
+2026-11-02，本机 Docker Desktop 29.6.2 的旧版本基线已发现：不同 Compose
+项目及网络仍能双向访问对方私有 IP 与 `host.docker.internal` 发布端口；密码、
+数据、API 归属和删除独立性通过。因此不能用“网络名不同”判定隔离。
+新实现的单元验证及真实运行验收进行中，尚未作为发布验收结论。
+
 ## 产品团队接入契约
 
 本节拥有受管产品团队的实现责任、配置边界与验收要求。读者流程由

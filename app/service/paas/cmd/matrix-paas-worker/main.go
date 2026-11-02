@@ -56,6 +56,7 @@ const (
 	listenAddressEnvironment                = "MATRIX_PAAS_WORKER_LISTEN_ADDRESS"
 	managedPostgresImageIDsEnvironment      = "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS"
 	managedMySQLImageIDsEnvironment         = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS"
+	managedMySQLEndpointImageIDsEnvironment = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS"
 	managedElasticsearchImageIDsEnvironment = "MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS"
 	managedRabbitMQImageIDsEnvironment      = "MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS"
 	pollInterval                            = 250 * time.Millisecond
@@ -98,6 +99,7 @@ type configuration struct {
 	listenAddress                string
 	managedPostgresImageIDs      string
 	managedMySQLImageIDs         string
+	managedMySQLEndpointImageIDs string
 	managedElasticsearchImageIDs string
 	managedRabbitMQImageIDs      string
 }
@@ -316,11 +318,18 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	mysqlEndpointImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedMySQLEndpointImageIDs, ","))
+	if err != nil {
+		return err
+	}
 	managedMySQL, err := localmysqladapter.New(localmysqladapter.Config{
 		Root:    managedMySQLRoot,
-		ImageID: mysqlImageID, Runtime: runtime,
+		ImageID: mysqlImageID, EndpointImageID: mysqlEndpointImageID, Runtime: runtime,
 	})
 	if err != nil {
+		return err
+	}
+	if err := managedMySQL.UpgradeNetwork(ctx); err != nil {
 		return err
 	}
 	managedElasticsearchRoot, err := managedRoot("elasticsearch")
@@ -805,6 +814,7 @@ func loadConfiguration() (configuration, error) {
 		listenAddress:                os.Getenv(listenAddressEnvironment),
 		managedPostgresImageIDs:      os.Getenv(managedPostgresImageIDsEnvironment),
 		managedMySQLImageIDs:         os.Getenv(managedMySQLImageIDsEnvironment),
+		managedMySQLEndpointImageIDs: os.Getenv(managedMySQLEndpointImageIDsEnvironment),
 		managedElasticsearchImageIDs: os.Getenv(managedElasticsearchImageIDsEnvironment),
 		managedRabbitMQImageIDs:      os.Getenv(managedRabbitMQImageIDsEnvironment),
 	}
@@ -816,7 +826,7 @@ func loadConfiguration() (configuration, error) {
 		config.enrollmentControllerTrust == "" ||
 		config.executionTenant == "" || config.machineBinding == "" ||
 		config.listenAddress == "" || config.managedPostgresImageIDs == "" ||
-		config.managedMySQLImageIDs == "" || config.managedElasticsearchImageIDs == "" ||
+		config.managedMySQLImageIDs == "" || config.managedMySQLEndpointImageIDs == "" || config.managedElasticsearchImageIDs == "" ||
 		config.managedRabbitMQImageIDs == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")
 	}

@@ -2958,6 +2958,7 @@ type binarySet struct {
 }
 
 type managedProductFixture struct {
+	tenantID         string
 	name             string
 	serviceID        string
 	offeringID       string
@@ -2972,6 +2973,7 @@ type managedProductFixture struct {
 type managedProductImages struct {
 	postgres      string
 	mysql         string
+	mysqlEndpoint string
 	elasticsearch string
 	rabbitmq      string
 }
@@ -2979,7 +2981,7 @@ type managedProductImages struct {
 func managedPostgresFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
-		name: "PostgreSQL 18", serviceID: managedservicev1.PostgreSQLServiceID,
+		tenantID: "organization-process", name: "PostgreSQL 18", serviceID: managedservicev1.PostgreSQLServiceID,
 		offeringID:   managedservicev1.PostgreSQLOfferingID,
 		quotaShapeID: "pg-small", engineVersion: "18",
 		installationID: newManagedProductID(t, owner, "pg"), imageID: imageID,
@@ -2990,7 +2992,7 @@ func managedPostgresFixture(t *testing.T, owner string, imageID string) managedP
 func managedMySQLFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
-		name: "MySQL 8.4 LTS", serviceID: managedservicev1.MySQLServiceID,
+		tenantID: "organization-process", name: "MySQL 8.4 LTS", serviceID: managedservicev1.MySQLServiceID,
 		offeringID:   managedservicev1.MySQLOfferingID,
 		quotaShapeID: "mysql-small", engineVersion: "8.4",
 		installationID: newManagedProductID(t, owner, "mysql"), imageID: imageID,
@@ -3001,7 +3003,7 @@ func managedMySQLFixture(t *testing.T, owner string, imageID string) managedProd
 func managedElasticsearchFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
-		name: "Elasticsearch 8.19", serviceID: managedservicev1.ElasticsearchServiceID,
+		tenantID: "organization-process", name: "Elasticsearch 8.19", serviceID: managedservicev1.ElasticsearchServiceID,
 		offeringID:   managedservicev1.ElasticsearchOfferingID,
 		quotaShapeID: "elasticsearch-small", engineVersion: "8.19.23",
 		installationID:   newManagedProductID(t, owner, "elasticsearch"),
@@ -3013,7 +3015,7 @@ func managedElasticsearchFixture(t *testing.T, owner string, imageID string) man
 func managedRabbitMQFixture(t *testing.T, owner string, imageID string) managedProductFixture {
 	t.Helper()
 	return managedProductFixture{
-		name: "RabbitMQ 4.1", serviceID: managedservicev1.RabbitMQServiceID,
+		tenantID: "organization-process", name: "RabbitMQ 4.1", serviceID: managedservicev1.RabbitMQServiceID,
 		offeringID:   managedservicev1.RabbitMQOfferingID,
 		quotaShapeID: "rabbitmq-small", engineVersion: "4.1.8",
 		installationID:   newManagedProductID(t, owner, "rabbitmq"),
@@ -3211,6 +3213,8 @@ func runManagedProductProviderProcesses(
 		"managed-products-provider-foreign-login")
 	changePasswordIAM(t, iamEndpoint, foreign.Credential, initialDeveloperPassword, changedDeveloperPassword,
 		"managed-products-provider-foreign-password")
+	finishTenantIsolation := beginManagedMySQLTenantIsolation(t, ctx, managedRuntime, paasEndpoint, bearer, foreign.Credential, foreignAccountID,
+		products[1], installationsByID[products[1].installationID], projectsByID[products[1].installationID])
 	for _, product := range products {
 		readPath := base + "/service-installations/" + product.installationID
 		if response := performJSON(t, http.MethodGet, readPath, foreign.Credential, nil); response.Status != http.StatusNotFound {
@@ -3304,6 +3308,8 @@ func runManagedProductProviderProcesses(
 	for _, product := range products {
 		assertManagedProductAudit(t, auditEndpoint, bearer, product)
 	}
+	finishTenantIsolation()
+	waitAllPaaSOutboxDelivered(t, ctx, database)
 	t.Log("real PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19 and RabbitMQ 4.1 providers completed create-to-READY-to-TERMINATED, protocol read/write, data and credential deletion, quota return, Operation, exact group authorization, next-request revocation, tenant isolation and verified Audit")
 	return []string{member.Credential, foreign.Credential}
 }
@@ -16210,6 +16216,7 @@ func startManagedProductWorker(
 	}
 	workerImageID := resolveManagedWorkerImage(t, ctx)
 	workerBinary := buildAuthorityLinuxBinary(t, ctx, root, inputRoot, "matrix-paas-worker-linux-amd64", "./app/service/paas/cmd/matrix-paas-worker")
+	images.mysqlEndpoint = buildManagedMySQLEndpointImage(t, ctx, root, temporary)
 	containerDSNPath := writeProtectedFile(t, inputRoot, "browser-paas-worker-container-dsn", []byte(containerDSN))
 	volumeName := "matrix-iam-managed-products-runtime-" + newManagedHexSuffix(t)
 	workerContainer := "matrix-iam-managed-products-worker-" + newManagedHexSuffix(t)
@@ -16533,6 +16540,7 @@ func managedProductWorkerEnvironment(
 		"MATRIX_PAAS_WORKER_LISTEN_ADDRESS=" + workerAddress,
 		"MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS=" + images.postgres,
 		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS=" + images.mysql,
+		"MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS=" + images.mysqlEndpoint,
 		"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS=" + images.elasticsearch,
 		"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS=" + images.rabbitmq,
 	}
@@ -16674,7 +16682,11 @@ func assertManagedProductRuntime(
 ) string {
 	t.Helper()
 	filter := "label=com.xiak.matrix.managedservice.installation=" + installation.ID
-	list := exec.CommandContext(ctx, "docker", "container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}")
+	arguments := []string{"container", "ls", "--all", "--filter", filter, "--format", "{{.ID}}"}
+	if product.offeringID == managedservicev1.MySQLOfferingID {
+		arguments = append(arguments, "--filter", "label=com.docker.compose.service=mysql")
+	}
+	list := exec.CommandContext(ctx, "docker", arguments...)
 	content, err := list.Output()
 	identities := strings.Fields(string(content))
 	if err != nil || len(identities) != 1 {
@@ -17080,7 +17092,7 @@ func cleanupManagedProduct(t *testing.T, product managedProductFixture) {
 		t.Errorf("list owned managed-product containers")
 		return
 	}
-	expectedProject := localcontaineradapter.ProjectName("organization-process", product.installationID)
+	expectedProject := localcontaineradapter.ProjectName(product.tenantID, product.installationID)
 	projects := map[string]bool{expectedProject: true}
 	for _, containerID := range strings.Fields(string(content)) {
 		inspect := exec.CommandContext(ctx, "docker", "container", "inspect", "--format",

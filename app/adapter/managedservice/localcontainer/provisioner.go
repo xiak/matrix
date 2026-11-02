@@ -51,36 +51,41 @@ type CredentialFile struct {
 }
 
 type Config struct {
-	Root              string
-	ImageID           string
-	ServiceName       string
-	CredentialFiles   []CredentialFile
-	DataDirectoryMode os.FileMode
-	Runtime           composeadapter.Runtime
-	ValidateRequest   func(managedserviceadapterv1.ProvisionRequest) error
-	CompileDocument   func(DocumentInput) ([]byte, error)
-	Endpoint          func(int) string
-	NewSecret         func() ([]byte, error)
+	Root        string
+	ImageID     string
+	ServiceName string
+	// EndpointServiceName names a trusted ingress process when the product
+	// itself has no published port. It is fixed by the product adapter.
+	EndpointServiceName string
+	CredentialFiles     []CredentialFile
+	DataDirectoryMode   os.FileMode
+	Runtime             composeadapter.Runtime
+	ValidateRequest     func(managedserviceadapterv1.ProvisionRequest) error
+	CompileDocument     func(DocumentInput) ([]byte, error)
+	Endpoint            func(int) string
+	NewSecret           func() ([]byte, error)
 }
 
 type Provisioner struct {
-	root              string
-	imageID           string
-	serviceName       string
-	credentialFiles   []CredentialFile
-	dataDirectoryMode os.FileMode
-	runtime           composeadapter.Runtime
-	dataPurger        composeadapter.DataPurger
-	validateRequest   func(managedserviceadapterv1.ProvisionRequest) error
-	compileDocument   func(DocumentInput) ([]byte, error)
-	endpoint          func(int) string
-	newSecret         func() ([]byte, error)
-	locks             sync.Map
+	root                string
+	imageID             string
+	serviceName         string
+	endpointServiceName string
+	credentialFiles     []CredentialFile
+	dataDirectoryMode   os.FileMode
+	runtime             composeadapter.Runtime
+	dataPurger          composeadapter.DataPurger
+	validateRequest     func(managedserviceadapterv1.ProvisionRequest) error
+	compileDocument     func(DocumentInput) ([]byte, error)
+	endpoint            func(int) string
+	newSecret           func() ([]byte, error)
+	locks               sync.Map
 }
 
 func New(config Config) (*Provisioner, error) {
 	if !imageIDPattern.MatchString(config.ImageID) ||
 		!serviceNamePattern.MatchString(config.ServiceName) ||
+		(config.EndpointServiceName != "" && (!serviceNamePattern.MatchString(config.EndpointServiceName) || config.EndpointServiceName == config.ServiceName)) ||
 		len(config.CredentialFiles) == 0 || len(config.CredentialFiles) > 4 ||
 		config.Runtime == nil || config.ValidateRequest == nil ||
 		config.CompileDocument == nil || config.Endpoint == nil {
@@ -117,7 +122,8 @@ func New(config Config) (*Provisioner, error) {
 	}
 	return &Provisioner{
 		root: root, imageID: config.ImageID, serviceName: config.ServiceName,
-		credentialFiles: credentialFiles, dataDirectoryMode: dataMode,
+		endpointServiceName: config.EndpointServiceName,
+		credentialFiles:     credentialFiles, dataDirectoryMode: dataMode,
 		runtime: config.Runtime, dataPurger: dataPurger, validateRequest: config.ValidateRequest,
 		compileDocument: config.CompileDocument, endpoint: config.Endpoint,
 		newSecret: config.NewSecret,
@@ -161,8 +167,14 @@ func (provisioner *Provisioner) Ensure(
 			Endpoint: endpoint, CredentialReference: credentialReference,
 		}, nil
 	}
-	if observeErr == nil && len(containers) > 1 {
-		return managedserviceadapterv1.ProvisionResult{}, errors.New("local managed-service ownership observation conflicts")
+	if observeErr == nil {
+		seen := make(map[string]bool)
+		for _, container := range containers {
+			if seen[container.Service] || !provisioner.owns(container, projectName, request.InstallationID, request.OfferingID, request.RegionID) {
+				return managedserviceadapterv1.ProvisionResult{}, errors.New("local managed-service ownership observation conflicts")
+			}
+			seen[container.Service] = true
+		}
 	}
 	applyErr := provisioner.runtime.Apply(ctx, project)
 	containers, observeErr = provisioner.runtime.Observe(ctx, project)
@@ -348,20 +360,31 @@ func (provisioner *Provisioner) ready(
 	projectName string,
 	request managedserviceadapterv1.ProvisionRequest,
 ) bool {
-	if len(containers) != 1 {
+	expected := map[string]uint32{provisioner.serviceName: 1}
+	if provisioner.endpointServiceName != "" {
+		expected[provisioner.serviceName] = 0
+		expected[provisioner.endpointServiceName] = 1
+	}
+	if len(containers) != len(expected) {
 		return false
 	}
-	container := containers[0]
-	return provisioner.owns(container, projectName, request.InstallationID, request.OfferingID, request.RegionID) &&
-		container.State == "running" && container.Health == "healthy" &&
-		container.PublishedPorts == 1
+	for _, container := range containers {
+		ports, found := expected[container.Service]
+		if !found || !provisioner.owns(container, projectName, request.InstallationID, request.OfferingID, request.RegionID) ||
+			container.State != "running" || container.Health != "healthy" || container.PublishedPorts != ports {
+			return false
+		}
+		delete(expected, container.Service)
+	}
+	return len(expected) == 0
 }
 
 func (provisioner *Provisioner) owns(
 	container composeadapter.RuntimeContainer,
 	projectName, installationID, offeringID, regionID string,
 ) bool {
-	return container.Project == projectName && container.Service == provisioner.serviceName &&
+	return container.Project == projectName &&
+		(container.Service == provisioner.serviceName || (provisioner.endpointServiceName != "" && container.Service == provisioner.endpointServiceName)) &&
 		!container.OneOff &&
 		container.Labels["com.xiak.matrix.managed"] == "true" &&
 		container.Labels["com.xiak.matrix.managedservice.installation"] == installationID &&

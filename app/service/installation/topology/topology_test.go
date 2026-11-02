@@ -16,7 +16,7 @@ import (
 )
 
 func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
-	if actual := ContractDigest(); actual != "sha256:7cb0360dd17ee421b4d4dfbf58e006e236f3f86e9d1495bebeb90f521ebfa73d" {
+	if actual := ContractDigest(); actual != "sha256:1744ab1eed4536c0aaa99a8e8b2b0bb6328b67139bafcf431996f4800883575f" {
 		t.Fatalf("current topology contract digest drifted: %s", actual)
 	}
 	if actual := legacyProductlessImplementationDigest(); actual != legacyProductlessContractDigest {
@@ -62,6 +62,23 @@ func TestInstalledCompilerReproducesAcceptedProductlessTopology(t *testing.T) {
 	}
 }
 
+func TestInstalledDirectMySQLSourceCanUpgradeWithoutInventingEndpointImage(t *testing.T) {
+	manifest := topologyManifest()
+	manifest.TopologyDigest = directMySQLContractDigest
+	options := Options{InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix", Listener: "127.0.0.1", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080"}
+	if _, err := Compile(manifest, options); err == nil {
+		t.Fatal("old topology accepted as a new candidate")
+	}
+	result, err := CompileInstalled(manifest, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document composeDocument
+	if json.Unmarshal(result.ComposeJSON, &document) != nil || result.ContractDigest != directMySQLContractDigest || document.Services["paas-worker"].Environment[mysqlEndpointImagesEnvironment] != "" {
+		t.Fatal("source topology changed")
+	}
+}
+
 func TestCompilePinsManagedServiceImagesForBothDockerStores(t *testing.T) {
 	manifest := topologyManifest()
 	result, err := Compile(manifest, Options{
@@ -77,6 +94,10 @@ func TestCompilePinsManagedServiceImagesForBothDockerStores(t *testing.T) {
 	}
 	for _, image := range manifest.Images {
 		switch image.Component {
+		case "paas":
+			if actual := strings.Split(document.Services["paas-worker"].Environment[mysqlEndpointImagesEnvironment], ","); !slices.Equal(actual, image.RuntimeImageIDs()) {
+				t.Fatal("MySQL ingress image is not release authenticated")
+			}
 		case "postgres", "mysql", "elasticsearch", "rabbitmq":
 			variable := "MATRIX_PAAS_WORKER_MANAGED_" + strings.ToUpper(image.Component) + "_IMAGE_IDS"
 			actual := strings.Split(document.Services["paas-worker"].Environment[variable], ",")
@@ -302,6 +323,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_INSTALLATION_ID",
 			"MATRIX_PAAS_WORKER_LISTEN_ADDRESS", "MATRIX_PAAS_WORKER_MACHINE_BINDING_REF",
 			"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS",
+			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS", "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_NODE_CONNECTIONS_FILE",

@@ -28,7 +28,7 @@ const (
 	RunnerToolchainSourceID        = installationrelease.RunnerToolchainSourceDigest
 	RunnerToolchainArchiveConfigID = installationrelease.RunnerToolchainArchiveConfigDigest
 	RunnerGVisorSHA256             = installationrelease.RunnerGVisorArchiveSHA256
-	minimumDockerVersion           = "27.5.1"
+	minimumDockerVersion           = "28.0.0"
 	minimumComposeVersion          = "2.33.0"
 )
 
@@ -79,6 +79,7 @@ var binarySpecifications = []binarySpecification{
 	{name: "matrix-paas-audit-dispatcher", packagePath: "./app/service/paas/cmd/matrix-paas-audit-dispatcher"},
 	{name: "matrix-paas-migrate", packagePath: "./app/service/paas/cmd/matrix-paas-migrate"},
 	{name: "matrix-paas-worker", packagePath: "./app/service/paas/cmd/matrix-paas-worker"},
+	{name: "matrix-mysql-endpoint", packagePath: "./app/service/paas/cmd/matrix-mysql-endpoint"},
 	{name: "matrix-platform", packagePath: "./app/service/installation/cmd/matrix-platform"},
 	{name: "matrix-verification", packagePath: "./app/service/installation/cmd/matrix-verification"},
 	{name: "mx", packagePath: "./app/service/installation/cmd/mx"},
@@ -123,7 +124,7 @@ var imageRecipes = []imageRecipe{
 		component: "paas", baseReference: DockerBasePinnedReference,
 		binaries: []string{
 			"matrix-paas", "matrix-paas-audit-dispatcher", "matrix-paas-migrate",
-			"matrix-paas-worker", "matrix-health",
+			"matrix-paas-worker", "matrix-mysql-endpoint", "matrix-health",
 		},
 	},
 	{

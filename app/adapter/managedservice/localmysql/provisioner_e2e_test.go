@@ -29,7 +29,7 @@ func TestLocalMySQLRealRuntime(t *testing.T) {
 	defer cancel()
 	runtime := composeadapter.NewLocalRuntime()
 	root := t.TempDir()
-	provisioner, err := New(Config{Root: root, ImageID: imageID, Runtime: runtime})
+	provisioner, err := New(Config{Root: root, ImageID: imageID, EndpointImageID: os.Getenv("MATRIX_LOCAL_MYSQL_E2E_ENDPOINT_IMAGE_ID"), Runtime: runtime})
 	if err != nil {
 		t.Fatalf("new real MySQL provisioner: %v", err)
 	}

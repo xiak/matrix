@@ -91,6 +91,17 @@ Logstash 样例不依赖 Elasticsearch。Kibana 验收临时准备自己的 Elas
 
 ## 5. 跑测试，再查看验收结果
 
+先与平台团队写清产品需要的网络关系：谁能连接产品、产品需要连接哪个已授权依赖、
+是否允许出网、哪些租户之间必须互相不可达。不能仅交付 Docker 网络名或 K8s
+命名空间，然后声称完成了租户隔离。对应 Provider 无法实现时，应明确拒绝交付该
+隔离等级。
+
+如果交付承诺网络隔离，应增加两个真实租户的正反向测试，覆盖私有地址、主机发布
+入口、数据、凭据、重启和独立删除。当前可复用的验收路线及适用范围见
+[MySQL 租户隔离](../features/FEAT-007-control-plane-console.md#docker-mysql-租户隔离)。
+L/K 样例不会自动获得 MySQL 的网络保证，Kibana 到 Elasticsearch 的授权依赖也
+需要在自己的目标 Provider 上单独证明。
+
 按运行手册依次执行[契约检查](../runbooks/managed-service-onboarding.md#契约检查)
 和[真实运行验收](../runbooks/managed-service-onboarding.md#真实运行验收)。
 

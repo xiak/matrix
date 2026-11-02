@@ -25,6 +25,11 @@ implementation tactics only through a recorded adoption decision.
 2. The customer supplies a supported Docker Engine and Compose plugin. Matrix
    performs read-only preflight and never changes daemon configuration,
    firewall policy, system package repositories, or unrelated Docker objects.
+   Candidates containing the [MySQL isolation slice](FEAT-007-control-plane-console.md#docker-mysql-租户隔离)
+   require Engine 28.0.0 or later: the signed manifest carries this minimum and
+   preflight rejects older hosts. The `isolated` bridge gateway mode was added
+   in [Docker 28](https://docs.docker.com/engine/release-notes/28/#port-publishing-in-bridge-networks).
+   Historical 27.5.1 runtime evidence below does not accept this new slice.
 3. One validated absolute installation root owns releases, generated platform
    configuration, exact secret files, backups, journals, and sanitized support
    evidence. Matrix rejects a volume root, links or reparse points, unsafe

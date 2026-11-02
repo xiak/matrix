@@ -1305,8 +1305,12 @@ func (value *gate) assertSignedManagedProductRuntime(
 	if !ok {
 		return nil, "", fail("signed-managed-product-image-" + product.component)
 	}
-	ids, err := dockerLines(ctx, "container", "ls", "--all", "--quiet", "--filter",
-		"label=com.xiak.matrix.managedservice.installation="+product.installationID)
+	arguments := []string{"container", "ls", "--all", "--quiet", "--filter",
+		"label=com.xiak.matrix.managedservice.installation=" + product.installationID}
+	if product.component == "mysql" {
+		arguments = append(arguments, "--filter", "label=com.docker.compose.service=mysql")
+	}
+	ids, err := dockerLines(ctx, arguments...)
 	if err != nil || len(ids) != 1 {
 		return nil, "", fail("signed-managed-product-runtime-" + product.component)
 	}
@@ -1318,11 +1322,15 @@ func (value *gate) assertSignedManagedProductRuntime(
 	project := inspection.Config.Labels["com.docker.compose.project"]
 	digest := sha256.Sum256([]byte(string(tenantID) + "\x00" + product.installationID))
 	wantProject := "matrix-" + hex.EncodeToString(digest[:12])
+	wantPorts := 1
+	if product.component == "mysql" {
+		wantPorts = 0
+	}
 	if !inspection.State.Running || inspection.State.Status != "running" || inspection.State.Health == nil ||
 		inspection.State.Health.Status != "healthy" || inspection.Config.Image != imageID || project != wantProject ||
 		inspection.Config.Labels["com.xiak.matrix.managedservice.offering"] != product.offeringID ||
 		inspection.Config.Labels["com.xiak.matrix.managedservice.region"] != "local-primary" ||
-		len(inspection.HostConfig.PortBindings) != 1 {
+		len(inspection.HostConfig.PortBindings) != wantPorts {
 		return nil, "", fail("signed-managed-product-runtime-" + product.component)
 	}
 	credentialDigest := sha256.Sum256([]byte(string(tenantID) + "\x00" + product.installationID + "\x00credential"))
