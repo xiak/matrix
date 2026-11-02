@@ -4,34 +4,37 @@
 
 - Updated: 2026-11-02
 - Repository: `https://github.com/xiak/matrix.git`
-- Branch: `feat/managed-tenant-isolation`
-- Committed and pushed implementation milestone: `6b37737a7ffdf774072ce6a27e40bff5268f7156`
-- Outcome: the local Docker/MySQL slice isolates two real tenants and preserves
-  the other tenant when one instance is terminated. Existing direct-port
-  instances migrate without changing their data, credentials or endpoint.
-- Delivery: [PR #13](https://github.com/xiak/matrix/pull/13), based on
-  `feat/product-onboarding-lk`. Check GitHub for current review and CI state;
-  do not infer a merge or a complete release from the local runtime evidence.
+- Branch: `feat/product-onboarding-release`
+- Committed and pushed milestone: `2e87c6501` records the next acceptance target.
+- Outcome: product-team onboarding must be repeatable for products like E/L/K,
+  reusing the existing platform authorities and lifecycle. The user agreed to
+  merge the existing handbook/onboarding delivery and advance formal integration.
+- Delivery: [PR #11](https://github.com/xiak/matrix/pull/11) and
+  [PR #12](https://github.com/xiak/matrix/pull/12) are merged into `main`.
+  [PR #13](https://github.com/xiak/matrix/pull/13) remains open and now targets
+  `main`; this branch includes its verified MySQL isolation implementation.
+  Recheck GitHub before changing that delivery state.
 
 Follow `AGENTS.md` and the repository-local Git identity.
 
 ## Reading route
 
-- Contract, scope and runtime evidence: [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#docker-mysql-租户隔离).
-- Signed local candidate and upgrade evidence: [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核).
-- Executed operator workflows: [installation runbook](../../docs/runbooks/platform-installation.md).
-- User workflow: [managed services guide](../../docs/user-guide/services-and-applications.md#多个团队使用时).
-- Runtime owners: `app/adapter/managedservice/localmysql`, the existing
-  `TestLocalMySQLRealRuntime` and `TestManagedProductProviderProcesses` gates.
+- Current target, boundaries and evidence: [FEAT-007 product onboarding](../../docs/features/FEAT-007-control-plane-console.md#产品团队接入契约).
+- Product-team workflow: [onboarding guide](../../docs/product-guide/managed-service-onboarding.md).
+- Executed acceptance commands: [onboarding runbook](../../docs/runbooks/managed-service-onboarding.md).
+- Existing executable owners: `api/adapter/managedservice/v1` and
+  `test/managedserviceonboarding`; published products remain in their existing
+  catalog, adapter, worker, UI and release owners identified in the guide.
+- For dependency authorization, additionally read [FEAT-IAM-008](../../docs/features/iam/FEAT-IAM-008-product-enforcement.md).
+- For signed installation delivery, additionally read [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md)
+  and the [installation runbook](../../docs/runbooks/platform-installation.md).
 
-The verified local scope is shared-host Docker/MySQL isolation. It does not establish
-physical isolation, general VPC/CNI support, other products' isolation, K8s/VM
-connectivity, a complete Gate C, or old-worker lifecycle support for the new
-MySQL topology. Consult the FEAT owners rather than extending this checkpoint.
-
-The preceding [PR #12](https://github.com/xiak/matrix/pull/12) delivers the product
-onboarding contract, runnable L/K examples and acceptance handbook. The user
-deferred adding L/K to the default catalog and formal release.
+The current L/K code still proves product-team examples only. No formal L/K
+catalog, real dependency authorization, browser or signed-release implementation
+was added at this milestone. Follow the FEAT's independently testable Logstash,
+then Kibana slices; do not mark either published from S1/S2 evidence. MySQL's
+verified shared-host isolation does not establish L/K network isolation or
+physical isolation.
 
 Secrets, test-account credentials and machine-local deployment state are not
 portable memory and are excluded from this checkpoint.
