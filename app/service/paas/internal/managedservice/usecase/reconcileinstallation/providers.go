@@ -13,19 +13,19 @@ import (
 // provider that can produce its real effect. A catalog entry without a
 // provider, or an unlisted provider, is rejected before the worker starts.
 type ProviderRegistry struct {
-	providers map[string]Provisioner
+	providers map[string]managedserviceadapterv1.Provisioner
 	order     []string
 }
 
 func NewProviderRegistry(
 	catalog domain.Catalog,
-	providers map[string]Provisioner,
+	providers map[string]managedserviceadapterv1.Provisioner,
 ) (*ProviderRegistry, error) {
 	offerings := catalog.List()
 	if len(offerings) == 0 || len(providers) != len(offerings) {
 		return nil, errors.New("managed-service provider registry does not match its catalog")
 	}
-	copy := make(map[string]Provisioner, len(providers))
+	copy := make(map[string]managedserviceadapterv1.Provisioner, len(providers))
 	order := make([]string, 0, len(offerings))
 	for _, offering := range offerings {
 		provider, exists := providers[offering.ID]

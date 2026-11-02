@@ -14,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	apphostingv1 "github.com/xiak/matrix/api/adapter/apphosting/v1"
+	managedserviceadapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	composeadapter "github.com/xiak/matrix/app/adapter/apphosting/compose"
 	localmachineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
@@ -354,7 +355,7 @@ func run(ctx context.Context) (result error) {
 	}
 	providerRegistry, err := reconcileinstallation.NewProviderRegistry(
 		domain.DefaultCatalog(),
-		map[string]reconcileinstallation.Provisioner{
+		map[string]managedserviceadapterv1.Provisioner{
 			domain.PostgreSQLOfferingID:    managedPostgres,
 			domain.MySQLOfferingID:         managedMySQL,
 			domain.ElasticsearchOfferingID: managedElasticsearch,

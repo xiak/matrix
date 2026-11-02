@@ -1,0 +1,5 @@
+{
+  "elasticsearch": "docker.elastic.co/elasticsearch/elasticsearch@sha256:4d0724bb8d78d7a2330693623e26ca4d621079d062ecc8a30b3e1fc180ec14c1",
+  "logstash": "docker.elastic.co/logstash/logstash@sha256:a77c29e406ddc6311b302703889f0953b5620dd5aa2445b0cdbcf7f88e285766",
+  "kibana": "docker.elastic.co/kibana/kibana@sha256:920b24f689833d34205f426f5359864378a572e829c53016073f0a6837c2e995"
+}

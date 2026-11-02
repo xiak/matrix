@@ -32,12 +32,6 @@ type Queue interface {
 	FailCleanup(context.Context, WorkItem, string) error
 }
 
-type Provisioner interface {
-	Ensure(context.Context, managedserviceadapterv1.ProvisionRequest) (managedserviceadapterv1.ProvisionResult, error)
-	Delete(context.Context, managedserviceadapterv1.DeprovisionRequest) error
-	Ready(context.Context) error
-}
-
 type Config struct {
 	Catalog         domain.Catalog
 	LeaseDuration   time.Duration
@@ -48,7 +42,7 @@ type Config struct {
 
 type Service struct {
 	queue           Queue
-	provisioner     Provisioner
+	provisioner     managedserviceadapterv1.Provisioner
 	catalog         domain.Catalog
 	leaseDuration   time.Duration
 	effectTimeout   time.Duration
@@ -56,7 +50,7 @@ type Service struct {
 	maximumAttempts uint32
 }
 
-func NewService(queue Queue, provisioner Provisioner, config Config) (*Service, error) {
+func NewService(queue Queue, provisioner managedserviceadapterv1.Provisioner, config Config) (*Service, error) {
 	if queue == nil || provisioner == nil {
 		return nil, errors.New("managed-service reconciler dependencies are required")
 	}

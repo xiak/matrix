@@ -1,0 +1,57 @@
+name: Product onboarding
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'api/adapter/managedservice/**'
+      - 'app/adapter/managedservice/**'
+      - 'app/adapter/apphosting/compose/**'
+      - 'test/managedserviceonboarding/**'
+      - '.github/workflows/product-onboarding.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: product-onboarding-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  elastic-product-contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      GOMAXPROCS: '2'
+      GOMEMLIMIT: '1GiB'
+      MATRIX_ONBOARDING_ROOT: /tmp/matrix-product-onboarding
+      MATRIX_ONBOARDING_REPORT: /tmp/matrix-product-onboarding-report.json
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: Check adapter contracts and architecture
+        run: |
+          go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./test/architecture
+      - name: Prepare exact local artifacts on host Docker
+        run: |
+          sudo sysctl -w vm.max_map_count=1048576
+          docker info --format '{{.ServerVersion}}'
+          mkdir -m 700 "$MATRIX_ONBOARDING_ROOT"
+          go run ./test/managedserviceonboarding/cmd/prepare -pull
+      - name: Run real Logstash and Kibana product-team acceptance
+        env:
+          MATRIX_ONBOARDING_RUNTIME: '1'
+        run: go test -count=1 -timeout=20m -v ./test/managedserviceonboarding
+      - name: Preserve non-secret acceptance result
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: product-onboarding-evidence
+          path: /tmp/matrix-product-onboarding-report.json
+          if-no-files-found: warn
+          retention-days: 14

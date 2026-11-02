@@ -23,7 +23,7 @@ func TestProviderRegistryRequiresAndRoutesEveryReleasedOffering(t *testing.T) {
 	rabbitmq := &registryProvider{result: managedserviceadapterv1.ProvisionResult{
 		Endpoint: "amqp://127.0.0.1:25672/matrix", CredentialReference: "credential-rabbitmq",
 	}}
-	registry, err := NewProviderRegistry(catalog, map[string]Provisioner{
+	registry, err := NewProviderRegistry(catalog, map[string]managedserviceadapterv1.Provisioner{
 		managedservicev1.PostgreSQLOfferingID:    postgres,
 		managedservicev1.MySQLOfferingID:         mysql,
 		managedservicev1.ElasticsearchOfferingID: elasticsearch,
@@ -56,7 +56,7 @@ func TestProviderRegistryRequiresAndRoutesEveryReleasedOffering(t *testing.T) {
 func TestProviderRegistryRejectsMissingExtraAndUnknownProviders(t *testing.T) {
 	catalog := domain.DefaultCatalog()
 	provider := &registryProvider{}
-	for name, providers := range map[string]map[string]Provisioner{
+	for name, providers := range map[string]map[string]managedserviceadapterv1.Provisioner{
 		"missing": {managedservicev1.PostgreSQLOfferingID: provider},
 		"extra": {
 			managedservicev1.PostgreSQLOfferingID:    provider,
@@ -72,7 +72,7 @@ func TestProviderRegistryRejectsMissingExtraAndUnknownProviders(t *testing.T) {
 			}
 		})
 	}
-	registry, err := NewProviderRegistry(catalog, map[string]Provisioner{
+	registry, err := NewProviderRegistry(catalog, map[string]managedserviceadapterv1.Provisioner{
 		managedservicev1.PostgreSQLOfferingID:    provider,
 		managedservicev1.MySQLOfferingID:         provider,
 		managedservicev1.ElasticsearchOfferingID: provider,

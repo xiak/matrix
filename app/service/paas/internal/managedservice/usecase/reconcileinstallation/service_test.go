@@ -104,7 +104,7 @@ func TestProcessNextRejectsChangedInstallationProfileWithoutEffect(t *testing.T)
 func testReconciler(
 	t *testing.T,
 	queue Queue,
-	provisioner Provisioner,
+	provisioner managedserviceadapterv1.Provisioner,
 	maximumAttempts uint32,
 ) *Service {
 	t.Helper()

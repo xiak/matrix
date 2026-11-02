@@ -285,6 +285,79 @@ operator intervention; automatic availability recovery is not claimed.
 Backups lacking this required witness are rejected rather than interpreted as
 an empty inventory.
 
+## 产品团队接入契约
+
+本节拥有受管产品团队的实现责任、配置边界与验收要求。读者流程由
+[产品接入手册](../product-guide/managed-service-onboarding.md)维护，执行命令归
+[接入验证运行手册](../runbooks/managed-service-onboarding.md)。本次交付范围是公开
+适配契约、Logstash/Kibana 可运行样例与验证工具；默认产品目录、北向 API 和签名
+发布组合仍为原有四种产品。样例门禁通过不等于产品上架或完整 Release 验收。
+
+### 双方交付边界
+
+- 产品团队交付固定版本的产品定义与规格、不可变制品、封闭配置、`Provisioner`
+  实现、真实协议探针、数据及凭据处理规则和自己的运行验收结果。
+- managedservice 拥有租户资源、开通、配额、幂等命令、Operation、事务、工作租约
+  和 fencing；IAM 决定权限，产品入口执行检查，Audit 接受事务中的事实。
+  适配器不能根据租户传来的 ID 自行推断已经获权。
+- 平台团队集成目录与 worker 注册、配置解析与依赖授权、控制台、制品清单、安装
+  拓扑和恢复清单，并执行产品 API、IAM 与签名发布组合的门禁。
+- 基础实例生命周期复用 `managedservice` 的资源与 Action。新增专用操作时先由
+  产品 owner 定义版本化 API、资源和当前对象校验，再按 FEAT-IAM-008 接入权限；
+  不因新增一种服务就复制 IAM、配额或另建一个通用产品引擎。
+
+### 适配器 v1
+
+`api/adapter/managedservice/v1` 是产品实现消费的公开 Go 契约；worker 的 composition
+root 注入实现。它不是远程注册 API、运行时插件 ABI 或租户上传的部署模板。
+`ProvisionRequest` 的 tenant、instance、operation、offering、version、region 与
+quota 均来自已经接受的权威事实，`ProvisionResult` 只返回端点和非秘密凭据引用。
+
+| 方法 | 必须满足的行为 |
+| --- | --- |
+| `Ready` | 核对运行环境、固定制品及产品前置条件；不创建租户实例。它不是全量实例巡检 |
+| `Ensure` | 校验精确身份与产品配置，先观察再执行；首次、等值重放、进程重启及结果丢失后收敛到同一实例。成功必须证明产品真正就绪，保留稳定端点、凭据引用及已有数据 |
+| `Delete` | 只删除能证明属于该实例的运行资源与按约定应删除的数据、凭据；等值重放成功，依赖服务与其他租户不受影响 |
+
+操作超时、取消或错误不证明效果回滚，调用方须以原身份重新观察和收敛。适配器返回
+可脱敏的失败，权威服务映射公开错误；本地路径、原生命令、秘密及原生日志不进入
+公开错误、Operation 或 Audit。工作状态和审计事实仍由 owning use case 写入。
+适配器不能自行从仓库拉取镜像或构建；制品必须已由受信交付准备并固定身份。
+
+### L/K 样例配置契约
+
+样例 owner 为 `test/managedserviceonboarding`，版本固定为 Elastic `8.19.23`。
+配置由测试中的受信交付方解析后注入构造器；它不是已发布的租户 API，也不假装
+已经通过真实 IAM。样例分别实现两种产品，并通过上述同一个公开接口驱动生命周期。
+
+| 项目 | Logstash 样例 | Kibana 样例 |
+| --- | --- | --- |
+| 配置修订 | `http-json-file-v1`，固定 HTTP JSON 输入和持久 JSON Lines 输出 | `elasticsearch-ui-v1`，固定对应版本的 Elasticsearch 依赖 |
+| 不可变绑定 | 精确租户、实例、规格、镜像及配置修订 | 同左，另绑定依赖实例、租户、版本、配置修订和凭据来源 |
+| 秘密 | 生成的输入认证密码只写保护文件 | 受信解析的 `kibana_system` 凭据及本实例生成的加密材料只写保护文件 |
+| 依赖 | 不要求 Elasticsearch；通过真实输入及落盘证明处理效果 | 依赖必须同租户、版本一致；样例只接受自己测试网络中的固定服务地址 |
+| 变更 | 已创建实例的配置不能原地改写；漂移拒绝并保留原实例 | 同左；删除 Kibana 不删除其 Elasticsearch 依赖 |
+
+原生 Pipeline DSL、任意环境变量、主机路径、URL、镜像、shell 或 Compose 均不是
+可直接添加到租户请求的通用扩展字段。正式产品需要更多配置时，先由产品 owner
+增加有界类型、校验、不可变修订及敏感字段交付约束；将精确配置引用纳入原命令
+摘要、持久化、worker 恢复、当前依赖授权与 Audit。依赖不能仅凭调用者提供的
+tenant 或 endpoint 视为可信，也不能复用样例中的测试网络授权假设。
+
+### 接入验收与发布交接
+
+| 门禁 | 判定与责任 |
+| --- | --- |
+| S1 契约与隔离 | 产品团队证明非法身份、规格、跨租户依赖、版本或配置漂移在运行效果前拒绝；秘密不出现在部署清单与返回值 |
+| S2 真实运行样例 | 用真实 L/K 制品验证就绪、业务协议、等值重放、重启后数据及身份稳定、结果丢失后恢复、精确删除与重复删除；依赖和旁观实例保持 |
+| P1 平台集成 | 平台团队证明目录/worker/制品/UI 对应一致；真实用户开通、配额、创建/读取/终止、跨租户拒绝、撤权、幂等恢复及 Audit。没有运行实现的产品不能发布 |
+| P2 发布验收 | 在同一固定源码上完成独立 CI 和签名包的离线安装、浏览器旅程、平台升级/回滚/恢复与数据保留；结果归本 FEAT、FEAT-IAM-008 和 FEAT-005 各自 owner |
+
+接收单必须给出固定源码、制品身份、配置修订、测试命令/结果、数据与删除语义、
+依赖清单、失败恢复及负责人。S1/S2 可以作为产品团队交接证据；缺少 P1/P2 时
+保持未发布，不对外声称已纳管。业务引擎升级、HA、业务数据备份、任意 Pipeline
+编辑及动态产品上架各自需要明确合同与门禁，不从基础样例成功推导支持。
+
 ## Console architecture
 
 The replacement UI is a Matrix-owned Next.js 16 and React 19 App Router
@@ -1918,11 +1991,13 @@ C real-authority and installed-release evidence.
 
 The managed-service API provides only the bounded routes needed by the journey:
 
+- list/get published service definitions and read/activate the current Account's service;
 - list/get available offerings;
 - list/get eligible regions;
 - activate and list/get quota entitlements;
-- create and list/get service installations;
+- create, list/get and terminate service installations;
 - get the installation Operation;
+- recover a supported command result and bind/unbind the exact released service-role template;
 - inspect the non-secret local-machine region configuration as an organization
   administrator.
 
@@ -1932,10 +2007,12 @@ Organization, user, and role come only from IAM. Public resource IDs cannot
 select another organization, and PostgreSQL row-level security is forced on
 every organization-owned table.
 
-IAM adds closed managed-service actions and maps them to the existing
-`ORGANIZATION_ADMIN`, `PAAS_DEVELOPER`, and `PAAS_VIEWER` roles. It does not
-introduce a customer policy language or a UI-only authorization shortcut. An
-expired, revoked, malformed, or unavailable session fails closed on the next
+IAM evaluates the released managed-service `AuthorizationProfile` with current
+identity policies, permission boundaries and supported credential types. The
+product derives resources and tenant ownership from authoritative facts; role
+names, navigation visibility and product activation do not substitute for a
+current decision. Policy and enforcement ownership remain in FEAT-IAM-008. An
+expired, revoked, malformed, or unavailable credential fails closed on the next
 request.
 
 ## Incremental acceptance

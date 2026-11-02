@@ -123,6 +123,7 @@ scope, release gates, and evidence.
 - **Platform operators:** use the
   [installation runbook](docs/runbooks/platform-installation.md).
 - **Product and platform engineers:** begin with the
+  [受管产品接入手册](docs/product-guide/managed-service-onboarding.md),
   [feature contracts](docs/features/README.md) and the directly relevant
   [architecture decisions](docs/architecture/README.md).
 - **API consumers:** use the versioned contracts for
