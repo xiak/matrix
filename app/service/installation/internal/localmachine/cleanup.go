@@ -22,7 +22,9 @@ func rollbackInstallation(
 	runtimeBoundary dockerRuntime,
 	plan platformcommand.InstallPlan,
 ) error {
-	compiled, err := topology.Compile(plan.Bundle.Manifest, topology.Options{
+	// Upgrade removes an authenticated installed source, which may use an
+	// accepted predecessor topology. New candidate admission stays strict.
+	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
 		InstallationID:   plan.InstallationID,
 		Root:             plan.Root,
 		Listener:         plan.Listener,

@@ -2616,6 +2616,30 @@ func TestRollbackInstallationRemovesUnhealthyOnlyProvedOwnedObjectsAndReplays(t 
 	}
 }
 
+func TestUpgradeCleanupAcceptsInstalledDirectMySQLTopology(t *testing.T) {
+	plan := newInstallPlan(t)
+	plan.Root = "/srv/matrix"
+	plan.Bundle.Manifest.TopologyDigest = "sha256:7cb0360dd17ee421b4d4dfbf58e006e236f3f86e9d1495bebeb90f521ebfa73d"
+	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
+		InstallationID: plan.InstallationID, Root: plan.Root, Listener: plan.Listener,
+		Port: plan.Port, NorthboundOrigin: plan.NorthboundOrigin,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectation, err := decodePlatformExpectation(compiled.ComposeJSON, plan.Bundle.Manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtimeBoundary := newPlatformCleanupRuntime(t, plan, expectation)
+	if err := rollbackInstallation(t.Context(), runtimeBoundary, plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(runtimeBoundary.containers) != 0 || len(runtimeBoundary.networks) != 0 || runtimeBoundary.unexpectedRemovals != 0 {
+		t.Fatal("installed predecessor cleanup did not preserve its ownership boundary")
+	}
+}
+
 func TestRollbackInstallationRejectsUnprovedOwnershipBeforeRemoval(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("local-machine platform cleanup effects target Linux")
