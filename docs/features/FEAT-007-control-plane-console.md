@@ -358,6 +358,32 @@ tenant 或 endpoint 视为可信，也不能复用样例中的测试网络授权
 保持未发布，不对外声称已纳管。业务引擎升级、HA、业务数据备份、任意 Pipeline
 编辑及动态产品上架各自需要明确合同与门禁，不从基础样例成功推导支持。
 
+### 产品团队样例验收证据
+
+2026-11-02，本机复核对应源码
+[`d5625ec86b42cca0969749d3430aca27bd316c16`](https://github.com/xiak/matrix/commit/d5625ec86b42cca0969749d3430aca27bd316c16)。
+真实运行使用 Linux/amd64、Go 1.26.3 和 Docker Desktop 的宿主机 Engine，
+工具容器连接宿主机 socket，没有启动 DinD。产品版本及不可变摘要由
+[`artifacts.json`](../../test/managedserviceonboarding/artifacts.json)拥有。
+
+- S1：Windows 与 Linux 契约、配置绑定和架构检查通过；Linux 验证了文件权限与
+  符号链接拒绝。现有 reconciler、worker 与四种正式产品适配器检查通过。
+  本次变更的全仓生成、vet 和普通 Go 测试通过，最终独立检查以 CI 为准。
+- S2：完整真实运行耗时 317.08 秒，非秘密报告为 `PASSED`，包含十项检查。
+  Logstash 证明认证输入、处理后落盘、真实效果后响应丢失恢复、重启及等值重放、
+  跨租户删除拒绝、精确及重复删除。Kibana 证明版本与实际就绪状态、认证后的数据
+  视图创建和读取、重启后的状态保留；删除后 Elasticsearch 仍为原实例且数据可读。
+  两者均核对秘密未进入部署清单、恢复清单收敛以及产品数据和凭据清理。
+- 运行资源由各自 provider 精确回收；临时依赖网络校验归属和空端点后删除。
+  清理不能确认时保留运行目录。通过后另外核对标签并回收了本次工具容器和缓存卷。
+- P1/P2：`NOT_RUN`。该结果没有证明 L/K 的默认目录、真实 IAM、浏览器、签名包
+  安装升级、平台恢复或业务数据备份，不能作为 L/K 正式上架依据。
+
+独立复核入口为 [Product onboarding](../../.github/workflows/product-onboarding.yml)，
+其运行记录和 `product-onboarding-evidence` 附件绑定对应 PR 源码；全仓门禁由既有
+[Verification](../../.github/workflows/verification.yml)负责。交接须同时检查测试退出码、
+报告结论与源码，不将跳过或部分子测试生成的 `INCOMPLETE` 解释为通过。
+
 ## Console architecture
 
 The replacement UI is a Matrix-owned Next.js 16 and React 19 App Router
