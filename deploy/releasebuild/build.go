@@ -11,6 +11,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -44,6 +45,9 @@ type Config struct {
 	PreviousVersion  string
 	Signer           SigningMaterial
 	Entropy          io.Reader
+	// Progress contains only fixed stage/component names, never tool output,
+	// signing material, caller paths or environment values.
+	Progress io.Writer
 }
 
 type Result struct {
@@ -85,6 +89,7 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 	var iamProductAuthorization []byte
 	var baseImages map[string]ImageMetadata
 	if config.Kind != installationrelease.NodeManifestKind {
+		reportBuildStage(config, "verify-fixed-inputs")
 		iamProductAuthorization, err = readIAMProductAuthorization(config.RepositoryRoot)
 		if err != nil {
 			return Result{}, err
@@ -137,7 +142,7 @@ func Assemble(ctx context.Context, config Config, effects Effects) (Result, erro
 		return Result{}, err
 	}
 	products := builtProducts(config.Version)
-	if err := stageRunnerPayloads(ctx, config, effects, bundle, binaries); err != nil {
+	if err := stageRunnerPayloads(ctx, config, effects, bundle, binaries, baseImages[RunnerToolchainReference]); err != nil {
 		return Result{}, err
 	}
 
@@ -163,6 +168,7 @@ func publishBundle(
 	images []installationrelease.Image,
 	products []installationrelease.Product,
 ) (Result, error) {
+	reportBuildStage(config, "sign-and-verify-bundle")
 	manifest := newManifest(config, files, images, products)
 	manifestBytes, err := installationrelease.EncodeCanonical(manifest)
 	if err != nil {
@@ -265,6 +271,7 @@ func buildBinaries(ctx context.Context, config Config, effects Effects, workspac
 	}
 	result := make(map[string]string, len(binarySpecifications))
 	for _, specification := range binarySpecifications {
+		reportBuildStage(config, "build-binary-"+specification.name)
 		target := filepath.Join(root, specification.name)
 		if err := effects.BuildGoBinary(ctx, config.RepositoryRoot, specification.packagePath, target); err != nil {
 			return nil, errors.New("build fixed release executable failed")
@@ -332,6 +339,7 @@ func buildImages(
 			return nil, tags, err
 		}
 		tag := "matrix-release-build/" + recipe.component + ":" + token
+		reportBuildStage(config, "build-image-"+recipe.component)
 		if err := effects.BuildImage(ctx, contextRoot, tag); err != nil {
 			return nil, tags, errors.New("build fixed release image failed")
 		}
@@ -342,6 +350,7 @@ func buildImages(
 		}
 		metadata[recipe.component] = image
 	}
+	reportBuildStage(config, "verify-paas-compose")
 	if err := effects.VerifyPaaSCLI(ctx, metadata["paas"].ID); err != nil {
 		return nil, tags, errors.New("PaaS image Docker Compose contract failed")
 	}
@@ -349,6 +358,7 @@ func buildImages(
 	required := installationrelease.RequiredImages(products)
 	images := make([]installationrelease.Image, 0, len(required))
 	for _, requirement := range required {
+		reportBuildStage(config, "save-image-"+requirement.Component)
 		image, found := metadata[requirement.Component]
 		if !found || validateImageMetadata(image) != nil {
 			return nil, tags, errors.New("release image inventory is incomplete")
@@ -378,7 +388,16 @@ func stageRunnerPayloads(
 	effects Effects,
 	bundle string,
 	binaries map[string]string,
+	toolchainImage ImageMetadata,
 ) error {
+	// A digest-authenticated pull has different local IDs in Docker's classic
+	// and containerd stores. Save the identity actually observed on this host;
+	// the archive must still resolve to the one pinned configuration below.
+	if validateImageMetadata(toolchainImage) != nil ||
+		(toolchainImage.ID != RunnerToolchainSourceID && toolchainImage.ID != RunnerToolchainArchiveConfigID) {
+		return errors.New("fixed runner toolchain local identity is invalid")
+	}
+	reportBuildStage(config, "stage-runner-binary")
 	runnerBinary, found := binaries["matrix-devops-runner"]
 	if !found {
 		return errors.New("runner release executable is missing")
@@ -393,7 +412,8 @@ func stageRunnerPayloads(
 	toolchainTarget := filepath.Join(
 		bundle, filepath.FromSlash(installationrelease.RunnerToolchainArchivePath),
 	)
-	toolchain, err := effects.SaveImage(ctx, RunnerToolchainSourceID, toolchainTarget)
+	reportBuildStage(config, "save-runner-toolchain")
+	toolchain, err := effects.SaveImage(ctx, toolchainImage.ID, toolchainTarget)
 	if err != nil || toolchain.ID != RunnerToolchainArchiveConfigID ||
 		validateImageMetadata(toolchain) != nil {
 		return errors.New("save fixed runner toolchain image failed")
@@ -401,6 +421,7 @@ func stageRunnerPayloads(
 	gvisorTarget := filepath.Join(
 		bundle, filepath.FromSlash(installationrelease.RunnerGVisorArchivePath),
 	)
+	reportBuildStage(config, "stage-runner-gvisor")
 	gvisor, err := effects.StageRunnerSandbox(ctx, config.GVisorArchive, gvisorTarget)
 	if err != nil || gvisor.SHA256 != RunnerGVisorSHA256 || gvisor.Size == 0 {
 		return errors.New("stage fixed runner gVisor archive failed")
@@ -418,6 +439,12 @@ func stageRunnerPayloads(
 		return errors.New("write runner gVisor checksum failed")
 	}
 	return nil
+}
+
+func reportBuildStage(config Config, stage string) {
+	if config.Progress != nil {
+		_, _ = fmt.Fprintln(config.Progress, "release-build:", stage)
+	}
 }
 
 func verifyBaseImages(ctx context.Context, effects Effects) (map[string]ImageMetadata, error) {

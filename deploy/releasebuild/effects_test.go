@@ -147,7 +147,7 @@ func TestLocalRunnerToolchainStagesPinnedOfflineImage(t *testing.T) {
 	}
 	effects := NewLocalEffects()
 	image, err := effects.InspectImage(context.Background(), RunnerToolchainReference)
-	if err != nil || image.ID != RunnerToolchainSourceID {
+	if err != nil || (image.ID != RunnerToolchainSourceID && image.ID != RunnerToolchainArchiveConfigID) {
 		t.Fatalf("pinned toolchain image=%#v err=%v", image, err)
 	}
 	output := filepath.Join(t.TempDir(), "go-1.26-offline-v1.tar")

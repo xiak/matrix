@@ -34,12 +34,19 @@ type authenticRunnerEffects struct {
 	local *LocalEffects
 }
 
+func (effects *authenticRunnerEffects) InspectImage(ctx context.Context, reference string) (ImageMetadata, error) {
+	if reference == RunnerToolchainReference {
+		return effects.local.InspectImage(ctx, reference)
+	}
+	return effects.fakeEffects.InspectImage(ctx, reference)
+}
+
 func (effects *authenticRunnerEffects) SaveImage(
 	ctx context.Context,
 	imageID string,
 	output string,
 ) (ImageMetadata, error) {
-	if imageID == RunnerToolchainSourceID {
+	if imageID == RunnerToolchainSourceID || imageID == RunnerToolchainArchiveConfigID {
 		return effects.local.SaveImage(ctx, imageID, output)
 	}
 	return effects.fakeEffects.SaveImage(ctx, imageID, output)
@@ -89,7 +96,9 @@ func (fake *fakeEffects) InspectImage(_ context.Context, reference string) (Imag
 	case RabbitMQPinnedReference:
 		return fake.baseImage("rabbitmq", RabbitMQManifestDigest), nil
 	case RunnerToolchainReference:
-		return fake.baseImage("golang", RunnerToolchainSourceID), nil
+		image := fake.baseImage("golang", RunnerToolchainSourceID)
+		image.ID = RunnerToolchainSourceID
+		return image, nil
 	default:
 		return fake.images[reference], nil
 	}
@@ -131,7 +140,7 @@ func (fake *fakeEffects) SaveImage(_ context.Context, imageID, output string) (I
 	identity := ImageMetadata{
 		ID: testDigest("load:" + imageID), OS: "linux", Architecture: "amd64",
 	}
-	if imageID == RunnerToolchainSourceID {
+	if imageID == RunnerToolchainSourceID || imageID == RunnerToolchainArchiveConfigID {
 		identity.ID = RunnerToolchainArchiveConfigID
 	}
 	fake.saved[imageID] = identity
@@ -158,6 +167,44 @@ func (fake *fakeEffects) VerifyPaaSCLI(_ context.Context, imageID string) error 
 func (fake *fakeEffects) RemoveBuildTag(_ context.Context, tag string) error {
 	fake.removed[tag] = struct{}{}
 	return nil
+}
+
+func TestRunnerToolchainAssemblyUsesAuthenticatedDockerStoreIdentity(t *testing.T) {
+	for _, identity := range []string{RunnerToolchainSourceID, RunnerToolchainArchiveConfigID, testDigest("foreign-store-image")} {
+		t.Run(strings.TrimPrefix(identity, "sha256:")[:12], func(t *testing.T) {
+			base := t.TempDir()
+			for _, relative := range []string{"runner/linux-amd64/bin", "runner/linux-amd64/images", "runner/linux-amd64/runtime"} {
+				if err := os.MkdirAll(filepath.Join(base, relative), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			runner := filepath.Join(base, "private-runner-source")
+			if err := os.WriteFile(runner, []byte("runner"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			var progress bytes.Buffer
+			effects := newFakeEffects()
+			err := stageRunnerPayloads(context.Background(), Config{GVisorArchive: filepath.Join(base, "private-sandbox"), Progress: &progress},
+				effects, base, map[string]string{"matrix-devops-runner": runner},
+				ImageMetadata{ID: identity, OS: "linux", Architecture: "amd64"})
+			if identity == testDigest("foreign-store-image") {
+				if err == nil || len(effects.saved) != 0 {
+					t.Fatal("foreign store identity reached release effects")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if image, found := effects.saved[identity]; !found || image.ID != RunnerToolchainArchiveConfigID || len(effects.saved) != 1 {
+				t.Fatal("release assembly did not save the authenticated local identity")
+			}
+			if !strings.Contains(progress.String(), "save-runner-toolchain") || strings.Contains(progress.String(), base) ||
+				strings.Contains(progress.String(), "private-runner-source") || strings.Contains(progress.String(), "private-sandbox") {
+				t.Fatal("release diagnostics omitted the stage or disclosed private inputs")
+			}
+		})
+	}
 }
 
 func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {

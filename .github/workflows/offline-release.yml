@@ -7,6 +7,8 @@ on:
     paths:
       - 'app/service/installation/test/phase1e2e/**'
       - 'deploy/cmd/matrix-offline-fixture/**'
+      - 'deploy/cmd/matrix-release/**'
+      - 'deploy/releasebuild/**'
       - '.github/workflows/offline-release.yml'
 
 permissions:
@@ -43,9 +45,12 @@ jobs:
           go build -o "$work/matrix-release" ./deploy/cmd/matrix-release
           go test -c -o "$work/phase1.test" ./app/service/installation/test/phase1e2e
           go run ./deploy/cmd/matrix-offline-fixture "$work/private"
+          docker info --format '{{.ServerVersion}} {{.Driver}} {{json .DriverStatus}}'
           curl --fail --location --retry 3 --output "$work/gvisor.tar.zstd" \
             https://github.com/google/gvisor/releases/download/release-20260831.0/gvisor-x86_64.tar.zstd
           printf '%s  %s\n' b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891 "$work/gvisor.tar.zstd" | sha256sum --check
+          MATRIX_TEST_RUNNER_TOOLCHAIN=1 go test -count=1 -v \
+            -run '^TestLocalRunnerToolchainStagesPinnedOfflineImage$' ./deploy/releasebuild
           "$work/matrix-release" keygen --key-id offline-acceptance \
             --private-key "$work/private/signer.json" --trust-key "$work/trust.json"
           sudo sysctl -w vm.max_map_count=1048576
@@ -106,6 +111,11 @@ jobs:
             wait "$engine_pid"
           }
           cleanup() {
+            result=$?
+            if [[ "$result" != 0 ]]; then
+              docker container ls --all --format '{{.Label "com.xiak.matrix.role"}} {{.State}} {{.Status}}' \
+                > "$work/evidence/runtime-health.txt" 2>/dev/null || true
+            fi
             if [[ -n "${engine_pid:-}" ]]; then kill -TERM "$engine_pid" 2>/dev/null || true; fi
             chmod 755 "$work/evidence"
             chmod 644 "$work/evidence/"*

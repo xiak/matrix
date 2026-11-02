@@ -165,7 +165,7 @@ func runAssemble(ctx context.Context, arguments []string, output io.Writer) erro
 		GVisorArchive: gvisorAbsolute,
 		Version:       *version, BuildID: *buildID, SourceCommit: sourceCommit,
 		CreatedAt: createdAt, PreviousID: *previousID,
-		PreviousVersion: *previousVersion, Signer: signer,
+		PreviousVersion: *previousVersion, Signer: signer, Progress: output,
 	}, releasebuild.NewLocalEffects())
 	if err != nil {
 		return err
