@@ -1608,6 +1608,15 @@ func TestRollbackRequiresEveryCurrentProductComponent(t *testing.T) {
 	if !retainsProductInventory(current, target) {
 		t.Fatal("unchanged product inventory cannot roll back")
 	}
+	for _, missing := range current.Products[0].RequiredComponents {
+		prior := release.ApplicationPaaSProduct("v0.2.0")
+		prior.RequiredComponents = slices.DeleteFunc(prior.RequiredComponents, func(component string) bool { return component == missing })
+		candidate := target
+		candidate.Products = []release.Product{prior, target.Products[1]}
+		if retainsProductInventory(current, candidate) {
+			t.Fatalf("rollback lost the %s management path", missing)
+		}
+	}
 	target.Products[0].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
 	if retainsProductInventory(current, target) {
 		t.Fatal("Logstash would lose its management path after rollback")

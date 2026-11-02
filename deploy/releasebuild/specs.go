@@ -27,6 +27,9 @@ const (
 	KibanaReference                = "docker.elastic.co/kibana/kibana:8.19.23"
 	KibanaManifestDigest           = "sha256:920b24f689833d34205f426f5359864378a572e829c53016073f0a6837c2e995"
 	KibanaPinnedReference          = KibanaReference + "@" + KibanaManifestDigest
+	RedisReference                 = "redis:8.2.11-bookworm"
+	RedisManifestDigest            = "sha256:8faf1ffc0fa573b9b0f5a8f886e45e27b498cdd5e9c7ee3c611856d30d0d4401"
+	RedisPinnedReference           = RedisReference + "@" + RedisManifestDigest
 	RabbitMQReference              = "rabbitmq:4.1.8"
 	RabbitMQManifestDigest         = "sha256:a82b5a24f4434a33cd15e1e47c444d1e07440261358e46c179539998557d4e29"
 	RabbitMQPinnedReference        = RabbitMQReference + "@" + RabbitMQManifestDigest
@@ -54,6 +57,7 @@ var baseImageSpecifications = []baseImageSpecification{
 	{RabbitMQPinnedReference, "rabbitmq", RabbitMQManifestDigest},
 	{LogstashPinnedReference, "docker.elastic.co/logstash/logstash", LogstashManifestDigest},
 	{KibanaPinnedReference, "docker.elastic.co/kibana/kibana", KibanaManifestDigest},
+	{RedisPinnedReference, "redis", RedisManifestDigest},
 	{RunnerToolchainReference, "golang", RunnerToolchainSourceID},
 }
 

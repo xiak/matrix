@@ -7,6 +7,7 @@ import (
 	"path"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -99,7 +100,7 @@ func TestCompilePinsManagedServiceImagesForBothDockerStores(t *testing.T) {
 			if actual := strings.Split(document.Services["paas-worker"].Environment[productEndpointImagesEnvironment], ","); !slices.Equal(actual, image.RuntimeImageIDs()) {
 				t.Fatal("shared product ingress image is not release authenticated")
 			}
-		case "postgres", "mysql", "elasticsearch", "rabbitmq", "logstash", "kibana":
+		case "postgres", "mysql", "elasticsearch", "rabbitmq", "logstash", "kibana", "redis":
 			variable := "MATRIX_PAAS_WORKER_MANAGED_" + strings.ToUpper(image.Component) + "_IMAGE_IDS"
 			actual := strings.Split(document.Services["paas-worker"].Environment[variable], ",")
 			if !slices.Equal(actual, image.RuntimeImageIDs()) || len(actual) != 2 {
@@ -326,6 +327,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_KIBANA_IMAGE_IDS",
+			"MATRIX_PAAS_WORKER_MANAGED_REDIS_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS",
 			"MATRIX_PAAS_WORKER_MANAGED_MYSQL_IMAGE_IDS", "MATRIX_PAAS_WORKER_MANAGED_POSTGRES_IMAGE_IDS",
@@ -1119,9 +1121,11 @@ func fourProductTopologyManifest(manifest release.Manifest) release.Manifest {
 			manifest.Products[index].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
 		}
 	}
-	manifest.Images = slices.DeleteFunc(manifest.Images, func(image release.Image) bool { return image.Component == "logstash" || image.Component == "kibana" })
+	manifest.Images = slices.DeleteFunc(manifest.Images, func(image release.Image) bool {
+		return image.Component == "logstash" || image.Component == "kibana" || image.Component == "redis"
+	})
 	manifest.Files = slices.DeleteFunc(manifest.Files, func(file release.File) bool {
-		return file.Path == "images/logstash.tar" || file.Path == "images/kibana.tar"
+		return file.Path == "images/logstash.tar" || file.Path == "images/kibana.tar" || file.Path == "images/redis.tar"
 	})
 	return manifest
 }
@@ -1150,35 +1154,52 @@ func TestInstalledFourProductTopologyRemainsExactAndCannotBeANewCandidate(t *tes
 	}
 }
 
-func TestInstalledLogstashTopologyRetainsExactWorkerInputs(t *testing.T) {
-	manifest := topologyManifest()
-	manifest.Database = release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8}, ContractRevision: 40}
-	manifest.TopologyDigest = fiveManagedProductsContractDigest
-	for i := range manifest.Products {
-		if manifest.Products[i].ID == release.ProductApplicationPaaS {
-			manifest.Products[i].RequiredComponents = []string{"elasticsearch", "logstash", "mysql", "paas", "rabbitmq"}
-		}
-	}
-	manifest.Images = slices.DeleteFunc(manifest.Images, func(image release.Image) bool { return image.Component == "kibana" })
-	manifest.Files = slices.DeleteFunc(manifest.Files, func(file release.File) bool { return file.Path == "images/kibana.tar" })
-	options := Options{InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix", Listener: "127.0.0.1", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080"}
-	if _, err := Compile(manifest, options); err == nil {
-		t.Fatal("old Logstash contract became a new candidate")
-	}
-	result, err := CompileInstalled(manifest, options)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var document composeDocument
-	if json.Unmarshal(result.ComposeJSON, &document) != nil {
-		t.Fatal("invalid installed topology")
-	}
-	env := document.Services["paas-worker"].Environment
-	if env[productEndpointImagesEnvironment] == "" || env[logstashImagesEnvironment] == "" || env[kibanaImagesEnvironment] != "" {
-		t.Fatal("accepted Logstash worker inputs changed")
-	}
-	manifest.TopologyDigest = ContractDigest()
-	if _, err := CompileInstalled(manifest, options); err == nil {
-		t.Fatal("mixed old product inventory and new topology admitted")
+func TestInstalledExpandedProductTopologyRetainsExactWorkerInputs(t *testing.T) {
+	for _, count := range []int{5, 6} {
+		t.Run(strconv.Itoa(count), func(t *testing.T) {
+			manifest := topologyManifest()
+			manifest.Database = release.DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8}, ContractRevision: 40}
+			manifest.TopologyDigest = fiveManagedProductsContractDigest
+			for i := range manifest.Products {
+				if manifest.Products[i].ID == release.ProductApplicationPaaS {
+					manifest.Products[i].RequiredComponents = []string{"elasticsearch", "logstash", "mysql", "paas", "rabbitmq"}
+				}
+			}
+			if count == 6 {
+				manifest.Database = release.CurrentDatabaseProfile()
+				manifest.TopologyDigest = sixManagedProductsContractDigest
+				for i := range manifest.Products {
+					if manifest.Products[i].ID == release.ProductApplicationPaaS {
+						manifest.Products[i].RequiredComponents = []string{"elasticsearch", "kibana", "logstash", "mysql", "paas", "rabbitmq"}
+					}
+				}
+			}
+			manifest.Images = slices.DeleteFunc(manifest.Images, func(image release.Image) bool {
+				return image.Component == "redis" || count == 5 && image.Component == "kibana"
+			})
+			manifest.Files = slices.DeleteFunc(manifest.Files, func(file release.File) bool {
+				return file.Path == "images/redis.tar" || count == 5 && file.Path == "images/kibana.tar"
+			})
+			options := Options{InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix", Listener: "127.0.0.1", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080"}
+			if _, err := Compile(manifest, options); err == nil {
+				t.Fatal("installed predecessor became a new candidate")
+			}
+			result, err := CompileInstalled(manifest, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var document composeDocument
+			if json.Unmarshal(result.ComposeJSON, &document) != nil {
+				t.Fatal("invalid installed topology")
+			}
+			env := document.Services["paas-worker"].Environment
+			if env[productEndpointImagesEnvironment] == "" || env[logstashImagesEnvironment] == "" || (env[kibanaImagesEnvironment] != "") != (count == 6) || env[redisImagesEnvironment] != "" {
+				t.Fatal("accepted predecessor worker inputs changed")
+			}
+			manifest.TopologyDigest = ContractDigest()
+			if _, err := CompileInstalled(manifest, options); err == nil {
+				t.Fatal("mixed old product inventory and new topology admitted")
+			}
+		})
 	}
 }

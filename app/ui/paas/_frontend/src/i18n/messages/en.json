@@ -136,6 +136,11 @@
         "description": "Browse data and create visualizations using managed Elasticsearch",
         "keywords": "kibana elastic elk dashboard visualization data view"
       },
+      "redis": {
+        "name": "Redis cache",
+        "description": "Authenticated single-instance cache with persistence",
+        "keywords": "redis cache key value persistence 缓存 键值"
+      },
       "logstash": {
         "name": "Logstash",
         "description": "Authenticated HTTP JSON input, durable event files and instance management",
@@ -175,6 +180,7 @@
     "groups": {
       "foundation": "Cloud foundation",
       "hosting": "Application platform",
+      "cache": "Cache & key-value",
       "relational": "Relational databases",
       "searchAnalytics": "Search & analytics",
       "messageQueue": "Message queues",
@@ -3769,6 +3775,7 @@
     }
   },
   "ManagedService": {
+    "redisConnectionHint": "Connect to the endpoint with a Redis client and the business username matrix. Obtain this instance’s password from your platform administrator; your Matrix login password does not authenticate to Redis.",
     "kibanaLoginHint": "Open the endpoint in your browser and sign in with the linked Elasticsearch business account. Ask your platform administrator for that instance’s business credentials; your Matrix account cannot sign in to Kibana.",
     "elasticsearchDependency": "Elasticsearch dependency",
     "productMockBoundary": "This is an isolated UX MOCK product workspace and does not create real resources. The matching backend capability is still a candidate awaiting independent verification; this is not evidence of release, high availability, or production readiness.",

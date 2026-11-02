@@ -25,6 +25,7 @@ import (
 	localmysqladapter "github.com/xiak/matrix/app/adapter/managedservice/localmysql"
 	localpostgresadapter "github.com/xiak/matrix/app/adapter/managedservice/localpostgres"
 	localrabbitmqadapter "github.com/xiak/matrix/app/adapter/managedservice/localrabbitmq"
+	localredisadapter "github.com/xiak/matrix/app/adapter/managedservice/localredis"
 	"github.com/xiak/matrix/app/service/installation/nodeconfig"
 	"github.com/xiak/matrix/app/service/internal/processconfig"
 	"github.com/xiak/matrix/app/service/internal/processhttp"
@@ -63,6 +64,7 @@ const (
 	managedRabbitMQImageIDsEnvironment        = "MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS"
 	managedLogstashImageIDsEnvironment        = "MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS"
 	managedKibanaImageIDsEnvironment          = "MATRIX_PAAS_WORKER_MANAGED_KIBANA_IMAGE_IDS"
+	managedRedisImageIDsEnvironment           = "MATRIX_PAAS_WORKER_MANAGED_REDIS_IMAGE_IDS"
 	managedProductEndpointImageIDsEnvironment = "MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS"
 	pollInterval                              = 250 * time.Millisecond
 	executionTargetRefresh                    = time.Minute
@@ -109,6 +111,7 @@ type configuration struct {
 	managedRabbitMQImageIDs        string
 	managedLogstashImageIDs        string
 	managedKibanaImageIDs          string
+	managedRedisImageIDs           string
 	managedProductEndpointImageIDs string
 }
 
@@ -406,6 +409,18 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	managedRedisRoot, err := managedRoot("redis")
+	if err != nil {
+		return err
+	}
+	redisImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedRedisImageIDs, ","))
+	if err != nil {
+		return err
+	}
+	managedRedis, err := localredisadapter.New(localredisadapter.Config{Root: managedRedisRoot, ImageID: redisImageID, EndpointImageID: productEndpointImageID, Runtime: runtime})
+	if err != nil {
+		return err
+	}
 	providerRegistry, err := reconcileinstallation.NewProviderRegistry(
 		domain.DefaultCatalog(),
 		map[string]managedserviceadapterv1.Provisioner{
@@ -415,6 +430,7 @@ func run(ctx context.Context) (result error) {
 			domain.RabbitMQOfferingID:      managedRabbitMQ,
 			domain.LogstashOfferingID:      managedLogstash,
 			domain.KibanaOfferingID:        managedKibana,
+			domain.RedisOfferingID:         managedRedis,
 		},
 	)
 	if err != nil {
@@ -865,6 +881,7 @@ func loadConfiguration() (configuration, error) {
 		managedRabbitMQImageIDs:        os.Getenv(managedRabbitMQImageIDsEnvironment),
 		managedLogstashImageIDs:        os.Getenv(managedLogstashImageIDsEnvironment),
 		managedKibanaImageIDs:          os.Getenv(managedKibanaImageIDsEnvironment),
+		managedRedisImageIDs:           os.Getenv(managedRedisImageIDsEnvironment),
 		managedProductEndpointImageIDs: os.Getenv(managedProductEndpointImageIDsEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.workerID == "" ||
@@ -876,7 +893,7 @@ func loadConfiguration() (configuration, error) {
 		config.executionTenant == "" || config.machineBinding == "" ||
 		config.listenAddress == "" || config.managedPostgresImageIDs == "" ||
 		config.managedMySQLImageIDs == "" || config.managedMySQLEndpointImageIDs == "" || config.managedElasticsearchImageIDs == "" ||
-		config.managedRabbitMQImageIDs == "" || config.managedLogstashImageIDs == "" || config.managedKibanaImageIDs == "" || config.managedProductEndpointImageIDs == "" {
+		config.managedRabbitMQImageIDs == "" || config.managedLogstashImageIDs == "" || config.managedKibanaImageIDs == "" || config.managedRedisImageIDs == "" || config.managedProductEndpointImageIDs == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")
 	}
 	if paasv1.ValidateID("workerId", config.workerID) != nil ||

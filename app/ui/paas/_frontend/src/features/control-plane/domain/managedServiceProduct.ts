@@ -7,7 +7,8 @@ export const managedServiceProducts = [
   { id: "elasticsearch", offeringId: "elasticsearch-8.19", category: "analytics", group: "searchAnalytics", icon: "observability", glyph: "search" },
   { id: "rabbitmq", offeringId: "rabbitmq-4.1", category: "middleware", group: "messageQueue", icon: "paas", glyph: "messages" },
   { id: "logstash", offeringId: "logstash-8.19", category: "analytics", group: "logData", icon: "observability", glyph: "logs" },
-  { id: "kibana", offeringId: "kibana-8.19", category: "analytics", group: "searchAnalytics", icon: "observability", glyph: "search" }
+  { id: "kibana", offeringId: "kibana-8.19", connectionHint: "kibanaLoginHint", category: "analytics", group: "searchAnalytics", icon: "observability", glyph: "search" },
+  { id: "redis", offeringId: "redis-8.2", connectionHint: "redisConnectionHint", category: "databases", group: "cache", icon: "paas", glyph: "database" }
 ] as const;
 
 export type ManagedServiceProductId = typeof managedServiceProducts[number]["id"];

@@ -1,11 +1,11 @@
-# 产品团队接入 Matrix：以 Logstash、Kibana 为例
+# 产品团队接入 Matrix：以 Logstash、Kibana 和 Redis 为例
 
 这份手册给准备把自己的产品交给 Matrix 纳管的研发与交付团队使用。
 目标是交付能够安装、验证、恢复和删除的产品实现，并给平台团队一份可复核的验收材料。
 普通用户开通已经发布的产品，请看[托管服务使用手册](../user-guide/services-and-applications.md)。
 
-本仓库提供 Logstash、Kibana 适配器及 ELK 的真实运行验收入口，使用与 PG、MySQL
-相同的部署接口。你可以先跑通这两个例子，再交付自己的产品实现。
+本仓库提供 Logstash、Kibana 和 Redis 适配器及真实运行验收入口，使用与 PG、MySQL
+相同的部署接口。先跑通这些例子，再交付自己的产品实现。
 **控制台能否开通、哪些版本可以发布，以安装版本的目录和
 [FEAT-007 的验收状态](../features/FEAT-007-control-plane-console.md#产品团队接入契约)为准。**
 适配器测试通过后，还须由平台团队完成正式集成和发布验收。
@@ -41,12 +41,14 @@ flowchart LR
 | --- | --- | --- |
 | Logstash | 带认证的 HTTP 输入被处理并写入持久文件；重启后数据保留 | [Logstash 适配器](../../app/adapter/managedservice/locallogstash/provisioner.go) |
 | Kibana | 连接准确的同租户 Elasticsearch 依赖；通过真实接口创建、读取数据视图 | [Kibana 适配器](../../app/adapter/managedservice/localkibana/provisioner.go) |
+| Redis | 带密码读写、TTL、持久化重启；双租户隔离与独立删除 | [Redis 适配器](../../app/adapter/managedservice/localredis/provisioner.go) |
 
 Logstash 样例不依赖 Elasticsearch。Kibana 验收临时准备自己的 Elasticsearch，
 用于证明依赖管理及删除边界；不要将它替换成生产数据库。
-两种产品都验证平台部署契约，业务协议验证是其中一个环节。
+Redis 没有外部服务依赖，适合用来验证另一个产品家族也能复用相同契约。
+各产品都验证平台部署契约，业务协议验证是其中一个环节。
 
-参考实现固定为 `8.19.23`，镜像摘要统一由
+Elastic 参考实现固定为 `8.19.23`，Redis 为 `8.2.11`，镜像摘要统一由
 [制品清单](../../test/managedserviceonboarding/artifacts.json)维护。实际镜像在准备阶段加载，
 产品安装阶段使用本地不可变镜像，不临时拉取或构建。
 上游配置依据为 Elastic 的 [Logstash Docker 配置](https://www.elastic.co/guide/en/logstash/8.19/docker-config.html)
@@ -77,12 +79,18 @@ Docker 产品可以从 [Logstash 适配器](../../app/adapter/managedservice/loc
 ## 4. 明确产品配置与依赖
 
 开始编码前，双方应确认配置中哪些内容属于用户选择、哪些必须由平台解析。
-Logstash 与 Kibana 各自的适配器拥有配置与不可变绑定；运行测试直接使用这些实现。
+各产品适配器拥有配置与不可变绑定；运行测试直接使用这些实现。
 第一次安装后不能悄悄改写同一实例的配置。
 
 **Logstash 示例**采用 `http-json-file-v1`：输入协议、输出位置和处理步骤固定。
 平台生成输入认证材料，保护配置文件；测试发送一条数据，并验证处理结果落盘。
 输入请求中的认证头不会写入示例输出数据。
+
+**Redis 示例**采用 `authenticated-aof-v1`：每个实例生成自己的 `matrix` 业务账号密码，
+关闭匿名访问，限制业务账号的管理能力。测试真正读写键值、验证过期时间，确认 AOF
+落盘后重启，再检查原数据与密码仍可用。平台登录密码不能用来连接 Redis。
+产品团队须说明内存上限、满额时的写入行为，以及持久化和业务备份的区别；当前边界见
+[Redis 切片](../features/FEAT-007-control-plane-console.md#redis-接入切片)。
 
 **Kibana 示例**采用 `elasticsearch-ui-v1`，按以下顺序处理依赖：
 
@@ -127,7 +135,7 @@ Elasticsearch 的业务账号登录；Matrix 登录态和后台服务凭据都�
 如果交付承诺网络隔离，应增加两个真实租户的正反向测试，覆盖私有地址、主机发布
 入口、数据、凭据、重启和独立删除。当前可复用的验收路线及适用范围见
 [MySQL 租户隔离](../features/FEAT-007-control-plane-console.md#docker-mysql-租户隔离)。
-ELK 运行门禁分别验证 Logstash、Elasticsearch 的双作用域隔离，以及 Kibana 的私有网络
+运行门禁分别验证 Logstash、Elasticsearch、Redis 的双作用域隔离，以及 Kibana 的私有网络
 和准确依赖通路。不要因一个产品通过，就省略新产品在目标 Provider 上的验证。
 这些适配器作用域测试仍须配合真实账号、权限和删除保护验收。
 
@@ -139,7 +147,7 @@ ELK 运行门禁分别验证 Logstash、Elasticsearch 的双作用域隔离，�
 测试结束会检查实例的数据、凭据及运行资源已经清理；Kibana 删除后还会验证依赖仍可用。
 
 结果文件只有非秘密的版本、制品身份、时间、检查项和结论。
-确认测试命令成功、结果为 `PASSED`，且 ELK 的预期检查项齐全。
+确认测试命令成功、结果为 `PASSED`，且 ELK 与 Redis 的预期检查项齐全。
 默认的普通单元测试会跳过 Docker 运行；出现 `SKIP` 不能填写真实运行验收通过。
 实际样例运行必须显式开启运行门禁，缺少镜像或环境会失败。
 
@@ -173,7 +181,7 @@ Kibana 接入中断后，按结果选择恢复动作：
 | 产品定义、规格与开通/实例契约 | [managed-service API](../../api/managedservice/v1/README.md)、[目录](../../app/service/paas/internal/managedservice/domain/catalog.go)；数据库规格与版本约束从目录生成，无需另写产品名单 |
 | 配置解析、依赖授权与持久化 | [managedservice 业务实现](../../app/service/paas/internal/managedservice)、[权限接入要求](../features/iam/FEAT-IAM-008-product-enforcement.md) |
 | 目录与运行实现一一对应 | [worker 组装](../../app/service/paas/cmd/matrix-paas-worker/main.go)、[注册校验](../../app/service/paas/internal/managedservice/usecase/reconcileinstallation/providers.go) |
-| 产品入口与真实页面 | [产品描述](../../app/ui/paas/_frontend/src/features/control-plane/domain/managedServiceProduct.ts)统一登记路由、发现入口、导航与图标；配套中英文说明由同一前端维护 |
+| 产品入口与真实页面 | [产品描述](../../app/ui/paas/_frontend/src/features/control-plane/domain/managedServiceProduct.ts)统一登记路由、发现入口、导航、图标与连接提示；配套中英文说明由同一前端维护 |
 | 固定制品、安装与恢复 | [发布组装](../../deploy/releasebuild)、[生命周期 owner](../features/FEAT-005-offline-platform-lifecycle.md) |
 
 只新增目录项会被运行实现校验拒绝。只放入镜像或增加页面，也不能完成接入。
@@ -188,6 +196,6 @@ Kibana 接入中断后，按结果选择恢复动作：
 以下状态应分别记录：**样例已验证 → 集成待验收 → 发布已验收**。
 交接时核对当前源码、当前报告和私有候选与正式发布的边界，
 不能只读取适配器报告中的 `PASSED`。
-ELK 完成正式纳管后，将用 Redis 复用
-同一条接入路径，验证它也适用于另一种产品家族。未完成验收的产品不显示为已发布。
+Redis 沿用同一条接入路径，不需要新增 IAM 求值、配额或任务工作流。
+是否已完成平台与发布验收仍以 owning FEAT 为准，不能从目录存在推导已发布。
 HA、产品引擎升级、业务数据备份和任意 Pipeline 编辑需要各自的明确接入范围。

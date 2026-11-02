@@ -8,8 +8,10 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,7 +34,7 @@ func run(pull bool) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Minute)
 	defer cancel()
-	for _, product := range []string{"elasticsearch", "logstash", "kibana"} {
+	for _, product := range slices.Sorted(maps.Keys(artifacts)) {
 		reference := artifacts[product]
 		if pull {
 			command := exec.CommandContext(ctx, "docker", "pull", "--platform", "linux/amd64", reference)

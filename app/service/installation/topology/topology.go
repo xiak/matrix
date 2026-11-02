@@ -45,6 +45,8 @@ const mysqlEndpointImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOIN
 const productEndpointImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS"
 const logstashImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS"
 const kibanaImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_KIBANA_IMAGE_IDS"
+const redisImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_REDIS_IMAGE_IDS"
+const sixManagedProductsContractDigest = "sha256:a5e88ed17c95e286c9b028d10a669f459f2c280612bc37314fbcf152ec840c6c"
 const fiveManagedProductsContractDigest = "sha256:14d8147b81e9a642c798a6a043c56265d770c0b433e9146729a022291aaaf52d"
 
 // Installed handbook.5 already uses isolated MySQL, without Logstash.
@@ -237,8 +239,17 @@ func ValidateInstalledContract(manifest release.Manifest) error {
 		return errors.New("installed release manifest contract is unsupported")
 	}
 	expected := ContractDigest()
+	if release.IsSixManagedProductsManifest(manifest) {
+		previous := contractDescription()
+		delete(previous.Compose.Services["paas-worker"].Environment, redisImagesEnvironment)
+		expected = sixManagedProductsContractDigest
+		if contractDescriptionDigest(previous) != expected {
+			return errors.New("installed ELK topology implementation is unsupported")
+		}
+	}
 	if release.IsFiveManagedProductsManifest(manifest) {
 		previous := contractDescription()
+		delete(previous.Compose.Services["paas-worker"].Environment, redisImagesEnvironment)
 		delete(previous.Compose.Services["paas-worker"].Environment, kibanaImagesEnvironment)
 		expected = fiveManagedProductsContractDigest
 		if contractDescriptionDigest(previous) != expected {
@@ -247,6 +258,7 @@ func ValidateInstalledContract(manifest release.Manifest) error {
 	}
 	if release.IsFourManagedProductsManifest(manifest) {
 		previous := contractDescription()
+		delete(previous.Compose.Services["paas-worker"].Environment, redisImagesEnvironment)
 		delete(previous.Compose.Services["paas-worker"].Environment, kibanaImagesEnvironment)
 		delete(previous.Compose.Services["paas-worker"].Environment, logstashImagesEnvironment)
 		delete(previous.Compose.Services["paas-worker"].Environment, productEndpointImagesEnvironment)
@@ -279,7 +291,7 @@ func CompileInstalled(manifest release.Manifest, options Options) (Result, error
 		return Result{}, err
 	}
 	if !release.IsLegacyProductlessManifest(manifest) {
-		if release.IsFiveManagedProductsManifest(manifest) {
+		if release.IsFiveManagedProductsManifest(manifest) || release.IsSixManagedProductsManifest(manifest) {
 			return compileProductTopology(manifest, options, true)
 		}
 		if release.IsFourManagedProductsManifest(manifest) {
@@ -775,7 +787,7 @@ func compileServices(
 				if images["logstash"] != "" {
 					paasWorker.Environment[productEndpointImagesEnvironment] = strings.Join(image.RuntimeImageIDs(), ",")
 				}
-			case "postgres", "mysql", "elasticsearch", "rabbitmq", "logstash", "kibana":
+			case "postgres", "mysql", "elasticsearch", "rabbitmq", "logstash", "kibana", "redis":
 				paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_"+strings.ToUpper(image.Component)+"_IMAGE_IDS"] =
 					strings.Join(image.RuntimeImageIDs(), ",")
 			}

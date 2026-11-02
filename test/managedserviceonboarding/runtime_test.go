@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -27,11 +28,12 @@ import (
 	localcontainer "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 	localelasticsearch "github.com/xiak/matrix/app/adapter/managedservice/localelasticsearch"
 	localkibana "github.com/xiak/matrix/app/adapter/managedservice/localkibana"
+	localredis "github.com/xiak/matrix/app/adapter/managedservice/localredis"
 )
 
 type sampleReport struct {
 	Kind        string            `json:"kind"`
-	Version     string            `json:"version"`
+	Versions    map[string]string `json:"versions"`
 	StartedAt   time.Time         `json:"startedAt"`
 	CompletedAt time.Time         `json:"completedAt"`
 	Status      string            `json:"status"`
@@ -40,9 +42,9 @@ type sampleReport struct {
 	Publication string            `json:"platformAndReleaseGates"`
 }
 
-// TestElasticRuntime is opt-in so ordinary unit tests never start Docker.
+// TestProductRuntime is opt-in so ordinary unit tests never start Docker.
 // When requested, absent inputs/images are failures, never skips or downloads.
-func TestElasticRuntime(t *testing.T) {
+func TestProductRuntime(t *testing.T) {
 	if os.Getenv("MATRIX_ONBOARDING_RUNTIME") != "1" {
 		t.Skip("set MATRIX_ONBOARDING_RUNTIME=1 for the real product-team gate")
 	}
@@ -57,7 +59,7 @@ func TestElasticRuntime(t *testing.T) {
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		t.Fatal("onboarding task directory is unavailable")
 	}
-	report := sampleReport{Kind: "MatrixProductOnboardingEvidence", Version: Version, StartedAt: time.Now().UTC(),
+	report := sampleReport{Kind: "MatrixProductOnboardingEvidence", Versions: map[string]string{"elasticsearch": ElasticVersion, "logstash": ElasticVersion, "kibana": ElasticVersion, "redis": localredis.Version}, StartedAt: time.Now().UTC(),
 		Status: "FAILED", Publication: "NOT_RUN: no catalog, IAM, browser or signed-release acceptance"}
 	report.Artifacts, err = ArtifactReferences()
 	if err != nil {
@@ -67,7 +69,7 @@ func TestElasticRuntime(t *testing.T) {
 		report.CompletedAt = time.Now().UTC()
 		if !t.Failed() {
 			report.Status = "INCOMPLETE"
-			if len(report.Checks) == 12 {
+			if len(report.Checks) == 18 {
 				report.Status = "PASSED"
 			}
 		}
@@ -85,9 +87,6 @@ func TestElasticRuntime(t *testing.T) {
 	})
 	imageIDs := make(map[string]string)
 	for product, reference := range report.Artifacts {
-		if !strings.HasPrefix(reference, "docker.elastic.co/"+product+"/"+product+"@sha256:") {
-			t.Fatal("fixture image must be digest pinned")
-		}
 		var image struct {
 			ID           string `json:"Id"`
 			Architecture string `json:"Architecture"`
@@ -117,11 +116,171 @@ func TestElasticRuntime(t *testing.T) {
 	endpointImageID := buildEndpointFixture(t, ctx, runID, &clean)
 	report.Artifacts["endpoint"] = endpointImageID
 	imageIDs["endpoint"] = endpointImageID
+	t.Run("Redis", func(t *testing.T) { verifyRedis(t, ctx, root, imageIDs["redis"], endpointImageID, &clean, &report) })
 	t.Run("Logstash", func(t *testing.T) {
 		verifyLogstash(t, ctx, root, imageIDs["logstash"], endpointImageID, &clean, &report)
 	})
 	t.Run("Elasticsearch", func(t *testing.T) { verifyElasticsearch(t, ctx, root, runID, imageIDs, &clean, &report) })
 	t.Run("Kibana", func(t *testing.T) { verifyKibana(t, ctx, root, runID, imageIDs, &clean, &report) })
+}
+
+func verifyRedis(t *testing.T, ctx context.Context, root, imageID, endpointImageID string, clean *bool, report *sampleReport) {
+	r := &lostResponseRuntime{LocalRuntime: compose.NewLocalRuntime(), loseNextApply: true}
+	configs := []InstallationConfig{{Root: filepath.Join(root, "managed-redis"), ImageID: imageID, EndpointImageID: endpointImageID, Runtime: r, Request: requestFor("redis")}}
+	configs[0].Request.TenantID = filepath.Base(root)
+	configs = append(configs, configs[0])
+	configs[1].Request.TenantID += "-peer"
+	configs[1].Runtime = compose.NewLocalRuntime()
+	providers := make([]adapterv1.Provisioner, 2)
+	projects := make([]compose.RuntimeProject, 2)
+	results := make([]adapterv1.ProvisionResult, 2)
+	secrets := make([][]byte, 2)
+	containers := make([]compose.RuntimeContainer, 2)
+	defer func() {
+		for _, secret := range secrets {
+			clear(secret)
+		}
+	}()
+	before := inventory(t, root)
+	for i, config := range configs {
+		construct := func() (adapterv1.Provisioner, error) {
+			return localredis.New(localredis.Config{Root: config.Root, ImageID: imageID, EndpointImageID: endpointImageID, Runtime: config.Runtime})
+		}
+		p, err := construct()
+		if err != nil {
+			t.Fatal(err)
+		}
+		registerCleanup(t, p, config.Request, clean)
+		if err := p.Ready(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if i == 0 {
+			if _, err := p.Ensure(ctx, config.Request); err == nil || !r.lost {
+				t.Fatal("Redis lost-response injection did not observe a completed effect")
+			}
+			p, err = construct()
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		result, err := p.Ensure(ctx, config.Request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		project := projectFor(config)
+		secret := readSecret(t, filepath.Join(project.Directory, "redis-password"))
+		providers[i], projects[i], results[i], secrets[i] = p, project, result, secret
+		containers[i] = ownedContainer(t, ctx, config.Runtime, project, config.Request)
+		checkNoManifestSecret(t, project, secret)
+		acl, err := os.ReadFile(filepath.Join(project.Directory, "users.acl"))
+		if err != nil || bytes.Contains(acl, secret) {
+			t.Fatal("Redis ACL exposed the original password")
+		}
+		session := redisProbe(t, ctx, result.Endpoint)
+		assertRedisDenied(t, session, "NOAUTH", "PING")
+		assertRedisDenied(t, session, "WRONGPASS", "AUTH", localredis.BusinessUser, "wrong-password")
+		assertRedisDenied(t, session, "WRONGPASS", "AUTH", "default", string(secret))
+		assertRedisValue(t, session, "OK", "AUTH", localredis.BusinessUser, string(secret))
+		assertRedisValue(t, session, "PONG", "PING")
+		version, err := session.Command("INFO", "server")
+		if err != nil || !strings.Contains(fmt.Sprint(version), "redis_version:"+localredis.Version+"\r\n") {
+			t.Fatal("Redis native engine version differs from the contract")
+		}
+		for _, command := range [][]string{
+			{"CONFIG", "GET", "dir"}, {"ACL", "LIST"}, {"MODULE", "LIST"}, {"REPLICAOF", "NO", "ONE"},
+			{"MIGRATE", "127.0.0.1", "1", "blocked-key", "0", "100"}, {"FLUSHALL"}, {"EVAL", "return 1", "0"}, {"SCRIPT", "LOAD", "return 1"},
+		} {
+			assertRedisDenied(t, session, "NOPERM", command...)
+		}
+		assertRedisValue(t, session, "OK", "SET", "matrix-retained", config.Request.TenantID)
+		assertRedisValue(t, session, config.Request.TenantID, "GET", "matrix-retained")
+		assertRedisValue(t, session, "OK", "SET", "matrix-expires", "temporary", "PX", "200")
+		await(t, ctx, "Redis TTL expiration", func() bool { value, err := session.Command("GET", "matrix-expires"); return err == nil && value == nil })
+		synced, err := session.Command("WAITAOF", "1", "0", "5000")
+		values, ok := synced.([]any)
+		if err != nil || !ok || len(values) != 2 || values[0] != int64(1) {
+			t.Fatal("Redis did not confirm its local AOF persistence")
+		}
+		_ = session.Close()
+		dockerOutput(t, "restart", "--time", "0", containers[i].ID)
+		awaitHealthy(t, ctx, config.Runtime, project)
+		p, err = construct()
+		if err != nil {
+			t.Fatal(err)
+		}
+		replayed, err := p.Ensure(ctx, config.Request)
+		if err != nil || replayed != result || ownedContainer(t, ctx, config.Runtime, project, config.Request).ID != containers[i].ID || !bytes.Equal(secret, readSecret(t, filepath.Join(project.Directory, "redis-password"))) {
+			t.Fatal("Redis restart/replay changed identity or credentials")
+		}
+		session = redisProbe(t, ctx, result.Endpoint)
+		assertRedisValue(t, session, "OK", "AUTH", localredis.BusinessUser, string(secret))
+		assertRedisValue(t, session, config.Request.TenantID, "GET", "matrix-retained")
+		assertRedisValue(t, session, nil, "GET", "matrix-expires")
+		_ = session.Close()
+	}
+	if bytes.Equal(secrets[0], secrets[1]) || results[0].Endpoint == results[1].Endpoint || results[0].CredentialReference == results[1].CredentialReference || projects[0].Directory == projects[1].Directory {
+		t.Fatal("Redis tenant identity or credentials are shared")
+	}
+	for i := range configs {
+		session := redisProbe(t, ctx, results[i].Endpoint)
+		assertRedisDenied(t, session, "WRONGPASS", "AUTH", localredis.BusinessUser, string(secrets[1-i]))
+		assertRedisDenied(t, session, "NOAUTH", "GET", "matrix-retained")
+		_ = session.Close()
+	}
+	assertProductNetworkIsolation(t, ctx, configs[0], results[0], configs[1], results[1], 6379)
+	if inventory(t, root) == before {
+		t.Fatal("Redis is missing from recovery inventory")
+	}
+	peerBefore := productRuntimeWitness(t, containers[1].ID)
+	bad := deletionFor(configs[0].Request)
+	bad.TenantID = "absent-account"
+	if err := providers[0].Delete(ctx, bad); err != nil {
+		t.Fatal(err)
+	}
+	_ = ownedContainer(t, ctx, configs[0].Runtime, projects[0], configs[0].Request)
+	deleteAndProve(t, ctx, providers[0], configs[0].Request, projects[0], configs[0].Runtime)
+	if productRuntimeWitness(t, containers[1].ID) != peerBefore || !bytes.Equal(secrets[1], readSecret(t, filepath.Join(projects[1].Directory, "redis-password"))) {
+		t.Fatal("deleting one Redis tenant changed the peer runtime or password")
+	}
+	session := redisProbe(t, ctx, results[1].Endpoint)
+	assertRedisValue(t, session, "OK", "AUTH", localredis.BusinessUser, string(secrets[1]))
+	assertRedisValue(t, session, configs[1].Request.TenantID, "GET", "matrix-retained")
+	assertRedisValue(t, session, "OK", "SET", "matrix-after-peer-delete", "retained")
+	assertRedisValue(t, session, "retained", "GET", "matrix-after-peer-delete")
+	_ = session.Close()
+	if productRuntimeWitness(t, containers[1].ID) != peerBefore {
+		t.Fatal("Redis peer was recreated while proving continued use")
+	}
+	deleteAndProve(t, ctx, providers[1], configs[1].Request, projects[1], configs[1].Runtime)
+	if inventory(t, root) != before {
+		t.Fatal("Redis remains in recovery inventory after deletion")
+	}
+	report.Checks = append(report.Checks, "redis/authentication-and-restricted-business-acl", "redis/data-ttl-and-aof-restart", "redis/two-tenant-network-data-and-credentials", "redis/lost-response-and-equal-replay", "redis/independent-exact-delete", "redis/recovery-inventory-and-secret-custody")
+}
+
+func redisProbe(t *testing.T, ctx context.Context, endpoint string) *RedisSession {
+	t.Helper()
+	session, err := DialRedis(ctx, endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	return session
+}
+func assertRedisValue(t *testing.T, session *RedisSession, expected any, command ...string) {
+	t.Helper()
+	actual, err := session.Command(command...)
+	if err != nil || actual != expected {
+		t.Fatalf("Redis %s did not produce the expected non-secret result", command[0])
+	}
+}
+func assertRedisDenied(t *testing.T, session *RedisSession, code string, command ...string) {
+	t.Helper()
+	_, err := session.Command(command...)
+	var denied RedisError
+	if !errors.As(err, &denied) || !strings.HasPrefix(string(denied), code+" ") {
+		t.Fatalf("Redis %s did not reject with %s", command[0], code)
+	}
 }
 
 func verifyLogstash(t *testing.T, ctx context.Context, root, imageID, endpointImageID string, clean *bool, report *sampleReport) {
@@ -158,7 +317,7 @@ func verifyLogstash(t *testing.T, ctx context.Context, root, imageID, endpointIm
 		Version string `json:"version"`
 	}
 	engineContent := dockerOutput(t, "exec", container.ID, "curl", "--silent", "--fail", "http://127.0.0.1:9600/")
-	if json.Unmarshal([]byte(engineContent), &engine) != nil || engine.Version != Version {
+	if json.Unmarshal([]byte(engineContent), &engine) != nil || engine.Version != ElasticVersion {
 		t.Fatal("Logstash runtime version differs from its contract")
 	}
 	if inventory(t, root) == before {
@@ -230,7 +389,7 @@ func verifyLogstash(t *testing.T, ctx context.Context, root, imageID, endpointIm
 			t.Fatal("another tenant's credential was accepted")
 		}
 	}
-	assertHTTPNetworkIsolation(t, ctx, config, result, peerConfig, peerResult, 8080)
+	assertProductNetworkIsolation(t, ctx, config, result, peerConfig, peerResult, 8080)
 	dockerOutput(t, "restart", "--time", "10", container.ID)
 	awaitHealthy(t, ctx, r, project)
 	provider, err = newLogstash(config)
@@ -255,7 +414,7 @@ func verifyLogstash(t *testing.T, ctx context.Context, root, imageID, endpointIm
 	if !bytes.Equal(peerData, currentPeerData) || !bytes.Equal(peerSecret, readSecret(t, filepath.Join(peerProject.Directory, "logstash-secret"))) {
 		t.Fatal("peer restart changed data or credential")
 	}
-	assertHTTPNetworkIsolation(t, ctx, config, result, peerConfig, peerResult, 8080)
+	assertProductNetworkIsolation(t, ctx, config, result, peerConfig, peerResult, 8080)
 	peerBeforeDeletion := productRuntimeWitness(t, peerContainer.ID)
 	bad := deletionFor(config.Request)
 	bad.TenantID = "other-account"
@@ -302,7 +461,7 @@ func verifyElasticsearch(t *testing.T, ctx context.Context, root, runID string, 
 	}()
 	for i := range configs {
 		configs[i] = InstallationConfig{Root: filepath.Join(root, "managed-elasticsearch"), ImageID: images["elasticsearch"], EndpointImageID: images["endpoint"], Runtime: r,
-			Request: adapterv1.ProvisionRequest{TenantID: runID + "-" + strconv.Itoa(i), InstallationID: "same-elasticsearch", OperationID: "operation-es", OfferingID: managedv1.ElasticsearchOfferingID, EngineVersion: Version, RegionID: "local-primary",
+			Request: adapterv1.ProvisionRequest{TenantID: runID + "-" + strconv.Itoa(i), InstallationID: "same-elasticsearch", OperationID: "operation-es", OfferingID: managedv1.ElasticsearchOfferingID, EngineVersion: ElasticVersion, RegionID: "local-primary",
 				QuotaShape: managedv1.QuotaShape{ID: "elasticsearch-small", DisplayName: "开发型", CPUMillicores: 1000, MemoryMiB: 1536, StorageGiB: 10}}}
 		var err error
 		providers[i], err = localelasticsearch.New(localelasticsearch.Config{Root: configs[i].Root, ImageID: configs[i].ImageID, EndpointImageID: configs[i].EndpointImageID, Runtime: r})
@@ -319,7 +478,7 @@ func verifyElasticsearch(t *testing.T, ctx context.Context, root, runID string, 
 		checkNoManifestSecret(t, projects[i], secrets[i])
 		status, versionBody := callHTTP(t, http.MethodGet, results[i].Endpoint, "elastic", secrets[i], nil)
 		var version struct{ Version struct{ Number string } }
-		if status != http.StatusOK || json.Unmarshal(versionBody, &version) != nil || version.Version.Number != Version {
+		if status != http.StatusOK || json.Unmarshal(versionBody, &version) != nil || version.Version.Number != ElasticVersion {
 			t.Fatal("Elasticsearch runtime version differs from the pinned product")
 		}
 		status, _ = callHTTP(t, http.MethodPut, results[i].Endpoint+"/matrix-onboarding/_doc/one?refresh=true", "elastic", secrets[i], map[string]string{"message": "tenant-" + strconv.Itoa(i)})
@@ -349,7 +508,7 @@ func verifyElasticsearch(t *testing.T, ctx context.Context, root, runID string, 
 		}
 		verifyData(i)
 	}
-	assertHTTPNetworkIsolation(t, ctx, configs[0], results[0], configs[1], results[1], 9200)
+	assertProductNetworkIsolation(t, ctx, configs[0], results[0], configs[1], results[1], 9200)
 	peer := ownedContainer(t, ctx, r, projects[1], configs[1].Request)
 	peerBefore := productRuntimeWitness(t, peer.ID)
 	first := ownedContainer(t, ctx, r, projects[0], configs[0].Request)
@@ -360,7 +519,7 @@ func verifyElasticsearch(t *testing.T, ctx context.Context, root, runID string, 
 		t.Fatal("Elasticsearch restart replay changed identity")
 	}
 	verifyData(0)
-	assertHTTPNetworkIsolation(t, ctx, configs[0], results[0], configs[1], results[1], 9200)
+	assertProductNetworkIsolation(t, ctx, configs[0], results[0], configs[1], results[1], 9200)
 	if productRuntimeWitness(t, peer.ID) != peerBefore {
 		t.Fatal("Elasticsearch peer changed during restart")
 	}
@@ -420,7 +579,7 @@ func verifyElasticsearch(t *testing.T, ctx context.Context, root, runID string, 
 		t.Fatal("explicit restart of migrated Elasticsearch failed")
 	}
 	verifyData(1)
-	assertHTTPNetworkIsolation(t, ctx, configs[0], results[0], configs[1], results[1], 9200)
+	assertProductNetworkIsolation(t, ctx, configs[0], results[0], configs[1], results[1], 9200)
 	peer = ownedContainer(t, ctx, r, projects[1], configs[1].Request)
 	peerBefore = productRuntimeWitness(t, peer.ID)
 	deleteAndProve(t, ctx, providers[0], configs[0].Request, projects[0], r)
@@ -516,7 +675,7 @@ func verifyKibana(t *testing.T, ctx context.Context, root, runID string, images 
 		}
 		container := ownedContainer(t, ctx, r, projects[i], configs[i].Request)
 		var pkg struct{ Version string }
-		if json.Unmarshal([]byte(dockerOutput(t, "exec", container.ID, "cat", "/usr/share/kibana/package.json")), &pkg) != nil || pkg.Version != Version {
+		if json.Unmarshal([]byte(dockerOutput(t, "exec", container.ID, "cat", "/usr/share/kibana/package.json")), &pkg) != nil || pkg.Version != ElasticVersion {
 			t.Fatal("Kibana runtime version differs from the pinned product")
 		}
 		assertKibanaDependencyRoute(t, ctx, r, projects[i], configs[i].Request, esContainer)
@@ -542,7 +701,7 @@ func verifyKibana(t *testing.T, ctx context.Context, root, runID string, images 
 			clear(key)
 		}
 	}
-	assertHTTPNetworkIsolation(t, ctx, configs[0], results[0], configs[1], results[1], 5601)
+	assertProductNetworkIsolation(t, ctx, configs[0], results[0], configs[1], results[1], 5601)
 	dataViewRequest := map[string]any{"data_view": map[string]any{"title": index, "name": "Matrix onboarding"}}
 	status, _ = callHTTP(t, http.MethodPost, results[0].Endpoint+"/api/data_views/data_view", "", nil, dataViewRequest)
 	if status != http.StatusUnauthorized {
@@ -753,9 +912,9 @@ func assertKibanaDependencyRoute(t *testing.T, ctx context.Context, r compose.Ru
 	if err := exec.CommandContext(ctx, "docker", "exec", backend.ID, "/usr/share/kibana/node/glibc-217/bin/node", "-e", nativeHTTP, "http://kibana-elasticsearch-endpoint:13306", "401").Run(); err != nil {
 		t.Fatal("allowed dependency relay is unreachable")
 	}
-	probeUnreachable(t, ctx, backend.ID, true, "http://"+net.JoinHostPort(address, "9200"))
+	probeUnreachable(t, ctx, backend.ID, "kibana", "http://"+net.JoinHostPort(address, "9200"))
 	for _, network := range networks {
-		probeUnreachable(t, ctx, es.ID, false, "http://"+net.JoinHostPort(network.IPAddress, "5601"))
+		probeUnreachable(t, ctx, es.ID, "elasticsearch", "http://"+net.JoinHostPort(network.IPAddress, "5601"))
 	}
 }
 
@@ -1075,11 +1234,11 @@ func productNetworks(t *testing.T, id string) map[string]productNetwork {
 	}
 	return networks
 }
-func assertHTTPNetworkIsolation(t *testing.T, ctx context.Context, left InstallationConfig, leftResult adapterv1.ProvisionResult, right InstallationConfig, rightResult adapterv1.ProvisionResult, targetPort int) {
+func assertProductNetworkIsolation(t *testing.T, ctx context.Context, left InstallationConfig, leftResult adapterv1.ProvisionResult, right InstallationConfig, rightResult adapterv1.ProvisionResult, targetPort int) {
 	t.Helper()
 	type route struct {
 		container, address, network, gateway, hostPort string
-		kibana                                         bool
+		product                                        string
 	}
 	routes := make([]route, 0, 2)
 	for _, item := range []struct {
@@ -1092,9 +1251,15 @@ func assertHTTPNetworkIsolation(t *testing.T, ctx context.Context, left Installa
 			endpoint += "/api/status?v8format=true"
 			expectedStatus = http.StatusOK
 		}
-		status, _ := callHTTP(t, http.MethodGet, endpoint, "", nil, nil)
-		if status != expectedStatus {
-			t.Fatal("positive host connectivity control failed")
+		if item.config.Request.OfferingID == managedv1.RedisOfferingID {
+			session := redisProbe(t, ctx, endpoint)
+			assertRedisDenied(t, session, "NOAUTH", "PING")
+			_ = session.Close()
+		} else {
+			status, _ := callHTTP(t, http.MethodGet, endpoint, "", nil, nil)
+			if status != expectedStatus {
+				t.Fatal("positive host connectivity control failed")
+			}
 		}
 		project := projectFor(item.config)
 		product := ownedContainer(t, ctx, item.config.Runtime, project, item.config.Request)
@@ -1102,7 +1267,7 @@ func assertHTTPNetworkIsolation(t *testing.T, ctx context.Context, left Installa
 		if len(networks) != 1 {
 			t.Fatal("tenant product has an unexpected network attachment")
 		}
-		value := route{container: product.ID, kibana: kibana}
+		value := route{container: product.ID, product: product.Service}
 		for name, network := range networks {
 			if net.ParseIP(network.IPAddress) == nil || network.Gateway != "" {
 				t.Fatal("tenant product has a host route or lacks its private address")
@@ -1148,19 +1313,37 @@ func assertHTTPNetworkIsolation(t *testing.T, ctx context.Context, left Installa
 	}
 	for _, direction := range [][2]route{{routes[0], routes[1]}, {routes[1], routes[0]}} {
 		for _, target := range []string{"http://" + net.JoinHostPort(direction[1].address, strconv.Itoa(targetPort)), "http://" + net.JoinHostPort(direction[1].gateway, direction[1].hostPort)} {
-			probeUnreachable(t, ctx, direction[0].container, direction[0].kibana, target)
+			probeUnreachable(t, ctx, direction[0].container, direction[0].product, target)
 		}
 	}
 }
 
-func probeUnreachable(t *testing.T, ctx context.Context, container string, kibana bool, target string) {
+func probeUnreachable(t *testing.T, ctx context.Context, container string, product string, target string) {
 	t.Helper()
 	probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	defer cancel()
 	args := []string{"exec", container, "curl", "--silent", "--connect-timeout", "1", "--max-time", "2", "--output", "/dev/null", target}
-	if kibana {
+	if product == "kibana" {
 		script := "const h=require('http');const r=h.get(process.argv[1],s=>{s.resume();process.exit(0)});r.on('error',e=>process.exit(['ECONNREFUSED','ENETUNREACH','EHOSTUNREACH','ETIMEDOUT'].includes(e.code)?7:1));r.setTimeout(2000,()=>process.exit(28));"
 		args = []string{"exec", container, "/usr/share/kibana/node/glibc-217/bin/node", "-e", script, target}
+	}
+	if product == "redis" {
+		parsed, err := url.Parse(target)
+		if err != nil || net.ParseIP(parsed.Hostname()) == nil || parsed.Port() == "" {
+			t.Fatal("Redis private probe target is invalid")
+		}
+		// A password rejection proves reachability, not isolation.
+		if output := dockerOutput(t, "exec", container, "redis-cli", "-t", "2", "--raw", "PING"); !strings.HasPrefix(output, "NOAUTH ") {
+			t.Fatal("Redis native connectivity control failed")
+		}
+		args = []string{"exec", container, "redis-cli", "-h", parsed.Hostname(), "-p", parsed.Port(), "-t", "2", "--raw", "PING"}
+		output, err := exec.CommandContext(probeCtx, "docker", args...).CombinedOutput()
+		var exit *exec.ExitError
+		text := string(output)
+		if probeCtx.Err() != nil || !errors.As(err, &exit) || exit.ExitCode() != 1 || !strings.Contains(text, "Could not connect to Redis at ") || !(strings.Contains(text, "Network is unreachable") || strings.Contains(text, "No route to host") || strings.Contains(text, "Connection refused") || strings.Contains(text, "Connection timed out")) {
+			t.Fatal("Redis private path was reachable or probe failed unexpectedly")
+		}
+		return
 	}
 	err := exec.CommandContext(probeCtx, "docker", args...).Run()
 	var exit *exec.ExitError

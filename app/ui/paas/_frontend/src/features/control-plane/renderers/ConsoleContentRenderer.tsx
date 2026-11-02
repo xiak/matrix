@@ -52,7 +52,7 @@ import type {
 } from "../domain/serviceAuthorization";
 import type { InstallationReadLoad, InstallationTerminationIntent, ServiceInstallation, ServiceOffering } from "../domain/resources";
 import { managedProductIcons } from "./ServiceDirectory";
-import { isManagedServiceProductId } from "../domain/managedServiceProduct";
+import { isManagedServiceProductId, managedServiceProducts } from "../domain/managedServiceProduct";
 import { consoleRouteHref } from "../domain/selection";
 
 type InstallationDetailLoad =
@@ -598,6 +598,8 @@ function InstallationContent({ scene, preview, accountId }: {
   const selected = selectedSummary && detailLoad.status === "ready"
     ? installationDetailScene(selectedSummary, detailLoad.installation)
     : selectedSummary;
+  const product = managedServiceProducts.find((item) => item.offeringId === selected?.offeringId);
+  const connectionHint = product && "connectionHint" in product ? product.connectionHint : undefined;
   const selectedId = selected?.id;
   const observedCommand = managedServiceCommand?.result;
   const openedResourceVersion = selectedSummary?.resourceVersion ?? 0;
@@ -717,7 +719,7 @@ function InstallationContent({ scene, preview, accountId }: {
           <div><dt>{t("createdAt")}</dt><dd>{format.timestamp(selected.createdAt)}</dd></div>
           {selected.safeFailureCode ? <div><dt>{t("safeFailureCode")}</dt><dd><Typography.Code>{selected.safeFailureCode}</Typography.Code></dd></div> : null}
         </dl>
-        {selected.offeringId === "kibana-8.19" && selected.phase === "READY" ? <Alert>{t("kibanaLoginHint")}</Alert> : null}
+        {connectionHint && selected.phase === "READY" ? <Alert>{t(connectionHint)}</Alert> : null}
         {preview && accountId ? <Card className={styles.authorizationCard}>
           <Card.Header className={styles.authorizationHeading}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Eyebrow>{t("authorizationEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t("serviceAuthorization")}</Typography.Title><Typography.Text tone="muted">{t("serviceAuthorizationHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
           <Card.Body className={styles.authorizationBody}>

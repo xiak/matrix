@@ -295,11 +295,12 @@ func allowedBinaryPackage(value string) bool {
 }
 
 func allowedImageReference(value string) bool {
-	return value == APISIXBasePinnedReference || value == AlpineBasePinnedReference ||
-		value == DockerBasePinnedReference || value == PostgresPinnedReference ||
-		value == MySQLPinnedReference || value == ElasticsearchPinnedReference ||
-		value == RabbitMQPinnedReference || value == LogstashPinnedReference || value == KibanaPinnedReference || value == RunnerToolchainReference ||
-		buildTagPattern.MatchString(value)
+	for _, specification := range baseImageSpecifications {
+		if value == specification.reference {
+			return true
+		}
+	}
+	return buildTagPattern.MatchString(value)
 }
 
 func compareVersion(left, right string) int {

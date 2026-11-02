@@ -73,8 +73,8 @@ describe("ProductLauncher", () => {
   });
 
   it("shows unsupported backend services honestly without inventing a destination", async () => {
-    await openDirectory({ preview: false, readServiceDefinitions: vi.fn().mockResolvedValue(liveDirectory(["redis"])) });
-    expect(await screen.findByText("后端 redis")).toBeTruthy();
+    await openDirectory({ preview: false, readServiceDefinitions: vi.fn().mockResolvedValue(liveDirectory(["unregistered-service"])) });
+    expect(await screen.findByText("后端 unregistered-service")).toBeTruthy();
     expect(screen.getByText("当前控制台尚未接入此服务页面。")).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("4 项服务");
     expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(3);
@@ -150,7 +150,8 @@ describe("ProductLauncher", () => {
     const { user, search } = await openDirectory();
     const categories = within(screen.getByRole("navigation", { name: "服务分类" }));
     await user.click(categories.getByRole("button", { name: /^数据库/ }));
-    expect(screen.getByRole("status").textContent).toBe("2 项服务");
+    expect(screen.getByRole("status").textContent).toBe("3 项服务");
+    expect(screen.getByRole("link", { name: /Redis 缓存/ }).getAttribute("href")).toBe("/console/products/redis/");
     expect(screen.queryByRole("link", { name: /研发效能 DevOps/ })).toBeNull();
     await user.type(search, "ci/cd");
     expect(screen.getByRole("link", { name: /研发效能 DevOps/ })).toBeTruthy();

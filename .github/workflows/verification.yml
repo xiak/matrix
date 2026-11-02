@@ -469,6 +469,7 @@ jobs:
           rabbitmq_image='rabbitmq:4.1.8@sha256:a82b5a24f4434a33cd15e1e47c444d1e07440261358e46c179539998557d4e29'
           logstash_image='docker.elastic.co/logstash/logstash:8.19.23@sha256:a77c29e406ddc6311b302703889f0953b5620dd5aa2445b0cdbcf7f88e285766'
           kibana_image='docker.elastic.co/kibana/kibana:8.19.23@sha256:920b24f689833d34205f426f5359864378a572e829c53016073f0a6837c2e995'
+          redis_image='redis:8.2.11-bookworm@sha256:8faf1ffc0fa573b9b0f5a8f886e45e27b498cdd5e9c7ee3c611856d30d0d4401'
           worker_image='docker:27.5.1-cli-alpine3.21@sha256:f56779b4e86550493153cc8642c9c8e40b5d934e43cb5b4ea463aea5245c5c01'
           current_max_map_count="$(sysctl -n vm.max_map_count)"
           case "$current_max_map_count" in
@@ -484,6 +485,7 @@ jobs:
           docker pull "$rabbitmq_image"
           docker pull "$logstash_image"
           docker pull "$kibana_image"
+          docker pull "$redis_image"
           docker pull --platform linux/amd64 "$worker_image"
           MATRIX_IAM_MANAGED_WORKER_INPUT_TEST=1 bash .github/scripts/run-go-test-selection.sh \
             'TestManagedWorkerPrivateInputsContainer' \
@@ -495,13 +497,14 @@ jobs:
           MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$rabbitmq_image")"
           MATRIX_IAM_MANAGED_LOGSTASH_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$logstash_image")"
           MATRIX_IAM_MANAGED_KIBANA_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$kibana_image")"
-          for image_id in "$MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID" "$MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID" "$MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID" "$MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID" "$MATRIX_IAM_MANAGED_LOGSTASH_IMAGE_ID" "$MATRIX_IAM_MANAGED_KIBANA_IMAGE_ID"; do
+          MATRIX_IAM_MANAGED_REDIS_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$redis_image")"
+          for image_id in "$MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID" "$MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID" "$MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID" "$MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID" "$MATRIX_IAM_MANAGED_LOGSTASH_IMAGE_ID" "$MATRIX_IAM_MANAGED_KIBANA_IMAGE_ID" "$MATRIX_IAM_MANAGED_REDIS_IMAGE_ID"; do
             case "$image_id" in
               sha256:[0-9a-f][0-9a-f]*) test "${#image_id}" = 71 ;;
               *) exit 1 ;;
             esac
           done
-          export MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID MATRIX_IAM_MANAGED_LOGSTASH_IMAGE_ID MATRIX_IAM_MANAGED_KIBANA_IMAGE_ID
+          export MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID MATRIX_IAM_MANAGED_LOGSTASH_IMAGE_ID MATRIX_IAM_MANAGED_KIBANA_IMAGE_ID MATRIX_IAM_MANAGED_REDIS_IMAGE_ID
           # Exercise the actual predecessor network with Compose, not a fake
           # runtime. The production entry binary needs no daemon or base image.
           mysql_endpoint_directory="$(mktemp -d)"

@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  elastic-product-contract:
+  managed-product-contract:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
@@ -37,14 +37,14 @@ jobs:
           cache-dependency-path: go.sum
       - name: Check adapter contracts and architecture
         run: |
-          go test -count=1 ./api/adapter/managedservice/v1 ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localcontainer ./test/managedserviceonboarding ./test/architecture
+          go test -count=1 ./api/adapter/managedservice/v1 ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localredis ./app/adapter/managedservice/localcontainer ./test/managedserviceonboarding ./test/architecture
       - name: Prepare exact local artifacts on host Docker
         run: |
           sudo sysctl -w vm.max_map_count=1048576
           docker info --format '{{.ServerVersion}}'
           mkdir -m 700 "$MATRIX_ONBOARDING_ROOT"
           go run ./test/managedserviceonboarding/cmd/prepare -pull
-      - name: Run real ELK product-team acceptance
+      - name: Run real ELK and Redis product-team acceptance
         env:
           MATRIX_ONBOARDING_RUNTIME: '1'
         run: go test -count=1 -timeout=40m -v ./test/managedserviceonboarding

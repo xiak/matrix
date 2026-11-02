@@ -240,6 +240,8 @@ const (
 	fourManagedProductsProfile
 	// Accepted Logstash .1/.2/.3 candidates have five managed products.
 	fiveManagedProductsProfile
+	// Accepted ELK .3/.4 candidates have six managed products.
+	sixManagedProductsProfile
 )
 
 func RequiredImages(products []Product) []ImageRequirement {
@@ -261,8 +263,11 @@ func requiredImages(products []Product, profile releaseProfile) []ImageRequireme
 			if profile != fourManagedProductsProfile {
 				required = append(required, ImageRequirement{Component: "logstash", Purpose: ImagePlatform, HealthContract: "logstash-ready-protocol-v1"})
 			}
-			if profile == currentReleaseProfile {
+			if profile == currentReleaseProfile || profile == sixManagedProductsProfile {
 				required = append(required, ImageRequirement{Component: "kibana", Purpose: ImagePlatform, HealthContract: "kibana-ready-protocol-v1"})
+			}
+			if profile == currentReleaseProfile {
+				required = append(required, ImageRequirement{Component: "redis", Purpose: ImagePlatform, HealthContract: "redis-ready-protocol-v1"})
 			}
 			required = append(required,
 				ImageRequirement{Component: "elasticsearch", Purpose: ImagePlatform, HealthContract: "elasticsearch-ready-protocol-v1"},
@@ -304,8 +309,11 @@ func applicationPaaSProduct(version string, profile releaseProfile) Product {
 	if profile != fourManagedProductsProfile {
 		components = append(components, "logstash")
 	}
-	if profile == currentReleaseProfile {
+	if profile == currentReleaseProfile || profile == sixManagedProductsProfile {
 		components = append(components, "kibana")
+	}
+	if profile == currentReleaseProfile {
+		components = append(components, "redis")
 	}
 	slices.Sort(components)
 	return Product{

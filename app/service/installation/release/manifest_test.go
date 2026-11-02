@@ -506,23 +506,30 @@ func digest(value byte) string {
 }
 
 func TestInstalledProductManifestsRetainSignaturesAndCannotOmitCandidateArtifacts(t *testing.T) {
-	for _, count := range []int{4, 5} {
+	for _, count := range []int{4, 5, 6} {
 		t.Run(fmt.Sprintf("%d-products", count), func(t *testing.T) {
 			previous := validManifest()
 			previous.Database = DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8}, ContractRevision: 40}
 			previous.Products[0].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
-			if count == 5 {
+			if count >= 5 {
 				previous.Products[0].RequiredComponents = []string{"elasticsearch", "logstash", "mysql", "paas", "rabbitmq"}
 			}
+			if count == 6 {
+				previous.Database = CurrentDatabaseProfile()
+				previous.Products[0].RequiredComponents = []string{"elasticsearch", "kibana", "logstash", "mysql", "paas", "rabbitmq"}
+			}
 			previous.Images = slices.DeleteFunc(previous.Images, func(image Image) bool {
-				return image.Component == "kibana" || count == 4 && image.Component == "logstash"
+				return image.Component == "redis" || count < 6 && image.Component == "kibana" || count == 4 && image.Component == "logstash"
 			})
 			previous.Files = slices.DeleteFunc(previous.Files, func(file File) bool {
-				return file.Path == "images/kibana.tar" || count == 4 && file.Path == "images/logstash.tar"
+				return file.Path == "images/redis.tar" || count < 6 && file.Path == "images/kibana.tar" || count == 4 && file.Path == "images/logstash.tar"
 			})
 			previous.TopologyDigest = "sha256:1744ab1eed4536c0aaa99a8e8b2b0bb6328b67139bafcf431996f4800883575f"
 			if count == 5 {
 				previous.TopologyDigest = "sha256:14d8147b81e9a642c798a6a043c56265d770c0b433e9146729a022291aaaf52d"
+			}
+			if count == 6 {
+				previous.TopologyDigest = "sha256:a5e88ed17c95e286c9b028d10a669f459f2c280612bc37314fbcf152ec840c6c"
 			}
 			if ValidateManifest(previous) == nil {
 				t.Fatal("new release omitted required product images")

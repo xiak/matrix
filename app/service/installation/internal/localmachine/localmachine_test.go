@@ -2628,9 +2628,11 @@ func TestUpgradeCleanupAcceptsInstalledDirectMySQLTopology(t *testing.T) {
 			plan.Bundle.Manifest.Products[index].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
 		}
 	}
-	plan.Bundle.Manifest.Images = slices.DeleteFunc(plan.Bundle.Manifest.Images, func(image release.Image) bool { return image.Component == "logstash" || image.Component == "kibana" })
+	plan.Bundle.Manifest.Images = slices.DeleteFunc(plan.Bundle.Manifest.Images, func(image release.Image) bool {
+		return image.Component == "logstash" || image.Component == "kibana" || image.Component == "redis"
+	})
 	plan.Bundle.Manifest.Files = slices.DeleteFunc(plan.Bundle.Manifest.Files, func(file release.File) bool {
-		return file.Path == "images/logstash.tar" || file.Path == "images/kibana.tar"
+		return file.Path == "images/logstash.tar" || file.Path == "images/kibana.tar" || file.Path == "images/redis.tar"
 	})
 	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root, Listener: plan.Listener,

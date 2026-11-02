@@ -17,8 +17,8 @@ provisioners, and real-runtime evidence; a visual mock or browser-only order is
 not acceptance.
 
 This is the smallest enterprise target for the requested public-cloud-style
-console. The current candidate contains six code-owned offerings—PostgreSQL 18,
-MySQL 8.4, Elasticsearch 8.19, RabbitMQ 4.1, Logstash 8.19 and Kibana 8.19—on
+console. The current candidate contains seven code-owned offerings—PostgreSQL 18,
+MySQL 8.4, Elasticsearch 8.19, RabbitMQ 4.1, Logstash 8.19, Kibana 8.19 and Redis 8.2—on
 one thin infrastructure profile. Their acceptance boundaries are recorded
 in the product onboarding slices below. It does not invent payment, invoices,
 public-cloud credentials,
@@ -56,7 +56,7 @@ schema beyond those real implementations.
    service installations, and local-region configuration allowed by the
    user's fixed IAM role.
 4. The catalog exposes `postgresql-18`, `mysql-8.4`, `elasticsearch-8.19`,
-   `rabbitmq-4.1`, `logstash-8.19` and `kibana-8.19`, each with a
+   `rabbitmq-4.1`, `logstash-8.19`, `kibana-8.19` and `redis-8.2`, each with a
    server-owned artifact and installation policy. Products without a real
    implementation are absent rather than rendered as disabled promises.
 5. A user activates one allowed quota shape. This is a durable product
@@ -390,7 +390,7 @@ Kibana 的团队应能按同一份手册，交付产品定义、固定制品、�
 按独立纵向切片推进：先将无外部服务依赖的 Logstash 接入真实平台，再以 Kibana
 验证已授权 Elasticsearch 依赖的选择、不可变绑定、专用服务凭据和删除保护。
 ELK 闭环后，再以 Redis 作为第二种产品家族复用相同接入路径，检验契约与工具没有
-绑定 Elastic 产品。Redis 的版本、持久化、凭据与实际运行证据由后继切片明确，
+绑定 Elastic 产品。Redis 的版本、持久化、凭据与实际运行证据由下文切片拥有，
 完成验收前不加入已发布能力声明。
 每片都须补齐 P1/P2 证据后才可标为已发布；S1/S2 证据只证明适配器与样例。
 验收还须从产品团队视角复跑手册，列明实际需要改动的 owner，并解释每个接入点的
@@ -514,7 +514,7 @@ Kibana 的独立凭据与保存对象、故障重试、网络正反向隔离及�
 19 项成功，包含实际六产品、前驱迁移、恢复和权限门禁；
 [Product onboarding 41462126164](https://github.com/xiak/matrix/actions/runs/41462126164)
 的实际附件 `13150478207` 为十二项 `PASSED`，其 P1/P2 仍明确为 `NOT_RUN`。
-这些固定源码的 Linux 成功结果不改写此前 Windows 超时。Redis 尚未接入。
+这些固定源码的 Linux 成功结果不改写此前 Windows 超时；该 ELK 源码不包含 Redis。
 
 签名候选 `matrix-v0.3.0-elk.1-c34eec1a1cd8` 安装后，APISIX 对真实控制台返回 502：
 原静态服务器将所有页面的内联脚本哈希合并到每个 CSP，新增路由使响应头超过网关缓冲区。
@@ -557,6 +557,45 @@ Elasticsearch 与 Logstash 继续可写。最后按依赖顺序终止其余两�
 适用于 worker 自身运行在独立容器网络中的安装，避免把 worker 回环地址当作宿主机。
 业务流量仍通过 Kibana 私网中的准确依赖入口，不向 worker 或其他租户开放整个私网。
 
+### Redis 接入切片
+
+本片先交付单节点 Redis `8.2.11`，以 `redis-8.2` 为封闭产品定义。8.2 是上游
+[扩展支持系列](https://redis.io/docs/latest/operate/oss_and_stack/install/version-mgmt/)，
+补丁身份依据 [8.2.11 发布记录](https://github.com/redis/redis/releases/tag/8.2.11)，
+Linux/amd64 官方镜像固定为
+`redis@sha256:8faf1ffc0fa573b9b0f5a8f886e45e27b498cdd5e9c7ee3c611856d30d0d4401`。
+目录、worker、共享控制台和固定制品组装已加入候选实现，不构成发布声明。
+2026-11-03，本机宿主 Docker 的完整 ELK/Redis 组合十八项通过（1526.59 秒），
+其中 Redis 六项耗时 48.97 秒，覆盖认证、管理命令限制、TTL、AOF 确认落盘后的
+重启保留、双作用域的私网/入口/数据/凭据隔离、结果丢失重放与独立删除。
+真实 PostgreSQL 的前驱迁移、租户旅程与依赖竞争三项 race 门禁通过；相关契约、
+适配器、目录、worker、发布/旧拓扑/回退保护及架构检查通过。
+组合报告明确保留平台/发布门禁 `NOT_RUN`；独立 CI、真实平台进程及签名包/
+浏览器验收尚待完成。
+
+产品使用每实例独立的 `matrix` 业务账号和随机密码，关闭匿名默认账号；原始凭据
+仅保存在保护目录中，ACL 使用密码摘要。配置固定为 AOF、每秒同步和
+`noeviction`；可用数据内存限定为规格内存的一半，为运行时和持久化保留余量。
+开发型为 0.5 vCPU/512 MiB/10 GiB，标准型为 1 vCPU/1024 MiB/20 GiB；
+StorageGiB 沿用平台的规格声明，不由该值推导文件系统硬配额保证。AOF 机制和
+业务备份不同，异常断电仍可能丢失最近约一秒写入，依据
+[Redis 持久化说明](https://redis.io/docs/latest/operate/oss_and_stack/management/persistence/)。
+平台升级/恢复须保留已有数据与密码，不重建实例来模拟恢复。
+
+业务账号支持普通数据读写、连接、事务及发布订阅；禁用配置、ACL、模块加载、
+复制拓扑和外连迁移等管理能力。实际白名单与拒绝行为须由真实 Redis 协议证明。
+固定私网及连接入口沿用 `localcontainer`，输出不含密码的连接端点；租户不能提交
+镜像、启动参数、ACL、文件路径或原生配置。Cluster、Sentinel、主从、模块、Lua
+扩展、引擎升级和业务数据备份不在本片范围。
+
+现有 owner 继续分别持有产品目录/数据库约束、公共契约、worker、共享页面、制品
+与发布恢复；只有 Redis 自身的原生配置/协议差异新增 `localredis` 适配器。
+S1/S2 扩展现有 `test/managedserviceonboarding`，P1 扩展实际产品进程门禁，
+不复制 IAM 求值、配额、Operation 或生命周期用例。验收包括未认证/错密码拒绝、
+真实读写与 TTL、AOF 确认落盘后的重启保留、双租户私网/入口/数据/凭据隔离、
+删除一方后另一方继续读写、结果未知重放和无残留清理，再完成真实页面及同
+Profile 签名包维护。未通过相应门禁前不填入已验收状态。
+
 ### 双方交付边界
 
 - 产品团队交付固定版本的产品定义与规格、不可变制品、封闭配置、`Provisioner`
@@ -593,7 +632,7 @@ worker 从领取工作之前开始使用同一绝对租约期限，开通、终�
 
 ### L/K 适配器配置契约
 
-运行验收 owner 为 `test/managedserviceonboarding`，版本固定为 Elastic `8.19.23`。
+运行验收 owner 为 `test/managedserviceonboarding`，版本固定为 Elastic `8.19.23` 与 Redis `8.2.11`。
 Logstash 与 Kibana 实现分别由 `app/adapter/managedservice/locallogstash`、
 `localkibana` 拥有，验收直接调用实际适配器。旧的测试专用 Kibana 实现已删除。
 适配器输入来自受信权威；其运行结果不替代当前用户的依赖使用授权与平台事务验收。
@@ -4772,7 +4811,7 @@ unchanged platform lifecycle and recovery evidence remains owned by Gate C.
 
 Money movement, invoices, tax, discounts, metering-based billing, marketplace
 publishing, an automatically wired Logstash-to-Elasticsearch ingestion pipeline,
-Redis, arbitrary Helm/Compose templates, customer
+Redis Cluster/Sentinel, arbitrary Helm/Compose templates, customer
 images, public-cloud accounts, VM/network provisioning, Kubernetes,
 multi-region placement, high availability, read replicas, point-in-time
 restore, engine upgrades, live external IdP/LDAP,

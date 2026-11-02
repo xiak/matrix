@@ -136,6 +136,11 @@
         "description": "连接受管 Elasticsearch，浏览数据与创建可视化",
         "keywords": "kibana elastic elk dashboard 数据视图 仪表板 可视化"
       },
+      "redis": {
+        "name": "Redis 缓存",
+        "description": "带密码认证与持久化的单实例缓存服务",
+        "keywords": "redis cache key value 缓存 键值 持久化"
+      },
       "logstash": {
         "name": "Logstash 日志处理",
         "description": "认证 HTTP JSON 输入、持久事件文件与实例管理",
@@ -175,6 +180,7 @@
     "groups": {
       "foundation": "云基础设施",
       "hosting": "应用平台",
+      "cache": "缓存与键值存储",
       "relational": "关系型数据库",
       "searchAnalytics": "搜索与分析",
       "messageQueue": "消息队列",
@@ -3769,6 +3775,7 @@
     }
   },
   "ManagedService": {
+    "redisConnectionHint": "请使用 Redis 客户端连接上方端点，业务用户名为 matrix。向平台管理员领取本实例的密码；Matrix 登录密码不能用于 Redis。",
     "kibanaLoginHint": "在浏览器中打开上方端点，使用关联 Elasticsearch 的业务账号登录。请向平台管理员领取该实例的业务凭据；Matrix 登录账号不能用于 Kibana 登录。",
     "elasticsearchDependency": "关联 Elasticsearch",
     "productMockBoundary": "这是隔离的 UX MOCK 产品工作区，不会创建真实资源。对应后端能力仍是待独立验收的候选，不能据此判断已发布、已具备高可用或可用于生产。",

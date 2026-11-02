@@ -14,6 +14,7 @@ const ElasticsearchOfferingID = managedservicev1.ElasticsearchOfferingID
 const RabbitMQOfferingID = managedservicev1.RabbitMQOfferingID
 const LogstashOfferingID = managedservicev1.LogstashOfferingID
 const KibanaOfferingID = managedservicev1.KibanaOfferingID
+const RedisOfferingID = managedservicev1.RedisOfferingID
 
 // ElasticsearchMatches checks the immutable product dependency selection.
 // Account ownership, current use permission and concurrent deletion are
@@ -40,6 +41,7 @@ func DefaultCatalog() Catalog {
 		newDefinition(managedservicev1.RabbitMQServiceID, "RabbitMQ", "由 Matrix 管理的消息队列服务。"),
 		newDefinition(managedservicev1.LogstashServiceID, "Logstash", "由 Matrix 管理的日志接收与处理服务。"),
 		newDefinition(managedservicev1.KibanaServiceID, "Kibana", "连接本账号 Elasticsearch 的可视化分析服务。"),
+		newDefinition(managedservicev1.RedisServiceID, "Redis", "由 Matrix 管理、带密码认证与持久化的缓存服务。"),
 	}
 	references := make(map[string]managedservicev1.ServiceDefinitionReference, len(definitions))
 	for _, definition := range definitions {
@@ -97,6 +99,15 @@ func DefaultCatalog() Catalog {
 			QuotaShapes: []managedservicev1.QuotaShape{
 				{ID: "kibana-small", DisplayName: "开发型", CPUMillicores: 1000, MemoryMiB: 1536, StorageGiB: 10},
 				{ID: "kibana-medium", DisplayName: "标准型", CPUMillicores: 2000, MemoryMiB: 3072, StorageGiB: 20},
+			},
+		},
+		{
+			ID: RedisOfferingID, Service: references[managedservicev1.RedisServiceID],
+			DisplayName: "Redis 8.2", Description: "使用独立业务账号读写数据，以 AOF 保留本实例的数据。",
+			EngineFamily: "redis", EngineVersion: "8.2.11", State: managedservicev1.OfferingAvailable,
+			QuotaShapes: []managedservicev1.QuotaShape{
+				{ID: "redis-small", DisplayName: "开发型", CPUMillicores: 500, MemoryMiB: 512, StorageGiB: 10},
+				{ID: "redis-medium", DisplayName: "标准型", CPUMillicores: 1000, MemoryMiB: 1024, StorageGiB: 20},
 			},
 		},
 		{

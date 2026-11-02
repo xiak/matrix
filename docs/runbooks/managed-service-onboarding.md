@@ -1,4 +1,4 @@
-# 受管产品接入验证：ELK
+# 受管产品接入验证：ELK 与 Redis
 
 本运行手册负责可执行检查与排错命令。接入顺序见[产品接入手册](../product-guide/managed-service-onboarding.md)，
 合同、验收要求和实际结果由 [FEAT-007](../features/FEAT-007-control-plane-console.md#产品团队接入契约)维护。
@@ -14,15 +14,15 @@ Windows 用户使用下文的 Docker Desktop 工具容器流程。
 从仓库根目录执行：
 
 ```sh
-go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
+go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localredis ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
 ```
 
-这一步不启动产品。`TestElasticRuntime` 的跳过提示是预期结果，不能把它当作真实验收。
+这一步不启动产品。`TestProductRuntime` 的跳过提示是预期结果，不能把它当作真实验收。
 文件权限和符号链接检查最终须在 Linux 上通过。
 
 ## 准备固定制品
 
-显式联网准备三种样例镜像，然后核对本地可用性：
+显式联网准备四种样例镜像，然后核对本地可用性：
 
 ```sh
 go run ./test/managedserviceonboarding/cmd/prepare -pull
@@ -46,9 +46,11 @@ MATRIX_ONBOARDING_RUNTIME=1 go test -count=1 -timeout=40m -v ./test/managedservi
 cat "$MATRIX_ONBOARDING_REPORT"
 ```
 
-判定必须同时满足：测试退出码为零，报告 `status` 为 `PASSED`，包含 ELK 三组共十二项运行检查。
+判定必须同时满足：测试退出码为零，报告 `status` 为 `PASSED`，包含 ELK 与 Redis 四组共十八项运行检查。
 Logstash、Elasticsearch 包含两个作用域的隔离、重启与独立删除；Kibana 包含准确依赖
 通路、两个实例的凭据与共享数据，以及发行/撤销凭据时丢失响应后的重试。
+Redis 包含密码与管理命令限制、实际读写和 TTL、AOF 确认落盘后的重启保留，
+以及双作用域的私网/主机入口/数据/凭据隔离与独立删除。
 报告写 `INCOMPLETE` 时，常见原因是仅运行了某个子测试；不能交付为完整样例验收。
 `platformAndReleaseGates` 保持 `NOT_RUN`，不表示平台目录、IAM、浏览器或签名发布包已经验收。
 
@@ -89,7 +91,7 @@ docker run -d --name $taskOperator --label "com.xiak.matrix.onboarding=$taskName
 工具链和模块缓存写入专用卷，仓库只读挂载。确认工具容器里的契约检查也通过，再执行真实门禁：
 
 ```powershell
-docker exec $taskOperator go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
+docker exec $taskOperator go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localredis ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
 docker exec $taskOperator go run ./test/managedserviceonboarding/cmd/prepare
 docker exec --env MATRIX_ONBOARDING_RUNTIME=1 --env "MATRIX_ONBOARDING_ROOT=$taskVolumeRoot/runs" --env "MATRIX_ONBOARDING_REPORT=$taskVolumeRoot/acceptance.json" $taskOperator go test -count=1 -timeout=40m -v ./test/managedserviceonboarding
 New-Item -ItemType Directory -Force .cache/product-onboarding | Out-Null
@@ -111,7 +113,7 @@ docker volume rm $taskVolume
 
 | 现象 | 处理顺序 |
 | --- | --- |
-| `TestElasticRuntime` 为 `SKIP` | 确认显式设置运行开关；只跑普通单测没有执行产品安装 |
+| `TestProductRuntime` 为 `SKIP` | 确认显式设置运行开关；只跑普通单测没有执行产品安装 |
 | 镜像缺失或架构不符 | 重新执行准备工具；网络中断后可以再次显式使用 `-pull`，保留准确摘要，不换成浮动 tag |
 | Elasticsearch 主机参数不满足 | 在 Docker Engine 所在主机检查参数；在普通工具容器里改参数不能代替修改实际主机 |
 | 绑定挂载找不到文件 | 核对测试进程与 Docker Engine 的路径；Windows 盘符目录不能冒充 Linux 引擎路径 |
@@ -120,6 +122,7 @@ docker volume rm $taskVolume
 | Kibana 删除失败，依赖不可用 | 先恢复同一 Elasticsearch，保留 Kibana 的凭据和意图文件，再用原请求重试撤销；不手工删除目录 |
 | 配置漂移被拒绝 | 保留旧实例；审阅制品、配置和依赖修订的变化。不要删除绑定记录强行重放 |
 | 子测试失败或报告为 `INCOMPLETE` | 根据明确失败项修复，再跑完整门禁；不修改报告结论 |
+| Docker 报 `all predefined address pools have been fully subnetted` | 用 `docker network ls` 核对已有网络；由维护者确认归属后回收停用测试安装的容器和网络，保留数据，再重跑门禁。不要用全局 prune，也不要删除其他租户的网络 |
 | 精确清理失败 | 保留本次运行目录，核对准确实例身份、所有权及运行对象，再通过 owning provider 处理；不运行全局 prune 或删除业务卷 |
 
 提交问题时附上代码提交、制品引用、失败子测试名称与非秘密报告。

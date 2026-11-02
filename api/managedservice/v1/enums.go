@@ -27,6 +27,8 @@ const (
 	LogstashOfferingID      = "logstash-8.19"
 	KibanaServiceID         = "kibana"
 	KibanaOfferingID        = "kibana-8.19"
+	RedisServiceID          = "redis"
+	RedisOfferingID         = "redis-8.2"
 )
 
 const (

@@ -76,7 +76,7 @@ func DecodeInstalledCanonical(content []byte) (Manifest, error) {
 		return Manifest{}, errors.New("installed release manifest size is invalid")
 	}
 	var previous Manifest
-	if decodeStrict(content, &previous) == nil && (IsFourManagedProductsManifest(previous) || IsFiveManagedProductsManifest(previous)) {
+	if decodeStrict(content, &previous) == nil && (IsFourManagedProductsManifest(previous) || IsFiveManagedProductsManifest(previous) || IsSixManagedProductsManifest(previous)) {
 		encoded, err := json.Marshal(previous)
 		if err == nil && bytes.Equal(encoded, content) {
 			return previous, nil
@@ -186,7 +186,7 @@ func ValidateInstalledManifest(manifest Manifest) error {
 	if err := ValidateManifest(manifest); err == nil {
 		return nil
 	}
-	if IsFourManagedProductsManifest(manifest) || IsFiveManagedProductsManifest(manifest) {
+	if IsFourManagedProductsManifest(manifest) || IsFiveManagedProductsManifest(manifest) || IsSixManagedProductsManifest(manifest) {
 		return nil
 	}
 	return validateLegacyProductlessManifest(manifest)
@@ -205,6 +205,15 @@ func IsFiveManagedProductsManifest(manifest Manifest) bool {
 	return manifest.Kind == ManifestKind && manifest.Database == (DatabaseProfile{
 		Compatibility: "identical-authority-profile", Authorities: AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8}, ContractRevision: 40,
 	}) && validateManifest(manifest, fiveManagedProductsProfile) == nil
+}
+
+// IsSixManagedProductsManifest recognizes the accepted ELK runtime inventory.
+// Authentication of this installed source never makes it a new candidate or a
+// rollback target that can retain Redis resources.
+func IsSixManagedProductsManifest(manifest Manifest) bool {
+	return manifest.Kind == ManifestKind && manifest.Database == (DatabaseProfile{
+		Compatibility: "identical-authority-profile", Authorities: AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 9}, ContractRevision: 41,
+	}) && validateManifest(manifest, sixManagedProductsProfile) == nil
 }
 
 // IsLegacyProductlessManifest reports only manifests that satisfy the complete

@@ -55,6 +55,7 @@ import (
 	iammigration "github.com/xiak/matrix/app/service/iam/migration"
 	installationrelease "github.com/xiak/matrix/app/service/installation/release"
 	paasmigration "github.com/xiak/matrix/app/service/paas/migration"
+	productonboarding "github.com/xiak/matrix/test/managedserviceonboarding"
 )
 
 const (
@@ -102,6 +103,7 @@ const (
 	managedRabbitMQImageIDEnv      = "MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID"
 	managedLogstashImageIDEnv      = "MATRIX_IAM_MANAGED_LOGSTASH_IMAGE_ID"
 	managedKibanaImageIDEnv        = "MATRIX_IAM_MANAGED_KIBANA_IMAGE_ID"
+	managedRedisImageIDEnv         = "MATRIX_IAM_MANAGED_REDIS_IMAGE_ID"
 	// Match the published PaaS client environment on every host. Resolve this
 	// manifest reference to the local image ID; classic and containerd stores
 	// need not expose the manifest digest as their runtime image ID.
@@ -805,7 +807,7 @@ func TestIAMRoleLifecycleConsoleBrowser(t *testing.T) {
 }
 
 // This gate provisions actual PostgreSQL 18, MySQL 8.4, RabbitMQ 4.1 and the
-// Elasticsearch/Logstash/Kibana 8.19 products through the public PaaS API and the
+// Elasticsearch/Logstash/Kibana 8.19 and Redis 8.2 products through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
 // manually completed records cannot satisfy it.
 func TestManagedProductProviderProcesses(t *testing.T) {
@@ -814,7 +816,7 @@ func TestManagedProductProviderProcesses(t *testing.T) {
 	}
 	for _, environment := range []string{
 		managedPostgresImageIDEnv, managedMySQLImageIDEnv,
-		managedElasticsearchImageIDEnv, managedRabbitMQImageIDEnv, managedLogstashImageIDEnv, managedKibanaImageIDEnv,
+		managedElasticsearchImageIDEnv, managedRabbitMQImageIDEnv, managedLogstashImageIDEnv, managedKibanaImageIDEnv, managedRedisImageIDEnv,
 	} {
 		if os.Getenv(environment) == "" {
 			t.Skipf("set %s to the already-loaded immutable product image ID", environment)
@@ -2980,6 +2982,7 @@ type managedProductImages struct {
 	rabbitmq      string
 	logstash      string
 	kibana        string
+	redis         string
 }
 
 func managedPostgresFixture(t *testing.T, owner string, imageID string) managedProductFixture {
@@ -3060,6 +3063,10 @@ func runManagedProductProviderProcesses(
 			offeringID: managedservicev1.KibanaOfferingID, quotaShapeID: "kibana-small", engineVersion: "8.19.23",
 			installationID: newManagedProductID(t, "provider", "kibana"), imageID: managedRuntime.images.kibana,
 			runtimeDirectory: "managed-kibana", credentialFile: "kibana-session-key"},
+		{tenantID: "organization-process", name: "Redis 8.2", serviceID: managedservicev1.RedisServiceID,
+			offeringID: managedservicev1.RedisOfferingID, quotaShapeID: "redis-small", engineVersion: "8.2.11",
+			installationID: newManagedProductID(t, "provider", "redis"), imageID: managedRuntime.images.redis,
+			runtimeDirectory: "managed-redis", credentialFile: "redis-password"},
 	}
 	quotasByID := make(map[string]managedservicev1.QuotaEntitlement, len(products))
 	installationsByID := make(map[string]managedservicev1.ServiceInstallation, len(products))
@@ -16700,6 +16707,7 @@ func managedProductWorkerEnvironment(
 		"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS=" + images.rabbitmq,
 		"MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS=" + images.logstash,
 		"MATRIX_PAAS_WORKER_MANAGED_KIBANA_IMAGE_IDS=" + images.kibana,
+		"MATRIX_PAAS_WORKER_MANAGED_REDIS_IMAGE_IDS=" + images.redis,
 		"MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS=" + images.endpoint,
 	}
 }
@@ -16713,6 +16721,7 @@ func managedProductImagesFromEnvironment(t *testing.T) managedProductImages {
 		rabbitmq:      managedProductImageID(t, managedRabbitMQImageIDEnv),
 		logstash:      managedProductImageID(t, managedLogstashImageIDEnv),
 		kibana:        managedProductImageID(t, managedKibanaImageIDEnv),
+		redis:         managedProductImageID(t, managedRedisImageIDEnv),
 	}
 }
 
@@ -16885,6 +16894,8 @@ func assertManagedProductRuntime(
 		assertManagedRabbitMQAMQP(t, ctx, installation, password)
 	case managedservicev1.LogstashOfferingID:
 		assertManagedLogstashHTTP(t, ctx, installation, password, containerID)
+	case managedservicev1.RedisOfferingID:
+		assertManagedRedisRESP(t, ctx, installation, password)
 	case managedservicev1.KibanaOfferingID:
 		if installation.Elasticsearch == nil {
 			t.Fatal("Kibana response omitted its authoritative dependency")
@@ -24758,6 +24769,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		managedservicev1.MySQLOfferingID,
 		managedservicev1.PostgreSQLOfferingID,
 		managedservicev1.RabbitMQOfferingID,
+		managedservicev1.RedisOfferingID,
 	}
 	expectedServiceIDs := []string{
 		managedservicev1.ElasticsearchServiceID,
@@ -24766,6 +24778,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 		managedservicev1.MySQLServiceID,
 		managedservicev1.PostgreSQLServiceID,
 		managedservicev1.RabbitMQServiceID,
+		managedservicev1.RedisServiceID,
 	}
 	for i := range tenants {
 		tenant := &tenants[i]
@@ -29562,4 +29575,32 @@ func assertManagedLogstashHTTP(t *testing.T, ctx context.Context, installation m
 		}
 	}
 	t.Fatal("authenticated Logstash event was not durably written")
+}
+
+func assertManagedRedisRESP(t *testing.T, ctx context.Context, installation managedservicev1.ServiceInstallation, password []byte) {
+	t.Helper()
+	session, err := productonboarding.DialRedis(ctx, *installation.Endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	_, err = session.Command("PING")
+	var denied productonboarding.RedisError
+	if !errors.As(err, &denied) || !strings.HasPrefix(string(denied), "NOAUTH ") {
+		t.Fatal("managed Redis accepted an unauthenticated client")
+	}
+	if value, err := session.Command("AUTH", "matrix", string(password)); err != nil || value != "OK" {
+		t.Fatal("managed Redis business authentication failed")
+	}
+	marker := "authority-" + newManagedHexSuffix(t)
+	if value, err := session.Command("SET", marker, installation.ID); err != nil || value != "OK" {
+		t.Fatal("managed Redis native write failed")
+	}
+	if value, err := session.Command("GET", marker); err != nil || value != installation.ID {
+		t.Fatal("managed Redis native read failed")
+	}
+	_, err = session.Command("CONFIG", "GET", "dir")
+	if !errors.As(err, &denied) || !strings.HasPrefix(string(denied), "NOPERM ") {
+		t.Fatal("managed Redis exposed administrative configuration")
+	}
 }

@@ -80,6 +80,16 @@ let snapshot: ControlPlaneSnapshot = {
       { id: "kibana-small", displayName: "开发型", cpuMillicores: 1000, memoryMiB: 1536, storageGiB: 10 },
       { id: "kibana-medium", displayName: "标准型", cpuMillicores: 2000, memoryMiB: 3072, storageGiB: 20 }
     ]
+  }, {
+    id: "redis-8.2",
+    service: { id: "redis", revision: 1, contentDigest: "sha256:" + "7".repeat(64) },
+    displayName: "Redis 8.2",
+    description: "使用独立业务账号读写数据，以 AOF 保留本实例的数据。",
+    engineFamily: "Redis", engineVersion: "8.2.11", state: "AVAILABLE",
+    quotaShapes: [
+      { id: "redis-small", displayName: "开发型", cpuMillicores: 500, memoryMiB: 512, storageGiB: 10 },
+      { id: "redis-medium", displayName: "标准型", cpuMillicores: 1000, memoryMiB: 1024, storageGiB: 20 }
+    ]
   }],
   regions: [
     {
@@ -163,7 +173,7 @@ function currentTime(): string {
 
 function previewEndpoint(installation: ServiceInstallation): string {
   const serviceId = snapshot.offerings.find((offering) => offering.id === installation.offeringId)?.service.id;
-  const port = serviceId === "mysql" ? 3306 : serviceId === "elasticsearch" ? 9200 : serviceId === "rabbitmq" ? 5672 : serviceId === "logstash" ? 8080 : serviceId === "kibana" ? 5601 : 5432;
+  const port = serviceId === "mysql" ? 3306 : serviceId === "elasticsearch" ? 9200 : serviceId === "rabbitmq" ? 5672 : serviceId === "logstash" ? 8080 : serviceId === "kibana" ? 5601 : serviceId === "redis" ? 6379 : 5432;
   return `${installation.id}.service.local:${port}`;
 }
 
