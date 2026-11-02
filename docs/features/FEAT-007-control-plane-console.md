@@ -461,30 +461,38 @@ tenant 或 endpoint 视为可信，也不能复用样例中的测试网络授权
 保持未发布，不对外声称已纳管。业务引擎升级、HA、业务数据备份、任意 Pipeline
 编辑及动态产品上架各自需要明确合同与门禁，不从基础样例成功推导支持。
 
-### 产品团队样例验收证据
+### 产品团队适配器验收证据
 
-2026-11-02，本机复核对应源码
-[`d5625ec86b42cca0969749d3430aca27bd316c16`](https://github.com/xiak/matrix/commit/d5625ec86b42cca0969749d3430aca27bd316c16)。
-真实运行使用 Linux/amd64、Go 1.26.3 和 Docker Desktop 的宿主机 Engine，
-工具容器连接宿主机 socket，没有启动 DinD。产品版本及不可变摘要由
-[`artifacts.json`](../../test/managedserviceonboarding/artifacts.json)拥有。
+2026-11-02，本机复核对应实现源码
+[`f6ac580463d94046d429f7c2f9046562969c2cee`](https://github.com/xiak/matrix/commit/f6ac580463d94046d429f7c2f9046562969c2cee)。
+真实运行使用 Linux/amd64、Go 1.26.3 和 Docker Desktop 29.6.2 的宿主机 Engine，
+工具容器连接宿主机 socket，没有启动 DinD。Elastic 产品版本与不可变摘要由
+[制品清单](../../test/managedserviceonboarding/artifacts.json)拥有；入口测试镜像从该
+源码显式构建，适配器本身不构建、不拉取制品。
 
-- S1：Windows 与 Linux 契约、配置绑定和架构检查通过；Linux 验证了文件权限与
-  符号链接拒绝。现有 reconciler、worker 与四种正式产品适配器检查通过。
-  本次变更的全仓生成、vet 和普通 Go 测试通过，最终独立检查以 CI 为准。
-- S2：完整真实运行耗时 317.08 秒，非秘密报告为 `PASSED`，包含十项检查。
-  Logstash 证明认证输入、处理后落盘、真实效果后响应丢失恢复、重启及等值重放、
-  跨租户删除拒绝、精确及重复删除。Kibana 证明版本与实际就绪状态、认证后的数据
-  视图创建和读取、重启后的状态保留；删除后 Elasticsearch 仍为原实例且数据可读。
-  两者均核对秘密未进入部署清单、恢复清单收敛以及产品数据和凭据清理。
-- 运行资源由各自 provider 精确回收；临时依赖网络校验归属和空端点后删除。
-  清理不能确认时保留运行目录。通过后另外核对标签并回收了本次工具容器和缓存卷。
-- P1/P2：`NOT_RUN`。该结果没有证明 L/K 的默认目录、真实 IAM、浏览器、签名包
-  安装升级、平台恢复或业务数据备份，不能作为 L/K 正式上架依据。
+- S1：Windows 与 Linux 的契约、配置绑定及架构检查通过；Linux 验证文件权限、
+  符号链接及公开文件模式拒绝。现有四种产品适配器、reconciler、worker 检查通过，
+  API 生成没有漂移，相关 vet 通过。
+- S2：本机完整真实运行 592.79 秒，非秘密报告为 `PASSED`，包含十一项检查。
+  Logstash 使用同一个公开实例 ID 和两个受信租户作用域，证明端点、数据与凭据
+  独立；对方密码不能写入，私有地址和宿主机发布入口双向不可达；重启后重复验证。
+  删除 A 后，B 的容器身份、启动时间、重启次数、网络、挂载、数据和密码保持，
+  并能继续写入。结果丢失后恢复、等值重放、重复删除及恢复清单检查也通过。
+- Kibana 证明真实版本、可用状态、认证的数据视图创建与读取及重启后状态保留；
+  删除 Kibana 后，Elasticsearch 仍为原实例且数据可读。其授权与依赖网络仍由受信
+  测试夹具提供，不具有 Logstash 本片验证的跨租户网络保证。
+- 同一实现源码的 [Product onboarding 独立 CI](https://github.com/xiak/matrix/actions/runs/41400154620)
+  通过。已读取其 `product-onboarding-evidence` 附件，确认 `PASSED`、十一项检查齐全，
+  且平台/发布结论仍为 `NOT_RUN`。产品实例、保护文件、临时入口镜像和测试依赖
+  由各自归属的清理流程回收；清理不能确认时保留证据并使门禁失败。
+- P1/P2：`NOT_RUN`。当前不包含 L/K 默认目录、真实 IAM、浏览器、签名包安装升级、
+  平台恢复或业务数据备份。两个适配器租户作用域不能代替真实用户与 IAM 验收，
+  也不能作为 L/K 正式上架依据。
 
-独立复核入口为 [Product onboarding](../../.github/workflows/product-onboarding.yml)，
-其运行记录和 `product-onboarding-evidence` 附件绑定对应 PR 源码；全仓门禁由既有
-[Verification](../../.github/workflows/verification.yml)负责。交接须同时检查测试退出码、
+运行门禁由 [Product onboarding](../../.github/workflows/product-onboarding.yml)拥有，
+全仓生成、架构、vet/race、权限和既有产品回归由
+[Verification](../../.github/workflows/verification.yml)负责；后续独立检查见
+[PR #14 检查](https://github.com/xiak/matrix/pull/14/checks)。交接须同时检查测试退出码、
 报告结论与源码，不将跳过或部分子测试生成的 `INCOMPLETE` 解释为通过。
 
 ## Console architecture
