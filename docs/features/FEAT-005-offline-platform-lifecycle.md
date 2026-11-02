@@ -275,8 +275,9 @@ root rolling back every installation disk and key together.
 
 `verify` rechecks journal seals, current bundle content, loaded image identity,
 Compose project membership, service health, schema compatibility, IAM
-authorization, Audit ingestion/deduplication, and one no-secret application
-probe. `status` is read-only. `support` emits only release IDs, component
+authorization, Audit ingestion/deduplication, one no-secret application
+probe, and a bounded credential-free HTML read of the public console through
+the gateway. `status` is read-only. `support` emits only release IDs, component
 health, normalized state, image/content digests, migration version, bounded
 timestamps, and correlation IDs; it excludes secrets, tokens, configuration
 values, database rows, native errors, arbitrary logs, and absolute paths.
@@ -288,11 +289,19 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 后继 ELK 接入候选把运行契约推进到 `88/40/9+r41`：Elasticsearch 增加私有网络及
 固定入口，旧直连端口 worker 无法据此承诺兼容管理。当前候选对 `r40 ↔ r41` 的
 升级、回滚和恢复均在效果及 journal 变更前拒绝；保留数据的适配器迁移测试不能
-替代签名包迁移验收。下列已验收 Logstash 签名包仍为 `r40`，本机未切换到后继候选。
+替代签名包迁移验收。下列已验收 Logstash 签名包仍为 `r40`，保留原安装用于恢复。
 Kibana 的依赖列、同账号外键、不可变绑定与竞争保护使 PaaS schema 推进到 9。
 准确的五产品 `88/40/8+r40` 已安装清单可验签读取，但不能因此成为新安装目标或
 获得升级、回滚、恢复许可。正式平台绑定与发布组合完成后，另按本 owner 的门禁
 开放准确的受支持路径。
+
+2026-11-02，从干净源码 `c34eec1a1cd8472afbbb842a656e232cb2834838` 构建的
+私有签名候选 `matrix-v0.3.0-elk.1-c34eec1a1cd8` 在独立根目录完成安装和 verify，
+19 个平台容器健康，但真实控制台返回 502，故本候选不接受为用户可用安装。原因和
+页面 CSP 修复由 [FEAT-007](FEAT-007-control-plane-console.md#kibana-依赖接入切片)拥有。
+安装验收现增加经过公网关的首页检查：必须为 200、HTML、非空且有界，不跟随重定向，
+不发送安装 verifier 凭据；网关错误使验证失败关闭。完整 localmachine race 通过，
+新的签名安装仍待执行。原 Logstash 平台已恢复，失败候选保留且停止，未覆盖原数据。
 
 2026-10-29，按用户手册从干净提交
 `bafc3491f441281b24b2e0059d9e3bc5815dd0f5` 构建私有签名候选

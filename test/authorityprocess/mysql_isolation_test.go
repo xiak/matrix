@@ -107,10 +107,21 @@ func beginManagedMySQLTenantIsolation(t *testing.T, ctx context.Context, runtime
 	for _, direction := range []struct {
 		instance managedservicev1.ServiceInstallation
 		password []byte
-	}{{instanceA, passwordA}, {instanceB, passwordB}} {
+		project  string
+	}{{instanceA, passwordA, projectA}, {instanceB, passwordB, projectB}} {
 		db := mysqlTenantDatabase(t, *direction.instance.Endpoint, direction.password)
 		deadline := time.Now().Add(time.Minute)
-		for db.PingContext(ctx) != nil {
+		project := direction.project
+		for {
+			// A successful SQL connection can precede Docker's next healthcheck.
+			// This intentional restart must settle both processes before later
+			// assertions inspect the original READY resource without waiting.
+			states, err := exec.CommandContext(ctx, "docker", "inspect", "--format",
+				"{{.State.Status}}|{{if .State.Health}}{{.State.Health.Status}}{{end}}",
+				project+"-mysql-1", project+"-mysql-endpoint-1").Output()
+			if err == nil && strings.TrimSpace(string(states)) == "running|healthy\nrunning|healthy" && db.PingContext(ctx) == nil {
+				break
+			}
 			if time.Now().After(deadline) || ctx.Err() != nil {
 				t.Fatal("MySQL did not recover after restart")
 			}

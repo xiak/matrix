@@ -5,34 +5,33 @@
 - Updated: 2026-11-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/product-onboarding-release`
-- Pushed implementation: `c34eec1a1cd8472afbbb842a656e232cb2834838`.
+- Implementation: this checkpoint's containing commit; the preceding Kibana integration is `c34eec1a1cd8472afbbb842a656e232cb2834838`.
 - Active goal: finish ELK onboarding and release closure, then reuse the same product contract for Redis.
-- [PR #14](https://github.com/xiak/matrix/pull/14) remains draft; the current candidate is not a public release.
+- [PR #14](https://github.com/xiak/matrix/pull/14) remains draft; no public release is accepted.
 
-Follow `AGENTS.md` and repository-local Git identity. Read the relevant owner only:
+Follow `AGENTS.md` and repository-local Git identity. Read only the relevant owner:
 
-- [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#产品团队接入契约): contract, completed Logstash candidate, Kibana platform implementation and actual local acceptance.
+- [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#产品团队接入契约): product contract, Logstash candidate, Kibana P1/S2 and failed signed UI evidence.
 - [Product-team guide](../../docs/product-guide/managed-service-onboarding.md) and [verified commands](../../docs/runbooks/managed-service-onboarding.md).
-- [FEAT-IAM-008](../../docs/features/iam/FEAT-IAM-008-product-enforcement.md): current dependency-use permission; [FEAT-IAM-001](../../docs/features/iam/FEAT-IAM-001-authorization-profile.md) owns the Profile declaration.
-- [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核): signed runtime profile and lifecycle admission.
+- [FEAT-IAM-008](../../docs/features/iam/FEAT-IAM-008-product-enforcement.md): dependency Use and immutable service-role template versions.
+- [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核): signed runtime/lifecycle admission and the new public-console verification.
 
-Kibana is now composed through the public typed Elasticsearch reference, current instance-use authorization, immutable same-Account/version/region database binding, serialized dependency reservation/termination, queue, production worker, catalog, release inventory and shared console. Read permission is insufficient; even equal replay rechecks current use permission. Failed provisioning may terminate without endpoint references, and cleanup retries retain the original reserved/consumed quota kind. Dependency protection remains until actual cleanup.
+Kibana integration includes the typed immutable Elasticsearch dependency, current exact-instance Use permission (also rechecked on equal replay), same-Account/version/region and READY validation, serialized dependency custody, queue/worker/catalog/release inventory and shared console. Cleanup retains dependency protection until actual success. Bounded container-local HTTP handles native Elasticsearch credential effects inside the real worker topology. Shared Kibana saved-object/report keys belong to the dependency; per-instance service credentials/session keys remain independent.
 
-The actual adapter manages native Elasticsearch credentials through bounded HTTP inside the exact observed dependency container. The earlier worker-loopback failure is fixed. Kibana data traffic still uses the dedicated exact-dependency entry. There is no generic plugin engine or IAM evaluator product-name branch.
+The c34 local six-product production-process P1 passed in 611.82 seconds. Its exact independent Product onboarding run 41452227464 attempt 2 passed all twelve S2 checks; actual artifact 13147966162 explicitly excludes platform/release gates. The c34 Verification 41452216037 and e1e5e83 PR Verification 41452442408 failed; their failures are retained in FEAT-007, not hidden by successful S2.
 
-Local six-product production-process P1 passed in 611.82 seconds, including Kibana exact-resource authorization, revocation, shared data-view use and dependency deletion protection. Three final real PostgreSQL 18 storage gates passed with race. The full frontend suite passed 83 files / 2164 tests, nine export checks, type/lint/architecture/style gates and deterministic 352-file embedded output. Affected Go packages, race, vet and generation checks passed. Their boundaries and older S2 evidence stay in FEAT-007.
+This checkpoint fixes:
+- route-growing CSP headers that made the signed c34 ELK candidate return APISIX 502 despite healthy containers; each HTML now carries only its own inline script hashes;
+- installer verify now requires a bounded credential-free 200 HTML read through the public gateway;
+- published service-role templates v1/Profile4 and v2/Profile7 remain byte-for-byte fixed, while v3 explicitly binds Profile8; migration does not invent old consent on fresh install;
+- current directory assertions include Kibana;
+- intentional MySQL restart acceptance waits for both actual container health and SQL;
+- the plaintext gate proves retained Session target authority before ignoring a random six-digit ID collision; free text and longer credentials remain checked.
 
-Independent CI for that exact pushed implementation is pending:
-- [push Verification 41452216037](https://github.com/xiak/matrix/actions/runs/41452216037)
-- [PR Verification 41452227411](https://github.com/xiak/matrix/actions/runs/41452227411)
-- [Product onboarding 41452227464](https://github.com/xiak/matrix/actions/runs/41452227464)
+Full UI race, localmachine race, architecture, focused IAM/template/source/plaintext tests and affected vet checks passed. Actual IAM predecessor migration passed (52.97s), and Profile advance passed (51.24s). The complete Windows authority process exceeded its original six-minute fixture deadline and remains failed; do not extend the gate or claim an overall local PASS. Independent Linux CI for the fixes is the next acceptance boundary.
 
-Read actual conclusions and the twelve-check report before accepting them. The previous deb7287 adapter baseline had a successful push suite and product report but a PR MySQL runtime-state failure; the current fixture reports safe observed runtime details if it recurs. Do not hide a failed run behind another successful run.
+Signed c34 candidates elk.1/elk.2 are not accepted: the installed elk.1 had the actual console failure above. Rebuild a clean fixed-source signed same-profile pair, then execute real browser/handbook and lifecycle/data/credential retention. Do not patch a signed candidate in place. The current profile remains IAM/Audit/PaaS 88/40/9+r41; accepted private Logstash is 88/40/8+r40. Cross-profile upgrade/rollback/recovery remain rejected. Complete cold-cache disconnected Gate C is still unproved.
 
-Current source is IAM/Audit/PaaS 88/40/9 at runtime revision 41. The accepted private Logstash candidate remains 88/40/8+r40. Cross-profile upgrade and rollback remain rejected: the old worker cannot manage the new Elasticsearch network/dependency topology. The new source has not been installed over that candidate.
-
-Next finish exact-source independent CI, signed current-profile runtime and real browser/handbook acceptance, including lifecycle/data/credential retention. Preserve the accepted installation and do not infer a complete cold-cache disconnected Gate C or public release from bounded local tests. Then implement Redis as the next vertical product slice. Redis has no implementation yet.
-
-Preserve user installations/data. No global Docker prune, user-image removal, DinD or host-wide security changes. Shared-host Docker isolation is not physical isolation. No legacy repository inspection occurred in this slice.
+Redis has no implementation yet. Finish ELK before adding its next vertical slice. Preserve user installations/data; no global Docker prune, user-image removal, DinD or host-wide security changes. Shared-host Docker isolation is not physical isolation. No legacy repository inspection occurred in this slice.
 
 Secrets, absolute checkout paths and uncommitted machine-local state are excluded.

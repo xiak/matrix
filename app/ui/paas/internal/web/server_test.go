@@ -3,6 +3,7 @@ package web
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"regexp"
@@ -102,6 +103,65 @@ func TestContentSecurityPolicyAllowsOnlyExactInlineScripts(t *testing.T) {
 		if !strings.Contains(policy, hash) {
 			t.Fatalf("CSP does not allow an exact embedded Next script: %s", hash)
 		}
+	}
+}
+
+func TestDocumentCSPRemainsScopedAndFitsTheReleaseGateway(t *testing.T) {
+	handler := NewHandler()
+	targets := []string{"/missing-document/", "/ready", "/_next/static/missing.js"}
+	err := fs.WalkDir(content, "assets", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() && strings.HasSuffix(name, ".html") {
+			targets = append(targets, "/"+strings.TrimPrefix(name, "assets/"))
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, target := range targets {
+		t.Run(target, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+			policy := response.Header().Get("Content-Security-Policy")
+			expected := map[string]bool{}
+			if strings.HasPrefix(response.Header().Get("Content-Type"), "text/html") {
+				for _, match := range inlineScript.FindAllSubmatch(response.Body.Bytes(), -1) {
+					if len(match[1]) == 0 {
+						continue
+					}
+					digest := sha256.Sum256(match[1])
+					expected["'sha256-"+base64.StdEncoding.EncodeToString(digest[:])+"'"] = true
+				}
+			}
+			for _, token := range strings.Fields(policy) {
+				if !strings.HasPrefix(token, "'sha256-") {
+					continue
+				}
+				token = strings.TrimSuffix(token, ";")
+				if !expected[token] {
+					t.Fatalf("response permits a script from another document: %s", target)
+				}
+				delete(expected, token)
+			}
+			if len(expected) != 0 {
+				t.Fatal("document script is missing from CSP")
+			}
+			if strings.Contains(policy, "'unsafe-inline'") || strings.Contains(policy, "'unsafe-eval'") {
+				t.Fatal("unsafe CSP")
+			}
+			var headers strings.Builder
+			if err := response.Header().Write(&headers); err != nil {
+				t.Fatal(err)
+			}
+			// APISIX uses the default 4 KiB upstream header buffer. Reserve
+			// space for the status line, Date and transport response headers.
+			if headers.Len()+256 > 4096 {
+				t.Fatalf("response headers exceed the release gateway budget: %d bytes", headers.Len()+256)
+			}
+		})
 	}
 }
 

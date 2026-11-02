@@ -19,9 +19,9 @@ import (
 const maxAuthorizationProfileSeedBytes = iamv1.MaxProductAuthorizationReleaseCatalogBytes
 
 // The public directory remains capped at 100 current template heads. IAM also
-// retains exactly one built-in predecessor version so existing consent can
+// retains two published built-in predecessor versions so existing consent can
 // keep issuing sessions without reducing the signed product catalog budget.
-const maxServiceRoleTemplateSeedItems = iamv1.DirectoryPageSize + 1
+const maxServiceRoleTemplateSeedItems = iamv1.DirectoryPageSize + 2
 
 var (
 	//go:embed 000001_authority/bootstrap.sql
@@ -235,7 +235,7 @@ func serviceRoleTemplateSeeds(additional []iamv1.ServiceRoleTemplate) (string, e
 		RetainedOnly  bool                            `json:"retainedOnly"`
 	}
 	templates, err := authority.BuiltInServiceRoleTemplateArchive()
-	if err != nil || len(templates) != 2 {
+	if err != nil || len(templates) != 3 {
 		return "", errors.New("invalid service role template registration set")
 	}
 	type templateKey struct {

@@ -54,7 +54,7 @@ ALTER TABLE iam.service_role_templates ENABLE ALWAYS TRIGGER service_role_templa
 DO $service_role_template_registration$
 DECLARE seeds jsonb:=__SERVICE_ROLE_TEMPLATE_SEEDS__; seed jsonb;
 BEGIN
-    IF jsonb_typeof(seeds)<>'array' OR jsonb_array_length(seeds) NOT BETWEEN 1 AND 101 THEN
+    IF jsonb_typeof(seeds)<>'array' OR jsonb_array_length(seeds) NOT BETWEEN 1 AND 102 THEN
         RAISE EXCEPTION USING ERRCODE='23514',MESSAGE='service role template catalog is invalid'; END IF;
     LOCK TABLE iam.service_role_templates IN SHARE ROW EXCLUSIVE MODE;
     FOR seed IN SELECT value FROM jsonb_array_elements(seeds) ORDER BY value->>'id',(value->>'version')::bigint LOOP

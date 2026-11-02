@@ -131,7 +131,41 @@ func (verifier *httpInstallationVerifier) Verify(
 	if err := verifier.pollAudit(ctx, endpoint, credential, auditRequest); err != nil {
 		return paasv1.InstallationVerification{}, err
 	}
+	if err := verifier.verifyConsole(ctx, endpoint); err != nil {
+		return paasv1.InstallationVerification{}, err
+	}
 	return paasResult, nil
+}
+
+// Container health and authority verification do not prove that the public
+// console can pass through the gateway (for example, oversized CSP headers).
+func (verifier *httpInstallationVerifier) verifyConsole(ctx context.Context, endpoint string) error {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"/", nil)
+	if err != nil {
+		return verificationFailure()
+	}
+	request.Header.Set("Accept", "text/html")
+	// The UI is public static content and must never receive verifier credentials.
+	response, err := verifier.client.Do(request)
+	if err != nil {
+		return verificationUnavailable()
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= http.StatusInternalServerError {
+		return verificationUnavailable()
+	}
+	mediaType, _, mediaErr := mime.ParseMediaType(response.Header.Get("Content-Type"))
+	if response.StatusCode != http.StatusOK || mediaErr != nil || mediaType != "text/html" {
+		return verificationFailure()
+	}
+	body, err := io.ReadAll(io.LimitReader(response.Body, maximumVerificationResponseBytes+1))
+	if err != nil {
+		return verificationUnavailable()
+	}
+	if len(bytes.TrimSpace(body)) == 0 || int64(len(body)) > maximumVerificationResponseBytes {
+		return verificationFailure()
+	}
+	return nil
 }
 
 func (verifier *httpInstallationVerifier) pollPaaS(

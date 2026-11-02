@@ -38,7 +38,19 @@ func TestHTTPInstallationVerifierPollsExactPaaSAndAuditFacts(t *testing.T) {
 	}
 	paasCalls := 0
 	auditCalls := 0
+	consoleCalls := 0
+	consoleStatus, consoleType, consoleBody := http.StatusOK, "text/html; charset=utf-8", "<!DOCTYPE html><title>Matrix</title>"
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/" {
+			consoleCalls++
+			if request.Method != http.MethodGet || request.URL.RawQuery != "" || request.Header.Get("Authorization") != "" || request.Header.Get("Matrix-Subject-Credential") != "" {
+				t.Error("public console probe received a credential or unexpected request")
+			}
+			response.Header().Set("Content-Type", consoleType)
+			response.WriteHeader(consoleStatus)
+			_, _ = response.Write([]byte(consoleBody))
+			return
+		}
 		if request.Method != http.MethodPost || request.URL.RawQuery != "" ||
 			request.Header.Get("Authorization") != "Bearer "+string(credential) ||
 			request.Header.Get("Matrix-Subject-Credential") != "" {
@@ -128,9 +140,29 @@ func TestHTTPInstallationVerifierPollsExactPaaSAndAuditFacts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("verify fixed installation flow: %v", err)
 	}
-	if paasCalls != 2 || auditCalls != 2 || result.DeploymentID != deploymentID ||
+	if paasCalls != 2 || auditCalls != 2 || consoleCalls != 1 || result.DeploymentID != deploymentID ||
 		result.Generation != 1 {
 		t.Fatalf("verification calls PaaS=%d Audit=%d", paasCalls, auditCalls)
+	}
+	for _, scenario := range []struct {
+		name              string
+		status            int
+		contentType, body string
+		want              error
+	}{
+		{"gateway rejects UI headers", http.StatusBadGateway, "text/html", "gateway detail", platformcommand.ErrEffectUnavailable},
+		{"wrong response type", http.StatusOK, "application/json", "{}", platformcommand.ErrEffectVerification},
+		{"empty document", http.StatusOK, "text/html", " ", platformcommand.ErrEffectVerification},
+		{"oversized document", http.StatusOK, "text/html", strings.Repeat("x", int(maximumVerificationResponseBytes)+1), platformcommand.ErrEffectVerification},
+		{"redirect", http.StatusFound, "text/html", "redirect", platformcommand.ErrEffectVerification},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			consoleStatus, consoleType, consoleBody = scenario.status, scenario.contentType, scenario.body
+			_, err := verifier.Verify(context.Background(), plan)
+			if !errors.Is(err, scenario.want) || strings.Contains(err.Error(), "gateway detail") {
+				t.Fatalf("unusable public console was not rejected safely: %v", err)
+			}
+		})
 	}
 }
 

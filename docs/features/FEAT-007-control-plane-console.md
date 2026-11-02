@@ -17,9 +17,11 @@ provisioners, and real-runtime evidence; a visual mock or browser-only order is
 not acceptance.
 
 This is the smallest enterprise target for the requested public-cloud-style
-console. The current release contains four code-owned offerings—PostgreSQL 18,
-MySQL 8.4, Elasticsearch 8.19 and RabbitMQ 4.1—on one thin infrastructure
-profile. It does not invent payment, invoices, public-cloud credentials,
+console. The current candidate contains six code-owned offerings—PostgreSQL 18,
+MySQL 8.4, Elasticsearch 8.19, RabbitMQ 4.1, Logstash 8.19 and Kibana 8.19—on
+one thin infrastructure profile. Their acceptance boundaries are recorded
+in the product onboarding slices below. It does not invent payment, invoices,
+public-cloud credentials,
 caller-selected images, provider-native specifications, or a generic provider
 schema beyond those real implementations.
 
@@ -53,8 +55,8 @@ schema beyond those real implementations.
 3. The authenticated console shows an overview, service catalog, quota,
    service installations, and local-region configuration allowed by the
    user's fixed IAM role.
-4. The catalog exposes the four available offerings `postgresql-18`,
-   `mysql-8.4`, `elasticsearch-8.19` and `rabbitmq-4.1`, each with a
+4. The catalog exposes `postgresql-18`, `mysql-8.4`, `elasticsearch-8.19`,
+   `rabbitmq-4.1`, `logstash-8.19` and `kibana-8.19`, each with a
    server-owned artifact and installation policy. Products without a real
    implementation are absent rather than rendered as disabled promises.
 5. A user activates one allowed quota shape. This is a durable product
@@ -374,7 +376,8 @@ Docker 上完成下列核对，没有启动 DinD。签名候选、前驱及安�
 [产品接入手册](../product-guide/managed-service-onboarding.md)维护，执行命令归
 [接入验证运行手册](../runbooks/managed-service-onboarding.md)。公开契约、L/K 可运行
 样例与验证工具已完成适配器验收；Logstash 已通过固定源码的独立平台门禁和本机
-签名候选的浏览器、升级、回滚及恢复验收；Kibana 的实际适配器仍待平台集成验收。上述私有候选
+签名候选的浏览器、升级、回滚及恢复验收；Kibana 已通过本机生产进程 P1，
+独立平台 CI、签名包与浏览器验收仍未闭环。上述私有候选
 不等于公开发布或完整离线 Release 验收。
 
 ### 正式接入的交付目标
@@ -496,7 +499,23 @@ Kibana 的独立凭据与保存对象、故障重试、网络正反向隔离及�
 代替使用、错误实例授权拒绝、准确实例授权、等值重放重新检查当前权限、撤权后拒绝，
 以及活跃依赖阻止 Elasticsearch 终止。原生数据视图由同一依赖下的两个 Kibana 读取，
 删除其中一个后另一个继续可用。测试自身精确清理本轮运行对象，未接管原安装。
-当前源码的独立 CI、浏览器与签名包验收尚未完成，Redis 尚未接入。
+固定源码 `c34eec1a1cd8472afbbb842a656e232cb2834838` 的
+[Product onboarding 41452227464，attempt 2](https://github.com/xiak/matrix/actions/runs/41452227464/attempts/2)
+已完成十二项 S2；实际 artifact `13147966162` 为 `PASSED`，明确标记平台和发布
+门禁 `NOT_RUN`。同源码 [Verification 41452216037](https://github.com/xiak/matrix/actions/runs/41452216037)
+仍失败：服务目录夹具漏掉 Kibana，前版本迁移重用了已发布模板版本；后继仅文档提交的
+[Verification 41452442408](https://github.com/xiak/matrix/actions/runs/41452442408)
+还暴露了 MySQL 重启后健康采样时序与会话随机 ID 的六位 OTP 碰撞。不能用 S2 的成功
+替代这些平台失败。修复后 IAM 前版本真实迁移通过（52.97 秒），授权 Profile 推进
+通过（51.24 秒）；Windows 上完整后台旅程触及原六分钟时限，仍记为失败，未延长
+该门禁。修复后的独立 CI、浏览器与签名包验收尚未完成，Redis 尚未接入。
+
+签名候选 `matrix-v0.3.0-elk.1-c34eec1a1cd8` 安装后，APISIX 对真实控制台返回 502：
+原静态服务器将所有页面的内联脚本哈希合并到每个 CSP，新增路由使响应头超过网关缓冲区。
+当前实现只授权实际响应 HTML 中的脚本，保持严格 CSP；回归遍历全部内嵌页面，校验
+脚本哈希、页面间隔离与网关响应头上限。UI 全包 race 与架构检查通过，签名重建后的
+真实浏览器验证仍待执行。安装成功判定的对应修复由
+[FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)拥有。
 
 当前切片的三个真实 PostgreSQL 18 存储门禁带 race 通过，包括固定前驱迁移、租户
 旅程和依赖创建/删除竞争；前端 83 个测试文件、2164 个用例及九项导出脚本检查通过，

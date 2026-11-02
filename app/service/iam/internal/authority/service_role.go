@@ -8,7 +8,12 @@ import (
 
 const managedServiceInstallationReaderTemplateID iamv1.ServiceRoleTemplateID = "managedservice.installation-reader"
 
-const managedServiceInstallationReaderHistoricalProfileRevision uint64 = 4
+// Advancing this Profile requires a new immutable template version.
+const managedServiceInstallationReaderCurrentProfileRevision uint64 = 8
+
+// Published template versions 1 and 2 bind Profiles 4 and 7 respectively.
+// Their bytes remain fixed when the current product Profile advances.
+var managedServiceInstallationReaderHistoricalProfileRevisions = []uint64{4, 7}
 
 // BuiltInServiceRoleTemplates returns only templates owned by this executable.
 // Additional signed product templates are migration data and must be resolved
@@ -33,7 +38,7 @@ func BuiltInServiceRoleTemplates() ([]iamv1.ServiceRoleTemplate, error) {
 // select a historical permission ceiling.
 func BuiltInServiceRoleTemplateArchive() ([]iamv1.ServiceRoleTemplate, error) {
 	policies, profiles, err := builtInServiceRolePolicyVersions()
-	if err != nil || len(policies) != 2 || len(profiles) != 2 {
+	if err != nil || len(policies) != 3 || len(profiles) != 3 {
 		return nil, ErrInvalidPolicyState
 	}
 	result := make([]iamv1.ServiceRoleTemplate, 0, len(policies))
@@ -71,30 +76,34 @@ func BuiltInServiceRoleTemplateArchive() ([]iamv1.ServiceRoleTemplate, error) {
 
 func builtInServiceRolePolicyVersions() ([]iamv1.PolicyVersion, []iamv1.AuthorizationProfile, error) {
 	currentProfile, found := iamv1.LookupAuthorizationProfile(iamv1.ProductManagedService)
-	if !found {
+	if !found || currentProfile.Revision != managedServiceInstallationReaderCurrentProfileRevision {
 		return nil, nil, ErrInvalidPolicyState
 	}
-	var historicalProfile iamv1.AuthorizationProfile
-	for _, candidate := range iamv1.HistoricalAuthorizationProfiles() {
-		if candidate.Product == iamv1.ProductManagedService && candidate.Revision == managedServiceInstallationReaderHistoricalProfileRevision {
-			historicalProfile = candidate
-			break
+	profiles := make([]iamv1.AuthorizationProfile, 0, 3)
+	for _, revision := range managedServiceInstallationReaderHistoricalProfileRevisions {
+		var historical iamv1.AuthorizationProfile
+		for _, candidate := range iamv1.HistoricalAuthorizationProfiles() {
+			if candidate.Product == iamv1.ProductManagedService && candidate.Revision == revision {
+				historical = candidate
+				break
+			}
 		}
+		if historical.Product == "" || historical.Revision >= currentProfile.Revision {
+			return nil, nil, ErrInvalidPolicyState
+		}
+		profiles = append(profiles, historical)
 	}
-	if historicalProfile.Product == "" || historicalProfile.Revision >= currentProfile.Revision {
-		return nil, nil, ErrInvalidPolicyState
+	profiles = append(profiles, currentProfile)
+	policies := make([]iamv1.PolicyVersion, 0, len(profiles))
+	for _, profile := range profiles {
+		version, err := systemPolicyVersion(iamv1.SystemPolicyManagedServiceInstallationReader,
+			[]iamv1.AuthorizationProfile{profile})
+		if err != nil {
+			return nil, nil, err
+		}
+		policies = append(policies, version)
 	}
-	historical, err := systemPolicyVersion(iamv1.SystemPolicyManagedServiceInstallationReader,
-		[]iamv1.AuthorizationProfile{historicalProfile})
-	if err != nil {
-		return nil, nil, err
-	}
-	current, err := systemPolicyVersion(iamv1.SystemPolicyManagedServiceInstallationReader,
-		[]iamv1.AuthorizationProfile{currentProfile})
-	if err != nil || historical.ID == current.ID || historical.ContentDigest == current.ContentDigest {
-		return nil, nil, ErrInvalidPolicyState
-	}
-	return []iamv1.PolicyVersion{historical, current}, []iamv1.AuthorizationProfile{historicalProfile, currentProfile}, nil
+	return policies, profiles, nil
 }
 
 func cloneServiceRoleTemplates(values []iamv1.ServiceRoleTemplate) []iamv1.ServiceRoleTemplate {

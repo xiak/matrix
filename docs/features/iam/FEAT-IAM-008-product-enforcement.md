@@ -93,6 +93,15 @@ Audit对主体载体的允许范围由同一封闭action catalog逐行声明：�
 
 ## 当前纵向切片：数据库驱动的产品授权目录与服务角色
 
+ELK 候选的 managedservice Profile revision 8 增加 USER 专属的依赖 Use 动作时，
+服务角色模板也必须发布新版本，不能重写已同意的版本。内置安装读取模板 v1 固定
+绑定 Profile 4，v2 固定绑定 Profile 7；当前 v3 绑定 Profile 8，权限上限仍只有实例读取。
+迁移只核对已有 v1/v2 的原始规范内容，不在新安装中补造历史模板或账号同意；目录只
+发布 v3。固定 IAM86 前驱已保存的 v2 摘要必须原样保留。此修复不授予服务角色依赖
+Use 权限，也不把前驱数据库迁移测试扩张为跨 profile 的签名发布升级支持。
+修复后的真实前版本进程迁移以 race 模式通过（52.97 秒），Profile 推进门禁通过
+（51.24 秒）；独立 CI 仍须验证当前修复组合。
+
 本片替换“在线求值只能识别当前 executable 源码产品”的过渡边界，但不增加租户可写注册接口。受信发布/安装 owner 在验签并确定完整 release input 后，才可把一个 `ProductAuthorizationReleaseCatalog` 交给 IAM migration source。目录同时携带额外 current/historical `AuthorizationProfile`、产品拥有的不可变服务Role权限上限 `PolicyVersion` 和 `ServiceRoleTemplate`；IAM 对整份目录执行严格解码、规范字节、摘要、产品归属、交叉引用、总量和确定排序校验，目录上限1 MiB，超限必须改用尚未交付的非嵌入安装协议。额外历史只可属于同一发布输入明确新增的产品，不能给 Matrix 内置产品补造历史。当前 Matrix 内置 Profile 必须仍以源码规范字节逐项存在，不能被外部声明覆盖、删除或同 revision 换内容。
 
 服务Role权限上限只能引用目录中同一产品的精确 Profile 编译结果；模板再精确绑定该不可变版本、已登记的USER实例bind/unbind Action、资源种类、服务purpose和会话上限。ACTIVE模板必须引用产品当前Profile；RETIRED模板可以保留历史权限解释，但其bind/unbind词汇仍必须在当前Profile中有效，避免发布演进删除撤销动作后把既有绑定永久搁浅。迁移把 Profile、系统策略版本与模板作为一个原子seed写入并逐项验证，不能只装模板而缺失它的解释依据。该系统策略只可由对应服务Role求值，普通USER/GROUP/客户Role的策略附件入口在事务锁内拒绝直接挂载；迁移与最终verify还通过非授权的`account_roots`索引逐Account设置RLS上下文，发现任何历史有效直授即整体失败且不自动删除，不能绕过工作负载同意取得模板上限。模板发布本身不创建服务主体、Role、binding、会话或任何Account授权；额外产品登记、服务主体凭据、Account显式同意和业务PEP仍是彼此独立的证明。首片只接受`TENANT` action，且只允许额外Profile复用已经安装并已封存凭据的calling service purpose；`INSTALLATION`/`INSTALLATION_PROBE`仍等待独立平台准入与响应契约。

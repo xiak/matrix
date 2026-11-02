@@ -16,7 +16,7 @@ func TestServiceRoleTemplateCatalogBindsAnExactLeastPrivilegePolicyVersion(t *te
 	template := templates[0]
 	ceiling, err := SystemPolicyVersion(iamv1.SystemPolicyManagedServiceInstallationReader)
 	if err != nil || iamv1.CheckServiceRoleTemplate(template, iamv1.AllAuthorizationProfiles()) != nil || template.Status != iamv1.ServiceRoleTemplateActive ||
-		template.Version != 2 ||
+		template.Version != 3 ||
 		template.Spec.Product != iamv1.ProductManagedService || template.Spec.ServicePurpose != iamv1.ServicePaaS ||
 		template.Spec.RoleName != "ManagedServiceInstallationReader" || template.Spec.RoleDescription == "" ||
 		template.Spec.PolicyVersion != (iamv1.PolicyVersionReference{PolicyID: ceiling.PolicyID, VersionID: ceiling.ID, ContentDigest: ceiling.ContentDigest}) ||
@@ -37,27 +37,34 @@ func TestServiceRoleTemplateCatalogBindsAnExactLeastPrivilegePolicyVersion(t *te
 	}
 }
 
-func TestServiceRoleTemplateArchivePreservesTheExactPredecessorWithoutPublishingItAsCurrent(t *testing.T) {
+func TestServiceRoleTemplateArchivePreservesPublishedConsentWithoutPublishingItAsCurrent(t *testing.T) {
 	directory, err := BuiltInServiceRoleTemplates()
 	archive, archiveErr := BuiltInServiceRoleTemplateArchive()
-	policies, _, policyErr := builtInServiceRolePolicyVersions()
-	if err != nil || archiveErr != nil || policyErr != nil || len(directory) != 1 || len(archive) != 2 || len(policies) != 2 {
+	policies, profiles, policyErr := builtInServiceRolePolicyVersions()
+	if err != nil || archiveErr != nil || policyErr != nil || len(directory) != 1 || len(archive) != 3 || len(policies) != 3 {
 		t.Fatal("service role template archive is unavailable", err, archiveErr, policyErr)
 	}
-	if archive[0].ID != directory[0].ID || archive[1].ID != directory[0].ID ||
-		archive[0].Version != 1 || archive[1].Version != 2 || !reflect.DeepEqual(archive[1], directory[0]) ||
-		archive[0].Status != iamv1.ServiceRoleTemplateActive || archive[1].Status != iamv1.ServiceRoleTemplateActive ||
-		archive[0].ContentDigest == archive[1].ContentDigest ||
-		archive[0].Spec.PolicyVersion != (iamv1.PolicyVersionReference{PolicyID: policies[0].PolicyID,
-			VersionID: policies[0].ID, ContentDigest: policies[0].ContentDigest}) ||
-		archive[1].Spec.PolicyVersion != (iamv1.PolicyVersionReference{PolicyID: policies[1].PolicyID,
-			VersionID: policies[1].ID, ContentDigest: policies[1].ContentDigest}) ||
-		policies[0].Compilation == nil || policies[1].Compilation == nil ||
-		len(policies[0].Compilation.Profiles) != 1 || len(policies[1].Compilation.Profiles) != 1 ||
-		policies[0].Compilation.Profiles[0].Product != iamv1.ProductManagedService ||
-		policies[1].Compilation.Profiles[0].Revision <= policies[0].Compilation.Profiles[0].Revision ||
-		policies[0].Compilation.Profiles[0].Revision != managedServiceInstallationReaderHistoricalProfileRevision {
-		t.Fatal("current and retained service role versions lost their exact policy/profile lineage")
+	if !reflect.DeepEqual(archive[2], directory[0]) {
+		t.Fatal("directory did not select the current immutable template")
+	}
+	for index, template := range archive {
+		policy := policies[index]
+		if template.ID != directory[0].ID || template.Version != uint64(index+1) ||
+			template.Status != iamv1.ServiceRoleTemplateActive ||
+			template.Spec.PolicyVersion != (iamv1.PolicyVersionReference{PolicyID: policy.PolicyID,
+				VersionID: policy.ID, ContentDigest: policy.ContentDigest}) ||
+			policy.Compilation == nil || len(policy.Compilation.Profiles) != 1 ||
+			policy.Compilation.Profiles[0].Product != iamv1.ProductManagedService ||
+			policy.Compilation.Profiles[0].Revision != profiles[index].Revision {
+			t.Fatal("service role version lost its exact policy/profile lineage")
+		}
+	}
+	// Version 2 is retained by the fixed IAM86 predecessor and real consent.
+	// Adding the USER-only dependency Use action must not rewrite this ceiling.
+	if profiles[0].Revision != 4 || profiles[1].Revision != 7 || profiles[2].Revision <= 7 ||
+		archive[1].ContentDigest != "sha256:88631b8f2a7de9df63ec417ad7453454aa88eaa6a2ee9b86297558e2bc372e0f" ||
+		archive[2].ContentDigest == archive[1].ContentDigest {
+		t.Fatal("published service role consent changed when the Profile advanced")
 	}
 }
 

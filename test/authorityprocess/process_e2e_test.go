@@ -24753,6 +24753,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	activation := managedservicev1.ActivateQuotaRequest{OfferingID: "postgresql-18", QuotaShapeID: "pg-small", InstanceCount: 2}
 	expectedOfferingIDs := []string{
 		managedservicev1.ElasticsearchOfferingID,
+		managedservicev1.KibanaOfferingID,
 		managedservicev1.LogstashOfferingID,
 		managedservicev1.MySQLOfferingID,
 		managedservicev1.PostgreSQLOfferingID,
@@ -24760,6 +24761,7 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	}
 	expectedServiceIDs := []string{
 		managedservicev1.ElasticsearchServiceID,
+		managedservicev1.KibanaServiceID,
 		managedservicev1.LogstashServiceID,
 		managedservicev1.MySQLServiceID,
 		managedservicev1.PostgreSQLServiceID,
@@ -26620,6 +26622,7 @@ func assertAuthorityPlaintextAbsent(
 	}
 	managedServiceRoleSessions := readManagedServiceRoleSessionRequests(t, ctx, admin)
 	roleActors := readRoleActorReferences(t, ctx, admin)
+	sessionTargets := readSessionTargetAuthorities(t, ctx, admin)
 	policyTargets := readPolicyTargetAuthorities(t, ctx, admin)
 	policyAttachmentTargets := readPolicyAttachmentTargetAuthorities(t, ctx, admin)
 	paasOperations := readPaaSOperationAuthorities(t, ctx, admin)
@@ -26695,6 +26698,13 @@ func assertAuthorityPlaintextAbsent(
 			t.Fatalf("invalid Role actor plaintext inspection source %q: %v", source, err)
 		}
 		for value := range roleActorStructural {
+			structuralLowEntropy[value] = struct{}{}
+		}
+		sessionStructural, err := sessionTargetStructuralLowEntropy(source, document, auditAuthorityDocument, sessionTargets)
+		if err != nil {
+			t.Fatal("invalid Session target plaintext inspection source")
+		}
+		for value := range sessionStructural {
 			structuralLowEntropy[value] = struct{}{}
 		}
 		policyStructural, err := policyTargetStructuralLowEntropy(
@@ -27094,6 +27104,81 @@ func readRoleActorReferences(
 		t.Fatal("incomplete Role actor authority")
 	}
 	return result
+}
+
+// Session IDs come from the server's random ID generator. Verify the exact
+// tenant and retained Session row before exempting a six-digit collision in
+// its Audit target; arbitrary ID-shaped strings remain untrusted.
+func readSessionTargetAuthorities(t *testing.T, ctx context.Context, admin *pgx.Conn) map[string]string {
+	t.Helper()
+	rows, err := admin.Query(ctx, "SELECT tenant_id,id,principal_id FROM iam.sessions")
+	if err != nil {
+		t.Fatal("read Session target authorities")
+	}
+	defer rows.Close()
+	result := map[string]string{}
+	for rows.Next() {
+		var tenant, id, principal string
+		if rows.Scan(&tenant, &id, &principal) != nil || iamv1.ValidateID("tenant", tenant) != nil ||
+			iamv1.ValidateID("principal", principal) != nil || !isGeneratedSessionID(id) {
+			t.Fatal("invalid retained Session target")
+		}
+		result[tenant+"\x00"+id] = principal
+	}
+	if rows.Err() != nil {
+		t.Fatal("incomplete Session target authorities")
+	}
+	return result
+}
+
+func isGeneratedSessionID(id string) bool {
+	const prefix = "session-"
+	if !strings.HasPrefix(id, prefix) || id != strings.ToLower(id) {
+		return false
+	}
+	decoded, err := hex.DecodeString(strings.TrimPrefix(id, prefix))
+	return err == nil && len(decoded) == 16
+}
+
+func sessionTargetStructuralLowEntropy(source, document, authorityDocument string, known map[string]string) (map[string]struct{}, error) {
+	result := map[string]struct{}{}
+	prefix, authority := "$.", document
+	switch source {
+	case "iam.outbox":
+		if authorityDocument != "" {
+			return nil, errors.New("unexpected Session authority copy")
+		}
+	case "audit.document.IAM":
+		if document != authorityDocument {
+			return nil, errors.New("Session Audit document differs from its authority")
+		}
+		authority = authorityDocument
+	case "audit.canonical.IAM":
+		prefix, authority = "$.event.", authorityDocument
+	default:
+		return result, nil
+	}
+	var event auditv1.Event
+	if auditv1.DecodeRequest(strings.NewReader(authority), &event) != nil || auditv1.ValidateEventForSource(auditv1.SourceIAM, event) != nil {
+		return nil, errors.New("invalid Session Audit authority")
+	}
+	if source == "audit.canonical.IAM" {
+		canonical, _, err := auditv1.CanonicalizeEvent(auditv1.SourceIAM, event)
+		if err != nil || canonical != document {
+			return nil, errors.New("Session canonical document differs from its authority")
+		}
+	}
+	if event.Target.Kind != auditv1.TargetSession || !isGeneratedSessionID(event.Target.ID) || event.InstallationID != "" ||
+		(event.Action != auditv1.ActionIAMSessionIssued && event.Action != auditv1.ActionIAMSessionRevoked) {
+		return result, nil
+	}
+	principal, found := known[string(event.TenantID)+"\x00"+event.Target.ID]
+	if !found || (event.Action == auditv1.ActionIAMSessionIssued &&
+		(event.Actor.Type != auditv1.ActorUser || string(event.Actor.ID) != principal)) {
+		return result, nil
+	}
+	result[structuralLowEntropyPathKey(prefix+"target.id", event.Target.ID)] = struct{}{}
+	return result, nil
 }
 
 // Customer Policy identities are derived by IAM from the Account, actor and
@@ -28462,6 +28547,50 @@ func TestAuthorityPlaintextInspection(t *testing.T) {
 			if marshalErr != nil || scanErr != nil || structuralErr == nil && location == "" {
 				t.Fatal("caller-controlled or noncanonical Audit access identity escaped plaintext inspection")
 			}
+		}
+	})
+	t.Run("session-target-authority", func(t *testing.T) {
+		session := event
+		session.Action = auditv1.ActionIAMSessionIssued
+		session.Target = auditv1.TargetReference{Kind: auditv1.TargetSession, ID: "session-" + strings.Repeat("a", 13) + code + strings.Repeat("b", 13)}
+		session.RequestDigest = "sha256:" + strings.Repeat("c", 64)
+		encoded, err := json.Marshal(session)
+		canonical, _, canonicalErr := auditv1.CanonicalizeEvent(auditv1.SourceIAM, session)
+		if err != nil || canonicalErr != nil {
+			t.Fatal("invalid Session authority fixture")
+		}
+		known := map[string]string{string(session.TenantID) + "\x00" + session.Target.ID: string(session.Actor.ID)}
+		for _, source := range []struct{ name, document, authority string }{
+			{"iam.outbox", string(encoded), ""}, {"audit.document.IAM", string(encoded), string(encoded)},
+			{"audit.canonical.IAM", canonical, string(encoded)},
+		} {
+			structural, err := sessionTargetStructuralLowEntropy(source.name, source.document, source.authority, known)
+			location, scanErr := authorityPlaintextLocationWithStructural(source.document, nil, structural, code)
+			if err != nil || scanErr != nil || location != "" {
+				t.Fatal("verified Session ID collision treated as OTP disclosure")
+			}
+			location, scanErr = authorityPlaintextLocationWithStructural(source.document, nil, structural, session.Target.ID)
+			if scanErr != nil || location == "" {
+				t.Fatal("Session exception hid a longer credential")
+			}
+			for _, unproved := range []map[string]string{nil, {"another-account\x00" + session.Target.ID: string(session.Actor.ID)}, {string(session.TenantID) + "\x00" + session.Target.ID: "another-user"}} {
+				structural, err = sessionTargetStructuralLowEntropy(source.name, source.document, source.authority, unproved)
+				location, scanErr = authorityPlaintextLocationWithStructural(source.document, nil, structural, code)
+				if err != nil || scanErr != nil || location == "" {
+					t.Fatal("unproved Session ID escaped plaintext inspection")
+				}
+			}
+		}
+		if _, err := sessionTargetStructuralLowEntropy("audit.canonical.IAM", canonical+" ", string(encoded), known); err == nil {
+			t.Fatal("changed canonical bytes obtained an exception")
+		}
+		copy := session
+		copy.RequestID, copy.CorrelationID = "request-"+code, "request-"+code
+		copied, _ := json.Marshal(copy)
+		structural, err := sessionTargetStructuralLowEntropy("iam.outbox", string(copied), "", known)
+		location, scanErr := authorityPlaintextLocationWithStructural(string(copied), nil, structural, code)
+		if err != nil || scanErr != nil || location == "" {
+			t.Fatal("Session authority hid code in request text")
 		}
 	})
 	t.Run("policy-target-authority", func(t *testing.T) {

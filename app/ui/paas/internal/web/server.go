@@ -47,7 +47,7 @@ func NewHandler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ready", serveReadiness)
 	mux.HandleFunc("GET /", serveStatic(assets))
-	return securityHeaders(mux, staticContentSecurityPolicy(assets))
+	return securityHeaders(mux)
 }
 
 func serveStatic(assets fs.FS) http.HandlerFunc {
@@ -173,6 +173,9 @@ func writeStatic(response http.ResponseWriter, status int, assetName string, ass
 		contentType = "application/octet-stream"
 	}
 	response.Header().Set("Content-Type", contentType)
+	if path.Ext(assetName) == ".html" {
+		response.Header().Set("Content-Security-Policy", staticContentSecurityPolicy(asset))
+	}
 	if strings.HasPrefix(assetName, "_next/static/") {
 		response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
@@ -192,30 +195,16 @@ func serveReadiness(response http.ResponseWriter, request *http.Request) {
 	})
 }
 
-func staticContentSecurityPolicy(assets fs.FS) string {
+// Authorize only scripts in the document being served. A site-wide union grows
+// with every route and can overflow the release gateway response-header buffer.
+func staticContentSecurityPolicy(page []byte) string {
 	hashes := map[string]struct{}{}
-	err := fs.WalkDir(assets, ".", func(name string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
+	for _, match := range inlineScript.FindAllSubmatch(page, -1) {
+		if len(match) != 2 || len(match[1]) == 0 {
+			continue
 		}
-		if entry.IsDir() || path.Ext(name) != ".html" {
-			return nil
-		}
-		page, err := fs.ReadFile(assets, name)
-		if err != nil {
-			return err
-		}
-		for _, match := range inlineScript.FindAllSubmatch(page, -1) {
-			if len(match) != 2 || len(match[1]) == 0 {
-				continue
-			}
-			digest := sha256.Sum256(match[1])
-			hashes["'sha256-"+base64.StdEncoding.EncodeToString(digest[:])+"'"] = struct{}{}
-		}
-		return nil
-	})
-	if err != nil {
-		panic("embedded control-plane CSP cannot be built")
+		digest := sha256.Sum256(match[1])
+		hashes["'sha256-"+base64.StdEncoding.EncodeToString(digest[:])+"'"] = struct{}{}
 	}
 	allowedScripts := make([]string, 0, len(hashes)+1)
 	allowedScripts = append(allowedScripts, "'self'")
@@ -228,7 +217,8 @@ func staticContentSecurityPolicy(assets fs.FS) string {
 		" form-action 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; worker-src 'none'"
 }
 
-func securityHeaders(next http.Handler, contentSecurityPolicy string) http.Handler {
+func securityHeaders(next http.Handler) http.Handler {
+	contentSecurityPolicy := staticContentSecurityPolicy(nil)
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Security-Policy", contentSecurityPolicy)
 		response.Header().Set("Cross-Origin-Resource-Policy", "same-origin")
