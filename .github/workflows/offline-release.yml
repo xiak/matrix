@@ -40,6 +40,7 @@ jobs:
           set -euo pipefail
           work="$RUNNER_TEMP/matrix-offline"
           mkdir -m 700 "$work"
+          mkdir "$work/evidence"
           echo "MATRIX_OFFLINE_WORK=$work" >> "$GITHUB_ENV"
           go test -count=1 ./app/service/installation/test/phase1e2e ./deploy/cmd/matrix-offline-fixture
           go build -o "$work/matrix-release" ./deploy/cmd/matrix-release
@@ -54,6 +55,58 @@ jobs:
           "$work/matrix-release" keygen --key-id offline-acceptance \
             --private-key "$work/private/signer.json" --trust-key "$work/trust.json"
           sudo sysctl -w vm.max_map_count=1048576
+      - name: Verify isolated native Docker execution before assembly
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env MATRIX_OFFLINE_WORK="$MATRIX_OFFLINE_WORK" unshare --net --mount bash -s <<'PROBE'
+          set -euo pipefail
+          umask 077
+          work="$MATRIX_OFFLINE_WORK"
+          mount --make-rprivate /
+          mkdir "$work/probe-run"
+          mount --bind "$work/probe-run" /run
+          ip link set lo up
+          export DOCKER_HOST=unix:///var/run/docker.sock
+          export DOCKER_CONFIG="$work/probe-client"
+          printf '{}\n' > "$work/probe-daemon.json"
+          dockerd --config-file "$work/probe-daemon.json" --data-root "$work/probe-engine" --exec-root /run/docker \
+            --pidfile /run/docker.pid --host "$DOCKER_HOST" --storage-driver overlay2 > "$work/probe-engine.log" 2>&1 &
+          engine_pid=$!
+          cleanup() {
+            kill -TERM "$engine_pid" 2>/dev/null || true
+            wait "$engine_pid" || true
+            chmod 755 "$work/evidence"
+            find "$work/evidence" -maxdepth 1 -type f -exec chmod 644 '{}' +
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            if docker info > /dev/null 2>&1; then break; fi
+            kill -0 "$engine_pid"
+            sleep 1
+          done
+          docker image load --input "$work/private/postfix.tar" > /dev/null
+          fixture_image="$(jq -r .imageId "$work/private/fixture.json")"
+          probe_id="$(docker run --detach --network none --label com.xiak.matrix.test=offline-runtime-probe \
+            --security-opt no-new-privileges:true --cap-drop ALL \
+            --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add FOWNER --cap-add SETGID --cap-add SETUID \
+            --entrypoint sh "$fixture_image" -c 'exec sleep 120')"
+          if ! timeout 30s docker exec "$probe_id" true > "$work/probe-exec.txt" 2>&1; then
+            # This command only executes `true`; it cannot print image secrets.
+            # Strip runtime paths and native identities from its error as well.
+            python3 - "$work/probe-exec.txt" > "$work/evidence/native-runtime-error.txt" <<'PY'
+          import re, sys
+          text = open(sys.argv[1]).read(8192)
+          text = re.sub(r'/[^\s:\x27";]+', '[path]', text)
+          text = re.sub(r'\b[0-9a-f]{12,}\b', '[identity]', text)
+          print(text)
+          PY
+            exit 1
+          fi
+          test "$(docker inspect --format '{{index .Config.Labels "com.xiak.matrix.test"}}' "$probe_id")" = offline-runtime-probe
+          docker rm --force "$probe_id" > /dev/null
+          printf 'native-container-exec PASSED\n' > "$work/evidence/native-runtime-probe.txt"
+          PROBE
       - name: Assemble fresh-install A and its exact successor B
         shell: bash
         run: |
@@ -69,7 +122,6 @@ jobs:
             --created-at "$created" --private-key "$work/private/signer.json" --trust-key "$work/trust.json" \
             --gvisor-archive "$work/gvisor.tar.zstd" \
             --previous-id "$(jq -r .release.id "$work/release-a/release.json")" --previous-version v0.3.0-products.1
-          mkdir "$work/evidence"
           cp "$work/release-a/release.json" "$work/evidence/release-a.json"
           cp "$work/release-b/release.json" "$work/evidence/release-b.json"
           cp "$work/trust.json" "$work/evidence/trust.json"
@@ -125,7 +177,8 @@ jobs:
               postgres_id="$(docker container ls --all --quiet --filter label=com.xiak.matrix.role=postgres)"
               if [[ "$postgres_id" =~ ^[a-f0-9]{12,64}$ ]]; then
                 timeout 10s docker inspect --format '{{json .State.Health}}' "$postgres_id" \
-                  | jq '{Status, FailingStreak, Log: [.Log[] | {Start, End, ExitCode}]}' > "$work/evidence/database-health.json" || true
+                  | python3 -c 'import json,re,sys; h=json.load(sys.stdin); clean=lambda s: re.sub(r"\b[0-9a-f]{12,}\b", "[identity]", re.sub(r"/[^\s:\x27\";]+", "[path]", s[:4096])); print(json.dumps({"Status":h["Status"], "FailingStreak":h["FailingStreak"], "Log":[{**{k:l[k] for k in ("Start","End","ExitCode")}, "Output":clean(l["Output"])} for l in h["Log"]]}))' \
+                  > "$work/evidence/database-health.json" || true
                 timeout 10s docker top "$postgres_id" -eo comm > "$work/evidence/database-processes.txt" 2>/dev/null || true
                 timeout 10s docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}} {{.PIDs}}' "$postgres_id" \
                   > "$work/evidence/database-resources.txt" 2>/dev/null || true
