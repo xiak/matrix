@@ -570,8 +570,30 @@ Linux/amd64 官方镜像固定为
 重启保留、双作用域的私网/入口/数据/凭据隔离、结果丢失重放与独立删除。
 真实 PostgreSQL 的前驱迁移、租户旅程与依赖竞争三项 race 门禁通过；相关契约、
 适配器、目录、worker、发布/旧拓扑/回退保护及架构检查通过。
-组合报告明确保留平台/发布门禁 `NOT_RUN`；独立 CI、真实平台进程及签名包/
-浏览器验收尚待完成。
+组合报告明确保留平台/发布门禁 `NOT_RUN`。固定实现
+`764cff427698377f70c24264be59a9fc5606d123` 的
+[独立 Verification](https://github.com/xiak/matrix/actions/runs/41485948364)
+十九项全部通过，真实七产品 P1 为 325.39 秒；覆盖目录、原生读写、IAM 精确授权与
+撤权、跨账号拒绝、配额、Operation、删除及 Audit。仅增加 checkpoint 的 `e3128822c`
+又通过 [PR Verification](https://github.com/xiak/matrix/actions/runs/41486683660)
+十九项；对应 [Product onboarding](https://github.com/xiak/matrix/actions/runs/41486683645)
+实际制品 `13164025331` 为 `PASSED`、十八项齐全，平台/发布状态仍为 `NOT_RUN`。
+
+本机 Windows P1 首次因 Docker 默认地址池耗尽而失败；有界探针复现后，只回收归属
+明确的停用测试平台容器和网络，保留安装数据。重跑在第二个 Kibana 的三分钟就绪
+观察边界失败（总计 734.74 秒）；未放宽边界，也未把该次运行改写为通过。上述 Linux
+成功结果分别证明其运行环境，不承诺 Windows 启动时延。
+
+同一固定实现的私有签名包已通过已有 ELK 安装升级、Redis 真实页面开通与创建、
+原生端点读写和 AOF 确认落盘后的强制重启。两个 Redis 的兼容升级、回滚、指定备份
+恢复与不含 Redis 旧包的回退保护由
+[FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)拥有。
+用户流程与真实截图见[Redis 使用示例](../user-guide/services-and-applications.md#示例开通并验证-redis)。
+恢复后经公开 API 分别终止两个测试 Redis。第一个实例的容器、网络、数据、凭据
+和端口精确释放，对照实例的容器身份、启动时间、网络、挂载与凭据保持一致，
+仍能读回原值并继续写入；最终两个实例均 TERMINATED，两个配额全部归还。
+终止后的真实页面展示端点释放与配额归还，不把请求已接受当作清理已完成。
+这仍不是全新安装的断网空缓存 Gate C 或公开发布证据。
 
 产品使用每实例独立的 `matrix` 业务账号和随机密码，关闭匿名默认账号；原始凭据
 仅保存在保护目录中，ACL 使用密码摘要。配置固定为 AOF、每秒同步和

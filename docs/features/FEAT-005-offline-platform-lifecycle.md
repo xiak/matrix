@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current ELK candidate is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. The fixed ELK source `a162c1cc25591139aaa9ec5f662488da7ad30084` passed exact-source independent CI and its local signed same-profile lifecycle/browser gate; complete cold-cache disconnected Gate C and public release remain open. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. These bounded private-candidate results do not constitute complete Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
+- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current managed-product candidate (ELK and Redis) is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. The fixed ELK source `a162c1cc25591139aaa9ec5f662488da7ad30084` passed exact-source independent CI and its local signed same-profile lifecycle/browser gate; complete cold-cache disconnected Gate C and public release remain open. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. These bounded private-candidate results do not constitute complete Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current ELK candidate is exactly IAM 88 / Audit 40 / PaaS 9 at contract revision 41. The retained SQL migration gates are development evidence, not permission for a cross-profile release upgrade; revision 40 and revision 41 transitions remain rejected, and no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -299,9 +299,44 @@ Redis 候选沿用 `88/40/9+r41`，新增固定 Redis 制品和受信 worker 输
 没有新增权威数据库或 IAM Action。已经安装的 ELK `.3/.4` 仍按原六产品清单、
 签名与准确拓扑摘要识别，不能把少一个制品的旧清单作为新候选。回退继续逐项
 核对当前产品的纳管组件：目标缺少 Redis 时在运行效果前拒绝。清单、拓扑、
-签名及每个组件的回退保护回归已通过；Redis 签名运行与浏览器验收尚未完成，
-不得由这些单元检查推导旧 ELK 到 Redis 的运行验收通过。产品切片归
+签名及每个组件的回退保护回归已通过。产品切片与独立 CI 归
 [FEAT-007](FEAT-007-control-plane-console.md#redis-接入切片)。
+
+2026-11-03，从干净固定源码 `764cff427698377f70c24264be59a9fc5606d123`
+组装的两个 Redis 私有候选完成本机宿主 Docker 生命周期，没有 DinD。
+两个包各自的 23 个清单、签名和负载文件逐字节校验一致，并恢复清单要求的执行位。
+
+| Redis 签名候选 | Manifest SHA-256 |
+| --- | --- |
+| `matrix-v0.3.0-redis.1-764cff427698`，构建 `redis-handbook-20261103-a` | `153f05abac9ace915510824babe7f9a988ea2c69b6261ddc40248a34da34a72b` |
+| `matrix-v0.3.0-redis.2-764cff427698`，构建 `redis-handbook-20261103-b`，准确前驱为上述 `.1` | `4c19c6d0d8c83cb05d02023c0c5146762796cb5ce64db7b6b33f1d92f89254d9` |
+
+`.1` 明确声明既有 `matrix-v0.3.0-elk.3-a162c1cc2559` 为前驱；新装调用被
+`INSTALL_RELEASE_HAS_PREDECESSOR` 拒绝。因此本次使用保留的 ELK 安装升级，
+不把这个升级包当作 Redis 全新安装包的验收证据。
+
+| 本机 Redis 流程 | 已验证结果 |
+| --- | --- |
+| ELK `.3` → Redis `.1` | `cmd-a4e397102497e562e6c1387b2f988eaa`，READY；自动备份 `backup-c5b5563b9fada5e2ab33542071547683` |
+| 两实例就绪后的独立备份 | `cmd-d49402fd8704837122f1408f6254aea2`；`backup-6c709516daab337398c0f2a9286a6998` |
+| 回退到不含 Redis 的 ELK | `ROLLBACK_PRODUCT_INVENTORY_INCOMPATIBLE`；保留当前实例及读写能力 |
+| Redis `.1` → `.2` | `cmd-11c67920547d68802ebd706c71c99d92`，READY；自动备份 `backup-48bd10918f550250c15516369829686b` |
+| `.2` → `.1` 兼容回滚 | `cmd-82c76c0c3e264c10cec9e8fdd0a68b95`，READY |
+| 按独立备份恢复 | `cmd-1894e3fe20082f045808c2be99024a54`，READY；恢复到所选 `.1` 备份 |
+| 最终验证 | `cmd-d339a60979ac99f5cd8f48b24112f731`，READY |
+
+升级、回滚、恢复全过程中，两实例的四个产品/入口容器身份、启动时间、网络与挂载
+保持一致；八份凭据和固定配置文件逐字节不变。原端点和密码持续可用，业务键可读写，
+备份后写入 Redis 的内容也保留。指定备份恢复移除了备份后新增的未使用配额，
+恢复前 Matrix Session 返回 401，原账号密码可重新登录，真实浏览器仍能读取两实例。
+平台状态恢复与业务数据保留分别验证，不把平台备份描述为 Redis 数据备份。
+
+此证据尚未覆盖 Redis 全新安装的断网空缓存 Gate C、扩展产品失败升级注入或公开发布。
+
+结束后恢复原 Logstash `.3` 安装，同一批十九个容器全部健康，验证
+`cmd-9b40e8023570638e04b18a4a770d5745` 为 READY。原 MySQL 的 173 个数据文件
+汇总校验值与此前基线一致，原先停止的 PostgreSQL 容器身份、启动/停止时间和零重启
+计数未变。独立 Redis 候选保留并停止，测试产品已通过各自 API 完成精确清理。
 
 2026-11-02，从干净源码 `c34eec1a1cd8472afbbb842a656e232cb2834838` 构建的
 私有签名候选 `matrix-v0.3.0-elk.1-c34eec1a1cd8` 在独立根目录完成安装和 verify，
