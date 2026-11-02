@@ -203,6 +203,82 @@ Matrix 的登录密码、访问密钥和数据库业务密码也不能混用。
 平台维护命令见[安装与维护指南](../runbooks/platform-installation.md)，适用版本与
 验收证据见 [Logstash 接入记录](../features/FEAT-007-control-plane-console.md#logstash-平台集成候选)。
 
+## 示例：为 Elasticsearch 开通 Kibana
+
+本例用于已经包含 Kibana 的交付包。Kibana 连接同一账号中的 Elasticsearch，
+提供浏览器中的数据查看入口。先确认这套环境的数据备份与凭据交付方式。
+
+### 1. 准备可用的 Elasticsearch
+
+1. 从 **产品与服务 → Elasticsearch** 开通服务、激活配额并创建实例。
+2. 本例创建 `elk-search`，显示名称为 `ELK 搜索示例`，选择 **Elasticsearch 8.19 · 标准型** 和 **本机主区域**。
+3. 等待实例显示 **运行中**，记下实例名称和 ID。
+4. 请管理员确认你有这个实例的使用权限，以及创建 Kibana 所需的权限。
+
+![真实 Elasticsearch 安装表单，准备将被 Kibana 使用的搜索实例](images/elasticsearch-install.jpg)
+
+能看到 Elasticsearch，不代表有权把它关联给 Kibana。两个产品还须处于同一区域、
+使用交付包支持的配套版本；无需自行填写地址、网络名或服务密码。
+
+### 2. 创建 Kibana 并选择关联实例
+
+1. 从 **产品与服务 → Kibana** 开通服务，在 **配额** 中准备一个开发型实例。
+2. 进入 **实例 → 安装服务**，本例填写实例 ID `elk-views`、显示名称 `ELK 可视化示例`，选择 **Kibana 8.19 · 开发型** 和 **本机主区域**。
+3. 在 **Elasticsearch 实例** 中选择刚才确认的实例，核对名称和 ID 后提交一次安装任务。
+4. 打开原实例详情，等待状态成为 **运行中**，核对 **关联 Elasticsearch** 是否正确。
+
+![真实 Kibana 安装表单，选择同一账号的 Elasticsearch，并显示使用权限说明](images/kibana-install.jpg)
+
+列表只显示当前账号内符合条件的实例。列表为空时，先检查 Elasticsearch 是否运行、
+区域与版本是否匹配，以及自己的读取权限；不要反复创建 Kibana。
+若页面提示所选实例已变化，使用 **刷新可用实例** 重新读取并选择。已经提交但结果未知时，
+按[恢复原操作](troubleshooting.md#提交后断线或显示结果未知)处理，保留原请求中的选择。
+
+### 3. 打开 Kibana 并验证数据
+
+![运行中的 Kibana 显示准确关联、连接端点和业务登录提示](images/kibana-running.jpg)
+
+从详情取得自己的端点，由管理员确认浏览器到该端点的连接方式。
+在 Kibana 登录页使用关联 Elasticsearch 的业务账号；Matrix 登录账号、
+访问密钥和凭据引用都不能当作这里的业务密码。
+
+本例先由管理员在 Elasticsearch 准备一个只有示例数据的 `matrix-handbook-elk` 索引，
+含 `@timestamp` 时间字段和一条已知事件。使用自己的索引时，先向数据负责人确认名称与时间字段。
+
+1. 首次登录出现欢迎页时，选择 **Explore on my own**，再进入 **Analytics**。
+2. 选择 **Create data view**。名称填写 `Matrix ELK 示例`，**Index pattern** 填写 `matrix-handbook-elk`。
+3. 确认右侧显示匹配到一个来源，**Timestamp field** 选择 `@timestamp`，点击 **Save data view to Kibana**。
+4. 进入 **Discover**，确认左上角已选择这个数据视图，并在 **Documents** 中看到已知事件。
+
+![数据视图表单已匹配真实测试索引，使用该索引的时间字段](images/kibana-data-view.jpg)
+
+![Discover 中真实读取到一条测试事件](images/kibana-discover.jpg)
+
+已有数据视图时直接打开它。若没有数据，先检查右上角时间范围是否覆盖测试事件；
+不要仅因默认的 **Last 15 minutes** 没有结果就重新创建实例。仅打开登录页还不算数据接入成功。
+同一 Elasticsearch 下的多个 Kibana 共享其中保存的数据视图；修改或删除这些内容前，
+先与共同使用的团队确认影响。
+
+### 4. 维护与停用
+
+维护后用原连接方式重新登录，检查原数据视图和已知数据仍在。
+打不开页面时先核对实例状态与网络；登录或数据访问失败时，请管理员检查关联
+Elasticsearch 的状态与业务凭据。不要重建依赖来尝试修复。
+
+维护跨越默认时间范围时，点右上角日期选择器，改为覆盖事件的范围，例如 **Last 1 hour**。
+
+![平台升级、回滚和恢复后，原数据视图仍能查到维护前后的五条事件](images/kibana-maintenance.jpg)
+
+只停用 Kibana 时，按[终止实例](#不再使用一个实例)审阅并提交，等待 **已终止**。
+它的独立入口与服务凭据会释放，关联 Elasticsearch 中的数据和保存的数据视图会保留。
+还需删除 Elasticsearch 时，先备份业务数据，终止所有关联 Kibana 并等待清理完成。
+页面提示仍有关联实例时，应核对原实例的清理状态，不绕过平台删除容器。
+
+![真实 Kibana 实例已终止，端点已释放，页面确认归还配额](images/kibana-terminated.jpg)
+
+平台维护命令见[安装与维护指南](../runbooks/platform-installation.md)。
+实际交付版本与验收边界见 [Kibana 接入记录](../features/FEAT-007-control-plane-console.md#kibana-依赖接入切片)。
+
 ## 日常查看与移交
 
 从实例详情核对名称、ID、状态、端点、操作编号和失败说明。

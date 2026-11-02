@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；数据库驱动的版本化产品 Profile、PaaS/managedservice/Audit PEP、服务Role同意与工作负载绑定、当前角色/程序凭据、可信标签及有界目录隔离已有固定后端实现。PostgreSQL18、MySQL8.4、Elasticsearch8.19、RabbitMQ4.1已通过生产worker的真实创建、协议读写、授权/撤权、终止、数据与凭据删除、配额和Audit闭环。当前精确独立CI与同Profile签名A/B安装、升级、回滚、恢复和专属引擎重启已通过，证据由[011](FEAT-IAM-011-acceptance.md)与[FEAT-005](../FEAT-005-offline-platform-lifecycle.md#current-iam87-foreground-session-and-recovery-gap-release-consumer-gate)拥有。Account服务开通及其不确定结果恢复已有独立LIVE页面与权威后验；额外产品 Logstash 的生产进程门禁和本机签名候选闭环由 [FEAT-007](../FEAT-007-control-plane-console.md#logstash-平台集成候选)拥有；Kibana 依赖使用授权、事务保护与生产 worker 已实现，本机生产进程门禁已通过，当前独立 CI 和签名发布仍待完成，其他未执行页面由010继续验收，HA/集群形态不由当前单节点运行证明。整体未验收。
+- 状态：实施中；数据库驱动的版本化产品 Profile、PaaS/managedservice/Audit PEP、服务Role同意与工作负载绑定、当前角色/程序凭据、可信标签及有界目录隔离已有固定后端实现。PostgreSQL18、MySQL8.4、Elasticsearch8.19、RabbitMQ4.1已通过生产worker的真实创建、协议读写、授权/撤权、终止、数据与凭据删除、配额和Audit闭环。当前精确独立CI与同Profile签名A/B安装、升级、回滚、恢复和专属引擎重启已通过，证据由[011](FEAT-IAM-011-acceptance.md)与[FEAT-005](../FEAT-005-offline-platform-lifecycle.md#current-iam87-foreground-session-and-recovery-gap-release-consumer-gate)拥有。Account服务开通及其不确定结果恢复已有独立LIVE页面与权威后验；额外产品 Logstash 的生产进程门禁和本机签名候选闭环由 [FEAT-007](../FEAT-007-control-plane-console.md#logstash-平台集成候选)拥有；Kibana 依赖使用授权、事务保护与生产 worker 已通过独立 CI，准确源码的本机签名候选功能闭环由 FEAT-007 和 FEAT-005 拥有，完整离线与公开发布仍未验收，其他未执行页面由010继续验收，HA/集群形态不由当前单节点运行证明。整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 

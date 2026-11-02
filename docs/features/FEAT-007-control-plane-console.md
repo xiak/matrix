@@ -376,8 +376,8 @@ Docker 上完成下列核对，没有启动 DinD。签名候选、前驱及安�
 [产品接入手册](../product-guide/managed-service-onboarding.md)维护，执行命令归
 [接入验证运行手册](../runbooks/managed-service-onboarding.md)。公开契约、L/K 可运行
 样例与验证工具已完成适配器验收；Logstash 已通过固定源码的独立平台门禁和本机
-签名候选的浏览器、升级、回滚及恢复验收；Kibana 已通过本机生产进程 P1，
-独立平台 CI、签名包与浏览器验收仍未闭环。上述私有候选
+签名候选的浏览器、升级、回滚及恢复验收；Kibana 已通过生产进程 P1、独立平台 CI
+及同 Profile 签名候选的浏览器与生命周期验收。上述私有候选
 不等于公开发布或完整离线 Release 验收。
 
 ### 正式接入的交付目标
@@ -508,19 +508,45 @@ Kibana 的独立凭据与保存对象、故障重试、网络正反向隔离及�
 还暴露了 MySQL 重启后健康采样时序与会话随机 ID 的六位 OTP 碰撞。不能用 S2 的成功
 替代这些平台失败。修复后 IAM 前版本真实迁移通过（52.97 秒），授权 Profile 推进
 通过（51.24 秒）；Windows 上完整后台旅程触及原六分钟时限，仍记为失败，未延长
-该门禁。修复后的独立 CI、浏览器与签名包验收尚未完成，Redis 尚未接入。
+该门禁。修复源码 `a162c1cc25591139aaa9ec5f662488da7ad30084` 的
+[分支 Verification 41462108500](https://github.com/xiak/matrix/actions/runs/41462108500) 与
+[PR Verification 41462128410](https://github.com/xiak/matrix/actions/runs/41462128410) 均全部
+19 项成功，包含实际六产品、前驱迁移、恢复和权限门禁；
+[Product onboarding 41462126164](https://github.com/xiak/matrix/actions/runs/41462126164)
+的实际附件 `13150478207` 为十二项 `PASSED`，其 P1/P2 仍明确为 `NOT_RUN`。
+这些固定源码的 Linux 成功结果不改写此前 Windows 超时。Redis 尚未接入。
 
 签名候选 `matrix-v0.3.0-elk.1-c34eec1a1cd8` 安装后，APISIX 对真实控制台返回 502：
 原静态服务器将所有页面的内联脚本哈希合并到每个 CSP，新增路由使响应头超过网关缓冲区。
 当前实现只授权实际响应 HTML 中的脚本，保持严格 CSP；回归遍历全部内嵌页面，校验
-脚本哈希、页面间隔离与网关响应头上限。UI 全包 race 与架构检查通过，签名重建后的
-真实浏览器验证仍待执行。安装成功判定的对应修复由
+脚本哈希、页面间隔离与网关响应头上限。UI 全包 race 与架构检查通过；固定 `a162c1c`
+重建的签名 `.3` 安装真实登录页与控制台正常。安装成功判定的对应修复由
 [FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)拥有。
 
 当前切片的三个真实 PostgreSQL 18 存储门禁带 race 通过，包括固定前驱迁移、租户
 旅程和依赖创建/删除竞争；前端 83 个测试文件、2164 个用例及九项导出脚本检查通过，
 类型、lint、架构、样式和 352 个页面资源的可重复构建及内嵌一致性检查通过。
-这些检查证明各自边界，不替代未执行的签名包与浏览器旅程。
+这些检查分别证明各自边界。签名 `matrix-v0.3.0-elk.3-a162c1cc2559` 的真实浏览器
+在独立示例账号开通并创建 `elk-search`、`elk-views` 与 `elk-ingest`，均到达 READY/3。
+Kibana 表单只选择准确 Elasticsearch；业务账号登录后创建数据视图，在 Discover
+看到实际索引事件。用户手册保存安装、运行、数据视图、读取、维护和终止的真实截图。
+平台 API 在 Kibana 活跃时以 `409 DEPENDENCY_IN_USE` 拒绝 Elasticsearch 终止，
+恢复平台备份后同一保护仍有效。
+
+同源码 `.3 → .4` 升级、`.4 → .3` 回滚及 `.3` 备份恢复后，ELK 的七个容器身份、
+启动时间、重启次数、网络、挂载和端点均保持，七份凭据/配置及加密材料摘要保持。
+各阶段均以原业务凭据实际读写 Elasticsearch、Logstash，并读取原 Kibana 数据视图。
+恢复后浏览器重新打开数据视图可见五个阶段的事件；Matrix 旧会话下次读取失效，
+原密码重新登录后读取正常。平台备份没有回退产品业务数据；发布身份与命令回执归
+[FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)。
+
+随后通过公开 API 终止 `elk-views`，操作 `operation-5cded9ffed1a77af28d408dddf4e6a0c`
+到达 TERMINATED/6；真实页面显示终态、端点释放和配额归还。其后台服务令牌从
+Elasticsearch 认证 200 变为 401，容器、网络及保护目录删除，端口拒绝连接；其他
+四个产品容器保持，Elasticsearch 中的原数据、保存的数据视图和共享密钥保留，
+Elasticsearch 与 Logstash 继续可写。最后按依赖顺序终止其余两个测试实例，三份
+配额均无占用，三个实例的容器、网络、数据和凭据目录无残留。此证据接受本机
+私有候选的功能闭环，不扩大为跨 Profile 升级、完整断网空缓存门禁或公开发布。
 
 失败安装可能留下资源而从未获得端点。此时终止允许端点和凭据引用均为空；清理
 失败后的再次终止保留原来的 RESERVED/CONSUMED 配额归还类型。只有确实清理完成
@@ -4745,7 +4771,8 @@ unchanged platform lifecycle and recovery evidence remains owned by Gate C.
 ## Deferred
 
 Money movement, invoices, tax, discounts, metering-based billing, marketplace
-publishing, a full ELK stack, Redis, arbitrary Helm/Compose templates, customer
+publishing, an automatically wired Logstash-to-Elasticsearch ingestion pipeline,
+Redis, arbitrary Helm/Compose templates, customer
 images, public-cloud accounts, VM/network provisioning, Kubernetes,
 multi-region placement, high availability, read replicas, point-in-time
 restore, engine upgrades, live external IdP/LDAP,

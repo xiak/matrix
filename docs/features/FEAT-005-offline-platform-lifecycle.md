@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current ELK candidate is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. The ELK candidate still requires its own exact-source independent CI and signed runtime gate. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. These bounded private-candidate results do not constitute complete Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
+- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current ELK candidate is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. The fixed ELK source `a162c1cc25591139aaa9ec5f662488da7ad30084` passed exact-source independent CI and its local signed same-profile lifecycle/browser gate; complete cold-cache disconnected Gate C and public release remain open. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. These bounded private-candidate results do not constitute complete Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current ELK candidate is exactly IAM 88 / Audit 40 / PaaS 9 at contract revision 41. The retained SQL migration gates are development evidence, not permission for a cross-profile release upgrade; revision 40 and revision 41 transitions remain rejected, and no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -300,8 +300,34 @@ Kibana 的依赖列、同账号外键、不可变绑定与竞争保护使 PaaS s
 19 个平台容器健康，但真实控制台返回 502，故本候选不接受为用户可用安装。原因和
 页面 CSP 修复由 [FEAT-007](FEAT-007-control-plane-console.md#kibana-依赖接入切片)拥有。
 安装验收现增加经过公网关的首页检查：必须为 200、HTML、非空且有界，不跟随重定向，
-不发送安装 verifier 凭据；网关错误使验证失败关闭。完整 localmachine race 通过，
-新的签名安装仍待执行。原 Logstash 平台已恢复，失败候选保留且停止，未覆盖原数据。
+不发送安装 verifier 凭据；网关错误使验证失败关闭。完整 localmachine race 通过。
+
+修复后从干净固定源码 `a162c1cc25591139aaa9ec5f662488da7ad30084` 组装同为
+`88/40/9+r41` 的签名候选；源码独立 CI 及产品/浏览器证据归
+[FEAT-007](FEAT-007-control-plane-console.md#kibana-依赖接入切片)。
+
+| 本机 ELK 签名候选 | Manifest SHA-256 |
+| --- | --- |
+| `matrix-v0.3.0-elk.3-a162c1cc2559`，构建 `elk-handbook-20261102-c` | `b8b01ff2cbd41d08d0a47de1e1353c0e92224e2e024bb247b83883ca7720a1ac` |
+| `matrix-v0.3.0-elk.4-a162c1cc2559`，构建 `elk-handbook-20261102-d`，准确前驱为上述 `.3` | `e454c299773c0539c39ff329888e1af59bdb2d8af71dcf1976f1a69b70aff253` |
+
+| ELK 本机流程 | 已验证结果 |
+| --- | --- |
+| 独立安装 `.3` 与首次验证 | `SUCCEEDED / READY`；安装 `cmd-badd986669241067cde2de9dc79b3889`，验证 `cmd-60074f939f7c600c7155da9e765460e2`；真实公共控制台可用 |
+| 包含 E/L/K 的显式备份 | `backup-fcbfe2eb048c5ef218ecd844bf917681`；`cmd-db80078c77925630c6b72038c2b780ed` |
+| `.3 → .4` 升级 | `SUCCEEDED / READY`；`cmd-5c8ea009b8603ce9153fb3f7755e0b75`；自动备份 `backup-9d388f6f990f8d039da06245becd3da2` |
+| `.4 → .3` 回滚 | `SUCCEEDED / READY`；`cmd-7c2b24b333d0bc2007a62c5602621369` |
+| 恢复上述 `.3` 显式备份 | `SUCCEEDED / READY`；`cmd-4c77a098237a0e927791cb528ddce204`；备份后新增的未使用配额撤回，原三份配额保留，旧会话返回 401 |
+| 产品精确清理后最终验证 | `SUCCEEDED / READY`；`cmd-69c3272f4b3a93e05e0c180da63b3250` |
+
+该测试使用宿主机 Docker，没有 DinD，两个候选各自的 22 个清单/签名/负载文件
+均核对身份。升级、回滚和恢复保持同一组产品运行对象、数据与凭据；产品详细结果
+只由 FEAT-007 记录。恢复撤回平台配额变化，不回退托管产品业务事件。
+原 Logstash 控制平面在维护窗口停止并保留，结束后恢复同一组 19 个原容器并验证
+`READY`，关联 `cmd-04f3ee43a878670cbf2308cf207fa13d`；原停止 PostgreSQL 的身份、
+状态、启动/停止时间及重启计数保持。ELK 测试安装与失败候选均保留且停止。
+此同宿主机、已有镜像缓存的私有候选验收不等于完整断网空缓存 Gate C；
+跨 Profile 升降级及恢复仍拒绝，公开发布与扩展产品的失败升级故障注入未验收。
 
 2026-10-29，按用户手册从干净提交
 `bafc3491f441281b24b2e0059d9e3bc5815dd0f5` 构建私有签名候选
