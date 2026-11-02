@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	adapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
@@ -300,6 +301,10 @@ func kibanaFixture(t *testing.T) (Config, *fixtureRuntime, *fixtureNative, adapt
 }
 
 type fixtureRuntime struct {
+	// Docker is a separate process in production. Protect the in-memory
+	// substitute independently of the provider's OS file lock, which is not
+	// a Go memory synchronization primitive.
+	mu                     sync.Mutex
 	t                      *testing.T
 	elasticsearchProject   string
 	elasticsearchLabels    map[string]string
@@ -310,6 +315,8 @@ type fixtureRuntime struct {
 
 func (r *fixtureRuntime) Ready(context.Context) error { return nil }
 func (r *fixtureRuntime) Apply(_ context.Context, project compose.RuntimeProject) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.applies++
 	content, err := os.ReadFile(filepath.Join(project.Directory, "product-configuration.json"))
 	if err != nil {
@@ -327,6 +334,8 @@ func (r *fixtureRuntime) Apply(_ context.Context, project compose.RuntimeProject
 	return nil
 }
 func (r *fixtureRuntime) Observe(_ context.Context, project compose.RuntimeProject) ([]compose.RuntimeContainer, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	labels := r.elasticsearchLabels
 	services := map[string]uint32{"elasticsearch": 0, "elasticsearch-endpoint": 1}
 	if project.Name != r.elasticsearchProject {
@@ -343,16 +352,21 @@ func (r *fixtureRuntime) Observe(_ context.Context, project compose.RuntimeProje
 	return result, nil
 }
 func (r *fixtureRuntime) Stop(_ context.Context, project compose.RuntimeProject) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.stops++
 	delete(r.running, project.Name)
 	return nil
 }
 func (r *fixtureRuntime) PurgeData(context.Context, compose.RuntimeProject, string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.purges++
 	return nil
 }
 
 type fixtureNative struct {
+	mu                                             sync.Mutex
 	t                                              *testing.T
 	tokens                                         map[string]string
 	issued                                         int
@@ -360,6 +374,8 @@ type fixtureNative struct {
 }
 
 func (f *fixtureNative) RoundTrip(request *http.Request) (*http.Response, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.t.Helper()
 	if request.URL.Host != "127.0.0.1:27123" {
 		f.t.Fatal("dependency credential escaped its exact endpoint")
