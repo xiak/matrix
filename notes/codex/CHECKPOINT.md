@@ -5,23 +5,25 @@
 - Updated: 2026-11-02
 - Repository: `https://github.com/xiak/matrix.git`
 - Branch: `feat/product-onboarding-release`
-- Committed and pushed Logstash platform implementation: `bd74051e19a58f97f1fe89bcdd9c592d36ee3b9e`.
+- Verified implementation: `67a8dee905b060d24ec510609bcb0fac865f4e7a`.
 - Active goal: finish ELK product onboarding and release closure, then reuse the same contract for Redis.
-- PRs #11, #12 and #13 are merged. [PR #14](https://github.com/xiak/matrix/pull/14) remains draft; verify the current head and CI before accepting it.
+- PRs #11, #12 and #13 are merged. [PR #14](https://github.com/xiak/matrix/pull/14) remains draft. Do not merge a later implementation on the strength of earlier CI.
 
-Follow `AGENTS.md` and repository-local Git identity. Read only the relevant owner:
+Follow `AGENTS.md` and repository-local Git identity. Read the relevant owner only:
 
-- [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#产品团队接入契约) owns product contracts, Logstash candidate status and runtime evidence.
+- [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#产品团队接入契约): product contract, current Logstash acceptance and pending Kibana dependency slice.
 - [Product-team guide](../../docs/product-guide/managed-service-onboarding.md) and [executed onboarding commands](../../docs/runbooks/managed-service-onboarding.md).
-- [FEAT-IAM-008](../../docs/features/iam/FEAT-IAM-008-product-enforcement.md) for authorization and product dependencies.
-- [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md) and [installation runbook](../../docs/runbooks/platform-installation.md) for signed lifecycle.
+- [FEAT-IAM-008](../../docs/features/iam/FEAT-IAM-008-product-enforcement.md): product authorization and dependency use.
+- [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核): exact signed candidates, upgrade/rollback/recovery evidence and remaining Gate C limits.
 
-Logstash now has a real adapter, default catalog and worker registration, UI routes, signed artifact inventory and production-process tests. Database offering/shape/version constraints derive from the compiled catalog instead of a second SQL product list. The UI registration supplies discovery, navigation and routes. The fixed older MySQL entrypoint and authenticated four-product installed manifests remain supported as real predecessors.
+Logstash's fixed implementation passed all 19 jobs in [Verification 41420489245](https://github.com/xiak/matrix/actions/runs/41420489245), including 2,141 console tests and five-product authority processes. [Product onboarding 41420489173](https://github.com/xiak/matrix/actions/runs/41420489173) passed; artifact 13130505645 was read and contains all 11 checks, with platform/release explicitly NOT_RUN in that adapter-only report. A separate local Logstash run passed six checks; its concurrent Kibana dependency did not become ready in time, so that local full run remains failed.
 
-Local five-product production processes passed in 428.32 seconds, including native protocol/data, IAM, quotas, tenant rejection, revocation, Audit, termination and the existing MySQL two-tenant isolation gate. Real PostgreSQL catalog constraints and retained-state predecessor migration passed. UI embedded export matched 337 files. Full installation/platformcommand/localmachine/release/topology/releasebuild/architecture checks passed on Linux. The expanded-product upgrade retains its active phase after start/verification failure rather than automatically returning to an authority unable to manage new resources; explicit incompatible product rollback fails before effects.
+Signed Logstash .3 from the fixed source passed upgrade from .2, compatible rollback to .2, re-upgrade, explicit backup, recovery and final verify/status on host Docker without DinD. Recovery removed an unused quota created after backup, invalidated the old browser session and retained product events written after backup. Exact identities and command correlations belong to FEAT-005. Real installation/running/termination screenshots and user workflows are in the existing guide. This accepts the bounded private-candidate functionality, not cold-cache disconnected installation, public release or automatic expanded-upgrade failure injection.
 
-The implementation commit's Verification 41408406255 exposed two stale frontend projection assertions that assumed four products; it is not accepted. The Product onboarding run is 41408406276. Check the latest head after the focused assertion correction; do not treat earlier CI or local S2 as final release acceptance. The previous adapter milestone d31f981a had all 19 Verification jobs and Product onboarding green.
+The real terminated detail currently says the instance will disappear from the visible catalog, while authorized terminal records remain listed. Correct that wording in the next shared UI slice.
 
-Next acceptance boundary: signed Logstash candidate upgrade, actual browser/screenshots, compatible-version rollback and platform recovery with retained product data; synchronize existing user guide, runbook and FEAT evidence after execution. Keep P2 pending until verified. Then implement Kibana's typed same-tenant READY Elasticsearch dependency, current dependency-use authorization and delete/create race protection, persistent dependency-owned credentials/keys, and isolated network routing; the current Kibana sample has only trusted fixture dependency assumptions. Redis follows accepted ELK. Shared-host Docker isolation is not physical isolation.
+Current design work proceeds to Kibana: add a typed immutable same-tenant READY Elasticsearch dependency; separately authorize current dependency use; lock reserve/delete transactions against dangling dependencies. Preserve dependency-owned saved-object keys; issue and revoke only each Kibana's own service credential. Isolate Elasticsearch first and route only the exact allowed Kibana-to-Elasticsearch connection. The existing sample still relies on trusted test fixtures and is not a platform product. Redis follows accepted ELK. Reuse existing lifecycle, IAM evaluation and UI owners rather than creating a generic plugin or workflow engine.
 
-Secrets, account credentials, absolute checkout paths and uncommitted machine-local runtime state are excluded.
+Before a risky replacement, keep this verified predecessor committed and pushed. Preserve user installations and data; do not use global Docker prune, remove user images for an offline test, enable DinD or change host-wide network security. Shared-host Docker isolation is not physical isolation.
+
+Secrets, account credentials, absolute checkout paths and uncommitted machine-local state are excluded.

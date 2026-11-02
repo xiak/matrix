@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；数据库驱动的版本化产品 Profile、PaaS/managedservice/Audit PEP、服务Role同意与工作负载绑定、当前角色/程序凭据、可信标签及有界目录隔离已有固定后端实现。PostgreSQL18、MySQL8.4、Elasticsearch8.19、RabbitMQ4.1已通过生产worker的真实创建、协议读写、授权/撤权、终止、数据与凭据删除、配额和Audit闭环。当前精确独立CI与同Profile签名A/B安装、升级、回滚、恢复和专属引擎重启已通过，证据由[011](FEAT-IAM-011-acceptance.md)与[FEAT-005](../FEAT-005-offline-platform-lifecycle.md#current-iam87-foreground-session-and-recovery-gap-release-consumer-gate)拥有。Account服务开通及其不确定结果恢复已有独立LIVE页面与权威后验；首个额外产品仍需自身provider/可信边缘/PEP的真实接入证据，其他未执行页面由010继续验收，HA/集群形态不由当前单节点运行证明。整体未验收。
+- 状态：实施中；数据库驱动的版本化产品 Profile、PaaS/managedservice/Audit PEP、服务Role同意与工作负载绑定、当前角色/程序凭据、可信标签及有界目录隔离已有固定后端实现。PostgreSQL18、MySQL8.4、Elasticsearch8.19、RabbitMQ4.1已通过生产worker的真实创建、协议读写、授权/撤权、终止、数据与凭据删除、配额和Audit闭环。当前精确独立CI与同Profile签名A/B安装、升级、回滚、恢复和专属引擎重启已通过，证据由[011](FEAT-IAM-011-acceptance.md)与[FEAT-005](../FEAT-005-offline-platform-lifecycle.md#current-iam87-foreground-session-and-recovery-gap-release-consumer-gate)拥有。Account服务开通及其不确定结果恢复已有独立LIVE页面与权威后验；额外产品 Logstash 的生产进程门禁和本机签名候选闭环由 [FEAT-007](../FEAT-007-control-plane-console.md#logstash-平台集成候选)拥有；Kibana 依赖使用授权与正式纳管尚未实现，其他未执行页面由010继续验收，HA/集群形态不由当前单节点运行证明。整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -29,7 +29,7 @@ Profile 的代码/签名发行由产品 owner 管理，IAM 只注册校验与求
 
 产品授权声明与产品上线资格严格分开：Profile、Action、Policy 或控制台文案都不能单独让一个商品进入租户目录。每个目录项必须由对应产品 owner 提供真实 provider，并在同一纵向门禁中证明受信制品、创建到终态、真实协议读写、凭据保护、配额与 Operation、资源级 IAM、租户 Audit、失败回滚和明确终止语义。当前PostgreSQL、MySQL、Elasticsearch与RabbitMQ分别拥有产品适配器、不可变镜像、固定版本/规格、协议门禁和相同生命周期，不是目录样例；新增产品继续复用统一目录、provider registry和IAM协议，但必须单独实现并验收自己的provider，不在通用IAM求值器内按产品名写分支。
 
-首次使用服务不是配额购买、资源创建或服务受托的别名。managedservice拥有Account范围的`ServiceActivation`事实；IAM只声明和求值`managedservice.service-definition.read`、`managedservice.service-activation.read`、`managedservice.service-activation.activate`及对应资源形状。原primary能开通是因为其受保护的`system.account-administrator`附件包含动作，不是evaluator识别primary后放行。子USER或ROLE可通过AccountAdministrator或窄`system.service-activation-administrator`获得同一动作；普通USER、PaaSDeveloper/Viewer、PlatformOperator和SERVICE默认不能开通。当前四个私有部署服务没有计费/法律前置，采用permission-only；未来产品若确需primary同意，必须由其受信服务定义增加封闭前置并单独验收，不能把例外扩成通用主账号特权。
+首次使用服务不是配额购买、资源创建或服务受托的别名。managedservice拥有Account范围的`ServiceActivation`事实；IAM只声明和求值`managedservice.service-definition.read`、`managedservice.service-activation.read`、`managedservice.service-activation.activate`及对应资源形状。原primary能开通是因为其受保护的`system.account-administrator`附件包含动作，不是evaluator识别primary后放行。子USER或ROLE可通过AccountAdministrator或窄`system.service-activation-administrator`获得同一动作；普通USER、PaaSDeveloper/Viewer、PlatformOperator和SERVICE默认不能开通。当前私有部署服务没有计费/法律前置，采用permission-only；未来产品若确需primary同意，必须由其受信服务定义增加封闭前置并单独验收，不能把例外扩成通用主账号特权。
 
 PaaS 先覆盖 Application、Configuration/Revision、Deployment、Operation；managedservice 覆盖 Offering/Region/Entitlement/Installation；Audit 保持 chain/query scope。平台主机/终端由既有 Phase owner 消费确认的公共契约，本任务不重做主机实现。
 

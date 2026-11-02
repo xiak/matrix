@@ -228,7 +228,7 @@ Logstash candidate rejects that downgrade with
 `ROLLBACK_PRODUCT_INVENTORY_INCOMPATIBLE` before journal advancement, observation
 or provider effects; the previously accepted four-product/productless boundary
 is retained only for its authenticated predecessor profile. This candidate rule
-has unit coverage and rejects the signed five-product Logstash candidate’s rollback to its four-product predecessor in the local runtime. Compatible five-product rollback and expanded-upgrade failure injection remain outstanding. Recovery is the
+has unit coverage and rejects the signed five-product Logstash candidate’s rollback to its four-product predecessor in the local runtime. Compatible five-product rollback passed for the signed `.3` to `.2` pair below; expanded-upgrade failure injection remains unit-only. Recovery is the
 separate destructive path that restores a selected verified backup after an
 operator request. The recovery engine comes from an authenticated, supported
 operator bundle compatible with the installation profile; the selected backup
@@ -318,7 +318,29 @@ MySQL 数据保持；新 Logstash 的真实页面创建、认证写入与重启�
 `matrix-v0.3.0-logstash.2-ed056b7bfac8`，构建标识 `logstash-verified-20261102`。
 从 `.1` 升级返回 `SUCCEEDED / READY`，关联 `cmd-8c25e89d5fb172d6810d87c987b31baf`，
 自动备份 `backup-f817428e1e41b5656d8faa48ab9de0ef`。真实页面验证及实例清理归
-FEAT-007。本片仍待最终修复包的完整独立 CI、兼容版本回滚与当前版本恢复验收。
+FEAT-007。
+
+最终功能源码固定为 `67a8dee905b060d24ec510609bcb0fac865f4e7a`，签名候选
+`matrix-v0.3.0-logstash.3-67a8dee905b0`，构建标识 `logstash-handbook-20261102`，
+仍为 `88/40/8+r40`，以 `.2` 为直接前驱。该源码的
+[完整 Verification](https://github.com/xiak/matrix/actions/runs/41420489245) 全部 19 项
+通过；独立接入报告及真实产品读写、页面和清理证据归 FEAT-007。
+
+| Logstash 本机签名候选流程 | 已验证结果 |
+| --- | --- |
+| `.2 → .3` 升级 | `SUCCEEDED / READY`；`cmd-e7124368105484eab809745e43f7c076`；自动备份 `backup-d56823d714a6fec10b0fbe4c14941b45` |
+| `.3 → .2` 兼容回滚 | `SUCCEEDED / READY`；`cmd-a60772a1cdd1c7ed92288901153f6b9f`；升级后写入的产品数据保留 |
+| 再次升级至 `.3` | `SUCCEEDED / READY`；`cmd-aa0646a62c3a394e04ccf2a9f14bc4ac` |
+| 显式备份 | `backup-f5cdcaef48221d12f509879d0a838739`；`cmd-cac460aa772a966ba998d338b148f4b7`；2026-11-02 09:50:37 UTC |
+| 恢复上述备份 | `SUCCEEDED / READY`；`cmd-f78ae3106c8127c80cf809423bd06986`；备份后的未使用标准型配额撤回，原两项开发型配额保持 |
+| 恢复后验证与状态 | `SUCCEEDED / READY`；`cmd-2efcee5891a702654b337e425e53729a`；19 项平台服务健康，旧会话下次读取被拒绝，当前凭据重新登录成功 |
+
+该闭环接受同宿主机私有候选的功能行为。托管 Logstash 容器、端点、凭据和业务
+事件保持，包含平台备份之后写入的事件；没有将业务目录恢复到平台备份时刻。
+原 PostgreSQL 停止实例的身份、停止状态和启动/停止时间保持，原 MySQL 173 个数据
+文件的内容摘要保持。扩展产品升级失败的
+自动故障注入尚未执行，不能以正常回滚/恢复成功替代。完整 Gate C 的边界保持下述
+限制，不能将本片改写为公开发布或断网空镜像安装验收。
 
 环境为 Windows 上的 Docker Desktop 4.83.0 / Engine 29.6.2，Linux/amd64、
 containerd 镜像存储。普通 Linux 工具容器中的 Docker CLI 27.5.1 / Compose 2.33.0
