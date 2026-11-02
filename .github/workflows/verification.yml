@@ -495,6 +495,19 @@ jobs:
             esac
           done
           export MATRIX_IAM_MANAGED_POSTGRES_IMAGE_ID MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID
+          # Exercise the actual predecessor network with Compose, not a fake
+          # runtime. The production entry binary needs no daemon or base image.
+          mysql_endpoint_directory="$(mktemp -d)"
+          mysql_endpoint_tag="matrix-mysql-network-gate:${{ github.run_id }}-${{ github.run_attempt }}"
+          trap 'docker image rm "$mysql_endpoint_tag" >/dev/null 2>&1 || true; rm -rf "$mysql_endpoint_directory"' EXIT
+          CGO_ENABLED=0 go build -trimpath -o "$mysql_endpoint_directory/matrix-mysql-endpoint" ./app/service/paas/cmd/matrix-mysql-endpoint
+          printf 'FROM scratch\nCOPY --chmod=0555 matrix-mysql-endpoint /matrix/bin/matrix-mysql-endpoint\n' > "$mysql_endpoint_directory/Dockerfile"
+          docker build --network none --pull=false --tag "$mysql_endpoint_tag" "$mysql_endpoint_directory"
+          MATRIX_LOCAL_MYSQL_E2E_IMAGE_ID="$MATRIX_IAM_MANAGED_MYSQL_IMAGE_ID" \
+          MATRIX_LOCAL_MYSQL_E2E_ENDPOINT_IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$mysql_endpoint_tag")" \
+            bash .github/scripts/run-go-test-selection.sh \
+            'TestLocalMySQLRealRuntime' \
+            -race -p 1 -count=1 ./app/adapter/managedservice/localmysql -run '^TestLocalMySQLRealRuntime$'
           time bash .github/scripts/run-go-test-selection.sh \
             'TestManagedProductProviderProcesses' \
             -race -p 1 -count=1 -timeout 18m ./test/authorityprocess \

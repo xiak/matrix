@@ -3,6 +3,7 @@ package localmysql
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -99,6 +100,43 @@ func TestLocalMySQLRealRuntime(t *testing.T) {
 	if err := runtime.Stop(ctx, runtimeProject); err != nil {
 		t.Fatalf("stop MySQL before persistence replay: %v", err)
 	}
+	// Recreate the supported predecessor's direct-port topology around the
+	// same real database. Migration must work with its existing default
+	// network attached, rather than only with a fake Runtime or an empty host.
+	content, err := os.ReadFile(runtimeProject.EffectDocument)
+	var predecessor map[string]any
+	if err != nil || json.Unmarshal(content, &predecessor) != nil {
+		t.Fatal("read MySQL predecessor fixture")
+	}
+	services := predecessor["services"].(map[string]any)
+	delete(services, endpointServiceName)
+	delete(predecessor, "networks")
+	backend := services[mysqlServiceName].(map[string]any)
+	delete(backend, "networks")
+	_, port, err := net.SplitHostPort(result.Endpoint)
+	if err != nil {
+		t.Fatal("read MySQL predecessor endpoint")
+	}
+	backend["ports"] = []string{"127.0.0.1:" + port + ":3306/tcp"}
+	content, err = json.Marshal(predecessor)
+	if err != nil {
+		t.Fatal("encode MySQL predecessor fixture")
+	}
+	for _, path := range []string{runtimeProject.EffectDocument, runtimeProject.ObservationDocument} {
+		if os.WriteFile(path, content, 0o600) != nil {
+			t.Fatal("write MySQL predecessor fixture")
+		}
+	}
+	if err := runtime.Apply(ctx, runtimeProject); err != nil {
+		t.Fatalf("start real MySQL predecessor: %v", err)
+	}
+	legacy, err := runtime.Observe(ctx, runtimeProject)
+	if err != nil || len(legacy) != 1 || legacy[0].Service != mysqlServiceName || legacy[0].PublishedPorts != 1 {
+		t.Fatal("real MySQL predecessor did not publish its original endpoint")
+	}
+	if err := provisioner.UpgradeNetwork(ctx); err != nil {
+		t.Fatalf("migrate running MySQL predecessor: %v", err)
+	}
 	replayed, err := provisioner.Ensure(ctx, request)
 	if err != nil || replayed != result {
 		t.Fatalf("reconcile real MySQL=%#v err=%v", replayed, err)
@@ -139,4 +177,5 @@ func TestLocalMySQLRealRuntime(t *testing.T) {
 	if err := provisioner.Delete(ctx, deprovision); err != nil {
 		t.Fatalf("equal real MySQL delete replay: %v", err)
 	}
+	t.Log("running direct-port predecessor migrated to private backend and trusted ingress; original endpoint, password and SQL data survived, and termination removed the owned resources")
 }

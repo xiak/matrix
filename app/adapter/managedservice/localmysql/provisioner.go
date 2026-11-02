@@ -160,7 +160,10 @@ func privateNetworks() map[string]any {
 			"internal": true, "driver": "bridge", "enable_ipv6": false,
 			"driver_opts": map[string]string{"com.docker.network.bridge.gateway_mode_ipv4": "isolated"},
 		},
-		"default": map[string]any{"driver": "bridge"},
+		// Keep Compose's implicit bridge configuration. Explicitly adding the
+		// same driver changes its network hash; Compose would try to remove
+		// the still-attached predecessor network before recreating MySQL.
+		"default": map[string]any{},
 	}
 }
 
