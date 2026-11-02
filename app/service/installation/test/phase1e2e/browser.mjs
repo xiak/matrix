@@ -27,6 +27,7 @@ const report = {
   pageErrors: 0,
   serverErrors: 0,
   observedFailurePhase: null,
+  failure: null,
 };
 let browser;
 let page;
@@ -40,8 +41,41 @@ async function step(name, action) {
 }
 
 async function visit(product, view = "") {
-  const response = await page.goto(`${origin}/console/products/${product.id}/${view ? `${view}/` : ""}`);
-  assert.equal(response?.status(), 200);
+  // SessionProvider keeps credentials in page memory. Follow the same launcher
+  // and sidebar links as a user; a document reload deliberately loses login.
+  await closeWorkspace();
+  const productPath = `/console/products/${product.id}/`;
+  if (!new URL(page.url()).pathname.startsWith(productPath)) {
+    await page.getByRole("button", { name: "打开产品与服务", exact: true }).click();
+    const launcher = page.getByRole("dialog", { name: "云产品入口", exact: true });
+    await launcher.getByRole("searchbox", { name: "搜索产品与服务", exact: true }).fill(product.id);
+    await launcher.locator(`a[href="${productPath}"]`).click();
+    await page.waitForURL(`${origin}${productPath}`);
+    await launcher.waitFor({ state: "detached" });
+  }
+  const destination = `${productPath}${view ? `${view}/` : ""}`;
+  if (new URL(page.url()).pathname !== destination) {
+    await page.locator("#console-product-navigation").locator(`a[href="${destination}"]`).click();
+    await page.waitForURL(`${origin}${destination}`);
+  }
+  assert.equal(await page.locator("#login-form").count(), 0);
+  if (view === "instances" && await detail().isVisible()) {
+    await detail().getByRole("button", { name: "返回服务实例", exact: true }).click();
+  }
+}
+
+async function closeWorkspace() {
+  const close = page.locator("#console-workspace").getByRole("button", { name: "关闭上下文面板", exact: true });
+  if (await close.isVisible()) {
+    await close.click();
+    await close.waitFor({ state: "hidden" });
+  }
+}
+
+async function readQuota(purchased, used, available) {
+  for (const [label, count] of [["已激活", purchased], ["使用中", used], ["可用", available]]) {
+    await waitText(page.locator("small").filter({ hasText: new RegExp(`^${label}$`) }).locator("..").locator("strong"), String(count));
+  }
 }
 
 async function choose(label, option) {
@@ -144,7 +178,10 @@ try {
       await choose("资源规格", /开发型/);
       await page.getByRole("spinbutton", { name: "实例数量", exact: true }).fill("1");
       await page.getByRole("button", { name: "确认激活配额", exact: true }).click();
-      await page.getByText("配额已由平台确认", { exact: true }).waitFor();
+      // Successful quota reconciliation may close the form automatically.
+      // Observe the server-backed quota card instead of its transient notice.
+      await readQuota(1, 0, 1);
+      await closeWorkspace();
     });
     await step(`${product.id}-installation-submit`, async () => {
       await visit(product, "instances");
@@ -179,9 +216,7 @@ try {
     });
     await step(`${product.id}-quota-returned`, async () => {
       await visit(product, "quotas");
-      for (const [label, count] of [["已激活", "1"], ["使用中", "0"], ["可用", "1"]]) {
-        await waitText(page.locator("small").filter({ hasText: new RegExp(`^${label}$`) }).locator("..").locator("strong"), count);
-      }
+      await readQuota(1, 0, 1);
     });
   }
   await step("browser-health", async () => {
@@ -189,8 +224,17 @@ try {
     assert.equal(report.serverErrors, 0);
   });
   report.status = "PASSED";
-} catch {
-  // Closed diagnostics deliberately exclude exception messages and stacks.
+} catch (failure) {
+  // Closed diagnostics deliberately exclude text, URLs, response bodies,
+  // exception messages and stacks. Only known error names and UI facts leave.
+  report.failure = {
+    kind: ["TimeoutError", "AssertionError"].includes(failure?.name) ? failure.name : "Error",
+  };
+  if (page && !page.isClosed()) {
+    report.failure.loginVisible = await page.locator("#login-form").isVisible().catch(() => null);
+    report.failure.activationVisible = await page.getByRole("button", { name: "开通服务", exact: true }).isVisible().catch(() => null);
+    report.failure.quotaEntryVisible = await page.getByRole("link", { name: "配置配额", exact: true }).isVisible().catch(() => null);
+  }
   process.exitCode = 1;
 } finally {
   password = undefined;
