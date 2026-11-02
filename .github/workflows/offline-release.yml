@@ -6,6 +6,7 @@ on:
     branches: ['feat/product-onboarding-release']
     paths:
       - 'app/service/installation/test/phase1e2e/**'
+      - 'app/service/installation/internal/localmachine/**'
       - 'deploy/cmd/matrix-offline-fixture/**'
       - 'deploy/cmd/matrix-release/**'
       - 'deploy/releasebuild/**'
@@ -133,6 +134,18 @@ jobs:
           cp "$work/release-b/release.json" "$work/evidence/release-b.json"
           cp "$work/trust.json" "$work/evidence/trust.json"
           cp "$work/private/fixture.json" "$work/evidence/mail-fixture-identity.json"
+      - name: Verify selected product routes and enrollment boundaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$MATRIX_OFFLINE_WORK"
+          # This uses the online build engine, never the cold acceptance root.
+          docker image load --input "$work/release-a/images/apisix.tar" > /dev/null
+          apisix_ref="$(jq -r '.images[] | select(.component == "apisix") | .localReference' "$work/release-a/release.json")"
+          apisix_identity="$(docker image inspect "$apisix_ref" --format '{{.Id}}')"
+          MATRIX_APISIX_TLS_TEST_IMAGE="$apisix_identity" go test -count=1 -v \
+            -run '^TestAPISIXServesInstallationAuthenticatedEnrollmentTLS$' \
+            ./app/service/installation/internal/localmachine
       - name: Run cold-cache lifecycle and engine restart without DinD
         shell: bash
         run: |

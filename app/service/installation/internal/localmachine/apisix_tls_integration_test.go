@@ -38,8 +38,19 @@ func TestAPISIXServesInstallationAuthenticatedEnrollmentTLS(t *testing.T) {
 	if _, err := exec.LookPath("docker"); err != nil {
 		t.Fatal("APISIX TLS integration requires the Docker CLI")
 	}
+	for _, selected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("devops-selected-%t", selected), func(t *testing.T) {
+			assertAPISIXProductAndEnrollmentBoundaries(t, image, selected)
+		})
+	}
+}
 
+func assertAPISIXProductAndEnrollmentBoundaries(t *testing.T, image string, devopsSelected bool) {
+	t.Helper()
 	plan := newInstallPlan(t)
+	if devopsSelected {
+		plan = newDevOpsInstallPlan(t)
+	}
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage APISIX TLS integration installation: %v", err)
 	}
@@ -78,7 +89,10 @@ http {
   access_log /dev/stdout;
   server {
     listen 8080;
+    location /api/devops/ { return 405; }
     location / {
+      add_header X-Matrix-Test-Method $request_method always;
+      add_header X-Matrix-Test-URI $uri always;
       add_header X-Matrix-Test-Observed-Peer $http_x_matrix_observed_peer always;
       add_header X-Matrix-Test-Transport-Scheme $http_x_matrix_transport_scheme always;
       add_header X-Matrix-Test-Authorization $http_authorization always;
@@ -88,6 +102,16 @@ http {
       add_header X-Matrix-Test-Subject-Credential $http_matrix_subject_credential always;
       add_header X-Matrix-Test-Public-Origin $http_x_matrix_public_origin always;
       add_header X-Matrix-Test-TLS-Peer $http_x_matrix_tls_peer always;
+      add_header X-Matrix-Test-Edge-Assertion $http_x_matrix_edge_assertion always;
+      add_header X-Matrix-Test-Correlation-ID $http_matrix_correlation_id always;
+      add_header X-Matrix-Test-Traceparent $http_traceparent always;
+      add_header X-Matrix-Test-Tenant-ID $http_matrix_tenant_id always;
+      add_header X-Matrix-Test-X-Tenant-ID $http_x_tenant_id always;
+      add_header X-Matrix-Test-Organization-ID $http_matrix_organization_id always;
+      add_header X-Matrix-Test-X-Organization-ID $http_x_organization_id always;
+      add_header X-Matrix-Test-Gitea-Event $http_x_gitea_event always;
+      add_header X-Matrix-Test-Gitea-Delivery $http_x_gitea_delivery always;
+      add_header X-Matrix-Test-Gitea-Signature $http_x_gitea_signature always;
       return 204;
     }
   }
@@ -103,6 +127,7 @@ http {
 		"--cpus", "1", "--memory", "512m", "--pids-limit", "256",
 		"--user", "0:0",
 		"--network", networkName, "--network-alias", "paas-api",
+		"--network-alias", "devops-api", "--network-alias", "matrix-ui",
 		"--mount", "type=bind,source="+upstreamConfig+",target=/tmp/matrix-paas-api.conf,readonly",
 		"--entrypoint", "/usr/local/openresty/bin/openresty", image,
 		"-c", "/tmp/matrix-paas-api.conf", "-g", "daemon off;",
@@ -117,6 +142,16 @@ http {
 		t.Fatalf("reserve APISIX TLS integration port: %v", err)
 	}
 	hostPort := listener.Addr().(*net.TCPAddr).Port
+	publicListener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		listener.Close()
+		t.Fatalf("reserve APISIX public API integration port: %v", err)
+	}
+	publicPort := publicListener.Addr().(*net.TCPAddr).Port
+	if err := publicListener.Close(); err != nil {
+		listener.Close()
+		t.Fatalf("release APISIX public API integration port: %v", err)
+	}
 	if err := listener.Close(); err != nil {
 		t.Fatalf("release APISIX TLS integration port: %v", err)
 	}
@@ -126,10 +161,12 @@ http {
 		"run", "--detach", "--name", containerName,
 		"--label", "com.xiak.matrix.test=node-enrollment-tls",
 		"--cpus", "1", "--memory", "512m", "--pids-limit", "256",
+		"--user", "0:0",
 		"--network", networkName,
 		"--env", "APISIX_STAND_ALONE=true",
 		"--publish", "127.0.0.1:" + strconv.Itoa(hostPort) + ":" +
 			strconv.Itoa(int(topology.NodeEnrollmentIngressTargetPort)) + "/tcp",
+		"--publish", "127.0.0.1:" + strconv.Itoa(publicPort) + ":9080/tcp",
 	}
 	for _, mount := range []struct {
 		source, target string
@@ -208,14 +245,17 @@ http {
 		bootstrap.Body.Close()
 	}
 	client := newAPISIXTLSClient(security.Clone(), 5*time.Second)
-	denied, err := client.Get(baseURL + "/api/iam/v1/ready")
-	if err != nil {
-		t.Fatalf("request APISIX enrollment TLS closed route: %v", err)
+	for _, route := range []string{"/api/iam/v1/ready", "/api/devops/v1/projects"} {
+		denied, err := client.Get(baseURL + route)
+		if err != nil {
+			t.Fatalf("request APISIX enrollment TLS closed route: %v", err)
+		}
+		denied.Body.Close()
+		if denied.StatusCode != http.StatusNotFound {
+			t.Fatalf("APISIX enrollment TLS front admitted an unrelated route: %d", denied.StatusCode)
+		}
 	}
-	denied.Body.Close()
-	if denied.StatusCode != http.StatusNotFound {
-		t.Fatalf("APISIX enrollment TLS front admitted an unrelated route: %d", denied.StatusCode)
-	}
+	assertAPISIXDevOpsRoutes(t, "http://127.0.0.1:"+strconv.Itoa(publicPort), devopsSelected)
 	oversized, err := http.NewRequest(
 		http.MethodPost,
 		baseURL+"/api/paas/v1/node-enrollments/node-enrollment-11111111111111111111111111111111/exchange",
@@ -245,6 +285,72 @@ http {
 		MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12,
 		RootCAs: roots, ServerName: serverName,
 	})
+}
+
+func assertAPISIXDevOpsRoutes(t *testing.T, endpoint string, selected bool) {
+	t.Helper()
+	client := newAPISIXTLSClient(nil, 5*time.Second)
+	for _, webhook := range []bool{false, true} {
+		route := "/v1/projects"
+		if webhook {
+			route = "/v1/source-ingress/tenant-one/source-one"
+		}
+		request, err := http.NewRequest(http.MethodPost, endpoint+"/api/devops"+route, strings.NewReader(`{"fixture":true}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		for name, value := range map[string]string{
+			"Authorization": "Bearer test-user", "Cookie": "test=cookie",
+			"Idempotency-Key": "test-mutation", "If-Match": `"1"`,
+			"Matrix-Correlation-ID": "test-correlation", "traceparent": "test-trace",
+			"Matrix-Subject-Credential": "forged-subject", "X-Matrix-Edge-Assertion": "forged-edge",
+			"X-Gitea-Event": "push", "X-Gitea-Delivery": "test-delivery", "X-Gitea-Signature": "test-signature",
+		} {
+			request.Header.Set(name, value)
+		}
+		if webhook {
+			for _, name := range []string{"Matrix-Tenant-ID", "X-Tenant-ID", "Matrix-Organization-ID", "X-Organization-ID"} {
+				request.Header.Set(name, "forged-authority")
+			}
+		}
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatalf("request selected product API: %v", err)
+		}
+		response.Body.Close()
+		if !selected {
+			if response.StatusCode != http.StatusMethodNotAllowed {
+				t.Fatalf("unselected DevOps reached its API upstream: status=%d", response.StatusCode)
+			}
+			continue
+		}
+		if response.StatusCode != http.StatusNoContent || response.Header.Get("X-Matrix-Test-URI") != route ||
+			response.Header.Get("X-Matrix-Test-Method") != http.MethodPost {
+			t.Fatalf("selected DevOps route failed: webhook=%t status=%d", webhook, response.StatusCode)
+		}
+		for _, suffix := range []string{"Subject-Credential", "Edge-Assertion", "Tenant-ID", "X-Tenant-ID", "Organization-ID", "X-Organization-ID"} {
+			if response.Header.Get("X-Matrix-Test-"+suffix) != "" {
+				t.Fatalf("DevOps route forwarded caller authority: webhook=%t header=%s", webhook, suffix)
+			}
+		}
+		for suffix, want := range map[string]string{
+			"Authorization": "Bearer test-user", "Cookie": "test=cookie", "Idempotency-Key": "test-mutation",
+			"If-Match": `"1"`, "Correlation-ID": "test-correlation", "Traceparent": "test-trace",
+		} {
+			if webhook {
+				want = ""
+			}
+			if response.Header.Get("X-Matrix-Test-"+suffix) != want {
+				t.Fatalf("DevOps credential/workflow boundary failed: webhook=%t header=%s", webhook, suffix)
+			}
+		}
+		for suffix, want := range map[string]string{"Gitea-Event": "push", "Gitea-Delivery": "test-delivery", "Gitea-Signature": "test-signature"} {
+			if response.Header.Get("X-Matrix-Test-"+suffix) != want {
+				t.Fatalf("DevOps route lost provider authentication: header=%s", suffix)
+			}
+		}
+	}
 }
 
 func removeDockerTestContainer(t *testing.T, name string) {

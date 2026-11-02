@@ -182,7 +182,7 @@ func installedAPISIXStandaloneConfig(
 	if release.IsLegacyProductlessManifest(manifest) {
 		return legacyProductlessAPISIXStandaloneConfig()
 	}
-	return apisixStandaloneConfig(northboundOrigin)
+	return apisixStandaloneConfig(manifest, northboundOrigin)
 }
 
 func installedAPISIXMainConfig(manifest release.Manifest) []byte {
@@ -332,8 +332,8 @@ nginx_config:
 	))
 }
 
-func apisixStandaloneConfig(northboundOrigin string) []byte {
-	return []byte(fmt.Sprintf(`routes:
+func apisixStandaloneConfig(manifest release.Manifest, northboundOrigin string) []byte {
+	content := fmt.Sprintf(`routes:
   -
     id: matrix-ready
     uri: /ready
@@ -651,5 +651,72 @@ func apisixStandaloneConfig(northboundOrigin string) []byte {
       nodes:
         "matrix-ui:8080": 1
 #END
-`, northboundOrigin, topology.NodeEnrollmentIngressLoopbackPort, northboundOrigin))
+`, northboundOrigin, topology.NodeEnrollmentIngressLoopbackPort, northboundOrigin)
+	if !manifest.IncludesProduct(release.ProductDevOps) {
+		return []byte(content)
+	}
+	const marker = "  -\n    id: matrix-ui\n"
+	const devopsRoutes = `  -
+    id: matrix-devops-source-ingress
+    uri: /api/devops/v1/source-ingress/*
+    priority: 200
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/devops/(.*)"
+          - "/$1"
+        headers:
+          remove:
+            - Authorization
+            - Cookie
+            - Idempotency-Key
+            - If-Match
+            - Matrix-Correlation-ID
+            - Matrix-Subject-Credential
+            - Matrix-Tenant-ID
+            - X-Tenant-ID
+            - Matrix-Organization-ID
+            - X-Organization-ID
+            - traceparent
+            - X-Matrix-Edge-Assertion
+            - Forwarded
+            - X-Forwarded-For
+            - X-Real-IP
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target
+            - X-Matrix-External-Source-IP
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer
+    upstream:
+      type: roundrobin
+      nodes:
+        "devops-api:8080": 1
+  -
+    id: matrix-devops
+    uri: /api/devops/*
+    plugins:
+      proxy-rewrite:
+        regex_uri:
+          - "^/api/devops/(.*)"
+          - "/$1"
+        headers:
+          remove:
+            - Matrix-Subject-Credential
+            - X-Matrix-Edge-Assertion
+            - Forwarded
+            - X-Forwarded-For
+            - X-Real-IP
+            - X-Matrix-External-Origin
+            - X-Matrix-External-Request-Target
+            - X-Matrix-External-Source-IP
+            - X-Matrix-Observed-Peer
+            - X-Matrix-Transport-Scheme
+            - X-Matrix-TLS-Peer
+    upstream:
+      type: roundrobin
+      nodes:
+        "devops-api:8080": 1
+`
+	return []byte(strings.Replace(content, marker, devopsRoutes+marker, 1))
 }
