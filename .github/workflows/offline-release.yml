@@ -66,6 +66,10 @@ jobs:
           mount --make-rprivate /
           mkdir "$work/probe-run"
           mount --bind "$work/probe-run" /run
+          # The private /run hides the inherited login runtime directory.
+          # containerd needs an existing owner-only directory for exec specs.
+          export XDG_RUNTIME_DIR=/run/matrix-offline-runtime
+          mkdir -m 700 "$XDG_RUNTIME_DIR"
           ip link set lo up
           export DOCKER_HOST=unix:///var/run/docker.sock
           export DOCKER_CONFIG="$work/probe-client"
@@ -147,6 +151,8 @@ jobs:
           chown -R root:root "$work/private"
           mkdir "$work/run"
           mount --bind "$work/run" /run
+          export XDG_RUNTIME_DIR=/run/matrix-offline-runtime
+          mkdir -m 700 "$XDG_RUNTIME_DIR"
           # Keep native runtime PID/proc/cgroup observation in the host's PID
           # namespace. Network and filesystem mounts remain private.
           ip link set lo up
