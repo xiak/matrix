@@ -644,6 +644,17 @@ func (value *gate) verifySignedManagedProducts(ctx context.Context) error {
 			return err
 		}
 	}
+	// Kibana creates shared encryption material in its Elasticsearch dependency.
+	// Capture custody only after the complete dependency graph is provisioned.
+	for index := range value.retainedIAM.ManagedProducts {
+		retained := &value.retainedIAM.ManagedProducts[index]
+		directory := filepath.Join(value.config.root, filepath.FromSlash(layout.ExecutorRoot), "managed-"+retained.Component, retained.Project)
+		digests, err := managedProductCustodyDigests(directory)
+		if err != nil {
+			return fail("signed-managed-product-custody-baseline-" + retained.Component)
+		}
+		retained.CustodyDigests = digests
+	}
 	if _, err := value.edge.verifyAuditChain(ctx, tenant.RetainedPrimaryCredential, tenant.Account.ID, ""); err != nil {
 		return fail("signed-managed-products-audit-chain")
 	}
@@ -1071,10 +1082,9 @@ func (value *gate) verifySignedManagedProduct(
 		if err != nil {
 			return err
 		}
-		digest := sha256.Sum256(password)
 		value.retainedIAM.ManagedProducts = append(value.retainedIAM.ManagedProducts, managedProductRetention{
 			Component: product.component, Installation: installation, Project: project,
-			CredentialDigest: hex.EncodeToString(digest[:]), Containers: containers,
+			Containers: containers,
 		})
 		return nil
 	}
@@ -1531,6 +1541,52 @@ func sameManagedProductRuntime(before, after []containerInspection, restarted bo
 	return true
 }
 
+// The local providers keep protected credentials, dependency intents and
+// immutable configuration in the project root. Mutable engine data lives in
+// child directories and is checked separately through each business protocol.
+func managedProductCustodyDigests(directory string) (map[string]string, error) {
+	invalid := errors.New("managed product custody is unavailable")
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+		(runtime.GOOS != "windows" && info.Mode().Perm() != 0o700) {
+		return nil, invalid
+	}
+	root, err := os.Open(directory)
+	if err != nil {
+		return nil, invalid
+	}
+	entries, readErr := root.ReadDir(65)
+	closeErr := root.Close()
+	if (readErr != nil && !errors.Is(readErr, io.EOF)) || closeErr != nil || len(entries) > 64 {
+		return nil, invalid
+	}
+	digests := make(map[string]string)
+	for _, entry := range entries {
+		info, err := entry.Info()
+		if err != nil {
+			return nil, invalid
+		}
+		if info.IsDir() {
+			continue
+		}
+		if !info.Mode().IsRegular() || info.Size() > 65536 {
+			return nil, invalid
+		}
+		content, err := os.ReadFile(filepath.Join(directory, entry.Name()))
+		if err != nil || len(content) > 65536 {
+			clear(content)
+			return nil, invalid
+		}
+		digest := sha256.Sum256(content)
+		clear(content)
+		digests[entry.Name()] = fmt.Sprintf("%04o:%x", info.Mode().Perm(), digest)
+	}
+	if len(digests) == 0 {
+		return nil, invalid
+	}
+	return digests, nil
+}
+
 func (value *gate) assertRetainedManagedProducts(ctx context.Context, restarted, terminate bool) error {
 	if value.retainedIAM == nil || len(value.retainedIAM.ManagedProducts) != 4 || len(value.retainedIAM.Tenants) != 2 {
 		return fail("signed-managed-product-retention-fixture")
@@ -1578,12 +1634,17 @@ func (value *gate) assertRetainedManagedProducts(ctx context.Context, restarted,
 		if err != nil {
 			return err
 		}
-		digest := sha256.Sum256(password)
 		value.edge.addForbidden(password)
 		value.sensitive = append(value.sensitive, bytes.Clone(password))
-		if project != retained.Project || hex.EncodeToString(digest[:]) != retained.CredentialDigest {
+		if project != retained.Project {
 			clear(password)
 			return fail("signed-managed-product-retention-credential-" + product.component)
+		}
+		directory := filepath.Join(value.config.root, filepath.FromSlash(layout.ExecutorRoot), product.runtimeDirectory, project)
+		custody, custodyErr := managedProductCustodyDigests(directory)
+		if custodyErr != nil || len(retained.CustodyDigests) == 0 || !equalJSON(custody, retained.CustodyDigests) {
+			clear(password)
+			return fail("signed-managed-product-retention-custody-" + product.component)
 		}
 		err = value.assertSignedManagedProductProtocol(ctx, installation, product, password, true)
 		clear(password)

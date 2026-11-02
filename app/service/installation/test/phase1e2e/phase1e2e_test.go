@@ -31,6 +31,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
@@ -101,6 +102,102 @@ func TestManagedProductMaintenancePreservesNativeCustody(t *testing.T) {
 	if sameManagedProductRuntime([]containerInspection{original}, nil, false) ||
 		sameManagedProductRuntime([]containerInspection{original, original}, []containerInspection{original, original}, true) {
 		t.Fatal("missing or duplicate native inventory was accepted")
+	}
+}
+
+func TestManagedProductCustodyProtectsAllMaterialWithoutBindingBusinessData(t *testing.T) {
+	for _, change := range []string{"unchanged", "business-data", "credential", "dependency-key", "missing", "added", "permissions", "symlink"} {
+		t.Run(change, func(t *testing.T) {
+			if runtime.GOOS == "windows" && (change == "permissions" || change == "symlink") {
+				t.Skip("Linux custody semantics are required")
+			}
+			directory := t.TempDir()
+			if err := os.Chmod(directory, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			write := func(name, content string) {
+				t.Helper()
+				if err := os.WriteFile(filepath.Join(directory, name), []byte(content), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			write("credential", "private-business-credential")
+			write("dependency-key", "private-shared-encryption-key")
+			if err := os.Mkdir(filepath.Join(directory, "data"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			write("data/events", "original business data")
+			before, err := managedProductCustodyDigests(directory)
+			if err != nil || len(before) != 2 {
+				t.Fatalf("custody baseline failed: %v", err)
+			}
+			encoded, _ := json.Marshal(before)
+			if bytes.Contains(encoded, []byte("private-")) {
+				t.Fatal("custody evidence contains a secret")
+			}
+			switch change {
+			case "business-data":
+				write("data/events", "new business data")
+			case "credential", "dependency-key":
+				write(change, "replaced material")
+			case "missing":
+				if err := os.Remove(filepath.Join(directory, "dependency-key")); err != nil {
+					t.Fatal(err)
+				}
+			case "added":
+				write("extra-key", "unapproved material")
+			case "permissions":
+				if err := os.Chmod(filepath.Join(directory, "dependency-key"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Symlink(filepath.Join(directory, "credential"), filepath.Join(directory, "extra-key")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			after, err := managedProductCustodyDigests(directory)
+			if got := err == nil && equalJSON(before, after); got != (change == "unchanged" || change == "business-data") {
+				t.Fatalf("changed custody admitted=%t", got)
+			}
+		})
+	}
+}
+
+func TestDevOpsCreationFailureExposesOnlyStepAndStatus(t *testing.T) {
+	for _, test := range []struct {
+		name, mediaType, body string
+		status                int
+	}{
+		{"unauthorized", problemJSONMediaType, `{"detail":"private-server-detail"}`, http.StatusUnauthorized},
+		{"conflict", problemJSONMediaType, `{"detail":"private-server-detail"}`, http.StatusConflict},
+		{"unavailable", problemJSONMediaType, `{"detail":"private-server-detail"}`, http.StatusServiceUnavailable},
+		{"invalid-media-type", "text/plain", "private-server-detail", http.StatusBadGateway},
+		{"forbidden-material", jsonMediaType, `{"secret":"private-test-credential"}`, http.StatusCreated},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", test.mediaType)
+				w.Header().Set("Location", "/private-server-path")
+				w.WriteHeader(test.status)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			client := &edgeClient{endpoint: server.URL, http: server.Client(), forbidden: [][]byte{[]byte("private-test-credential")}}
+			resource, err := createDevOpsResource(
+				context.Background(), client, "devops-project-create", "/api/devops/v1/projects", "create-project",
+				"/v1/projects/project", nil, devopsv1.CreateDevOpsProjectRequest{ID: "project", Name: "project"},
+				devopsv1.ValidateDevOpsProject,
+				func(value devopsv1.DevOpsProject) uint64 { return value.Metadata.ResourceVersion },
+			)
+			want := "phase1 gate failed at devops-project-create-request-http-" + strconv.Itoa(test.status)
+			if err == nil || safeFailure(err).Error() != want || resource.Metadata.ID != "" {
+				t.Fatal("failure did not preserve only the safe step and status")
+			}
+			response, err := client.json(context.Background(), http.MethodPost, "/api/devops/v1/projects", nil, nil, nil, http.StatusCreated)
+			if err == nil || response.status != test.status || response.header != nil || response.body != nil {
+				t.Fatal("failed HTTP response retained private content or lost its numeric status")
+			}
+		})
 	}
 }
 

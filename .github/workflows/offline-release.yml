@@ -225,6 +225,26 @@ jobs:
           stop_engine
           engine_pid=''
           OFFLINE
+      - name: Package the exact accepted disposable release pair
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$MATRIX_OFFLINE_WORK"
+          # A tar archive preserves the signed executable modes. Explicit
+          # inputs exclude the disposable signer, SMTP fixture and installed
+          # state. This pair uses an acceptance-only key, not a release key.
+          tar --create --gzip --file offline-release-candidates.tar.gz \
+            release-a release-b trust.json
+          tar --compare --gzip --file offline-release-candidates.tar.gz
+          sha256sum offline-release-candidates.tar.gz > evidence/candidates.sha256
+      - name: Retain accepted disposable installation candidates
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offline-release-candidates
+          path: ${{ runner.temp }}/matrix-offline/offline-release-candidates.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
       - name: Preserve only public gate evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

@@ -603,7 +603,7 @@ func (client *edgeClient) jsonWithResponseMediaType(
 		mediaType != wantMediaType || response.Header.Get("Content-Encoding") != "" ||
 		containsAny(content, client.forbidden) {
 		clear(content)
-		return httpResult{}, errors.New("HTTP response contract failed")
+		return httpResult{status: response.StatusCode}, errors.New("HTTP response contract failed")
 	}
 	accepted := false
 	for _, status := range wantStatus {
@@ -611,7 +611,7 @@ func (client *edgeClient) jsonWithResponseMediaType(
 	}
 	if !accepted {
 		clear(content)
-		return httpResult{}, errors.New("HTTP response status failed")
+		return httpResult{status: response.StatusCode}, errors.New("HTTP response status failed")
 	}
 	return httpResult{status: response.StatusCode, header: response.Header.Clone(), body: content}, nil
 }

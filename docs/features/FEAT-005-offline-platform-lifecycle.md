@@ -1396,7 +1396,10 @@ running Verification 38997696246, or accept the later Account
    ELK and Redis remain provisioned across failed-upgrade automatic rollback,
    upgrade, explicit rollback, selected-backup recovery and the native Docker
    engine restart. Their original container/image identities, private networks,
-   mounts, endpoints and credential digests must survive. The Elasticsearch
+   mounts, endpoints and protected material must survive. Custody compares
+   credential, shared encryption key, dependency intent and immutable
+   configuration digests and file permissions after the complete dependency
+   graph exists; engine data is verified through its business protocol. The Elasticsearch
    document, Logstash event, Kibana Space and Redis AOF-backed key are read
    before any replacement write can mask data loss. Reverse dependency-order
    termination then proves native cleanup, closed endpoints and quota return.
@@ -1408,8 +1411,12 @@ daemon with an empty data root inside private mount and network namespaces.
 Native runtime processes retain the host PID/proc/cgroup view.
 The runner and its build daemon remain outside those namespaces; no container
 hosts a daemon. The effectful gate independently rejects external routes and
-nonempty Docker state. Private signers, SMTP credentials and installation data
-are excluded from uploaded evidence. A workflow definition alone is not an
+nonempty Docker state. After the whole lifecycle passes, the exact signed A/B
+pair and its public trust configuration are retained as an acceptance-only
+archive with executable permissions and a SHA-256 checksum. Its ephemeral
+test signer does not authorize a production release. Private signers, SMTP
+credentials and installation data are excluded from uploaded artifacts.
+A workflow definition alone is not an
 accepted Gate C result; the current execution status remains recorded above.
 
 Common generation-drift, unit, vet, race, repeated, schema, architecture,

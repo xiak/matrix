@@ -1,7 +1,7 @@
 # 受管产品接入验证：ELK 与 Redis
 
 本运行手册负责可执行检查与排错命令。接入顺序见[产品接入手册](../product-guide/managed-service-onboarding.md)，
-合同、验收要求和实际结果由 [FEAT-007](../features/FEAT-007-control-plane-console.md#产品团队接入契约)维护。
+契约、验收要求和实际结果由 [FEAT-007](../features/FEAT-007-control-plane-console.md#产品团队接入契约)维护。
 
 真实门禁需要 Linux/amd64 进程、同一主机上的 Docker Engine、Docker Compose 与 Go 1.26。
 使用宿主机 Docker，不启动 DinD。执行前按安装运行手册完成
@@ -14,7 +14,7 @@ Windows 用户使用下文的 Docker Desktop 工具容器流程。
 从仓库根目录执行：
 
 ```sh
-go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localredis ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
+go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/locallogstash ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localredis ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
 ```
 
 这一步不启动产品。`TestProductRuntime` 的跳过提示是预期结果，不能把它当作真实验收。
@@ -91,7 +91,7 @@ docker run -d --name $taskOperator --label "com.xiak.matrix.onboarding=$taskName
 工具链和模块缓存写入专用卷，仓库只读挂载。确认工具容器里的契约检查也通过，再执行真实门禁：
 
 ```powershell
-docker exec $taskOperator go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localredis ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
+docker exec $taskOperator go test -count=1 ./api/adapter/managedservice/v1 ./test/managedserviceonboarding ./app/adapter/managedservice/locallogstash ./app/adapter/managedservice/localkibana ./app/adapter/managedservice/localelasticsearch ./app/adapter/managedservice/localmysql ./app/adapter/managedservice/localredis ./app/adapter/managedservice/localcontainer ./app/service/paas/internal/managedservice/usecase/reconcileinstallation ./test/architecture
 docker exec $taskOperator go run ./test/managedserviceonboarding/cmd/prepare
 docker exec --env MATRIX_ONBOARDING_RUNTIME=1 --env "MATRIX_ONBOARDING_ROOT=$taskVolumeRoot/runs" --env "MATRIX_ONBOARDING_REPORT=$taskVolumeRoot/acceptance.json" $taskOperator go test -count=1 -timeout=40m -v ./test/managedserviceonboarding
 New-Item -ItemType Directory -Force .cache/product-onboarding | Out-Null

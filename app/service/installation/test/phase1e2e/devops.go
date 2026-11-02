@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
@@ -150,7 +151,7 @@ func (value *gate) exerciseDevOpsAccess(
 		return
 	}
 	if err := value.createDevOpsConfiguration(ctx, administrator); err != nil {
-		returnErr = fail("devops-admin-control-plane")
+		returnErr = safeFailure(err)
 		return
 	}
 	if _, err := value.waitDevOpsSourceUnavailable(ctx, administrator, 1); err != nil {
@@ -531,19 +532,22 @@ func (value *gate) createDevOpsConfiguration(
 	bearer []byte,
 ) error {
 	project, err := createDevOpsResource(
-		ctx, value.edge, "/api/devops/v1/projects", "phase1-create-devops-project",
+		ctx, value.edge, "devops-project-create", "/api/devops/v1/projects", "phase1-create-devops-project",
 		"/v1/projects/"+string(devOpsProjectID), bearer,
 		devopsv1.CreateDevOpsProjectRequest{ID: devOpsProjectID, Name: "phase1-project"},
 		devopsv1.ValidateDevOpsProject,
 		func(resource devopsv1.DevOpsProject) uint64 { return resource.Metadata.ResourceVersion },
 	)
-	if err != nil || project.Metadata.ID != devOpsProjectID ||
+	if err != nil {
+		return err
+	}
+	if project.Metadata.ID != devOpsProjectID ||
 		project.Metadata.Scope.TenantID != devOpsTenant {
-		return errors.New("DevOps project creation failed")
+		return fail("devops-project-create-identity")
 	}
 
 	connection, err := createDevOpsResource(
-		ctx, value.edge, "/api/devops/v1/source-connections", "phase1-create-devops-source",
+		ctx, value.edge, "devops-source-create", "/api/devops/v1/source-connections", "phase1-create-devops-source",
 		"/v1/source-connections/"+string(devOpsSourceConnectionID), bearer,
 		devopsv1.CreateSourceConnectionRequest{
 			ID: devOpsSourceConnectionID, Name: "phase1-source",
@@ -556,22 +560,25 @@ func (value *gate) createDevOpsConfiguration(
 		devopsv1.ValidateSourceConnection,
 		func(resource devopsv1.SourceConnection) uint64 { return resource.Metadata.ResourceVersion },
 	)
-	if err != nil || connection.Metadata.ID != devOpsSourceConnectionID ||
+	if err != nil {
+		return err
+	}
+	if connection.Metadata.ID != devOpsSourceConnectionID ||
 		connection.Metadata.Scope.TenantID != devOpsTenant ||
 		connection.Status.Health != devopsv1.SourceConnectionPending ||
 		connection.Status.Reason != devopsv1.SourceConnectionReasonConfigurationChanged {
-		return errors.New("DevOps source connection creation failed")
+		return fail("devops-source-create-state")
 	}
 	if _, err := scheduleDevOpsRecheck(
 		ctx, value.edge, "/api/devops/v1/source-connections/"+string(devOpsSourceConnectionID),
 		"phase1-recheck-devops-source", bearer, devopsv1.ValidateSourceConnection,
 		func(resource devopsv1.SourceConnection) uint64 { return resource.Metadata.ResourceVersion },
 	); err != nil {
-		return err
+		return fail("devops-source-recheck")
 	}
 
 	binding, err := createDevOpsResource(
-		ctx, value.edge, "/api/devops/v1/repository-bindings", "phase1-create-devops-repository",
+		ctx, value.edge, "devops-repository-create", "/api/devops/v1/repository-bindings", "phase1-create-devops-repository",
 		"/v1/repository-bindings/"+string(devOpsRepositoryBindingID), bearer,
 		devopsv1.CreateRepositoryBindingRequest{
 			ID: devOpsRepositoryBindingID, Name: "phase1-repository", ProjectID: devOpsProjectID,
@@ -584,22 +591,25 @@ func (value *gate) createDevOpsConfiguration(
 		devopsv1.ValidateRepositoryBinding,
 		func(resource devopsv1.RepositoryBinding) uint64 { return resource.Metadata.ResourceVersion },
 	)
-	if err != nil || binding.Metadata.ID != devOpsRepositoryBindingID ||
+	if err != nil {
+		return err
+	}
+	if binding.Metadata.ID != devOpsRepositoryBindingID ||
 		binding.Metadata.Scope.TenantID != devOpsTenant || binding.ProjectID != devOpsProjectID ||
 		binding.Status.Health != devopsv1.RepositoryBindingPending ||
 		binding.Status.Reason != devopsv1.RepositoryBindingReasonConfigurationChanged {
-		return errors.New("DevOps repository binding creation failed")
+		return fail("devops-repository-create-state")
 	}
 	if _, err := scheduleDevOpsRecheck(
 		ctx, value.edge, "/api/devops/v1/repository-bindings/"+string(devOpsRepositoryBindingID),
 		"phase1-recheck-devops-repository", bearer, devopsv1.ValidateRepositoryBinding,
 		func(resource devopsv1.RepositoryBinding) uint64 { return resource.Metadata.ResourceVersion },
 	); err != nil {
-		return err
+		return fail("devops-repository-recheck")
 	}
 
 	pipeline, err := createDevOpsResource(
-		ctx, value.edge, "/api/devops/v1/pipelines", "phase1-create-devops-pipeline",
+		ctx, value.edge, "devops-pipeline-create", "/api/devops/v1/pipelines", "phase1-create-devops-pipeline",
 		"/v1/pipelines/"+string(devOpsPipelineID), bearer,
 		devopsv1.CreatePipelineRequest{
 			ID: devOpsPipelineID, Name: "phase1-pipeline", ProjectID: devOpsProjectID,
@@ -614,10 +624,13 @@ func (value *gate) createDevOpsConfiguration(
 		devopsv1.ValidatePipeline,
 		func(resource devopsv1.Pipeline) uint64 { return resource.Metadata.ResourceVersion },
 	)
-	if err != nil || pipeline.Metadata.ID != devOpsPipelineID ||
+	if err != nil {
+		return err
+	}
+	if pipeline.Metadata.ID != devOpsPipelineID ||
 		pipeline.Metadata.Scope.TenantID != devOpsTenant || pipeline.ProjectID != devOpsProjectID ||
 		pipeline.ActiveRevision != nil {
-		return errors.New("DevOps Pipeline creation failed")
+		return fail("devops-pipeline-create-state")
 	}
 
 	response, err := value.edge.json(
@@ -630,7 +643,7 @@ func (value *gate) createDevOpsConfiguration(
 		http.StatusCreated,
 	)
 	if err != nil {
-		return err
+		return devOpsRequestFailure("devops-pipeline-activate", response)
 	}
 	defer clear(response.body)
 	var activation devopsv1.PipelineActivation
@@ -645,7 +658,7 @@ func (value *gate) createDevOpsConfiguration(
 		!isQuotedResourceVersion(response.header, activation.Pipeline.Metadata.ResourceVersion) ||
 		response.header.Get("Location") != "/v1/pipelines/"+string(devOpsPipelineID)+
 			"/revisions/"+string(activation.Revision.ID) {
-		return errors.New("DevOps Pipeline activation failed")
+		return fail("devops-pipeline-activate-contract")
 	}
 	return nil
 }
@@ -928,7 +941,7 @@ func (value *gate) assertForeignTenantBoundary(ctx context.Context) (returnErr e
 func createDevOpsResource[T any](
 	ctx context.Context,
 	client *edgeClient,
-	path, idempotencyKey, location string,
+	step, path, idempotencyKey, location string,
 	bearer []byte,
 	body any,
 	validate func(T) error,
@@ -940,16 +953,32 @@ func createDevOpsResource[T any](
 		map[string]string{"Idempotency-Key": idempotencyKey}, http.StatusCreated,
 	)
 	if err != nil {
-		return zero, err
+		return zero, devOpsRequestFailure(step, response)
 	}
 	defer clear(response.body)
 	var resource T
-	if decodeOne(response.body, &resource) != nil || validate(resource) != nil ||
-		!isQuotedResourceVersion(response.header, resourceVersion(resource)) ||
-		response.header.Get("Location") != location {
-		return zero, errors.New("DevOps resource creation response failed")
+	if decodeOne(response.body, &resource) != nil {
+		return zero, fail(step + "-decode")
+	}
+	if validate(resource) != nil {
+		return zero, fail(step + "-schema")
+	}
+	if !isQuotedResourceVersion(response.header, resourceVersion(resource)) {
+		return zero, fail(step + "-version")
+	}
+	if response.header.Get("Location") != location {
+		return zero, fail(step + "-location")
 	}
 	return resource, nil
+}
+
+// A failed acceptance request exposes only a fixed call-site step and numeric
+// status. Neither the server's body/headers nor transport errors enter evidence.
+func devOpsRequestFailure(step string, response httpResult) error {
+	if response.status >= 100 && response.status <= 599 {
+		return fail(step + "-request-http-" + strconv.Itoa(response.status))
+	}
+	return fail(step + "-request")
 }
 
 func scheduleDevOpsRecheck[T any](
