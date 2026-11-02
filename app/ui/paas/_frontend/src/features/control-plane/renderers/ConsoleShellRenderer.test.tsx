@@ -755,13 +755,15 @@ describe("ConsoleShellRenderer", () => {
         observedAt: "2026-08-26T12:04:00Z"
       }
     };
+    let current = installation;
     let acceptTermination!: (value: ServiceInstallation) => void;
     const terminateInstallation = vi.fn(() => new Promise<ServiceInstallation>((resolve) => {
-      acceptTermination = resolve;
+      acceptTermination = (value) => { current = value; resolve(value); };
     }));
     const { user } = await renderConsole({
       section: "installations",
-      load: vi.fn().mockResolvedValue({ ...snapshot, installations: [installation] }),
+      load: vi.fn(async () => ({ ...snapshot, installations: [current] })),
+      getInstallation: vi.fn(async () => current),
       terminateInstallation
     });
 
@@ -787,7 +789,7 @@ describe("ConsoleShellRenderer", () => {
 
     acceptTermination(accepted);
     expect((await screen.findAllByText("等待终止")).length).toBeGreaterThan(0);
-    expect(screen.getByText(/正在异步清理运行时、网络、数据与凭据/)).toBeTruthy();
+    expect(await screen.findByText(/正在异步清理运行时、网络、数据与凭据/)).toBeTruthy();
   });
 
   it("confirms an unknown termination through the original public key and independently rereads the instance", async () => {

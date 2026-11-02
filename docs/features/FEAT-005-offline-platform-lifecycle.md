@@ -314,7 +314,11 @@ MySQL 数据保持；新 Logstash 的真实页面创建、认证写入与重启�
 显式退回不含 Logstash 的前驱被 `ROLLBACK_PRODUCT_INVENTORY_INCOMPATIBLE`
 拒绝，现有实例继续接受原凭据并保留事件。包含该实例的平台备份
 `backup-6c05f13d42e58322ca9fd12b37291777` 创建成功；未把备份成功计作恢复成功。
-本片仍待最终修复包的独立 CI、兼容版本回滚与当前版本恢复验收。
+随后从固定提交 `ed056b7bfac8e980e62b40937788c53e9760c554` 构建 `.2`，发布标识
+`matrix-v0.3.0-logstash.2-ed056b7bfac8`，构建标识 `logstash-verified-20261102`。
+从 `.1` 升级返回 `SUCCEEDED / READY`，关联 `cmd-8c25e89d5fb172d6810d87c987b31baf`，
+自动备份 `backup-f817428e1e41b5656d8faa48ab9de0ef`。真实页面验证及实例清理归
+FEAT-007。本片仍待最终修复包的完整独立 CI、兼容版本回滚与当前版本恢复验收。
 
 环境为 Windows 上的 Docker Desktop 4.83.0 / Engine 29.6.2，Linux/amd64、
 containerd 镜像存储。普通 Linux 工具容器中的 Docker CLI 27.5.1 / Compose 2.33.0
