@@ -739,7 +739,9 @@ func assertPlatform(
 }
 
 func expectedPublishedPortBindings(manifest release.Manifest) map[string]int {
-	result := map[string]int{"apisix": 1}
+	// The current topology publishes both the console/API listener and the
+	// authenticated node-enrollment listener through APISIX.
+	result := map[string]int{"apisix": 2}
 	if manifest.IncludesProduct(release.ProductDevOps) {
 		result["devops-executor-gateway"] = 1
 	}
