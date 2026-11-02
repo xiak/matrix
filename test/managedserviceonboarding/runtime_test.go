@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -672,7 +673,28 @@ func assertLogstashWrite(t *testing.T, ctx context.Context, endpoint string, sec
 }
 func logstashRuntimeWitness(t *testing.T, id string) string {
 	t.Helper()
-	return dockerOutput(t, "inspect", "--format", "{{.Id}} {{.State.StartedAt}} {{.RestartCount}} {{json .NetworkSettings.Networks}} {{json .Mounts}}", id)
+	var witness struct {
+		ID              string `json:"Id"`
+		State           struct{ StartedAt string }
+		RestartCount    int
+		NetworkSettings struct{ Networks map[string]json.RawMessage }
+		Mounts          []struct {
+			Type, Name, Source, Destination, Driver, Mode, Propagation string
+			RW                                                         bool
+		}
+	}
+	if json.Unmarshal([]byte(dockerOutput(t, "inspect", "--format", "{{json .}}", id)), &witness) != nil || witness.ID != id {
+		t.Fatal("cannot inspect exact Logstash runtime identity")
+	}
+	// Engine inspection does not promise mount order. Compare all mount
+	// properties by their unique container destination, retaining identity,
+	// start time, restart count and every network attachment in the witness.
+	sort.Slice(witness.Mounts, func(i, j int) bool { return witness.Mounts[i].Destination < witness.Mounts[j].Destination })
+	content, err := json.Marshal(witness)
+	if err != nil {
+		t.Fatal("cannot encode Logstash runtime witness")
+	}
+	return string(content)
 }
 
 type productNetwork struct{ IPAddress, Gateway, NetworkID string }

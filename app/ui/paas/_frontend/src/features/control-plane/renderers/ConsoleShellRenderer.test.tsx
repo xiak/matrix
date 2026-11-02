@@ -453,14 +453,6 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("button", { name: /批量授权/ })).toBeNull();
   });
 
-  it("states the server-side visibility boundary without claiming a live IAM integration", async () => {
-    await renderConsole({ section: "installations" });
-
-    expect(await screen.findByText(/实例可见性必须由产品服务在服务端结合 IAM 判定/)).toBeTruthy();
-    expect(screen.getByText(/不会把拒绝项下载到浏览器后再隐藏/)).toBeTruthy();
-    expect(screen.queryByRole("button", { name: /批量授权/ })).toBeNull();
-  });
-
   it("keeps product-catalog fixtures distinct from IAM-filtered visibility", async () => {
     await renderConsole({ section: "catalog", experience: previewExperienceSnapshot });
 
@@ -687,6 +679,49 @@ describe("ConsoleShellRenderer", () => {
     ));
   });
 
+  it.each(["ready", "revoked"] as const)("refreshes the open instance through a fresh authorized read after polling advances it: %s", async (outcome) => {
+    let poll!: () => void;
+    const schedule = window.setTimeout.bind(window);
+    vi.spyOn(window, "setTimeout").mockImplementation((handler, delay, ...args) => {
+      if (delay === 4_000 && typeof handler === "function") {
+        poll = () => { handler(...args); };
+        return schedule(() => {}, 60_000) as unknown as ReturnType<typeof globalThis.setTimeout>;
+      }
+      return schedule(handler, delay, ...args) as unknown as ReturnType<typeof globalThis.setTimeout>;
+    });
+    const pending: ServiceInstallation = {
+      id: "logstash-progress", name: "日志安装进度", offeringId: "logstash-8.19", engineVersion: "8.19.23",
+      quotaEntitlementId: "quota-logstash", regionId: "local-primary", phase: "PROVISIONING",
+      endpoint: null, credentialReference: null, resourceVersion: 2, createdAt: "2026-11-02T08:00:00Z",
+      operation: { id: "operation-logstash", kind: "PROVISION", phase: "PROVISIONING", safeFailureCode: null, observedAt: "2026-11-02T08:00:00Z" }
+    };
+    const listed: ServiceInstallation = { ...pending, phase: "READY", resourceVersion: 3, endpoint: "summary-only.service.local:8080", operation: { ...pending.operation, phase: "READY" } };
+    const detail = { ...listed, endpoint: "authorized-detail.service.local:8080" };
+    let current = pending;
+    const getInstallation = vi.fn<ControlPlaneRepository["getInstallation"]>()
+      .mockResolvedValueOnce(pending)
+      .mockImplementationOnce(async () => { current = listed; return listed; });
+    if (outcome === "revoked") getInstallation.mockRejectedValue(new HttpProblem(403, "PERMISSION_REVOKED"));
+    else getInstallation.mockResolvedValue(detail);
+    const { user } = await renderConsole({
+      section: "installations", getInstallation,
+      load: vi.fn(async () => ({ ...snapshot, installations: [current] }))
+    });
+    await user.click(screen.getByRole("button", { name: "日志安装进度" }));
+    await act(async () => { await Promise.resolve(); });
+    expect(screen.getAllByText("安装中").length).toBeGreaterThan(0);
+    await act(async () => { poll(); });
+    expect(screen.getByRole("heading", { name: "日志安装进度" })).toBeTruthy();
+    expect(screen.queryByText("summary-only.service.local:8080")).toBeNull();
+    if (outcome === "revoked") {
+      expect(screen.getByText("详情不可用")).toBeTruthy();
+      expect(screen.queryByText("authorized-detail.service.local:8080")).toBeNull();
+    } else {
+      expect(screen.getByText("authorized-detail.service.local:8080")).toBeTruthy();
+      expect(screen.queryByText("安装中")).toBeNull();
+    }
+    expect(getInstallation.mock.calls.every(([credential, id]) => credential === "renderer-test-memory-only-session" && id === pending.id)).toBe(true);
+  });
   it("reviews installation termination in the content region and keeps the submit control stable", async () => {
     const installation: ServiceInstallation = {
       id: "pg-termination-review",

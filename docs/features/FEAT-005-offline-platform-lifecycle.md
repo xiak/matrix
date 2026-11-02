@@ -228,7 +228,7 @@ Logstash candidate rejects that downgrade with
 `ROLLBACK_PRODUCT_INVENTORY_INCOMPATIBLE` before journal advancement, observation
 or provider effects; the previously accepted four-product/productless boundary
 is retained only for its authenticated predecessor profile. This candidate rule
-has unit coverage; signed-runtime acceptance remains outstanding. Recovery is the
+has unit coverage and rejects the signed five-product Logstash candidate’s rollback to its four-product predecessor in the local runtime. Compatible five-product rollback and expanded-upgrade failure injection remain outstanding. Recovery is the
 separate destructive path that restores a selected verified backup after an
 operator request. The recovery engine comes from an authenticated, supported
 operator bundle compatible with the installation profile; the selected backup
@@ -304,6 +304,17 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 本次核对接受该私有候选的本机升级与验证，不接受完整 Gate C 或新 MySQL 拓扑的
 旧版 worker 回退；托管实例的迁移及隔离证据归
 [FEAT-007](FEAT-007-control-plane-console.md#docker-mysql-租户隔离)。
+
+2026-11-02，Logstash 私有签名候选来自干净提交
+`bd74051e19a58f97f1fe89bcdd9c592d36ee3b9e`，发布标识
+`matrix-v0.3.0-logstash.1-bd74051e19a5`，以 `.5` 为直接前驱。原地升级和
+随后验证返回 `SUCCEEDED / READY`，分别关联 `cmd-7903c4b1760aef172732bb85b01dc18e`
+与 `cmd-5e863e1933391bb7395efb1a04c53af2`。已停止的原 PostgreSQL 实例状态和
+MySQL 数据保持；新 Logstash 的真实页面创建、认证写入与重启保留见 FEAT-007。
+显式退回不含 Logstash 的前驱被 `ROLLBACK_PRODUCT_INVENTORY_INCOMPATIBLE`
+拒绝，现有实例继续接受原凭据并保留事件。包含该实例的平台备份
+`backup-6c05f13d42e58322ca9fd12b37291777` 创建成功；未把备份成功计作恢复成功。
+本片仍待最终修复包的独立 CI、兼容版本回滚与当前版本恢复验收。
 
 环境为 Windows 上的 Docker Desktop 4.83.0 / Engine 29.6.2，Linux/amd64、
 containerd 镜像存储。普通 Linux 工具容器中的 Docker CLI 27.5.1 / Compose 2.33.0

@@ -600,14 +600,20 @@ function InstallationContent({ scene, preview, accountId }: {
     : selectedSummary;
   const selectedId = selected?.id;
   const observedCommand = managedServiceCommand?.result;
+  const openedResourceVersion = selectedSummary?.resourceVersion ?? 0;
+  const listedResourceVersion = scene.installations.find((item) => item.id === selectedId)?.resourceVersion ?? 0;
 
   useEffect(() => {
-    if (preview || !selectedId || observedCommand?.target.kind !== "SERVICE_INSTALLATION" || observedCommand.target.id !== selectedId) return;
+    if (preview || !selectedId) return;
+    const commandTargetsSelected = observedCommand?.target.kind === "SERVICE_INSTALLATION" && observedCommand.target.id === selectedId;
+    // Directory progress is only a refresh signal. The current identity must
+    // independently read this exact instance before updated details appear.
+    if (!commandTargetsSelected && listedResourceVersion <= openedResourceVersion) return;
     const revision = ++detailReadRevision.current;
     queueMicrotask(() => { if (revision === detailReadRevision.current) setDetailLoad({ status: "loading" }); });
     void readInstallation(selectedId).then((next) => { if (revision === detailReadRevision.current) setDetailLoad(next); });
     return () => { detailReadRevision.current += 1; };
-  }, [observedCommand, preview, readInstallation, selectedId]);
+  }, [listedResourceVersion, observedCommand, openedResourceVersion, preview, readInstallation, selectedId]);
 
   const openInstallation = useCallback((item: InstallationScene) => {
     setSelectedSummary(item);

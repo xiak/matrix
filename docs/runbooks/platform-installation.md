@@ -72,7 +72,7 @@ Docker Desktop 的主机网络功能并重启 Docker Desktop。
 
 ### 检查托管服务的主机参数
 
-当前托管服务执行器会一起检查四个产品的运行条件。即使只准备使用 MySQL 或 PostgreSQL，
+当前托管服务执行器会一起检查发布包中托管产品的运行条件。即使只准备使用 MySQL 或 PostgreSQL，
 Docker 所在 Linux 主机的 `vm.max_map_count` 也须不低于 `1048576`。
 在 Docker Desktop 上，以下命令已在 PowerShell 中执行验证：
 
@@ -304,6 +304,7 @@ root# /usr/local/sbin/mx --format json platform recover \
 | `RELEASE_BUNDLE_INVALID` | 先核对完整发布包、信任材料和文件权限。Windows 中转后按签名清单核对全部执行位，不修改清单或跳过验证 |
 | `EFFECT_OUTCOME_UNKNOWN`／`STARTING` | 原命令结果未确认。由交付人员核对原安装与对象占用，排除测试容器占用平台网络等原因，再以相同命令和输入继续；不重装、不删除状态记录 |
 | `START_VERIFICATION_FAILED` | 平台服务未通过启动检查。保留原命令与错误，不发放登录信息；先由交付人员定位失败服务 |
+| `ROLLBACK_PRODUCT_INVENTORY_INCOMPATIBLE` | 上一版本不能继续纳管当前版本提供的产品。保留当前安装，使用交付负责人验证过的兼容包；不删实例或修改发布清单来绕过 |
 | `ROLLBACK_OUTCOME_UNKNOWN`／`ROLLING_BACK` | 回滚还没有确认完成。核对阻塞原因后，用相同安装命令与相同输入继续原回滚，不清空目录重装 |
 | 首次安装失败后，`status` 返回 `PLATFORM_NOT_INSTALLED` | 当前没有成功提交的安装。即使目录仍有文件，也不能开始备份、升级或首次登录；保留原目录供定位 |
 | `INSTALLATION_COMMAND_CONFLICT` | 有其他操作或原操作的输入不一致。先核对原操作，不更换输入反复提交 |

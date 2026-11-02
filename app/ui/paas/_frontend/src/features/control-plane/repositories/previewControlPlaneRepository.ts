@@ -62,7 +62,7 @@ let snapshot: ControlPlaneSnapshot = {
     id: "logstash-8.19",
     service: { id: "logstash", revision: 1, contentDigest: `sha256:${"5".repeat(64)}` },
     displayName: "Logstash 8.19",
-    description: "通过认证 HTTP 接收 JSON 事件并持久保存；配置固定为 http-json-file-v1。",
+    description: "使用业务账号接收 JSON 日志，并将事件保存在本实例中。",
     engineFamily: "Logstash", engineVersion: "8.19.23", state: "AVAILABLE",
     quotaShapes: [
       { id: "logstash-small", displayName: "开发型", cpuMillicores: 1000, memoryMiB: 1536, storageGiB: 10 },

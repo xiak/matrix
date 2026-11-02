@@ -68,7 +68,7 @@ func DefaultCatalog() Catalog {
 		{
 			ID: LogstashOfferingID, Service: references[managedservicev1.LogstashServiceID],
 			DisplayName:  "Logstash 8.19",
-			Description:  "通过认证 HTTP 接收 JSON 事件并持久保存；配置固定为 http-json-file-v1。",
+			Description:  "使用业务账号接收 JSON 日志，并将事件保存在本实例中。",
 			EngineFamily: "logstash", EngineVersion: "8.19.23",
 			State: managedservicev1.OfferingAvailable,
 			QuotaShapes: []managedservicev1.QuotaShape{

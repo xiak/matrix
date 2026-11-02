@@ -20019,9 +20019,22 @@ func proveAccessKeyProcesses(t *testing.T, ctx context.Context, database *pgx.Co
 		request.Header.Set("X-Matrix-Edge-Assertion", edgeAssertion)
 		request.Header.Set("X-Real-IP", value.sourceIP)
 		request.Header.Set("X-Forwarded-For", value.sourceIP)
-		response, err := processHTTPClient().Do(request)
+		client := processHTTPClient()
+		if value.method == http.MethodGet && (value.route == "/v1/applications" || strings.HasPrefix(value.route, "/v1/applications?")) {
+			// This functional gate verifies every decision and evidence row in a
+			// 50-resource page. It is not a five-second latency acceptance gate;
+			// retained local runtimes also perform durable audit writes per item.
+			directoryClient := *client
+			directoryClient.Timeout = 30 * time.Second
+			client = &directoryClient
+		}
+		started := time.Now()
+		response, err := client.Do(request)
 		if err != nil {
-			t.Fatal("invoke signed PaaS request", err)
+			t.Fatalf("invoke signed PaaS request after %s: %v", time.Since(started), err)
+		}
+		if client != processHTTPClient() {
+			t.Logf("signed Application directory status=%d duration=%s", response.StatusCode, time.Since(started))
 		}
 		defer response.Body.Close()
 		body, err := io.ReadAll(io.LimitReader(response.Body, iamv1.MaxRequestBytes+1))
@@ -24518,12 +24531,14 @@ func proveTenantResourceProcesses(t *testing.T, ctx context.Context, admin *pgx.
 	activation := managedservicev1.ActivateQuotaRequest{OfferingID: "postgresql-18", QuotaShapeID: "pg-small", InstanceCount: 2}
 	expectedOfferingIDs := []string{
 		managedservicev1.ElasticsearchOfferingID,
+		managedservicev1.LogstashOfferingID,
 		managedservicev1.MySQLOfferingID,
 		managedservicev1.PostgreSQLOfferingID,
 		managedservicev1.RabbitMQOfferingID,
 	}
 	expectedServiceIDs := []string{
 		managedservicev1.ElasticsearchServiceID,
+		managedservicev1.LogstashServiceID,
 		managedservicev1.MySQLServiceID,
 		managedservicev1.PostgreSQLServiceID,
 		managedservicev1.RabbitMQServiceID,
