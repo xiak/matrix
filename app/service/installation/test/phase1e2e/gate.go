@@ -97,7 +97,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		"--security-mail-configuration", value.config.securityMail,
 		"--northbound-origin", value.config.edge,
 	}, value.pathLeakage())
-	if err != nil || install.ReleaseID != value.releases.a.Manifest.Release.ID || !install.Changed {
+	if err != nil {
+		return err
+	}
+	if install.ReleaseID != value.releases.a.Manifest.Release.ID || !install.Changed {
 		return fail("release-a-install")
 	}
 	state, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, "")

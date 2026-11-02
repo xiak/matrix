@@ -87,6 +87,9 @@ jobs:
           umask 077
           work="$MATRIX_OFFLINE_WORK"
           mount --make-rprivate /
+          # mx requires private inputs to belong to the installing OS user.
+          # These files were prepared by the unprivileged CI build user.
+          chown -R root:root "$work/private"
           mkdir "$work/run"
           mount --bind "$work/run" /run
           mount -t proc proc /proc
@@ -115,6 +118,9 @@ jobs:
             if [[ "$result" != 0 ]]; then
               docker container ls --all --format '{{.Label "com.xiak.matrix.role"}} {{.State}} {{.Status}}' \
                 > "$work/evidence/runtime-health.txt" 2>/dev/null || true
+              "$work/release-a/bin/mx" --format json platform status --root "$work/installation" 2>/dev/null \
+                | jq '{status, state: .result.state, code: .error.code}' > "$work/evidence/failure-status.json" || true
+              df -B1 --output=avail "$work" | tail -1 > "$work/evidence/available-bytes.txt"
             fi
             if [[ -n "${engine_pid:-}" ]]; then kill -TERM "$engine_pid" 2>/dev/null || true; fi
             chmod 755 "$work/evidence"

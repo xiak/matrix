@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -33,6 +34,7 @@ import (
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
+	"github.com/xiak/matrix/app/service/installation/internal/cli"
 	"github.com/xiak/matrix/app/service/installation/release"
 )
 
@@ -99,6 +101,27 @@ func TestManagedProductMaintenancePreservesNativeCustody(t *testing.T) {
 	if sameManagedProductRuntime([]containerInspection{original}, nil, false) ||
 		sameManagedProductRuntime([]containerInspection{original, original}, []containerInspection{original, original}, true) {
 		t.Fatal("missing or duplicate native inventory was accepted")
+	}
+}
+
+func TestInstallFailureDiagnosticsExposeOnlyClosedCategories(t *testing.T) {
+	for _, test := range []struct {
+		code, class, want string
+		exit              int
+	}{
+		{"SECURITY_MAIL_CONFIGURATION_INVALID", string(cli.FaultVerification), "mx-install-mail-input-invalid", cli.ExitVerification},
+		{"PREFLIGHT_FAILED", string(cli.FaultPrecondition), "mx-install-preflight-failed", cli.ExitPrecondition},
+		{"IMAGE_VERIFICATION_FAILED", string(cli.FaultVerification), "mx-install-image-verification-failed", cli.ExitVerification},
+		{"PRIVATE_VALUE", string(cli.FaultVerification), "mx-install-exit-unknown", cli.ExitVerification},
+		{"SECURITY_MAIL_CONFIGURATION_INVALID", "INTERNAL", "mx-install-exit-unknown", cli.ExitInternal},
+	} {
+		t.Run(test.code+test.class, func(t *testing.T) {
+			failure := []byte(fmt.Sprintf(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"PlatformCommandFailure","action":"INSTALL","status":"FAILED","error":{"class":%q,"code":%q,"message":"private raw detail"}}`, test.class, test.code))
+			_, err := checkMXOutput("install", commandOutput{stderr: failure, exit: test.exit}, nil, nil, nil)
+			if err == nil || err.Error() != fail(test.want).Error() || strings.Contains(err.Error(), "private raw detail") {
+				t.Fatalf("unexpected install diagnostic: %v", err)
+			}
+		})
 	}
 }
 

@@ -351,16 +351,17 @@ func validMXSourceTrustResult(
 func closedMXFailure(action string, output commandOutput) error {
 	unknown := fail("mx-" + action + "-exit-unknown")
 	var envelope mxFailure
-	if action != "rollback" || len(output.stdout) != 0 || decodeOne(output.stderr, &envelope) != nil ||
+	if (action != "rollback" && action != "install") || len(output.stdout) != 0 || decodeOne(output.stderr, &envelope) != nil ||
 		envelope.APIVersion != cli.OutputAPIVersion || envelope.Kind != "PlatformCommandFailure" ||
-		envelope.Action != "ROLLBACK" || envelope.Status != "FAILED" {
+		envelope.Action != strings.ToUpper(action) || envelope.Status != "FAILED" {
 		return unknown
 	}
-	known := map[string]struct {
+	type failureCategory struct {
 		class cli.FaultClass
 		exit  int
 		step  string
-	}{
+	}
+	known := map[string]failureCategory{
 		"ROLLBACK_SOURCE_NOT_READY":        {cli.FaultPrecondition, cli.ExitPrecondition, "source-not-ready"},
 		"ROLLBACK_PREDECESSOR_UNAVAILABLE": {cli.FaultPrecondition, cli.ExitPrecondition, "predecessor-unavailable"},
 		"ROLLBACK_PREDECESSOR_MISMATCH":    {cli.FaultPrecondition, cli.ExitPrecondition, "predecessor-mismatch"},
@@ -374,11 +375,34 @@ func closedMXFailure(action string, output commandOutput) error {
 		"COMMAND_INTERRUPTED":              {cli.FaultInterrupted, cli.ExitInterrupted, "interrupted"},
 		"ROLLBACK_FAILED":                  {cli.FaultInternal, cli.ExitInternal, "execution-failed"},
 	}
+	if action == "install" {
+		// The catalog stays closed: caller-controlled codes, messages, paths
+		// and native tool output never become diagnostic text.
+		known = map[string]failureCategory{
+			"TRUST_ROOT_INVALID":                  {cli.FaultVerification, cli.ExitVerification, "trust-invalid"},
+			"RELEASE_BUNDLE_INVALID":              {cli.FaultVerification, cli.ExitVerification, "bundle-invalid"},
+			"SECURITY_MAIL_CONFIGURATION_INVALID": {cli.FaultVerification, cli.ExitVerification, "mail-input-invalid"},
+			"INSTALL_RELEASE_HAS_PREDECESSOR":     {cli.FaultPrecondition, cli.ExitPrecondition, "has-predecessor"},
+			"PREFLIGHT_FAILED":                    {cli.FaultPrecondition, cli.ExitPrecondition, "preflight-failed"},
+			"PREFLIGHT_VERIFICATION_FAILED":       {cli.FaultVerification, cli.ExitVerification, "preflight-verification-failed"},
+			"OWNERSHIP_CONFLICT":                  {cli.FaultConflict, cli.ExitConflict, "ownership-conflict"},
+			"DEPENDENCY_UNAVAILABLE":              {cli.FaultUnavailable, cli.ExitUnavailable, "dependency-unavailable"},
+			"COMMAND_INTERRUPTED":                 {cli.FaultInterrupted, cli.ExitInterrupted, "interrupted"},
+		}
+		for _, phase := range []string{"STAGING", "IMAGE", "CONFIGURATION", "MIGRATION", "START", "PLATFORM"} {
+			known[phase+"_FAILED"] = failureCategory{
+				cli.FaultInternal, cli.ExitInternal, strings.ToLower(phase) + "-failed",
+			}
+			known[phase+"_VERIFICATION_FAILED"] = failureCategory{
+				cli.FaultVerification, cli.ExitVerification, strings.ToLower(phase) + "-verification-failed",
+			}
+		}
+	}
 	category, ok := known[envelope.Error.Code]
 	if !ok || envelope.Error.Class != string(category.class) || output.exit != category.exit {
 		return unknown
 	}
-	return fail("mx-rollback-" + category.step)
+	return fail("mx-" + action + "-" + category.step)
 }
 
 func checkExplicitRollback(result mxResult, commandErr error, expectedRelease string) error {
