@@ -1415,6 +1415,13 @@ running Verification 38997696246, or accept the later Account
    document, Logstash event, Kibana Space and Redis AOF-backed key are read
    before any replacement write can mask data loss. Reverse dependency-order
    termination then proves native cleanup, closed endpoints and quota return.
+7. After the engine-restart gate, a real Chromium browser logs into that same
+   signed installation. It activates ELK and Redis, orders quota, creates each
+   instance, selects Elasticsearch for Kibana, reads READY details, then
+   terminates in reverse dependency order and observes endpoint release and
+   quota return. The browser uses public pages without mocked responses or
+   injected sessions. Only known product pages and a closed diagnostic report
+   are exported; credentials, browser storage and traces remain private.
 
 The [offline release workflow](../../.github/workflows/offline-release.yml)
 owns a reproducible disposable Linux execution of this gate. It builds signed
@@ -1423,7 +1430,9 @@ daemon with an empty data root inside private mount and network namespaces.
 Native runtime processes retain the host PID/proc/cgroup view.
 The runner and its build daemon remain outside those namespaces; no container
 hosts a daemon. The effectful gate independently rejects external routes and
-nonempty Docker state. After the whole lifecycle passes, the exact signed A/B
+nonempty Docker state. Its pinned browser and operating-system dependencies
+are prepared online before isolation; browser journeys remain disconnected.
+After the lifecycle and browser gates pass, the exact signed A/B
 pair and its public trust configuration are retained as an acceptance-only
 archive with executable permissions and a SHA-256 checksum. Its ephemeral
 test signer does not authorize a production release. Private signers, SMTP

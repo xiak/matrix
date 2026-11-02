@@ -35,6 +35,9 @@ jobs:
         with:
           go-version: '1.26.x'
           cache-dependency-path: go.sum
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22.22.2'
       - name: Prepare disposable signed release inputs
         shell: bash
         run: |
@@ -56,6 +59,15 @@ jobs:
           "$work/matrix-release" keygen --key-id offline-acceptance \
             --private-key "$work/private/signer.json" --trust-key "$work/trust.json"
           sudo sysctl -w vm.max_map_count=1048576
+      - name: Prepare the pinned browser before disconnecting acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$MATRIX_OFFLINE_WORK"
+          node --check app/service/installation/test/phase1e2e/browser.mjs
+          npm install --prefix "$work/browser" --no-audit --no-fund --ignore-scripts playwright@1.64.1
+          PLAYWRIGHT_BROWSERS_PATH="$work/browser/engines" \
+            "$work/browser/node_modules/.bin/playwright" install --with-deps --no-shell chromium
       - name: Verify isolated native Docker execution before assembly
         shell: bash
         run: |
@@ -161,7 +173,8 @@ jobs:
           # Only the child native processes enter these namespaces. The runner,
           # build daemon and host networking stay online and unchanged. No
           # container hosts a daemon; the acceptance daemon starts with no data.
-          sudo env MATRIX_OFFLINE_WORK="$MATRIX_OFFLINE_WORK" \
+          sudo env MATRIX_OFFLINE_WORK="$MATRIX_OFFLINE_WORK" MATRIX_BROWSER_NODE="$(command -v node)" \
+            MATRIX_BROWSER_SCRIPT="$GITHUB_WORKSPACE/app/service/installation/test/phase1e2e/browser.mjs" \
             unshare --net --mount bash -s <<'OFFLINE'
           set -euo pipefail
           umask 077
@@ -220,8 +233,8 @@ jobs:
               fi
             fi
             if [[ -n "${engine_pid:-}" ]]; then kill -TERM "$engine_pid" 2>/dev/null || true; fi
-            chmod 755 "$work/evidence"
-            chmod 644 "$work/evidence/"*
+            find "$work/evidence" -type d -exec chmod 755 '{}' +
+            find "$work/evidence" -type f -exec chmod 644 '{}' +
           }
           trap cleanup EXIT
           start_engine
@@ -243,6 +256,10 @@ jobs:
           unset MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_ARCHIVE MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256 MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_IMAGE_ID
           "$work/phase1.test" -test.run '^TestOfflinePhase1Lifecycle$' -test.v -test.timeout 17m \
             2>&1 | tee "$work/evidence/after-restart.log"
+          export PLAYWRIGHT_BROWSERS_PATH="$work/browser/engines"
+          timeout --signal=TERM --kill-after=15s 20m "$MATRIX_BROWSER_NODE" "$MATRIX_BROWSER_SCRIPT" \
+            "$work/installation-iam-retention.json" "$work/browser/node_modules/playwright/index.mjs" \
+            "$work/evidence/browser" | tee "$work/evidence/browser.log"
           stop_engine
           engine_pid=''
           OFFLINE

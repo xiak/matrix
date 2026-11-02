@@ -575,11 +575,20 @@ Linux/amd64 官方镜像固定为
 [独立 Verification](https://github.com/xiak/matrix/actions/runs/41485948364)
 十九项全部通过，真实七产品 P1 为 325.39 秒；覆盖目录、原生读写、IAM 精确授权与
 撤权、跨账号拒绝、配额、Operation、删除及 Audit。当前候选
-`737c2c51b16e5c44b4ac90ec4e6cfc31c4beba9d` 的
-[Product onboarding](https://github.com/xiak/matrix/actions/runs/41525056959)
-十八项在 832.66 秒内全部通过。已读取实际制品 `13180048181`，SHA-256 为
-`a551c9a39015d6644cadfb7399e3c04387e7e64e84961417a0c1e8578f5f76e0`；
-报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。
+`39c2e0f9cf68e9a5dff059e9af2b8bfb8c1833ef` 的
+[Product onboarding](https://github.com/xiak/matrix/actions/runs/41528913822)
+十八项在 852.78 秒内全部通过。已读取实际制品 `13182750658`，SHA-256 为
+`515110dc3d0c4703395096569fd58702a1a5b10ca0dca62f242368ad1767473a`；
+报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。同一源码的
+[push Verification](https://github.com/xiak/matrix/actions/runs/41528903587) 与
+[PR Verification](https://github.com/xiak/matrix/actions/runs/41528913797)
+各十九项全部通过。上述独立门禁不替代签名包的完整离线生命周期和浏览器验收。
+
+当前离线门禁在原生引擎重启验收后，用同一签名安装中的真实页面完成 ELK、Redis
+开通、单份配额、实例创建与详情读取，再按依赖顺序终止并确认端点释放及配额归还。
+Kibana 从页面选择准确 Elasticsearch 依赖；每种产品保留安装、运行、终止三张截图。
+浏览器只使用已有私有夹具中的管理员登录，不注入 Session 或改写产品响应。
+此浏览器脚本已加入门禁，尚无成功运行证据；早先本机截图的固定源码边界保持不变。
 
 本机 Windows P1 首次因 Docker 默认地址池耗尽而失败；有界探针复现后，只回收归属
 明确的停用测试平台容器和网络，保留安装数据。重跑在第二个 Kibana 的三分钟就绪
