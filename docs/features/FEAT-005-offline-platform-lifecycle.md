@@ -304,15 +304,20 @@ Redis 候选沿用 `88/40/9+r41`，新增固定 Redis 制品和受信 worker 输
 
 当前原生 Linux 空缓存验收扩展为保留 ELK/Redis，逐次核对运行身份、端点、网络、
 挂载、全部顶层保护材料及业务数据。CI 使用独立的原生 Docker 数据根与网络命名空间，
-不使用 DinD。固定源码 `737c2c51b16e5c44b4ac90ec4e6cfc31c4beba9d` 的
-[运行 41525046240](https://github.com/xiak/matrix/actions/runs/41525046240)
-通过真实 APISIX 的产品选择、请求转发和封闭 enrollment TLS 检查，随后完成离线
-安装、verify、IAM、AccessKey、MFA、邮件及访问分析基线，但在 731.06 秒处因
-`devops-foreign-tenant-boundary` 失败。已读取证据制品 `13179429825`，SHA-256 为
-`5316f2fdb91cb40df85da07e849d083dd0b2b2f4ed9957c107555af1d30c024a`。
-失败源于验收夹具试图用已停用租户的失效会话授权；当前夹具改用既有有效租户及其
-保留会话，仍要求跨账号读取返回 404，并精确撤回临时授权。Windows 与原生 Linux
-的夹具测试通过；完整 ELK/Redis 冷安装、失败升级及重启组合尚未通过 Gate C。
+不使用 DinD。固定源码 `39c2e0f9cf68e9a5dff059e9af2b8bfb8c1833ef` 的
+[运行 41528903410](https://github.com/xiak/matrix/actions/runs/41528903410)
+通过真实 APISIX 选择与转发、封闭 enrollment TLS、离线安装、IAM/DevOps 和七种
+产品的生产 API 门禁。重启前的完整阶段在 2230.68 秒内通过，包含失败升级自动回滚、
+正常升级、显式回滚、指定备份恢复；每次都确认 ELK/Redis 原容器、端点、网络、挂载、
+全部保护文件及原有业务数据保留。已读取证据制品 `13184711307`，SHA-256 为
+`e368ed83b9eeaea52bc48c7e50530ab9a1b9a290d30f68b46b93db1988c1a841`。
+
+引擎重启阶段仍失败：夹具只加载保留的 A 包，却在重复检查中调用未加载的 B 工具，
+15.50 秒处报告 `repeated-status`。失败现场的独立状态读取为 `NOT_READY`，worker 和
+部分产品仍在自动启动。当前修正显式选择该阶段已经验证的安装工具，并在原有重启
+总时限内只读等待准确 A 版本从 `NOT_READY` 到 `READY`；错误命令、身份漂移、未知
+状态及 journal 变更均拒绝。Windows 与原生 Linux 单元包通过。完整重启、浏览器与
+可保留交付包仍未验收，不能将重启前的通过改写为完整 Gate C。
 
 2026-11-03，从干净固定源码 `764cff427698377f70c24264be59a9fc5606d123`
 组装的两个 Redis 私有候选完成本机宿主 Docker 生命周期，没有 DinD。

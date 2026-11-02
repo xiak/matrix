@@ -113,7 +113,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("release-a-install")
 
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.b, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
 	emit("release-a-status-verify")
@@ -297,7 +297,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.b, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
 	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
@@ -342,7 +342,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("upgrade-audit-history")
 	}
 	if err := value.repeatedStatusAndVerify(
-		ctx, value.releases.b.Manifest, value.releases.b.Manifest.Release.ID, value.releases.a.Manifest.Release.ID,
+		ctx, value.releases.b, value.releases.b.Manifest, value.releases.b.Manifest.Release.ID, value.releases.a.Manifest.Release.ID,
 	); err != nil {
 		return err
 	}
@@ -396,7 +396,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertWorkload(ctx, value.releases.a.Manifest, updated, 2, "2", settingTwo, secretDigest); err != nil {
 		return err
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.b, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
 	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
@@ -466,7 +466,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil || !containsAuditHistory(recoveredAudit, backupBaseline) {
 		return fail("recovered-audit-history")
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.b, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
 	if err := value.assertCommittedProductDiscovery(ctx, bearer, value.releases.a.Manifest); err != nil {
@@ -568,7 +568,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("application-stop-capacity-release")
 
-	if err := value.writeAndScanSupport(ctx, value.releases.a.Manifest, "phase1-before-restart.json", backup.BackupID, secret, newPassword, bearer); err != nil {
+	if err := value.writeAndScanSupport(ctx, value.releases.b, value.releases.a.Manifest, "phase1-before-restart.json", backup.BackupID, secret, newPassword, bearer); err != nil {
 		return err
 	}
 	dataRootAfter, err := os.Stat(filepath.Join(value.config.root, filepath.FromSlash(layout.PostgresData)))
@@ -2129,6 +2129,37 @@ func accessAnalyzerCoverageIsClosed(
 	return true
 }
 
+func (value *gate) waitRestartReadiness(ctx context.Context) error {
+	before, err := readJournal(ctx, value.config.root)
+	if err != nil {
+		return fail("restart-readiness-journal-before")
+	}
+	for {
+		// Only A is retained by the after-restart gate. Docker's API becoming
+		// available does not mean its restarted services are already healthy.
+		output, processErr := runProcess(ctx, mxPath(value.releases.a),
+			"--format", "json", "platform", "status", "--root", value.config.root)
+		ready, err := checkRestartStatusOutput(output, processErr, ctx.Err(), value.pathLeakage(), value.releases.a.Manifest.Release.ID)
+		if err != nil {
+			return err
+		}
+		if ready {
+			break
+		}
+		// Keep the existing enclosing restart budget; no command repairs or
+		// recreates services while we observe automatic restart convergence.
+		if !waitPoll(ctx, time.Second) {
+			return fail("restart-readiness-deadline")
+		}
+	}
+	after, err := readJournal(ctx, value.config.root)
+	if err != nil || !journalsEqual(before, after) {
+		return fail("restart-readiness-read-only")
+	}
+	emit("restart-platform-readiness")
+	return nil
+}
+
 func (value *gate) afterRestart(ctx context.Context) error {
 	defer value.edge.close()
 	if err := assertNoExternalRoute(); err != nil {
@@ -2137,7 +2168,10 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if _, err := os.Stat(value.config.root); err != nil {
 		return fail("restart-installation-root")
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.waitRestartReadiness(ctx); err != nil {
+		return err
+	}
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.a, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		return err
 	}
 	state, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, "")
@@ -2178,7 +2212,7 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	}
 	defer clear(sourceTrust)
 	if err := value.writeAndScanSupport(
-		ctx, value.releases.a.Manifest, "phase1-after-restart.json", sourceTrust,
+		ctx, value.releases.a, value.releases.a.Manifest, "phase1-after-restart.json", sourceTrust,
 	); err != nil {
 		return err
 	}
@@ -4169,6 +4203,7 @@ func (value *gate) forbidden(values ...[]byte) [][]byte {
 
 func (value *gate) repeatedStatusAndVerify(
 	ctx context.Context,
+	inspector release.VerifiedBundle,
 	manifest release.Manifest,
 	releaseID, previousID string,
 ) error {
@@ -4177,8 +4212,11 @@ func (value *gate) repeatedStatusAndVerify(
 		return fail("status-journal-before")
 	}
 	for index := 0; index < 2; index++ {
-		result, err := runMX(ctx, value.releases.b, "status", []string{"--root", value.config.root}, value.pathLeakage())
-		if err != nil || result.ReleaseID != releaseID || result.PreviousID != previousID || result.Changed {
+		result, err := runMX(ctx, inspector, "status", []string{"--root", value.config.root}, value.pathLeakage())
+		if err != nil {
+			return err
+		}
+		if result.ReleaseID != releaseID || result.PreviousID != previousID || result.Changed {
 			return fail("repeated-status")
 		}
 	}
@@ -4187,8 +4225,11 @@ func (value *gate) repeatedStatusAndVerify(
 		return fail("status-read-only")
 	}
 	for index := 0; index < 2; index++ {
-		result, err := runMX(ctx, value.releases.b, "verify", []string{"--root", value.config.root}, value.pathLeakage())
-		if err != nil || result.ReleaseID != releaseID || result.PreviousID != previousID {
+		result, err := runMX(ctx, inspector, "verify", []string{"--root", value.config.root}, value.pathLeakage())
+		if err != nil {
+			return err
+		}
+		if result.ReleaseID != releaseID || result.PreviousID != previousID {
 			return fail("repeated-verify")
 		}
 	}
@@ -4812,6 +4853,7 @@ func (value *gate) postgresScalar(
 
 func (value *gate) writeAndScanSupport(
 	ctx context.Context,
+	inspector release.VerifiedBundle,
 	manifest release.Manifest,
 	name string,
 	extra ...any,
@@ -4828,10 +4870,13 @@ func (value *gate) writeAndScanSupport(
 		case nil:
 		}
 	}
-	result, err := runMX(ctx, value.releases.b, "support", []string{
+	result, err := runMX(ctx, inspector, "support", []string{
 		"--root", value.config.root, "--output", output,
 	}, forbidden)
-	if err != nil || !result.Changed {
+	if err != nil {
+		return err
+	}
+	if !result.Changed {
 		return fail("support-command")
 	}
 	content, err := os.ReadFile(output)

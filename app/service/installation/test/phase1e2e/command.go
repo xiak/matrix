@@ -193,6 +193,17 @@ func runMXClosedFailure(
 }
 
 func checkMXOutput(action string, output commandOutput, processErr, contextErr error, forbidden [][]byte) (mxResult, error) {
+	result, err := checkMXCommandResult(action, output, processErr, contextErr, forbidden)
+	if err != nil {
+		return mxResult{}, err
+	}
+	if result.State != "READY" {
+		return mxResult{}, fail("mx-" + action + "-state")
+	}
+	return result, nil
+}
+
+func checkMXCommandResult(action string, output commandOutput, processErr, contextErr error, forbidden [][]byte) (mxResult, error) {
 	step := "mx-" + action
 	if containsAny(output.stdout, forbidden) || containsAny(output.stderr, forbidden) {
 		return mxResult{}, fail(step + "-sensitive-output")
@@ -231,10 +242,28 @@ func checkMXOutput(action string, output commandOutput, processErr, contextErr e
 	if envelope.Status != "SUCCEEDED" {
 		return mxResult{}, fail(step + "-status")
 	}
-	if envelope.Result.State != "READY" {
-		return mxResult{}, fail(step + "-state")
-	}
 	return envelope.Result, nil
+}
+
+// Only an authenticated, unchanged observation of the retained release may
+// wait for startup. Command failures, another release and unknown states are
+// not transient readiness and must not be hidden by polling.
+func checkRestartStatusOutput(output commandOutput, processErr, contextErr error, forbidden [][]byte, releaseID string) (bool, error) {
+	result, err := checkMXCommandResult("status", output, processErr, contextErr, forbidden)
+	if err != nil {
+		return false, err
+	}
+	if releaseID == "" || result.ReleaseID != releaseID || result.PreviousID != "" || result.Changed {
+		return false, fail("restart-status-identity")
+	}
+	switch result.State {
+	case "READY":
+		return true, nil
+	case "NOT_READY":
+		return false, nil
+	default:
+		return false, fail("restart-status-state")
+	}
 }
 
 func runMXSourceCredential(

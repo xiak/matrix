@@ -369,6 +369,37 @@ func TestMXOutputKeepsClosedFailureClassification(t *testing.T) {
 	}
 }
 
+func TestRestartStatusWaitsOnlyForTheUnchangedRetainedRelease(t *testing.T) {
+	valid := []byte(`{"apiVersion":"cli.matrix.xiak.com/v1","kind":"PlatformCommandResult","action":"STATUS","status":"SUCCEEDED","result":{"state":"READY","releaseId":"release-a","changed":false}}`)
+	for _, scenario := range []struct {
+		name       string
+		output     commandOutput
+		processErr error
+		contextErr error
+		ready      bool
+		want       string
+	}{
+		{"ready", commandOutput{stdout: valid}, nil, nil, true, ""},
+		{"still starting", commandOutput{stdout: bytes.ReplaceAll(valid, []byte(`"READY"`), []byte(`"NOT_READY"`))}, nil, nil, false, ""},
+		{"unknown state", commandOutput{stdout: bytes.ReplaceAll(valid, []byte(`"READY"`), []byte(`"BROKEN"`))}, nil, nil, false, "restart-status-state"},
+		{"wrong release", commandOutput{stdout: bytes.ReplaceAll(valid, []byte("release-a"), []byte("release-b"))}, nil, nil, false, "restart-status-identity"},
+		{"changed journal", commandOutput{stdout: bytes.ReplaceAll(valid, []byte(`"changed":false`), []byte(`"changed":true`))}, nil, nil, false, "restart-status-identity"},
+		{"unexpected predecessor", commandOutput{stdout: bytes.ReplaceAll(valid, []byte(`"changed":false`), []byte(`"changed":false,"previousId":"release-b"`))}, nil, nil, false, "restart-status-identity"},
+		{"missing executable", commandOutput{}, errors.New("private executable path"), nil, false, "mx-status-process"},
+		{"deadline with ready response", commandOutput{stdout: valid}, nil, context.DeadlineExceeded, false, "mx-status-deadline"},
+		{"cancelled", commandOutput{stdout: valid}, nil, context.Canceled, false, "mx-status-cancelled"},
+		{"malformed response", commandOutput{stdout: []byte("{")}, nil, nil, false, "mx-status-json"},
+		{"sensitive response", commandOutput{stdout: []byte("sensitive-test-material")}, nil, nil, false, "mx-status-sensitive-output"},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			ready, err := checkRestartStatusOutput(scenario.output, scenario.processErr, scenario.contextErr, [][]byte{[]byte("sensitive-test-material")}, "release-a")
+			if ready != scenario.ready || scenario.want == "" && err != nil || scenario.want != "" && (err == nil || err.Error() != "phase1 gate failed at "+scenario.want) {
+				t.Fatalf("restart readiness=%t, failure=%v", ready, safeFailure(err))
+			}
+		})
+	}
+}
+
 func TestExplicitRollbackKeepsCommandAndReceiptFailuresSeparate(t *testing.T) {
 	valid := mxResult{ReleaseID: "release-a", Changed: true}
 	for _, scenario := range []struct {
@@ -480,7 +511,7 @@ func TestOfflinePhase1UpgradeFault(t *testing.T) {
 	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
 		t.Fatal(safeFailure(err))
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.b, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		t.Fatal(safeFailure(err))
 	}
 	if err := assertNoExternalRoute(); err != nil {
@@ -536,7 +567,7 @@ func TestOfflinePhase1Rollback(t *testing.T) {
 	if err := assertNoPlatformReleaseContainers(ctx, value.releases.b.Manifest.Release.ID); err != nil {
 		t.Fatal(safeFailure(err))
 	}
-	if err := value.repeatedStatusAndVerify(ctx, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
+	if err := value.repeatedStatusAndVerify(ctx, value.releases.b, value.releases.a.Manifest, value.releases.a.Manifest.Release.ID, ""); err != nil {
 		t.Fatal(safeFailure(err))
 	}
 	if err := assertNoExternalRoute(); err != nil {
