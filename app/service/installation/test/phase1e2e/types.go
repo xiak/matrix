@@ -54,6 +54,17 @@ type iamRetention struct {
 	PolicyChanges         policyAttachmentChangeRetention
 	Tenants               []tenantRetention
 	PlatformAuditHashes   map[string]struct{}
+	ManagedProducts       []managedProductRetention
+}
+
+// Only non-secret observations cross the outer-engine restart here. Product
+// credentials remain in their original provider-owned files.
+type managedProductRetention struct {
+	Component        string
+	Installation     managedservicev1.ServiceInstallation
+	Project          string
+	CredentialDigest string
+	Containers       []containerInspection
 }
 
 // policyAttachmentChangeRetention contains immutable command results rather

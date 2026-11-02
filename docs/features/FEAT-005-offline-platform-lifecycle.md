@@ -1391,6 +1391,25 @@ running Verification 38997696246, or accept the later Account
    platform container identities/start times/restart counts, terminates that
    installation, and then completes the ordinary recovery. Unit-only directory
    fixtures do not substitute for this provider-backed gate.
+6. The current product inventory exercises PostgreSQL, MySQL, Elasticsearch,
+   RabbitMQ, Logstash, Kibana and Redis through the signed production APIs.
+   ELK and Redis remain provisioned across failed-upgrade automatic rollback,
+   upgrade, explicit rollback, selected-backup recovery and the native Docker
+   engine restart. Their original container/image identities, private networks,
+   mounts, endpoints and credential digests must survive. The Elasticsearch
+   document, Logstash event, Kibana Space and Redis AOF-backed key are read
+   before any replacement write can mask data loss. Reverse dependency-order
+   termination then proves native cleanup, closed endpoints and quota return.
+
+The [offline release workflow](../../.github/workflows/offline-release.yml)
+owns a reproducible disposable Linux execution of this gate. It builds signed
+fresh-install A and exact successor B while online, then runs a native Docker
+daemon with an empty data root inside private mount, PID and network namespaces.
+The runner and its build daemon remain outside those namespaces; no container
+hosts a daemon. The effectful gate independently rejects external routes and
+nonempty Docker state. Private signers, SMTP credentials and installation data
+are excluded from uploaded evidence. A workflow definition alone is not an
+accepted Gate C result; the current execution status remains recorded above.
 
 Common generation-drift, unit, vet, race, repeated, schema, architecture,
 real-PostgreSQL, real-Compose, cross-platform build, Markdown-link, stale-term,

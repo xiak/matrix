@@ -54,6 +54,54 @@ func fixtureTrustPEM(t *testing.T, notBefore, notAfter time.Time) string {
 	return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 }
 
+func TestManagedProductMaintenancePreservesNativeCustody(t *testing.T) {
+	var original containerInspection
+	if err := json.Unmarshal([]byte(`{
+		"Id":"owned", "Image":"sha256:engine", "RestartCount":0,
+		"Config":{"Image":"sha256:engine","Labels":{"com.docker.compose.project":"owned-project"}},
+		"State":{"Running":true,"Status":"running","StartedAt":"before","Health":{"Status":"healthy"}},
+		"HostConfig":{"PortBindings":{"6379/tcp":[{"HostIp":"127.0.0.1","HostPort":"32000"}]}},
+		"NetworkSettings":{"Networks":{"owned-network":{"NetworkID":"private","Gateway":"172.20.0.1"}}},
+		"Mounts":[{"Source":"/owned/data","Destination":"/data","RW":true}]
+	}`), &original); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name           string
+		mutate         func(*containerInspection)
+		restartAccepts bool
+	}{
+		{"unchanged", func(*containerInspection) {}, true},
+		{"engine-restart", func(v *containerInspection) { v.State.StartedAt = "after"; v.RestartCount++ }, true},
+		{"replaced-container", func(v *containerInspection) { v.ID = "different" }, false},
+		{"replaced-engine", func(v *containerInspection) { v.Image = "sha256:different" }, false},
+		{"changed-owner", func(v *containerInspection) { v.Config.Labels["com.docker.compose.project"] = "foreign" }, false},
+		{"changed-data", func(v *containerInspection) { v.Mounts[0].Source = "/foreign/data" }, false},
+		{"changed-network", func(v *containerInspection) { delete(v.NetworkSettings.Networks, "owned-network") }, false},
+		{"changed-port", func(v *containerInspection) { delete(v.HostConfig.PortBindings, "6379/tcp") }, false},
+		{"unhealthy", func(v *containerInspection) { v.State.Health.Status = "unhealthy" }, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded, _ := json.Marshal(original)
+			var changed containerInspection
+			if err := json.Unmarshal(encoded, &changed); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(&changed)
+			if got := sameManagedProductRuntime([]containerInspection{original}, []containerInspection{changed}, false); got != (test.name == "unchanged") {
+				t.Fatalf("maintenance custody accepted=%t", got)
+			}
+			if got := sameManagedProductRuntime([]containerInspection{original}, []containerInspection{changed}, true); got != test.restartAccepts {
+				t.Fatalf("engine restart custody accepted=%t", got)
+			}
+		})
+	}
+	if sameManagedProductRuntime([]containerInspection{original}, nil, false) ||
+		sameManagedProductRuntime([]containerInspection{original, original}, []containerInspection{original, original}, true) {
+		t.Fatal("missing or duplicate native inventory was accepted")
+	}
+}
+
 func TestOfflinePhase1Lifecycle(t *testing.T) {
 	if os.Getenv("MATRIX_PHASE1_E2E") != "1" {
 		t.Skip("set MATRIX_PHASE1_E2E=1 inside a clean external-network-disabled Linux Docker host")

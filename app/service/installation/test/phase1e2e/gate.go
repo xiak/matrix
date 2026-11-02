@@ -40,6 +40,7 @@ import (
 	"github.com/xiak/matrix/app/service/installation/internal/layout"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
 	"github.com/xiak/matrix/app/service/installation/release"
+	onboarding "github.com/xiak/matrix/test/managedserviceonboarding"
 )
 
 const (
@@ -171,9 +172,6 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 	value.retainedIAM.AccessAnalyzer = analyzer
-	if err := value.persistTenantRetention(); err != nil {
-		return err
-	}
 	emit("security-mail-contact-verification")
 	emit("signed-mfa-binding-login-and-security-notice")
 	emit("access-analyzer-explicit-disposition-baseline")
@@ -200,6 +198,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	value.edge.addForbidden(secret)
 	value.sensitive = append(value.sensitive, initialPassword, newPassword, firstSession, bearer, secret)
 	if err := value.verifySignedManagedProducts(ctx); err != nil {
+		return err
+	}
+	if err := value.persistTenantRetention(); err != nil {
 		return err
 	}
 	emit("signed-managed-products-real-provider-lifecycle")
@@ -309,6 +310,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertTenantRetention(ctx, true, false, "automatic-rollback"); err != nil {
 		return err
 	}
+	if err := value.assertRetainedManagedProducts(ctx, false, false); err != nil {
+		return err
+	}
+	emit("automatic-rollback-retained-elk-redis")
 
 	upgrade, err := runMX(ctx, value.releases.b, "upgrade", []string{
 		"--bundle", value.releases.b.Root, "--root", value.config.root,
@@ -366,6 +371,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertTenantRetention(ctx, true, false, "upgrade"); err != nil {
 		return err
 	}
+	if err := value.assertRetainedManagedProducts(ctx, false, false); err != nil {
+		return err
+	}
+	emit("upgrade-retained-elk-redis")
 	postUpgrade, err := value.writePostUpgradeTenantResource(ctx)
 	if err != nil {
 		return err
@@ -406,6 +415,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertTenantRetention(ctx, true, false, "rollback"); err != nil {
 		return err
 	}
+	if err := value.assertRetainedManagedProducts(ctx, false, false); err != nil {
+		return err
+	}
+	emit("rollback-retained-elk-redis")
 	if err := value.assertPostUpgradeTenantResource(ctx, postUpgrade, true); err != nil {
 		return err
 	}
@@ -502,6 +515,10 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.assertTenantRetention(ctx, true, true, "recovery"); err != nil {
 		return err
 	}
+	if err := value.assertRetainedManagedProducts(ctx, false, false); err != nil {
+		return err
+	}
+	emit("recovery-retained-elk-redis")
 	emit("backup-recovery-access-key-fenced")
 	if err := value.assertPostUpgradeTenantResource(ctx, postUpgrade, false); err != nil {
 		return err
@@ -594,6 +611,15 @@ func signedManagedProducts() []signedManagedProduct {
 			offeringID:   managedservicev1.RabbitMQOfferingID,
 			quotaShapeID: "rabbitmq-small", engineVersion: "4.1.8", installationID: "phase1-managed-rabbitmq",
 			runtimeDirectory: "managed-rabbitmq", credentialFile: "rabbitmq-password", credentialMode: 0o600},
+		{name: "Logstash 8.19.23", component: "logstash", serviceID: managedservicev1.LogstashServiceID,
+			offeringID: managedservicev1.LogstashOfferingID, quotaShapeID: "logstash-small", engineVersion: "8.19.23",
+			installationID: "phase1-managed-logstash", runtimeDirectory: "managed-logstash", credentialFile: "logstash-secret", credentialMode: 0o640},
+		{name: "Kibana 8.19.23", component: "kibana", serviceID: managedservicev1.KibanaServiceID,
+			offeringID: managedservicev1.KibanaOfferingID, quotaShapeID: "kibana-small", engineVersion: "8.19.23",
+			installationID: "phase1-managed-kibana", runtimeDirectory: "managed-kibana", credentialFile: "kibana-session-key", credentialMode: 0o640},
+		{name: "Redis 8.2.11", component: "redis", serviceID: managedservicev1.RedisServiceID,
+			offeringID: managedservicev1.RedisOfferingID, quotaShapeID: "redis-small", engineVersion: "8.2.11",
+			installationID: "phase1-managed-redis", runtimeDirectory: "managed-redis", credentialFile: "redis-password", credentialMode: 0o640},
 	}
 }
 
@@ -901,11 +927,24 @@ func (value *gate) verifySignedManagedProduct(
 	}
 
 	createKey := requestPrefix + "-create"
+	command := managedservicev1.CreateInstallationRequest{
+		ID: product.installationID, Name: "Signed " + product.name,
+		OfferingID: product.offeringID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+	}
+	if product.component == "kibana" {
+		for _, dependency := range value.retainedIAM.ManagedProducts {
+			if dependency.Component == "elasticsearch" {
+				command.Elasticsearch = &managedservicev1.ElasticsearchReference{
+					InstallationID: dependency.Installation.ID, ResourceVersion: dependency.Installation.ResourceVersion,
+				}
+			}
+		}
+		if command.Elasticsearch == nil {
+			return fail("signed-managed-product-kibana-dependency")
+		}
+	}
 	createResponse, err := value.edge.json(ctx, http.MethodPost, base+"/service-installations", bearer,
-		managedservicev1.CreateInstallationRequest{
-			ID: product.installationID, Name: "Signed " + product.name,
-			OfferingID: product.offeringID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
-		}, map[string]string{"Idempotency-Key": createKey}, http.StatusAccepted)
+		command, map[string]string{"Idempotency-Key": createKey}, http.StatusAccepted)
 	if err != nil {
 		return fail("signed-managed-product-create-" + product.component)
 	}
@@ -930,7 +969,7 @@ func (value *gate) verifySignedManagedProduct(
 	defer clear(password)
 	value.edge.addForbidden(password)
 	value.sensitive = append(value.sensitive, bytes.Clone(password))
-	if err := assertSignedManagedProductProtocol(ctx, installation, product, password); err != nil {
+	if err := value.assertSignedManagedProductProtocol(ctx, installation, product, password, false); err != nil {
 		return fail("signed-managed-product-protocol-" + product.component)
 	}
 	operationResponse, err := value.edge.json(ctx, http.MethodGet,
@@ -1020,6 +1059,30 @@ func (value *gate) verifySignedManagedProduct(
 		return err
 	}
 
+	if slices.Contains([]string{"elasticsearch", "logstash", "kibana", "redis"}, product.component) {
+		installation, err = value.waitSignedManagedProductPhase(ctx, bearer, product, managedservicev1.InstallationReady)
+		if err != nil {
+			return err
+		}
+		containers, err := value.signedProductContainers(ctx, product)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(password)
+		value.retainedIAM.ManagedProducts = append(value.retainedIAM.ManagedProducts, managedProductRetention{
+			Component: product.component, Installation: installation, Project: project,
+			CredentialDigest: hex.EncodeToString(digest[:]), Containers: containers,
+		})
+		return nil
+	}
+	return value.terminateSignedManagedProduct(ctx, tenant, bearer, product, installation, project)
+}
+
+func (value *gate) terminateSignedManagedProduct(ctx context.Context, tenant *tenantRetention, bearer []byte,
+	product signedManagedProduct, installation managedservicev1.ServiceInstallation, project string,
+) error {
+	base := "/api/managed-services/v1"
+	requestPrefix := "phase1-signed-" + product.component
 	terminationPath := base + "/service-installations/" + product.installationID + "/termination"
 	terminationKey := requestPrefix + "-terminate"
 	terminationResponse, err := value.edge.json(ctx, http.MethodPost, terminationPath, bearer, nil,
@@ -1028,7 +1091,7 @@ func (value *gate) verifySignedManagedProduct(
 		return fail("signed-managed-product-termination-" + product.component)
 	}
 	var terminating managedservicev1.ServiceInstallation
-	decodeErr = decodeOne(terminationResponse.body, &terminating)
+	decodeErr := decodeOne(terminationResponse.body, &terminating)
 	clear(terminationResponse.body)
 	if decodeErr != nil || managedservicev1.ValidateServiceInstallation(terminating) != nil ||
 		terminating.ID != product.installationID || terminating.Phase != managedservicev1.InstallationTerminationPending ||
@@ -1060,8 +1123,8 @@ func (value *gate) verifySignedManagedProduct(
 		return err
 	}
 	if err := value.assertSignedManagedProductCommandResult(
-		ctx, bearer, managedservicev1.CommandInstallationCreate, createKey, product.installationID,
-		managedservicev1.CommandSucceeded, operation.ID, managedservicev1.InstallationOperationProvision,
+		ctx, bearer, managedservicev1.CommandInstallationCreate, requestPrefix+"-create", product.installationID,
+		managedservicev1.CommandSucceeded, installation.Operation.ID, managedservicev1.InstallationOperationProvision,
 	); err != nil {
 		return err
 	}
@@ -1071,7 +1134,7 @@ func (value *gate) verifySignedManagedProduct(
 		return fail("signed-managed-product-termination-conflict-" + product.component)
 	}
 	clear(conflict.body)
-	quotaRead, err := value.edge.json(ctx, http.MethodGet, base+"/quota-entitlements/"+quota.ID,
+	quotaRead, err := value.edge.json(ctx, http.MethodGet, base+"/quota-entitlements/"+installation.QuotaEntitlementID,
 		bearer, nil, nil, http.StatusOK)
 	if err != nil {
 		return fail("signed-managed-product-quota-release-" + product.component)
@@ -1080,7 +1143,7 @@ func (value *gate) verifySignedManagedProduct(
 	decodeErr = decodeOne(quotaRead.body, &released)
 	clear(quotaRead.body)
 	if decodeErr != nil || managedservicev1.ValidateQuotaEntitlement(released) != nil ||
-		released.ID != quota.ID || released.ReservedCount != 0 || released.ConsumedCount != 0 {
+		released.ID != installation.QuotaEntitlementID || released.ReservedCount != 0 || released.ConsumedCount != 0 {
 		return fail("signed-managed-product-quota-release-" + product.component)
 	}
 	if _, err := value.edge.waitAuditActions(ctx, bearer, tenant.Account.ID, map[auditv1.Action]string{
@@ -1307,9 +1370,7 @@ func (value *gate) assertSignedManagedProductRuntime(
 	}
 	arguments := []string{"container", "ls", "--all", "--quiet", "--filter",
 		"label=com.xiak.matrix.managedservice.installation=" + product.installationID}
-	if product.component == "mysql" {
-		arguments = append(arguments, "--filter", "label=com.docker.compose.service=mysql")
-	}
+	arguments = append(arguments, "--filter", "label=com.docker.compose.service="+product.component)
 	ids, err := dockerLines(ctx, arguments...)
 	if err != nil || len(ids) != 1 {
 		return nil, "", fail("signed-managed-product-runtime-" + product.component)
@@ -1323,7 +1384,7 @@ func (value *gate) assertSignedManagedProductRuntime(
 	digest := sha256.Sum256([]byte(string(tenantID) + "\x00" + product.installationID))
 	wantProject := "matrix-" + hex.EncodeToString(digest[:12])
 	wantPorts := 1
-	if product.component == "mysql" {
+	if product.component != "postgres" && product.component != "rabbitmq" {
 		wantPorts = 0
 	}
 	if !inspection.State.Running || inspection.State.Status != "running" || inspection.State.Health == nil ||
@@ -1406,11 +1467,12 @@ func (value *gate) assertSignedManagedProductDeleted(
 	return nil
 }
 
-func assertSignedManagedProductProtocol(
+func (value *gate) assertSignedManagedProductProtocol(
 	ctx context.Context,
 	installation managedservicev1.ServiceInstallation,
 	product signedManagedProduct,
 	password []byte,
+	retained bool,
 ) error {
 	if installation.Endpoint == nil {
 		return errors.New("managed product endpoint is unavailable")
@@ -1421,12 +1483,248 @@ func assertSignedManagedProductProtocol(
 	case managedservicev1.MySQLOfferingID:
 		return probeSignedMySQL(ctx, *installation.Endpoint, password)
 	case managedservicev1.ElasticsearchOfferingID:
-		return probeSignedElasticsearch(ctx, *installation.Endpoint, password)
+		return probeSignedElasticsearch(ctx, *installation.Endpoint, password, retained)
 	case managedservicev1.RabbitMQOfferingID:
 		return probeSignedRabbitMQ(ctx, *installation.Endpoint, password)
+	case managedservicev1.RedisOfferingID:
+		return probeSignedRedis(ctx, *installation.Endpoint, password, retained)
+	case managedservicev1.LogstashOfferingID:
+		return value.probeSignedLogstash(ctx, *installation.Endpoint, password, product, retained)
+	case managedservicev1.KibanaOfferingID:
+		return value.probeSignedKibana(ctx, *installation.Endpoint, retained)
 	default:
 		return errors.New("managed product offering is unsupported")
 	}
+}
+
+func (value *gate) signedProductContainers(ctx context.Context, product signedManagedProduct) ([]containerInspection, error) {
+	ids, err := dockerLines(ctx, "container", "ls", "--all", "--quiet", "--filter",
+		"label=com.xiak.matrix.managedservice.installation="+product.installationID)
+	if err != nil || len(ids) < 2 || len(ids) > 3 {
+		return nil, fail("signed-managed-product-containers-" + product.component)
+	}
+	return inspectContainers(ctx, ids)
+}
+
+func sameManagedProductRuntime(before, after []containerInspection, restarted bool) bool {
+	if len(before) == 0 || len(before) != len(after) {
+		return false
+	}
+	seen := make(map[string]bool, len(after))
+	for _, current := range after {
+		index := slices.IndexFunc(before, func(original containerInspection) bool { return original.ID == current.ID })
+		if index < 0 || current.ID == "" || seen[current.ID] || !current.State.Running || current.State.Health == nil || current.State.Health.Status != "healthy" {
+			return false
+		}
+		seen[current.ID] = true
+		original := before[index]
+		if current.Image != original.Image || !equalJSON(current.Config, original.Config) ||
+			!equalJSON(current.HostConfig, original.HostConfig) || !equalJSON(current.Mounts, original.Mounts) ||
+			!equalJSON(current.NetworkSettings, original.NetworkSettings) || current.State.StartedAt == "" ||
+			(!restarted && (current.State.StartedAt != original.State.StartedAt || current.RestartCount != original.RestartCount)) {
+			return false
+		}
+	}
+	return true
+}
+
+func (value *gate) assertRetainedManagedProducts(ctx context.Context, restarted, terminate bool) error {
+	if value.retainedIAM == nil || len(value.retainedIAM.ManagedProducts) != 4 || len(value.retainedIAM.Tenants) != 2 {
+		return fail("signed-managed-product-retention-fixture")
+	}
+	tenant := &value.retainedIAM.Tenants[0]
+	primary, err := value.edge.loginNamed(ctx, tenant.Account.RootIdentity.LoginName, tenant.PrimaryPassword,
+		tenant.Account.ID, tenant.Account.RootIdentity.PrincipalID, "phase1-retained-product-primary")
+	if err != nil || primary.MustChangePassword {
+		return fail("signed-managed-product-retention-login")
+	}
+	bearer := primary.Credential.CopyBytes()
+	defer clear(bearer)
+	defer func() { _ = value.edge.logout(ctx, bearer) }()
+	value.edge.addForbidden(bearer)
+	products := signedManagedProducts()
+	for _, retained := range value.retainedIAM.ManagedProducts {
+		index := slices.IndexFunc(products, func(product signedManagedProduct) bool { return product.component == retained.Component })
+		if index < 0 {
+			return fail("signed-managed-product-retention-kind")
+		}
+		product := products[index]
+		installation, err := value.waitSignedManagedProductPhase(ctx, bearer, product, managedservicev1.InstallationReady)
+		if err != nil || installation.Endpoint == nil || retained.Installation.Endpoint == nil ||
+			*installation.Endpoint != *retained.Installation.Endpoint || installation.QuotaEntitlementID != retained.Installation.QuotaEntitlementID ||
+			!equalJSON(installation.CredentialReference, retained.Installation.CredentialReference) ||
+			!equalJSON(installation.Elasticsearch, retained.Installation.Elasticsearch) {
+			return fail("signed-managed-product-retention-metadata-" + product.component)
+		}
+		deadline, cancel := context.WithTimeout(ctx, 3*time.Minute)
+		var containers []containerInspection
+		for deadline.Err() == nil {
+			containers, err = value.signedProductContainers(deadline, product)
+			if err == nil && sameManagedProductRuntime(retained.Containers, containers, restarted) {
+				break
+			}
+			if !waitPoll(deadline, time.Second) {
+				break
+			}
+		}
+		cancel()
+		if err != nil || !sameManagedProductRuntime(retained.Containers, containers, restarted) {
+			return fail("signed-managed-product-retention-runtime-" + product.component)
+		}
+		password, project, err := value.assertSignedManagedProductRuntime(ctx, tenant.Account.ID, installation, product)
+		if err != nil {
+			return err
+		}
+		digest := sha256.Sum256(password)
+		value.edge.addForbidden(password)
+		value.sensitive = append(value.sensitive, bytes.Clone(password))
+		if project != retained.Project || hex.EncodeToString(digest[:]) != retained.CredentialDigest {
+			clear(password)
+			return fail("signed-managed-product-retention-credential-" + product.component)
+		}
+		err = value.assertSignedManagedProductProtocol(ctx, installation, product, password, true)
+		clear(password)
+		if err != nil {
+			return fail("signed-managed-product-retention-data-" + product.component)
+		}
+	}
+	if terminate {
+		// Kibana's explicit dependency must be released before Elasticsearch.
+		for index := len(value.retainedIAM.ManagedProducts) - 1; index >= 0; index-- {
+			retained := value.retainedIAM.ManagedProducts[index]
+			productIndex := slices.IndexFunc(products, func(product signedManagedProduct) bool { return product.component == retained.Component })
+			if err := value.terminateSignedManagedProduct(ctx, tenant, bearer, products[productIndex], retained.Installation, retained.Project); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func probeSignedRedis(ctx context.Context, endpoint string, password []byte, retained bool) error {
+	session, err := onboarding.DialRedis(ctx, endpoint)
+	if err != nil {
+		return err
+	}
+	defer session.Close()
+	if _, err := session.Command("GET", "matrix-release-acceptance"); err == nil || !strings.HasPrefix(err.Error(), "NOAUTH") {
+		return errors.New("Redis unauthenticated read was not rejected")
+	}
+	if response, err := session.Command("AUTH", "matrix", string(password)); err != nil || response != "OK" {
+		return errors.New("Redis authenticated connection failed")
+	}
+	if _, err := session.Command("CONFIG", "GET", "*"); err == nil || !strings.HasPrefix(err.Error(), "NOPERM") {
+		return errors.New("Redis administrative command was not rejected")
+	}
+	if !retained {
+		if response, err := session.Command("SET", "matrix-release-acceptance", "signed"); err != nil || response != "OK" {
+			return errors.New("Redis write failed")
+		}
+		if response, err := session.Command("WAITAOF", "1", "0", "5000"); err != nil || !equalJSON(response, []any{int64(1), int64(0)}) {
+			return errors.New("Redis AOF confirmation failed")
+		}
+	}
+	if response, err := session.Command("GET", "matrix-release-acceptance"); err != nil || response != "signed" {
+		return errors.New("Redis retained read failed")
+	}
+	return nil
+}
+
+func signedProductHTTP(ctx context.Context, endpoint, method, path, user string, password, body []byte, want int) ([]byte, error) {
+	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{Proxy: nil},
+		CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	defer client.CloseIdleConnections()
+	request, err := http.NewRequestWithContext(ctx, method, endpoint+path, bytes.NewReader(body))
+	if err != nil {
+		return nil, errors.New("product HTTP request failed")
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("kbn-xsrf", "matrix-release")
+	if user != "" {
+		request.SetBasicAuth(user, string(password))
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, errors.New("product HTTP connection failed")
+	}
+	defer response.Body.Close()
+	content, err := io.ReadAll(io.LimitReader(response.Body, maximumHTTPBody+1))
+	if err != nil || len(content) > maximumHTTPBody || response.StatusCode != want {
+		clear(content)
+		return nil, errors.New("product HTTP response failed")
+	}
+	return content, nil
+}
+
+func (value *gate) probeSignedLogstash(ctx context.Context, endpoint string, password []byte, product signedManagedProduct, retained bool) error {
+	denied, err := signedProductHTTP(ctx, endpoint, http.MethodPost, "/", "", nil, []byte(`{"matrix_release":"denied"}`), http.StatusUnauthorized)
+	clear(denied)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256([]byte(string(value.retainedIAM.Tenants[0].Account.ID) + "\x00" + product.installationID))
+	eventsPath := filepath.Join(value.config.root, filepath.FromSlash(layout.ExecutorRoot), product.runtimeDirectory,
+		"matrix-"+hex.EncodeToString(digest[:12]), "data", "events.jsonl")
+	if !retained {
+		accepted, err := signedProductHTTP(ctx, endpoint, http.MethodPost, "/", "matrix", password, []byte(`{"matrix_release":"signed"}`), http.StatusOK)
+		clear(accepted)
+		if err != nil {
+			return err
+		}
+	}
+	deadline, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	for deadline.Err() == nil {
+		content, err := os.ReadFile(eventsPath)
+		valid := err == nil && bytes.Contains(content, []byte(`"matrix_release":"signed"`)) && !bytes.Contains(content, []byte(`"matrix_release":"denied"`))
+		clear(content)
+		if valid {
+			return nil
+		}
+		if !waitPoll(deadline, 100*time.Millisecond) {
+			break
+		}
+	}
+	return errors.New("Logstash retained event is unavailable")
+}
+
+func (value *gate) probeSignedKibana(ctx context.Context, endpoint string, retained bool) error {
+	dependencyIndex := slices.IndexFunc(value.retainedIAM.ManagedProducts, func(product managedProductRetention) bool { return product.Component == "elasticsearch" })
+	if dependencyIndex < 0 {
+		return errors.New("Kibana dependency is unavailable")
+	}
+	dependency := value.retainedIAM.ManagedProducts[dependencyIndex]
+	password, err := os.ReadFile(filepath.Join(value.config.root, filepath.FromSlash(layout.ExecutorRoot), "managed-elasticsearch", dependency.Project, "elasticsearch-password"))
+	if err != nil {
+		return errors.New("Kibana business credential is unavailable")
+	}
+	defer clear(password)
+	denied, err := signedProductHTTP(ctx, endpoint, http.MethodGet, "/api/spaces/space", "", nil, nil, http.StatusUnauthorized)
+	clear(denied)
+	if err != nil {
+		return err
+	}
+	if !retained {
+		created, err := signedProductHTTP(ctx, endpoint, http.MethodPost, "/api/spaces/space", "elastic", password,
+			[]byte(`{"id":"matrix-release","name":"Signed release acceptance"}`), http.StatusOK)
+		clear(created)
+		if err != nil {
+			return err
+		}
+	}
+	content, err := signedProductHTTP(ctx, endpoint, http.MethodGet, "/api/spaces/space/matrix-release", "elastic", password, nil, http.StatusOK)
+	if err != nil {
+		return err
+	}
+	defer clear(content)
+	var space struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	if json.Unmarshal(content, &space) != nil || space.ID != "matrix-release" || space.Name != "Signed release acceptance" {
+		return errors.New("Kibana retained space is unavailable")
+	}
+	return nil
 }
 
 func probeSignedPostgreSQL(ctx context.Context, endpoint string, password []byte) error {
@@ -1481,7 +1779,7 @@ func probeSignedMySQL(ctx context.Context, endpoint string, password []byte) err
 	return nil
 }
 
-func probeSignedElasticsearch(ctx context.Context, endpoint string, password []byte) error {
+func probeSignedElasticsearch(ctx context.Context, endpoint string, password []byte, retained bool) error {
 	client := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{
 		Proxy: nil, DisableCompression: true, ResponseHeaderTimeout: 20 * time.Second,
 	}}
@@ -1520,10 +1818,12 @@ func probeSignedElasticsearch(ctx context.Context, endpoint string, password []b
 	if decodeErr != nil || root.Version.Number != "8.19.23" {
 		return errors.New("managed Elasticsearch version failed")
 	}
-	written, err := request(http.MethodPut, "/matrix-release-acceptance/_doc/signed?refresh=wait_for", []byte(`{"value":"signed"}`))
-	clear(written)
-	if err != nil {
-		return err
+	if !retained {
+		written, err := request(http.MethodPut, "/matrix-release-acceptance/_doc/signed?refresh=wait_for", []byte(`{"value":"signed"}`))
+		clear(written)
+		if err != nil {
+			return err
+		}
 	}
 	documentBytes, err := request(http.MethodGet, "/matrix-release-acceptance/_doc/signed", nil)
 	if err != nil {
@@ -1786,6 +2086,10 @@ func (value *gate) afterRestart(ctx context.Context) error {
 	if err := value.assertTenantRetention(ctx, true, true, "restart"); err != nil {
 		return err
 	}
+	if err := value.assertRetainedManagedProducts(ctx, true, true); err != nil {
+		return err
+	}
+	emit("restart-retained-elk-redis-and-precise-cleanup")
 	if err := value.retireRetainedAccessKey(ctx); err != nil {
 		return err
 	}

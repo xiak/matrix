@@ -1,0 +1,143 @@
+name: Offline release acceptance
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/product-onboarding-release']
+    paths:
+      - 'app/service/installation/test/phase1e2e/**'
+      - 'deploy/cmd/matrix-offline-fixture/**'
+      - '.github/workflows/offline-release.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: offline-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  native-offline-lifecycle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    env:
+      GOMAXPROCS: '2'
+      GOMEMLIMIT: '1GiB'
+      CGO_ENABLED: '0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: '1.26.x'
+          cache-dependency-path: go.sum
+      - name: Prepare disposable signed release inputs
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$RUNNER_TEMP/matrix-offline"
+          mkdir -m 700 "$work"
+          echo "MATRIX_OFFLINE_WORK=$work" >> "$GITHUB_ENV"
+          go test -count=1 ./app/service/installation/test/phase1e2e ./deploy/cmd/matrix-offline-fixture
+          go build -o "$work/matrix-release" ./deploy/cmd/matrix-release
+          go test -c -o "$work/phase1.test" ./app/service/installation/test/phase1e2e
+          go run ./deploy/cmd/matrix-offline-fixture "$work/private"
+          curl --fail --location --retry 3 --output "$work/gvisor.tar.zstd" \
+            https://github.com/google/gvisor/releases/download/release-20260831.0/gvisor-x86_64.tar.zstd
+          printf '%s  %s\n' b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891 "$work/gvisor.tar.zstd" | sha256sum --check
+          "$work/matrix-release" keygen --key-id offline-acceptance \
+            --private-key "$work/private/signer.json" --trust-key "$work/trust.json"
+          sudo sysctl -w vm.max_map_count=1048576
+      - name: Assemble fresh-install A and its exact successor B
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$MATRIX_OFFLINE_WORK"
+          created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          "$work/matrix-release" assemble --repository "$GITHUB_WORKSPACE" \
+            --output "$work/release-a" --version v0.3.0-products.1 --build-id "offline-${GITHUB_RUN_ID}-a" \
+            --created-at "$created" --private-key "$work/private/signer.json" --trust-key "$work/trust.json" \
+            --gvisor-archive "$work/gvisor.tar.zstd"
+          "$work/matrix-release" assemble --repository "$GITHUB_WORKSPACE" \
+            --output "$work/release-b" --version v0.3.0-products.2 --build-id "offline-${GITHUB_RUN_ID}-b" \
+            --created-at "$created" --private-key "$work/private/signer.json" --trust-key "$work/trust.json" \
+            --gvisor-archive "$work/gvisor.tar.zstd" \
+            --previous-id "$(jq -r .release.id "$work/release-a/release.json")" --previous-version v0.3.0-products.1
+          mkdir "$work/evidence"
+          cp "$work/release-a/release.json" "$work/evidence/release-a.json"
+          cp "$work/release-b/release.json" "$work/evidence/release-b.json"
+          cp "$work/trust.json" "$work/evidence/trust.json"
+          cp "$work/private/fixture.json" "$work/evidence/mail-fixture-identity.json"
+      - name: Run cold-cache lifecycle and engine restart without DinD
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Only the child native processes enter these namespaces. The runner,
+          # build daemon and host networking stay online and unchanged. No
+          # container hosts a daemon; the acceptance daemon starts with no data.
+          sudo env MATRIX_OFFLINE_WORK="$MATRIX_OFFLINE_WORK" \
+            unshare --net --mount --pid --fork --kill-child bash -s <<'OFFLINE'
+          set -euo pipefail
+          umask 077
+          work="$MATRIX_OFFLINE_WORK"
+          mount --make-rprivate /
+          mkdir "$work/run"
+          mount --bind "$work/run" /run
+          mount -t proc proc /proc
+          ip link set lo up
+          export DOCKER_HOST=unix:///var/run/docker.sock
+          export DOCKER_CONFIG="$work/private/docker-client"
+          printf '{}\n' > "$work/private/daemon.json"
+          start_engine() {
+            dockerd --config-file "$work/private/daemon.json" --data-root "$work/engine" --exec-root /run/docker \
+              --pidfile /run/docker.pid --host "$DOCKER_HOST" --storage-driver overlay2 \
+              > "$work/private/engine.log" 2>&1 &
+            engine_pid=$!
+            for attempt in $(seq 1 60); do
+              if docker info > /dev/null 2>&1; then return; fi
+              kill -0 "$engine_pid"
+              sleep 1
+            done
+            return 1
+          }
+          stop_engine() {
+            kill -TERM "$engine_pid"
+            wait "$engine_pid"
+          }
+          cleanup() {
+            if [[ -n "${engine_pid:-}" ]]; then kill -TERM "$engine_pid" 2>/dev/null || true; fi
+            chmod 755 "$work/evidence"
+            chmod 644 "$work/evidence/"*
+          }
+          trap cleanup EXIT
+          start_engine
+          export MATRIX_PHASE1_E2E=1 MATRIX_PHASE1_E2E_TIMEOUT=90m
+          export MATRIX_PHASE1_ROOT="$work/installation"
+          export MATRIX_PHASE1_RELEASE_A="$work/release-a" MATRIX_PHASE1_RELEASE_B="$work/release-b"
+          export MATRIX_PHASE1_TRUST_KEY="$work/trust.json"
+          export MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION="$work/private/security-mail.json"
+          export MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_ARCHIVE="$work/private/postfix.tar"
+          export MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256="$(jq -r .sha256 "$work/private/fixture.json")"
+          export MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_IMAGE_ID="$(jq -r .imageId "$work/private/fixture.json")"
+          export MATRIX_PHASE1_E2E_PHASE=run
+          "$work/phase1.test" -test.run '^TestOfflinePhase1Lifecycle$' -test.v -test.timeout 92m \
+            2>&1 | tee "$work/evidence/lifecycle.log"
+          stop_engine
+          start_engine
+          export MATRIX_PHASE1_E2E_PHASE=after-restart MATRIX_PHASE1_E2E_TIMEOUT=15m
+          unset MATRIX_PHASE1_RELEASE_B MATRIX_PHASE1_SECURITY_MAIL_CONFIGURATION
+          unset MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_ARCHIVE MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256 MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_IMAGE_ID
+          "$work/phase1.test" -test.run '^TestOfflinePhase1Lifecycle$' -test.v -test.timeout 17m \
+            2>&1 | tee "$work/evidence/after-restart.log"
+          stop_engine
+          engine_pid=''
+          OFFLINE
+      - name: Preserve only public gate evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offline-release-evidence
+          path: ${{ runner.temp }}/matrix-offline/evidence/
+          if-no-files-found: warn
+          retention-days: 14

@@ -601,6 +601,7 @@ type containerInspection struct {
 		} `json:"Networks"`
 	} `json:"NetworkSettings"`
 	Mounts []struct {
+		Source      string `json:"Source"`
 		Destination string `json:"Destination"`
 		RW          bool   `json:"RW"`
 	} `json:"Mounts"`
