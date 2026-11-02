@@ -121,6 +121,19 @@ jobs:
               "$work/release-a/bin/mx" --format json platform status --root "$work/installation" 2>/dev/null \
                 | jq '{status, state: .result.state, code: .error.code}' > "$work/evidence/failure-status.json" || true
               df -B1 --output=avail "$work" | tail -1 > "$work/evidence/available-bytes.txt"
+              postgres_id="$(docker container ls --all --quiet --filter label=com.xiak.matrix.role=postgres)"
+              if [[ "$postgres_id" =~ ^[a-f0-9]{12,64}$ ]]; then
+                timeout 10s docker inspect --format '{{json .State.Health}}' "$postgres_id" \
+                  | jq '{Status, FailingStreak, Log: [.Log[] | {Start, End, ExitCode}]}' > "$work/evidence/database-health.json" || true
+                timeout 10s docker top "$postgres_id" -eo comm > "$work/evidence/database-processes.txt" 2>/dev/null || true
+                timeout 10s docker stats --no-stream --format '{{.CPUPerc}} {{.MemUsage}} {{.PIDs}}' "$postgres_id" \
+                  > "$work/evidence/database-resources.txt" 2>/dev/null || true
+                # Publish only counts of fixed diagnostic phrases. Raw logs,
+                # SQL, credentials, native identities and paths remain private.
+                timeout 10s docker logs --tail 100 "$postgres_id" 2>&1 \
+                  | python3 -c 'import json,sys; s=sys.stdin.read(65536).lower(); phrases=["permission denied","operation not permitted","fatal","panic","out of memory","ready to accept connections","init process complete","initdb","waiting for server to shut down","server started","could not create","could not open","could not bind","no space left","postmaster.pid","creating subdirectories"]; print(json.dumps({p:s.count(p) for p in phrases}))' \
+                  > "$work/evidence/database-startup-categories.json" || true
+              fi
             fi
             if [[ -n "${engine_pid:-}" ]]; then kill -TERM "$engine_pid" 2>/dev/null || true; fi
             chmod 755 "$work/evidence"

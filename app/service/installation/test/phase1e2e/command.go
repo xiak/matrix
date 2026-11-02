@@ -387,6 +387,7 @@ func closedMXFailure(action string, output commandOutput) error {
 			"PREFLIGHT_VERIFICATION_FAILED":       {cli.FaultVerification, cli.ExitVerification, "preflight-verification-failed"},
 			"OWNERSHIP_CONFLICT":                  {cli.FaultConflict, cli.ExitConflict, "ownership-conflict"},
 			"DEPENDENCY_UNAVAILABLE":              {cli.FaultUnavailable, cli.ExitUnavailable, "dependency-unavailable"},
+			"EFFECT_OUTCOME_UNKNOWN":              {cli.FaultUnavailable, cli.ExitUnavailable, "effect-outcome-unknown"},
 			"COMMAND_INTERRUPTED":                 {cli.FaultInterrupted, cli.ExitInterrupted, "interrupted"},
 		}
 		for _, phase := range []string{"STAGING", "IMAGE", "CONFIGURATION", "MIGRATION", "START", "PLATFORM"} {

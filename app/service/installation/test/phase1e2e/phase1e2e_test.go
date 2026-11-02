@@ -112,6 +112,7 @@ func TestInstallFailureDiagnosticsExposeOnlyClosedCategories(t *testing.T) {
 		{"SECURITY_MAIL_CONFIGURATION_INVALID", string(cli.FaultVerification), "mx-install-mail-input-invalid", cli.ExitVerification},
 		{"PREFLIGHT_FAILED", string(cli.FaultPrecondition), "mx-install-preflight-failed", cli.ExitPrecondition},
 		{"IMAGE_VERIFICATION_FAILED", string(cli.FaultVerification), "mx-install-image-verification-failed", cli.ExitVerification},
+		{"EFFECT_OUTCOME_UNKNOWN", string(cli.FaultUnavailable), "mx-install-effect-outcome-unknown", cli.ExitUnavailable},
 		{"PRIVATE_VALUE", string(cli.FaultVerification), "mx-install-exit-unknown", cli.ExitVerification},
 		{"SECURITY_MAIL_CONFIGURATION_INVALID", "INTERNAL", "mx-install-exit-unknown", cli.ExitInternal},
 	} {
