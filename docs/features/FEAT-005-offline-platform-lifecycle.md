@@ -284,6 +284,14 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 `handbook-mysql-iam-cb0864326`，同一 authority profile，以 `.3` 为直接前驱。
 它们是本地测试候选，不是正式接受的发布或完整 Gate C。
 
+2026-11-02，MySQL 隔离候选来自干净提交
+`6b37737a7ffdf774072ce6a27e40bff5268f7156`，发布标识
+`matrix-v0.3.0-handbook.5-6b37737a7ffd`，构建标识
+`tenant-isolation-network-fixed`，同一 authority profile，以 `.4` 为直接前驱。
+本次核对接受该私有候选的本机升级与验证，不接受完整 Gate C 或新 MySQL 拓扑的
+旧版 worker 回退；托管实例的迁移及隔离证据归
+[FEAT-007](FEAT-007-control-plane-console.md#docker-mysql-租户隔离)。
+
 环境为 Windows 上的 Docker Desktop 4.83.0 / Engine 29.6.2，Linux/amd64、
 containerd 镜像存储。普通 Linux 工具容器中的 Docker CLI 27.5.1 / Compose 2.33.0
 连接主机 socket；其 Engine ID 与 Windows 客户端相同，容器中没有 `dockerd`，
@@ -302,6 +310,8 @@ containerd 镜像存储。普通 Linux 工具容器中的 Docker CLI 27.5.1 / Co
 | 显式备份 | `.3` 返回 `BACKUP SUCCEEDED / READY`，编号 `backup-618e4b554c28a544656ed9e4a967fe0e`；关联 `cmd-ea3ff28c97b24ea9c31c83c480c24b5a` |
 | 平台恢复 | `RECOVER SUCCEEDED / READY`，使用上述备份；关联 `cmd-0916d305cb0b448fad54a1bc8886519b` |
 | 恢复后复验与诊断 | `VERIFY SUCCEEDED / READY`，关联 `cmd-d9f17abe49743bbb445b9a8908ed60ff`；`support/handbook-final.json` 导出成功，关联 `cmd-2dd7f86f1f0c83317d6460382e3060df` |
+| MySQL 隔离候选升级 | `.4` → `.5` 返回 `UPGRADE SUCCEEDED / READY`，关联 `cmd-bee85f80b5cc3220a55307c4acc78bfb`，自动备份 `backup-ebca11f0ee01207d7e229653722b3201` |
+| 隔离候选复验 | `VERIFY SUCCEEDED / READY`，关联 `cmd-b0490fed7be97300695bc8319e267d69`；随后 `status` 确认当前 `.5` 与直接前驱 `.4` |
 
 2026-10-30，Docker Desktop VM 重新启动后，`vm.max_map_count` 回到 262144，
 worker 报 `PAAS_WORKER_READINESS_MANAGED_SERVICE`，平台未就绪。实际逐项探测

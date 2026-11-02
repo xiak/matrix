@@ -186,6 +186,29 @@ root# /usr/local/sbin/mx --format json platform verify --root /var/lib/matrix
 3. 核对原有实例及未完成任务的状态，再通知用户继续操作。
 4. 平台未恢复时，记录错误并导出支持信息；保留原安装，不重新执行全新安装或删除数据卷。
 
+### 恢复经运维停止的 MySQL 实例
+
+这不是控制台中的“安装服务”操作。先核对实例仍归当前租户所有、没有终止任务，
+并由交付负责人确认它在当前安装下的部署目录。已经终止的实例不能用此流程恢复。
+不要猜项目名，也不要拿另一个实例的目录替代。
+
+将下面的安装路径和 `matrix-REPLACE_WITH_VERIFIED_PROJECT` 替换为核对后的实际值，
+使用该目录中现有的部署文件重新创建或启动数据库和连接入口：
+
+```console
+root# docker compose \
+  --file /var/lib/matrix/runtime/executor/managed-mysql/matrix-REPLACE_WITH_VERIFIED_PROJECT/compose.json \
+  --project-name matrix-REPLACE_WITH_VERIFIED_PROJECT \
+  up --detach --wait --wait-timeout 120 --no-build --pull never
+```
+
+命令成功后，使用原地址和原密码读取一条已知数据，
+并在控制台核对实例身份和状态。失败时保留原目录和错误，不重新生成密码、
+不删除数据，也不手工给数据库容器增加端口或其他网络。
+
+旧实例在网络迁移后可能已没有原来的容器，因此不能只对旧容器执行 `docker start`。
+适用版本与迁移限制见 [MySQL 隔离验收](../features/FEAT-007-control-plane-console.md#docker-mysql-租户隔离)。
+
 ## 升级回滚与恢复
 
 ### 先创建平台备份
@@ -218,6 +241,13 @@ root# /usr/local/sbin/mx --format json platform upgrade \
 升级流程还会自行创建并验证备份。完成后运行前述 `verify` 与 `status`，
 确认版本和状态，再验证登录及关键业务读取，最后通知使用者恢复操作。
 浏览器需要重新登录时，先核对先前提交的操作结果，再继续工作。
+
+若新包包含 MySQL 网络隔离，维护窗口还应安排现有数据库的连接复测：
+运行中的实例迁移会短暂断开连接；原先停止的实例保持停止，需要使用时按
+[停止实例恢复流程](#恢复经运维停止的-mysql-实例)处理。升级前须确认数据库业务备份
+及配套回退方案；旧版 worker 不能提供新 MySQL 拓扑的生命周期保证，
+不能仅因平台能够识别前驱版本，就认定实例也支持任意回退。
+具体版本与限制归 [FEAT-007](../features/FEAT-007-control-plane-console.md#已安装实例的迁移)。
 
 ### 选择回滚还是恢复备份
 

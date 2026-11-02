@@ -4,27 +4,34 @@
 
 - Updated: 2026-11-02
 - Repository: `https://github.com/xiak/matrix.git`
-- Branch: `feat/product-onboarding-lk`
-- Committed and pushed milestone: `d5625ec86b42cca0969749d3430aca27bd316c16`
-- Outcome: product teams have a public deployment contract, executable
-  Logstash/Kibana examples, and reproducible onboarding and acceptance workflows.
-- Scope confirmed by the user: contract, runnable examples, tests and handbooks;
-  L/K publication in the default catalog and signed release is deferred.
+- Branch: `feat/managed-tenant-isolation`
+- Committed and pushed implementation milestone: `6b37737a7ffdf774072ce6a27e40bff5268f7156`
+- Outcome: the local Docker/MySQL slice isolates two real tenants and preserves
+  the other tenant when one instance is terminated. Existing direct-port
+  instances migrate without changing their data, credentials or endpoint.
+- Delivery: [PR #13](https://github.com/xiak/matrix/pull/13), based on
+  `feat/product-onboarding-lk`. Check GitHub for current review and CI state;
+  do not infer a merge or a complete release from the local runtime evidence.
 
-Follow `AGENTS.md` and the repository-local Git identity. This branch builds on
-`feat/handbook-mysql-iam` at `e723dc4797be43aa49aebfc8b8363b0488f63a89`.
-[PR #11](https://github.com/xiak/matrix/pull/11) owns the preceding illustrated
-MySQL/IAM handbook work. Check GitHub for current base and review status.
+Follow `AGENTS.md` and the repository-local Git identity.
 
 ## Reading route
 
-- Contract, boundaries and evidence: [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#产品团队接入契约).
-- Product-team workflow: [onboarding guide](../../docs/product-guide/managed-service-onboarding.md).
-- Verified commands and recovery guidance: [onboarding runbook](../../docs/runbooks/managed-service-onboarding.md).
-- Public implementation boundary: [adapter v1](../../api/adapter/managedservice/v1/README.md).
-- Runnable examples and acceptance gate: [managedserviceonboarding](../../test/managedserviceonboarding).
+- Contract, scope and runtime evidence: [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#docker-mysql-租户隔离).
+- Signed local candidate and upgrade evidence: [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核).
+- Executed operator workflows: [installation runbook](../../docs/runbooks/platform-installation.md).
+- User workflow: [managed services guide](../../docs/user-guide/services-and-applications.md#多个团队使用时).
+- Runtime owners: `app/adapter/managedservice/localmysql`, the existing
+  `TestLocalMySQLRealRuntime` and `TestManagedProductProviderProcesses` gates.
 
-The local sample gate passed on host Docker without DinD. Do not infer platform
-integration or release acceptance from that result. Consult the feature owner
-and the branch's independent GitHub checks for acceptance scope and current CI.
-Secrets and machine-local deployment state are excluded from this checkpoint.
+The verified local scope is shared-host Docker/MySQL isolation. It does not establish
+physical isolation, general VPC/CNI support, other products' isolation, K8s/VM
+connectivity, a complete Gate C, or old-worker lifecycle support for the new
+MySQL topology. Consult the FEAT owners rather than extending this checkpoint.
+
+The preceding [PR #12](https://github.com/xiak/matrix/pull/12) delivers the product
+onboarding contract, runnable L/K examples and acceptance handbook. The user
+deferred adding L/K to the default catalog and formal release.
+
+Secrets, test-account credentials and machine-local deployment state are not
+portable memory and are excluded from this checkpoint.
