@@ -461,6 +461,7 @@ export function buildConsoleScene(
       return {
         entitlementId: item.id,
         offeringId: source?.offeringId ?? "",
+        engineVersion: selectedSnapshot.offerings.find((offering) => offering.id === source?.offeringId)?.engineVersion ?? "",
         label: `${item.offeringName} · ${item.shapeName}`,
         available: item.available
       };
@@ -490,6 +491,9 @@ export function buildConsoleScene(
         ? {
             kind: "installation-order",
             entitlementOptions,
+            elasticsearchOptions: snapshot.installations
+              .filter((item) => item.offeringId === "elasticsearch-8.19" && item.phase === "READY")
+              .map((item) => ({ id: item.id, label: item.name, resourceVersion: item.resourceVersion, engineVersion: item.engineVersion, regionId: item.regionId })),
             regionOptions: selectedSnapshot.regions
               .filter((item) => item.state === "READY")
               .map((item) => ({ id: item.id, label: item.displayName }))

@@ -1,6 +1,6 @@
 # FEAT-IAM-008：业务接入、服务角色与 ABAC
 
-- 状态：实施中；数据库驱动的版本化产品 Profile、PaaS/managedservice/Audit PEP、服务Role同意与工作负载绑定、当前角色/程序凭据、可信标签及有界目录隔离已有固定后端实现。PostgreSQL18、MySQL8.4、Elasticsearch8.19、RabbitMQ4.1已通过生产worker的真实创建、协议读写、授权/撤权、终止、数据与凭据删除、配额和Audit闭环。当前精确独立CI与同Profile签名A/B安装、升级、回滚、恢复和专属引擎重启已通过，证据由[011](FEAT-IAM-011-acceptance.md)与[FEAT-005](../FEAT-005-offline-platform-lifecycle.md#current-iam87-foreground-session-and-recovery-gap-release-consumer-gate)拥有。Account服务开通及其不确定结果恢复已有独立LIVE页面与权威后验；额外产品 Logstash 的生产进程门禁和本机签名候选闭环由 [FEAT-007](../FEAT-007-control-plane-console.md#logstash-平台集成候选)拥有；Kibana 依赖使用授权与正式纳管尚未实现，其他未执行页面由010继续验收，HA/集群形态不由当前单节点运行证明。整体未验收。
+- 状态：实施中；数据库驱动的版本化产品 Profile、PaaS/managedservice/Audit PEP、服务Role同意与工作负载绑定、当前角色/程序凭据、可信标签及有界目录隔离已有固定后端实现。PostgreSQL18、MySQL8.4、Elasticsearch8.19、RabbitMQ4.1已通过生产worker的真实创建、协议读写、授权/撤权、终止、数据与凭据删除、配额和Audit闭环。当前精确独立CI与同Profile签名A/B安装、升级、回滚、恢复和专属引擎重启已通过，证据由[011](FEAT-IAM-011-acceptance.md)与[FEAT-005](../FEAT-005-offline-platform-lifecycle.md#current-iam87-foreground-session-and-recovery-gap-release-consumer-gate)拥有。Account服务开通及其不确定结果恢复已有独立LIVE页面与权威后验；额外产品 Logstash 的生产进程门禁和本机签名候选闭环由 [FEAT-007](../FEAT-007-control-plane-console.md#logstash-平台集成候选)拥有；Kibana 依赖使用授权、事务保护与生产 worker 已实现，本机生产进程门禁已通过，当前独立 CI 和签名发布仍待完成，其他未执行页面由010继续验收，HA/集群形态不由当前单节点运行证明。整体未验收。
 - 依赖：001、005、006。
 - Owner：IAM Profile/Role，PaaS/managedservice/Audit 各自的真实资源与 PEP。
 
@@ -14,6 +14,7 @@
 | IAM-PEP-04 | create collection→最终 ID、Operation、配置、配额和 outbox 有封闭映射 |
 | IAM-PEP-05 | 产品目录只发布已接入真实 provider 的产品；目录项必须能完成真实创建、协议读写、凭据、运行态、权限、审计与终止闭环，不接受示例、占位或仅有 IAM Profile 的伪接入 |
 | IAM-PEP-06 | Account 服务开通是独立、可委派的闭合 Action；它不按主/子账号类型绕过 Policy，也不隐式授予资源权限、配额或服务Role |
+| IAM-PEP-07 | 关联受管依赖必须对同账号准确实例检查当前使用权限；读取、历史许可和等值创建回执不能代替当前授权；拒绝后不占用配额或创建业务效果 |
 | IAM-SVC-01 | 服务主体与目标 Account 中的 Role/同意分离；purpose/installation 不授任意租户权 |
 | IAM-SVC-02 | 服务角色模板、服务相关角色、PassRole、工作负载绑定与短期凭据 |
 | IAM-TAG-01 | 可信资源标签/请求标签 ABAC，创建时强制标签和标签写入本身授权 |
@@ -28,6 +29,8 @@ Profile 的代码/签名发行由产品 owner 管理，IAM 只注册校验与求
 通用 IAM 求值器和控制台不得按产品名称、服务名称、角色名称或六种旧角色枚举内置授权分支。产品新增动作/模板是相应 owner 的版本化声明；新增产品必须通过登记与契约验证，不修改求值算法或逐个扩展前端角色菜单。预置策略、服务角色模板可由可信产品发布，但内容、默认版本与同意关系分别管理；显示名改动不影响授权，新版本不能隐式扩张既有账号的授权。当前静态 Action catalog 是 001 的过渡实现，不是最终可扩展接入完成。
 
 产品授权声明与产品上线资格严格分开：Profile、Action、Policy 或控制台文案都不能单独让一个商品进入租户目录。每个目录项必须由对应产品 owner 提供真实 provider，并在同一纵向门禁中证明受信制品、创建到终态、真实协议读写、凭据保护、配额与 Operation、资源级 IAM、租户 Audit、失败回滚和明确终止语义。当前PostgreSQL、MySQL、Elasticsearch与RabbitMQ分别拥有产品适配器、不可变镜像、固定版本/规格、协议门禁和相同生命周期，不是目录样例；新增产品继续复用统一目录、provider registry和IAM协议，但必须单独实现并验收自己的provider，不在通用IAM求值器内按产品名写分支。
+
+依赖使用由产品资源 owner 发起当前授权。依赖使用动作及当前/历史 Profile 的封闭声明由 [001](FEAT-IAM-001-authorization-profile.md)拥有。Kibana 创建事务读取同账号、READY、同引擎版本同区域及准确观察版本的 Elasticsearch，再用当前凭据请求依赖使用 Action，校验返回的账号、主体与外层创建许可一致。等值创建重放也重新授权。当前 AccountAdministrator、PaaSDeveloper 的新策略版本含此动作；已有不可变版本和附件不会自动扩权，维护者须显式选择新版本或委派准确实例的自定义策略。PaaSViewer 及单独的读取权限均不包含使用权限。依赖锁定、配额、worker 凭据清理与删除保护的业务不变量及证据归 [FEAT-007](../FEAT-007-control-plane-console.md#kibana-依赖接入切片)；本片不引入通用跨账号依赖或 IAM 产品分支。
 
 首次使用服务不是配额购买、资源创建或服务受托的别名。managedservice拥有Account范围的`ServiceActivation`事实；IAM只声明和求值`managedservice.service-definition.read`、`managedservice.service-activation.read`、`managedservice.service-activation.activate`及对应资源形状。原primary能开通是因为其受保护的`system.account-administrator`附件包含动作，不是evaluator识别primary后放行。子USER或ROLE可通过AccountAdministrator或窄`system.service-activation-administrator`获得同一动作；普通USER、PaaSDeveloper/Viewer、PlatformOperator和SERVICE默认不能开通。当前私有部署服务没有计费/法律前置，采用permission-only；未来产品若确需primary同意，必须由其受信服务定义增加封闭前置并单独验收，不能把例外扩成通用主账号特权。
 

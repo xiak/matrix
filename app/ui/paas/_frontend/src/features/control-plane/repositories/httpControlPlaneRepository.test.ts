@@ -167,6 +167,43 @@ afterEach(() => {
 });
 
 describe("httpControlPlaneRepository", () => {
+  it("sends only the exact Kibana dependency and rejects a substituted receipt", async () => {
+    const command = { id: "kibana-primary", name: "Kibana", offeringId: "kibana-8.19", quotaEntitlementId: "quota-k",
+      regionId: "local-primary", elasticsearch: { installationId: "es-primary", resourceVersion: 4 } };
+    const receipt = { ...command, engineVersion: "8.19.23", phase: "PENDING", resourceVersion: 1,
+      endpoint: null, credentialReference: null, createdAt: "2026-11-02T00:00:00Z",
+      operation: { id: "operation-k", kind: "PROVISION", phase: "PENDING", safeFailureCode: null, observedAt: "2026-11-02T00:00:00Z" } };
+    const fetchMock = vi.fn().mockImplementation(async () => jsonResponse(receipt));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await httpControlPlaneRepository.createInstallation("session", command, "create-k");
+    expect(result.elasticsearch).toEqual(command.elasticsearch);
+    expect(JSON.parse(fetchMock.mock.calls[0]![1].body)).toEqual(command);
+    for (const elasticsearch of [undefined, null, { ...command.elasticsearch, resourceVersion: 0 },
+      { ...command.elasticsearch, resourceVersion: Number.MAX_SAFE_INTEGER + 1 },
+      { ...command.elasticsearch, installationId: command.id }, { ...command.elasticsearch, password: "unexpected" }]) {
+      fetchMock.mockImplementationOnce(async () => jsonResponse({ ...receipt, elasticsearch }));
+      await expect(httpControlPlaneRepository.getInstallation("session", command.id)).rejects.toThrow("INVALID_INSTALLATION_DEPENDENCY_RESPONSE");
+    }
+    fetchMock.mockImplementationOnce(async () => jsonResponse({ ...receipt,
+      elasticsearch: { ...command.elasticsearch, resourceVersion: 5 } }));
+    await expect(httpControlPlaneRepository.createInstallation("session", command, "create-k"))
+      .rejects.toThrow("INVALID_INSTALLATION_CREATION_RESPONSE");
+    const calls = fetchMock.mock.calls.length;
+    await expect(httpControlPlaneRepository.createInstallation("session", { ...command, elasticsearch: undefined }, "create-k"))
+      .rejects.toThrow("INVALID_INSTALLATION_DEPENDENCY_REQUEST");
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
+  });
+
+  it("retains a Kibana binding when cleaning up a failed installation without an assigned endpoint", async () => {
+    const installation = { id: "kibana-cleanup", name: "Kibana", offeringId: "kibana-8.19", engineVersion: "8.19.23",
+      quotaEntitlementId: "quota-k", regionId: "local-primary", phase: "TERMINATION_FAILED", resourceVersion: 5,
+      elasticsearch: { installationId: "es-primary", resourceVersion: 4 }, endpoint: null, credentialReference: null,
+      createdAt: "2026-11-02T00:00:00Z", operation: { id: "operation-cleanup", kind: "TERMINATE", phase: "FAILED",
+        safeFailureCode: "TERMINATION_FAILED", observedAt: "2026-11-02T00:00:00Z" } };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(installation)));
+    await expect(httpControlPlaneRepository.getInstallation("session", installation.id)).resolves.toEqual(installation);
+  });
+
   it("reads only the resource slice requested by the destination page", async () => {
     const fetchMock = vi.fn(async (path: string) => {
       if (path !== "/api/managed-services/v1/offerings") {

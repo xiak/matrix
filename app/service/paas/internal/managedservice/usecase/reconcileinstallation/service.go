@@ -110,10 +110,20 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 	)
 	if !resolved || offering.EngineVersion != work.Installation.EngineVersion ||
 		work.Installation.RegionID != "local-primary" {
-		if failErr := service.queue.Fail(ctx, work, "INSTALLATION_PROFILE_INVALID"); failErr != nil {
+		if work.Kind == managedservicev1.InstallationOperationTerminate {
+			return true, service.queue.Fail(ctx, work, "INSTALLATION_PROFILE_INVALID")
+		}
+		if failErr := service.queue.FailCleanup(ctx, work, "INSTALLATION_PROFILE_INVALID"); failErr != nil {
 			return true, failErr
 		}
 		return true, nil
+	}
+	var dependency *managedserviceadapterv1.ElasticsearchDependency
+	if reference := work.Installation.Elasticsearch; reference != nil {
+		dependency = &managedserviceadapterv1.ElasticsearchDependency{
+			InstallationID: reference.InstallationID, ResourceVersion: reference.ResourceVersion,
+			EngineVersion: work.Installation.EngineVersion, RegionID: work.Installation.RegionID,
+		}
 	}
 	effectContext, cancel := context.WithTimeout(ctx, service.effectTimeout)
 	if work.Kind == managedservicev1.InstallationOperationTerminate {
@@ -121,6 +131,7 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 			TenantID: work.TenantID, InstallationID: work.Installation.ID,
 			OperationID: work.OperationID, OfferingID: offering.ID,
 			EngineVersion: offering.EngineVersion, RegionID: work.Installation.RegionID,
+			Elasticsearch: dependency,
 		})
 		cancel()
 		if expired() {
@@ -142,7 +153,7 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 		TenantID: work.TenantID, InstallationID: work.Installation.ID,
 		OperationID: work.OperationID, OfferingID: offering.ID,
 		EngineVersion: offering.EngineVersion, RegionID: work.Installation.RegionID,
-		QuotaShape: shape,
+		QuotaShape: shape, Elasticsearch: dependency,
 	})
 	cancel()
 	if expired() {
@@ -160,6 +171,7 @@ func (service *Service) ProcessNext(ctx context.Context, workerID string) (bool,
 			TenantID: work.TenantID, InstallationID: work.Installation.ID,
 			OperationID: work.OperationID, OfferingID: offering.ID,
 			EngineVersion: offering.EngineVersion, RegionID: work.Installation.RegionID,
+			Elasticsearch: dependency,
 		})
 		cleanupCancel()
 		if expired() {

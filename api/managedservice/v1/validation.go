@@ -96,7 +96,21 @@ func ValidateCreateInstallationRequest(value CreateInstallationRequest) error {
 		validateID("offeringId", value.OfferingID),
 		validateID("quotaEntitlementId", value.QuotaEntitlementID),
 		validateID("regionId", value.RegionID),
+		validateElasticsearchReference(value.OfferingID, value.ID, value.Elasticsearch),
 	)
+}
+
+func validateElasticsearchReference(offeringID, installationID string, value *ElasticsearchReference) error {
+	if offeringID != KibanaOfferingID {
+		if value != nil {
+			return errors.New("this offering does not accept an Elasticsearch dependency")
+		}
+		return nil
+	}
+	if value == nil || value.InstallationID == installationID {
+		return errors.New("Kibana requires another Elasticsearch installation")
+	}
+	return errors.Join(ValidateInstallationID(value.InstallationID), validateResourceVersion(value.ResourceVersion))
 }
 
 func ValidateBindServiceRoleRequest(value BindServiceRoleRequest) error {
@@ -246,6 +260,7 @@ func ValidateServiceInstallation(value ServiceInstallation) error {
 		validateInstallationOperation(value.Operation),
 		validateResourceVersion(value.ResourceVersion),
 		validateTime("serviceInstallation.createdAt", value.CreatedAt),
+		validateElasticsearchReference(value.OfferingID, value.ID, value.Elasticsearch),
 	)
 	if !installationOperationMatchesPhase(value.Operation.Kind, value.Operation.Phase, value.Phase) {
 		problems = append(problems, errors.New("installation and operation state is inconsistent"))
@@ -256,13 +271,16 @@ func ValidateServiceInstallation(value ServiceInstallation) error {
 	if value.CredentialReference != nil {
 		problems = append(problems, validateID("serviceInstallation.credentialReference", *value.CredentialReference))
 	}
-	retainsReadyResult := value.Phase == InstallationReady ||
+	mayRetainResult := value.Phase == InstallationReady ||
 		value.Phase == InstallationTerminationPending || value.Phase == InstallationTerminating ||
 		value.Phase == InstallationTerminationFailed
-	if retainsReadyResult && (value.Endpoint == nil || value.CredentialReference == nil) {
+	if value.Phase == InstallationReady && (value.Endpoint == nil || value.CredentialReference == nil) {
 		problems = append(problems, errors.New("ready installation requires endpoint and credential reference"))
 	}
-	if !retainsReadyResult && (value.Endpoint != nil || value.CredentialReference != nil) {
+	if (value.Endpoint == nil) != (value.CredentialReference == nil) {
+		problems = append(problems, errors.New("installation result references must be retained together"))
+	}
+	if !mayRetainResult && (value.Endpoint != nil || value.CredentialReference != nil) {
 		problems = append(problems, errors.New("non-ready installation cannot expose endpoint or credential reference"))
 	}
 	return errors.Join(problems...)
@@ -530,7 +548,7 @@ func validateErrorCode(value ErrorCode) error {
 		ErrorIdentityUnavailable, ErrorNotFound, ErrorAlreadyExists,
 		ErrorIdempotencyConflict, ErrorServiceDefinitionConflict,
 		ErrorServiceUnavailable, ErrorServiceNotActivated,
-		ErrorQuotaExhausted, ErrorRegionUnavailable,
+		ErrorQuotaExhausted, ErrorRegionUnavailable, ErrorDependencyUnavailable, ErrorDependencyInUse,
 		ErrorServiceRoleConflict, ErrorResourceStateConflict, ErrorInternal:
 		return nil
 	default:

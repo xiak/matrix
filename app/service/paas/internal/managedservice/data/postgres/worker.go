@@ -27,12 +27,15 @@ func (repository *Repository) Claim(
 	var result reconcileinstallation.WorkItem
 	var fencingToken int64
 	var attempt int32
+	var dependencyID *string
+	var dependencyVersion *uint64
 	err = repository.pool.QueryRow(ctx, `
 SELECT tenant_id, operation_id, operation_kind, installation_id, installation_name,
        offering_id, engine_version, quota_entitlement_id, region_id,
        installation_endpoint, installation_credential_reference,
        quota_shape_id, fencing_token, attempt, created_at,
-       installation_resource_version, observed_at
+       installation_resource_version, observed_at,
+       elasticsearch_installation_id, elasticsearch_resource_version
   FROM managedservice.claim_operation($1, $2)`, workerID, leaseSeconds).Scan(
 		&result.TenantID, &result.OperationID,
 		&result.Kind,
@@ -43,12 +46,16 @@ SELECT tenant_id, operation_id, operation_kind, installation_id, installation_na
 		&result.QuotaShapeID, &fencingToken, &attempt,
 		&result.Installation.CreatedAt, &result.Installation.ResourceVersion,
 		&result.Installation.Operation.ObservedAt,
+		&dependencyID, &dependencyVersion,
 	)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return reconcileinstallation.WorkItem{}, false, nil
 	}
-	if err != nil || fencingToken < 1 || attempt < 1 {
+	if err != nil || fencingToken < 1 || attempt < 1 || (dependencyID == nil) != (dependencyVersion == nil) {
 		return reconcileinstallation.WorkItem{}, false, reconcileinstallation.ErrQueueUnavailable
+	}
+	if dependencyID != nil {
+		result.Installation.Elasticsearch = &managedservicev1.ElasticsearchReference{InstallationID: *dependencyID, ResourceVersion: *dependencyVersion}
 	}
 	result.FencingToken = uint64(fencingToken)
 	result.Attempt = uint32(attempt)

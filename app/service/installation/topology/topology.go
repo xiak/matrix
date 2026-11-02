@@ -44,6 +44,8 @@ const directMySQLContractDigest = "sha256:7cb0360dd17ee421b4d4dfbf58e006e236f3f8
 const mysqlEndpointImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_MYSQL_ENDPOINT_IMAGE_IDS"
 const productEndpointImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS"
 const logstashImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS"
+const kibanaImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_KIBANA_IMAGE_IDS"
+const fiveManagedProductsContractDigest = "sha256:14d8147b81e9a642c798a6a043c56265d770c0b433e9146729a022291aaaf52d"
 
 // Installed handbook.5 already uses isolated MySQL, without Logstash.
 const fourManagedProductsContractDigest = "sha256:1744ab1eed4536c0aaa99a8e8b2b0bb6328b67139bafcf431996f4800883575f"
@@ -235,8 +237,17 @@ func ValidateInstalledContract(manifest release.Manifest) error {
 		return errors.New("installed release manifest contract is unsupported")
 	}
 	expected := ContractDigest()
+	if release.IsFiveManagedProductsManifest(manifest) {
+		previous := contractDescription()
+		delete(previous.Compose.Services["paas-worker"].Environment, kibanaImagesEnvironment)
+		expected = fiveManagedProductsContractDigest
+		if contractDescriptionDigest(previous) != expected {
+			return errors.New("installed five-product topology implementation is unsupported")
+		}
+	}
 	if release.IsFourManagedProductsManifest(manifest) {
 		previous := contractDescription()
+		delete(previous.Compose.Services["paas-worker"].Environment, kibanaImagesEnvironment)
 		delete(previous.Compose.Services["paas-worker"].Environment, logstashImagesEnvironment)
 		delete(previous.Compose.Services["paas-worker"].Environment, productEndpointImagesEnvironment)
 		expected = fourManagedProductsContractDigest
@@ -268,6 +279,9 @@ func CompileInstalled(manifest release.Manifest, options Options) (Result, error
 		return Result{}, err
 	}
 	if !release.IsLegacyProductlessManifest(manifest) {
+		if release.IsFiveManagedProductsManifest(manifest) {
+			return compileProductTopology(manifest, options, true)
+		}
 		if release.IsFourManagedProductsManifest(manifest) {
 			return compileProductTopology(manifest, options, manifest.TopologyDigest != directMySQLContractDigest)
 		}
@@ -761,7 +775,7 @@ func compileServices(
 				if images["logstash"] != "" {
 					paasWorker.Environment[productEndpointImagesEnvironment] = strings.Join(image.RuntimeImageIDs(), ",")
 				}
-			case "postgres", "mysql", "elasticsearch", "rabbitmq", "logstash":
+			case "postgres", "mysql", "elasticsearch", "rabbitmq", "logstash", "kibana":
 				paasWorker.Environment["MATRIX_PAAS_WORKER_MANAGED_"+strings.ToUpper(image.Component)+"_IMAGE_IDS"] =
 					strings.Join(image.RuntimeImageIDs(), ",")
 			}

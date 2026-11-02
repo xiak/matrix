@@ -86,6 +86,8 @@ AccessKey 使用旧 USER 策略的最窄兼容规则归007的原子授权片：�
 
 现有 `enums.go` 是源码登记owner，按产品组合的Profile声明是当前唯一数据源。`AllActions`、`ActionDefinition`、资源/scope/service admission、条件能力及生成器从它派生；不存在第二份可编辑的action map。源码登记每产品只有一个当前revision，缺项/无效声明/重复产品会在服务启动前关闭，公开读取深拷贝所有嵌套集合，不能修改授权目录。历史已退休动作只保留原有不可变决定解码边界，不进入当前Profile。声明注册不代表产品已取得目标Account权限；历史保存和同revision变体拒绝归下述注册事务，签名发行与线上决定/策略绑定仍需后续验收。
 
+managedservice 的依赖使用声明由当前 revision 8 拥有：`managedservice.service-installation.use` 只接受 USER、TENANT scope 和准确 `SERVICE_INSTALLATION` 的 INSTANCE 模式，不声明集合、批量或创建结果。保留的 revision 7 不包含此动作，其原有 bytes/digest 不变。声明本身不授予依赖权限；Kibana 创建、当前授权及撤权行为由 [008](FEAT-IAM-008-product-enforcement.md#详细设计)拥有。纯契约检查覆盖当前声明可编译、旧声明拒绝新动作，以及只读策略不会解析出使用权限。
+
 目标模式不能只有一个从动作后缀推断的 INSTANCE 标记。当前真实调用者至少存在三种情况，必须在首片全部覆盖：
 
 | 当前拥有者与动作 | 必须登记并验证的语义 |

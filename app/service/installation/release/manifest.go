@@ -141,7 +141,7 @@ type AuthoritySchemas struct {
 func CurrentDatabaseProfile() DatabaseProfile {
 	return DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8},
+		Authorities:      AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 9},
 		ContractRevision: 41,
 	}
 }
@@ -238,6 +238,8 @@ const (
 	currentReleaseProfile releaseProfile = iota
 	// The installed handbook.4/.5 releases contain four managed products.
 	fourManagedProductsProfile
+	// Accepted Logstash .1/.2/.3 candidates have five managed products.
+	fiveManagedProductsProfile
 )
 
 func RequiredImages(products []Product) []ImageRequirement {
@@ -256,8 +258,11 @@ func requiredImages(products []Product, profile releaseProfile) []ImageRequireme
 	for _, product := range products {
 		switch product.ID {
 		case ProductApplicationPaaS:
-			if profile == currentReleaseProfile {
+			if profile != fourManagedProductsProfile {
 				required = append(required, ImageRequirement{Component: "logstash", Purpose: ImagePlatform, HealthContract: "logstash-ready-protocol-v1"})
+			}
+			if profile == currentReleaseProfile {
+				required = append(required, ImageRequirement{Component: "kibana", Purpose: ImagePlatform, HealthContract: "kibana-ready-protocol-v1"})
 			}
 			required = append(required,
 				ImageRequirement{Component: "elasticsearch", Purpose: ImagePlatform, HealthContract: "elasticsearch-ready-protocol-v1"},
@@ -296,10 +301,13 @@ func ApplicationPaaSProduct(version string) Product {
 
 func applicationPaaSProduct(version string, profile releaseProfile) Product {
 	components := []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
-	if profile == currentReleaseProfile {
+	if profile != fourManagedProductsProfile {
 		components = append(components, "logstash")
-		slices.Sort(components)
 	}
+	if profile == currentReleaseProfile {
+		components = append(components, "kibana")
+	}
+	slices.Sort(components)
 	return Product{
 		ID:                 ProductApplicationPaaS,
 		Version:            version,

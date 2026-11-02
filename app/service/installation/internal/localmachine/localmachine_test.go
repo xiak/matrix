@@ -2619,14 +2619,19 @@ func TestRollbackInstallationRemovesUnhealthyOnlyProvedOwnedObjectsAndReplays(t 
 func TestUpgradeCleanupAcceptsInstalledDirectMySQLTopology(t *testing.T) {
 	plan := newInstallPlan(t)
 	plan.Root = "/srv/matrix"
+	plan.Bundle.Manifest.Database = release.DatabaseProfile{
+		Compatibility: "identical-authority-profile", Authorities: release.AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8}, ContractRevision: 40,
+	}
 	plan.Bundle.Manifest.TopologyDigest = "sha256:7cb0360dd17ee421b4d4dfbf58e006e236f3f86e9d1495bebeb90f521ebfa73d"
 	for index := range plan.Bundle.Manifest.Products {
 		if plan.Bundle.Manifest.Products[index].ID == release.ProductApplicationPaaS {
 			plan.Bundle.Manifest.Products[index].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
 		}
 	}
-	plan.Bundle.Manifest.Images = slices.DeleteFunc(plan.Bundle.Manifest.Images, func(image release.Image) bool { return image.Component == "logstash" })
-	plan.Bundle.Manifest.Files = slices.DeleteFunc(plan.Bundle.Manifest.Files, func(file release.File) bool { return file.Path == "images/logstash.tar" })
+	plan.Bundle.Manifest.Images = slices.DeleteFunc(plan.Bundle.Manifest.Images, func(image release.Image) bool { return image.Component == "logstash" || image.Component == "kibana" })
+	plan.Bundle.Manifest.Files = slices.DeleteFunc(plan.Bundle.Manifest.Files, func(file release.File) bool {
+		return file.Path == "images/logstash.tar" || file.Path == "images/kibana.tar"
+	})
 	compiled, err := topology.CompileInstalled(plan.Bundle.Manifest, topology.Options{
 		InstallationID: plan.InstallationID, Root: plan.Root, Listener: plan.Listener,
 		Port: plan.Port, NorthboundOrigin: plan.NorthboundOrigin,

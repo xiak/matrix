@@ -193,12 +193,14 @@ function installationTerminationMutationError(error: unknown): InstallationTermi
   if (error.status === 401) return "expired";
   if (error.status === 403) return "forbidden";
   if (error.status === 404) return "notFound";
+  if (error.status === 409 && error.code === "DEPENDENCY_IN_USE") return "dependencyInUse";
   if (error.status === 409) return "conflict";
   if ([400, 413, 415, 422].includes(error.status)) return "invalid";
   return "unknown";
 }
 
 function managedServiceCommandError(error: unknown): ManagedServiceCommandError {
+  if (error instanceof HttpProblem && error.status === 409 && error.code === "DEPENDENCY_UNAVAILABLE") return "dependencyUnavailable";
   return installationTerminationMutationError(error);
 }
 
@@ -692,7 +694,7 @@ export function ControlPlaneProvider({
       targetId: command.id,
       targetLabel: command.name,
       kind: "CREATE_INSTALLATION",
-      payload: { ...command }
+      payload: { ...command, ...(command.elasticsearch ? { elasticsearch: { ...command.elasticsearch } } : {}) }
     };
     if (!beginManagedServiceCommand(intent)) return false;
     setMutation("installation");
@@ -803,7 +805,7 @@ export function ControlPlaneProvider({
         commitInstallationTerminationIntent({
           ...intent,
           phase: "failed",
-          error: commandError === "storageUnavailable" || commandError === "unavailable" || commandError === "mismatch" || commandError === "operationFailed" ? "unknown" : commandError,
+          error: commandError === "storageUnavailable" || commandError === "unavailable" || commandError === "mismatch" || commandError === "operationFailed" || commandError === "dependencyUnavailable" ? "unknown" : commandError,
           open: true
         });
       }
@@ -1006,7 +1008,7 @@ export function ControlPlaneProvider({
         commitServiceAuthorizationIntent({
           ...intent,
           phase: "failed",
-          error: commandError === "storageUnavailable" || commandError === "unavailable" || commandError === "mismatch" || commandError === "operationFailed" ? "unknown" : commandError,
+          error: commandError === "storageUnavailable" || commandError === "unavailable" || commandError === "mismatch" || commandError === "operationFailed" || commandError === "dependencyUnavailable" || commandError === "dependencyInUse" ? "unknown" : commandError,
           open: true
         });
       }

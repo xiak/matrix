@@ -35,6 +35,8 @@ BEGIN
             ('service_installations_entitlement_fk'),
             ('service_installations_current_operation_fk'),
             ('service_installations_ids_valid'),
+            ('service_installations_elasticsearch_valid'),
+            ('service_installations_elasticsearch_fk'),
             ('operations_idempotency_uq'),
             ('operations_installation_fk'),
             ('managedservice_operations_kind_valid'),
@@ -53,6 +55,7 @@ BEGIN
             ('append_audit_outbox'), ('claim_audit_event'),
             ('complete_audit_event'), ('audit_outbox_snapshot'),
             ('list_command_results'),
+            ('protect_elasticsearch_dependency'),
             ('start_termination'), ('claim_operation'), ('complete_operation'),
             ('complete_termination_operation'), ('retry_operation'),
             ('fail_operation'), ('fail_cleanup_operation')
@@ -68,6 +71,37 @@ BEGIN
      );
     IF missing IS NOT NULL THEN
         RAISE EXCEPTION 'managed-service functions are missing or unsafe: %', missing;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_trigger AS trigger
+         WHERE trigger.tgrelid = 'managedservice.service_installations'::regclass
+           AND trigger.tgname = 'protect_elasticsearch_dependency'
+           AND trigger.tgfoid = 'managedservice.protect_elasticsearch_dependency()'::regprocedure
+           AND NOT trigger.tgisinternal AND trigger.tgenabled = 'O'
+           -- Row-level BEFORE INSERT/UPDATE, limited to the immutable binding.
+           AND trigger.tgtype = 23
+           AND cardinality(trigger.tgattr::smallint[]) = 2
+           AND trigger.tgattr::smallint[] @> ARRAY(
+               SELECT attribute.attnum FROM pg_catalog.pg_attribute AS attribute
+                WHERE attribute.attrelid = trigger.tgrelid
+                  AND attribute.attname IN ('elasticsearch_installation_id', 'elasticsearch_resource_version')
+                  AND NOT attribute.attisdropped
+           )
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_constraint
+         WHERE conrelid = 'managedservice.service_installations'::regclass
+           AND conname = 'service_installations_elasticsearch_fk'
+           AND confrelid = conrelid AND contype = 'f' AND convalidated
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_catalog.pg_index
+         WHERE indexrelid = to_regclass('managedservice.service_installations_active_elasticsearch_idx')
+           AND indrelid = 'managedservice.service_installations'::regclass
+           AND indisvalid AND indisready
+    ) OR has_function_privilege('public', 'managedservice.protect_elasticsearch_dependency()', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_api', 'managedservice.protect_elasticsearch_dependency()', 'EXECUTE')
+       OR has_function_privilege('matrix_paas_worker', 'managedservice.protect_elasticsearch_dependency()', 'EXECUTE') THEN
+        RAISE EXCEPTION 'managed-service dependency custody is missing or unsafe';
     END IF;
 
     IF to_regprocedure(

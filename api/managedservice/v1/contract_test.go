@@ -39,6 +39,37 @@ func TestMutationSchemasAreClosedAndExcludeNativeAuthorityFields(t *testing.T) {
 	}
 }
 
+func TestKibanaRequiresAnExactElasticsearchReference(t *testing.T) {
+	base := CreateInstallationRequest{ID: "kibana-one", Name: "Kibana", OfferingID: KibanaOfferingID,
+		QuotaEntitlementID: "quota-one", RegionID: "local-primary",
+		Elasticsearch: &ElasticsearchReference{InstallationID: "search-one", ResourceVersion: 3}}
+	if err := ValidateCreateInstallationRequest(base); err != nil {
+		t.Fatal(err)
+	}
+	for name, change := range map[string]func(*CreateInstallationRequest){
+		"missing":             func(v *CreateInstallationRequest) { v.Elasticsearch = nil },
+		"self":                func(v *CreateInstallationRequest) { v.Elasticsearch.InstallationID = v.ID },
+		"foreign offering":    func(v *CreateInstallationRequest) { v.OfferingID = LogstashOfferingID },
+		"missing version":     func(v *CreateInstallationRequest) { v.Elasticsearch.ResourceVersion = 0 },
+		"unsafe version":      func(v *CreateInstallationRequest) { v.Elasticsearch.ResourceVersion = 9007199254740992 },
+		"not an installation": func(v *CreateInstallationRequest) { v.Elasticsearch.InstallationID = "URL:9200" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			value, reference := base, *base.Elasticsearch
+			value.Elasticsearch = &reference
+			change(&value)
+			if ValidateCreateInstallationRequest(value) == nil {
+				t.Fatal("invalid dependency selection admitted")
+			}
+		})
+	}
+	base.OfferingID, base.Elasticsearch = LogstashOfferingID, nil
+	encoded, err := json.Marshal(base)
+	if err != nil || ValidateCreateInstallationRequest(base) != nil || strings.Contains(string(encoded), "elasticsearch") {
+		t.Fatal("existing independent product request acquired a dependency field")
+	}
+}
+
 func TestCommandResultContractIsClosedAndStateBound(t *testing.T) {
 	now := time.Date(2026, 10, 13, 12, 0, 0, 123_000, time.UTC)
 	completed := now.Add(time.Second)

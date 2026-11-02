@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,8 +22,8 @@ import (
 )
 
 type elasticsearchTarget struct {
-	directory, endpoint string
-	password            []byte
+	directory, containerID string
+	password               []byte
 }
 
 type tokenIntent struct {
@@ -79,6 +79,7 @@ func (p *Provisioner) resolveDependency(ctx context.Context, tenant string, depe
 		return empty, errDependency
 	}
 	expected := map[string]uint32{"elasticsearch": 0, "elasticsearch-endpoint": 1}
+	containerID := ""
 	for _, c := range observed {
 		ports, exists := expected[c.Service]
 		if !exists || c.Project != projectName || c.OneOff || c.State != "running" || c.Health != "healthy" || c.PublishedPorts != ports {
@@ -90,12 +91,15 @@ func (p *Provisioner) resolveDependency(ctx context.Context, tenant string, depe
 			}
 		}
 		delete(expected, c.Service)
+		if c.Service == "elasticsearch" {
+			containerID = c.ID
+		}
 	}
 	password, err := localcontainer.ReadProtectedSecret(filepath.Join(directory, "elasticsearch-password"))
 	if err != nil {
 		return empty, errDependency
 	}
-	return elasticsearchTarget{directory: directory, endpoint: "http://127.0.0.1:" + strconv.Itoa(port), password: password}, nil
+	return elasticsearchTarget{directory: directory, containerID: containerID, password: password}, nil
 }
 
 func (p *Provisioner) prepareConfiguration(ctx context.Context, input localcontainer.DocumentInput) error {
@@ -250,26 +254,26 @@ func (p *Provisioner) verifyToken(ctx context.Context, target elasticsearchTarge
 }
 
 func (p *Provisioner) callDependency(ctx context.Context, target elasticsearchTarget, method, path string, token []byte) (int, []byte, error) {
-	request, err := http.NewRequestWithContext(ctx, method, target.endpoint+path, nil)
-	if err != nil {
-		return 0, nil, errDependency
-	}
+	authorization := ""
 	if token == nil {
-		request.SetBasicAuth("elastic", string(target.password))
+		credential := append([]byte("elastic:"), target.password...)
+		authorization = "Basic " + base64.StdEncoding.EncodeToString(credential)
+		clear(credential)
 	} else {
-		request.Header.Set("Authorization", "Bearer "+string(token))
+		authorization = "Bearer " + string(token)
 	}
-	response, err := p.config.HTTPClient.Do(request)
+	status, body, err := p.http.RequestContainerHTTP(ctx, compose.ContainerHTTPRequest{
+		ContainerID: target.containerID, Port: 9200, Method: method, Path: path, Authorization: authorization,
+	})
 	if err != nil {
-		return 0, nil, errDependency
-	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(io.LimitReader(response.Body, 65537))
-	if err != nil || len(body) > 65536 {
 		clear(body)
 		return 0, nil, errDependency
 	}
-	return response.StatusCode, body, nil
+	if len(body) > 65536 {
+		clear(body)
+		return 0, nil, errDependency
+	}
+	return status, body, nil
 }
 
 func (p *Provisioner) savedObjectKeys(ctx context.Context, target elasticsearchTarget) ([]byte, []byte, error) {

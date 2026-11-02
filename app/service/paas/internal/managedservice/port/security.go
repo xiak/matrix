@@ -27,6 +27,7 @@ const (
 	AuthorizeInstallationCreate        = iamv1.ActionManagedServiceInstallationCreate
 	AuthorizeInstallationRead          = iamv1.ActionManagedServiceInstallationRead
 	AuthorizeInstallationTerminate     = iamv1.ActionManagedServiceInstallationTerminate
+	AuthorizeInstallationUse           = iamv1.ActionManagedServiceInstallationUse
 	AuthorizeInstallationRoleBind      = iamv1.ActionManagedServiceInstallationRoleBind
 	AuthorizeInstallationRoleUnbind    = iamv1.ActionManagedServiceInstallationRoleUnbind
 )

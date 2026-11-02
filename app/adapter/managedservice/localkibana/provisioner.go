@@ -7,13 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strconv"
-	"time"
 
 	adapterv1 "github.com/xiak/matrix/api/adapter/managedservice/v1"
 	managedv1 "github.com/xiak/matrix/api/managedservice/v1"
@@ -32,15 +30,13 @@ type Config struct {
 	Root, ImageID, EndpointImageID          string
 	ElasticsearchRoot, ElasticsearchImageID string
 	Runtime                                 compose.Runtime
-	// HTTPClient is a trusted test seam for the native dependency API. It is
-	// never selected by the tenant request.
-	HTTPClient *http.Client
-	NewSecret  func() ([]byte, error)
+	NewSecret                               func() ([]byte, error)
 }
 
 type Provisioner struct {
 	config   Config
 	provider *localcontainer.Provisioner
+	http     compose.ContainerHTTP
 }
 
 func New(config Config) (*Provisioner, error) {
@@ -51,14 +47,14 @@ func New(config Config) (*Provisioner, error) {
 		filepath.Base(config.ElasticsearchRoot) != "managed-elasticsearch" || filepath.Dir(config.Root) != filepath.Dir(config.ElasticsearchRoot) {
 		return nil, errors.New("Kibana local dependency configuration is invalid")
 	}
-	if config.HTTPClient == nil {
-		config.HTTPClient = &http.Client{Timeout: 10 * time.Second, Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true},
-			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	containerHTTP, available := config.Runtime.(compose.ContainerHTTP)
+	if !available {
+		return nil, errors.New("Kibana container protocol capability is unavailable")
 	}
 	if protectedDirectory(filepath.Dir(config.Root)) != nil || protectedDirectory(config.ElasticsearchRoot) != nil {
 		return nil, errDependency
 	}
-	p := &Provisioner{config: config}
+	p := &Provisioner{config: config, http: containerHTTP}
 	provider, err := localcontainer.New(localcontainer.Config{
 		Root: config.Root, ImageID: config.ImageID, Runtime: config.Runtime,
 		ServiceName: "kibana", EndpointServiceName: "kibana-endpoint", DependencyServiceName: dependencyService,

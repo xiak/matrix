@@ -50,6 +50,8 @@ export type ManagedServiceCommandError =
   | "forbidden"
   | "notFound"
   | "conflict"
+  | "dependencyInUse"
+  | "dependencyUnavailable"
   | "invalid"
   | "storageUnavailable"
   | "unavailable"

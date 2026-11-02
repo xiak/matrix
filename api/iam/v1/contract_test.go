@@ -3774,7 +3774,7 @@ func TestManagedServiceRoleProfileOnlyAllowsDeclaredRoleActions(t *testing.T) {
 	_, revisionFourDigest, err := CanonicalizeAuthorizationProfile(archives[revisionFourIndex])
 	_, revisionFiveDigest, err := CanonicalizeAuthorizationProfile(archives[revisionFiveIndex])
 	_, revisionSixDigest, err := CanonicalizeAuthorizationProfile(archives[revisionSixIndex])
-	if !found || err != nil || current.Revision != 7 || revisionSixDigest != "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b" || currentDigest == originalDigest ||
+	if !found || err != nil || current.Revision != 8 || revisionSixDigest != "sha256:4e33e4a65c454d0e8fe62e0ac9fdb1c09ea5241d102a01790fdc6b9ed4376c4b" || currentDigest == originalDigest ||
 		currentDigest == revisionTwoDigest || currentDigest == revisionThreeDigest ||
 		currentDigest == revisionFourDigest || currentDigest == revisionFiveDigest || currentDigest == revisionSixDigest {
 		t.Fatal("missing explicit managedservice delegated-activation revision")
@@ -3981,13 +3981,56 @@ func TestInstanceListBatchContractIsExplicitBoundedAndResponseBound(t *testing.T
 	}
 }
 
+func TestManagedServiceDependencyUseRequiresExplicitCurrentPermission(t *testing.T) {
+	archives := HistoricalAuthorizationProfiles()
+	index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
+		return profile.Product == ProductManagedService && profile.Revision == 7
+	})
+	current, found := LookupAuthorizationProfile(ProductManagedService)
+	if index < 0 || !found || current.Revision != 8 {
+		t.Fatal("missing retained or current managedservice Profile")
+	}
+	read := PolicyDocument{LanguageVersion: PolicyLanguageVersion, Scope: AuthorityScopeTenant, Statements: []PolicyStatement{{
+		SID: "read-only", Effect: PolicyAllow, Actions: []Action{ActionManagedServiceInstallationRead},
+		Resources: []PolicyResourceSelector{{Kind: ResourceServiceInstallation, Match: PolicyResourceExact, ID: "search-one"}},
+	}}}
+	compilation, err := CompilePolicyDocument(read, []AuthorizationProfile{archives[index]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, digest, err := CanonicalizePolicyCompilation(read, compilation, []AuthorizationProfile{archives[index]})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := NewAuthorizationRequest(ActionManagedServiceInstallationUse,
+		ResourceReference{Kind: ResourceServiceInstallation, ID: "search-one"}, AuthorizationResourceInstance, "", "request-use", "correlation-use")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckPolicyCompilationRequest(read, compilation, digest, []AuthorizationProfile{archives[index]}, current, request, SubjectUser); err != nil {
+		t.Fatal("nonparticipating retained read policy failed integrity checks", err)
+	}
+	for _, statement := range compilation.ResolvedStatements {
+		if slices.Contains(statement.Actions, ActionManagedServiceInstallationUse) {
+			t.Fatal("a retained read policy acquired dependency use")
+		}
+	}
+	read.Statements[0].Actions = []Action{ActionManagedServiceInstallationUse}
+	if _, err := CompilePolicyDocument(read, []AuthorizationProfile{archives[index]}); err == nil {
+		t.Fatal("old Profile gained the new action")
+	}
+	if _, err := CompilePolicyDocument(read, []AuthorizationProfile{current}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInstanceListBatchTransportDoesNotGrowFrozenPolicyAuthority(t *testing.T) {
 	archives := HistoricalAuthorizationProfiles()
 	index := slices.IndexFunc(archives, func(profile AuthorizationProfile) bool {
 		return profile.Product == ProductManagedService && profile.Revision == 3
 	})
 	current, found := LookupAuthorizationProfile(ProductManagedService)
-	if index < 0 || !found || current.Revision != 7 {
+	if index < 0 || !found || current.Revision != 8 {
 		t.Fatal("managedservice profile transition is missing")
 	}
 	frozen := archives[index]

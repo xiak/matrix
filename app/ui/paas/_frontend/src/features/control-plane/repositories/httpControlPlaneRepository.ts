@@ -1,4 +1,5 @@
 import { requestJSON, requestJSONResponse } from "@/infrastructure/http/jsonRequest";
+import { validElasticsearchReference } from "../domain/managedServiceProduct";
 import {
   validApplicationCursor,
   validApplicationId,
@@ -525,6 +526,10 @@ function installationOperationMatchesResourcePhase(
 
 function parseInstallation(value: unknown): ServiceInstallation {
   const wire = record(value, "service installation");
+  const installationId = text(wire.id, "installation id");
+  if (wire.offeringId === "kibana-8.19"
+    ? !validElasticsearchReference(wire.elasticsearch, installationId)
+    : wire.elasticsearch !== undefined) throw new Error("INVALID_INSTALLATION_DEPENDENCY_RESPONSE");
   const operation = record(wire.operation, "installation operation");
   const phase = String(wire.phase);
   const operationKind = String(operation.kind);
@@ -544,12 +549,13 @@ function parseInstallation(value: unknown): ServiceInstallation {
     throw new Error("INVALID_INSTALLATION_RESPONSE");
   }
   return {
-    id: text(wire.id, "installation id"),
+    id: installationId,
     name: text(wire.name, "installation name"),
     offeringId: text(wire.offeringId, "installation offering"),
     engineVersion: text(wire.engineVersion, "installation engine version"),
     quotaEntitlementId: text(wire.quotaEntitlementId, "installation entitlement"),
     regionId: text(wire.regionId, "installation region"),
+    ...(validElasticsearchReference(wire.elasticsearch, installationId) ? { elasticsearch: { ...wire.elasticsearch } } : {}),
     phase: phase as ServiceInstallation["phase"],
     endpoint: nullableText(wire.endpoint, "installation endpoint"),
     credentialReference: nullableText(wire.credentialReference, "installation credential reference"),
@@ -827,6 +833,9 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
 
   async createInstallation(credential, command: CreateInstallationCommand, requestId) {
     if (!publicIdentifierPattern.test(requestId)) throw new Error("INVALID_INSTALLATION_CREATION_REQUEST");
+    if (command.offeringId === "kibana-8.19"
+      ? !validElasticsearchReference(command.elasticsearch, command.id)
+      : command.elasticsearch !== undefined) throw new Error("INVALID_INSTALLATION_DEPENDENCY_REQUEST");
     const value = await requestJSON<unknown>("/api/managed-services/v1/service-installations", {
       method: "POST",
       headers: {
@@ -836,7 +845,13 @@ export const httpControlPlaneRepository: ControlPlaneRepository = {
       },
       body: JSON.stringify(command)
     });
-    return parseInstallation(value);
+    const installation = parseInstallation(value);
+    if (installation.id !== command.id || installation.offeringId !== command.offeringId ||
+      installation.elasticsearch?.installationId !== command.elasticsearch?.installationId ||
+      installation.elasticsearch?.resourceVersion !== command.elasticsearch?.resourceVersion) {
+      throw new Error("INVALID_INSTALLATION_CREATION_RESPONSE");
+    }
+    return installation;
   },
 
   async terminateInstallation(credential, installationId, requestId) {

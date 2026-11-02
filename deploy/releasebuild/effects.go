@@ -298,7 +298,7 @@ func allowedImageReference(value string) bool {
 	return value == APISIXBasePinnedReference || value == AlpineBasePinnedReference ||
 		value == DockerBasePinnedReference || value == PostgresPinnedReference ||
 		value == MySQLPinnedReference || value == ElasticsearchPinnedReference ||
-		value == RabbitMQPinnedReference || value == LogstashPinnedReference || value == RunnerToolchainReference ||
+		value == RabbitMQPinnedReference || value == LogstashPinnedReference || value == KibanaPinnedReference || value == RunnerToolchainReference ||
 		buildTagPattern.MatchString(value)
 }
 

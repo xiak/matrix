@@ -159,6 +159,7 @@ export type QuotaOrderOptionScene = {
 export type InstallationOrderOptionScene = {
   entitlementId: string;
   offeringId: string;
+  engineVersion: string;
   label: string;
   available: number;
 };
@@ -219,6 +220,7 @@ export type ConsoleWorkspaceScene =
       kind: "installation-order";
       entitlementOptions: InstallationOrderOptionScene[];
       regionOptions: Array<{ id: string; label: string }>;
+      elasticsearchOptions: Array<{ id: string; label: string; resourceVersion: number; engineVersion: string; regionId: string }>;
     }
   | {
       kind: "platform-status";

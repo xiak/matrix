@@ -13,6 +13,19 @@ const MySQLOfferingID = managedservicev1.MySQLOfferingID
 const ElasticsearchOfferingID = managedservicev1.ElasticsearchOfferingID
 const RabbitMQOfferingID = managedservicev1.RabbitMQOfferingID
 const LogstashOfferingID = managedservicev1.LogstashOfferingID
+const KibanaOfferingID = managedservicev1.KibanaOfferingID
+
+// ElasticsearchMatches checks the immutable product dependency selection.
+// Account ownership, current use permission and concurrent deletion are
+// enforced by the use case and its transactional persistence boundary.
+func ElasticsearchMatches(reference managedservicev1.ElasticsearchReference,
+	installation managedservicev1.ServiceInstallation, engineVersion, regionID string,
+) bool {
+	return managedservicev1.ValidateServiceInstallation(installation) == nil &&
+		installation.ID == reference.InstallationID && installation.ResourceVersion == reference.ResourceVersion &&
+		installation.OfferingID == ElasticsearchOfferingID && installation.Phase == managedservicev1.InstallationReady &&
+		installation.EngineVersion == engineVersion && installation.RegionID == regionID
+}
 
 type Catalog struct {
 	definitions []managedservicev1.ServiceDefinition
@@ -26,6 +39,7 @@ func DefaultCatalog() Catalog {
 		newDefinition(managedservicev1.ElasticsearchServiceID, "Elasticsearch", "由 Matrix 管理的搜索与分析服务。"),
 		newDefinition(managedservicev1.RabbitMQServiceID, "RabbitMQ", "由 Matrix 管理的消息队列服务。"),
 		newDefinition(managedservicev1.LogstashServiceID, "Logstash", "由 Matrix 管理的日志接收与处理服务。"),
+		newDefinition(managedservicev1.KibanaServiceID, "Kibana", "连接本账号 Elasticsearch 的可视化分析服务。"),
 	}
 	references := make(map[string]managedservicev1.ServiceDefinitionReference, len(definitions))
 	for _, definition := range definitions {
@@ -74,6 +88,15 @@ func DefaultCatalog() Catalog {
 			QuotaShapes: []managedservicev1.QuotaShape{
 				{ID: "logstash-small", DisplayName: "开发型", CPUMillicores: 1000, MemoryMiB: 1536, StorageGiB: 10},
 				{ID: "logstash-medium", DisplayName: "标准型", CPUMillicores: 2000, MemoryMiB: 3072, StorageGiB: 20},
+			},
+		},
+		{
+			ID: KibanaOfferingID, Service: references[managedservicev1.KibanaServiceID],
+			DisplayName: "Kibana 8.19", Description: "选择同区域已就绪的 Elasticsearch，查看数据并保存分析视图。",
+			EngineFamily: "kibana", EngineVersion: "8.19.23", State: managedservicev1.OfferingAvailable,
+			QuotaShapes: []managedservicev1.QuotaShape{
+				{ID: "kibana-small", DisplayName: "开发型", CPUMillicores: 1000, MemoryMiB: 1536, StorageGiB: 10},
+				{ID: "kibana-medium", DisplayName: "标准型", CPUMillicores: 2000, MemoryMiB: 3072, StorageGiB: 20},
 			},
 		},
 		{

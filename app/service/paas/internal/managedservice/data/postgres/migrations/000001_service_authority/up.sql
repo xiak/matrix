@@ -182,12 +182,6 @@ CREATE TABLE IF NOT EXISTS managedservice.service_installations (
             'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED', 'TERMINATED'
         )
     ),
-    CONSTRAINT service_installations_result_valid CHECK (
-        (phase IN ('READY', 'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED')
-            AND endpoint IS NOT NULL AND credential_reference IS NOT NULL)
-        OR (phase NOT IN ('READY', 'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED')
-            AND endpoint IS NULL AND credential_reference IS NULL)
-    ),
     CONSTRAINT service_installations_version_valid CHECK (
         resource_version BETWEEN 1 AND 9007199254740991
     ),
@@ -217,6 +211,76 @@ ALTER TABLE managedservice.service_installations
         AND quota_entitlement_id COLLATE "C" ~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$'
         AND region_id = 'local-primary'
     );
+
+-- A dependency is immutable history, not a caller-supplied endpoint or secret.
+ALTER TABLE managedservice.service_installations
+    ADD COLUMN IF NOT EXISTS elasticsearch_installation_id text COLLATE "C",
+    ADD COLUMN IF NOT EXISTS elasticsearch_resource_version bigint;
+ALTER TABLE managedservice.service_installations
+    DROP CONSTRAINT IF EXISTS service_installations_elasticsearch_valid,
+    DROP CONSTRAINT IF EXISTS service_installations_elasticsearch_fk;
+ALTER TABLE managedservice.service_installations
+    ADD CONSTRAINT service_installations_elasticsearch_valid CHECK (
+        (offering_id = 'kibana-8.19'
+         AND elasticsearch_installation_id IS NOT NULL
+         AND elasticsearch_resource_version IS NOT NULL
+         AND elasticsearch_installation_id <> id
+         AND elasticsearch_installation_id COLLATE "C" ~ '^[a-z0-9][a-z0-9._-]{0,61}[a-z0-9]$'
+         AND elasticsearch_resource_version BETWEEN 1 AND 9007199254740991)
+        OR (offering_id <> 'kibana-8.19'
+            AND elasticsearch_installation_id IS NULL AND elasticsearch_resource_version IS NULL)
+    ),
+    ADD CONSTRAINT service_installations_elasticsearch_fk
+        FOREIGN KEY (tenant_id, elasticsearch_installation_id)
+        REFERENCES managedservice.service_installations (tenant_id, id);
+CREATE INDEX IF NOT EXISTS service_installations_active_elasticsearch_idx
+    ON managedservice.service_installations (tenant_id, elasticsearch_installation_id)
+    WHERE elasticsearch_installation_id IS NOT NULL AND phase NOT IN ('FAILED', 'TERMINATED');
+
+-- Both reservation and termination lock the dependency row. The API role
+-- keeps INSERT/SELECT only; this function cannot grant it arbitrary UPDATE.
+CREATE OR REPLACE FUNCTION managedservice.protect_elasticsearch_dependency()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = pg_catalog, pg_temp
+AS $function$
+DECLARE
+    dependency managedservice.service_installations%ROWTYPE;
+BEGIN
+    IF TG_OP = 'UPDATE' THEN
+        IF (NEW.elasticsearch_installation_id, NEW.elasticsearch_resource_version)
+            IS DISTINCT FROM (OLD.elasticsearch_installation_id, OLD.elasticsearch_resource_version) THEN
+            RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service dependency is immutable';
+        END IF;
+        RETURN NEW;
+    END IF;
+    IF NEW.offering_id <> 'kibana-8.19' THEN
+        RETURN NEW;
+    END IF;
+    IF NEW.tenant_id IS DISTINCT FROM managedservice.current_tenant_id() THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX424', MESSAGE = 'managed-service dependency is unavailable';
+    END IF;
+    SELECT * INTO dependency
+      FROM managedservice.service_installations
+     WHERE tenant_id = NEW.tenant_id AND id = NEW.elasticsearch_installation_id
+     FOR UPDATE;
+    IF NOT FOUND OR dependency.offering_id <> 'elasticsearch-8.19'
+       OR dependency.phase <> 'READY'
+       OR dependency.resource_version IS DISTINCT FROM NEW.elasticsearch_resource_version
+       OR dependency.engine_version <> NEW.engine_version
+       OR dependency.region_id <> NEW.region_id THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX424', MESSAGE = 'managed-service dependency is unavailable';
+    END IF;
+    RETURN NEW;
+END
+$function$;
+REVOKE ALL ON FUNCTION managedservice.protect_elasticsearch_dependency() FROM PUBLIC;
+DROP TRIGGER IF EXISTS protect_elasticsearch_dependency ON managedservice.service_installations;
+CREATE TRIGGER protect_elasticsearch_dependency
+    BEFORE INSERT OR UPDATE OF elasticsearch_installation_id, elasticsearch_resource_version
+    ON managedservice.service_installations
+    FOR EACH ROW EXECUTE FUNCTION managedservice.protect_elasticsearch_dependency();
 
 CREATE TABLE IF NOT EXISTS managedservice.operations (
     tenant_id text COLLATE "C" NOT NULL,
@@ -325,12 +389,15 @@ ALTER TABLE managedservice.service_installations
             'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED', 'TERMINATED'
         )
     );
+-- Failed provisioning can retain resources without ever acquiring an endpoint.
+-- Its termination retries preserve either both ready references or neither.
 ALTER TABLE managedservice.service_installations
     DROP CONSTRAINT IF EXISTS service_installations_result_valid;
 ALTER TABLE managedservice.service_installations
     ADD CONSTRAINT service_installations_result_valid CHECK (
-        (phase IN ('READY', 'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED')
-            AND endpoint IS NOT NULL AND credential_reference IS NOT NULL)
+        (phase = 'READY' AND endpoint IS NOT NULL AND credential_reference IS NOT NULL)
+        OR (phase IN ('TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED')
+            AND ((endpoint IS NULL) = (credential_reference IS NULL)))
         OR (phase NOT IN ('READY', 'TERMINATION_PENDING', 'TERMINATING', 'TERMINATION_FAILED')
             AND endpoint IS NULL AND credential_reference IS NULL)
     );
@@ -353,6 +420,7 @@ AS $function$
 DECLARE
     effective_tenant_id text;
     current_phase text;
+    current_release text;
     release_kind text;
 BEGIN
     effective_tenant_id := managedservice.current_tenant_id();
@@ -374,22 +442,33 @@ BEGIN
        OR requested_request_id COLLATE "C" !~ '^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$' THEN
         RAISE EXCEPTION USING ERRCODE = '22023', MESSAGE = 'managed-service termination request is invalid';
     END IF;
-    SELECT phase
-      INTO current_phase
-      FROM managedservice.service_installations
-     WHERE tenant_id = effective_tenant_id
-       AND id = requested_installation_id
-     FOR UPDATE;
+    SELECT installation.phase, operation.quota_release
+      INTO current_phase, current_release
+      FROM managedservice.service_installations AS installation
+      JOIN managedservice.operations AS operation
+        ON operation.tenant_id = installation.tenant_id AND operation.id = installation.current_operation_id
+     WHERE installation.tenant_id = effective_tenant_id
+       AND installation.id = requested_installation_id
+     FOR UPDATE OF installation, operation;
     IF current_phase IS NULL THEN
         RAISE EXCEPTION USING ERRCODE = 'MX404', MESSAGE = 'managed-service installation is absent';
     END IF;
     release_kind := CASE
-        WHEN current_phase IN ('READY', 'TERMINATION_FAILED') THEN 'CONSUMED'
+        WHEN current_phase = 'READY' THEN 'CONSUMED'
+        WHEN current_phase = 'TERMINATION_FAILED' THEN current_release
         WHEN current_phase = 'ROLLBACK_FAILED' THEN 'RESERVED'
         ELSE NULL
     END;
-    IF release_kind IS NULL THEN
+    IF release_kind IS NULL OR release_kind NOT IN ('CONSUMED', 'RESERVED') THEN
         RAISE EXCEPTION USING ERRCODE = 'MX409', MESSAGE = 'managed-service installation cannot terminate from its current state';
+    END IF;
+    IF EXISTS (
+        SELECT 1 FROM managedservice.service_installations
+         WHERE tenant_id = effective_tenant_id
+           AND elasticsearch_installation_id = requested_installation_id
+           AND phase NOT IN ('FAILED', 'TERMINATED')
+    ) THEN
+        RAISE EXCEPTION USING ERRCODE = 'MX423', MESSAGE = 'managed-service dependency is in use';
     END IF;
     INSERT INTO managedservice.operations (
         tenant_id, id, installation_id, kind, quota_release,
@@ -1056,7 +1135,9 @@ RETURNS TABLE (
     attempt integer,
     created_at timestamptz,
     installation_resource_version bigint,
-    observed_at timestamptz
+    observed_at timestamptz,
+    elasticsearch_installation_id text,
+    elasticsearch_resource_version bigint
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -1127,7 +1208,9 @@ BEGIN
            claimed.attempts,
            marked.created_at,
            marked.resource_version,
-           claimed.observed_at
+           claimed.observed_at,
+           marked.elasticsearch_installation_id,
+           marked.elasticsearch_resource_version
       FROM claimed
       JOIN marked ON marked.tenant_id = claimed.tenant_id
                  AND marked.id = claimed.installation_id

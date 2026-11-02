@@ -122,6 +122,7 @@ func buildDocument() object {
 				string(managedservicev1.ErrorNotFound), string(managedservicev1.ErrorAlreadyExists),
 				string(managedservicev1.ErrorIdempotencyConflict), string(managedservicev1.ErrorQuotaExhausted),
 				string(managedservicev1.ErrorRegionUnavailable), string(managedservicev1.ErrorInternal),
+				string(managedservicev1.ErrorDependencyUnavailable), string(managedservicev1.ErrorDependencyInUse),
 				string(managedservicev1.ErrorServiceRoleConflict),
 				string(managedservicev1.ErrorResourceStateConflict),
 			},
@@ -290,6 +291,7 @@ func structs() map[string]reflect.Type {
 		"ActivateQuotaRequest":         openapi31.StructType[managedservicev1.ActivateQuotaRequest](),
 		"ActivateServiceRequest":       openapi31.StructType[managedservicev1.ActivateServiceRequest](),
 		"CreateInstallationRequest":    openapi31.StructType[managedservicev1.CreateInstallationRequest](),
+		"ElasticsearchReference":       openapi31.StructType[managedservicev1.ElasticsearchReference](),
 		"ServiceRoleTemplateReference": openapi31.StructType[iamv1.ServiceRoleTemplateReference](),
 		"BindServiceRoleRequest":       openapi31.StructType[managedservicev1.BindServiceRoleRequest](),
 		"ServiceRoleBindingReceipt":    openapi31.StructType[managedservicev1.ServiceRoleBindingReceipt](),
@@ -301,6 +303,9 @@ func structs() map[string]reflect.Type {
 }
 
 func fieldOverlay(owner string, field reflect.StructField, jsonName string, base object) object {
+	if owner == "ElasticsearchReference" && field.Name == "InstallationID" {
+		return openapi31.Ref("Name")
+	}
 	if (owner == "CreateInstallationRequest" || owner == "ServiceInstallation") && field.Name == "ID" {
 		return openapi31.Ref("Name")
 	}
@@ -329,6 +334,12 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func schemaOverlay(schemas object) {
+	for _, name := range []string{"CreateInstallationRequest", "ServiceInstallation"} {
+		schema := schemas[name].(object)
+		schema["if"] = object{"properties": object{"offeringId": object{"const": managedservicev1.KibanaOfferingID}}}
+		schema["then"] = object{"required": []string{"elasticsearch"}}
+		schema["else"] = object{"properties": object{"elasticsearch": false}}
+	}
 	for name, kind := range map[string]string{
 		"ServiceDefinitionList": "ServiceDefinitionList", "ServiceActivationList": "ServiceActivationList",
 		"ServiceOfferingList": "ServiceOfferingList", "RegionList": "RegionList",

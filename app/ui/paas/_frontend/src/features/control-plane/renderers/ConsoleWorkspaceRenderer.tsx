@@ -12,6 +12,7 @@ import {
 import { Alert, FormField, Badge, Button, Input, Select, Typography } from "@ui/xiak";
 import { useControlPlane } from "../application/ControlPlaneProvider";
 import type { ConsoleWorkspaceScene } from "../scenes/consoleScene";
+import type { ElasticsearchReference } from "../domain/resources";
 import styles from "./ConsoleWorkspaceRenderer.module.css";
 import { useTranslations } from "next-intl";
 import { useConsoleFormat } from "./useConsoleFormat";
@@ -128,9 +129,16 @@ function InstallationOrder({
   const [regionId, setRegionId] = useState(scene.regionOptions[0]?.id ?? "");
   const [name, setName] = useState("service-primary");
   const [id, setId] = useState("service-primary");
+  const [elasticsearch, setElasticsearch] = useState<ElasticsearchReference | null>(null);
   const [accepted, setAccepted] = useState(false);
   const selectedEntitlement = scene.entitlementOptions.find((item) => item.entitlementId === entitlementId);
-  const canSubmit = Boolean(selectedEntitlement && scene.regionOptions.some((region) => region.id === regionId) && installationIDPattern.test(id) && name.trim());
+  const requiresElasticsearch = selectedEntitlement?.offeringId === "kibana-8.19";
+  const eligibleDependencies = scene.elasticsearchOptions.filter((item) =>
+    item.regionId === regionId && item.engineVersion === selectedEntitlement?.engineVersion && item.id !== id);
+  const selectedDependency = eligibleDependencies.find((item) =>
+    item.id === elasticsearch?.installationId && item.resourceVersion === elasticsearch.resourceVersion);
+  const canSubmit = Boolean(selectedEntitlement && scene.regionOptions.some((region) => region.id === regionId) &&
+    installationIDPattern.test(id) && name.trim() && (!requiresElasticsearch || selectedDependency));
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -141,7 +149,10 @@ function InstallationOrder({
       name: name.trim(),
       offeringId: selectedEntitlement.offeringId,
       quotaEntitlementId: entitlementId,
-      regionId
+      regionId,
+      ...(requiresElasticsearch && selectedDependency ? {
+        elasticsearch: { installationId: selectedDependency.id, resourceVersion: selectedDependency.resourceVersion }
+      } : {})
     });
     setAccepted(success);
   }
@@ -179,19 +190,34 @@ function InstallationOrder({
             <Input onChange={(event) => { setName(event.target.value); setAccepted(false); }} required value={name} />
           </FormField>
           <FormField label={t("quota")}>
-            <Select onValueChange={(next) => { setEntitlementId(next); setAccepted(false); }} value={entitlementId}
+            <Select onValueChange={(next) => { setEntitlementId(next); setElasticsearch(null); setAccepted(false); }} value={entitlementId}
               options={scene.entitlementOptions.map((item) => ({ value: item.entitlementId, label: `${item.label} · ${t("available", { count: item.available })}` }))} />
           </FormField>
           <FormField label={t("installRegion")}>
-            <Select onValueChange={(next) => { setRegionId(next); setAccepted(false); }} value={regionId}
+            <Select onValueChange={(next) => { setRegionId(next); setElasticsearch(null); setAccepted(false); }} value={regionId}
               options={scene.regionOptions.map((item) => ({ value: item.id, label: item.label }))} />
           </FormField>
+          {requiresElasticsearch ? <>
+            <FormField label={t("elasticsearch")} hint={t("elasticsearchHint")}>
+              <Select aria-label={t("elasticsearch")} value={selectedDependency ? `${selectedDependency.id}@${selectedDependency.resourceVersion}` : ""}
+                placeholder={t("selectElasticsearch")}
+                onValueChange={(next) => {
+                  const dependency = eligibleDependencies.find((item) => `${item.id}@${item.resourceVersion}` === next);
+                  setElasticsearch(dependency ? { installationId: dependency.id, resourceVersion: dependency.resourceVersion } : null);
+                  setAccepted(false);
+                }}
+                options={eligibleDependencies.map((item) => ({ value: `${item.id}@${item.resourceVersion}`, label: `${item.label} · ${item.id}` }))} />
+            </FormField>
+            {elasticsearch && !selectedDependency ? <Alert status="warning">{t("elasticsearchChanged")}</Alert> : null}
+            {eligibleDependencies.length === 0 ? <Alert status="warning">{t("elasticsearchEmpty")}</Alert> : null}
+            <Button disabled={controlPlane.loading} onClick={() => void controlPlane.reload()} type="button" variant="secondary">{t("reloadElasticsearch")}</Button>
+          </> : null}
           <div className={styles.resourceSummary}>
             <MapPin aria-hidden="true" />
             <div><strong>{t("localInstall")}</strong><span>{t("serverPolicy")}</span></div>
           </div>
           {accepted ? <Alert status="success">{t("installAccepted")}</Alert> : null}
-          <Button block disabled={!canSubmit || controlPlane.mutation === "installation" || controlPlane.managedServiceCommand?.phase === "unknown" || controlPlane.managedServiceCommand?.checking} size="large" type="submit">
+          <Button block disabled={!canSubmit || controlPlane.loading || controlPlane.mutation === "installation" || controlPlane.managedServiceCommand?.phase === "unknown" || controlPlane.managedServiceCommand?.checking} size="large" type="submit">
             <ServerCog aria-hidden="true" />
             {controlPlane.mutation === "installation" ? t("submitting") : t("install")}
           </Button>

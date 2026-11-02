@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,7 +18,7 @@ import (
 func TestCurrentDatabaseProfile(t *testing.T) {
 	want := DatabaseProfile{
 		Compatibility:    "identical-authority-profile",
-		Authorities:      AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8},
+		Authorities:      AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 9},
 		ContractRevision: 41,
 	}
 	if got := CurrentDatabaseProfile(); got != want {
@@ -396,19 +397,19 @@ func validManifest() Manifest {
 	products := []Product{ApplicationPaaSProduct("v0.1.0")}
 	required := RequiredImages(products)
 	images := make([]Image, 0, len(required))
-	fileDigests := "23456789abcd"
-	imageDigests := "89abcdef0123"
-	sourceDigests := "ef0123456789"
+	fixtureDigest := func(kind, component string) string {
+		return fmt.Sprintf("sha256:%x", sha256.Sum256([]byte(kind+":"+component)))
+	}
 	for index, requirement := range required {
 		archive := "images/" + requirement.Component + ".tar"
-		sourceDigest := digest(sourceDigests[index])
+		sourceDigest := fixtureDigest("source", requirement.Component)
 		files = append(files, File{
 			Path: archive, MediaType: mediaDockerArchive,
-			Size: 1024 + uint64(index), SHA256: digest(fileDigests[index]),
+			Size: 1024 + uint64(index), SHA256: fixtureDigest("archive", requirement.Component),
 		})
 		images = append(images, Image{
 			Component: requirement.Component, Purpose: requirement.Purpose, ArchivePath: archive,
-			ImageID: digest(imageDigests[index]), SourceDigest: sourceDigest,
+			ImageID: fixtureDigest("image", requirement.Component), SourceDigest: sourceDigest,
 			LocalReference: LocalImageReference(requirement.Component, sourceDigest),
 			OS:             "linux", Architecture: "amd64", HealthContract: requirement.HealthContract,
 		})
@@ -504,47 +505,62 @@ func digest(value byte) string {
 	return "sha256:" + strings.Repeat(string(value), 64)
 }
 
-func TestInstalledFourProductManifestRetainsSignatureAndCannotOmitNewArtifactsFromCandidates(t *testing.T) {
-	previous := validManifest()
-	previous.Products[0].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
-	previous.Images = slices.DeleteFunc(previous.Images, func(image Image) bool { return image.Component == "logstash" })
-	previous.Files = slices.DeleteFunc(previous.Files, func(file File) bool { return file.Path == "images/logstash.tar" })
-	previous.TopologyDigest = "sha256:1744ab1eed4536c0aaa99a8e8b2b0bb6328b67139bafcf431996f4800883575f"
-	if ValidateManifest(previous) == nil {
-		t.Fatal("new release omitted the required Logstash image")
-	}
-	if err := ValidateInstalledManifest(previous); err != nil {
-		t.Fatal(err)
-	}
-	content, err := json.Marshal(previous)
-	if err != nil {
-		t.Fatal(err)
-	}
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	trust, err := NewTrustRoot(previous.Signer.KeyID, publicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	trustBytes, err := EncodeTrustRoot(trust)
-	if err != nil {
-		t.Fatal(err)
-	}
-	signature := ed25519.Sign(privateKey, content)
-	if _, err := VerifyInstalled(content, signature, trustBytes); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := Verify(content, signature, trustBytes); err == nil {
-		t.Fatal("installed predecessor became a new candidate")
-	}
-	signature[0] ^= 1
-	if _, err := VerifyInstalled(content, signature, trustBytes); err == nil {
-		t.Fatal("installed predecessor bypassed signature verification")
-	}
-	previous.Products[0].RequiredComponents = ApplicationPaaSProduct(previous.Products[0].Version).RequiredComponents
-	if ValidateInstalledManifest(previous) == nil {
-		t.Fatal("current product declaration with missing image accepted")
+func TestInstalledProductManifestsRetainSignaturesAndCannotOmitCandidateArtifacts(t *testing.T) {
+	for _, count := range []int{4, 5} {
+		t.Run(fmt.Sprintf("%d-products", count), func(t *testing.T) {
+			previous := validManifest()
+			previous.Database = DatabaseProfile{Compatibility: "identical-authority-profile", Authorities: AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8}, ContractRevision: 40}
+			previous.Products[0].RequiredComponents = []string{"elasticsearch", "mysql", "paas", "rabbitmq"}
+			if count == 5 {
+				previous.Products[0].RequiredComponents = []string{"elasticsearch", "logstash", "mysql", "paas", "rabbitmq"}
+			}
+			previous.Images = slices.DeleteFunc(previous.Images, func(image Image) bool {
+				return image.Component == "kibana" || count == 4 && image.Component == "logstash"
+			})
+			previous.Files = slices.DeleteFunc(previous.Files, func(file File) bool {
+				return file.Path == "images/kibana.tar" || count == 4 && file.Path == "images/logstash.tar"
+			})
+			previous.TopologyDigest = "sha256:1744ab1eed4536c0aaa99a8e8b2b0bb6328b67139bafcf431996f4800883575f"
+			if count == 5 {
+				previous.TopologyDigest = "sha256:14d8147b81e9a642c798a6a043c56265d770c0b433e9146729a022291aaaf52d"
+			}
+			if ValidateManifest(previous) == nil {
+				t.Fatal("new release omitted required product images")
+			}
+			if err := ValidateInstalledManifest(previous); err != nil {
+				t.Fatal(err)
+			}
+			content, err := json.Marshal(previous)
+			if err != nil {
+				t.Fatal(err)
+			}
+			publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			trust, err := NewTrustRoot(previous.Signer.KeyID, publicKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			trustBytes, err := EncodeTrustRoot(trust)
+			if err != nil {
+				t.Fatal(err)
+			}
+			signature := ed25519.Sign(privateKey, content)
+			if _, err := VerifyInstalled(content, signature, trustBytes); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := Verify(content, signature, trustBytes); err == nil {
+				t.Fatal("installed predecessor became a new candidate")
+			}
+			signature[0] ^= 1
+			if _, err := VerifyInstalled(content, signature, trustBytes); err == nil {
+				t.Fatal("installed predecessor bypassed signature verification")
+			}
+			previous.Products[0].RequiredComponents = ApplicationPaaSProduct(previous.Products[0].Version).RequiredComponents
+			if ValidateInstalledManifest(previous) == nil {
+				t.Fatal("current product declaration with missing image accepted")
+			}
+		})
 	}
 }

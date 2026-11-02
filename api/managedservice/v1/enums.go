@@ -104,6 +104,8 @@ const (
 	ErrorServiceNotActivated       ErrorCode = "SERVICE_NOT_ACTIVATED"
 	ErrorQuotaExhausted            ErrorCode = "QUOTA_EXHAUSTED"
 	ErrorRegionUnavailable         ErrorCode = "REGION_UNAVAILABLE"
+	ErrorDependencyUnavailable     ErrorCode = "DEPENDENCY_UNAVAILABLE"
+	ErrorDependencyInUse           ErrorCode = "DEPENDENCY_IN_USE"
 	ErrorServiceRoleConflict       ErrorCode = "SERVICE_ROLE_CONFLICT"
 	ErrorResourceStateConflict     ErrorCode = "RESOURCE_STATE_CONFLICT"
 	ErrorInternal                  ErrorCode = "INTERNAL"

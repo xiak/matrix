@@ -29,6 +29,8 @@ var (
 	ErrQuotaExhausted            = errors.New("managed-service quota is exhausted")
 	ErrInvalidState              = errors.New("managed-service resource state conflicts")
 	ErrRegionUnavailable         = errors.New("managed-service region is unavailable")
+	ErrDependencyUnavailable     = errors.New("managed-service dependency is unavailable")
+	ErrDependencyInUse           = errors.New("managed-service dependency is in use")
 	ErrTransactionRetry          = errors.New("managed-service transaction must retry")
 	ErrRepositoryUnavailable     = errors.New("managed-service repository is unavailable")
 )
@@ -110,6 +112,7 @@ type InstallationDraft struct {
 	EngineVersion      string
 	QuotaEntitlementID string
 	RegionID           string
+	Elasticsearch      *managedservicev1.ElasticsearchReference
 	OperationID        string
 	IdempotencyKey     string
 	RequestDigest      string
@@ -144,6 +147,7 @@ type ActivateServiceCommand struct {
 
 type CreateInstallationCommand struct {
 	Authorization  port.Authorization
+	Credential     string
 	Request        managedservicev1.CreateInstallationRequest
 	IdempotencyKey string
 }
@@ -172,6 +176,7 @@ type UnbindServiceRoleCommand struct {
 }
 
 type Config struct {
+	Authorizer            port.Authorizer
 	Catalog               domain.Catalog
 	Region                managedservicev1.Region
 	WorkloadRoleAuthority port.WorkloadRoleAuthority
@@ -182,6 +187,7 @@ type Config struct {
 }
 
 type Service struct {
+	authorizer            port.Authorizer
 	repository            Repository
 	workloadRoleAuthority port.WorkloadRoleAuthority
 	workloadRoleRuntime   port.WorkloadRoleRuntime
@@ -213,6 +219,7 @@ func NewService(repository Repository, config Config) (*Service, error) {
 		config.NewOperationID = func() (string, error) { return newID("operation-") }
 	}
 	return &Service{
+		authorizer: config.Authorizer,
 		repository: repository, workloadRoleAuthority: config.WorkloadRoleAuthority,
 		workloadRoleRuntime: config.WorkloadRoleRuntime,
 		catalog:             config.Catalog, region: config.Region,
@@ -855,6 +862,9 @@ func (service *Service) CreateInstallation(
 			if existingDigest != digest {
 				return ErrIdempotencyConflict
 			}
+			if err := service.authorizeElasticsearch(ctx, transaction, command, existing.EngineVersion); err != nil {
+				return err
+			}
 			result, replayed = existing, true
 			return nil
 		}
@@ -870,11 +880,15 @@ func (service *Service) CreateInstallation(
 		if !found {
 			return ErrInvalidArgument
 		}
+		if err := service.authorizeElasticsearch(ctx, transaction, command, offering.EngineVersion); err != nil {
+			return err
+		}
 		created, createErr := transaction.ReserveInstallation(ctx, InstallationDraft{
 			ID: command.Request.ID, Name: command.Request.Name,
 			OfferingID: offering.ID, EngineVersion: offering.EngineVersion,
 			QuotaEntitlementID: entitlement.ID, RegionID: service.region.ID,
-			OperationID: operationID, IdempotencyKey: command.IdempotencyKey,
+			Elasticsearch: command.Request.Elasticsearch,
+			OperationID:   operationID, IdempotencyKey: command.IdempotencyKey,
 			RequestDigest: digest,
 			ActorType:     command.Authorization.Subject.Type,
 			ActorID:       command.Authorization.Subject.ID,
@@ -901,6 +915,48 @@ func (service *Service) CreateInstallation(
 		return managedservicev1.ServiceInstallation{}, false, ErrRepositoryUnavailable
 	}
 	return result, replayed, nil
+}
+
+func (service *Service) authorizeElasticsearch(ctx context.Context, transaction Transaction,
+	command CreateInstallationCommand, engineVersion string,
+) error {
+	if command.Request.Elasticsearch == nil {
+		return nil
+	}
+	if service.authorizer == nil {
+		return port.ErrAuthorizationUnavailable
+	}
+	dependency, err := transaction.GetServiceInstallation(ctx, command.Request.Elasticsearch.InstallationID)
+	if errors.Is(err, ErrNotFound) {
+		return ErrDependencyUnavailable
+	}
+	if err != nil {
+		return err
+	}
+	if !domain.ElasticsearchMatches(*command.Request.Elasticsearch, dependency, engineVersion, command.Request.RegionID) {
+		return ErrDependencyUnavailable
+	}
+	digest := sha256.Sum256([]byte(command.Authorization.RequestID + "\x00" + dependency.ID))
+	request := port.AuthorizationRequest{
+		Credential: command.Credential, Action: port.AuthorizeInstallationUse,
+		Resource:     port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: dependency.ID},
+		ResourceMode: iamv1.AuthorizationResourceInstance,
+		RequestID:    "dependency-use-" + hex.EncodeToString(digest[:]), CorrelationID: command.Authorization.RequestID,
+	}
+	if port.ValidateAuthorizationRequest(request) != nil {
+		return port.ErrUnauthenticated
+	}
+	authorizeContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	authorization, err := service.authorizer.Authorize(authorizeContext, request)
+	if err != nil {
+		return err
+	}
+	if port.ValidateAuthorizationForRequest(authorization, request) != nil ||
+		authorization.TenantID != command.Authorization.TenantID || !authorization.Subject.Equal(command.Authorization.Subject) {
+		return port.ErrAuthorizationUnavailable
+	}
+	return nil
 }
 
 func (service *Service) TerminateInstallation(

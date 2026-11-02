@@ -296,7 +296,8 @@ func kibanaFixture(t *testing.T) (Config, *fixtureRuntime, *fixtureNative, adapt
 	}
 	r := &fixtureRuntime{t: t, elasticsearchProject: esProject, elasticsearchLabels: labels, running: map[string]bool{}, requests: map[string]adapterv1.ProvisionRequest{}}
 	native := &fixtureNative{t: t, tokens: map[string]string{}}
-	config := Config{Root: filepath.Join(root, "managed-kibana"), ImageID: imageID, EndpointImageID: imageID, ElasticsearchRoot: esRoot, ElasticsearchImageID: imageID, Runtime: r, HTTPClient: &http.Client{Transport: native}}
+	r.native = native
+	config := Config{Root: filepath.Join(root, "managed-kibana"), ImageID: imageID, EndpointImageID: imageID, ElasticsearchRoot: esRoot, ElasticsearchImageID: imageID, Runtime: r}
 	return config, r, native, request
 }
 
@@ -310,10 +311,28 @@ type fixtureRuntime struct {
 	elasticsearchLabels    map[string]string
 	running                map[string]bool
 	requests               map[string]adapterv1.ProvisionRequest
+	native                 *fixtureNative
 	applies, stops, purges int
 }
 
 func (r *fixtureRuntime) Ready(context.Context) error { return nil }
+func (r *fixtureRuntime) RequestContainerHTTP(ctx context.Context, request compose.ContainerHTTPRequest) (int, []byte, error) {
+	if request.ContainerID != r.elasticsearchProject+"-elasticsearch" || request.Port != 9200 {
+		r.t.Fatal("native request escaped the exact observed dependency container")
+	}
+	httpRequest, err := http.NewRequestWithContext(ctx, request.Method, "http://127.0.0.1:9200"+request.Path, nil)
+	if err != nil {
+		return 0, nil, err
+	}
+	httpRequest.Header.Set("Authorization", request.Authorization)
+	response, err := r.native.RoundTrip(httpRequest)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	return response.StatusCode, body, err
+}
 func (r *fixtureRuntime) Apply(_ context.Context, project compose.RuntimeProject) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -377,7 +396,7 @@ func (f *fixtureNative) RoundTrip(request *http.Request) (*http.Response, error)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.t.Helper()
-	if request.URL.Host != "127.0.0.1:27123" {
+	if request.URL.Host != "127.0.0.1:9200" {
 		f.t.Fatal("dependency credential escaped its exact endpoint")
 	}
 	status := http.StatusOK

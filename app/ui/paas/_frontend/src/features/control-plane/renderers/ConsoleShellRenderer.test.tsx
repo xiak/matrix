@@ -231,6 +231,7 @@ async function renderConsole({
   getServiceActivation,
   activateService,
   activateQuota,
+  createInstallation,
   listCommandResults,
   logout = vi.fn().mockResolvedValue(undefined),
   accountRepository,
@@ -257,6 +258,7 @@ async function renderConsole({
   getServiceActivation?: ControlPlaneRepository["getServiceActivation"];
   activateService?: ControlPlaneRepository["activateService"];
   activateQuota?: ControlPlaneRepository["activateQuota"];
+  createInstallation?: ControlPlaneRepository["createInstallation"];
   listCommandResults?: ControlPlaneRepository["listCommandResults"];
   logout?: IamRepository["logout"];
   accountRepository?: AccountRepository;
@@ -279,7 +281,7 @@ async function renderConsole({
     }),
     terminateInstallation,
     activateQuota: activateQuota ?? vi.fn(),
-    createInstallation: vi.fn(),
+    createInstallation: createInstallation ?? vi.fn(),
     readApplication,
     listApplications,
     inspectServiceAuthorization,
@@ -2800,6 +2802,60 @@ describe("ConsoleShellRenderer", () => {
       expect(nativePattern.test(id)).toBe(false);
       expect(submit.disabled).toBe(true);
     }
+  });
+
+  it("requires explicit selection of a matching Elasticsearch and rejects a stale observation before Kibana submission", async () => {
+    const dependency: ServiceInstallation = {
+      id: "es-ready", name: "业务搜索", offeringId: "elasticsearch-8.19", engineVersion: "8.19.23",
+      regionId: "local-primary", quotaEntitlementId: "quota-es", phase: "READY", resourceVersion: 3,
+      endpoint: "http://127.0.0.1:29200", credentialReference: "credential-es", createdAt: "2026-11-02T00:00:00Z",
+      operation: { id: "operation-es", kind: "PROVISION", phase: "READY", safeFailureCode: null, observedAt: "2026-11-02T00:00:00Z" }
+    };
+    let current: ControlPlaneSnapshot = { ...snapshot,
+      offerings: [{ ...snapshot.offerings[0]!, id: "kibana-8.19", service: { ...snapshot.offerings[0]!.service, id: "kibana" },
+        displayName: "Kibana 8.19", engineFamily: "Kibana", engineVersion: "8.19.23" }],
+      entitlements: [{ ...snapshot.entitlements[0]!, offeringId: "kibana-8.19" }],
+      installations: [dependency,
+        { ...dependency, id: "es-wrong-region", name: "其他区域", regionId: "other-region" },
+        { ...dependency, id: "es-wrong-version", name: "其他版本", engineVersion: "8.19.22" },
+        { ...dependency, id: "es-not-ready", name: "尚未就绪", phase: "PENDING" },
+        { ...dependency, id: "mysql-not-es", name: "其他产品", offeringId: "mysql-8.4" }]
+    };
+    const createInstallation = vi.fn<ControlPlaneRepository["createInstallation"]>(async (_credential, command) => ({
+      ...dependency, ...command, engineVersion: "8.19.23", phase: "PENDING", endpoint: null, credentialReference: null,
+      operation: { ...dependency.operation, id: "operation-k", phase: "PENDING" }
+    }));
+    const { user } = await renderConsole({ section: "installations", openWorkspace: true,
+      load: vi.fn(async () => structuredClone(current)), createInstallation });
+    const submit = screen.getByRole("button", { name: "提交安装任务" }) as HTMLButtonElement;
+    expect(submit.disabled).toBe(true);
+    expect(screen.getByText(/仅有查看权限不足以安装/)).toBeTruthy();
+    await user.click(screen.getByRole("combobox", { name: "Elasticsearch 实例" }));
+    expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(1);
+    await user.click(screen.getByRole("option", { name: "业务搜索 · es-ready" }));
+    expect(submit.disabled).toBe(false);
+    current = { ...current, installations: current.installations.map((item) => item.id === dependency.id ? { ...item, resourceVersion: 4 } : item) };
+    await user.click(screen.getByRole("button", { name: "刷新可用实例" }));
+    expect(await screen.findByText("所选实例已变化或不再匹配，请刷新列表并重新选择。")).toBeTruthy();
+    expect(submit.disabled).toBe(true);
+    await user.click(submit);
+    expect(createInstallation).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("combobox", { name: "Elasticsearch 实例" }));
+    await user.click(screen.getByRole("option", { name: "业务搜索 · es-ready" }));
+    await user.click(submit);
+    await waitFor(() => expect(createInstallation).toHaveBeenCalledWith("renderer-test-memory-only-session", {
+      id: "service-primary", name: "service-primary", offeringId: "kibana-8.19", quotaEntitlementId: "quota-primary",
+      regionId: "local-primary", elasticsearch: { installationId: "es-ready", resourceVersion: 4 }
+    }, expect.stringMatching(/^ui-install-/)));
+  });
+
+  it("explains how to obtain an eligible Elasticsearch when the Kibana dependency list is empty", async () => {
+    await renderConsole({ section: "installations", openWorkspace: true, load: vi.fn().mockResolvedValue({ ...snapshot,
+      offerings: [{ ...snapshot.offerings[0]!, id: "kibana-8.19", engineVersion: "8.19.23" }],
+      entitlements: [{ ...snapshot.entitlements[0]!, offeringId: "kibana-8.19" }]
+    }) });
+    expect(screen.getByText("没有匹配的 Elasticsearch。请先安装同版本、同区域的实例，确认拥有查看和使用权限，再刷新列表。")).toBeTruthy();
+    expect((screen.getByRole("button", { name: "提交安装任务" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("shows the instance list first and opens setup only through the named installation action", async () => {

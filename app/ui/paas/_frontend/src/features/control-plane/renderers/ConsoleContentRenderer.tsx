@@ -709,6 +709,7 @@ function InstallationContent({ scene, preview, accountId }: {
           <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{selected.id}</Typography.Code></dd></div>
           <div><dt>{t("product")}</dt><dd>{selected.engine}<small><Typography.Code>{selected.offeringId}</Typography.Code></small></dd></div>
           <div><dt>{t("region")}</dt><dd>{selected.regionName}</dd></div>
+          {detailLoad.status === "ready" && detailLoad.installation.elasticsearch ? <div><dt>{t("elasticsearchDependency")}</dt><dd><Typography.Code>{detailLoad.installation.elasticsearch.installationId}</Typography.Code></dd></div> : null}
           <div><dt>{t("status")}</dt><dd><Badge status={selected.status}>{t(`installationPhases.${selected.phase}`)}</Badge></dd></div>
           <div><dt>{t("endpoint")}</dt><dd><Typography.Code>{selected.endpoint ?? t("unassigned")}</Typography.Code></dd></div>
           <div><dt>{t("operationId")}</dt><dd><Typography.Code>{selected.operationId}</Typography.Code><small>{t(`operationKinds.${selected.operationKind}`)}</small></dd></div>
@@ -716,6 +717,7 @@ function InstallationContent({ scene, preview, accountId }: {
           <div><dt>{t("createdAt")}</dt><dd>{format.timestamp(selected.createdAt)}</dd></div>
           {selected.safeFailureCode ? <div><dt>{t("safeFailureCode")}</dt><dd><Typography.Code>{selected.safeFailureCode}</Typography.Code></dd></div> : null}
         </dl>
+        {selected.offeringId === "kibana-8.19" && selected.phase === "READY" ? <Alert>{t("kibanaLoginHint")}</Alert> : null}
         {preview && accountId ? <Card className={styles.authorizationCard}>
           <Card.Header className={styles.authorizationHeading}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Eyebrow>{t("authorizationEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t("serviceAuthorization")}</Typography.Title><Typography.Text tone="muted">{t("serviceAuthorizationHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
           <Card.Body className={styles.authorizationBody}>

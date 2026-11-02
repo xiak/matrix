@@ -20,6 +20,7 @@ import (
 	localmachineadapter "github.com/xiak/matrix/app/adapter/infrastructure/localmachine"
 	localcontaineradapter "github.com/xiak/matrix/app/adapter/managedservice/localcontainer"
 	localelasticsearchadapter "github.com/xiak/matrix/app/adapter/managedservice/localelasticsearch"
+	localkibanaadapter "github.com/xiak/matrix/app/adapter/managedservice/localkibana"
 	locallogstashadapter "github.com/xiak/matrix/app/adapter/managedservice/locallogstash"
 	localmysqladapter "github.com/xiak/matrix/app/adapter/managedservice/localmysql"
 	localpostgresadapter "github.com/xiak/matrix/app/adapter/managedservice/localpostgres"
@@ -61,6 +62,7 @@ const (
 	managedElasticsearchImageIDsEnvironment   = "MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS"
 	managedRabbitMQImageIDsEnvironment        = "MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS"
 	managedLogstashImageIDsEnvironment        = "MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS"
+	managedKibanaImageIDsEnvironment          = "MATRIX_PAAS_WORKER_MANAGED_KIBANA_IMAGE_IDS"
 	managedProductEndpointImageIDsEnvironment = "MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS"
 	pollInterval                              = 250 * time.Millisecond
 	executionTargetRefresh                    = time.Minute
@@ -106,6 +108,7 @@ type configuration struct {
 	managedElasticsearchImageIDs   string
 	managedRabbitMQImageIDs        string
 	managedLogstashImageIDs        string
+	managedKibanaImageIDs          string
 	managedProductEndpointImageIDs string
 }
 
@@ -388,6 +391,21 @@ func run(ctx context.Context) (result error) {
 	if err != nil {
 		return err
 	}
+	managedKibanaRoot, err := managedRoot("kibana")
+	if err != nil {
+		return err
+	}
+	kibanaImageID, err := runtime.ResolveImageID(ctx, strings.Split(config.managedKibanaImageIDs, ","))
+	if err != nil {
+		return err
+	}
+	managedKibana, err := localkibanaadapter.New(localkibanaadapter.Config{
+		Root: managedKibanaRoot, ImageID: kibanaImageID, EndpointImageID: productEndpointImageID,
+		ElasticsearchRoot: managedElasticsearchRoot, ElasticsearchImageID: elasticsearchImageID, Runtime: runtime,
+	})
+	if err != nil {
+		return err
+	}
 	providerRegistry, err := reconcileinstallation.NewProviderRegistry(
 		domain.DefaultCatalog(),
 		map[string]managedserviceadapterv1.Provisioner{
@@ -396,6 +414,7 @@ func run(ctx context.Context) (result error) {
 			domain.ElasticsearchOfferingID: managedElasticsearch,
 			domain.RabbitMQOfferingID:      managedRabbitMQ,
 			domain.LogstashOfferingID:      managedLogstash,
+			domain.KibanaOfferingID:        managedKibana,
 		},
 	)
 	if err != nil {
@@ -845,6 +864,7 @@ func loadConfiguration() (configuration, error) {
 		managedElasticsearchImageIDs:   os.Getenv(managedElasticsearchImageIDsEnvironment),
 		managedRabbitMQImageIDs:        os.Getenv(managedRabbitMQImageIDsEnvironment),
 		managedLogstashImageIDs:        os.Getenv(managedLogstashImageIDsEnvironment),
+		managedKibanaImageIDs:          os.Getenv(managedKibanaImageIDsEnvironment),
 		managedProductEndpointImageIDs: os.Getenv(managedProductEndpointImageIDsEnvironment),
 	}
 	if config.databaseDSNFile == "" || config.workerID == "" ||
@@ -856,7 +876,7 @@ func loadConfiguration() (configuration, error) {
 		config.executionTenant == "" || config.machineBinding == "" ||
 		config.listenAddress == "" || config.managedPostgresImageIDs == "" ||
 		config.managedMySQLImageIDs == "" || config.managedMySQLEndpointImageIDs == "" || config.managedElasticsearchImageIDs == "" ||
-		config.managedRabbitMQImageIDs == "" || config.managedLogstashImageIDs == "" || config.managedProductEndpointImageIDs == "" {
+		config.managedRabbitMQImageIDs == "" || config.managedLogstashImageIDs == "" || config.managedKibanaImageIDs == "" || config.managedProductEndpointImageIDs == "" {
 		return configuration{}, errors.New("PaaS worker configuration is incomplete")
 	}
 	if paasv1.ValidateID("workerId", config.workerID) != nil ||

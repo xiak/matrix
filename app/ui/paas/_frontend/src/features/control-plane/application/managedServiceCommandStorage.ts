@@ -4,6 +4,7 @@ import type {
 } from "../domain/managedServiceCommand";
 import { sameManagedServiceCommandOwner } from "../domain/managedServiceCommand";
 import { managedServiceInstallationReader } from "../domain/serviceAuthorization";
+import { validElasticsearchReference } from "../domain/managedServiceProduct";
 
 export const managedServiceCommandStorageKey = "matrix.managed-service.commands.v1";
 
@@ -74,15 +75,17 @@ export function parseManagedServiceCommandIntent(value: unknown): ManagedService
       instanceCount: Number(payload.instanceCount)
     } };
   }
-  if (wire.kind === "CREATE_INSTALLATION" && wire.targetId === payload.id && exactKeys(payload, ["id", "name", "offeringId", "quotaEntitlementId", "regionId"]) &&
+  if (wire.kind === "CREATE_INSTALLATION" && wire.targetId === payload.id && exactKeys(payload, ["id", "name", "offeringId", "quotaEntitlementId", "regionId", ...(payload.offeringId === "kibana-8.19" ? ["elasticsearch"] : [])]) &&
     text(payload.id, installationId) && typeof payload.name === "string" && payload.name.trim().length > 0 && payload.name.length <= 128 &&
     text(payload.offeringId) && text(payload.quotaEntitlementId) && text(payload.regionId)) {
+    if (payload.offeringId === "kibana-8.19" && !validElasticsearchReference(payload.elasticsearch, payload.id)) return null;
     return { ...base, kind: wire.kind, payload: {
       id: payload.id,
       name: payload.name,
       offeringId: payload.offeringId,
       quotaEntitlementId: payload.quotaEntitlementId,
-      regionId: payload.regionId
+      regionId: payload.regionId,
+      ...(validElasticsearchReference(payload.elasticsearch, payload.id) ? { elasticsearch: { ...payload.elasticsearch } } : {})
     } };
   }
   if (wire.kind === "TERMINATE_INSTALLATION" && wire.targetId === payload.installationId && exactKeys(payload, ["installationId"]) && text(payload.installationId, installationId)) {

@@ -206,6 +206,131 @@ func TestInstallationReservationHonorsQuota(t *testing.T) {
 	}
 }
 
+func TestKibanaDependencyUsesCurrentCredentialAlsoOnEqualReplay(t *testing.T) {
+	repository, service, command := kibanaDependencyFixture(t)
+	authorizer := &dependencyAuthorizer{authorization: command.Authorization}
+	service.authorizer = authorizer
+	created, replayed, err := service.CreateInstallation(t.Context(), command)
+	if err != nil || replayed || created.Elasticsearch == nil || *created.Elasticsearch != *command.Request.Elasticsearch {
+		t.Fatalf("dependency reservation replay=%v err=%v", replayed, err)
+	}
+	request := authorizer.request
+	if request.Credential != command.Credential || request.Action != port.AuthorizeInstallationUse ||
+		request.Resource != (port.ResourceReference{Kind: port.ResourceServiceInstallation, ID: "search-one"}) ||
+		request.ResourceMode != iamv1.AuthorizationResourceInstance || request.CollectionUsage != "" ||
+		request.CorrelationID != command.Authorization.RequestID || !authorizer.bounded {
+		t.Fatal("dependency permission was not bound to the current credential and exact instance")
+	}
+	_, replayed, err = service.CreateInstallation(t.Context(), command)
+	if err != nil || !replayed || authorizer.calls != 2 {
+		t.Fatal("equal replay skipped current use permission", err)
+	}
+	beforeEvents, beforeQuota := len(repository.events), repository.quotas["quota-kibana"]
+	authorizer.err = port.ErrPermissionDenied
+	if _, _, err := service.CreateInstallation(t.Context(), command); !errors.Is(err, port.ErrPermissionDenied) {
+		t.Fatal("revoked dependency use permitted replay", err)
+	}
+	if len(repository.events) != beforeEvents || repository.quotas["quota-kibana"] != beforeQuota {
+		t.Fatal("replay changed quota or Audit")
+	}
+	changed := command
+	changed.Request.Elasticsearch = &managedservicev1.ElasticsearchReference{InstallationID: "search-other", ResourceVersion: 3}
+	if _, _, err := service.CreateInstallation(t.Context(), changed); !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatal("dependency binding changed under an existing command", err)
+	}
+}
+
+func TestKibanaDependencyRejectionsHaveNoPartialEffects(t *testing.T) {
+	for _, name := range []string{"read only", "wrong account decision", "wrong subject decision", "no authorizer", "no credential", "missing", "stale", "wrong engine", "wrong region", "wrong offering", "terminating"} {
+		t.Run(name, func(t *testing.T) {
+			repository, service, command := kibanaDependencyFixture(t)
+			authorizer := &dependencyAuthorizer{authorization: command.Authorization}
+			service.authorizer = authorizer
+			dependency := repository.installations["search-one"]
+			want := ErrDependencyUnavailable
+			switch name {
+			case "read only":
+				authorizer.err, want = port.ErrPermissionDenied, port.ErrPermissionDenied
+			case "wrong account decision":
+				authorizer.authorization.TenantID, want = "other-account", port.ErrAuthorizationUnavailable
+			case "wrong subject decision":
+				authorizer.authorization.Subject.ID, want = "other-user", port.ErrAuthorizationUnavailable
+			case "no authorizer":
+				service.authorizer, want = nil, port.ErrAuthorizationUnavailable
+			case "no credential":
+				command.Credential, want = "", port.ErrUnauthenticated
+			case "missing":
+				delete(repository.installations, "search-one")
+			case "stale":
+				dependency.ResourceVersion++
+			case "wrong engine":
+				dependency.EngineVersion = "8.20.0"
+			case "wrong region":
+				dependency.RegionID = "other-region"
+			case "wrong offering":
+				dependency.OfferingID = managedservicev1.LogstashOfferingID
+			case "terminating":
+				dependency.Phase = managedservicev1.InstallationTerminating
+			}
+			if name != "missing" {
+				repository.installations[dependency.ID] = dependency
+			}
+			beforeQuota, beforeCount := repository.quotas["quota-kibana"], len(repository.installations)
+			if _, _, err := service.CreateInstallation(t.Context(), command); !errors.Is(err, want) {
+				t.Fatalf("got %v, want %v", err, want)
+			}
+			if len(repository.events) != 0 || len(repository.installKeys) != 0 || len(repository.installations) != beforeCount || repository.quotas["quota-kibana"] != beforeQuota {
+				t.Fatal("rejected dependency left quota, instance, command or Audit effects")
+			}
+			for _, tenant := range repository.beginTenants {
+				if tenant != command.Authorization.TenantID {
+					t.Fatal("dependency read selected another account")
+				}
+			}
+		})
+	}
+}
+
+func kibanaDependencyFixture(t *testing.T) (*memoryRepository, *Service, CreateInstallationCommand) {
+	t.Helper()
+	repository := newMemoryRepository()
+	service := newTestService(t, repository)
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	endpoint, credential := "http://127.0.0.1:27123", "credential-search-one"
+	repository.installations["search-one"] = managedservicev1.ServiceInstallation{
+		ID: "search-one", Name: "Search", OfferingID: managedservicev1.ElasticsearchOfferingID,
+		EngineVersion: "8.19.23", RegionID: "local-primary", QuotaEntitlementID: "quota-search",
+		Phase: managedservicev1.InstallationReady, ResourceVersion: 3, CreatedAt: now, Endpoint: &endpoint, CredentialReference: &credential,
+		Operation: managedservicev1.InstallationOperation{ID: "operation-search", Kind: managedservicev1.InstallationOperationProvision, Phase: managedservicev1.InstallationReady, ObservedAt: now},
+	}
+	repository.quotas["quota-kibana"] = managedservicev1.QuotaEntitlement{ID: "quota-kibana", OfferingID: managedservicev1.KibanaOfferingID,
+		QuotaShapeID: "kibana-small", PurchasedCount: 1, ResourceVersion: 1, ActivatedAt: now}
+	command := CreateInstallationCommand{Authorization: testAuthorization(), Credential: "Bearer current-user", IdempotencyKey: "create-kibana-one",
+		Request: managedservicev1.CreateInstallationRequest{ID: "kibana-one", Name: "Kibana", OfferingID: managedservicev1.KibanaOfferingID,
+			QuotaEntitlementID: "quota-kibana", RegionID: "local-primary",
+			Elasticsearch: &managedservicev1.ElasticsearchReference{InstallationID: "search-one", ResourceVersion: 3}}}
+	return repository, service, command
+}
+
+type dependencyAuthorizer struct {
+	port.Authorizer
+	authorization port.Authorization
+	err           error
+	request       port.AuthorizationRequest
+	calls         int
+	bounded       bool
+}
+
+func (a *dependencyAuthorizer) Authorize(ctx context.Context, request port.AuthorizationRequest) (port.Authorization, error) {
+	a.calls++
+	a.request = request
+	deadline, ok := ctx.Deadline()
+	a.bounded = ok && time.Until(deadline) <= 5*time.Second
+	result := a.authorization
+	result.RequestID = request.RequestID
+	return result, a.err
+}
+
 func TestTerminationIsAtomicIdempotentAndBoundToOneInstallation(t *testing.T) {
 	repository := newMemoryRepository()
 	service := newTestService(t, repository)
@@ -966,6 +1091,7 @@ func (transaction *memoryTransaction) ReserveInstallation(
 		ID: draft.ID, Name: draft.Name, OfferingID: draft.OfferingID,
 		EngineVersion: draft.EngineVersion, QuotaEntitlementID: draft.QuotaEntitlementID,
 		RegionID: draft.RegionID, Phase: managedservicev1.InstallationPending,
+		Elasticsearch:   draft.Elasticsearch,
 		ResourceVersion: 1, CreatedAt: now,
 		Operation: managedservicev1.InstallationOperation{
 			ID: draft.OperationID, Kind: managedservicev1.InstallationOperationProvision,

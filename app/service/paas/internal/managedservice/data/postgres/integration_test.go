@@ -7,7 +7,9 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -33,6 +35,7 @@ import (
 
 const (
 	managedServiceIntegrationDSN = "MATRIX_MANAGEDSERVICE_POSTGRES_TEST_DSN"
+	managedServiceDependencyDSN  = "MATRIX_MANAGEDSERVICE_DEPENDENCY_POSTGRES_TEST_DSN"
 	managedServicePredecessorDSN = "MATRIX_MANAGEDSERVICE_PREDECESSOR_POSTGRES_TEST_DSN"
 	managedServicePredecessor    = "ba2ea256528349f1300092ba0fd44641d758accb"
 	managedServiceAPIPassword    = "mxp1.managed-api-00000000000000000000000000000"
@@ -291,7 +294,7 @@ SELECT managedservice.complete_operation($1, $2, 'predecessor-worker', $3, $4, $
 		t.Fatalf("upgraded predecessor rejected current ROLE activation=%#v replayed=%v err=%v", roleActivation, replayed, err)
 	}
 	var schemaVersion uint64
-	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 8 {
+	if err := currentPool.QueryRow(ctx, `SELECT schema_version FROM paas.readiness()`).Scan(&schemaVersion); err != nil || schemaVersion != 9 {
 		t.Fatalf("current PaaS readiness schema=%d err=%v", schemaVersion, err)
 	}
 }
@@ -892,6 +895,392 @@ func (ingestor *managedServiceAuditIngestor) Ingest(_ context.Context, event aud
 
 // Prove the generated database contract with real writes through the restricted
 // API login. Each probe rolls back, so it cannot become reconciliation work.
+func TestManagedServiceElasticsearchDependencyCustodyAndRaces(t *testing.T) {
+	adminDSN := os.Getenv(managedServiceDependencyDSN)
+	if adminDSN == "" {
+		t.Skipf("set %s to a clean disposable PostgreSQL 18 database", managedServiceDependencyDSN)
+	}
+	parsed, err := pgxpool.ParseConfig(adminDSN)
+	if err != nil || !strings.HasPrefix(parsed.ConnConfig.Database, "matrix_managedservice_dependency_") {
+		t.Fatal("dependency test requires a dedicated database")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	apiDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_api_login", managedServiceAPIPassword)
+	workerDSN := integrationRuntimeDSN(t, adminDSN, "matrix_paas_worker_login", managedServiceWorkerPassword)
+	for range 2 {
+		if err := paasmigration.Apply(ctx, adminDSN, apiDSN, workerDSN); err != nil {
+			t.Fatal("apply dependency schema", err)
+		}
+	}
+	pool, err := pgxpool.New(ctx, apiDSN)
+	if err != nil {
+		t.Fatal("open dependency API pool")
+	}
+	defer pool.Close()
+	workerPool, err := pgxpool.New(ctx, workerDSN)
+	if err != nil {
+		t.Fatal("open dependency worker pool")
+	}
+	defer workerPool.Close()
+	repository, queue := managedServiceRepository(t, pool), managedServiceRepository(t, workerPool)
+	var sequence atomic.Uint32
+	newID := func() (string, error) { return "dependency-" + strconv.FormatUint(uint64(sequence.Add(1)), 10), nil }
+	config := usecase.Config{Catalog: domain.DefaultCatalog(), Region: integrationRegion(),
+		Authorizer: integrationDependencyAuthorizer{}, WorkloadRoleAuthority: integrationWorkloadRoleBinder{},
+		WorkloadRoleRuntime: integrationWorkloadRoleBinder{}, NewQuotaID: newID, NewOperationID: newID}
+	service, err := usecase.NewService(repository, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorization := integrationAuthorization("dependency-account")
+	other := integrationAuthorization("dependency-other")
+	quota := func(actor port.Authorization, serviceID, offeringID, shapeID string) managedservicev1.QuotaEntitlement {
+		t.Helper()
+		definition, err := service.GetService(ctx, actor, serviceID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, _ := newID()
+		if _, _, err := service.ActivateService(ctx, usecase.ActivateServiceCommand{Authorization: actor, IdempotencyKey: key,
+			Request: managedservicev1.ActivateServiceRequest{Service: managedservicev1.ServiceDefinitionReference{
+				ID: definition.ID, Revision: definition.Revision, ContentDigest: definition.ContentDigest}}}); err != nil {
+			t.Fatal(err)
+		}
+		key, _ = newID()
+		value, _, err := service.ActivateQuota(ctx, usecase.ActivateQuotaCommand{Authorization: actor, IdempotencyKey: key,
+			Request: managedservicev1.ActivateQuotaRequest{OfferingID: offeringID, QuotaShapeID: shapeID, InstanceCount: 8}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	eQuota := quota(authorization, managedservicev1.ElasticsearchServiceID, managedservicev1.ElasticsearchOfferingID, "elasticsearch-small")
+	kQuota := quota(authorization, managedservicev1.KibanaServiceID, managedservicev1.KibanaOfferingID, "kibana-small")
+	otherQuota := quota(other, managedservicev1.ElasticsearchServiceID, managedservicev1.ElasticsearchOfferingID, "elasticsearch-small")
+	claim := func(id string, kind managedservicev1.InstallationOperationKind) reconcileinstallation.WorkItem {
+		t.Helper()
+		work, found, err := queue.Claim(ctx, "dependency-worker", time.Minute)
+		if err != nil || !found || work.Installation.ID != id || work.Kind != kind {
+			t.Fatalf("claim exact dependency operation %s: %v", id, err)
+		}
+		return work
+	}
+	createSearch := func(actor port.Authorization, entitlement managedservicev1.QuotaEntitlement, id string) managedservicev1.ServiceInstallation {
+		t.Helper()
+		if _, _, err := service.CreateInstallation(ctx, usecase.CreateInstallationCommand{Authorization: actor, IdempotencyKey: "create-" + id,
+			Request: managedservicev1.CreateInstallationRequest{ID: id, Name: id, OfferingID: entitlement.OfferingID, QuotaEntitlementID: entitlement.ID, RegionID: "local-primary"}}); err != nil {
+			t.Fatal(err)
+		}
+		work := claim(id, managedservicev1.InstallationOperationProvision)
+		if err := queue.CompleteProvision(ctx, work, managedserviceadapterv1.ProvisionResult{Endpoint: "http://127.0.0.1:27123", CredentialReference: "credential-" + id}); err != nil {
+			t.Fatal(err)
+		}
+		value, err := service.GetServiceInstallation(ctx, actor, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value
+	}
+	search := createSearch(authorization, eQuota, "dependency-search")
+	foreign := createSearch(other, otherQuota, "foreign-search")
+	create := func(id string, dependency managedservicev1.ServiceInstallation) usecase.CreateInstallationCommand {
+		return usecase.CreateInstallationCommand{Authorization: authorization, Credential: authorization.TenantID, IdempotencyKey: "create-" + id,
+			Request: managedservicev1.CreateInstallationRequest{ID: id, Name: id, OfferingID: kQuota.OfferingID, QuotaEntitlementID: kQuota.ID, RegionID: "local-primary",
+				Elasticsearch: &managedservicev1.ElasticsearchReference{InstallationID: dependency.ID, ResourceVersion: dependency.ResourceVersion}}}
+	}
+	terminate := func(actor port.Authorization, id, key string) usecase.TerminateInstallationCommand {
+		return usecase.TerminateInstallationCommand{Authorization: actor, InstallationID: id, IdempotencyKey: key}
+	}
+	snapshot := func() (managedservicev1.QuotaEntitlement, int64, int64) {
+		t.Helper()
+		q, err := service.GetQuotaEntitlement(ctx, authorization, kQuota.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tx, err := pool.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer tx.Rollback(context.Background())
+		if _, err := tx.Exec(ctx, "SELECT pg_catalog.set_config('matrix.tenant_id', $1, true)", authorization.TenantID); err != nil {
+			t.Fatal(err)
+		}
+		var operations, events int64
+		if err := tx.QueryRow(ctx, "SELECT count(*) FROM managedservice.operations").Scan(&operations); err != nil {
+			t.Fatal(err)
+		}
+		// Audit remains behind its bounded security-definer observer.
+		if err := workerPool.QueryRow(ctx, "SELECT pending_count + leased_count + retry_count + delivered_count + dead_letter_count FROM managedservice.audit_outbox_snapshot()").Scan(&events); err != nil {
+			t.Fatal(err)
+		}
+		return q, operations, events
+	}
+	beforeQuota, beforeOperations, beforeEvents := snapshot()
+	for _, name := range []string{"missing", "foreign", "stale"} {
+		command := create("rejected-kibana", search)
+		switch name {
+		case "missing":
+			command.Request.Elasticsearch.InstallationID = "absent-search"
+		case "foreign":
+			command.Request.Elasticsearch.InstallationID = foreign.ID
+		case "stale":
+			command.Request.Elasticsearch.ResourceVersion++
+		}
+		if _, _, err := service.CreateInstallation(ctx, command); !errors.Is(err, usecase.ErrDependencyUnavailable) {
+			t.Fatalf("%s dependency error=%v", name, err)
+		}
+	}
+	// Bypass the application check to prove the restricted SQL boundary itself.
+	for _, name := range []string{"foreign", "stale", "engine", "region"} {
+		tx, err := repository.Begin(ctx, authorization.TenantID, usecase.ReadWrite)
+		if err != nil {
+			t.Fatal(err)
+		}
+		draft := usecase.InstallationDraft{ID: "sql-rejected-kibana", Name: "SQL dependency probe", OfferingID: kQuota.OfferingID, EngineVersion: search.EngineVersion,
+			QuotaEntitlementID: kQuota.ID, RegionID: search.RegionID, OperationID: "sql-rejected-operation", IdempotencyKey: "sql-rejected-command",
+			RequestDigest: "sha256:" + strings.Repeat("a", 64), ActorType: port.SubjectUser, ActorID: authorization.Subject.ID, IAMDecisionID: authorization.DecisionID, RequestID: authorization.RequestID,
+			Elasticsearch: &managedservicev1.ElasticsearchReference{InstallationID: search.ID, ResourceVersion: search.ResourceVersion}}
+		switch name {
+		case "foreign":
+			draft.Elasticsearch.InstallationID = foreign.ID
+		case "stale":
+			draft.Elasticsearch.ResourceVersion++
+		case "engine":
+			draft.EngineVersion = "8.20.0"
+		case "region":
+			draft.RegionID = "other-region"
+		}
+		_, reserveErr := tx.ReserveInstallation(ctx, draft, beforeQuota.ResourceVersion)
+		_ = tx.Rollback(ctx)
+		if !errors.Is(reserveErr, usecase.ErrDependencyUnavailable) {
+			t.Fatalf("SQL %s dependency error=%v", name, reserveErr)
+		}
+	}
+	afterQuota, afterOperations, afterEvents := snapshot()
+	if beforeQuota != afterQuota || beforeOperations != afterOperations || beforeEvents != afterEvents {
+		t.Fatal("dependency rejection changed quota, operations or Audit")
+	}
+
+	command := create("dependency-kibana", search)
+	created, replayed, err := service.CreateInstallation(ctx, command)
+	if err != nil || replayed || created.Elasticsearch == nil || *created.Elasticsearch != *command.Request.Elasticsearch {
+		t.Fatal("persist typed dependency", err)
+	}
+	wrongProduct := create("rejected-dependent-kibana", created)
+	if _, _, err := service.CreateInstallation(ctx, wrongProduct); !errors.Is(err, usecase.ErrDependencyUnavailable) {
+		t.Fatal("Kibana accepted another Kibana as Elasticsearch", err)
+	}
+	retained, err := service.GetServiceInstallation(ctx, authorization, created.ID)
+	if err != nil || !reflect.DeepEqual(retained, created) {
+		t.Fatal("dependency read differs from reservation", err)
+	}
+	denyDelete := func() {
+		t.Helper()
+		beforeQuota, beforeOperations, beforeEvents := snapshot()
+		if _, _, err := service.TerminateInstallation(ctx, terminate(authorization, search.ID, "delete-protected-search")); !errors.Is(err, usecase.ErrDependencyInUse) {
+			t.Fatal("live dependency failed to prevent Elasticsearch termination", err)
+		}
+		afterQuota, afterOperations, afterEvents := snapshot()
+		if beforeQuota != afterQuota || beforeOperations != afterOperations || beforeEvents != afterEvents {
+			t.Fatal("denied termination left partial effects")
+		}
+	}
+	denyDelete()
+	work := claim(created.ID, managedservicev1.InstallationOperationProvision)
+	if work.Installation.Elasticsearch == nil || *work.Installation.Elasticsearch != *command.Request.Elasticsearch {
+		t.Fatal("worker claim lost dependency binding")
+	}
+	if err := queue.FailCleanup(ctx, work, "PROVIDER_CLEANUP_FAILED"); err != nil {
+		t.Fatal(err)
+	}
+	denyDelete()
+	if _, _, err := service.TerminateInstallation(ctx, terminate(authorization, created.ID, "retry-kibana-cleanup")); err != nil {
+		t.Fatal("retry failed provisioning cleanup", err)
+	}
+	work = claim(created.ID, managedservicev1.InstallationOperationTerminate)
+	if err := queue.Fail(ctx, work, "PROVIDER_TERMINATION_FAILED"); err != nil {
+		t.Fatal(err)
+	}
+	denyDelete()
+	if _, _, err := service.TerminateInstallation(ctx, terminate(authorization, created.ID, "retry-kibana-cleanup-again")); err != nil {
+		t.Fatal("retry native credential revocation", err)
+	}
+	work = claim(created.ID, managedservicev1.InstallationOperationTerminate)
+	if err := queue.CompleteTermination(ctx, work); err != nil {
+		t.Fatal("release reserved quota after eventual cleanup", err)
+	}
+	retained, err = service.GetServiceInstallation(ctx, authorization, created.ID)
+	if err != nil || retained.Phase != managedservicev1.InstallationTerminated || retained.Elasticsearch == nil || *retained.Elasticsearch != *command.Request.Elasticsearch {
+		t.Fatal("terminal dependency history was lost", err)
+	}
+	cleanedQuota, _, _ := snapshot()
+	if cleanedQuota.ReservedCount != 0 || cleanedQuota.ConsumedCount != 0 {
+		t.Fatal("cleanup retried the wrong quota release")
+	}
+	finishSearch := func(actor port.Authorization, id string) {
+		t.Helper()
+		if _, _, err := service.TerminateInstallation(ctx, terminate(actor, id, "finish-"+id)); err != nil {
+			t.Fatal(err)
+		}
+		if err := queue.CompleteTermination(ctx, claim(id, managedservicev1.InstallationOperationTerminate)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	finishSearch(authorization, search.ID)
+	finishSearch(other, foreign.ID)
+
+	for _, winner := range []string{"create", "terminate"} {
+		t.Run("dependency-race-"+winner, func(t *testing.T) {
+			search := createSearch(authorization, eQuota, "race-search-"+winner)
+			barrier := &dependencyBarrierRepository{Repository: repository, winner: winner, held: make(chan struct{}), entered: make(chan struct{}, 1), release: make(chan struct{})}
+			racing, err := usecase.NewService(barrier, config)
+			if err != nil {
+				t.Fatal(err)
+			}
+			createResult, terminateResult := make(chan error, 1), make(chan error, 1)
+			command := create("race-kibana-"+winner, search)
+			createCall := func() { _, _, err := racing.CreateInstallation(ctx, command); createResult <- err }
+			terminateCall := func() {
+				_, _, err := racing.TerminateInstallation(ctx, terminate(authorization, search.ID, "race-delete-"+winner))
+				terminateResult <- err
+			}
+			if winner == "create" {
+				go createCall()
+			} else {
+				go terminateCall()
+			}
+			select {
+			case <-barrier.held:
+			case <-ctx.Done():
+				t.Fatal("dependency winner did not acquire its row lock")
+			}
+			if winner == "create" {
+				go terminateCall()
+			} else {
+				go createCall()
+			}
+			select {
+			case <-barrier.entered:
+			case <-ctx.Done():
+				t.Fatal("dependency loser did not enter its conflicting transaction")
+			}
+			close(barrier.release)
+			createErr, terminateErr := <-createResult, <-terminateResult
+			if winner == "create" {
+				if createErr != nil || !errors.Is(terminateErr, usecase.ErrDependencyInUse) {
+					t.Fatalf("create winner create=%v terminate=%v", createErr, terminateErr)
+				}
+				if err := queue.Fail(ctx, claim(command.Request.ID, managedservicev1.InstallationOperationProvision), "CLEANED_FIXTURE"); err != nil {
+					t.Fatal(err)
+				}
+				finishSearch(authorization, search.ID)
+			} else {
+				if terminateErr != nil || !errors.Is(createErr, usecase.ErrDependencyUnavailable) {
+					t.Fatalf("terminate winner create=%v terminate=%v", createErr, terminateErr)
+				}
+				if _, err := service.GetServiceInstallation(ctx, authorization, command.Request.ID); !errors.Is(err, usecase.ErrNotFound) {
+					t.Fatal("termination winner left dangling Kibana", err)
+				}
+				if err := queue.CompleteTermination(ctx, claim(search.ID, managedservicev1.InstallationOperationTerminate)); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+	adminPool, err := pgxpool.New(ctx, adminDSN)
+	if err != nil {
+		t.Fatal("open dependency schema verifier")
+	}
+	defer adminPool.Close()
+	if _, err := adminPool.Exec(ctx, "ALTER TABLE managedservice.service_installations DISABLE TRIGGER protect_elasticsearch_dependency"); err != nil {
+		t.Fatal(err)
+	}
+	verifyErr := paasmigration.VerifyInstalled(ctx, adminDSN, apiDSN, workerDSN)
+	if _, err := adminPool.Exec(ctx, "ALTER TABLE managedservice.service_installations ENABLE TRIGGER protect_elasticsearch_dependency"); err != nil {
+		t.Fatal(err)
+	}
+	if verifyErr == nil {
+		t.Fatal("disabled dependency guard passed schema readiness")
+	}
+	if err := paasmigration.VerifyInstalled(ctx, adminDSN, apiDSN, workerDSN); err != nil {
+		t.Fatal("restored dependency guard failed readiness", err)
+	}
+}
+
+type integrationDependencyAuthorizer struct{ port.Authorizer }
+
+func (integrationDependencyAuthorizer) Authorize(_ context.Context, request port.AuthorizationRequest) (port.Authorization, error) {
+	if port.ValidateAuthorizationRequest(request) != nil || request.Action != port.AuthorizeInstallationUse || request.Credential != "dependency-account" {
+		return port.Authorization{}, port.ErrPermissionDenied
+	}
+	result := integrationAuthorization(request.Credential)
+	result.RequestID = request.RequestID
+	return result, nil
+}
+
+type dependencyBarrierRepository struct {
+	usecase.Repository
+	winner  string
+	held    chan struct{}
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (r *dependencyBarrierRepository) Begin(ctx context.Context, tenant string, mode usecase.TransactionMode) (usecase.Transaction, error) {
+	tx, err := r.Repository.Begin(ctx, tenant, mode)
+	if err != nil {
+		return nil, err
+	}
+	return &dependencyBarrierTransaction{Transaction: tx, barrier: r}, nil
+}
+
+type dependencyBarrierTransaction struct {
+	usecase.Transaction
+	barrier *dependencyBarrierRepository
+}
+
+func (tx *dependencyBarrierTransaction) ReserveInstallation(ctx context.Context, draft usecase.InstallationDraft, version uint64) (managedservicev1.ServiceInstallation, error) {
+	if tx.barrier.winner != "create" {
+		select {
+		case tx.barrier.entered <- struct{}{}:
+		default:
+		}
+	}
+	value, err := tx.Transaction.ReserveInstallation(ctx, draft, version)
+	if err == nil && tx.barrier.winner == "create" {
+		tx.barrier.once.Do(func() {
+			close(tx.barrier.held)
+			select {
+			case <-tx.barrier.release:
+			case <-ctx.Done():
+			}
+		})
+	}
+	return value, err
+}
+
+func (tx *dependencyBarrierTransaction) StartTermination(ctx context.Context, draft usecase.TerminationDraft) (managedservicev1.ServiceInstallation, error) {
+	if tx.barrier.winner != "terminate" {
+		select {
+		case tx.barrier.entered <- struct{}{}:
+		default:
+		}
+	}
+	value, err := tx.Transaction.StartTermination(ctx, draft)
+	if err == nil && tx.barrier.winner == "terminate" {
+		tx.barrier.once.Do(func() {
+			close(tx.barrier.held)
+			select {
+			case <-tx.barrier.release:
+			case <-ctx.Done():
+			}
+		})
+	}
+	return value, err
+}
+
 func assertCompiledCatalogConstraints(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	probe := func(offeringID, shapeID, engineVersion, expectedConstraint string) {
@@ -910,11 +1299,36 @@ func assertCompiledCatalogConstraints(t *testing.T, ctx context.Context, pool *p
 		) VALUES (managedservice.current_tenant_id(), 'catalog-quota', $1, $2, 1, 'catalog-request', $3,
 			'USER', 'catalog-principal', 'catalog-decision', 'catalog-request')`,
 			offeringID, shapeID, "sha256:"+strings.Repeat("a", 64))
+		var dependencyID, dependencyVersion any
+		if err == nil && offeringID == managedservicev1.KibanaOfferingID {
+			search, _, found := domain.DefaultCatalog().Resolve(managedservicev1.ElasticsearchOfferingID, "elasticsearch-small")
+			if !found {
+				t.Fatal("catalog lacks Kibana's prerequisite")
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO managedservice.quota_entitlements (
+				tenant_id, id, offering_id, quota_shape_id, purchased_count, idempotency_key, request_digest,
+				activated_by_type, activated_by_id, iam_decision_id, request_id
+			) VALUES (managedservice.current_tenant_id(), 'catalog-search-quota', $1, 'elasticsearch-small', 1, 'catalog-search-request', $2,
+				'USER', 'catalog-principal', 'catalog-decision', 'catalog-search-request')`, search.ID, "sha256:"+strings.Repeat("a", 64))
+			if err != nil {
+				t.Fatal("seed catalog prerequisite quota", err)
+			}
+			_, err = tx.Exec(ctx, `INSERT INTO managedservice.service_installations (
+				tenant_id, id, name, offering_id, engine_version, quota_entitlement_id, region_id, current_operation_id,
+				phase, endpoint, credential_reference
+			) VALUES (managedservice.current_tenant_id(), 'catalog-search', 'Catalog search', $1, $2,
+				'catalog-search-quota', 'local-primary', 'catalog-search-operation', 'READY', 'http://127.0.0.1:27123', 'credential-catalog-search')`, search.ID, search.EngineVersion)
+			if err != nil {
+				t.Fatal("seed catalog prerequisite installation", err)
+			}
+			dependencyID, dependencyVersion = "catalog-search", uint64(1)
+		}
 		if err == nil {
 			_, err = tx.Exec(ctx, `INSERT INTO managedservice.service_installations (
-				tenant_id, id, name, offering_id, engine_version, quota_entitlement_id, region_id, current_operation_id
+				tenant_id, id, name, offering_id, engine_version, quota_entitlement_id, region_id, current_operation_id,
+				elasticsearch_installation_id, elasticsearch_resource_version
 			) VALUES (managedservice.current_tenant_id(), 'catalog-installation', 'Catalog constraint probe',
-				$1, $2, 'catalog-quota', 'local-primary', 'catalog-operation')`, offeringID, engineVersion)
+				$1, $2, 'catalog-quota', 'local-primary', 'catalog-operation', $3, $4)`, offeringID, engineVersion, dependencyID, dependencyVersion)
 		}
 		if expectedConstraint == "" {
 			if err != nil {
@@ -923,6 +1337,12 @@ func assertCompiledCatalogConstraints(t *testing.T, ctx context.Context, pool *p
 			return
 		}
 		var failure *pgconn.PgError
+		if offeringID == managedservicev1.KibanaOfferingID && expectedConstraint == "service_installations_ids_valid" {
+			if !errors.As(err, &failure) || failure.Code != "MX424" {
+				t.Fatal("mismatched Kibana engine passed dependency binding", err)
+			}
+			return
+		}
 		if !errors.As(err, &failure) || failure.Code != "23514" || failure.ConstraintName != expectedConstraint {
 			t.Fatalf("catalog mismatch did not fail its owning constraint %s", expectedConstraint)
 		}

@@ -76,7 +76,7 @@ func DecodeInstalledCanonical(content []byte) (Manifest, error) {
 		return Manifest{}, errors.New("installed release manifest size is invalid")
 	}
 	var previous Manifest
-	if decodeStrict(content, &previous) == nil && IsFourManagedProductsManifest(previous) {
+	if decodeStrict(content, &previous) == nil && (IsFourManagedProductsManifest(previous) || IsFiveManagedProductsManifest(previous)) {
 		encoded, err := json.Marshal(previous)
 		if err == nil && bytes.Equal(encoded, content) {
 			return previous, nil
@@ -186,7 +186,7 @@ func ValidateInstalledManifest(manifest Manifest) error {
 	if err := ValidateManifest(manifest); err == nil {
 		return nil
 	}
-	if IsFourManagedProductsManifest(manifest) {
+	if IsFourManagedProductsManifest(manifest) || IsFiveManagedProductsManifest(manifest) {
 		return nil
 	}
 	return validateLegacyProductlessManifest(manifest)
@@ -196,6 +196,15 @@ func ValidateInstalledManifest(manifest Manifest) error {
 // Its exact accepted topology is checked independently by the installed compiler.
 func IsFourManagedProductsManifest(manifest Manifest) bool {
 	return manifest.Kind == ManifestKind && validateManifest(manifest, fourManagedProductsProfile) == nil
+}
+
+// IsFiveManagedProductsManifest recognizes the accepted revision-40 Logstash
+// installation contract. This permits authenticated source inspection only;
+// it does not admit a cross-profile upgrade or rollback.
+func IsFiveManagedProductsManifest(manifest Manifest) bool {
+	return manifest.Kind == ManifestKind && manifest.Database == (DatabaseProfile{
+		Compatibility: "identical-authority-profile", Authorities: AuthoritySchemas{IAM: 88, Audit: 40, PaaS: 8}, ContractRevision: 40,
+	}) && validateManifest(manifest, fiveManagedProductsProfile) == nil
 }
 
 // IsLegacyProductlessManifest reports only manifests that satisfy the complete

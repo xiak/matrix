@@ -11,7 +11,7 @@ import (
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 )
 
-const paasDatabaseSchemaVersion = 8
+const paasDatabaseSchemaVersion = 9
 
 func (repository *ApplicationRepository) Readiness(
 	ctx context.Context,

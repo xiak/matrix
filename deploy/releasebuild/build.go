@@ -312,9 +312,14 @@ func buildImages(
 	if !found || validateImageMetadata(logstash) != nil {
 		return nil, nil, errors.New("fixed Logstash image identity is unavailable")
 	}
+	kibana, found := baseImages[KibanaPinnedReference]
+	if !found || validateImageMetadata(kibana) != nil {
+		return nil, nil, errors.New("fixed Kibana image identity is unavailable")
+	}
 	metadata := map[string]ImageMetadata{
 		"postgres": postgres, "mysql": mysql,
 		"elasticsearch": elasticsearch, "rabbitmq": rabbitmq, "logstash": logstash,
+		"kibana": kibana,
 	}
 	tags := make([]string, 0, len(imageRecipes))
 	for _, recipe := range imageRecipes {

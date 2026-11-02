@@ -478,7 +478,7 @@ func (value *handler) createInstallation(response http.ResponseWriter, request *
 		return
 	}
 	result, replayed, err := value.workflow.CreateInstallation(request.Context(), usecase.CreateInstallationCommand{
-		Authorization: authorization, Request: body,
+		Authorization: authorization, Credential: request.Header.Get("Authorization"), Request: body,
 		IdempotencyKey: request.Header.Get("Idempotency-Key"),
 	})
 	if err != nil {
@@ -732,6 +732,12 @@ func writeWorkflowError(response http.ResponseWriter, requestID string, err erro
 	case errors.Is(err, usecase.ErrRegionUnavailable):
 		writeProblem(response, requestID, http.StatusConflict,
 			managedservicev1.ErrorRegionUnavailable, "Region unavailable", "the selected local region is not ready", true)
+	case errors.Is(err, usecase.ErrDependencyUnavailable):
+		writeProblem(response, requestID, http.StatusConflict,
+			managedservicev1.ErrorDependencyUnavailable, "Dependency unavailable", "select a current ready Elasticsearch installation in the same account and region", false)
+	case errors.Is(err, usecase.ErrDependencyInUse):
+		writeProblem(response, requestID, http.StatusConflict,
+			managedservicev1.ErrorDependencyInUse, "Dependency in use", "terminate dependent Kibana installations and finish their cleanup first", false)
 	case errors.Is(err, usecase.ErrInvalidState):
 		writeProblem(response, requestID, http.StatusConflict,
 			managedservicev1.ErrorResourceStateConflict, "Resource state conflict", "the service installation cannot perform this transition", false)

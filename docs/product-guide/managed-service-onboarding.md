@@ -88,12 +88,20 @@ Logstash 与 Kibana 各自的适配器拥有配置与不可变绑定；运行测
 
 1. 平台核对所选 Elasticsearch 的账号、当前使用权限、READY 状态、观察版本和区域。
    接受后，把准确的依赖引用写入实例记录，再交给 worker；产品团队不能自行跳过这一步。
-2. 适配器从受保护的实例记录解析连接入口，为当前 Kibana 发行自己的服务凭据。
+2. 适配器从受保护的实例记录核对准确依赖，通过固定运行时能力访问该容器，为当前 Kibana 发行自己的服务凭据。
    两个 Kibana 共用 Elasticsearch 时，各自的凭据和浏览器会话材料独立。
+   平台本身运行在容器里时也要测试这一步：worker 内的回环地址不代表宿主机；
+   可复用的固定协议操作由 [Compose runtime](../../app/adapter/apphosting/compose/runtime.go) 提供。
 3. 保存对象和报表使用 Elasticsearch 所属的共享加密材料。删除 Kibana 会撤销它
    自己的服务凭据并清理自己的运行资源，保留 Elasticsearch 数据与共享密钥。
 4. 创建或撤销凭据时断线，保留现场，用相同实例身份重试；不会把断线当作删除成功。
    已经运行的实例缺失凭据文件时会明确失败，不自动换密码掩盖问题。
+
+对接页面或业务 API 时，用户只提交所选实例 ID 与读取到的 `resourceVersion`，
+对应创建请求中的 `elasticsearch` 引用。列表刷新后观察版本改变，应重新选择；
+结果未知时保留原请求，不自动改用最新依赖。权限管理员须为该准确 Elasticsearch
+授权“使用实例”，具体 Action 和历史策略版本边界见
+[依赖使用权限](../features/iam/FEAT-IAM-008-product-enforcement.md#详细设计)。
 
 第一步的业务 API、当前权限、依赖绑定和删除保护属于平台集成验收；后续步骤由
 [Kibana 依赖实现](../../app/adapter/managedservice/localkibana/dependency.go)与真实运行门禁证明。

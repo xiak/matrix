@@ -299,7 +299,22 @@
       },
       "CreateInstallationRequest": {
         "additionalProperties": false,
+        "else": {
+          "properties": {
+            "elasticsearch": false
+          }
+        },
+        "if": {
+          "properties": {
+            "offeringId": {
+              "const": "kibana-8.19"
+            }
+          }
+        },
         "properties": {
+          "elasticsearch": {
+            "$ref": "#/components/schemas/ElasticsearchReference"
+          },
           "id": {
             "$ref": "#/components/schemas/Name"
           },
@@ -323,6 +338,11 @@
           "quotaEntitlementId",
           "regionId"
         ],
+        "then": {
+          "required": [
+            "elasticsearch"
+          ]
+        },
         "type": "object"
       },
       "Digest": {
@@ -330,6 +350,24 @@
         "minLength": 71,
         "pattern": "^sha256:[0-9a-f]{64}$",
         "type": "string"
+      },
+      "ElasticsearchReference": {
+        "additionalProperties": false,
+        "properties": {
+          "installationId": {
+            "$ref": "#/components/schemas/Name"
+          },
+          "resourceVersion": {
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "installationId",
+          "resourceVersion"
+        ],
+        "type": "object"
       },
       "ErrorCode": {
         "enum": [
@@ -343,6 +381,8 @@
           "QUOTA_EXHAUSTED",
           "REGION_UNAVAILABLE",
           "INTERNAL",
+          "DEPENDENCY_UNAVAILABLE",
+          "DEPENDENCY_IN_USE",
           "SERVICE_ROLE_CONFLICT",
           "RESOURCE_STATE_CONFLICT"
         ],
@@ -831,12 +871,27 @@
       },
       "ServiceInstallation": {
         "additionalProperties": false,
+        "else": {
+          "properties": {
+            "elasticsearch": false
+          }
+        },
+        "if": {
+          "properties": {
+            "offeringId": {
+              "const": "kibana-8.19"
+            }
+          }
+        },
         "properties": {
           "createdAt": {
             "$ref": "#/components/schemas/Timestamp"
           },
           "credentialReference": {
             "$ref": "#/components/schemas/ID"
+          },
+          "elasticsearch": {
+            "$ref": "#/components/schemas/ElasticsearchReference"
           },
           "endpoint": {
             "type": "string"
@@ -883,6 +938,11 @@
           "regionId",
           "resourceVersion"
         ],
+        "then": {
+          "required": [
+            "elasticsearch"
+          ]
+        },
         "type": "object"
       },
       "ServiceInstallationList": {

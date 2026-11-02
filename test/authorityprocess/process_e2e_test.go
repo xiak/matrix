@@ -101,6 +101,7 @@ const (
 	managedElasticsearchImageIDEnv = "MATRIX_IAM_MANAGED_ELASTICSEARCH_IMAGE_ID"
 	managedRabbitMQImageIDEnv      = "MATRIX_IAM_MANAGED_RABBITMQ_IMAGE_ID"
 	managedLogstashImageIDEnv      = "MATRIX_IAM_MANAGED_LOGSTASH_IMAGE_ID"
+	managedKibanaImageIDEnv        = "MATRIX_IAM_MANAGED_KIBANA_IMAGE_ID"
 	// Match the published PaaS client environment on every host. Resolve this
 	// manifest reference to the local image ID; classic and containerd stores
 	// need not expose the manifest digest as their runtime image ID.
@@ -803,8 +804,8 @@ func TestIAMRoleLifecycleConsoleBrowser(t *testing.T) {
 	testIndependentAuthorityProcesses(t, authorityProcessRoleLifecycleBrowser)
 }
 
-// This gate provisions actual PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19
-// and RabbitMQ 4.1 product resources through the public PaaS API and the
+// This gate provisions actual PostgreSQL 18, MySQL 8.4, RabbitMQ 4.1 and the
+// Elasticsearch/Logstash/Kibana 8.19 products through the public PaaS API and the
 // production worker. Catalog rows, accepted commands, synthetic endpoints or
 // manually completed records cannot satisfy it.
 func TestManagedProductProviderProcesses(t *testing.T) {
@@ -813,7 +814,7 @@ func TestManagedProductProviderProcesses(t *testing.T) {
 	}
 	for _, environment := range []string{
 		managedPostgresImageIDEnv, managedMySQLImageIDEnv,
-		managedElasticsearchImageIDEnv, managedRabbitMQImageIDEnv, managedLogstashImageIDEnv,
+		managedElasticsearchImageIDEnv, managedRabbitMQImageIDEnv, managedLogstashImageIDEnv, managedKibanaImageIDEnv,
 	} {
 		if os.Getenv(environment) == "" {
 			t.Skipf("set %s to the already-loaded immutable product image ID", environment)
@@ -2978,6 +2979,7 @@ type managedProductImages struct {
 	elasticsearch string
 	rabbitmq      string
 	logstash      string
+	kibana        string
 }
 
 func managedPostgresFixture(t *testing.T, owner string, imageID string) managedProductFixture {
@@ -3054,6 +3056,10 @@ func runManagedProductProviderProcesses(
 		managedElasticsearchFixture(t, "provider", managedRuntime.images.elasticsearch),
 		managedRabbitMQFixture(t, "provider", managedRuntime.images.rabbitmq),
 		managedLogstashFixture(t, "provider", managedRuntime.images.logstash),
+		{tenantID: "organization-process", name: "Kibana 8.19", serviceID: managedservicev1.KibanaServiceID,
+			offeringID: managedservicev1.KibanaOfferingID, quotaShapeID: "kibana-small", engineVersion: "8.19.23",
+			installationID: newManagedProductID(t, "provider", "kibana"), imageID: managedRuntime.images.kibana,
+			runtimeDirectory: "managed-kibana", credentialFile: "kibana-session-key"},
 	}
 	quotasByID := make(map[string]managedservicev1.QuotaEntitlement, len(products))
 	installationsByID := make(map[string]managedservicev1.ServiceInstallation, len(products))
@@ -3098,6 +3104,16 @@ func runManagedProductProviderProcesses(
 		command := managedservicev1.CreateInstallationRequest{
 			ID: product.installationID, Name: "Authority provider " + product.name,
 			OfferingID: product.offeringID, QuotaEntitlementID: quota.ID, RegionID: "local-primary",
+		}
+		if product.offeringID == managedservicev1.KibanaOfferingID {
+			for _, dependency := range installationsByID {
+				if dependency.OfferingID == managedservicev1.ElasticsearchOfferingID {
+					command.Elasticsearch = &managedservicev1.ElasticsearchReference{InstallationID: dependency.ID, ResourceVersion: dependency.ResourceVersion}
+				}
+			}
+			if command.Elasticsearch == nil {
+				t.Fatal("Kibana acceptance requires a real ready Elasticsearch dependency")
+			}
 		}
 		response = performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", bearer,
 			requestPrefix+"-installation", command)
@@ -3210,6 +3226,8 @@ func runManagedProductProviderProcesses(
 		}
 	}
 
+	assertManagedKibanaDependencyPermission(t, ctx, database, managedRuntime, iamEndpoint, paasEndpoint,
+		bearer, member.Credential, memberUser.ID, products, installationsByID)
 	foreignAccountID := "account-managed-" + newManagedHexSuffix(t)
 	foreignLoginName := "managed.foreign." + newManagedHexSuffix(t)
 	response = performJSON(t, http.MethodPost, iamEndpoint+"/v1/accounts", bearer, map[string]any{
@@ -3277,7 +3295,18 @@ func runManagedProductProviderProcesses(
 		assertManagedProductAuthorization(t, ctx, database, auditEndpoint, bearer, memberUser.ID, product)
 	}
 
-	for _, product := range products {
+	for _, dependency := range installationsByID {
+		if dependency.OfferingID != managedservicev1.ElasticsearchOfferingID {
+			continue
+		}
+		response := performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations/"+dependency.ID+"/termination", bearer, "blocked-elasticsearch-dependency", nil)
+		var problem managedservicev1.Problem
+		if response.Status != http.StatusConflict || json.Unmarshal(response.Body, &problem) != nil || problem.Code != managedservicev1.ErrorDependencyInUse {
+			t.Fatal("live Kibana failed to protect its native Elasticsearch dependency")
+		}
+	}
+	for index := len(products) - 1; index >= 0; index-- {
+		product := products[index]
 		terminationPath := base + "/service-installations/" + product.installationID + "/termination"
 		if response := performJSONWithIdempotency(t, http.MethodPost, terminationPath, member.Credential,
 			"managed-product-member-termination-"+product.runtimeDirectory, nil); response.Status != http.StatusForbidden {
@@ -3323,8 +3352,121 @@ func runManagedProductProviderProcesses(
 	}
 	finishTenantIsolation()
 	waitAllPaaSOutboxDelivered(t, ctx, database)
-	t.Log("real PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19, RabbitMQ 4.1 and Logstash 8.19 providers completed create-to-READY-to-TERMINATED, protocol read/write, data and credential deletion, quota return, Operation, exact group authorization, next-request revocation, tenant isolation and verified Audit")
+	t.Log("real PostgreSQL 18, MySQL 8.4, Elasticsearch 8.19, RabbitMQ 4.1, Logstash 8.19 and Kibana 8.19 providers completed create-to-READY-to-TERMINATED, protocol read/write, data and credential deletion, quota return, Operation, exact group authorization, next-request revocation, tenant isolation and verified Audit")
 	return []string{member.Credential, foreign.Credential}
+}
+
+func assertManagedKibanaDependencyPermission(t *testing.T, ctx context.Context, database *pgx.Conn,
+	managedRuntime managedProductRuntime, iamEndpoint, paasEndpoint, ownerBearer, memberBearer string,
+	memberID iamv1.PrincipalID, products []managedProductFixture, installations map[string]managedservicev1.ServiceInstallation,
+) {
+	t.Helper()
+	var product managedProductFixture
+	var search managedservicev1.ServiceInstallation
+	var unrelatedID string
+	for _, candidate := range products {
+		switch candidate.offeringID {
+		case managedservicev1.KibanaOfferingID:
+			product = candidate
+		case managedservicev1.ElasticsearchOfferingID:
+			search = installations[candidate.installationID]
+		case managedservicev1.MySQLOfferingID:
+			unrelatedID = candidate.installationID
+		}
+	}
+	if product.installationID == "" || search.ID == "" || unrelatedID == "" {
+		t.Fatal("dependency permission gate lacks real product prerequisites")
+	}
+	product.installationID = newManagedProductID(t, "dependency-user", "kibana")
+	defer cleanupManagedProduct(t, product)
+	defer func() {
+		if t.Failed() {
+			cleanupManagedProductWorker(t, managedRuntime.workerContainer, managedRuntime.volumeName)
+		}
+	}()
+	base := paasEndpoint + "/managed-services/v1"
+	response := performJSONWithIdempotency(t, http.MethodPost, base+"/quota-entitlements", ownerBearer, "dependency-permission-quota",
+		managedservicev1.ActivateQuotaRequest{OfferingID: product.offeringID, QuotaShapeID: product.quotaShapeID, InstanceCount: 1})
+	var quota managedservicev1.QuotaEntitlement
+	if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &quota) != nil || managedservicev1.ValidateQuotaEntitlement(quota) != nil {
+		t.Fatal("create dependency permission quota")
+	}
+	grant := func(action iamv1.Action, targetID, requestID string) iamv1.PolicyAttachment {
+		t.Helper()
+		selector := iamv1.PolicyResourceSelector{Kind: iamv1.ResourceServiceInstallation, Match: iamv1.PolicyResourceExact, ID: targetID}
+		if targetID == "" {
+			selector.Match = iamv1.PolicyResourceAnyInAuthority
+		}
+		response := performJSON(t, http.MethodPost, iamEndpoint+"/v1/policies", ownerBearer, iamv1.CreatePolicyRequest{
+			DisplayName: requestID, RequestID: requestID,
+			Document: iamv1.PolicyDocument{LanguageVersion: iamv1.PolicyLanguageVersion, Scope: iamv1.AuthorityScopeTenant,
+				Statements: []iamv1.PolicyStatement{{SID: "exact-authority", Effect: iamv1.PolicyAllow, Actions: []iamv1.Action{action}, Resources: []iamv1.PolicyResourceSelector{selector}}}},
+		})
+		var policy iamv1.PolicyDetail
+		if response.Status != http.StatusCreated || json.Unmarshal(response.Body, &policy) != nil || iamv1.ValidatePolicyDetail(policy) != nil {
+			t.Fatalf("publish dependency grant status=%d", response.Status)
+		}
+		return createIAMPolicyAttachment(t, iamEndpoint, ownerBearer, memberID, policy.Policy.ID, requestID+"-attach")
+	}
+	createGrant := grant(iamv1.ActionManagedServiceInstallationCreate, "", "dependency-create-grant")
+	command := managedservicev1.CreateInstallationRequest{ID: product.installationID, Name: "Explicit dependency use", OfferingID: product.offeringID,
+		QuotaEntitlementID: quota.ID, RegionID: search.RegionID,
+		Elasticsearch: &managedservicev1.ElasticsearchReference{InstallationID: search.ID, ResourceVersion: search.ResourceVersion}}
+	key := "dependency-permission-create"
+	deny := func(stage string) {
+		t.Helper()
+		response := performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", memberBearer, key, command)
+		var problem managedservicev1.Problem
+		if response.Status != http.StatusForbidden || json.Unmarshal(response.Body, &problem) != nil || problem.Code != managedservicev1.ErrorPermissionDenied {
+			t.Fatalf("%s dependency permission status=%d", stage, response.Status)
+		}
+	}
+	deny("read is not use")
+	wrongGrant := grant(iamv1.ActionManagedServiceInstallationUse, unrelatedID, "dependency-wrong-target-grant")
+	deny("another exact resource is not this dependency")
+	revokeIAMPolicyAttachment(t, iamEndpoint, ownerBearer, wrongGrant.ID, wrongGrant.ResourceVersion, "dependency-wrong-target-revoke")
+	var effects int
+	if err := database.QueryRow(ctx, `SELECT count(*) FROM managedservice.operations WHERE tenant_id=$1 AND installation_id=$2`, product.tenantID, product.installationID).Scan(&effects); err != nil || effects != 0 {
+		t.Fatal("denied dependency left an operation", err)
+	}
+	response = performJSON(t, http.MethodGet, base+"/quota-entitlements/"+quota.ID, ownerBearer, nil)
+	var unspent managedservicev1.QuotaEntitlement
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &unspent) != nil || unspent.ReservedCount != 0 || unspent.ConsumedCount != 0 {
+		t.Fatal("denied dependency consumed quota")
+	}
+	useGrant := grant(iamv1.ActionManagedServiceInstallationUse, search.ID, "dependency-exact-use-grant")
+	response = performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", memberBearer, key, command)
+	var accepted managedservicev1.ServiceInstallation
+	if response.Status != http.StatusAccepted || json.Unmarshal(response.Body, &accepted) != nil || managedservicev1.ValidateServiceInstallation(accepted) != nil ||
+		accepted.Elasticsearch == nil || *accepted.Elasticsearch != *command.Elasticsearch {
+		t.Fatalf("explicit current dependency grant create status=%d", response.Status)
+	}
+	response = performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations", memberBearer, key, command)
+	var replay managedservicev1.ServiceInstallation
+	if response.Status != http.StatusOK || json.Unmarshal(response.Body, &replay) != nil || replay.ID != accepted.ID || replay.Operation.ID != accepted.Operation.ID {
+		t.Fatal("authorized dependency replay changed command identity")
+	}
+	revokeIAMPolicyAttachment(t, iamEndpoint, ownerBearer, useGrant.ID, useGrant.ResourceVersion, "dependency-exact-use-revoke")
+	deny("revoked use blocks equal replay")
+	revokeIAMPolicyAttachment(t, iamEndpoint, ownerBearer, createGrant.ID, createGrant.ResourceVersion, "dependency-create-revoke")
+	installation := waitManagedProductReady(t, ctx, paasEndpoint, ownerBearer, product)
+	project := assertManagedProductRuntime(t, ctx, installation, managedRuntime, product)
+	var decisionProof bool
+	if err := database.QueryRow(ctx, `SELECT EXISTS (
+		SELECT 1 FROM iam.authorization_decisions decision_value
+		WHERE tenant_id=$1 AND principal_id=$2 AND action_name=$3 AND target_id=$4 AND allowed
+		AND EXISTS (SELECT 1 FROM jsonb_array_elements(decision_value.policy_evidence) evidence WHERE evidence->>'attachmentId'=$5)
+	) AND EXISTS (SELECT 1 FROM iam.authorization_decisions
+		WHERE tenant_id=$1 AND principal_id=$2 AND action_name=$3 AND target_id=$4 AND NOT allowed)`,
+		product.tenantID, memberID, iamv1.ActionManagedServiceInstallationUse, search.ID, useGrant.ID).Scan(&decisionProof); err != nil || !decisionProof {
+		t.Fatal("dependency did not retain exact current IAM allow and deny evidence", err)
+	}
+	response = performJSONWithIdempotency(t, http.MethodPost, base+"/service-installations/"+product.installationID+"/termination", ownerBearer, "dependency-permission-terminate", nil)
+	if response.Status != http.StatusAccepted {
+		t.Fatalf("terminate dependency permission product status=%d", response.Status)
+	}
+	_ = waitManagedProductTerminated(t, ctx, paasEndpoint, ownerBearer, product)
+	assertManagedProductDeleted(t, ctx, managedRuntime, product, project, *installation.Endpoint)
 }
 
 func assertManagedProductTerminationProof(
@@ -16557,6 +16699,7 @@ func managedProductWorkerEnvironment(
 		"MATRIX_PAAS_WORKER_MANAGED_ELASTICSEARCH_IMAGE_IDS=" + images.elasticsearch,
 		"MATRIX_PAAS_WORKER_MANAGED_RABBITMQ_IMAGE_IDS=" + images.rabbitmq,
 		"MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS=" + images.logstash,
+		"MATRIX_PAAS_WORKER_MANAGED_KIBANA_IMAGE_IDS=" + images.kibana,
 		"MATRIX_PAAS_WORKER_MANAGED_PRODUCT_ENDPOINT_IMAGE_IDS=" + images.endpoint,
 	}
 }
@@ -16569,6 +16712,7 @@ func managedProductImagesFromEnvironment(t *testing.T) managedProductImages {
 		elasticsearch: managedProductImageID(t, managedElasticsearchImageIDEnv),
 		rabbitmq:      managedProductImageID(t, managedRabbitMQImageIDEnv),
 		logstash:      managedProductImageID(t, managedLogstashImageIDEnv),
+		kibana:        managedProductImageID(t, managedKibanaImageIDEnv),
 	}
 }
 
@@ -16716,7 +16860,7 @@ func assertManagedProductRuntime(
 	parts := strings.Split(strings.TrimSpace(string(state)), "|")
 	want := []string{"running", "healthy", product.imageID, product.offeringID, installation.RegionID}
 	if err != nil || len(parts) != 6 || !slices.Equal(parts[:5], want) {
-		t.Fatalf("%s runtime state does not match its product resource", product.name)
+		t.Fatalf("%s runtime state does not match its product resource: observed=%q expected=%q inspectFailed=%t", product.name, parts, want, err != nil)
 	}
 	project := parts[5]
 	projectDigest := strings.TrimPrefix(project, "matrix-")
@@ -16741,6 +16885,17 @@ func assertManagedProductRuntime(
 		assertManagedRabbitMQAMQP(t, ctx, installation, password)
 	case managedservicev1.LogstashOfferingID:
 		assertManagedLogstashHTTP(t, ctx, installation, password, containerID)
+	case managedservicev1.KibanaOfferingID:
+		if installation.Elasticsearch == nil {
+			t.Fatal("Kibana response omitted its authoritative dependency")
+		}
+		dependency := managedProductFixture{tenantID: product.tenantID, runtimeDirectory: "managed-elasticsearch", credentialFile: "elasticsearch-password"}
+		dependencyPassword, err := readManagedProductCredential(ctx, managedRuntime, dependency, localcontaineradapter.ProjectName(product.tenantID, installation.Elasticsearch.InstallationID))
+		if err != nil {
+			t.Fatal("Kibana dependency business credential is unavailable")
+		}
+		defer clear(dependencyPassword)
+		assertManagedKibanaHTTP(t, ctx, installation, dependencyPassword)
 	default:
 		t.Fatal("managed product fixture is unsupported")
 	}
@@ -16912,6 +17067,73 @@ func assertManagedElasticsearchHTTP(
 	if json.Unmarshal(request(http.MethodGet, "/matrix-iam-acceptance/_doc/preserved", nil), &document) != nil ||
 		!document.Found || document.Source.Value != "preserved" {
 		t.Fatal("managed product resource did not complete a real Elasticsearch HTTP write/read round trip")
+	}
+}
+
+func assertManagedKibanaHTTP(t *testing.T, ctx context.Context, installation managedservicev1.ServiceInstallation, password []byte) {
+	t.Helper()
+	client := &http.Client{Timeout: 30 * time.Second}
+	defer client.CloseIdleConnections()
+	request := func(method, path string, body []byte, authenticated bool) (int, []byte) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, method, *installation.Endpoint+path, bytes.NewReader(body))
+		if err != nil {
+			t.Fatal("construct native Kibana request")
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("kbn-xsrf", "matrix-acceptance")
+		if authenticated {
+			req.SetBasicAuth("elastic", string(password))
+		}
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal("native Kibana request failed")
+		}
+		defer response.Body.Close()
+		content, err := io.ReadAll(io.LimitReader(response.Body, 1024*1024))
+		if err != nil {
+			t.Fatal("native Kibana response unavailable")
+		}
+		return response.StatusCode, content
+	}
+	status, content := request(http.MethodGet, "/api/status", nil, false)
+	var root struct {
+		Version struct {
+			Number string `json:"number"`
+		} `json:"version"`
+	}
+	if status != http.StatusOK || json.Unmarshal(content, &root) != nil || root.Version.Number != installation.EngineVersion {
+		t.Fatal("native Kibana version differs from its installation")
+	}
+	if status, _ := request(http.MethodGet, "/api/data_views", nil, false); status != http.StatusUnauthorized {
+		t.Fatal("native Kibana accepted an unauthenticated business request")
+	}
+	if installation.Elasticsearch == nil {
+		t.Fatal("native Kibana has no authoritative Elasticsearch reference")
+	}
+	// Saved objects belong to Elasticsearch. A second Kibana must read this
+	// same view; creating the same title with another ID is a native conflict.
+	id := "matrix-iam-" + installation.Elasticsearch.InstallationID
+	path := "/api/data_views/data_view/" + id
+	status, content = request(http.MethodGet, path, nil, true)
+	if status == http.StatusNotFound {
+		body, err := json.Marshal(map[string]any{"data_view": map[string]string{"id": id, "title": "matrix-iam-acceptance*"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status, _ := request(http.MethodPost, "/api/data_views/data_view", body, true); status != http.StatusOK {
+			t.Fatalf("native Kibana data-view creation failed: HTTP %d", status)
+		}
+		status, content = request(http.MethodGet, path, nil, true)
+	}
+	var saved struct {
+		DataView struct {
+			ID    string `json:"id"`
+			Title string `json:"title"`
+		} `json:"data_view"`
+	}
+	if status != http.StatusOK || json.Unmarshal(content, &saved) != nil || saved.DataView.ID != id || saved.DataView.Title != "matrix-iam-acceptance*" {
+		t.Fatal("native Kibana saved view did not survive its authenticated read")
 	}
 }
 

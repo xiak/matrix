@@ -131,6 +131,11 @@
         "description": "Managed search, indexing and analytics",
         "keywords": "elasticsearch elastic es search analytics index 搜索 分析 索引 大数据"
       },
+      "kibana": {
+        "name": "Kibana",
+        "description": "Browse data and create visualizations using managed Elasticsearch",
+        "keywords": "kibana elastic elk dashboard visualization data view"
+      },
       "logstash": {
         "name": "Logstash",
         "description": "Authenticated HTTP JSON input, durable event files and instance management",
@@ -3764,6 +3769,8 @@
     }
   },
   "ManagedService": {
+    "kibanaLoginHint": "Open the endpoint in your browser and sign in with the linked Elasticsearch business account. Ask your platform administrator for that instance’s business credentials; your Matrix account cannot sign in to Kibana.",
+    "elasticsearchDependency": "Elasticsearch dependency",
     "productMockBoundary": "This is an isolated UX MOCK product workspace and does not create real resources. The matching backend capability is still a candidate awaiting independent verification; this is not evidence of release, high availability, or production readiness.",
     "productLiveBoundary": "This page shows the service offerings, quotas and instances you can access.",
     "managedCloudService": "Managed cloud service",
@@ -3876,11 +3883,12 @@
     "reviewTerminationAgain": "Review termination retry",
     "resumeTermination": "Resume unconfirmed termination",
     "terminationInProgress": "The platform accepted the termination and is asynchronously deleting runtime, network, data and credentials. This page keeps reading the current operation; do not create a second intent.",
-    "terminationCompleted": "The platform completed termination. The instance will leave the visible directory and its quota is returned at terminal completion.",
+    "terminationCompleted": "Termination is complete and the associated quota has been returned. Authorized readers can still view this termination record.",
     "terminationUnknownPreserved": "The result of original termination request {id} is not confirmed. Its idempotency key is preserved and a second termination intent will not be created.",
     "terminationAnotherIntent": "Instance {id} still has an unfinished termination request. Complete or explicitly handle it before terminating another instance.",
     "terminationAuthorizationBusy": "This instance still has an unfinished service-authorization review. Finish that flow before reviewing termination.",
     "terminationMutationErrors": {
+      "dependencyInUse": "This Elasticsearch still has linked Kibana instances. Terminate them and wait for cleanup to complete before trying again.",
       "expired": "The current session expired. The original request will not be automatically submitted with a new session.",
       "forbidden": "This identity may not terminate this exact instance.",
       "notFound": "The instance no longer exists, or this identity cannot confirm whether it exists. Return to the directory and read it again.",
@@ -4009,6 +4017,8 @@
     },
     "dismissCommandNotice": "Dismiss",
     "commandErrors": {
+      "dependencyInUse": "This Elasticsearch still has linked Kibana instances. Terminate them and wait for cleanup to complete before trying again.",
+      "dependencyUnavailable": "The selected Elasticsearch changed or is no longer available. Refresh the available instances and select one again before submitting.",
       "expired": "The current session expired. The original request was not automatically submitted with a new session. Sign in again and read resource state.",
       "forbidden": "This identity may not perform the exact operation. The request stopped and will not silently expand its permission scope.",
       "notFound": "The target no longer exists, or this identity cannot confirm that it exists. Read the resource again.",
@@ -4043,6 +4053,12 @@
     }
   },
   "ServiceWorkflow": {
+    "reloadElasticsearch": "Refresh available instances",
+    "elasticsearchChanged": "The selected instance changed or no longer matches. Refresh the list and select it again.",
+    "elasticsearchEmpty": "No matching Elasticsearch instance. Install one with the same version and region, obtain read and use permissions, then refresh the list.",
+    "selectElasticsearch": "Select an Elasticsearch instance",
+    "elasticsearchHint": "Only READY instances in this account with the same version and region are listed. Creating Kibana also requires permission to use the selected instance; read permission alone is insufficient.",
+    "elasticsearch": "Elasticsearch instance",
     "quotaEyebrow": "Quota activation",
     "quotaTitle": "Activate service quota",
     "catalogEmpty": "The service catalog returned no products available for activation.",

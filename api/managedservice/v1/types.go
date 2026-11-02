@@ -110,18 +110,19 @@ type InstallationOperation struct {
 }
 
 type ServiceInstallation struct {
-	ID                  string                `json:"id"`
-	Name                string                `json:"name"`
-	OfferingID          string                `json:"offeringId"`
-	EngineVersion       string                `json:"engineVersion"`
-	QuotaEntitlementID  string                `json:"quotaEntitlementId"`
-	RegionID            string                `json:"regionId"`
-	Phase               InstallationPhase     `json:"phase"`
-	Endpoint            *string               `json:"endpoint"`
-	CredentialReference *string               `json:"credentialReference"`
-	Operation           InstallationOperation `json:"operation"`
-	ResourceVersion     uint64                `json:"resourceVersion"`
-	CreatedAt           time.Time             `json:"createdAt"`
+	ID                  string                  `json:"id"`
+	Name                string                  `json:"name"`
+	OfferingID          string                  `json:"offeringId"`
+	EngineVersion       string                  `json:"engineVersion"`
+	QuotaEntitlementID  string                  `json:"quotaEntitlementId"`
+	RegionID            string                  `json:"regionId"`
+	Elasticsearch       *ElasticsearchReference `json:"elasticsearch,omitempty"`
+	Phase               InstallationPhase       `json:"phase"`
+	Endpoint            *string                 `json:"endpoint"`
+	CredentialReference *string                 `json:"credentialReference"`
+	Operation           InstallationOperation   `json:"operation"`
+	ResourceVersion     uint64                  `json:"resourceVersion"`
+	CreatedAt           time.Time               `json:"createdAt"`
 }
 
 type ServiceInstallationList struct {
@@ -171,11 +172,20 @@ type ActivateServiceRequest struct {
 }
 
 type CreateInstallationRequest struct {
-	ID                 string `json:"id"`
-	Name               string `json:"name"`
-	OfferingID         string `json:"offeringId"`
-	QuotaEntitlementID string `json:"quotaEntitlementId"`
-	RegionID           string `json:"regionId"`
+	ID                 string                  `json:"id"`
+	Name               string                  `json:"name"`
+	OfferingID         string                  `json:"offeringId"`
+	QuotaEntitlementID string                  `json:"quotaEntitlementId"`
+	RegionID           string                  `json:"regionId"`
+	Elasticsearch      *ElasticsearchReference `json:"elasticsearch,omitempty"`
+}
+
+// ElasticsearchReference selects an exact, observed installation in the
+// caller's Account. Its immutable binding grants no permission by itself;
+// the authority checks current use permission before accepting the command.
+type ElasticsearchReference struct {
+	InstallationID  string `json:"installationId"`
+	ResourceVersion uint64 `json:"resourceVersion"`
 }
 
 // BindServiceRoleRequest selects one exact release-owned template. The

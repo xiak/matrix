@@ -286,6 +286,7 @@ func run(ctx context.Context) error {
 	managedServiceWorkflow, err := managedserviceusecase.NewService(
 		managedServiceRepository,
 		managedserviceusecase.Config{
+			Authorizer:            managedServiceAuthorizer,
 			Catalog:               domain.DefaultCatalog(),
 			WorkloadRoleAuthority: managedServiceAuthorizer,
 			WorkloadRoleRuntime:   managedServiceAuthorizer,

@@ -1,9 +1,9 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The unified mainline candidate is separately composed at `88/40/8+r40` and remains a candidate until its exact combined source, independent CI and signed runtime gate complete. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. These bounded private-candidate results do not constitute complete Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
+- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current ELK candidate is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. The ELK candidate still requires its own exact-source independent CI and signed runtime gate. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. These bounded private-candidate results do not constitute complete Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
-- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The unified candidate is exactly IAM 88 / Audit 40 / PaaS 8 at contract revision 40. Its retained PaaS-7-to-8 SQL gate is development migration evidence, not permission for a cross-profile release upgrade; no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
+- Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current ELK candidate is exactly IAM 88 / Audit 40 / PaaS 9 at contract revision 41. The retained SQL migration gates are development evidence, not permission for a cross-profile release upgrade; revision 40 and revision 41 transitions remain rejected, and no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
 
 ## Outcome
 
@@ -285,11 +285,14 @@ values, database rows, native errors, arbitrary logs, and absolute paths.
 
 ### 当前主线本机 Docker 安装复核
 
-后继 ELK 接入候选把运行契约推进到 `88/40/8+r41`：Elasticsearch 增加私有网络及
+后继 ELK 接入候选把运行契约推进到 `88/40/9+r41`：Elasticsearch 增加私有网络及
 固定入口，旧直连端口 worker 无法据此承诺兼容管理。当前候选对 `r40 ↔ r41` 的
 升级、回滚和恢复均在效果及 journal 变更前拒绝；保留数据的适配器迁移测试不能
 替代签名包迁移验收。下列已验收 Logstash 签名包仍为 `r40`，本机未切换到后继候选。
-Kibana 的正式平台绑定与发布组合完成后，另按本 owner 的门禁开放准确的受支持路径。
+Kibana 的依赖列、同账号外键、不可变绑定与竞争保护使 PaaS schema 推进到 9。
+准确的五产品 `88/40/8+r40` 已安装清单可验签读取，但不能因此成为新安装目标或
+获得升级、回滚、恢复许可。正式平台绑定与发布组合完成后，另按本 owner 的门禁
+开放准确的受支持路径。
 
 2026-10-29，按用户手册从干净提交
 `bafc3491f441281b24b2e0059d9e3bc5815dd0f5` 构建私有签名候选

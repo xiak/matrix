@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"os/user"
@@ -15,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -66,6 +68,18 @@ type Runtime interface {
 // and Compose evidence are never exposed to the helper image.
 type DataPurger interface {
 	PurgeData(context.Context, RuntimeProject, string) error
+}
+
+// ContainerHTTP performs a bounded request inside an already observed container.
+// It reaches only that container's loopback, independently of the worker's
+// network namespace. Authorization travels on stdin, never in argv or logs.
+type ContainerHTTP interface {
+	RequestContainerHTTP(context.Context, ContainerHTTPRequest) (int, []byte, error)
+}
+
+type ContainerHTTPRequest struct {
+	ContainerID, Method, Path, Authorization string
+	Port                                     uint16
 }
 
 type runtimeReadiness func(context.Context) error
@@ -366,6 +380,10 @@ func validateRuntimeProject(project RuntimeProject) error {
 }
 
 func runDocker(ctx context.Context, output io.Writer, arguments ...string) (bool, error) {
+	return runDockerInput(ctx, nil, output, arguments...)
+}
+
+func runDockerInput(ctx context.Context, input io.Reader, output io.Writer, arguments ...string) (bool, error) {
 	if ctx == nil {
 		return false, errors.New("Docker command context is required")
 	}
@@ -373,7 +391,7 @@ func runDocker(ctx context.Context, output io.Writer, arguments ...string) (bool
 		return false, err
 	}
 	command := exec.CommandContext(ctx, "docker", arguments...)
-	command.Stdin = nil
+	command.Stdin = input
 	command.Stdout = io.Discard
 	if output != nil {
 		command.Stdout = output
@@ -388,6 +406,53 @@ func runDocker(ctx context.Context, output io.Writer, arguments ...string) (bool
 		return false, err
 	}
 	return true, command.Wait()
+}
+
+func (*LocalRuntime) RequestContainerHTTP(ctx context.Context, request ContainerHTTPRequest) (int, []byte, error) {
+	return requestContainerHTTP(ctx, request, runDockerInput)
+}
+
+func requestContainerHTTP(ctx context.Context, request ContainerHTTPRequest,
+	run func(context.Context, io.Reader, io.Writer, ...string) (bool, error),
+) (int, []byte, error) {
+	path, err := url.ParseRequestURI(request.Path)
+	identity, identityErr := hex.DecodeString(request.ContainerID)
+	if ctx == nil || run == nil || err != nil || path == nil || path.Host != "" || path.Scheme != "" ||
+		!strings.HasPrefix(request.Path, "/") || strings.HasPrefix(request.Path, "//") || len(request.Path) > 2048 ||
+		strings.ContainsAny(request.Path, "\r\n\x00\\\"#") || request.Port == 0 || identityErr != nil || len(identity) != 32 ||
+		request.ContainerID != hex.EncodeToString(identity) ||
+		(request.Method != "GET" && request.Method != "POST" && request.Method != "DELETE") {
+		return 0, nil, ErrRuntimeOutputInvalid
+	}
+	scheme, credential, found := strings.Cut(request.Authorization, " ")
+	if !found || (scheme != "Basic" && scheme != "Bearer") || len(credential) == 0 || len(credential) > 2048 {
+		return 0, nil, ErrRuntimeOutputInvalid
+	}
+	for _, character := range credential {
+		if !strings.ContainsRune("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/=_-", character) {
+			return 0, nil, ErrRuntimeOutputInvalid
+		}
+	}
+	requestContext, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	var output boundedBuffer
+	output.maximum = 65540 // bounded body plus newline and three-digit status
+	defer func() { clear(output.Bytes()) }()
+	configuration := []byte("header = \"Authorization: " + request.Authorization + "\"\n")
+	defer clear(configuration)
+	_, err = run(requestContext, bytes.NewReader(configuration), &output,
+		"exec", "--interactive", request.ContainerID, "curl", "--disable", "--silent", "--show-error",
+		"--globoff", "--noproxy", "*", "--proto", "=http", "--connect-timeout", "2", "--max-time", "10",
+		"--max-filesize", "65536", "--request", request.Method, "--url", "http://127.0.0.1:"+strconv.Itoa(int(request.Port))+request.Path,
+		"--config", "-", "--write-out", "\n%{http_code}")
+	if err != nil || output.exceeded || output.Len() < 4 || output.Bytes()[output.Len()-4] != '\n' {
+		return 0, nil, ErrRuntimeUnavailable
+	}
+	status, err := strconv.Atoi(string(output.Bytes()[output.Len()-3:]))
+	if err != nil || status < 100 || status > 599 {
+		return 0, nil, ErrRuntimeOutputInvalid
+	}
+	return status, append([]byte(nil), output.Bytes()[:output.Len()-4]...), nil
 }
 
 type boundedBuffer struct {

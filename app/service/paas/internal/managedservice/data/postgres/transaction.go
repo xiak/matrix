@@ -35,7 +35,8 @@ const installationColumns = `installation.id, installation.name,
        installation.credential_reference, installation.resource_version,
        installation.created_at,
        operation.id, operation.kind, operation.phase, operation.safe_failure_code,
-       operation.observed_at`
+       operation.observed_at,
+       installation.elasticsearch_installation_id, installation.elasticsearch_resource_version`
 
 func (value *transaction) ListCommandResults(
 	ctx context.Context,
@@ -391,16 +392,22 @@ UPDATE managedservice.quota_entitlements
 	}
 	var createdAt, observedAt time.Time
 	var resourceVersion uint64
+	var dependencyID, dependencyVersion any
+	if draft.Elasticsearch != nil {
+		dependencyID, dependencyVersion = draft.Elasticsearch.InstallationID, draft.Elasticsearch.ResourceVersion
+	}
 	err = value.tx.QueryRow(ctx, `
 INSERT INTO managedservice.service_installations (
     tenant_id, id, name, offering_id, engine_version,
-    quota_entitlement_id, region_id, current_operation_id
+    quota_entitlement_id, region_id, current_operation_id,
+    elasticsearch_installation_id, elasticsearch_resource_version
 ) VALUES (
-    managedservice.current_tenant_id(), $1, $2, $3, $4, $5, $6, $7
+    managedservice.current_tenant_id(), $1, $2, $3, $4, $5, $6, $7, $8, $9
 )
 RETURNING created_at, observed_at, resource_version`,
 		draft.ID, draft.Name, draft.OfferingID, draft.EngineVersion,
 		draft.QuotaEntitlementID, draft.RegionID, draft.OperationID,
+		dependencyID, dependencyVersion,
 	).Scan(&createdAt, &observedAt, &resourceVersion)
 	if err != nil {
 		return managedservicev1.ServiceInstallation{}, databaseError(ctx, err)
@@ -425,6 +432,7 @@ RETURNING observed_at`,
 		ID: draft.ID, Name: draft.Name, OfferingID: draft.OfferingID,
 		EngineVersion: draft.EngineVersion, QuotaEntitlementID: draft.QuotaEntitlementID,
 		RegionID: draft.RegionID, Phase: managedservicev1.InstallationPending,
+		Elasticsearch:   draft.Elasticsearch,
 		ResourceVersion: resourceVersion, CreatedAt: normalizeTime(createdAt),
 		Operation: managedservicev1.InstallationOperation{
 			ID: draft.OperationID, Kind: managedservicev1.InstallationOperationProvision,
@@ -626,6 +634,8 @@ func scanInstallationValues(
 ) (managedservicev1.ServiceInstallation, string, error) {
 	var result managedservicev1.ServiceInstallation
 	var digest string
+	var dependencyID *string
+	var dependencyVersion *uint64
 	destinations := []any{
 		&result.ID, &result.Name, &result.OfferingID, &result.EngineVersion,
 		&result.QuotaEntitlementID, &result.RegionID, &result.Phase,
@@ -633,12 +643,19 @@ func scanInstallationValues(
 		&result.CreatedAt,
 		&result.Operation.ID, &result.Operation.Kind, &result.Operation.Phase,
 		&result.Operation.SafeFailureCode, &result.Operation.ObservedAt,
+		&dependencyID, &dependencyVersion,
 	}
 	if withDigest {
 		destinations = append(destinations, &digest)
 	}
 	if err := row.Scan(destinations...); err != nil {
 		return managedservicev1.ServiceInstallation{}, "", err
+	}
+	if (dependencyID == nil) != (dependencyVersion == nil) {
+		return managedservicev1.ServiceInstallation{}, "", usecase.ErrRepositoryUnavailable
+	}
+	if dependencyID != nil {
+		result.Elasticsearch = &managedservicev1.ElasticsearchReference{InstallationID: *dependencyID, ResourceVersion: *dependencyVersion}
 	}
 	result.CreatedAt = normalizeTime(result.CreatedAt)
 	result.Operation.ObservedAt = normalizeTime(result.Operation.ObservedAt)

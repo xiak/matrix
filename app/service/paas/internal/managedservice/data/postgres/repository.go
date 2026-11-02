@@ -76,6 +76,10 @@ func databaseError(ctx context.Context, err error) error {
 			return usecase.ErrNotFound
 		case "MX409":
 			return usecase.ErrInvalidState
+		case "MX424":
+			return usecase.ErrDependencyUnavailable
+		case "MX423":
+			return usecase.ErrDependencyInUse
 		case "23514", "22023":
 			return usecase.ErrInvalidArgument
 		}

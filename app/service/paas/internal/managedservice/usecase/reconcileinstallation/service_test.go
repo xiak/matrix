@@ -97,8 +97,45 @@ func TestProcessNextRejectsChangedInstallationProfileWithoutEffect(t *testing.T)
 	service := testReconciler(t, queue, provisioner, 3)
 	processed, err := service.ProcessNext(context.Background(), "worker-test")
 	if err != nil || !processed || queue.failureCode != "INSTALLATION_PROFILE_INVALID" ||
-		provisioner.calls != 0 {
+		provisioner.calls != 0 || queue.cleanupFailed != 1 {
 		t.Fatalf("processed=%v err=%v queue=%#v calls=%d", processed, err, queue, provisioner.calls)
+	}
+}
+
+func TestKibanaBindingSurvivesProvisionCompensationAndTermination(t *testing.T) {
+	for _, path := range []string{"provision", "compensation", "failed cleanup", "termination"} {
+		t.Run(path, func(t *testing.T) {
+			work := testWorkItem(3)
+			work.QuotaShapeID = "kibana-small"
+			work.Installation.ID, work.Installation.OfferingID, work.Installation.EngineVersion = "kibana-one", managedservicev1.KibanaOfferingID, "8.19.23"
+			work.Installation.Elasticsearch = &managedservicev1.ElasticsearchReference{InstallationID: "search-one", ResourceVersion: 3}
+			queue := &stubQueue{work: work, found: true}
+			provider := &stubProvisioner{result: managedserviceadapterv1.ProvisionResult{Endpoint: "http://127.0.0.1:27561", CredentialReference: "credential-kibana-one"}}
+			if path == "compensation" || path == "failed cleanup" {
+				provider.err = errors.New("native attempt failed")
+			}
+			if path == "failed cleanup" {
+				provider.deleteErr = errors.New("token revocation failed")
+			}
+			if path == "termination" {
+				queue.work.Kind = managedservicev1.InstallationOperationTerminate
+			}
+			processed, err := testReconciler(t, queue, provider, 3).ProcessNext(t.Context(), "worker-test")
+			if err != nil || !processed {
+				t.Fatal("dependency reconciliation failed", err)
+			}
+			dependency := provider.request.Elasticsearch
+			if path != "provision" {
+				dependency = provider.deleteRequest.Elasticsearch
+			}
+			want := managedserviceadapterv1.ElasticsearchDependency{InstallationID: "search-one", ResourceVersion: 3, EngineVersion: "8.19.23", RegionID: "local-primary"}
+			if dependency == nil || *dependency != want {
+				t.Fatal("effect lost or changed its authoritative binding")
+			}
+			if path == "failed cleanup" && (queue.cleanupFailed != 1 || queue.completed != 0) {
+				t.Fatal("failed native cleanup released dependency protection")
+			}
+		})
 	}
 }
 
@@ -205,13 +242,14 @@ func testWorkItem(attempt uint32) WorkItem {
 }
 
 type stubQueue struct {
-	work        WorkItem
-	found       bool
-	completed   int
-	retried     int
-	failed      int
-	failureCode string
-	onClaim     func()
+	work          WorkItem
+	found         bool
+	completed     int
+	retried       int
+	failed        int
+	cleanupFailed int
+	failureCode   string
+	onClaim       func()
 }
 
 func (queue *stubQueue) Claim(context.Context, string, time.Duration) (WorkItem, bool, error) {
@@ -244,6 +282,7 @@ func (queue *stubQueue) Fail(_ context.Context, _ WorkItem, code string) error {
 
 func (queue *stubQueue) FailCleanup(_ context.Context, _ WorkItem, code string) error {
 	queue.failed++
+	queue.cleanupFailed++
 	queue.failureCode = code
 	return nil
 }

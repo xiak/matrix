@@ -39,6 +39,36 @@ const serviceRoleCommands: ManagedServiceCommandIntent[] = [
 afterEach(() => localStorage.clear());
 
 describe("managedServiceCommandStorage", () => {
+  it("preserves the exact non-secret Kibana dependency in a recovered command", () => {
+    const intent = { ...command, payload: { ...command.payload, offeringId: "kibana-8.19",
+      elasticsearch: { installationId: "es-primary", resourceVersion: 4 } } };
+    const parsed = parseManagedServiceCommandIntent(intent);
+    expect(parsed).toEqual(intent);
+    writeManagedServiceCommand(localStorage, intent);
+    intent.payload.elasticsearch.resourceVersion = 5;
+    expect(readManagedServiceCommand(localStorage, owner)).toEqual(parsed);
+    expect(parsed && "elasticsearch" in parsed.payload && parsed.payload.elasticsearch?.resourceVersion).toBe(4);
+  });
+
+  it.each([
+    undefined, null, { installationId: "es-primary" },
+    ...[0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, "4"].map((resourceVersion) => ({ installationId: "es-primary", resourceVersion })),
+    { installationId: command.targetId, resourceVersion: 4 },
+    { installationId: "es/other", resourceVersion: 4 },
+    { installationId: "es-primary", resourceVersion: 4, password: "must-not-persist" },
+    { installationId: "es-primary", resourceVersion: 4, endpoint: "http://untrusted" }
+  ])("rejects an invalid or secret-bearing Kibana dependency: %j", (elasticsearch) => {
+    expect(parseManagedServiceCommandIntent({ ...command, payload: {
+      ...command.payload, offeringId: "kibana-8.19", elasticsearch
+    } })).toBeNull();
+  });
+
+  it("rejects a dependency on products without that contract", () => {
+    expect(parseManagedServiceCommandIntent({ ...command, payload: {
+      ...command.payload, elasticsearch: { installationId: "es-primary", resourceVersion: 4 }
+    } })).toBeNull();
+  });
+
   it("keeps the Role and its original source User as separate exact identities", () => {
     const roleOwner = { accountId: owner.accountId, actorKind: "ROLE" as const, actorId: "role:a", sourceUserId: "b" };
     const roleCommand: ManagedServiceCommandIntent = { ...command, owner: roleOwner };

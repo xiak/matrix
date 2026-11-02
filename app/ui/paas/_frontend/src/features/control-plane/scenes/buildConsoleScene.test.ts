@@ -203,6 +203,21 @@ describe("buildConsoleScene", () => {
     });
   });
 
+  it("keeps current-account Elasticsearch choices available on the Kibana-only product page", () => {
+    const dependency = { ...snapshot.installations[0]!, id: "es-ready", name: "Search", offeringId: "elasticsearch-8.19", engineVersion: "8.19.23" };
+    const kibanaSnapshot = { ...snapshot,
+      offerings: [{ ...snapshot.offerings[0]!, id: "kibana-8.19", service: { ...snapshot.offerings[0]!.service, id: "kibana" }, engineVersion: "8.19.23" }],
+      entitlements: [{ ...snapshot.entitlements[0]!, offeringId: "kibana-8.19" }],
+      installations: [dependency, { ...dependency, id: "es-pending", phase: "PENDING" as const }]
+    };
+    const scene = buildConsoleScene("installations", kibanaSnapshot, undefined, undefined, "kibana");
+    expect(scene.content).toMatchObject({ kind: "installations", installations: [] });
+    expect(scene.workspace).toMatchObject({ kind: "installation-order",
+      entitlementOptions: [{ offeringId: "kibana-8.19", engineVersion: "8.19.23" }],
+      elasticsearchOptions: [{ id: "es-ready", label: "Search", resourceVersion: 2, engineVersion: "8.19.23", regionId: "local-primary" }]
+    });
+  });
+
   it("builds IAM navigation without reading unrelated PaaS resources", () => {
     const unavailable = new Proxy(snapshot, { get() { throw new Error("PaaS unavailable"); } });
     const scene = buildConsoleScene("access", unavailable, undefined, "groups");

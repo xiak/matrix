@@ -73,6 +73,11 @@ export type InstallationOperation = {
   observedAt: string;
 };
 
+export type ElasticsearchReference = {
+  installationId: string;
+  resourceVersion: number;
+};
+
 export type ServiceInstallation = {
   id: string;
   name: string;
@@ -80,6 +85,7 @@ export type ServiceInstallation = {
   engineVersion: string;
   quotaEntitlementId: string;
   regionId: string;
+  elasticsearch?: ElasticsearchReference;
   phase: InstallationPhase;
   endpoint: string | null;
   credentialReference: string | null;
@@ -93,6 +99,7 @@ export type InstallationTerminationMutationError =
   | "forbidden"
   | "notFound"
   | "conflict"
+  | "dependencyInUse"
   | "invalid"
   | "unknown";
 
@@ -127,4 +134,5 @@ export type CreateInstallationCommand = {
   offeringId: string;
   quotaEntitlementId: string;
   regionId: string;
+  elasticsearch?: ElasticsearchReference;
 };

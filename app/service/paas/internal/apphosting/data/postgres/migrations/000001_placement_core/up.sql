@@ -5435,7 +5435,7 @@ AS $function$
              WHERE outbox.status = 'DEAD_LETTER'
                 OR outbox.attempts >= 100
         ),
-        8::bigint,
+        9::bigint,
         transaction_timestamp()
 $function$;
 
@@ -5473,7 +5473,7 @@ AS $function$
         AND to_regprocedure(
             'paas.reconcile_local_execution_profile(bigint,jsonb,bigint,jsonb,bigint,jsonb)'
         ) IS NULL,
-        8::bigint,
+        9::bigint,
         transaction_timestamp()
 $function$;
 

@@ -698,7 +698,7 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 			iamv1.ActionManagedServiceOfferingRead, iamv1.ActionManagedServiceRegionRead,
 			iamv1.ActionManagedServiceQuotaEntitlementActivate, iamv1.ActionManagedServiceQuotaEntitlementRead,
 			iamv1.ActionManagedServiceInstallationCreate, iamv1.ActionManagedServiceInstallationRead,
-			iamv1.ActionManagedServiceInstallationTerminate,
+			iamv1.ActionManagedServiceInstallationTerminate, iamv1.ActionManagedServiceInstallationUse,
 			iamv1.ActionDevOpsProjectCreate, iamv1.ActionDevOpsProjectRead,
 			iamv1.ActionDevOpsSourceConnectionCreate, iamv1.ActionDevOpsSourceConnectionRead,
 			iamv1.ActionDevOpsSourceConnectionUpdate, iamv1.ActionDevOpsSourceConnectionRecheck,
@@ -742,7 +742,7 @@ func systemPolicyVersion(id iamv1.PolicyID, profiles []iamv1.AuthorizationProfil
 			iamv1.ActionManagedServiceOfferingRead, iamv1.ActionManagedServiceRegionRead,
 			iamv1.ActionManagedServiceQuotaEntitlementActivate, iamv1.ActionManagedServiceQuotaEntitlementRead,
 			iamv1.ActionManagedServiceInstallationCreate, iamv1.ActionManagedServiceInstallationRead,
-			iamv1.ActionManagedServiceInstallationTerminate,
+			iamv1.ActionManagedServiceInstallationTerminate, iamv1.ActionManagedServiceInstallationUse,
 		}
 	case iamv1.SystemPolicyPaaSViewer:
 		actions = []iamv1.Action{

@@ -1087,8 +1087,8 @@ BEGIN
             'paas.append_audit_outbox(jsonb, jsonb)',
             'EXECUTE'
        )
-       OR (SELECT schema_version FROM paas.readiness()) IS DISTINCT FROM 8::bigint
-       OR (SELECT schema_version FROM paas.worker_readiness()) IS DISTINCT FROM 8::bigint THEN
+       OR (SELECT schema_version FROM paas.readiness()) IS DISTINCT FROM 9::bigint
+       OR (SELECT schema_version FROM paas.worker_readiness()) IS DISTINCT FROM 9::bigint THEN
         RAISE EXCEPTION 'application roles lack required current privileges';
     END IF;
 END

@@ -6,6 +6,8 @@ import type {
 import type { ControlPlaneRepository } from "./controlPlaneRepository";
 import type { ControlPlaneResourceSnapshot } from "./controlPlaneRepository";
 import { isPreviewCredential } from "@/features/auth/repositories/previewIamRepository";
+import { HttpProblem } from "@/infrastructure/http/jsonRequest";
+import { validElasticsearchReference } from "../domain/managedServiceProduct";
 
 let entitlementSequence = 3;
 
@@ -67,6 +69,16 @@ let snapshot: ControlPlaneSnapshot = {
     quotaShapes: [
       { id: "logstash-small", displayName: "开发型", cpuMillicores: 1000, memoryMiB: 1536, storageGiB: 10 },
       { id: "logstash-medium", displayName: "标准型", cpuMillicores: 2000, memoryMiB: 3072, storageGiB: 20 }
+    ]
+  }, {
+    id: "kibana-8.19",
+    service: { id: "kibana", revision: 1, contentDigest: `sha256:${"6".repeat(64)}` },
+    displayName: "Kibana 8.19",
+    description: "连接当前账号中的 Elasticsearch，浏览数据并创建可视化。",
+    engineFamily: "Kibana", engineVersion: "8.19.23", state: "AVAILABLE",
+    quotaShapes: [
+      { id: "kibana-small", displayName: "开发型", cpuMillicores: 1000, memoryMiB: 1536, storageGiB: 10 },
+      { id: "kibana-medium", displayName: "标准型", cpuMillicores: 2000, memoryMiB: 3072, storageGiB: 20 }
     ]
   }],
   regions: [
@@ -151,7 +163,7 @@ function currentTime(): string {
 
 function previewEndpoint(installation: ServiceInstallation): string {
   const serviceId = snapshot.offerings.find((offering) => offering.id === installation.offeringId)?.service.id;
-  const port = serviceId === "mysql" ? 3306 : serviceId === "elasticsearch" ? 9200 : serviceId === "rabbitmq" ? 5672 : serviceId === "logstash" ? 8080 : 5432;
+  const port = serviceId === "mysql" ? 3306 : serviceId === "elasticsearch" ? 9200 : serviceId === "rabbitmq" ? 5672 : serviceId === "logstash" ? 8080 : serviceId === "kibana" ? 5601 : 5432;
   return `${installation.id}.service.local:${port}`;
 }
 
@@ -190,7 +202,7 @@ export const previewControlPlaneRepository: ControlPlaneRepository = {
       };
       snapshot = {
         ...snapshot,
-        installations: snapshot.installations.filter((item) => item.id !== installationId)
+        installations: snapshot.installations.map((item) => item.id === installationId ? terminated : item)
       };
       return structuredClone(terminated);
     }
@@ -216,6 +228,13 @@ export const previewControlPlaneRepository: ControlPlaneRepository = {
     requirePreviewCredential(credential);
     const offering = snapshot.offerings.find((item) => item.id === command.offeringId);
     if (!offering) throw new Error("PREVIEW_OFFERING_NOT_FOUND");
+    if (offering.id === "kibana-8.19") {
+      if (!validElasticsearchReference(command.elasticsearch, command.id)) throw new HttpProblem(400, "INVALID_ARGUMENT");
+      const dependency = snapshot.installations.find((item) => item.id === command.elasticsearch?.installationId);
+      if (!dependency || dependency.phase !== "READY" || dependency.offeringId !== "elasticsearch-8.19" ||
+        dependency.regionId !== command.regionId || dependency.engineVersion !== offering.engineVersion ||
+        dependency.resourceVersion !== command.elasticsearch.resourceVersion) throw new HttpProblem(409, "DEPENDENCY_UNAVAILABLE");
+    } else if (command.elasticsearch !== undefined) throw new HttpProblem(400, "INVALID_ARGUMENT");
     const installation: ServiceInstallation = {
       id: command.id,
       name: command.name,
@@ -223,6 +242,7 @@ export const previewControlPlaneRepository: ControlPlaneRepository = {
       engineVersion: offering.engineVersion,
       quotaEntitlementId: command.quotaEntitlementId,
       regionId: command.regionId,
+      ...(command.elasticsearch ? { elasticsearch: { ...command.elasticsearch } } : {}),
       phase: "PENDING",
       endpoint: null,
       credentialReference: null,
@@ -246,6 +266,8 @@ export const previewControlPlaneRepository: ControlPlaneRepository = {
     if (!["READY", "ROLLBACK_FAILED", "TERMINATION_FAILED"].includes(current.phase)) {
       throw new Error("PREVIEW_INSTALLATION_STATE_CONFLICT");
     }
+    if (snapshot.installations.some((item) => item.elasticsearch?.installationId === installationId &&
+      !["FAILED", "TERMINATED"].includes(item.phase))) throw new HttpProblem(409, "DEPENDENCY_IN_USE");
     const terminating: ServiceInstallation = {
       ...current,
       phase: "TERMINATION_PENDING",

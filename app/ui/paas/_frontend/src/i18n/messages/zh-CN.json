@@ -131,6 +131,11 @@
         "description": "托管搜索、索引与分析服务",
         "keywords": "elasticsearch elastic es search analytics index 搜索 分析 索引 大数据"
       },
+      "kibana": {
+        "name": "Kibana 数据可视化",
+        "description": "连接受管 Elasticsearch，浏览数据与创建可视化",
+        "keywords": "kibana elastic elk dashboard 数据视图 仪表板 可视化"
+      },
       "logstash": {
         "name": "Logstash 日志处理",
         "description": "认证 HTTP JSON 输入、持久事件文件与实例管理",
@@ -3764,6 +3769,8 @@
     }
   },
   "ManagedService": {
+    "kibanaLoginHint": "在浏览器中打开上方端点，使用关联 Elasticsearch 的业务账号登录。请向平台管理员领取该实例的业务凭据；Matrix 登录账号不能用于 Kibana 登录。",
+    "elasticsearchDependency": "关联 Elasticsearch",
     "productMockBoundary": "这是隔离的 UX MOCK 产品工作区，不会创建真实资源。对应后端能力仍是待独立验收的候选，不能据此判断已发布、已具备高可用或可用于生产。",
     "productLiveBoundary": "当前页面显示你有权查看的服务规格、配额和实例。",
     "managedCloudService": "托管云服务",
@@ -3876,11 +3883,12 @@
     "reviewTerminationAgain": "审阅再次终止",
     "resumeTermination": "继续处理未确认终止",
     "terminationInProgress": "终止请求已被平台接受，正在异步清理运行时、网络、数据与凭据。页面会继续读取当前操作；请勿创建第二个终止意图。",
-    "terminationCompleted": "平台已完成实例终止。实例将从可见目录移除，关联配额在终态后归还。",
+    "terminationCompleted": "平台已完成实例终止并归还关联配额。有查看权限的用户仍可查看这条终止记录。",
     "terminationUnknownPreserved": "原终止请求 {id} 的结果尚未确认。已保留原幂等键，不会创建第二个终止意图。",
     "terminationAnotherIntent": "实例 {id} 仍有未完成的终止请求。完成或明确处理它之前，不能发起另一个实例终止。",
     "terminationAuthorizationBusy": "当前实例还有未完成的服务授权审阅。请先结束该信息流，再审阅终止。",
     "terminationMutationErrors": {
+      "dependencyInUse": "此 Elasticsearch 仍有关联的 Kibana。请先终止关联实例，并等待清理完成后再重试。",
       "expired": "当前会话已失效。原请求不会换用新会话自动提交。",
       "forbidden": "当前身份无权终止这个准确实例。",
       "notFound": "实例已不存在，或当前身份不能确认它是否存在。请返回目录重新读取。",
@@ -4009,6 +4017,8 @@
     },
     "dismissCommandNotice": "关闭提示",
     "commandErrors": {
+      "dependencyInUse": "此 Elasticsearch 仍有关联的 Kibana。请先终止关联实例，并等待清理完成后再重试。",
+      "dependencyUnavailable": "所选 Elasticsearch 已变化或不再可用。请刷新可用实例列表，重新选择后提交。",
       "expired": "当前会话已失效，原请求没有自动换用新会话提交。请重新登录后重新读取资源状态。",
       "forbidden": "当前身份无权执行这个精确操作。原请求已停止，不会自动扩大权限范围。",
       "notFound": "目标资源已不存在，或当前身份不能确认其存在。请重新读取资源。",
@@ -4043,6 +4053,12 @@
     }
   },
   "ServiceWorkflow": {
+    "reloadElasticsearch": "刷新可用实例",
+    "elasticsearchChanged": "所选实例已变化或不再匹配，请刷新列表并重新选择。",
+    "elasticsearchEmpty": "没有匹配的 Elasticsearch。请先安装同版本、同区域的实例，确认拥有查看和使用权限，再刷新列表。",
+    "selectElasticsearch": "选择 Elasticsearch 实例",
+    "elasticsearchHint": "仅显示当前账号中同版本、同区域且已就绪的实例。创建 Kibana 还需要该实例的使用权限；仅有查看权限不足以安装。",
+    "elasticsearch": "Elasticsearch 实例",
     "quotaEyebrow": "配额激活",
     "quotaTitle": "激活服务配额",
     "catalogEmpty": "服务目录没有返回可激活的真实产品。",

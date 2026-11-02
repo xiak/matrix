@@ -460,8 +460,11 @@ func verifyKibana(t *testing.T, ctx context.Context, root, runID string, images 
 	projects := make([]compose.RuntimeProject, 2)
 	tokens := make([][]byte, 2)
 	settings := make([]map[string]any, 2)
-	construct := func(config InstallationConfig, client *http.Client) *localkibana.Provisioner {
-		p, e := localkibana.New(localkibana.Config{Root: config.Root, ImageID: config.ImageID, EndpointImageID: config.EndpointImageID, ElasticsearchRoot: esConfig.Root, ElasticsearchImageID: esConfig.ImageID, Runtime: r, HTTPClient: client})
+	construct := func(config InstallationConfig, native compose.Runtime) *localkibana.Provisioner {
+		if native == nil {
+			native = r
+		}
+		p, e := localkibana.New(localkibana.Config{Root: config.Root, ImageID: config.ImageID, EndpointImageID: config.EndpointImageID, ElasticsearchRoot: esConfig.Root, ElasticsearchImageID: esConfig.ImageID, Runtime: native})
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -480,8 +483,8 @@ func verifyKibana(t *testing.T, ctx context.Context, root, runID string, images 
 		if i == 0 {
 			// The real native API accepts creation; the adapter loses only its response.
 			// A new provider must recover this exact token name without touching others.
-			transport := &lostTokenResponse{base: &http.Transport{Proxy: nil, DisableKeepAlives: true}, method: http.MethodPost}
-			uncertain := construct(configs[i], &http.Client{Timeout: 10 * time.Second, Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
+			transport := &lostTokenResponse{LocalRuntime: r, method: http.MethodPost}
+			uncertain := construct(configs[i], transport)
 			if _, err := uncertain.Ensure(ctx, configs[i].Request); err == nil || !transport.lost || inventory(t, root) == before {
 				t.Fatal("lost native token response was not fenced by recoverable installation custody")
 			}
@@ -581,8 +584,8 @@ func verifyKibana(t *testing.T, ctx context.Context, root, runID string, images 
 	}
 	clear(settingsBytes)
 	assertDataView(results[0].Endpoint)
-	lostDelete := &lostTokenResponse{base: &http.Transport{Proxy: nil, DisableKeepAlives: true}, method: http.MethodDelete}
-	uncertainDelete := construct(configs[0], &http.Client{Timeout: 10 * time.Second, Transport: lostDelete, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }})
+	lostDelete := &lostTokenResponse{LocalRuntime: r, method: http.MethodDelete}
+	uncertainDelete := construct(configs[0], lostDelete)
 	if err := uncertainDelete.Delete(ctx, deletionFor(configs[0].Request)); err == nil || !lostDelete.lost {
 		t.Fatal("lost native revocation response was not reported as uncertain")
 	}
@@ -644,20 +647,19 @@ func verifyKibana(t *testing.T, ctx context.Context, root, runID string, images 
 }
 
 type lostTokenResponse struct {
-	base   http.RoundTripper
+	*compose.LocalRuntime
 	method string
 	lost   bool
 }
 
-func (r *lostTokenResponse) RoundTrip(request *http.Request) (*http.Response, error) {
-	response, err := r.base.RoundTrip(request)
-	if err == nil && !r.lost && request.Method == r.method && strings.HasPrefix(request.URL.Path, "/_security/service/elastic/kibana/credential/token/") && response.StatusCode == http.StatusOK {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 65536))
-		_ = response.Body.Close()
+func (r *lostTokenResponse) RequestContainerHTTP(ctx context.Context, request compose.ContainerHTTPRequest) (int, []byte, error) {
+	status, body, err := r.LocalRuntime.RequestContainerHTTP(ctx, request)
+	if err == nil && !r.lost && request.Method == r.method && strings.HasPrefix(request.Path, "/_security/service/elastic/kibana/credential/token/") && status == http.StatusOK {
+		clear(body)
 		r.lost = true
-		return nil, errors.New("injected lost native credential response")
+		return 0, nil, errors.New("injected lost native credential response")
 	}
-	return response, err
+	return status, body, err
 }
 
 func assertServiceToken(t *testing.T, endpoint string, token []byte, name string, expected int) {

@@ -41,7 +41,31 @@ describe("previewControlPlaneRepository", () => {
         operation: { kind: "TERMINATE", phase: "READY" }
       });
     expect((await previewControlPlaneRepository.load(previewCredential, ["installations"]))
-      .installations?.some((installation) => installation.id === id)).toBe(false);
+      .installations?.find((installation) => installation.id === id)?.phase).toBe("TERMINATED");
+  });
+
+  it("requires an exact READY Elasticsearch and holds deletion protection through Kibana cleanup", async () => {
+    const repository = previewControlPlaneRepository;
+    const create = { id: "es-preview-dependency", name: "Elasticsearch", offeringId: "elasticsearch-8.19",
+      quotaEntitlementId: "quota-preview-es", regionId: "shanghai-a" };
+    const es = await repository.createInstallation(previewCredential, create, "create-es");
+    const kibana = { ...create, id: "kibana-preview-dependency", name: "Kibana", offeringId: "kibana-8.19",
+      elasticsearch: { installationId: es.id, resourceVersion: es.resourceVersion } };
+    await expect(repository.createInstallation(previewCredential, kibana, "create-k")).rejects.toThrow("DEPENDENCY_UNAVAILABLE");
+    const ready = await repository.getInstallation(previewCredential, es.id);
+    await expect(repository.createInstallation(previewCredential, kibana, "create-k")).rejects.toThrow("DEPENDENCY_UNAVAILABLE");
+    kibana.elasticsearch.resourceVersion = ready.resourceVersion;
+    const pending = await repository.createInstallation(previewCredential, kibana, "create-k");
+    expect(pending.elasticsearch).toEqual(kibana.elasticsearch);
+    for (const phase of ["PENDING", "READY", "TERMINATION_PENDING"]) {
+      await expect(repository.terminateInstallation!(previewCredential, es.id, "terminate-es")).rejects.toThrow("DEPENDENCY_IN_USE");
+      if (phase === "PENDING") expect((await repository.getInstallation(previewCredential, kibana.id)).endpoint).toContain(":5601");
+      if (phase === "READY") await repository.terminateInstallation!(previewCredential, kibana.id, "terminate-k");
+    }
+    const terminated = await repository.getInstallation(previewCredential, kibana.id);
+    expect(terminated).toMatchObject({ phase: "TERMINATED", elasticsearch: kibana.elasticsearch });
+    await expect(repository.terminateInstallation!(previewCredential, es.id, "terminate-es")).resolves.toMatchObject({ phase: "TERMINATION_PENDING" });
+    await repository.getInstallation(previewCredential, es.id);
   });
 
   it("rejects non-preview credentials", async () => {

@@ -1085,6 +1085,27 @@ func policyVersionForTest(t *testing.T, id iamv1.PolicyID, effect iamv1.PolicyEf
 	return version
 }
 
+func TestManagedServiceDependencyUseIsSeparateFromReadAndRevocable(t *testing.T) {
+	now := authorityTestTime()
+	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{
+		Action:    iamv1.ActionManagedServiceInstallationUse,
+		Resource:  iamv1.ResourceReference{Kind: iamv1.ResourceServiceInstallation, ID: "search-one"},
+		RequestID: "dependency-use-test", CorrelationID: "dependency-use-test",
+	}, iamv1.AuthorizationResourceInstance, "")
+	subject := authoritySubject(now, iamv1.SystemPolicyManagedServiceInstallationReader)
+	if decision, err := Decide(subject, iamv1.ServicePaaS, request, "decision-read-only", now); err != nil || decision.Allowed {
+		t.Fatal("read permission implied use of a dependency", err)
+	}
+	subject.Policies = authorityPoliciesForAction(t, now, iamv1.ActionManagedServiceInstallationUse)
+	if decision, err := Decide(subject, iamv1.ServicePaaS, request, "decision-explicit-use", now); err != nil || !decision.Allowed {
+		t.Fatal("explicit dependency-use grant was rejected", err)
+	}
+	subject.Policies = nil
+	if decision, err := Decide(subject, iamv1.ServicePaaS, request, "decision-revoked-use", now); err != nil || decision.Allowed {
+		t.Fatal("revoked dependency use survived the next decision", err)
+	}
+}
+
 func TestUserBoundaryIntersectsAllGrantsWithoutGrantingAuthority(t *testing.T) {
 	now := authorityTestTime()
 	request := boundAuthorizationRequest(t, iamv1.AuthorizationRequest{Action: iamv1.ActionPaaSApplicationRead,

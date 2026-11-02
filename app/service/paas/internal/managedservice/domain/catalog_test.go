@@ -16,6 +16,7 @@ func TestDefaultCatalogContainsOnlyImplementedProvidersAndIsDefensivelyCopied(t 
 		ElasticsearchOfferingID: managedservicev1.ElasticsearchServiceID,
 		RabbitMQOfferingID:      managedservicev1.RabbitMQServiceID,
 		LogstashOfferingID:      managedservicev1.LogstashServiceID,
+		KibanaOfferingID:        managedservicev1.KibanaServiceID,
 	}
 	if len(definitions) != len(expected) || len(offerings) != len(expected) {
 		t.Fatal("released service and offering inventories disagree")
