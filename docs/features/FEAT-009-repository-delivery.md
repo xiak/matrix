@@ -1975,12 +1975,14 @@ Current verification evidence:
   A public-IAM-created User receives a customer-managed read-only DevOps Policy
   through a PolicyAttachment, reads that exact graph, and receives closed
   `403` Problems for create and bodyless Recheck mutations. The gate reuses its
-  independently retained second Account, attaches an equivalent customer
-  Policy to that Account's existing child User, exercises the real IAM session
+  independently retained active foreign Account and its valid retained primary
+  Session, attaches an equivalent customer Policy to that Account's existing
+  active child User, exercises the real IAM session
   and APISIX read to a closed tenant-scoped `404`, then revokes each exact
   attachment and retires each customer Policy with bounded cleanup even when
-  an assertion fails. It does not create tenants, copy password hashes, or
-  mutate IAM authority through SQL; no plaintext credential enters SQL or is
+  an assertion fails. The disabled second Account and revoked original Sessions
+  remain unchanged for the separate retention checks. It does not create
+  tenants, copy password hashes, or mutate IAM authority through SQL; no plaintext credential enters SQL or is
   retained for restart. The
   same graph is read back after failed automatic upgrade rollback, successful B
   upgrade, explicit A rollback, and protected-backup recovery. A dedicated

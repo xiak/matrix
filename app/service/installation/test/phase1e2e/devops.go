@@ -216,7 +216,7 @@ func (value *gate) exerciseDevOpsAccess(
 		return
 	}
 	if err := value.assertForeignTenantBoundary(ctx); err != nil {
-		returnErr = fail("devops-foreign-tenant-boundary")
+		returnErr = safeFailure(err)
 		return
 	}
 	return
@@ -904,26 +904,35 @@ func (value *gate) retireDevOpsViewerGrant(
 
 func (value *gate) assertForeignTenantBoundary(ctx context.Context) (returnErr error) {
 	if value.retainedIAM == nil || len(value.retainedIAM.Tenants) != 2 {
-		return errors.New("foreign tenant fixture is unavailable")
+		return fail("devops-foreign-tenant-fixture")
 	}
-	tenant := &value.retainedIAM.Tenants[1]
+	// Beta and its child are deliberately disabled by the retention baseline.
+	// Alpha remains active, but its original primary Session was revoked. Use
+	// the separately retained valid Session without reviving either old one.
+	tenant := &value.retainedIAM.Tenants[0]
+	if tenant.Account.Status != iamv1.AccountActive || tenant.Child.Status != iamv1.PrincipalActive ||
+		tenant.Account.ID == iamv1.AccountID(devOpsTenant) || len(tenant.RetainedPrimaryCredential) == 0 {
+		return fail("devops-foreign-tenant-fixture")
+	}
 	policy, attachment, err := value.grantDevOpsViewer(
-		ctx, tenant.OldPrimaryCredential, tenant.Child.ID, "phase1-foreign-devops-viewer",
+		ctx, tenant.RetainedPrimaryCredential, tenant.Child.ID, "phase1-foreign-devops-viewer",
 	)
 	if err != nil {
-		return err
+		return fail("devops-foreign-viewer-grant")
 	}
 	defer func() {
-		returnErr = errors.Join(returnErr, value.retireDevOpsViewerGrant(
-			ctx, tenant.OldPrimaryCredential, policy, attachment, "phase1-foreign-devops-viewer",
-		))
+		if err := value.retireDevOpsViewerGrant(
+			ctx, tenant.RetainedPrimaryCredential, policy, attachment, "phase1-foreign-devops-viewer",
+		); err != nil {
+			returnErr = errors.Join(returnErr, fail("devops-foreign-viewer-cleanup"))
+		}
 	}()
 	login, err := value.edge.loginNamed(
 		ctx, "developer@"+string(tenant.Account.ID), tenant.ChildPassword,
 		tenant.Account.ID, tenant.Child.ID, "phase1-login-foreign-viewer",
 	)
 	if err != nil {
-		return err
+		return fail("devops-foreign-viewer-login")
 	}
 	bearer := login.Credential.CopyBytes()
 	defer clear(bearer)
@@ -933,9 +942,12 @@ func (value *gate) assertForeignTenantBoundary(ctx context.Context) (returnErr e
 		"/api/devops/v1/projects/"+string(devOpsProjectID), bearer, nil, nil,
 		http.StatusNotFound, devopsv1.ErrorNotFound,
 	); err != nil {
-		return err
+		return fail("devops-foreign-tenant-read-boundary")
 	}
-	return value.edge.logout(ctx, bearer)
+	if err := value.edge.logout(ctx, bearer); err != nil {
+		return fail("devops-foreign-viewer-logout")
+	}
+	return nil
 }
 
 func createDevOpsResource[T any](

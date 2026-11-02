@@ -574,10 +574,12 @@ Linux/amd64 官方镜像固定为
 `764cff427698377f70c24264be59a9fc5606d123` 的
 [独立 Verification](https://github.com/xiak/matrix/actions/runs/41485948364)
 十九项全部通过，真实七产品 P1 为 325.39 秒；覆盖目录、原生读写、IAM 精确授权与
-撤权、跨账号拒绝、配额、Operation、删除及 Audit。仅增加 checkpoint 的 `e3128822c`
-又通过 [PR Verification](https://github.com/xiak/matrix/actions/runs/41486683660)
-十九项；对应 [Product onboarding](https://github.com/xiak/matrix/actions/runs/41486683645)
-实际制品 `13164025331` 为 `PASSED`、十八项齐全，平台/发布状态仍为 `NOT_RUN`。
+撤权、跨账号拒绝、配额、Operation、删除及 Audit。当前候选
+`737c2c51b16e5c44b4ac90ec4e6cfc31c4beba9d` 的
+[Product onboarding](https://github.com/xiak/matrix/actions/runs/41525056959)
+十八项在 832.66 秒内全部通过。已读取实际制品 `13180048181`，SHA-256 为
+`a551c9a39015d6644cadfb7399e3c04387e7e64e84961417a0c1e8578f5f76e0`；
+报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。
 
 本机 Windows P1 首次因 Docker 默认地址池耗尽而失败；有界探针复现后，只回收归属
 明确的停用测试平台容器和网络，保留安装数据。重跑在第二个 Kibana 的三分钟就绪

@@ -201,6 +201,57 @@ func TestDevOpsCreationFailureExposesOnlyStepAndStatus(t *testing.T) {
 	}
 }
 
+func TestForeignTenantProbeDoesNotUseRevokedOrDisabledAuthority(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*tenantRetention)
+	}{
+		{"active-foreign-account", func(*tenantRetention) {}},
+		{"disabled-account", func(v *tenantRetention) { v.Account.Status = iamv1.AccountDisabled }},
+		{"disabled-member", func(v *tenantRetention) { v.Child.Status = iamv1.PrincipalDisabled }},
+		{"same-account", func(v *tenantRetention) { v.Account.ID = iamv1.AccountID(devOpsTenant) }},
+		{"missing-valid-session", func(v *tenantRetention) { v.RetainedPrimaryCredential = nil }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			active := tenantRetention{
+				Account:              iamv1.Account{ID: "foreign-active", Status: iamv1.AccountActive},
+				Child:                iamv1.User{ID: "foreign-member", AccountID: "foreign-active", Status: iamv1.PrincipalActive},
+				OldPrimaryCredential: []byte("revoked-primary"), RetainedPrimaryCredential: []byte("retained-primary"),
+			}
+			test.mutate(&active)
+			var requested atomic.Bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requested.Store(true)
+				if r.Header.Get("Authorization") != "Bearer retained-primary" {
+					t.Error("probe used revoked or disabled authority")
+				}
+				// Stop at the authority boundary; the signed runtime gate owns
+				// the real grant, cross-account 404 and exact cleanup proof.
+				w.Header().Set("Content-Type", problemJSONMediaType)
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, `{}`)
+			}))
+			defer server.Close()
+			value := &gate{
+				edge: &edgeClient{endpoint: server.URL, http: server.Client()},
+				retainedIAM: &iamRetention{Tenants: []tenantRetention{active, {
+					Account: iamv1.Account{ID: "foreign-disabled", Status: iamv1.AccountDisabled},
+					Child:   iamv1.User{Status: iamv1.PrincipalDisabled}, OldPrimaryCredential: []byte("disabled-primary"),
+				}}},
+			}
+			err := value.assertForeignTenantBoundary(context.Background())
+			want := "devops-foreign-tenant-fixture"
+			if test.name == "active-foreign-account" {
+				want = "devops-foreign-viewer-grant"
+			}
+			if err == nil || safeFailure(err).Error() != fail(want).Error() ||
+				requested.Load() != (test.name == "active-foreign-account") {
+				t.Fatal("probe did not preserve the live foreign authority boundary")
+			}
+		})
+	}
+}
+
 func TestInstallFailureDiagnosticsExposeOnlyClosedCategories(t *testing.T) {
 	for _, test := range []struct {
 		code, class, want string
