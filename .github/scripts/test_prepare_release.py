@@ -13,11 +13,82 @@ import tempfile
 import unittest
 from unittest import mock
 import urllib.error
+import urllib.parse
 import zipfile
 
 
-PREPARE = runpy.run_path(str(Path(__file__).with_name('prepare-release.py')))['main']
+RELEASE_BOUNDARY = runpy.run_path(str(Path(__file__).with_name('prepare-release.py')))
+PREPARE = RELEASE_BOUNDARY['main']
+REQUIRE_ACCEPTED_SOURCE = RELEASE_BOUNDARY['require_accepted_source']
 REAL_RUN = subprocess.run
+
+
+class AcceptedSourceTests(unittest.TestCase):
+    def setUp(self):
+        self.source = '1' * 40
+        self.runs = {name: [{'head_sha': self.source, 'head_branch': 'main',
+                            'event': event, 'status': 'completed', 'conclusion': 'success'}]
+                     for name, event in (('verification.yml', 'push'),
+                                         ('product-onboarding.yml', 'workflow_dispatch'))}
+        self.observed_workflows = []
+
+    def api(self, request, **_kwargs):
+        url = urllib.parse.urlsplit(request.full_url)
+        self.assertEqual(url.scheme, 'https')
+        self.assertEqual(url.netloc, 'api.github.com')
+        self.assertEqual(request.get_method(), 'GET')
+        self.assertEqual(urllib.parse.parse_qs(url.query),
+                         {'head_sha': [self.source], 'branch': ['main'], 'per_page': ['1']})
+        workflow = url.path.split('/')[-2]
+        self.assertIn(workflow, self.runs)
+        self.observed_workflows.append(workflow)
+        return io.BytesIO(json.dumps({'workflow_runs': self.runs[workflow]}).encode())
+
+    def accept(self):
+        with mock.patch('urllib.request.urlopen', side_effect=self.api):
+            REQUIRE_ACCEPTED_SOURCE('release-fixture/matrix', self.source, 'fixture-no-real-token')
+
+    def test_both_exact_main_workflows_must_complete_successfully(self):
+        self.accept()
+        self.assertEqual(set(self.observed_workflows), set(self.runs))
+
+    def test_pr_other_branch_or_other_source_cannot_accept_a_release(self):
+        for workflow in self.runs:
+            accepted = self.runs[workflow][0].copy()
+            for change in ({'event': 'pull_request'}, {'event': 'pull_request_target'},
+                           {'head_branch': 'feat/candidate'}, {'head_sha': '2' * 40}):
+                with self.subTest(workflow=workflow, change=change):
+                    self.runs[workflow] = [{**accepted, **change}]
+                    with self.assertRaisesRegex(SystemExit, 'exact-source main acceptance'):
+                        self.accept()
+            self.runs[workflow] = [accepted]
+
+    def test_missing_unfinished_failed_or_ambiguous_runs_are_rejected(self):
+        for workflow in self.runs:
+            accepted = self.runs[workflow][0].copy()
+            for runs in ([], [accepted, accepted], [{}], [None], None,
+                         [{**accepted, 'status': 'in_progress', 'conclusion': None}],
+                         [{**accepted, 'conclusion': 'failure'}],
+                         [{**accepted, 'conclusion': 'skipped'}]):
+                with self.subTest(workflow=workflow, runs=runs):
+                    self.runs[workflow] = runs
+                    with self.assertRaisesRegex(SystemExit, 'exact-source main acceptance'):
+                        self.accept()
+            self.runs[workflow] = [accepted]
+
+    def test_unavailable_metadata_is_not_treated_as_acceptance(self):
+        failure = urllib.error.HTTPError('https://github.invalid/fixture', 404,
+                                         'fixture missing', {}, io.BytesIO())
+        with mock.patch('urllib.request.urlopen', side_effect=failure):
+            with self.assertRaisesRegex(SystemExit, 'metadata is unavailable'):
+                REQUIRE_ACCEPTED_SOURCE('release-fixture/matrix', self.source, 'fixture-no-real-token')
+
+    def test_invalid_or_oversized_metadata_is_rejected(self):
+        for body in (b'not json', b'[]', b'{}', b'null', b' ' * (1024 * 1024 + 1)):
+            with self.subTest(bytes=len(body)):
+                with mock.patch('urllib.request.urlopen', return_value=io.BytesIO(body)):
+                    with self.assertRaisesRegex(SystemExit, 'metadata is (invalid|oversized)'):
+                        REQUIRE_ACCEPTED_SOURCE('release-fixture/matrix', self.source, 'fixture-no-real-token')
 
 
 class ReleaseDeliveryTests(unittest.TestCase):

@@ -70,7 +70,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 - <<'PY'
-          import json, os, re, urllib.request
+          import os, re, runpy
           a, b = 'v0.3.0-products.1', 'v0.3.0-products.2'
           if os.environ['PREPARE_RELEASE'] == 'true':
               a, b = os.environ['RELEASE_VERSION'], os.environ['SUCCESSOR_VERSION']
@@ -81,14 +81,8 @@ jobs:
                   raise SystemExit('acceptance successor must follow the release version')
               if os.environ['GITHUB_REF'] != 'refs/heads/main':
                   raise SystemExit('production signing requires main')
-              repo, sha = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']
-              for workflow in ('verification.yml', 'product-onboarding.yml'):
-                  url = f'https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs?head_sha={sha}&per_page=1'
-                  request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
-                  with urllib.request.urlopen(request, timeout=30) as response:
-                      runs = json.load(response)['workflow_runs']
-                  if len(runs) != 1 or runs[0]['head_sha'] != sha or runs[0]['status'] != 'completed' or runs[0]['conclusion'] != 'success':
-                      raise SystemExit('exact-source independent acceptance is required: ' + workflow)
+              require_accepted_source = runpy.run_path('.github/scripts/prepare-release.py')['require_accepted_source']
+              require_accepted_source(os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA'], os.environ['GH_TOKEN'])
           with open(os.environ['GITHUB_ENV'], 'a') as output:
               output.write(f'MATRIX_RELEASE_A_VERSION={a}\nMATRIX_RELEASE_B_VERSION={b}\n')
           PY

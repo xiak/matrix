@@ -1485,7 +1485,11 @@ allowed deployment rule is branch `main`. The public key fingerprint is
 This proves custody/configuration, not successful CI decryption or a signed
 production release; those require the actual production dispatch.
 Production assembly requires successful exact-source Verification and Product
-onboarding runs, then executes the complete lifecycle and browser gate with
+onboarding runs executed directly on `main` by push or manual dispatch. PR
+runs cannot satisfy this boundary: their metadata names the head commit while
+checkout normally tests a synthetic merge, as documented by the
+[GitHub pull-request event](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows#pull_request).
+The production workflow then executes the complete lifecycle and browser gate with
 the protected signer. A is the fresh-install delivery; its same-source B is
 used for upgrade/rollback acceptance and is not published as a second release.
 
@@ -1503,9 +1507,11 @@ different assets are rejected without replacement. A lost upload response can
 resume only matching assets. The result remains an unpublished draft for
 final delivery review.
 
-Thirteen local publication-boundary tests passed, including damaged signatures,
-changed chunks, foreign source/trust, unexpected private files, checksum path
-escape, existing publication/asset protection and upload-response recovery.
+Eighteen local release-boundary tests passed, including wrong branch/event/source,
+missing or unsuccessful independent gates, unavailable or malformed metadata,
+damaged signatures, changed chunks, foreign source/trust, unexpected private
+files, checksum path escape, existing publication/asset protection and
+upload-response recovery.
 They use real Ed25519 verification and simulate GitHub HTTP/CLI effects
 without network requests. Workflow YAML, Bash and Python syntax
 checks passed. These checks do not claim a production-signed run, Linux CI

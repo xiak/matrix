@@ -2,6 +2,33 @@
 """Verify an accepted signed delivery and prepare its exact unpublished GitHub Release."""
 
 
+def require_accepted_source(repo, source, token):
+    import json, urllib.parse, urllib.request
+    query = urllib.parse.urlencode({'head_sha': source, 'branch': 'main', 'per_page': 1})
+    for workflow in ('verification.yml', 'product-onboarding.yml'):
+        url = f'https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs?{query}'
+        request = urllib.request.Request(url, headers={
+            'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read(1024 * 1024 + 1)
+        except OSError:
+            raise SystemExit('independent acceptance metadata is unavailable: ' + workflow) from None
+        if len(body) > 1024 * 1024:
+            raise SystemExit('independent acceptance metadata is oversized: ' + workflow)
+        try:
+            runs = json.loads(body)['workflow_runs']
+        except (ValueError, KeyError, TypeError):
+            raise SystemExit('independent acceptance metadata is invalid: ' + workflow) from None
+        # PR metadata names its head SHA, but checkout normally tests a synthetic
+        # merge commit. Only direct main-branch executions accept release source.
+        if (not isinstance(runs, list) or len(runs) != 1 or not isinstance(runs[0], dict)
+                or runs[0].get('head_sha') != source or runs[0].get('head_branch') != 'main'
+                or runs[0].get('event') not in ('push', 'workflow_dispatch')
+                or runs[0].get('status') != 'completed' or runs[0].get('conclusion') != 'success'):
+            raise SystemExit('exact-source main acceptance is required: ' + workflow)
+
+
 def main():
     import base64, hashlib, json, os, pathlib, re, subprocess, urllib.error, urllib.request
     root = pathlib.Path(os.environ['RUNNER_TEMP'])
