@@ -295,6 +295,17 @@ jobs:
             kill -TERM "$engine_pid"
             wait "$engine_pid"
           }
+          start_https_proxy() {
+            "$MATRIX_BROWSER_NODE" "$MATRIX_HTTPS_PROXY_SCRIPT" "$SSL_CERT_FILE" "$work/private/https-key.pem" \
+              > "$work/private/https-proxy.log" 2>&1 &
+            https_proxy_pid=$!
+            for attempt in $(seq 1 30); do
+              if curl --silent --max-time 2 --cacert "$SSL_CERT_FILE" "$MATRIX_PHASE1_EDGE/ready" > /dev/null; then return; fi
+              kill -0 "$https_proxy_pid"
+              sleep 1
+            done
+            return 1
+          }
           cleanup() {
             result=$?
             if [[ -n "${https_proxy_pid:-}" ]]; then kill -TERM "$https_proxy_pid" 2>/dev/null || true; fi
@@ -338,14 +349,7 @@ jobs:
             export MATRIX_PHASE1_FIRST_USE_BROWSER=1
             export MATRIX_BROWSER_PLAYWRIGHT="$work/browser/node_modules/playwright/index.mjs"
             export MATRIX_BROWSER_FIRST_USE_EVIDENCE="$work/evidence/first-use"
-            "$MATRIX_BROWSER_NODE" "$MATRIX_HTTPS_PROXY_SCRIPT" "$SSL_CERT_FILE" "$work/private/https-key.pem" \
-              > "$work/private/https-proxy.log" 2>&1 &
-            https_proxy_pid=$!
-            for attempt in $(seq 1 30); do
-              if curl --silent --cacert "$SSL_CERT_FILE" "$MATRIX_PHASE1_EDGE/ready" > /dev/null; then break; fi
-              kill -0 "$https_proxy_pid"
-              sleep 1
-            done
+            start_https_proxy
           fi
           export MATRIX_PHASE1_E2E=1 MATRIX_PHASE1_E2E_TIMEOUT=90m
           export MATRIX_PHASE1_ROOT="$work/installation"
@@ -365,6 +369,24 @@ jobs:
           unset MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_ARCHIVE MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_SHA256 MATRIX_PHASE1_SECURITY_MAIL_FIXTURE_IMAGE_ID
           "$work/phase1.test" -test.run '^TestOfflinePhase1Lifecycle$' -test.v -test.timeout 17m \
             2>&1 | tee "$work/evidence/after-restart.log"
+          if [[ "$MATRIX_HTTPS_PROXY" == 1 ]]; then
+            kill -TERM "$https_proxy_pid"
+            wait "$https_proxy_pid"
+            https_proxy_pid=''
+            if curl --silent --max-time 3 --cacert "$SSL_CERT_FILE" "$MATRIX_PHASE1_EDGE/ready" > /dev/null; then
+              exit 1
+            fi
+            for action in status verify; do
+              timeout 5m "$work/release-a/bin/mx" --format json platform "$action" --root "$work/installation" \
+                > "$work/private/proxy-down-$action.json"
+              jq --exit-status '.status == "SUCCEEDED" and .result.state == "READY"' \
+                "$work/private/proxy-down-$action.json" > /dev/null
+            done
+            start_https_proxy
+            curl --fail --silent --show-error --max-time 5 --cacert "$SSL_CERT_FILE" "$MATRIX_PHASE1_EDGE/ready" > /dev/null
+            printf '%s\n' '{"proxyUnavailable":true,"localStatusReady":true,"localVerificationReady":true,"proxyRecovered":true}' \
+              > "$work/evidence/https-proxy-recovery.json"
+          fi
           export PLAYWRIGHT_BROWSERS_PATH="$work/browser/engines"
           timeout --signal=TERM --kill-after=15s 20m "$MATRIX_BROWSER_NODE" "$MATRIX_BROWSER_SCRIPT" \
             "$work/installation-iam-retention.json" "$work/browser/node_modules/playwright/index.mjs" \
@@ -416,7 +438,7 @@ jobs:
           names += [f'browser/{product}-{state}.jpg' for product in ('elasticsearch', 'logstash', 'kibana', 'redis')
                     for state in ('install', 'running', 'terminated')]
           if os.environ.get('MATRIX_HTTPS_PROXY') == '1':
-              names += ['first-use/report.json', 'first-use/https-first-use-console.jpg']
+              names += ['first-use/report.json', 'first-use/https-first-use-console.jpg', 'https-proxy-recovery.json']
           with zipfile.ZipFile(work / 'delivery/acceptance-evidence.zip', 'x', zipfile.ZIP_DEFLATED) as archive:
               for name in names:
                   source = work / 'evidence' / name

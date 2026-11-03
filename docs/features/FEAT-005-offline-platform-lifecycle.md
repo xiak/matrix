@@ -50,9 +50,7 @@ mixed. The supported host preparation and command identity are owned by the
 verified
 [platform installation runbook](../runbooks/platform-installation.md).
 
-## Release inventory and ownership
-
-### Local HTTPS proxy ingress (in progress)
+## Local HTTPS proxy ingress
 
 The next fresh-install candidate admits a canonical external HTTPS origin
 through a host-local proxy such as Cloudflare Tunnel. HTTP remains the
@@ -73,6 +71,33 @@ Public Cloudflare/Tencent connectivity is a separate live gate requiring the
 operator's prepared server and domain; local TLS evidence cannot stand in
 for that result. Credentials, tunnel tokens, SMTP passwords and signing keys
 remain outside Git and public evidence.
+
+Current evidence (2026-11-03):
+
+- Unit gates pass for topology, installation commands, local verification and
+  the terminal same-origin boundary. Plain HTTP behavior remains covered.
+- The real pinned APISIX gate passes HTTP/HTTPS with DevOps selected and
+  omitted, including Host/Origin rejection, forged forwarding metadata and
+  no-store API responses. The upstream in this gate is a test echo service.
+- Native acceptance [41609621167](https://github.com/xiak/matrix/actions/runs/41609621167)
+  installed and verified the signed HTTPS candidate. Its browser completed
+  first login and forced password change without returning to login. The
+  complete run is **not accepted**; the corrected logout selector and proxy
+  interruption drill require a fresh run.
+- Debian 13/amd64 package preparation was executed in an unprivileged
+  disposable container, without a Docker socket or nested daemon. Installed
+  versions were Docker CLI 29.9.2, Compose 5.7.0 and cloudflared 2026.10.7.
+  The token-file service passed systemd syntax validation; token input and
+  root-only permissions were tested using invalid synthetic material.
+  This does not prove host systemd startup, a real Tunnel connection or Tencent
+  host reboot. Those remain part of the live gate.
+- The [deployment workflow](../runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel)
+  uses a fixed public hostname and host-native connector. In this profile,
+  node/runner ingress ports also remain on loopback; remote enrollment is not
+  claimed by the Web Tunnel acceptance. Source-IP authorization observes the
+  proxy peer, not the visitor.
+
+## Release inventory and ownership
 
 An accepted bundle contains the exact immutable payloads required by
 [`ADR-0002`](../architecture/ADR-0002-product-boundary.md):

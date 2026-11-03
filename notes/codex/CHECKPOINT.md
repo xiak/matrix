@@ -4,24 +4,42 @@
 
 - Updated: 2026-11-03
 - Repository: https://github.com/xiak/matrix.git
-- Branch: feat/product-onboarding-release
-- Outcome: ELK/Redis product onboarding, signed release, user/product-team documentation and owned test cleanup are accepted.
-- [Matrix v0.3.0](https://github.com/xiak/matrix/releases/tag/v0.3.0) is public. Signed payload and tag: fd1eaa88879edb5d18879c2e55fb9175a190711d. Release ID: 432360073.
-- PR #14 delivered the products; PR #15 delivered publication recovery. Both are merged. User and product-team documentation is also in main.
+- Branch: feat/cloudflare-tunnel-entry
+- Outcome requested: accept a host-local HTTPS proxy entry and a usable Tencent Debian / Cloudflare Tunnel deployment workflow, using native Docker and keeping all credentials outside GitHub.
+- Base main: c609e1078cee3c55442d0164738f03fc28676f15. The published v0.3.0 payload is unchanged and does not include the new HTTPS profile.
 
-Follow AGENTS.md and repository-local Git identity. Load only the owning document:
+Follow AGENTS.md and repository-local identity `Xiak <Jellal@aliyun.com>`.
+Read [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#local-https-proxy-ingress), then the owning installation code/tests and [deployment runbook](../../docs/runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel).
 
-- [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核): exact signed identities, production runtime/browser/transport evidence, recovered publication and supported maintenance limits.
-- [FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#产品团队接入契约): product contract, adapter/platform acceptance, isolation and product-specific limits.
-- [Product-team guide](../../docs/product-guide/managed-service-onboarding.md) and [verified commands](../../docs/runbooks/managed-service-onboarding.md): reusable adapter-to-platform handoff.
-- [User guide](../../docs/user-guide/getting-started.md), [product examples](../../docs/user-guide/services-and-applications.md), and [installation commands](../../docs/runbooks/platform-installation.md): illustrated user workflows and operator handoff.
+The branch implements external HTTPS origin sealing, loopback-only host ingress,
+Host/Origin checks, ignored forwarding metadata, Secure terminal cookies and
+local maintenance independent of proxy availability. SourceIP still means the
+observed proxy peer. Remote node/runner enrollment is not covered by the Web
+Tunnel profile. HTTP release behavior is retained.
 
-Production native job 125744139260 in run 41583699116 accepted the original signed payload. The old overall run remains failed because of its draft-lookup bug; it must not be relabelled successful. Protected recovery run 41599590448 succeeded using the same accepted artifact and draft, without rebuilding or signing. Its repaired publisher source is 63c1fcc82f6a66af20770db1c2db048f7cce7ec2. Both PR Verification 41595424725 and direct-main Verification 41599492116 passed all twenty jobs. Actual seven-product P1 logs passed in 395.98 and 401.01 seconds. FEAT-005 owns detailed evidence.
+Local unit gates and the actual pinned APISIX gate passed. Debian 13 package
+preparation, protected token-file input with synthetic material and service-file
+syntax passed without a nested daemon. FEAT-005 owns their precise scope.
+Native HTTPS run 41609621167 installed successfully and passed browser first
+login/change-password, but failed at the logout harness selector; it is not an
+accepted lifecycle run. The selector is corrected and a proxy-interruption
+drill is added on this branch. Full native acceptance and current-source
+Verification still need successful results before acceptance.
 
-All eight public asset digests match the original delivery. Downloaded manifest/signature/public trust independently verify; the evidence ZIP has the identical 22 public files and twelve visually reviewed screenshots. Unauthenticated Release/tag lookup and exact manifest download passed. Release notes link to fixed handbook commit 2c33fd38ee1c92fe180f89ee9d6fa0e358f934ab, whose user/product-team/installation guides were fetched publicly and compared with Git. Runtime payload identity remains unchanged by later publication/documentation commits.
+The user is preparing the Tencent server. Live hostname/SSH access and actual
+Cloudflare setup are pending; never claim public connectivity or host reboot
+has passed based on the local TLS surrogate. Request only a usable SSH alias
+and access readiness, not a private key, password or Tunnel Token. Keep the
+real domain and deployment credentials out of portable repository evidence.
 
-The unused test resources and failed partial local download were removed. The original installation was retained and freshly confirmed READY with nineteen healthy platform services. Do not delete its data or treat a stopped user instance as disposable. No local Docker workload or large download remains necessary for this release.
+Next: finish current-source CI, inspect safe browser evidence, update the
+owning FEAT, complete live deployment/recovery when access is ready, then offer
+the concrete reviewed change. No release publication, merge or DNS mutation
+has occurred for this task. Never retag the existing release as an HTTPS build.
 
-The user authorized formal release, merging and dedicated signing custody. Reuse matrix-release-20261103; never regenerate it as a retry. The protected release environment remains main-only. Preserve the original older Logstash installation: its 88/40/8+r40 profile is not a maintenance source for this fresh-install-only 88/40/9+r41 release. Shared-host Docker does not establish physical tenant isolation. Redis is single-node AOF; platform backup does not back up product business data. Future work must retain these published boundaries or explicitly replace them with newly accepted support.
-
-No implementation or release gate remains open for this goal. Secrets, absolute checkout paths and uncommitted machine-local state are excluded.
+Preserve the original local installation and its data. Remove only this task's
+disposable Debian preparation container/image after validation. The prior
+ELK/Redis release goal is complete and must not be restarted. Dedicated signing
+custody already exists; do not generate replacement signing keys. Production
+signing inputs, SMTP configuration and Tunnel tokens must never enter Git,
+public logs, screenshots or CI artifacts.

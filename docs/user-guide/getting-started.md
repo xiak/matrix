@@ -24,6 +24,8 @@ Matrix 帮助团队在自己的基础设施上管理账号、申请托管服务�
   确认平台就绪，再交付地址与初始管理身份。
   使用 Windows 与 Docker Desktop 时，先阅读[环境说明](../runbooks/platform-installation.md#windows-与-docker-desktop)，
   不直接在 PowerShell 中运行 Linux 安装命令。
+  准备公网演示时，使用[腾讯云 Debian 与 Cloudflare Tunnel 流程](../runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel)，
+  并领取明确支持 HTTPS 入口的配套版本；上面的 v0.3.0 包不能直接替代。
 - **团队管理员**：需要独立团队空间时，由平台管理员开通租户账号；
   你在自己的账号内创建成员，不需要为每名成员新建一个租户。
 

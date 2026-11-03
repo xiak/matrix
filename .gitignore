@@ -5,6 +5,9 @@
 *.key
 *.pem
 *.p12
+*.token
+signer.json
+security-mail.json
 secrets/
 
 # Editors and operating systems

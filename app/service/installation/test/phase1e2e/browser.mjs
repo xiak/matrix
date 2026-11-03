@@ -201,10 +201,12 @@ try {
       assert.equal((await page.locator("body").innerText()).includes(password), false);
       await page.screenshot({ path: path.join(evidencePath, "https-first-use-console.jpg"), type: "jpeg", quality: 80, fullPage: true });
     });
-    await step("logout-and-new-password-relogin", async () => {
+    await step("administrator-ui-logout", async () => {
       await page.getByRole("button", { name: "打开账号菜单，当前用户 admin", exact: true }).click();
-      await page.getByRole("button", { name: "注销并撤销 IAM 会话", exact: true }).click();
+      await page.getByRole("menuitem", { name: "注销并撤销 IAM 会话", exact: true }).click();
       await page.locator("#login-form").waitFor();
+    });
+    await step("new-password-ui-relogin", async () => {
       await page.locator("#login-name").fill("admin");
       await page.locator("#login-password").fill(password);
       await page.getByRole("button", { name: "登录控制台", exact: true }).click();

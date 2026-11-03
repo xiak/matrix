@@ -60,11 +60,13 @@ GitHub 自动提供的 **Source code** 是源码，不能用作安装包。
 通过本机 `/var/run/docker.sock` 管理工作负载。远程 Docker、Rootless Docker、
 Kubernetes 和多节点控制平面不属于本页的安装流程。
 
-**访问入口须提前隔离。** 当前安装只接受 HTTP 和显式端口 `8080`；
+**先选定访问入口，再选择配套版本。** 已发布的 v0.3.0 只接受 HTTP 和显式端口 `8080`；
 示例地址为 `http://127.0.0.1:8080`。安装参数里的地址用于请求校验，
-不是监听绑定；服务仍监听 `0.0.0.0:8080`。
+不是该版本的监听绑定；服务仍监听 `0.0.0.0:8080`。
 安装器不会替你配置防火墙，不能因此假定只有本机能够访问。
-请由部署人员事先提供网络隔离与访问方式；当前流程不能直接当作公网 HTTPS 部署。
+请由部署人员事先提供网络隔离与访问方式；不能把这个包直接用于公网 HTTPS 部署。
+腾讯云与 Cloudflare Tunnel 使用[下方的 HTTPS 部署流程](#腾讯云-debian-与-cloudflare-tunnel)，
+须领取包含该功能且完成验收的新包，不能只把旧安装命令的 `http` 改为 `https`。
 安装前还会检查节点接入端口 `8443` 是否空闲；仅确认 `8080` 空闲还不够。
 
 主机资源是否足够，以交付包声明的要求与安装前检查为准。
@@ -178,6 +180,219 @@ root# /usr/local/sbin/mx --format json platform status --root /var/lib/matrix
 
 首次改密成功应直接进入控制台，再正常退出并用新密码验证登录。
 平台验证成功不能代替这一步交付检查，见[首次使用说明](../user-guide/getting-started.md#3-完成首次改密)。
+
+## 腾讯云 Debian 与 Cloudflare Tunnel
+
+适合一台 Debian 13、x86_64 服务器上的演示环境。Docker Engine、安装工具和
+cloudflared 都运行在这台主机上，平台容器使用主机的 Docker；没有 DinD。
+示例域名为 `matrix.example.com`，现场统一替换成自己的域名，安装后不能随意更换。
+本流程对应的新版本与已完成验收项目见
+[HTTPS 入口验收记录](../features/FEAT-005-offline-platform-lifecycle.md#local-https-proxy-ingress)。
+v0.3.0 的发布附件不包含此功能。
+
+```mermaid
+flowchart LR
+    A[用户浏览器] -->|HTTPS| B[Cloudflare 域名入口]
+    B <-->|加密隧道，服务器主动连接| C[Debian 主机上的 cloudflared]
+    C -->|本机 127.0.0.1:8080| D[Matrix 控制台与 API]
+    D --> E[主机 Docker 中的平台服务]
+```
+
+前端与 API 使用同一域名。Cloudflare 承担公网 HTTPS 入口，服务器上的原有网关继续
+处理登录、权限和服务请求。服务器 IP 不需要成为这个域名的 A 记录。
+这条隧道只提供平台 Web 入口，不会把数据库端口、节点接入端口或主机 Docker 暴露到公网。
+
+### 1. 准备服务器、域名和安装材料
+
+在腾讯云控制台准备主机，并让主机管理员完成以下事项：
+
+- 使用全新、专用的 Debian 13 主机；已有 Docker 工作负载的主机先由运维核对，
+  不照搬安装新引擎的步骤覆盖原环境。
+- 安全组仅向管理人员的来源地址开放 SSH。此方案不需要开放公网 `80`、`443`、
+  `8080`、`8443`、`8444`、Docker 管理端口或数据库端口。
+- 允许服务器访问软件源、邮件服务器和 DNS，并允许 cloudflared 向 Cloudflare
+  出站连接 `7844`：UDP 用于 QUIC，TCP 用于 HTTP/2。以
+  [Cloudflare Tunnel 网络要求](https://developers.cloudflare.com/tunnel/get-started/)
+  为准核对云安全组及主机的出站规则。
+- 在 Cloudflare 中确认域名已生效、自己能够管理 Tunnel 和该子域名的 DNS。
+  子域名已有 A、AAAA 或 CNAME 时，先核对现有用途再处理冲突。
+- 按[准备安装材料](#准备安装材料)领取经过验收的 HTTPS 配套包、公开信任文件和
+  受保护的邮件配置；发布签名私钥不需要放到演示服务器。
+
+磁盘要同时容纳下载文件、解压后的发布包、Docker 镜像、实例数据和备份。
+安装前检查中的剩余空间门槛不能当作运行所有产品的容量承诺。
+磁盘容量按演示要创建的实例预留，避免把系统盘填满。
+
+### 2. 安装主机软件
+
+以下软件源与包安装命令已在 Debian 13/amd64 环境执行。使用 root，先执行 `umask 077`。
+Docker 和 cloudflared 的软件源公钥是公开验签材料，不是服务器私钥。
+已有其他来源的 Docker 时，先按
+[Docker 官方 Debian 安装说明](https://docs.docker.com/engine/install/debian/)
+处理软件包冲突，不删除原容器数据。
+
+```bash
+apt-get update -qq
+apt-get install -y ca-certificates curl
+install -m 0755 -d /etc/apt/keyrings
+curl --fail --silent --show-error --location --max-time 120 https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+chmod a+r /etc/apt/keyrings/docker.asc
+. /etc/os-release
+cat > /etc/apt/sources.list.d/docker.sources <<EOF
+Types: deb
+URIs: https://download.docker.com/linux/debian
+Suites: ${VERSION_CODENAME}
+Components: stable
+Architectures: $(dpkg --print-architecture)
+Signed-By: /etc/apt/keyrings/docker.asc
+EOF
+chmod 644 /etc/apt/sources.list.d/docker.sources
+curl --fail --silent --show-error --location --max-time 120 https://pkg.cloudflare.com/cloudflare-main.gpg -o /etc/apt/keyrings/cloudflare-main.gpg
+chmod 644 /etc/apt/keyrings/cloudflare-main.gpg
+printf '%s\n' 'deb [signed-by=/etc/apt/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' > /etc/apt/sources.list.d/cloudflared.list
+chmod 644 /etc/apt/sources.list.d/cloudflared.list
+apt-get update -qq
+apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin cloudflared
+docker --version
+docker compose version
+cloudflared --version
+```
+
+由主机管理员确认 Docker 已启动、设置为开机启动，并完成前述
+[主机检查](#1-进入安装身份并检查主机)。Docker 服务端也必须能够响应，不能只看客户端版本。
+同时按[托管服务主机参数](#检查托管服务的主机参数)将 `vm.max_map_count` 持久化为不低于
+`1048576`，再检查当前值。软件安装验证没有启动嵌套 daemon；
+实际腾讯云主机的开机启动与重启恢复仍需在交接时验证。
+
+### 3. 安装 Matrix 并先完成本机检查
+
+按[安装平台](#安装平台)准备目录与受保护材料。
+HTTPS 版安装时，将同一条 `platform install` 命令的最后一项设为
+`--northbound-origin https://matrix.example.com`。
+这个地址同时决定域名校验和 HTTPS 模式；安装器将本机入口限制为 `127.0.0.1:8080`。
+不要加 `/console/`，也不要填 cloudflared 的本机回源地址。
+
+安装完成后执行前述 `platform verify` 和 `platform status`，两者都应成功，平台为 `READY`。
+这些命令通过本机回环检查平台，因此 Tunnel 尚未连接时也可执行。
+本机检查成功只说明 Matrix 正常，公网交接还需完成以下步骤。
+
+### 4. 在 Cloudflare 创建固定域名入口
+
+按 [Cloudflare 的 Tunnel 创建流程](https://developers.cloudflare.com/tunnel/get-started/)
+进入 **Networking → Tunnels**，创建一个由控制台管理的 Tunnel，例如 `matrix-demo`。
+记下自己的 Tunnel 名称，后续检查与恢复都使用同一个 Tunnel。
+
+在 **Routes → Published application** 添加入口：
+
+| 界面项目 | 填写内容 |
+| --- | --- |
+| 主机名 | `matrix.example.com`，与 Matrix 安装时完全一致 |
+| Path | 留空，让控制台、静态资源和 API 都经过同一入口 |
+| Service / URL | `http://127.0.0.1:8080` |
+| HTTP Host Header | `matrix.example.com`，不要写 `localhost` 或 `127.0.0.1` |
+
+HTTP Host Header 位于 **Additional application settings → HTTP**，见
+[Cloudflare 回源参数](https://developers.cloudflare.com/tunnel/reference/origin-parameters/)。
+这里的 HTTP 只发生在同一台主机的回环接口；浏览器使用 HTTPS，Cloudflare 到连接器使用加密隧道。
+
+确认该域名的 HTTPS 证书已生效，并在 Cloudflare 为它开启 HTTP 到 HTTPS 的跳转。
+共享域名空间时使用仅匹配这个主机名的跳转规则，避免影响其他站点。
+检查现有 Cache Rules：登录、控制台 HTML、API 均不应强制缓存；
+API 响应由 Matrix 标记为 `no-store`。带版本标识的静态文件可按源站缓存头缓存。
+WebSocket 应保持开启；不要给 API 或 WebSocket 加需要浏览器交互才能通过的额外挑战。
+
+### 5. 只在服务器保存 Tunnel Token
+
+在 Cloudflare 页面取得这个 Tunnel 的 Token，通过服务器终端的隐藏输入写入受保护文件。
+不要把页面给出的含 Token 安装命令粘贴到 shell 历史、聊天、工单或 GitHub。
+下面的输入与权限步骤已用无效测试值验证；实际值仅由运维在现场输入：
+
+```bash
+(
+set -euo pipefail
+umask 077
+install -d -o root -g root -m 0700 /etc/cloudflared
+IFS= read -r -s -p 'Tunnel Token: ' matrix_tunnel_token
+printf '\n'
+test -n "$matrix_tunnel_token"
+printf '%s' "$matrix_tunnel_token" > /etc/cloudflared/matrix.token.new
+unset matrix_tunnel_token
+chmod 600 /etc/cloudflared/matrix.token.new
+mv -f /etc/cloudflared/matrix.token.new /etc/cloudflared/matrix.token
+)
+```
+
+将以下内容保存为 `/etc/systemd/system/matrix-tunnel.service`，由 root 持有，权限 `0644`。
+配置仅保存 Token 的文件路径，文件内容不出现在服务启动参数中。
+这个服务文件已通过 Debian 的 `systemd-analyze verify` 语法检查：
+
+```ini
+[Unit]
+Description=Matrix Cloudflare Tunnel
+Wants=network-online.target
+After=network-online.target docker.service
+
+[Service]
+Type=simple
+UMask=0077
+ExecStart=/usr/bin/cloudflared --no-autoupdate tunnel --metrics 127.0.0.1:20241 --loglevel warn run --token-file /etc/cloudflared/matrix.token
+Restart=always
+RestartSec=5s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+
+[Install]
+WantedBy=multi-user.target
+```
+
+由主机管理员重新加载 systemd、启用并启动 `matrix-tunnel.service`。
+确认服务状态为运行中，再在 Cloudflare 页面确认连接器为 **Healthy**。
+完整的服务启停与网络连通性属于服务器现场验收；语法检查不能替代这一步。
+`--token-file` 需要 cloudflared 2025.4.0 或更新版本，见
+[官方运行参数](https://developers.cloudflare.com/tunnel/reference/run-parameters/)。
+
+### 6. 从用户网络完成交接与恢复演练
+
+打开 `https://matrix.example.com`，按[首次使用图文流程](../user-guide/getting-started.md)
+完成初始登录、改密、进入控制台、退出后使用新密码重新登录，再查看 IAM 与托管服务页面。
+检查浏览器没有证书错误，HTTP 地址会跳转到 HTTPS，页面没有 MOCK 标识。
+域名能打开或 Tunnel 为 Healthy 都不能代替这些检查。
+
+在约定的演练窗口，由运维短暂停止 Tunnel 服务：公网应暂时不可访问，
+服务器上的 `platform status` 和 `platform verify` 仍应成功。
+随后恢复同一个服务，确认原域名恢复访问、当前密码仍可登录、原实例仍能读取。
+接着演练一次主机重启，按[主机重启后](#主机重启后)逐项复核，并确认 Tunnel 自动恢复。
+所有检查完成后才交付演示地址；实际通过日期与证据归入 FEAT-005。
+
+平台的备份、升级和恢复继续使用[已有维护流程](#升级回滚与恢复)。
+Tunnel Token 轮换时只替换受保护的 Token 文件并重启连接器，
+不要重装 Matrix、修改安装记录或重新生成平台管理员密码。
+旧 Token 的撤销与已有连接处理以
+[Cloudflare Token 轮换说明](https://developers.cloudflare.com/tunnel/reference/tunnel-tokens/)
+为准，不能仅凭本地文件已替换就认定旧连接已撤销。
+
+### 入口故障定位
+
+先运行本机 `status` / `verify`，再区分平台故障与 Tunnel 故障。
+排查使用时间、域名、错误码与经过检查的截图，不上传 Token、SMTP 配置或浏览器请求凭据。
+
+| 现象 | 下一步 |
+| --- | --- |
+| Cloudflare `1033` 或连接器不健康 | 检查 Tunnel 服务、Token 是否属于该 Tunnel、DNS 解析及出站 `7844`；参考[连接故障说明](https://developers.cloudflare.com/tunnel/troubleshooting/) |
+| Cloudflare `502`，本机平台也未就绪 | 按平台启动故障处理，保留原安装目录与数据 |
+| Cloudflare `502`，本机平台正常 | 核对回源为 `http://127.0.0.1:8080`，连接器与 Matrix 在同一主机，不使用另一个容器自己的回环地址 |
+| `421` | 回源 Host 与安装时域名不一致，修正路由的 HTTP Host Header |
+| `403` 或页面 API 被拒绝 | 确认浏览器确实使用已配置的 HTTPS 域名，再检查 Cloudflare 是否拦截请求；不通过关闭域名或 Origin 校验绕过 |
+| 页面仍是旧版、登录结果异常 | 排查强制缓存规则并清理该域名的错误缓存；不要缓存 API 或把不同入口的会话混用 |
+| Tunnel 恢复后仍打不开 | 分别检查 Cloudflare 的 DNS/证书、连接器健康与本机平台状态，保留各层错误供交付人员定位 |
+
+此模式的 IAM `SourceIP` 指平台实际看到的代理连接地址，不能用它限制访问者的真实公网 IP。
+需要限制演示访问来源时，在 Cloudflare 入口实施访问控制并单独验证，
+不要把客户端自带的转发请求头当作可信身份。
+远程节点接入、DevOps runner 和数据库客户端连接需要各自的网络方案，本页没有将它们纳入 Web 隧道。
 
 ## 日常检查
 
