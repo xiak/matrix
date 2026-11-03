@@ -295,7 +295,9 @@ HTTP Host Header 位于 **Additional application settings → HTTP**，见
 [Cloudflare 回源参数](https://developers.cloudflare.com/tunnel/reference/origin-parameters/)。
 这里的 HTTP 只发生在同一台主机的回环接口；浏览器使用 HTTPS，Cloudflare 到连接器使用加密隧道。
 
-确认该域名的 HTTPS 证书已生效，并在 Cloudflare 为它开启 HTTP 到 HTTPS 的跳转。
+确认该域名的 HTTPS 证书已生效，并按
+[Cloudflare HTTPS 跳转说明](https://developers.cloudflare.com/ssl/edge-certificates/additional-options/always-use-https/)
+为它开启 HTTP 到 HTTPS 的跳转。
 共享域名空间时使用仅匹配这个主机名的跳转规则，避免影响其他站点。
 检查现有 Cache Rules：登录、控制台 HTML、API 均不应强制缓存；
 API 响应由 Matrix 标记为 `no-store`。带版本标识的静态文件可按源站缓存头缓存。

@@ -1012,6 +1012,7 @@ func TestCanonicalNorthboundOriginPreservesOnlySupportedURLs(t *testing.T) {
 		}
 	}
 	for _, raw := range []string{
+		"https://:443", "http://:8080",
 		"https://matrix.example.test/", "https://matrix.example.test?", "https://matrix.example.test#",
 		"https://user:secret@matrix.example.test", "https://matrix.example.test:",
 		"https://matrix.example.test:0", "https://matrix.example.test:65536", "https://matrix.example.test:0443",

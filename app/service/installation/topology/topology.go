@@ -453,9 +453,9 @@ func ValidateNorthboundOrigin(origin string, listenerPort uint16) error {
 	if err != nil {
 		return errors.New("platform northbound origin is invalid")
 	}
-	_, port, err := net.SplitHostPort(parsed.Host)
+	host, port, err := net.SplitHostPort(parsed.Host)
 	number, portErr := strconv.ParseUint(port, 10, 16)
-	if err != nil || portErr != nil || number == 0 || strconv.FormatUint(number, 10) != port ||
+	if err != nil || host == "" || portErr != nil || number == 0 || strconv.FormatUint(number, 10) != port ||
 		(parsed.Scheme == "http" && number != uint64(listenerPort)) {
 		return errors.New("platform northbound origin is invalid")
 	}
