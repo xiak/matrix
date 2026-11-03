@@ -574,15 +574,15 @@ Linux/amd64 官方镜像固定为
 `764cff427698377f70c24264be59a9fc5606d123` 的
 [独立 Verification](https://github.com/xiak/matrix/actions/runs/41485948364)
 十九项全部通过，真实七产品 P1 为 325.39 秒；覆盖目录、原生读写、IAM 精确授权与
-撤权、跨账号拒绝、配额、Operation、删除及 Audit。当前候选
-`ff688e24fce3a7bf80e07bfe7cadc591bfef181f` 的
-[Product onboarding](https://github.com/xiak/matrix/actions/runs/41565294637)
-十八项在 764.76 秒内全部通过。已读取实际制品 `13199897022`，SHA-256 为
-`18813345fce31daa190fe07e2e11e748e66de3fca4327120aed15788938d6f97`；
+撤权、跨账号拒绝、配额、Operation、删除及 Audit。主线集成提交
+`fd1eaa88879edb5d18879c2e55fb9175a190711d` 的
+[Product onboarding](https://github.com/xiak/matrix/actions/runs/41576458008)
+十八项在 818.39 秒内全部通过。已读取实际制品 `13204241730`，SHA-256 为
+`cd3a9d0e4663d21a6bd30400fe19fa2dc8290694696916dbf33fa2380af2dbd8`；
 报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。同源码的
-[PR Verification](https://github.com/xiak/matrix/actions/runs/41565295181) 与
-[push Verification](https://github.com/xiak/matrix/actions/runs/41565287724)
-各十九项全部通过，两次实际日志均确认真实七产品 P1 通过。
+[PR Verification](https://github.com/xiak/matrix/actions/runs/41576457997) 与
+[push Verification](https://github.com/xiak/matrix/actions/runs/41576453984)
+各十九项全部通过，实际日志确认真实七产品 P1 分别为 390.91 秒和 332.70 秒。
 上述独立门禁不替代签名包的完整离线生命周期和浏览器验收。
 
 当前离线门禁在原生引擎重启验收后，用同一签名安装中的真实页面完成 ELK、Redis
