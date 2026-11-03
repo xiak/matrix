@@ -74,6 +74,10 @@ remain outside Git and public evidence.
 
 Current evidence (2026-11-03):
 
+- Independent [Verification 41612656543](https://github.com/xiak/matrix/actions/runs/41612656543)
+  passed all 20 jobs for implementation `f6cf6e76fb5f4df028e7e57ad877dbf0e9fcbf60`.
+  The full native HTTPS lifecycle [41612484059](https://github.com/xiak/matrix/actions/runs/41612484059)
+  is still running; independent unit gates do not replace its result.
 - Unit gates pass for topology, installation commands, local verification and
   the terminal same-origin boundary. Plain HTTP behavior remains covered.
 - The real pinned APISIX gate passes HTTP/HTTPS with DevOps selected and
@@ -89,8 +93,15 @@ Current evidence (2026-11-03):
   versions were Docker CLI 29.9.2, Compose 5.7.0 and cloudflared 2026.10.7.
   The token-file service passed systemd syntax validation; token input and
   root-only permissions were tested using invalid synthetic material.
-  This does not prove host systemd startup, a real Tunnel connection or Tencent
-  host reboot. Those remain part of the live gate.
+  This container result does not prove host systemd startup or connectivity.
+- On the dedicated Tencent Debian 12/amd64 host, the existing Docker engine
+  was retained and the host-native cloudflared 2026.10.7 service was installed.
+  Docker and the connector are enabled and active; the connector's loopback
+  readiness endpoint returns 200 after TCP/UDP 7844 egress was allowed.
+  Token custody is root-only, outside the checkout and service arguments.
+  Matrix is not yet installed there: public first use, SMTP delivery, proxy
+  interruption and host reboot are still unverified. Tunnel health alone
+  does not accept the public deployment.
 - The [deployment workflow](../runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel)
   uses a fixed public hostname and host-native connector. In this profile,
   node/runner ingress ports also remain on loopback; remote enrollment is not

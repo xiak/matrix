@@ -206,7 +206,8 @@ flowchart LR
 
 在腾讯云控制台准备主机，并让主机管理员完成以下事项：
 
-- 使用全新、专用的 Debian 13 主机；已有 Docker 工作负载的主机先由运维核对，
+- 使用专用的 Debian 主机。本流程已核对 Debian 12 实机和 Debian 13 软件准备环境；
+  已有 Docker 工作负载的主机先由运维核对，
   不照搬安装新引擎的步骤覆盖原环境。
 - 安全组仅向管理人员的来源地址开放 SSH。此方案不需要开放公网 `80`、`443`、
   `8080`、`8443`、`8444`、Docker 管理端口或数据库端口。
@@ -258,11 +259,13 @@ docker compose version
 cloudflared --version
 ```
 
+已有可用 Docker 的 Debian 12 实机保留了原有引擎，只安装 cloudflared；
+不要为了照抄上述整段命令重装引擎。
 由主机管理员确认 Docker 已启动、设置为开机启动，并完成前述
 [主机检查](#1-进入安装身份并检查主机)。Docker 服务端也必须能够响应，不能只看客户端版本。
 同时按[托管服务主机参数](#检查托管服务的主机参数)将 `vm.max_map_count` 持久化为不低于
 `1048576`，再检查当前值。软件安装验证没有启动嵌套 daemon；
-实际腾讯云主机的开机启动与重启恢复仍需在交接时验证。
+实机已确认 Docker 与连接器设置为开机启动，主机重启后的完整恢复仍需在交接时验证。
 
 ### 3. 安装 Matrix 并先完成本机检查
 
@@ -326,7 +329,7 @@ mv -f /etc/cloudflared/matrix.token.new /etc/cloudflared/matrix.token
 
 将以下内容保存为 `/etc/systemd/system/matrix-tunnel.service`，由 root 持有，权限 `0644`。
 配置仅保存 Token 的文件路径，文件内容不出现在服务启动参数中。
-这个服务文件已通过 Debian 的 `systemd-analyze verify` 语法检查：
+这个服务文件已通过 Debian 的 `systemd-analyze verify` 语法检查，并在 Debian 12 实机运行：
 
 ```ini
 [Unit]
@@ -350,9 +353,21 @@ ProtectSystem=strict
 WantedBy=multi-user.target
 ```
 
-由主机管理员重新加载 systemd、启用并启动 `matrix-tunnel.service`。
-确认服务状态为运行中，再在 Cloudflare 页面确认连接器为 **Healthy**。
-完整的服务启停与网络连通性属于服务器现场验收；语法检查不能替代这一步。
+继续以 root 执行以下已在实机验证的命令：
+
+```bash
+systemd-analyze verify /etc/systemd/system/matrix-tunnel.service
+systemctl daemon-reload
+systemctl enable --now matrix-tunnel.service
+systemctl is-enabled matrix-tunnel.service
+systemctl is-active matrix-tunnel.service
+curl --silent --max-time 5 --output /dev/null --write-out '%{http_code}\n' http://127.0.0.1:20241/ready
+```
+
+最后三项应分别返回 `enabled`、`active`、`200`，再在 Cloudflare 页面确认连接器为
+**Healthy**。`20241` 只绑定本机回环，不需要在云安全组开放。
+这证明连接器已连接 Cloudflare；Matrix 是否就绪仍以第 3 步的平台检查为准。
+若连接器健康而平台尚未安装，访问域名仍会得到 `502`，不能据此认定 DNS 配错。
 `--token-file` 需要 cloudflared 2025.4.0 或更新版本，见
 [官方运行参数](https://developers.cloudflare.com/tunnel/reference/run-parameters/)。
 
@@ -383,8 +398,8 @@ Tunnel Token 轮换时只替换受保护的 Token 文件并重启连接器，
 
 | 现象 | 下一步 |
 | --- | --- |
-| Cloudflare `1033` 或连接器不健康 | 检查 Tunnel 服务、Token 是否属于该 Tunnel、DNS 解析及出站 `7844`；参考[连接故障说明](https://developers.cloudflare.com/tunnel/troubleshooting/) |
-| Cloudflare `502`，本机平台也未就绪 | 按平台启动故障处理，保留原安装目录与数据 |
+| Cloudflare `1033` 或连接器不健康 | 检查 Tunnel 服务、Token 是否属于该 Tunnel、DNS 解析及出站 `7844`；入站放行不能代替出站放行。参考[连接故障说明](https://developers.cloudflare.com/tunnel/troubleshooting/) |
+| Cloudflare `502`，本机平台也未就绪 | 先确认 Matrix 已安装；已安装则按平台启动故障处理，保留原安装目录与数据 |
 | Cloudflare `502`，本机平台正常 | 核对回源为 `http://127.0.0.1:8080`，连接器与 Matrix 在同一主机，不使用另一个容器自己的回环地址 |
 | `421` | 回源 Host 与安装时域名不一致，修正路由的 HTTP Host Header |
 | `403` 或页面 API 被拒绝 | 确认浏览器确实使用已配置的 HTTPS 域名，再检查 Cloudflare 是否拦截请求；不通过关闭域名或 Origin 校验绕过 |

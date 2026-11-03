@@ -17,25 +17,32 @@ local maintenance independent of proxy availability. SourceIP still means the
 observed proxy peer. Remote node/runner enrollment is not covered by the Web
 Tunnel profile. HTTP release behavior is retained.
 
-Local unit gates and the actual pinned APISIX gate passed. Debian 13 package
-preparation, protected token-file input with synthetic material and service-file
-syntax passed without a nested daemon. FEAT-005 owns their precise scope.
-Native HTTPS run 41609621167 installed successfully and passed browser first
-login/change-password, but failed at the logout harness selector; it is not an
-accepted lifecycle run. The selector is corrected and a proxy-interruption
-drill is added on this branch. Full native acceptance and current-source
-Verification still need successful results before acceptance.
+Implementation `f6cf6e76fb5f4df028e7e57ad877dbf0e9fcbf60` passed all 20 jobs
+in independent Verification 41612656543. Local unit gates and the actual
+pinned APISIX gate passed. Native HTTPS acceptance 41612484059 is still running;
+do not dispatch a duplicate. Earlier run 41609621167 failed at the browser
+logout harness after install and first password change; that selector is
+corrected, but the earlier run is not accepted. FEAT-005 owns precise evidence.
 
-The user is preparing the Tencent server. Live hostname/SSH access and actual
-Cloudflare setup are pending; never claim public connectivity or host reboot
-has passed based on the local TLS surrogate. Request only a usable SSH alias
-and access readiness, not a private key, password or Tunnel Token. Keep the
-real domain and deployment credentials out of portable repository evidence.
+The dedicated Tencent Debian 12 host now has a running host-native Cloudflare
+connector, enabled at boot, with loopback readiness 200 and root-only token
+custody. Its existing Docker engine is preserved. The published hostname has
+a Tunnel route, but Matrix is not installed, so public application access is
+not accepted. Debian 13 package preparation was separately verified without
+a nested daemon. No host reboot or live application recovery is accepted yet.
+The current installer still requires SMTP configuration. The user wants to
+defer supplying a mailbox; do not request or configure credentials until the
+mail-disabled installation scope is resolved. Do not use dummy mail settings
+to bypass the existing requirement or silently weaken MFA enrollment.
 
-Next: finish current-source CI, inspect safe browser evidence, update the
-owning FEAT, complete live deployment/recovery when access is ready, then offer
-the concrete reviewed change. No release publication, merge or DNS mutation
-has occurred for this task. Never retag the existing release as an HTTPS build.
+Next: finish native CI, inspect safe browser evidence, resolve the deferred
+mail configuration, then complete live deployment/recovery with an accepted
+HTTPS package. Draft PR #16 tracks the change. No release publication or merge
+has occurred for this task. The operator configured the Cloudflare route;
+never retag the existing release as an HTTPS build. Keep server identifiers,
+credentials and local access files outside repository evidence. A temporary
+sudo grant must be removed after deployment verification as promised to the
+operator. Token rotation remains an operator-private handoff, not a chat input.
 
 Preserve the original local installation and its data. Remove only this task's
 disposable Debian preparation container/image after validation. The prior
