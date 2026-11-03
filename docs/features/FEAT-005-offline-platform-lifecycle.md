@@ -1465,6 +1465,45 @@ credentials and installation data are excluded from uploaded artifacts.
 A workflow definition alone is not an
 accepted Gate C result; the current execution status remains recorded above.
 
+The same workflow has a main-only `prepare_release` dispatch for production
+delivery. Its `release` environment must restrict access to the `main` branch
+and hold `MATRIX_RELEASE_SIGNING_KEY` as a Secret and
+`MATRIX_RELEASE_TRUST_ROOT` as the matching public variable. Ordinary
+acceptance uses its separate empty environment and disposable signer. On
+2026-11-03, the user authorized a dedicated long-lived key with local custody
+and a GitHub publishing Secret. Key `matrix-release-20261103` was generated,
+its private/public pair verified, and local directory/file access checked as
+owner-only. The encrypted environment Secret and byte-identical public
+variable were configured and read back by metadata/public value; the sole
+allowed deployment rule is branch `main`. The public key fingerprint is
+`sha256:c61ac6fee5c7cb723eaa1062f2f74914b3577674d2fcd26947eaf7c8e91f1245`.
+This proves custody/configuration, not successful CI decryption or a signed
+production release; those require the actual production dispatch.
+Production assembly requires successful exact-source Verification and Product
+onboarding runs, then executes the complete lifecycle and browser gate with
+the protected signer. A is the fresh-install delivery; its same-source B is
+used for upgrade/rollback acceptance and is not published as a second release.
+
+After acceptance, the workflow compares the delivery archive against A,
+extracts it into a fresh directory and compares again. GitHub download chunks
+are byte-checked against that one archive and have individual and whole-bundle
+SHA-256 checksums. This is transport packaging for GitHub's per-asset limit;
+the installer still accepts one complete bundle and gains no split-media
+contract. The draft-preparation script checks exact source/version, protected
+trust, the Ed25519 manifest signature, complete chunk/checksum inventory and
+uploaded asset sizes/digests. Existing published releases, unrelated tags and
+different assets are rejected without replacement. A lost upload response can
+resume only matching assets. The result remains an unpublished draft for
+final delivery review.
+
+Thirteen local publication-boundary tests passed, including damaged signatures,
+changed chunks, foreign source/trust, unexpected private files, checksum path
+escape, existing publication/asset protection and upload-response recovery.
+They use real Ed25519 verification and simulate GitHub HTTP/CLI effects
+without network requests. Workflow YAML, Bash and Python syntax
+checks passed. These checks do not claim a production-signed run, Linux CI
+execution of the new publishing path, or a public Release; those remain open.
+
 Common generation-drift, unit, vet, race, repeated, schema, architecture,
 real-PostgreSQL, real-Compose, cross-platform build, Markdown-link, stale-term,
 donor-dependency, tenant-authority, and `git diff --check` gates must pass on

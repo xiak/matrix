@@ -1,11 +1,12 @@
 name: Verification
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, 'feat/**']
-    paths: ['api/**', 'app/**', 'deploy/**', 'test/**', 'go.mod', 'go.sum', '.github/workflows/**']
+    paths: ['api/**', 'app/**', 'deploy/**', 'test/**', 'go.mod', 'go.sum', '.github/workflows/**', '.github/scripts/**']
   pull_request:
-    paths: ['api/**', 'app/**', 'deploy/**', 'test/**', 'go.mod', 'go.sum', '.github/workflows/**']
+    paths: ['api/**', 'app/**', 'deploy/**', 'test/**', 'go.mod', 'go.sum', '.github/workflows/**', '.github/scripts/**']
 
 permissions:
   contents: read

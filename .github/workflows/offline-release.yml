@@ -2,6 +2,19 @@ name: Offline release acceptance
 
 on:
   workflow_dispatch:
+    inputs:
+      prepare_release:
+        description: Use the protected release signer and prepare a verified draft Release (main only)
+        type: boolean
+        default: false
+      release_version:
+        description: Fresh-install release version
+        type: string
+        default: v0.3.0
+      successor_version:
+        description: Same-source successor used only for lifecycle acceptance
+        type: string
+        default: v0.3.1
   push:
     branches: ['feat/product-onboarding-release']
     paths:
@@ -10,6 +23,8 @@ on:
       - 'deploy/cmd/matrix-offline-fixture/**'
       - 'deploy/cmd/matrix-release/**'
       - 'deploy/releasebuild/**'
+      - '.github/scripts/prepare-release.py'
+      - '.github/scripts/test_prepare_release.py'
       - '.github/workflows/offline-release.yml'
 
 permissions:
@@ -21,8 +36,15 @@ concurrency:
 
 jobs:
   native-offline-lifecycle:
+    if: ${{ !inputs.prepare_release || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
+    environment:
+      name: ${{ inputs.prepare_release && 'release' || 'acceptance' }}
+      deployment: false
+    permissions:
+      contents: read
+      actions: read
     env:
       GOMAXPROCS: '2'
       GOMEMLIMIT: '1GiB'
@@ -38,6 +60,38 @@ jobs:
       - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: '22.22.2'
+      - name: Select exact release versions and require accepted source
+        env:
+          PREPARE_RELEASE: ${{ inputs.prepare_release && 'true' || 'false' }}
+          RELEASE_VERSION: ${{ inputs.release_version }}
+          SUCCESSOR_VERSION: ${{ inputs.successor_version }}
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, re, urllib.request
+          a, b = 'v0.3.0-products.1', 'v0.3.0-products.2'
+          if os.environ['PREPARE_RELEASE'] == 'true':
+              a, b = os.environ['RELEASE_VERSION'], os.environ['SUCCESSOR_VERSION']
+              version = r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
+              if not re.fullmatch(version, a) or not re.fullmatch(version, b):
+                  raise SystemExit('release versions must be stable semantic versions')
+              if tuple(map(int, b[1:].split('.'))) <= tuple(map(int, a[1:].split('.'))):
+                  raise SystemExit('acceptance successor must follow the release version')
+              if os.environ['GITHUB_REF'] != 'refs/heads/main':
+                  raise SystemExit('production signing requires main')
+              repo, sha = os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']
+              for workflow in ('verification.yml', 'product-onboarding.yml'):
+                  url = f'https://api.github.com/repos/{repo}/actions/workflows/{workflow}/runs?head_sha={sha}&per_page=1'
+                  request = urllib.request.Request(url, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'], 'Accept': 'application/vnd.github+json'})
+                  with urllib.request.urlopen(request, timeout=30) as response:
+                      runs = json.load(response)['workflow_runs']
+                  if len(runs) != 1 or runs[0]['head_sha'] != sha or runs[0]['status'] != 'completed' or runs[0]['conclusion'] != 'success':
+                      raise SystemExit('exact-source independent acceptance is required: ' + workflow)
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write(f'MATRIX_RELEASE_A_VERSION={a}\nMATRIX_RELEASE_B_VERSION={b}\n')
+          PY
       - name: Prepare disposable signed release inputs
         shell: bash
         run: |
@@ -46,6 +100,7 @@ jobs:
           mkdir -m 700 "$work"
           mkdir "$work/evidence"
           echo "MATRIX_OFFLINE_WORK=$work" >> "$GITHUB_ENV"
+          python3 .github/scripts/test_prepare_release.py
           go test -count=1 ./app/service/installation/test/phase1e2e ./deploy/cmd/matrix-offline-fixture
           go build -o "$work/matrix-release" ./deploy/cmd/matrix-release
           go test -c -o "$work/phase1.test" ./app/service/installation/test/phase1e2e
@@ -56,9 +111,35 @@ jobs:
           printf '%s  %s\n' b9ccc6e14ca4eb2c2e65ff66e011f3b7e79d3275fb12eab747b19f95caf8e891 "$work/gvisor.tar.zstd" | sha256sum --check
           MATRIX_TEST_RUNNER_TOOLCHAIN=1 go test -count=1 -v \
             -run '^TestLocalRunnerToolchainStagesPinnedOfflineImage$' ./deploy/releasebuild
-          "$work/matrix-release" keygen --key-id offline-acceptance \
-            --private-key "$work/private/signer.json" --trust-key "$work/trust.json"
           sudo sysctl -w vm.max_map_count=1048576
+      - name: Create a disposable acceptance signer
+        if: ${{ !inputs.prepare_release }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          "$MATRIX_OFFLINE_WORK/matrix-release" keygen --key-id offline-acceptance \
+            --private-key "$MATRIX_OFFLINE_WORK/private/signer.json" --trust-key "$MATRIX_OFFLINE_WORK/trust.json"
+      - name: Load the protected production signing identity
+        if: ${{ inputs.prepare_release }}
+        env:
+          MATRIX_RELEASE_SIGNING_KEY: ${{ secrets.MATRIX_RELEASE_SIGNING_KEY }}
+          MATRIX_RELEASE_TRUST_ROOT: ${{ vars.MATRIX_RELEASE_TRUST_ROOT }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Configure these only in the release environment, restricted to main.
+          # Assembly validates canonical encoding and the exact key/trust match.
+          python3 - <<'PY'
+          import os
+          root = os.environ['MATRIX_OFFLINE_WORK']
+          for variable, relative in (('MATRIX_RELEASE_SIGNING_KEY', 'private/signer.json'), ('MATRIX_RELEASE_TRUST_ROOT', 'trust.json')):
+              content = os.environ.get(variable, '').encode()
+              if not 0 < len(content) <= 16384:
+                  raise SystemExit('protected release signing input is missing or oversized')
+              descriptor = os.open(os.path.join(root, relative), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+              with os.fdopen(descriptor, 'wb') as output:
+                  output.write(content)
+          PY
       - name: Prepare the pinned browser before disconnecting acceptance
         shell: bash
         run: |
@@ -134,14 +215,14 @@ jobs:
           work="$MATRIX_OFFLINE_WORK"
           created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           "$work/matrix-release" assemble --repository "$GITHUB_WORKSPACE" \
-            --output "$work/release-a" --version v0.3.0-products.1 --build-id "offline-${GITHUB_RUN_ID}-a" \
+            --output "$work/release-a" --version "$MATRIX_RELEASE_A_VERSION" --build-id "offline-${GITHUB_RUN_ID}-a" \
             --created-at "$created" --private-key "$work/private/signer.json" --trust-key "$work/trust.json" \
             --gvisor-archive "$work/gvisor.tar.zstd"
           "$work/matrix-release" assemble --repository "$GITHUB_WORKSPACE" \
-            --output "$work/release-b" --version v0.3.0-products.2 --build-id "offline-${GITHUB_RUN_ID}-b" \
+            --output "$work/release-b" --version "$MATRIX_RELEASE_B_VERSION" --build-id "offline-${GITHUB_RUN_ID}-b" \
             --created-at "$created" --private-key "$work/private/signer.json" --trust-key "$work/trust.json" \
             --gvisor-archive "$work/gvisor.tar.zstd" \
-            --previous-id "$(jq -r .release.id "$work/release-a/release.json")" --previous-version v0.3.0-products.1
+            --previous-id "$(jq -r .release.id "$work/release-a/release.json")" --previous-version "$MATRIX_RELEASE_A_VERSION"
           cp "$work/release-a/release.json" "$work/evidence/release-a.json"
           cp "$work/release-b/release.json" "$work/evidence/release-b.json"
           cp "$work/trust.json" "$work/evidence/trust.json"
@@ -263,23 +344,58 @@ jobs:
           stop_engine
           engine_pid=''
           OFFLINE
-      - name: Package the exact accepted disposable release pair
+      - name: Package the exact accepted release pair
         shell: bash
         run: |
           set -euo pipefail
           cd "$MATRIX_OFFLINE_WORK"
           # A tar archive preserves the signed executable modes. Explicit
           # inputs exclude the disposable signer, SMTP fixture and installed
-          # state. This pair uses an acceptance-only key, not a release key.
+          # state. Ordinary acceptance uses a disposable key; only the protected
+          # main-only dispatch can use the long-lived release identity.
           tar --create --gzip --file offline-release-candidates.tar.gz \
             release-a release-b trust.json
           tar --compare --gzip --file offline-release-candidates.tar.gz
           sha256sum offline-release-candidates.tar.gz > evidence/candidates.sha256
-      - name: Retain accepted disposable installation candidates
+      - name: Prepare downloadable fresh-install delivery
+        if: ${{ inputs.prepare_release }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          work="$MATRIX_OFFLINE_WORK"
+          archive="matrix-${MATRIX_RELEASE_A_VERSION}-linux-amd64.tar.gz"
+          mkdir -m 700 "$work/delivery"
+          tar --create --gzip --file "$work/$archive" --directory "$work/release-a" .
+          tar --compare --gzip --file "$work/$archive" --directory "$work/release-a"
+          mkdir -m 700 "$work/transport-verify"
+          tar --extract --gzip --file "$work/$archive" --directory "$work/transport-verify"
+          tar --compare --gzip --file "$work/$archive" --directory "$work/transport-verify"
+          # GitHub limits each Release asset to less than 2 GiB. These are
+          # transport chunks of one byte-identical bundle, not installer media.
+          split --bytes=1900M --numeric-suffixes=0 --suffix-length=3 \
+            "$work/$archive" "$work/delivery/$archive.part-"
+          cat "$work/delivery/$archive".part-* | cmp - "$work/$archive"
+          cp "$work/trust.json" "$work/delivery/release-trust.json"
+          cp "$work/release-a/release.json" "$work/release-a/release.sig" "$work/delivery/"
+          (cd "$work" && sha256sum "$archive") > "$work/delivery/bundle.sha256"
+          cd "$work/delivery"
+          sha256sum "$archive".part-* release-trust.json release.json release.sig bundle.sha256 > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          cp SHA256SUMS "$work/evidence/delivery.sha256"
+      - name: Retain accepted installation candidates
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: offline-release-candidates
           path: ${{ runner.temp }}/matrix-offline/offline-release-candidates.tar.gz
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 3
+      - name: Retain verified Release delivery
+        if: ${{ inputs.prepare_release }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: offline-release-delivery
+          path: ${{ runner.temp }}/matrix-offline/delivery/
           if-no-files-found: error
           compression-level: 0
           retention-days: 3
@@ -291,3 +407,32 @@ jobs:
           path: ${{ runner.temp }}/matrix-offline/evidence/
           if-no-files-found: warn
           retention-days: 14
+
+  prepare-draft-release:
+    needs: native-offline-lifecycle
+    if: ${{ inputs.prepare_release && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment:
+      name: release
+      deployment: false
+    permissions:
+      contents: write
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RELEASE_VERSION: ${{ inputs.release_version }}
+      MATRIX_RELEASE_TRUST_ROOT: ${{ vars.MATRIX_RELEASE_TRUST_ROOT }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Download only this run's accepted delivery
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh run download "$GITHUB_RUN_ID" --repo "$GITHUB_REPOSITORY" \
+            --name offline-release-delivery --dir "$RUNNER_TEMP/delivery"
+      - name: Verify delivery and prepare a draft with matching uploaded assets
+        shell: bash
+        run: python3 .github/scripts/prepare-release.py
