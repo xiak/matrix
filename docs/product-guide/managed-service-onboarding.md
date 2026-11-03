@@ -73,8 +73,8 @@ Docker 产品可以从 [Logstash 适配器](../../app/adapter/managedservice/loc
 提供封闭的规格与删除校验、固定配置和健康检查，再通过现有本地容器适配层组装。
 目录创建、凭据保护、重复执行、状态观察、精确删除与恢复清单由共享实现处理，
 产品团队无需重写一遍。产品自己的真实协议测试仍须保留。
-同一适配器也由 Logstash 平台候选的 worker 调用，不需要维护两份生命周期。
-正式交付状态以 [FEAT-007](../features/FEAT-007-control-plane-console.md#logstash-平台集成候选)为准。
+同一适配器也由平台的 Logstash worker 调用，不需要维护两份生命周期。
+平台集成与交付状态以 [FEAT-007](../features/FEAT-007-control-plane-console.md#产品团队接入契约)为准。
 
 ## 4. 明确产品配置与依赖
 
@@ -199,3 +199,8 @@ Kibana 接入中断后，按结果选择恢复动作：
 Redis 沿用同一条接入路径，不需要新增 IAM 求值、配额或任务工作流。
 是否已完成平台与发布验收仍以对应功能记录为准，不能从目录存在推导已发布。
 HA、产品引擎升级、业务数据备份和任意 Pipeline 编辑需要各自的明确接入范围。
+
+要复核参考产品的完整用户流程，可从 [v0.3.0 发布页](https://github.com/xiak/matrix/releases/tag/v0.3.0)
+领取安装包，按[安装与首次使用](../user-guide/getting-started.md)准备环境，再照
+[托管服务图文手册](../user-guide/services-and-applications.md)完成开通、连接验证和终止。
+同一发布页的 `acceptance-evidence.zip` 提供实际运行报告与十二张验收截图。

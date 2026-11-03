@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current managed-product candidate (ELK and Redis) is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. Fixed main source `fd1eaa88879edb5d18879c2e55fb9175a190711d` passed the complete native cold-cache disconnected lifecycle, engine restart, real browser journey and retained transport gate using the protected production signer. Public release remains open while draft publication is recovered. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. Those earlier local checks alone do not establish cold-cache Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
+- Status: [v0.3.0](https://github.com/xiak/matrix/releases/tag/v0.3.0) is published and accepted for fresh installation. Its fixed main source `fd1eaa88879edb5d18879c2e55fb9175a190711d`, IAM/Audit/PaaS `88/40/9+r41`, passed the complete native cold-cache disconnected lifecycle, engine restart, real browser journey and retained transport gate using the protected production signer; the recovered publisher verified all eight uploaded assets before publication. The older signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, `87/39/7+r37`, and the private Logstash installation at `88/40/8+r40` retain their own accepted evidence, not cross-profile maintenance permission. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current ELK candidate is exactly IAM 88 / Audit 40 / PaaS 9 at contract revision 41. The retained SQL migration gates are development evidence, not permission for a cross-profile release upgrade; revision 40 and revision 41 transitions remain rejected, and no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -330,8 +330,23 @@ CI 完成 tar 逐项比较，实际证据中的归档 SHA-256 为
 `13210432139` 为 2,859,673,627 字节，GitHub 记录的 SHA-256 为
 `a03b7efcfdc1f884b31542f2c8afc63455fc4600fd55bdf50d2f555a3f3f2545`。
 归档比对、全新目录解压比对、分片重组比对及逐项校验均已通过。
-草稿准备任务在验签通过后未能查回刚创建的未发布草稿，整个运行因此为失败；
-不能把原生运行任务成功表述为整条发布流程成功。公开发布仍以恢复后的附件核验为准。
+初次草稿准备任务在验签通过后未能查回刚创建的未发布草稿，原运行保持失败状态。
+[PR #15](https://github.com/xiak/matrix/pull/15) 修复了草稿查找及恢复边界，
+[受保护恢复运行 41599590448](https://github.com/xiak/matrix/actions/runs/41599590448)
+在 main 的发布器源码 `63c1fcc82f6a66af20770db1c2db048f7cce7ec2` 上成功完成。
+原生运行步骤在该恢复任务中按设计跳过；复用原制品，不重建、不重新签名，也不改写
+原验收源码或运行身份。发布器变化未改变 `api/app/deploy/test` 与 Go 依赖。
+
+[v0.3.0 正式发布](https://github.com/xiak/matrix/releases/tag/v0.3.0) 于
+2026-11-03 08:02:24 UTC 公开，Release ID 为 `432360073`，标签准确指向上述
+`fd1eaa888` 源码。八个附件的服务端大小/摘要检查通过，全部摘要与原验收清单一致；
+下载后的清单、签名与正式公钥再次独立验签通过。两片合计 2,858,809,116 字节，
+完整安装归档 SHA-256 为
+`12f62a630a75cce4959ca6f9f2b2b4e1ecf9cac39d96d29522be3ef56196f695`。
+实际下载的 `acceptance-evidence.zip` 包含 22 项公开证据，与已复核的生产证据逐项
+相同，其中十二张为真实页面截图。未登录身份可读取正式 Release、源码标签并下载
+正确的 `release.json`。安装领取流程由[运行手册](../runbooks/platform-installation.md#领取与核验安装包)
+拥有；本发布仍仅接受全新安装，B 不作为第二个公开版本。
 
 此前固定源码 `ff688e24fce3a7bf80e07bfe7cadc591bfef181f` 的
 [运行 41565287835](https://github.com/xiak/matrix/actions/runs/41565287835)
@@ -1530,9 +1545,12 @@ create/upload-response recovery, paginated draft discovery, and retained-deliver
 recovery with wrong provenance, failed gates, transport corruption and path escape.
 They use real Ed25519 verification and simulate GitHub HTTP/CLI effects
 without network requests. Workflow YAML, Bash and Python syntax
-checks passed for the earlier path. The repaired publisher and recovery path
-still require Linux CI and actual draft-asset acceptance before publication.
-Verification now runs this boundary suite independently of the full cold gate.
+checks passed, including both workflow files and all 38 Bash steps. The repaired
+publisher passed all twenty [PR Verification jobs](https://github.com/xiak/matrix/actions/runs/41595424725),
+with actual seven-product P1 PASS in 395.98 seconds. The protected main recovery
+ran all 33 boundary tests again, verified the real Ed25519 signature, and checked
+the complete uploaded asset inventory before the independent publication review
+recorded above. Verification runs this suite independently of the full cold gate.
 
 Common generation-drift, unit, vet, race, repeated, schema, architecture,
 real-PostgreSQL, real-Compose, cross-platform build, Markdown-link, stale-term,

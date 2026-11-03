@@ -212,8 +212,9 @@ credential through its Go process, or calls the APISIX Admin API.
 - server-owned installation profile version;
 - availability state.
 
-The current release admits exactly four available entries: PostgreSQL 18,
-MySQL 8.4, Elasticsearch 8.19 and RabbitMQ 4.1. The browser cannot submit an
+The current catalog admits seven available entries: PostgreSQL 18, MySQL 8.4,
+Elasticsearch 8.19, RabbitMQ 4.1, Logstash 8.19, Kibana 8.19 and Redis 8.2.
+The browser cannot submit an
 image, digest, command, Compose document, port, volume, environment value,
 extension, superuser name, or provider-native option.
 
@@ -375,10 +376,11 @@ Docker 上完成下列核对，没有启动 DinD。签名候选、前驱及安�
 本节拥有受管产品团队的实现责任、配置边界与验收要求。读者流程由
 [产品接入手册](../product-guide/managed-service-onboarding.md)维护，执行命令归
 [接入验证运行手册](../runbooks/managed-service-onboarding.md)。公开契约、L/K 可运行
-样例与验证工具已完成适配器验收；Logstash 已通过固定源码的独立平台门禁和本机
-签名候选的浏览器、升级、回滚及恢复验收；Kibana 已通过生产进程 P1、独立平台 CI
-及同 Profile 签名候选的浏览器与生命周期验收。上述私有候选
-不等于公开发布或完整离线 Release 验收。
+样例与验证工具已完成适配器验收；ELK、Redis 已通过准确 main 源码的独立平台门禁，
+以及正式签名组合的断网空缓存安装、升级回滚、恢复、引擎重启与真实浏览器验收。
+准确发布身份、交付状态及限制归
+[FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)，
+适配器报告本身仍不能代替平台和发布验收。
 
 ### 正式接入的交付目标
 
@@ -404,7 +406,8 @@ ELK 闭环后，再以 Redis 作为第二种产品家族复用相同接入路径
 工作流或 IAM 求值分支。固定实现 `67a8dee905b060d24ec510609bcb0fac865f4e7a` 的
 [Verification](https://github.com/xiak/matrix/actions/runs/41420489245) 全部 19 项通过，
 含 2,141 项控制台测试和真实五产品生产进程门禁。签名 `.3` 已完成下述本机生命周期，
-本片接受该私有候选的功能闭环；完整断网空缓存门禁与公开发布仍未完成。
+该次证据接受私有候选的功能闭环；后续正式签名组合与发布状态统一见
+[FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)。
 
 接入复核发现数据库也持有一份硬编码产品清单，导致目录可开通而 Logstash 配额返回
 `INVALID_ARGUMENT`。持久化约束现由已验证的编译期 domain 目录生成，继续检查产品与
@@ -564,7 +567,7 @@ Elasticsearch 与 Logstash 继续可写。最后按依赖顺序终止其余两�
 补丁身份依据 [8.2.11 发布记录](https://github.com/redis/redis/releases/tag/8.2.11)，
 Linux/amd64 官方镜像固定为
 `redis@sha256:8faf1ffc0fa573b9b0f5a8f886e45e27b498cdd5e9c7ee3c611856d30d0d4401`。
-目录、worker、共享控制台和固定制品组装已加入候选实现，不构成发布声明。
+目录、worker、共享控制台和固定制品组装已完成集成；发布状态由 FEAT-005 统一维护。
 2026-11-03，本机宿主 Docker 的完整 ELK/Redis 组合十八项通过（1526.59 秒），
 其中 Redis 六项耗时 48.97 秒，覆盖认证、管理命令限制、TTL、AOF 确认落盘后的
 重启保留、双作用域的私网/入口/数据/凭据隔离、结果丢失重放与独立删除。
@@ -590,10 +593,10 @@ Linux/amd64 官方镜像固定为
 Kibana 从页面选择准确 Elasticsearch 依赖；每种产品保留安装、运行、终止三张截图。
 浏览器只使用已有私有夹具中的管理员登录，不注入 Session 或改写产品响应。
 浏览器驱动沿手册中的产品入口及菜单导航保留内存会话，并读取实际配额卡片确认
-成功。固定源码 `5ab41d4c1` 的完整签名运行已通过全部 27 项浏览器检查，实际报告
+成功。固定 main 源码 `fd1eaa888` 的正式签名运行已通过全部 27 项浏览器检查，实际报告
 与十二张截图均已读取复核；页面与服务器错误均为零。准确的生命周期、归档与
 源码证据由 [FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)
-拥有。该运行使用验收密钥；正式签名交付与公开发布仍待完成。早先本机手册截图的
+拥有。该运行使用受保护正式密钥；公开发布状态也以该 owner 为准。早先本机手册截图的
 固定源码归属保持不变。
 
 本机 Windows P1 首次因 Docker 默认地址池耗尽而失败；有界探针复现后，只回收归属

@@ -17,7 +17,9 @@ build, secure, and operate it.
 [See Matrix in action](#see-matrix-in-action) ·
 [Explore locally](#explore-locally) ·
 [用户手册](docs/user-guide/README.md) ·
+[产品接入手册](docs/product-guide/managed-service-onboarding.md) ·
 [Install Matrix](docs/runbooks/platform-installation.md) ·
+[安装包下载](https://github.com/xiak/matrix/releases/tag/v0.3.0) ·
 [Read the architecture](docs/architecture/README.md)
 
 [![Verification](https://github.com/xiak/matrix/actions/workflows/verification.yml/badge.svg?branch=main)](https://github.com/xiak/matrix/actions/workflows/verification.yml)

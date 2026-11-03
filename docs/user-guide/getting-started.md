@@ -18,7 +18,9 @@ Matrix 帮助团队在自己的基础设施上管理账号、申请托管服务�
 ## 1. 安装平台，或直接领取账号
 
 - **普通成员**：平台已安装时，直接进入下一步。
-- **平台运维人员**：先完成[安装与检查](../runbooks/platform-installation.md#安装平台)，
+- **平台运维人员**：先从 [Matrix v0.3.0 发布页](https://github.com/xiak/matrix/releases/tag/v0.3.0)
+  领取安装附件，按[领取与核验安装包](../runbooks/platform-installation.md#领取与核验安装包)
+  还原发布目录，再完成[安装与检查](../runbooks/platform-installation.md#安装平台)，
   确认平台就绪，再交付地址与初始管理身份。
   使用 Windows 与 Docker Desktop 时，先阅读[环境说明](../runbooks/platform-installation.md#windows-与-docker-desktop)，
   不直接在 PowerShell 中运行 Linux 安装命令。
@@ -27,6 +29,9 @@ Matrix 帮助团队在自己的基础设施上管理账号、申请托管服务�
 
 Linux 的 root 用户负责安装；Matrix 的主账号负责平台内的资源与权限。
 两者的密码不通用。
+
+本次安装包用于全新安装。已有平台需要维护时，先让交付人员核对支持的版本路径，
+不要把新包直接覆盖到原安装目录。发布页同时提供实际验收报告与页面截图，便于交付时核对。
 
 ## 2. 选择正确的登录方式
 

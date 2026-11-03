@@ -11,12 +11,34 @@
 
 ## 安装前准备
 
+### 领取与核验安装包
+
+打开 [Matrix v0.3.0 发布页](https://github.com/xiak/matrix/releases/tag/v0.3.0)，
+下载 Assets 中的全部安装附件到同一目录。安装包分为两个 `.part-*` 文件，
+需要同时领取校验文件、发布清单、签名、信任文件及 `acceptance-evidence.zip`。
+GitHub 自动提供的 **Source code** 是源码，不能用作安装包。
+
+在 Linux 主机上按发布页的校验、重组与解压步骤还原 `matrix-release` 目录。
+每一步都成功后再继续；缺少分片或校验不符时重新领取正确附件，不跳过检查。
+信任文件的公开指纹由可信交付人员核对，不能只凭同一下载目录里的校验值建立信任。
+验收压缩包供查看报告和截图，不作为安装输入。
+
+解压目录本身就是完整发布包，其中 `bin/mx` 是配套安装工具。
+可以直接使用它的绝对路径：把下文 `/usr/local/sbin/mx` 换成该文件的实际位置，
+把 `/srv/matrix-release` 换成解压目录的实际位置。不要把分片、源码归档或包含
+所有下载附件的父目录当作 `--bundle`。信任文件与安全邮件配置仍须按下表单独保护。
+
+本包用于全新安装；已有平台先核对支持的维护路径。正式交付的准确身份和验收结果见
+[平台交付功能记录](../features/FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)。
+
+### 准备安装材料
+
 先向交付负责人领取配套材料，确认版本、主机和访问地址后再开始：
 
 | 需要准备 | 本文示例位置或要求 |
 | --- | --- |
 | 安装主机 | 独立的 Linux/amd64 主机或虚拟机，已安装 Docker Engine 与 Compose 插件 |
-| 安装工具 | 已验证来源的 `mx`，放在 `/usr/local/sbin/mx` |
+| 安装工具 | 已验证发布目录中的 `bin/mx`；下文示例约定为 `/usr/local/sbin/mx` |
 | 完整离线发布包 | `/srv/matrix-release`，与安装工具配套 |
 | 发布信任文件 | `/etc/matrix/release-trust.json`，由可信交付渠道提供 |
 | 安全邮件配置 | `/etc/matrix/security-mail.json`，由交付人员准备并保护，供安全通知与验证码使用 |
