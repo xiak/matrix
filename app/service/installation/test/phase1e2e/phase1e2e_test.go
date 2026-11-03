@@ -1958,39 +1958,41 @@ func TestPhase1AccessKeySignerBindsExactNorthboundRequest(t *testing.T) {
 		},
 		Secret: secret,
 	}
-	header, err := signAccessKeyRequest(created, "installation-phase1", "http://127.0.0.1:8080",
-		"/api/paas/v1/applications?after=pc1.opaque")
-	if err != nil {
-		t.Fatal(err)
-	}
-	headerBytes := header.CopyBytes()
-	defer clear(headerBytes)
-	parameters, signature, err := iamv1.ParseAccessKeyAuthorization(string(headerBytes))
-	if err != nil || parameters.AccessKeyID != created.Key.ID || parameters.InstallationID != "installation-phase1" ||
-		parameters.Audience != iamv1.ProductPaaS || parameters.SignedAt <= 0 {
-		t.Fatalf("signed header parameters = %#v / %v", parameters, err)
-	}
-	httpRequest := iamv1.AccessKeyHTTPRequest{
-		Method: http.MethodGet, Scheme: "http", Authority: "127.0.0.1:8080",
-		EscapedPath: "/api/paas/v1/applications", RawQuery: "after=pc1.opaque", BodyDigest: fixedDigest(""),
-	}
-	canonical, err := iamv1.AccessKeySigningBytes(parameters, httpRequest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer clear(canonical)
-	mac := hmac.New(sha256.New, material)
-	_, _ = mac.Write(canonical)
-	wantSignature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
-	gotSignature := signature.CopyBytes()
-	defer clear(gotSignature)
-	if string(gotSignature) != wantSignature {
-		t.Fatal("phase1 signer did not bind the exact external request")
+	for _, scheme := range []string{"http", "https"} {
+		header, err := signAccessKeyRequest(created, "installation-phase1", scheme+"://127.0.0.1:8080",
+			"/api/paas/v1/applications?after=pc1.opaque")
+		if err != nil {
+			t.Fatal(err)
+		}
+		headerBytes := header.CopyBytes()
+		defer clear(headerBytes)
+		parameters, signature, err := iamv1.ParseAccessKeyAuthorization(string(headerBytes))
+		if err != nil || parameters.AccessKeyID != created.Key.ID || parameters.InstallationID != "installation-phase1" ||
+			parameters.Audience != iamv1.ProductPaaS || parameters.SignedAt <= 0 {
+			t.Fatalf("signed header parameters = %#v / %v", parameters, err)
+		}
+		httpRequest := iamv1.AccessKeyHTTPRequest{
+			Method: http.MethodGet, Scheme: scheme, Authority: "127.0.0.1:8080",
+			EscapedPath: "/api/paas/v1/applications", RawQuery: "after=pc1.opaque", BodyDigest: fixedDigest(""),
+		}
+		canonical, err := iamv1.AccessKeySigningBytes(parameters, httpRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer clear(canonical)
+		mac := hmac.New(sha256.New, material)
+		_, _ = mac.Write(canonical)
+		wantSignature := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+		gotSignature := signature.CopyBytes()
+		defer clear(gotSignature)
+		if string(gotSignature) != wantSignature {
+			t.Fatal("phase1 signer did not bind the exact external request")
+		}
 	}
 	for name, input := range map[string]struct{ origin, target string }{
-		"https topology": {"https://127.0.0.1:8080", "/api/paas/v1/applications"},
-		"origin path":    {"http://127.0.0.1:8080/base", "/api/paas/v1/applications"},
-		"empty query":    {"http://127.0.0.1:8080", "/api/paas/v1/applications?"},
+		"unsupported scheme": {"ftp://127.0.0.1:8080", "/api/paas/v1/applications"},
+		"origin path":        {"http://127.0.0.1:8080/base", "/api/paas/v1/applications"},
+		"empty query":        {"http://127.0.0.1:8080", "/api/paas/v1/applications?"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := signAccessKeyRequest(created, "installation-phase1", input.origin, input.target); err == nil {

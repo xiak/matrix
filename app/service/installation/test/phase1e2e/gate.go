@@ -179,6 +179,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 			return fail("iam-login-initial")
 		}
 		defer clear(firstSession)
+		value.sensitive = append(value.sensitive, firstSession)
 		value.edge.addForbidden(initialPassword, newPassword, firstSession)
 		if err := value.edge.changePassword(ctx, firstSession, initialPassword, newPassword, true, nil); err != nil {
 			return fail("iam-change-password")
@@ -263,7 +264,7 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	defer clear(secret)
 	value.edge.addForbidden(secret)
-	value.sensitive = append(value.sensitive, initialPassword, newPassword, firstSession, bearer, secret)
+	value.sensitive = append(value.sensitive, initialPassword, newPassword, bearer, secret)
 	if err := touchAdministrators("before-managed-products"); err != nil {
 		return err
 	}
