@@ -575,14 +575,18 @@ Linux/amd64 官方镜像固定为
 [独立 Verification](https://github.com/xiak/matrix/actions/runs/41485948364)
 十九项全部通过，真实七产品 P1 为 325.39 秒；覆盖目录、原生读写、IAM 精确授权与
 撤权、跨账号拒绝、配额、Operation、删除及 Audit。当前候选
-`6778b01b984e605dd885e92d24aa9f2d2e9767bc` 的
-[Product onboarding](https://github.com/xiak/matrix/actions/runs/41537249818)
-十八项在 841.59 秒内全部通过。已读取实际制品 `13186785114`，SHA-256 为
-`ecc35aff105884b213cf263e902de8be6ded879c3f433dad6a000f6bf87c9126`；
-报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。同一源码的
-[push Verification](https://github.com/xiak/matrix/actions/runs/41537242540) 与
-[PR Verification](https://github.com/xiak/matrix/actions/runs/41537249725)
-各十九项全部通过；实际日志确认七产品 P1 分别在 324.74 秒和 322.46 秒内通过。
+`3df9f7a8d27a6f9804a3281d66aaad56f0cd806c` 的
+[Product onboarding](https://github.com/xiak/matrix/actions/runs/41545016020)
+十八项在 844.71 秒内全部通过。已读取实际制品 `13189132679`，SHA-256 为
+`e448ea4e0c2c11e6dfcc1bfb394fcef37119f3f4cac08fc4d714da0094653f11`；
+报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。同源码的
+[PR Verification](https://github.com/xiak/matrix/actions/runs/41545015925)
+十九项全部通过，实际日志确认七产品 P1 为 402.02 秒。
+[push Verification](https://github.com/xiak/matrix/actions/runs/41545009287)
+的七产品 P1 在 390.94 秒内通过。首次整轮因 IAM 组权限存储子项达到既有 120 秒
+时限而失败；同一源码树的 PR 检查通过该项，本机独立数据库复查也通过。
+仅重跑失败存储及其依赖汇总的第二次尝试已完成：该存储子项 102.86 秒、整组
+376.16 秒通过，整轮十九项全部通过。未放宽时限或减少检查，首次失败仍保留。
 上述独立门禁不替代签名包的完整离线生命周期和浏览器验收。
 
 当前离线门禁在原生引擎重启验收后，用同一签名安装中的真实页面完成 ELK、Redis
@@ -591,8 +595,9 @@ Kibana 从页面选择准确 Elasticsearch 依赖；每种产品保留安装、�
 浏览器只使用已有私有夹具中的管理员登录，不注入 Session 或改写产品响应。
 固定源码 `6778b01b9` 的首次运行完成浏览器启动与真实登录，在 Elasticsearch
 开通步骤超时；脚本的整页跳转丢失内存会话。当前改为手册中的产品入口及菜单导航，
-并读取实际配额卡片确认成功，仍待真实重验。该运行已经通过离线生命周期和引擎
-重启，准确证据由 [FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)
+并读取实际配额卡片确认成功，仍待真实重验。后继 `3df9f7a8d` 运行停在自动回滚后
+的目录复查，未进入浏览器；当前补上管理员前台会话活动与封闭目录诊断。准确的
+生命周期证据由 [FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)
 拥有。早先本机截图的固定源码边界保持不变，不能据此宣称新浏览器门禁通过。
 
 本机 Windows P1 首次因 Docker 默认地址池耗尽而失败；有界探针复现后，只回收归属

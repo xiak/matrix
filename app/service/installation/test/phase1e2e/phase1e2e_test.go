@@ -33,6 +33,7 @@ import (
 
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
+	installationv1 "github.com/xiak/matrix/api/installation/v1"
 	managedservicev1 "github.com/xiak/matrix/api/managedservice/v1"
 	paasv1 "github.com/xiak/matrix/api/paas/v1"
 	"github.com/xiak/matrix/app/service/installation/internal/cli"
@@ -1411,6 +1412,67 @@ func TestAccessKeyBrowserHandoffRequiresPrivateEmptyMarkers(t *testing.T) {
 		t.Fatal("non-empty browser marker was accepted")
 	}
 	removeAccessKeyBrowserHandoff(login, created, disabled)
+}
+
+func TestInstalledProductFailuresKeepClosedCategories(t *testing.T) {
+	now := time.Date(2026, time.November, 3, 0, 0, 0, 0, time.UTC)
+	products := installationv1.InstalledProductList{
+		APIVersion: installationv1.APIVersion, Kind: "InstalledProductList",
+		ReleaseID: "matrix-v0.1.0-0123456789ab", ReleaseVersion: "v0.1.0", ObservedAt: now,
+		Products: []installationv1.InstalledProduct{{
+			ID: installationv1.ProductApplicationPaaS, Version: "v0.1.0", RouteKey: "paas",
+			State: installationv1.ProductReady, ObservedAt: now,
+		}},
+	}
+	valid, err := json.Marshal(products)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, body, want string
+		status           int
+	}{
+		{"valid inventory", string(valid), "", http.StatusOK},
+		{"expired session", `{"detail":"private-value"}`, "installed-product-authentication", http.StatusUnauthorized},
+		{"denied permission", `{"detail":"private-value"}`, "installed-product-authorization", http.StatusForbidden},
+		{"unavailable gateway", `{"detail":"private-value"}`, "installed-product-unavailable", http.StatusBadGateway},
+		{"unavailable service", `{"detail":"private-value"}`, "installed-product-unavailable", http.StatusServiceUnavailable},
+		{"unknown failure", `{"detail":"private-value"}`, "installed-product-response", http.StatusInternalServerError},
+		{"invalid inventory", `{"detail":"private-value"}`, "installed-product-response", http.StatusOK},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls++
+				if r.Method != http.MethodGet || r.URL.Path != "/api/platform/v1/installed-products" ||
+					r.Header.Get("Authorization") != "Bearer possessed-session" {
+					t.Error("inventory observation changed its authority or performed a recovery request")
+				}
+				mediaType := jsonMediaType
+				if test.status >= http.StatusBadRequest {
+					mediaType = problemJSONMediaType
+				}
+				w.Header().Set("Content-Type", mediaType)
+				w.WriteHeader(test.status)
+				_, _ = io.WriteString(w, test.body)
+			}))
+			defer server.Close()
+			client := newEdgeClient(server.URL)
+			defer client.close()
+			client.addForbidden([]byte("private-value"))
+			observed, err := client.installedProducts(context.Background(), []byte("possessed-session"))
+			if calls != 1 {
+				t.Fatal("inventory failure was hidden by automatic retry or login")
+			}
+			if test.want == "" {
+				if err != nil || !reflect.DeepEqual(observed, products) {
+					t.Fatal("valid inventory was not preserved")
+				}
+			} else if err == nil || safeFailure(err).Error() != fail(test.want).Error() || len(observed.Products) != 0 {
+				t.Fatal("inventory failure lost its closed diagnostic boundary")
+			}
+		})
+	}
 }
 
 func TestEdgeClientTouchesOnlyThePossessedCurrentSession(t *testing.T) {

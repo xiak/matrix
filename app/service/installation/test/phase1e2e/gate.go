@@ -143,13 +143,32 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.edge.logout(ctx, firstSession); err != nil {
 		return fail("iam-logout-initial")
 	}
-	bearer, err := value.edge.login(ctx, newPassword, "phase1-login-current")
+	administratorLogin, err := value.edge.loginNamed(
+		ctx, "admin", newPassword, "organization-default", "principal-admin", "phase1-login-current",
+	)
 	if err != nil {
 		return fail("iam-login-current")
 	}
+	bearer := administratorLogin.Credential.CopyBytes()
 	defer clear(bearer)
 	preBackupBearer := bearer
 	value.edge.addForbidden(bearer)
+	administratorSessions := map[iamv1.SessionID][]byte{administratorLogin.Session.ID: bearer}
+	touchAdministrators := func(checkpoint string) error {
+		// These are explicit foreground acceptance actions around potentially
+		// long maintenance operations, not a background keepalive. Ordinary
+		// authenticated reads do not renew idle expiry. Keep both possessed
+		// pre-recovery Sessions live so recovery rejection cannot pass merely
+		// because either Session was already idle. Never log in on touch failure.
+		for sessionID, credential := range administratorSessions {
+			if _, err := value.edge.touchCurrentSession(
+				ctx, credential, "organization-default", "principal-admin", sessionID,
+			); err != nil {
+				return fail("administrator-session-activity-" + checkpoint)
+			}
+		}
+		return nil
+	}
 	if err := value.assertCommittedProductDiscovery(
 		ctx, bearer, value.releases.a.Manifest,
 	); err != nil {
@@ -200,7 +219,13 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	defer clear(secret)
 	value.edge.addForbidden(secret)
 	value.sensitive = append(value.sensitive, initialPassword, newPassword, firstSession, bearer, secret)
+	if err := touchAdministrators("before-managed-products"); err != nil {
+		return err
+	}
 	if err := value.verifySignedManagedProducts(ctx); err != nil {
+		return err
+	}
+	if err := touchAdministrators("after-managed-products"); err != nil {
 		return err
 	}
 	if err := value.persistTenantRetention(); err != nil {
@@ -270,6 +295,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	backupBaseline := auditRecordHashes(recordsBeforeBackup)
 	emit("audit-query-integrity-through-apisix")
 
+	if err := touchAdministrators("before-backup"); err != nil {
+		return err
+	}
 	backup, err := runMX(ctx, value.releases.b, "backup", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
 	if err != nil || backup.BackupID == "" || !backup.Changed {
 		return fail("protected-backup")
@@ -284,8 +312,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err := value.touchActiveRetainedPrimarySessions(ctx, "before-failed-upgrade"); err != nil {
 		return err
 	}
+	if err := touchAdministrators("before-failed-upgrade"); err != nil {
+		return err
+	}
 
 	if err := value.failedUpgrade(ctx, secret, newPassword, bearer); err != nil {
+		return err
+	}
+	if err := touchAdministrators("after-failed-upgrade"); err != nil {
 		return err
 	}
 	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
@@ -318,6 +352,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 	emit("automatic-rollback-retained-elk-redis")
 
+	if err := touchAdministrators("before-upgrade"); err != nil {
+		return err
+	}
 	upgrade, err := runMX(ctx, value.releases.b, "upgrade", []string{
 		"--bundle", value.releases.b.Root, "--root", value.config.root,
 		"--security-mail-configuration", value.config.securityMail,
@@ -325,6 +362,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	if err != nil || upgrade.ReleaseID != value.releases.b.Manifest.Release.ID ||
 		upgrade.PreviousID != value.releases.a.Manifest.Release.ID || !upgrade.Changed {
 		return fail("release-b-upgrade")
+	}
+	if err := touchAdministrators("after-upgrade"); err != nil {
+		return err
 	}
 	if _, err := assertPlatform(
 		ctx, value.config.root, value.releases.b.Manifest, value.releases.a.Manifest.Release.ID,
@@ -356,13 +396,17 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("release-b-source-trust")
 	}
 	emit("release-b-upgrade-preservation")
-	postUpgradeBearer, err := value.edge.login(ctx, newPassword, "phase1-login-after-release-b")
+	postUpgradeLogin, err := value.edge.loginNamed(
+		ctx, "admin", newPassword, "organization-default", "principal-admin", "phase1-login-after-release-b",
+	)
 	if err != nil {
 		return fail("iam-login-after-release-b")
 	}
+	postUpgradeBearer := postUpgradeLogin.Credential.CopyBytes()
 	defer clear(postUpgradeBearer)
 	value.edge.addForbidden(postUpgradeBearer)
 	value.sensitive = append(value.sensitive, postUpgradeBearer)
+	administratorSessions[postUpgradeLogin.Session.ID] = postUpgradeBearer
 	bearer = postUpgradeBearer
 	if err := value.assertSecurityReportSnapshot(ctx, bearer, baselineReport, true); err != nil {
 		return err
@@ -383,8 +427,14 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return err
 	}
 
+	if err := touchAdministrators("before-rollback"); err != nil {
+		return err
+	}
 	rollback, err := runMX(ctx, value.releases.b, "rollback", []string{"--root", value.config.root}, value.forbidden(secret, newPassword, bearer))
 	if err := checkExplicitRollback(rollback, err, value.releases.a.Manifest.Release.ID); err != nil {
+		return err
+	}
+	if err := touchAdministrators("after-rollback"); err != nil {
 		return err
 	}
 	if _, err := assertPlatform(ctx, value.config.root, value.releases.a.Manifest, ""); err != nil {
@@ -427,6 +477,9 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 	}
 
 	value.workloadRunning = ""
+	if err := touchAdministrators("before-recovery"); err != nil {
+		return err
+	}
 	recovery, err := runMX(ctx, value.releases.b, "recover", []string{
 		"--root", value.config.root, "--backup", backup.BackupID,
 	}, value.forbidden(secret, newPassword, bearer))
@@ -4245,17 +4298,22 @@ func (value *gate) assertInstalledProducts(
 	manifest release.Manifest,
 ) error {
 	products, err := value.edge.installedProducts(ctx, bearer)
-	if err != nil || products.ReleaseID != manifest.Release.ID ||
+	if err != nil {
+		return err
+	}
+	if products.ReleaseID != manifest.Release.ID ||
 		products.ReleaseVersion != manifest.Release.Version ||
 		len(products.Products) != len(manifest.Products) {
-		return fail("installed-product-inventory")
+		return fail("installed-product-release-inventory")
 	}
 	for index, declared := range manifest.Products {
 		observed := products.Products[index]
 		if string(observed.ID) != string(declared.ID) || observed.Version != declared.Version ||
-			observed.RouteKey != declared.RouteKey ||
-			observed.State != installationv1.ProductReady || observed.Reason != "" {
-			return fail("installed-product-inventory")
+			observed.RouteKey != declared.RouteKey {
+			return fail("installed-product-identity")
+		}
+		if observed.State != installationv1.ProductReady || observed.Reason != "" {
+			return fail("installed-product-readiness")
 		}
 	}
 	return nil

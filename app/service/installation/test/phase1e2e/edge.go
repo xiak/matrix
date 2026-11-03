@@ -1324,14 +1324,25 @@ func (client *edgeClient) installedProducts(
 	ctx context.Context,
 	bearer []byte,
 ) (installationv1.InstalledProductList, error) {
-	var products installationv1.InstalledProductList
-	if _, err := client.get(
-		ctx, "/api/platform/v1/installed-products", bearer, &products,
-	); err != nil {
-		return installationv1.InstalledProductList{}, err
+	response, err := client.json(
+		ctx, http.MethodGet, "/api/platform/v1/installed-products", bearer, nil, nil, http.StatusOK,
+	)
+	defer clear(response.body)
+	if err != nil {
+		switch response.status {
+		case http.StatusUnauthorized:
+			return installationv1.InstalledProductList{}, fail("installed-product-authentication")
+		case http.StatusForbidden:
+			return installationv1.InstalledProductList{}, fail("installed-product-authorization")
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			return installationv1.InstalledProductList{}, fail("installed-product-unavailable")
+		default:
+			return installationv1.InstalledProductList{}, fail("installed-product-response")
+		}
 	}
-	if err := installationv1.ValidateInstalledProductList(products); err != nil {
-		return installationv1.InstalledProductList{}, errors.New("installed-product response failed")
+	var products installationv1.InstalledProductList
+	if decodeOne(response.body, &products) != nil || installationv1.ValidateInstalledProductList(products) != nil {
+		return installationv1.InstalledProductList{}, fail("installed-product-response")
 	}
 	return products, nil
 }
