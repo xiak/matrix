@@ -138,11 +138,14 @@ class ReleaseDeliveryTests(unittest.TestCase):
             'GITHUB_STEP_SUMMARY': str(self.root / 'summary.md'),
         }
         self.release = None
+        self.other_releases = []
         self.tag = None
         self.assets = []
         self.commands = []
         self.lose_upload_response = False
+        self.lose_create_response = False
         self.corrupt_uploaded_digest = False
+        self.recovery_routes = {}
 
     def sign_manifest(self):
         (self.delivery / 'release.json').write_text(json.dumps(self.manifest), encoding='utf-8')
@@ -160,10 +163,17 @@ class ReleaseDeliveryTests(unittest.TestCase):
         prefix = 'https://api.github.com/repos/release-fixture/matrix/'
         self.assertTrue(url.startswith(prefix))
         route = url[len(prefix):]
-        if route == 'git/ref/tags/' + self.version:
+        if route in self.recovery_routes:
+            value = self.recovery_routes[route]
+        elif route == 'git/ref/tags/' + self.version:
             value = self.tag
         elif route == 'releases/tags/' + self.version:
-            value = self.release
+            # GitHub's tag lookup does not expose an unpublished draft.
+            value = self.release if self.release and not self.release['draft'] else None
+        elif route.startswith('releases?per_page=100&page='):
+            page = int(route.rsplit('=', 1)[1])
+            releases = self.other_releases + ([self.release] if self.release else [])
+            value = releases[(page - 1) * 100:page * 100]
         elif route == 'releases/1/assets?per_page=100':
             value = self.assets
             if self.corrupt_uploaded_digest and value:
@@ -179,12 +189,18 @@ class ReleaseDeliveryTests(unittest.TestCase):
             return REAL_RUN(arguments, capture_output=True, **kwargs)
         self.assertEqual(arguments[0], 'gh')
         self.commands.append(arguments)
-        if arguments[1:3] == ['release', 'create']:
+        if arguments[1:] == ['api', 'repos/release-fixture/matrix/actions/artifacts/7/zip']:
+            kwargs['stdout'].write(self.recovery_zip_bytes)
+        elif arguments[1:3] == ['release', 'create']:
             self.assertIn('--draft', arguments)
             self.assertEqual(arguments[arguments.index('--target') + 1], self.source)
             notes = Path(arguments[arguments.index('--notes-file') + 1]).read_text(encoding='utf-8')
-            self.release = {'id': 1, 'draft': True, 'target_commitish': self.source,
+            self.assertIsNone(self.release, 'an existing draft must never be duplicated')
+            self.release = {'id': 1, 'tag_name': self.version, 'draft': True, 'target_commitish': self.source,
                             'body': notes, 'html_url': 'https://github.invalid/release-fixture/draft'}
+            if self.lose_create_response:
+                self.lose_create_response = False
+                raise subprocess.CalledProcessError(1, arguments)
         elif arguments[1:3] == ['release', 'upload']:
             item = Path(arguments[4])
             self.assertNotIn(item.name, {asset['name'] for asset in self.assets})
@@ -197,11 +213,142 @@ class ReleaseDeliveryTests(unittest.TestCase):
             self.fail('publication or unrelated GitHub mutation is forbidden in this driver')
         return subprocess.CompletedProcess(arguments, 0)
 
-    def prepare(self):
+    def prepare(self, accepted_run_id=None):
         with mock.patch.dict(os.environ, self.environment), \
                 mock.patch('urllib.request.urlopen', side_effect=self.api), \
                 mock.patch('subprocess.run', side_effect=self.command):
-            PREPARE()
+            PREPARE(accepted_run_id)
+
+    def recovery(self, extra_entry=None):
+        content = io.BytesIO()
+        with zipfile.ZipFile(content, 'w') as archive:
+            for item in self.delivery.iterdir():
+                archive.writestr(item.name, item.read_bytes())
+            if extra_entry is not None:
+                archive.writestr(extra_entry, b'rejected recovery fixture')
+        self.recovery_zip_bytes = content.getvalue()
+        recovered = self.root / 'recovered'
+        recovered.mkdir()
+        self.environment.update(RUNNER_TEMP=str(recovered), GITHUB_SHA='2' * 40, GITHUB_RUN_ID='456')
+        self.recovery_routes = {
+            'actions/runs/123': {'id': 123, 'path': '.github/workflows/offline-release.yml',
+                                 'head_branch': 'main', 'head_sha': self.source, 'event': 'workflow_dispatch',
+                                 'status': 'completed', 'conclusion': 'failure'},
+            'actions/runs/123/jobs?per_page=100': {'total_count': 2, 'jobs': [
+                {'name': 'native-offline-lifecycle', 'status': 'completed', 'conclusion': 'success'},
+                {'name': 'prepare-draft-release', 'status': 'completed', 'conclusion': 'failure'}]},
+            'actions/runs/123/artifacts?per_page=100': {'total_count': 1, 'artifacts': [{
+                'id': 7, 'name': 'offline-release-delivery', 'expired': False,
+                'size_in_bytes': len(self.recovery_zip_bytes),
+                'digest': 'sha256:' + hashlib.sha256(self.recovery_zip_bytes).hexdigest(),
+                'workflow_run': {'id': 123, 'head_sha': self.source, 'head_branch': 'main'}}]},
+        }
+        for name in ('verification.yml', 'product-onboarding.yml'):
+            route = f'actions/workflows/{name}/runs?head_sha={self.source}&branch=main&per_page=1'
+            self.recovery_routes[route] = {'workflow_runs': [{'head_sha': self.source, 'head_branch': 'main',
+                'event': 'push', 'status': 'completed', 'conclusion': 'success'}]}
+
+    def test_recovery_uses_original_signed_source_and_acceptance_run(self):
+        self.recovery()
+        self.prepare('123')
+        self.assertEqual(self.release['target_commitish'], self.source)
+        self.assertIn('/actions/runs/123)', self.release['body'])
+        self.assertNotIn('/actions/runs/456)', self.release['body'])
+        self.assertTrue(self.release['draft'])
+        self.assertEqual(len(self.assets), len(list(self.delivery.iterdir())))
+
+    def test_recovery_rejects_wrong_workflow_branch_event_or_unfinished_run(self):
+        self.recovery()
+        accepted = self.recovery_routes['actions/runs/123'].copy()
+        for change in ({'path': '.github/workflows/other.yml'}, {'head_branch': 'feat/candidate'},
+                       {'event': 'pull_request'}, {'status': 'in_progress'}, {'conclusion': 'cancelled'},
+                       {'id': 124}, {'head_sha': 'invalid'}, {'head_sha': None}):
+            with self.subTest(change=change):
+                self.recovery_routes['actions/runs/123'] = {**accepted, **change}
+                with self.assertRaisesRegex(SystemExit, 'original completed main release dispatch'):
+                    self.prepare('123')
+                self.assertEqual(self.commands, [])
+
+    def test_recovery_requires_successful_original_native_and_independent_gates(self):
+        self.recovery()
+        native = self.recovery_routes['actions/runs/123/jobs?per_page=100']['jobs'][0]
+        for state in ('failure', 'cancelled', 'skipped', None):
+            with self.subTest(native=state):
+                native['conclusion'] = state
+                with self.assertRaisesRegex(SystemExit, 'native release acceptance did not succeed'):
+                    self.prepare('123')
+                self.assertEqual(self.commands, [])
+        native['conclusion'] = 'success'
+        route = f'actions/workflows/verification.yml/runs?head_sha={self.source}&branch=main&per_page=1'
+        self.recovery_routes[route]['workflow_runs'][0]['conclusion'] = 'failure'
+        with self.assertRaisesRegex(SystemExit, 'exact-source main acceptance'):
+            self.prepare('123')
+        self.assertEqual(self.commands, [])
+
+    def test_recovery_refuses_incomplete_job_or_artifact_inventories(self):
+        self.recovery()
+        for route in ('actions/runs/123/jobs?per_page=100', 'actions/runs/123/artifacts?per_page=100'):
+            with self.subTest(route=route):
+                self.recovery_routes[route]['total_count'] += 1
+                with self.assertRaisesRegex(SystemExit, 'incomplete accepted (job|artifact) inventory'):
+                    self.prepare('123')
+                self.recovery_routes[route]['total_count'] -= 1
+                self.assertEqual(self.commands, [])
+
+    def test_recovery_refuses_missing_or_ambiguous_original_delivery(self):
+        self.recovery()
+        inventory = self.recovery_routes['actions/runs/123/artifacts?per_page=100']
+        accepted = inventory['artifacts'][0]
+        for entries in ([], [accepted, {**accepted, 'id': 8}]):
+            with self.subTest(count=len(entries)):
+                inventory.update(total_count=len(entries), artifacts=entries)
+                with self.assertRaisesRegex(SystemExit, 'exactly one original accepted delivery'):
+                    self.prepare('123')
+                self.assertEqual(self.commands, [])
+
+    def test_recovery_refuses_expired_foreign_or_unverifiable_delivery(self):
+        self.recovery()
+        inventory = self.recovery_routes['actions/runs/123/artifacts?per_page=100']
+        accepted = inventory['artifacts'][0].copy()
+        for change in ({'expired': True}, {'digest': ''}, {'digest': None}, {'size_in_bytes': 9 * 1024**3},
+                       {'workflow_run': {'id': 124, 'head_sha': self.source, 'head_branch': 'main'}},
+                       {'workflow_run': {'id': 123, 'head_sha': '2' * 40, 'head_branch': 'main'}},
+                       {'workflow_run': {'id': 123, 'head_sha': self.source, 'head_branch': 'feat/foreign'}}):
+            with self.subTest(change=change):
+                inventory['artifacts'] = [{**accepted, **change}]
+                with self.assertRaisesRegex(SystemExit, 'does not identify the accepted run'):
+                    self.prepare('123')
+                self.assertEqual(self.commands, [])
+
+    def test_recovery_rejects_changed_transport_before_extraction_or_release_mutation(self):
+        self.recovery()
+        self.recovery_zip_bytes += b'changed transport'
+        with self.assertRaisesRegex(SystemExit, 'transport integrity failed'):
+            self.prepare('123')
+        self.assertIsNone(self.release)
+        self.assertFalse((Path(self.environment['RUNNER_TEMP']) / 'delivery').exists())
+
+    def test_recovery_archive_cannot_write_outside_delivery(self):
+        self.recovery(extra_entry='../outside.txt')
+        with self.assertRaisesRegex(SystemExit, 'unsafe retained delivery archive'):
+            self.prepare('123')
+        self.assertIsNone(self.release)
+        self.assertFalse((Path(self.environment['RUNNER_TEMP']) / 'outside.txt').exists())
+
+    def test_recovery_still_requires_protected_signature_trust(self):
+        self.recovery()
+        self.environment['MATRIX_RELEASE_TRUST_ROOT'] = self.trust + '\n'
+        with self.assertRaisesRegex(SystemExit, 'trust differs from protected configuration'):
+            self.prepare('123')
+        self.assertIsNone(self.release)
+
+    def test_recovery_run_identity_is_not_a_route_or_shell_expression(self):
+        self.recovery()
+        for run_id in ('', '../123', '123;echo', '0', '1' * 21):
+            with self.subTest(run_id=run_id):
+                with self.assertRaisesRegex(SystemExit, 'invalid accepted run identity'):
+                    self.prepare(run_id)
+                self.assertEqual(self.commands, [])
 
     def test_signed_exact_delivery_becomes_only_an_unpublished_draft(self):
         self.prepare()
@@ -273,6 +420,50 @@ class ReleaseDeliveryTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, 'not the matching unpublished draft'):
             self.prepare()
         self.assertEqual(self.commands, [])
+
+    def test_existing_draft_on_a_later_page_is_reused_without_creating_another(self):
+        self.prepare()
+        self.other_releases = [{'id': i + 2, 'tag_name': f'v0.1.{i}'} for i in range(100)]
+        self.commands.clear()
+        self.prepare()
+        self.assertEqual(self.commands, [])
+
+    def test_create_response_loss_resumes_the_owned_draft(self):
+        self.lose_create_response = True
+        with self.assertRaises(subprocess.CalledProcessError):
+            self.prepare()
+        self.assertTrue(self.release['draft'])
+        self.commands.clear()
+        self.prepare()
+        self.assertTrue(all(command[1:3] == ['release', 'upload'] for command in self.commands))
+        self.assertEqual(len(self.assets), len(list(self.delivery.iterdir())))
+
+    def test_duplicate_matching_drafts_are_not_modified(self):
+        self.prepare()
+        self.other_releases = [{**self.release, 'id': 2}]
+        self.commands.clear()
+        with self.assertRaisesRegex(SystemExit, 'ambiguous release identity'):
+            self.prepare()
+        self.assertEqual(self.commands, [])
+
+    def test_incomplete_release_listing_cannot_authorize_creation(self):
+        self.other_releases = [{'id': i + 2, 'tag_name': f'v0.1.{i}'} for i in range(1000)]
+        with self.assertRaisesRegex(SystemExit, 'release listing exceeds the lookup bound'):
+            self.prepare()
+        self.assertEqual(self.commands, [])
+
+    def test_unavailable_or_malformed_release_listing_cannot_authorize_creation(self):
+        original_api = self.api
+        for value in (None, {}, [None], [{}], [{'id': 1}], [{'id': True, 'tag_name': self.version}]):
+            with self.subTest(value=value):
+                def api(request, **kwargs):
+                    if '/releases?per_page=100&page=' in request.full_url:
+                        return io.BytesIO(json.dumps(value).encode())
+                    return original_api(request, **kwargs)
+                with mock.patch.object(self, 'api', side_effect=api):
+                    with self.assertRaisesRegex(SystemExit, 'invalid release listing'):
+                        self.prepare()
+                self.assertEqual(self.commands, [])
 
     def test_different_existing_asset_is_never_overwritten(self):
         self.prepare()

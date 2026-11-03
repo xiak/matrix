@@ -29,13 +29,100 @@ def require_accepted_source(repo, source, token):
             raise SystemExit('exact-source main acceptance is required: ' + workflow)
 
 
-def main():
+def restore_accepted_delivery(repo, run_id, token, root):
+    """Recover only a retained delivery whose original native gate succeeded."""
+    import hashlib, json, re, shutil, stat, subprocess, urllib.request, zipfile
+    if not re.fullmatch(r'[1-9][0-9]{0,19}', run_id):
+        raise SystemExit('invalid accepted run identity')
+
+    def api(route):
+        request = urllib.request.Request(f'https://api.github.com/repos/{repo}/{route}', headers={
+            'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json'})
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                body = response.read(1024 * 1024 + 1)
+        except OSError:
+            raise SystemExit('accepted delivery metadata is unavailable') from None
+        if len(body) > 1024 * 1024:
+            raise SystemExit('accepted delivery metadata is oversized')
+        try:
+            return json.loads(body)
+        except ValueError:
+            raise SystemExit('accepted delivery metadata is invalid') from None
+
+    run = api('actions/runs/' + run_id)
+    if (not isinstance(run, dict) or run.get('id') != int(run_id)
+            or run.get('path') != '.github/workflows/offline-release.yml'
+            or run.get('head_branch') != 'main' or run.get('event') != 'workflow_dispatch'
+            or run.get('status') != 'completed' or run.get('conclusion') not in ('success', 'failure')
+            or not isinstance(run.get('head_sha'), str)
+            or not re.fullmatch(r'[0-9a-f]{40}', run.get('head_sha', ''))):
+        raise SystemExit('recovery requires an original completed main release dispatch')
+    source = run['head_sha']
+    require_accepted_source(repo, source, token)
+    jobs = api(f'actions/runs/{run_id}/jobs?per_page=100')
+    if (not isinstance(jobs, dict) or not isinstance(jobs.get('jobs'), list)
+            or len(jobs['jobs']) != jobs.get('total_count') or len(jobs['jobs']) >= 100
+            or any(not isinstance(job, dict) for job in jobs['jobs'])):
+        raise SystemExit('incomplete accepted job inventory')
+    native = [job for job in jobs['jobs'] if job.get('name') == 'native-offline-lifecycle']
+    if len(native) != 1 or native[0].get('status') != 'completed' or native[0].get('conclusion') != 'success':
+        raise SystemExit('original native release acceptance did not succeed')
+    inventory = api(f'actions/runs/{run_id}/artifacts?per_page=100')
+    if (not isinstance(inventory, dict) or not isinstance(inventory.get('artifacts'), list)
+            or len(inventory['artifacts']) != inventory.get('total_count') or len(inventory['artifacts']) >= 100
+            or any(not isinstance(item, dict) for item in inventory['artifacts'])):
+        raise SystemExit('incomplete accepted artifact inventory')
+    artifacts = [item for item in inventory['artifacts'] if item.get('name') == 'offline-release-delivery']
+    if len(artifacts) != 1:
+        raise SystemExit('exactly one original accepted delivery is required')
+    artifact = artifacts[0]
+    identity = artifact.get('workflow_run', {})
+    if (artifact.get('expired') is not False or type(artifact.get('id')) is not int or artifact['id'] <= 0
+            or type(artifact.get('size_in_bytes')) is not int or not 0 < artifact['size_in_bytes'] <= 8 * 1024**3
+            or not isinstance(artifact.get('digest'), str)
+            or not re.fullmatch(r'sha256:[0-9a-f]{64}', artifact.get('digest', ''))
+            or not isinstance(identity, dict) or identity.get('id') != int(run_id)
+            or identity.get('head_sha') != source or identity.get('head_branch') != 'main'):
+        raise SystemExit('retained delivery does not identify the accepted run')
+    archive = root / 'accepted-delivery.zip'
+    with archive.open('xb') as output:
+        subprocess.run(['gh', 'api', f'repos/{repo}/actions/artifacts/{artifact["id"]}/zip'],
+                       stdout=output, check=True, timeout=900)
+    digest = hashlib.sha256()
+    with archive.open('rb') as stream:
+        while chunk := stream.read(1024 * 1024):
+            digest.update(chunk)
+    if archive.stat().st_size != artifact['size_in_bytes'] or 'sha256:' + digest.hexdigest() != artifact['digest']:
+        raise SystemExit('retained delivery transport integrity failed')
+    delivery = root / 'delivery'
+    with zipfile.ZipFile(archive) as bundle:
+        entries = bundle.infolist()
+        if (not 0 < len(entries) <= 90 or len({item.filename for item in entries}) != len(entries)
+                or sum(item.file_size for item in entries) > 8 * 1024**3
+                or any(not re.fullmatch(r'[A-Za-z0-9._-]+', item.filename) or item.filename in ('.', '..')
+                       or item.is_dir() or not 0 < item.file_size < 2 * 1024**3
+                       or stat.S_ISLNK(item.external_attr >> 16) for item in entries)):
+            raise SystemExit('unsafe retained delivery archive')
+        delivery.mkdir(mode=0o700)
+        for item in entries:
+            with bundle.open(item) as incoming, (delivery / item.filename).open('xb') as output:
+                shutil.copyfileobj(incoming, output, 1024 * 1024)
+    # Extraction verifies ZIP CRCs; the ordinary publication path still checks
+    # exact inventory, protected trust, signature, source, version and every byte.
+    return source, run_id
+
+
+def main(accepted_run_id=None):
     import base64, hashlib, json, os, pathlib, re, subprocess, urllib.error, urllib.request
     root = pathlib.Path(os.environ['RUNNER_TEMP'])
     delivery = root / 'delivery'
     version, repo, source = os.environ['RELEASE_VERSION'], os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']
+    acceptance_run = os.environ['GITHUB_RUN_ID']
     if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
         raise SystemExit('invalid release version')
+    if accepted_run_id is not None:
+        source, acceptance_run = restore_accepted_delivery(repo, accepted_run_id, os.environ['GH_TOKEN'], root)
     archive = f'matrix-{version}-linux-amd64.tar.gz'
     metadata = {'release-trust.json', 'release.json', 'release.sig', 'bundle.sha256',
                 'SHA256SUMS', 'acceptance-evidence.zip'}
@@ -111,7 +198,7 @@ def main():
 
     支持 Linux amd64 宿主 Docker，无需 DinD。本包用于全新安装；旧私有候选不能据此直接升级。Redis 为单节点 AOF；平台备份不替代产品业务数据备份。
 
-    源码：`{source}`。完整离线安装、升级回滚、恢复、引擎重启及浏览器验收：[运行证据](https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']})。
+    源码：`{source}`。完整离线安装、升级回滚、恢复、引擎重启及浏览器验收：[运行证据](https://github.com/{repo}/actions/runs/{acceptance_run})。
     实际验收报告和 12 张页面截图保存在本 Release 的 `acceptance-evidence.zip` 中。
 
     下载本 Release 的全部附件，放在同一目录执行：
@@ -128,11 +215,31 @@ def main():
 
     发布信任指纹：`{trust['publicKeyFingerprint']}`。接受前请与可信交付方核对；压缩包校验值不能代替签名信任。
     '''.replace('\n    ', '\n'), encoding='utf-8')
-    existing_release = api('releases/tags/' + version)
+    def find_release():
+        # Tag lookup can return 404 for a draft which already exists. The
+        # authenticated release list includes drafts; finish bounded pagination
+        # before authorizing creation so retries cannot duplicate an older one.
+        matches = []
+        for page in range(1, 11):
+            releases = api(f'releases?per_page=100&page={page}')
+            if (not isinstance(releases, list) or len(releases) > 100
+                    or any(not isinstance(item, dict) or not isinstance(item.get('tag_name'), str)
+                           or type(item.get('id')) is not int or item['id'] <= 0 for item in releases)):
+                raise SystemExit('invalid release listing')
+            matches.extend(item for item in releases if item['tag_name'] == version)
+            if len(releases) < 100:
+                break
+        else:
+            raise SystemExit('release listing exceeds the lookup bound')
+        if len(matches) > 1:
+            raise SystemExit('ambiguous release identity')
+        return matches[0] if matches else None
+
+    existing_release = find_release()
     if existing_release is None:
         subprocess.run(['gh', 'release', 'create', version, '--repo', repo, '--target', source, '--draft',
                         '--title', 'Matrix ' + version, '--notes-file', str(notes)], check=True)
-        existing_release = api('releases/tags/' + version)
+        existing_release = find_release()
     if (not existing_release or not existing_release['draft'] or existing_release['target_commitish'] != source
             or existing_release.get('body') != notes.read_text(encoding='utf-8')):
         raise SystemExit('release is not the matching unpublished draft')
@@ -161,4 +268,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--resume-run', help='Recover the exact retained delivery of an accepted main dispatch')
+    main(parser.parse_args().resume_run)

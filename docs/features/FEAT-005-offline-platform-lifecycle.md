@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current managed-product candidate (ELK and Redis) is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. Fixed source `5ab41d4c1a4b0a51ea217d974c566f27d7664df6` passed the complete native cold-cache disconnected lifecycle, engine restart, real browser journey and retained acceptance-archive gate. Protected production signing and public release remain open. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. Those earlier local checks alone do not establish cold-cache Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
+- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current managed-product candidate (ELK and Redis) is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. Fixed main source `fd1eaa88879edb5d18879c2e55fb9175a190711d` passed the complete native cold-cache disconnected lifecycle, engine restart, real browser journey and retained transport gate using the protected production signer. Public release remains open while draft publication is recovered. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. Those earlier local checks alone do not establish cold-cache Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current ELK candidate is exactly IAM 88 / Audit 40 / PaaS 9 at contract revision 41. The retained SQL migration gates are development evidence, not permission for a cross-profile release upgrade; revision 40 and revision 41 transitions remain rejected, and no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -302,33 +302,36 @@ Redis 候选沿用 `88/40/9+r41`，新增固定 Redis 制品和受信 worker 输
 签名及每个组件的回退保护回归已通过。产品切片与独立 CI 归
 [FEAT-007](FEAT-007-control-plane-console.md#redis-接入切片)。
 
-固定源码 `5ab41d4c1a4b0a51ea217d974c566f27d7664df6` 的
-[运行 41573934644](https://github.com/xiak/matrix/actions/runs/41573934644)
+固定 main 源码 `fd1eaa88879edb5d18879c2e55fb9175a190711d` 的
+[生产运行验收任务](https://github.com/xiak/matrix/actions/runs/41583699116/job/125744139260)
 完成原生 Linux 空缓存、断网安装的完整 Gate C，未使用 DinD。重启前阶段在
-3491.36 秒内通过，包含真实 APISIX/IAM、七种产品、审计、备份、失败升级自动回滚、
+2988.73 秒内通过，包含真实 APISIX/IAM、七种产品、审计、备份、失败升级自动回滚、
 正常升级、显式回滚与指定备份恢复。每次维护均确认 ELK/Redis 原运行身份、端点、
-网络、挂载、保护文件及业务数据保留。引擎重启阶段在 259.65 秒内通过，确认自动就绪、
+网络、挂载、保护文件及业务数据保留。引擎重启阶段在 247.03 秒内通过，确认自动就绪、
 保留与精确清理、AccessKey 退役、MFA 新登录、租户恢复/撤权及最终 status/verify。
 
-同一安装上的 Chromium 真实旅程在 191.26 秒内通过全部 27 项检查。ELK、Redis 均
+同一安装上的 Chromium 真实旅程在 200.83 秒内通过全部 27 项检查。ELK、Redis 均
 完成服务与配额激活、实例创建、详情读取、终止及配额归还；Kibana 选择准确的
 Elasticsearch 依赖。实际报告为 `PASSED`，页面与服务器错误均为零。十二张安装、
 运行、终止截图已逐张查看；它们是该次运行证据，不改写早先本机手册截图的源码归属。
-证据制品 `13206670538` 已下载并校验，SHA-256 为
-`2c2ef7b650c6303f5e54a8646bae3de35f40602e254ee38fcffcd361e03093bd`。
+证据制品 `13210282456` 已下载并校验，SHA-256 为
+`c702eeeadf365b1c47fc97de1bd9e1d8d2adeb9fc83c0cde45a338e73215b564`。
 
 | 固定签名候选 | Manifest SHA-256 |
 | --- | --- |
-| `matrix-v0.3.0-products.1-5ab41d4c1a4b`，全新安装 A | `9844e41281bd4763ef07234490ed684308a6db4294d682538100a30521539f84` |
-| `matrix-v0.3.0-products.2-5ab41d4c1a4b`，准确前驱为 A | `6306aec5345c0c25f7bece262ac45390f6df72b4a3f0af41d3ac58b49ec760c7` |
+| `matrix-v0.3.0-fd1eaa88879e`，全新安装 A | `ce53a5f12228dff5117dadb8f0d56ab3124e7d5970ec931f5b030ee6545a1866` |
+| `matrix-v0.3.1-fd1eaa88879e`，准确前驱为 A、仅用于验收 | `1d394160f5783742c936d4b6518b70d66b5372824629c84214bc693a63643ff1` |
 
-通过后保留的制品为 `13206670534`。已从远端 ZIP 目录确认其中唯一的
-`offline-release-candidates.tar.gz` 为 5,717,613,463 字节，并读取到有效 gzip 头；
-没有把多 GB 归档下载到本机。CI 完成 tar 逐项比较，实际证据中的归档 SHA-256 为
-`c6102e3a0baca332b9a024ecd9738f943261be55c00746b159e1d844f13f042b`。
+通过后保留的 A/B 制品为 `13210222638`，未下载多 GB 归档到本机。
+CI 完成 tar 逐项比较，实际证据中的归档 SHA-256 为
+`575a867df7eb78f9ea70e9b5963b159eacc401b1d2bda918fbeed9148f58c503`。
 归档包含准确的 A/B 与公开信任文件，排除签名私钥、SMTP 凭据与安装数据。
-它使用一次性 `offline-acceptance` 签名；正式密钥包、发布草稿与公开 Release 仍须
-经过下述受保护发布流程，不能把验收包直接改称生产发布。
+它使用受保护的 `matrix-release-20261103` 正式签名。全新安装 A 的交付制品
+`13210432139` 为 2,859,673,627 字节，GitHub 记录的 SHA-256 为
+`a03b7efcfdc1f884b31542f2c8afc63455fc4600fd55bdf50d2f555a3f3f2545`。
+归档比对、全新目录解压比对、分片重组比对及逐项校验均已通过。
+草稿准备任务在验签通过后未能查回刚创建的未发布草稿，整个运行因此为失败；
+不能把原生运行任务成功表述为整条发布流程成功。公开发布仍以恢复后的附件核验为准。
 
 此前固定源码 `ff688e24fce3a7bf80e07bfe7cadc591bfef181f` 的
 [运行 41565287835](https://github.com/xiak/matrix/actions/runs/41565287835)
@@ -1482,8 +1485,8 @@ owner-only. The encrypted environment Secret and byte-identical public
 variable were configured and read back by metadata/public value; the sole
 allowed deployment rule is branch `main`. The public key fingerprint is
 `sha256:c61ac6fee5c7cb723eaa1062f2f74914b3577674d2fcd26947eaf7c8e91f1245`.
-This proves custody/configuration, not successful CI decryption or a signed
-production release; those require the actual production dispatch.
+Production run `41583699116` used this key to sign A/B and passed the native
+lifecycle, restart, browser and transport gates recorded above.
 Production assembly requires successful exact-source Verification and Product
 onboarding runs executed directly on `main` by push or manual dispatch. PR
 runs cannot satisfy this boundary: their metadata names the head commit while
@@ -1503,19 +1506,33 @@ trust, the Ed25519 manifest signature, complete chunk/checksum inventory and
 uploaded asset sizes/digests. The public report and twelve real screenshots
 are retained with the Release as `acceptance-evidence.zip`, beyond temporary
 Actions artifact retention. Existing published releases, unrelated tags and
-different assets are rejected without replacement. A lost upload response can
-resume only matching assets. The result remains an unpublished draft for
-final delivery review.
+different assets are rejected without replacement. Draft discovery uses the
+authenticated, bounded, paginated release list; a tag lookup returning 404
+does not establish that a draft is absent. Ambiguous identities and incomplete
+inventories fail before mutation. A lost create/upload response resumes the
+same owned draft and only its missing matching assets. The result remains an
+unpublished draft for final delivery review.
 
-Eighteen local release-boundary tests passed, including wrong branch/event/source,
+The main-only `accepted_run_id` recovery input skips assembly and signing.
+It requires an original completed main dispatch of this workflow, its
+successful native job, successful exact-source independent gates, and exactly
+one unexpired delivery artifact bound to that run/source. The artifact's full
+transport size/digest and bounded ZIP extraction are checked before the normal
+signature and asset validation. Recovery preserves the original signed source
+and evidence run in release notes; the current publisher commit cannot relabel
+the accepted payload. Runtime code changes still require a new full gate.
+
+Thirty-three local release-boundary tests passed, including wrong branch/event/source,
 missing or unsuccessful independent gates, unavailable or malformed metadata,
 damaged signatures, changed chunks, foreign source/trust, unexpected private
 files, checksum path escape, existing publication/asset protection and
-upload-response recovery.
+create/upload-response recovery, paginated draft discovery, and retained-delivery
+recovery with wrong provenance, failed gates, transport corruption and path escape.
 They use real Ed25519 verification and simulate GitHub HTTP/CLI effects
 without network requests. Workflow YAML, Bash and Python syntax
-checks passed. These checks do not claim a production-signed run, Linux CI
-execution of the new publishing path, or a public Release; those remain open.
+checks passed for the earlier path. The repaired publisher and recovery path
+still require Linux CI and actual draft-asset acceptance before publication.
+Verification now runs this boundary suite independently of the full cold gate.
 
 Common generation-drift, unit, vet, race, repeated, schema, architecture,
 real-PostgreSQL, real-Compose, cross-platform build, Markdown-link, stale-term,

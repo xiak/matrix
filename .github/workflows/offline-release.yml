@@ -15,17 +15,20 @@ on:
         description: Same-source successor used only for lifecycle acceptance
         type: string
         default: v0.3.1
+      accepted_run_id:
+        description: With prepare_release, resume publication from this accepted run; leave empty to build and test
+        type: string
+        default: ''
   push:
     branches: ['feat/product-onboarding-release']
+    # Publication recovery has its own Verification gate. Runtime changes below
+    # run cold acceptance automatically; production assembly always runs it.
     paths:
       - 'app/service/installation/test/phase1e2e/**'
       - 'app/service/installation/internal/localmachine/**'
       - 'deploy/cmd/matrix-offline-fixture/**'
       - 'deploy/cmd/matrix-release/**'
       - 'deploy/releasebuild/**'
-      - '.github/scripts/prepare-release.py'
-      - '.github/scripts/test_prepare_release.py'
-      - '.github/workflows/offline-release.yml'
 
 permissions:
   contents: read
@@ -36,7 +39,7 @@ concurrency:
 
 jobs:
   native-offline-lifecycle:
-    if: ${{ !inputs.prepare_release || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') }}
+    if: ${{ !inputs.accepted_run_id && (!inputs.prepare_release || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 150
     environment:
@@ -421,7 +424,7 @@ jobs:
 
   prepare-draft-release:
     needs: native-offline-lifecycle
-    if: ${{ inputs.prepare_release && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' }}
+    if: ${{ always() && !cancelled() && inputs.prepare_release && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && ((inputs.accepted_run_id && needs.native-offline-lifecycle.result == 'skipped') || (!inputs.accepted_run_id && needs.native-offline-lifecycle.result == 'success')) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     environment:
@@ -434,11 +437,13 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       RELEASE_VERSION: ${{ inputs.release_version }}
       MATRIX_RELEASE_TRUST_ROOT: ${{ vars.MATRIX_RELEASE_TRUST_ROOT }}
+      ACCEPTED_RUN_ID: ${{ inputs.accepted_run_id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
       - name: Download only this run's accepted delivery
+        if: ${{ !inputs.accepted_run_id }}
         shell: bash
         run: |
           set -euo pipefail
@@ -446,4 +451,11 @@ jobs:
             --name offline-release-delivery --dir "$RUNNER_TEMP/delivery"
       - name: Verify delivery and prepare a draft with matching uploaded assets
         shell: bash
-        run: python3 .github/scripts/prepare-release.py
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/test_prepare_release.py
+          if [[ -n "$ACCEPTED_RUN_ID" ]]; then
+            python3 .github/scripts/prepare-release.py --resume-run "$ACCEPTED_RUN_ID"
+          else
+            python3 .github/scripts/prepare-release.py
+          fi
