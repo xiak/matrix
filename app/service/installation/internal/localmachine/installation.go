@@ -28,7 +28,8 @@ func authenticateInstalledPlanWithVerifier(
 	if verifyDirectory == nil {
 		return platformcommand.InstallPlan{}, errors.New("release directory verifier is required")
 	}
-	if topology.ValidateNorthboundOrigin(installed.NorthboundOrigin, installed.Port) != nil {
+	if topology.ValidateNorthboundOrigin(installed.NorthboundOrigin, installed.Port) != nil ||
+		(topology.NorthboundListener(installed.NorthboundOrigin) == "127.0.0.1" && installed.Listener != "127.0.0.1") {
 		return platformcommand.InstallPlan{}, errors.New("installed northbound origin is invalid")
 	}
 	trustPath, err := managedPath(

@@ -19,6 +19,10 @@ on:
         description: With prepare_release, resume publication from this accepted run; leave empty to build and test
         type: string
         default: ''
+      https_proxy:
+        description: Exercise local HTTPS proxy ingress, first-use browser and lifecycle recovery
+        type: boolean
+        default: false
   push:
     branches: ['feat/product-onboarding-release']
     # Publication recovery has its own Verification gate. Runtime changes below
@@ -52,6 +56,7 @@ jobs:
       GOMAXPROCS: '2'
       GOMEMLIMIT: '1GiB'
       CGO_ENABLED: '0'
+      MATRIX_HTTPS_PROXY: ${{ inputs.https_proxy && '1' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -143,6 +148,7 @@ jobs:
           set -euo pipefail
           work="$MATRIX_OFFLINE_WORK"
           node --check app/service/installation/test/phase1e2e/browser.mjs
+          node --check app/service/installation/test/phase1e2e/https-proxy.mjs
           npm install --prefix "$work/browser" --no-audit --no-fund --ignore-scripts playwright@1.64.1
           PLAYWRIGHT_BROWSERS_PATH="$work/browser/engines" \
             "$work/browser/node_modules/.bin/playwright" install --with-deps --no-shell chromium
@@ -253,6 +259,8 @@ jobs:
           # container hosts a daemon; the acceptance daemon starts with no data.
           sudo env MATRIX_OFFLINE_WORK="$MATRIX_OFFLINE_WORK" MATRIX_BROWSER_NODE="$(command -v node)" \
             MATRIX_BROWSER_SCRIPT="$GITHUB_WORKSPACE/app/service/installation/test/phase1e2e/browser.mjs" \
+            MATRIX_HTTPS_PROXY="$MATRIX_HTTPS_PROXY" \
+            MATRIX_HTTPS_PROXY_SCRIPT="$GITHUB_WORKSPACE/app/service/installation/test/phase1e2e/https-proxy.mjs" \
             unshare --net --mount bash -s <<'OFFLINE'
           set -euo pipefail
           umask 077
@@ -289,6 +297,7 @@ jobs:
           }
           cleanup() {
             result=$?
+            if [[ -n "${https_proxy_pid:-}" ]]; then kill -TERM "$https_proxy_pid" 2>/dev/null || true; fi
             if [[ "$result" != 0 ]]; then
               docker container ls --all --format '{{.Label "com.xiak.matrix.role"}} {{.State}} {{.Status}}' \
                 > "$work/evidence/runtime-health.txt" 2>/dev/null || true
@@ -316,6 +325,28 @@ jobs:
           }
           trap cleanup EXIT
           start_engine
+          export PLAYWRIGHT_BROWSERS_PATH="$work/browser/engines"
+          if [[ "$MATRIX_HTTPS_PROXY" == 1 ]]; then
+            # Disposable test identity stays private. No production Cloudflare,
+            # SSH or SMTP credential is needed or uploaded by this gate.
+            openssl req -x509 -newkey rsa:2048 -sha256 -nodes -days 2 \
+              -subj /CN=127.0.0.1 -addext 'subjectAltName=IP:127.0.0.1' \
+              -keyout "$work/private/https-key.pem" -out "$work/private/https-cert.pem" \
+              > "$work/private/https-generation.log" 2>&1
+            export SSL_CERT_FILE="$work/private/https-cert.pem"
+            export MATRIX_PHASE1_EDGE=https://127.0.0.1:18443
+            export MATRIX_PHASE1_FIRST_USE_BROWSER=1
+            export MATRIX_BROWSER_PLAYWRIGHT="$work/browser/node_modules/playwright/index.mjs"
+            export MATRIX_BROWSER_FIRST_USE_EVIDENCE="$work/evidence/first-use"
+            "$MATRIX_BROWSER_NODE" "$MATRIX_HTTPS_PROXY_SCRIPT" "$SSL_CERT_FILE" "$work/private/https-key.pem" \
+              > "$work/private/https-proxy.log" 2>&1 &
+            https_proxy_pid=$!
+            for attempt in $(seq 1 30); do
+              if curl --silent --cacert "$SSL_CERT_FILE" "$MATRIX_PHASE1_EDGE/ready" > /dev/null; then break; fi
+              kill -0 "$https_proxy_pid"
+              sleep 1
+            done
+          fi
           export MATRIX_PHASE1_E2E=1 MATRIX_PHASE1_E2E_TIMEOUT=90m
           export MATRIX_PHASE1_ROOT="$work/installation"
           export MATRIX_PHASE1_RELEASE_A="$work/release-a" MATRIX_PHASE1_RELEASE_B="$work/release-b"
@@ -384,6 +415,8 @@ jobs:
                    'release-a.json', 'release-b.json', 'trust.json']
           names += [f'browser/{product}-{state}.jpg' for product in ('elasticsearch', 'logstash', 'kibana', 'redis')
                     for state in ('install', 'running', 'terminated')]
+          if os.environ.get('MATRIX_HTTPS_PROXY') == '1':
+              names += ['first-use/report.json', 'first-use/https-first-use-console.jpg']
           with zipfile.ZipFile(work / 'delivery/acceptance-evidence.zip', 'x', zipfile.ZIP_DEFLATED) as archive:
               for name in names:
                   source = work / 'evidence' / name

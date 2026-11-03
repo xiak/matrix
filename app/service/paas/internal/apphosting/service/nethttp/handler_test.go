@@ -27,6 +27,28 @@ import (
 	"github.com/xiak/matrix/app/service/paas/internal/apphosting/usecase/verifyinstallation"
 )
 
+func TestTerminalHTTPSProxyRejectsPlaintextAndForeignOrigins(t *testing.T) {
+	for _, scenario := range []struct {
+		origin       string
+		secure, want bool
+	}{
+		{"https://matrix.example.test", true, true},
+		{"http://matrix.example.test", true, false},
+		{"https://attacker.invalid", true, false},
+		{"null", true, false},
+		{"", true, false},
+		{"http://matrix.example.test", false, true},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "http://matrix.example.test/api/paas/v1/terminal-sessions/session/connect", nil)
+		request.Header.Set("Origin", scenario.origin)
+		request.Header.Set("X-Forwarded-Proto", "https")
+		request.Header.Set("Sec-WebSocket-Protocol", nodev1.TerminalSubprotocol)
+		if validNorthboundTerminalUpgrade(request, scenario.secure) != scenario.want {
+			t.Fatalf("terminal origin %q secure=%t", scenario.origin, scenario.secure)
+		}
+	}
+}
+
 func TestHandlerReadinessIsOperationalAndSanitized(t *testing.T) {
 	readyErr := error(nil)
 	readiness := paasv1.Readiness{

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -652,6 +653,9 @@ func apisixStandaloneConfig(manifest release.Manifest, northboundOrigin string) 
         "matrix-ui:8080": 1
 #END
 `, northboundOrigin, topology.NodeEnrollmentIngressLoopbackPort, northboundOrigin)
+	if strings.HasPrefix(northboundOrigin, "https://") {
+		content = strings.Replace(content, "#END\n", httpsProxyRules(northboundOrigin)+"#END\n", 1)
+	}
 	if !manifest.IncludesProduct(release.ProductDevOps) {
 		return []byte(content)
 	}
@@ -719,4 +723,54 @@ func apisixStandaloneConfig(manifest release.Manifest, northboundOrigin string) 
         "devops-api:8080": 1
 `
 	return []byte(strings.Replace(content, marker, devopsRoutes+marker, 1))
+}
+
+// HTTPS terminates in an operator-owned local proxy. The signed installation
+// configuration, never a forwarding header, owns the external origin. Retain
+// the observed TCP peer for SourceIP conditions; CF-Connecting-IP is not an
+// authenticated visitor identity at this boundary.
+func httpsProxyRules(origin string) string {
+	parsed, err := url.Parse(origin)
+	if err != nil {
+		panic("validated HTTPS origin cannot be parsed")
+	}
+	host := parsed.Host
+	if parsed.Port() == "443" {
+		host = strings.TrimSuffix(host, ":443")
+	}
+	return fmt.Sprintf(`global_rules:
+  - id: matrix-local-https-proxy
+    plugins:
+      serverless-pre-function:
+        phase: rewrite
+        functions:
+          - |
+            return function()
+              if ngx.var.server_port ~= "9080" then return end
+              if ngx.var.uri ~= "/ready" then
+                local host = string.lower(ngx.var.http_host or "")
+                if host ~= %q and host ~= %q then return 421 end
+                local origin = ngx.req.get_headers()["origin"]
+                if origin ~= nil and origin ~= %q and origin ~= %q then return 403 end
+              end
+              for _, header in ipairs({
+                "Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-Port",
+                "X-Real-IP", "CF-Connecting-IP", "CF-Connecting-IPv6", "True-Client-IP", "CF-Visitor",
+                "X-Matrix-External-Origin", "X-Matrix-External-Request-Target", "X-Matrix-External-Source-IP",
+                "X-Matrix-Edge-Assertion", "X-Matrix-Observed-Peer", "X-Matrix-Transport-Scheme", "X-Matrix-TLS-Peer"
+              }) do ngx.req.clear_header(header) end
+            end
+      serverless-post-function:
+        phase: header_filter
+        functions:
+          - |
+            return function()
+              if ngx.var.server_port ~= "9080" then return end
+              ngx.header["Strict-Transport-Security"] = "max-age=86400"
+              if string.sub(ngx.var.request_uri, 1, 5) == "/api/" then
+                ngx.header["Cache-Control"] = "no-store"
+                ngx.header["Pragma"] = "no-cache"
+              end
+            end
+`, host, parsed.Host, "https://"+host, origin)
 }

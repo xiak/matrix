@@ -82,6 +82,44 @@ func newGate(config options, releases releasePair) *gate {
 	return &gate{config: config, releases: releases, edge: newEdgeClient(config.edge)}
 }
 
+func (value *gate) firstUseBrowser(ctx context.Context, initial, replacement []byte) error {
+	node, script := os.Getenv("MATRIX_BROWSER_NODE"), os.Getenv("MATRIX_BROWSER_SCRIPT")
+	playwright, evidence := os.Getenv("MATRIX_BROWSER_PLAYWRIGHT"), os.Getenv("MATRIX_BROWSER_FIRST_USE_EVIDENCE")
+	for _, filename := range []string{node, script, playwright, evidence} {
+		if !filepath.IsAbs(filename) || filepath.Clean(filename) != filename {
+			return fail("first-use-browser-input")
+		}
+	}
+	// Private, one-shot handoff. No password or bearer is passed in argv/env,
+	// emitted by the browser, or copied to the public evidence directory.
+	filename := value.config.root + "-first-use.json"
+	encoded, err := json.Marshal(struct{ AdministratorPassword, NewPassword []byte }{initial, replacement})
+	if err != nil {
+		return fail("first-use-browser-input")
+	}
+	defer clear(encoded)
+	file, err := os.OpenFile(filename, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fail("first-use-browser-input")
+	}
+	defer os.Remove(filename)
+	_, writeErr := file.Write(encoded)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		return fail("first-use-browser-input")
+	}
+	bounded, cancel := context.WithTimeout(ctx, 3*time.Minute)
+	defer cancel()
+	output, err := runProcess(bounded, node, script, filename, playwright, evidence, "first-use")
+	defer clear(output.stdout)
+	defer clear(output.stderr)
+	if err != nil || output.exit != 0 {
+		return fail("first-use-browser-journey")
+	}
+	emit("https-first-use-password-change-and-relogin")
+	return nil
+}
+
 func (value *gate) beforeRestart(ctx context.Context) error {
 	defer value.edge.close()
 	if err := value.assertFreshHost(ctx); err != nil {
@@ -131,18 +169,25 @@ func (value *gate) beforeRestart(ctx context.Context) error {
 		return fail("iam-new-password")
 	}
 	defer clear(newPassword)
-	firstSession, err := value.edge.login(ctx, initialPassword, "phase1-login-initial")
-	if err != nil {
-		return fail("iam-login-initial")
+	if os.Getenv("MATRIX_PHASE1_FIRST_USE_BROWSER") == "1" {
+		if err := value.firstUseBrowser(ctx, initialPassword, newPassword); err != nil {
+			return err
+		}
+	} else {
+		firstSession, err := value.edge.login(ctx, initialPassword, "phase1-login-initial")
+		if err != nil {
+			return fail("iam-login-initial")
+		}
+		defer clear(firstSession)
+		value.edge.addForbidden(initialPassword, newPassword, firstSession)
+		if err := value.edge.changePassword(ctx, firstSession, initialPassword, newPassword, true, nil); err != nil {
+			return fail("iam-change-password")
+		}
+		if err := value.edge.logout(ctx, firstSession); err != nil {
+			return fail("iam-logout-initial")
+		}
 	}
-	defer clear(firstSession)
-	value.edge.addForbidden(initialPassword, newPassword, firstSession)
-	if err := value.edge.changePassword(ctx, firstSession, initialPassword, newPassword, true, nil); err != nil {
-		return fail("iam-change-password")
-	}
-	if err := value.edge.logout(ctx, firstSession); err != nil {
-		return fail("iam-logout-initial")
-	}
+	value.edge.addForbidden(initialPassword, newPassword)
 	administratorLogin, err := value.edge.loginNamed(
 		ctx, "admin", newPassword, "organization-default", "principal-admin", "phase1-login-current",
 	)
@@ -3393,7 +3438,7 @@ func signAccessKeyMaterial(
 		return iamv1.Secret{}, errors.New("access key material is invalid")
 	}
 	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Scheme != "http" || parsed.Host == "" || origin != parsed.Scheme+"://"+parsed.Host {
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" || origin != parsed.Scheme+"://"+parsed.Host {
 		return iamv1.Secret{}, errors.New("signed request origin is invalid")
 	}
 	escapedPath, rawQuery, hasQuery := strings.Cut(target, "?")

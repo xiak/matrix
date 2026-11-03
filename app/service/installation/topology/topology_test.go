@@ -968,6 +968,61 @@ func TestCompileRejectsUntrustedTopologyInputs(t *testing.T) {
 	}
 }
 
+func TestHTTPSProxyTopologyIsLoopbackAndPreservesPublicIdentity(t *testing.T) {
+	for _, origin := range []string{"https://matrix.example.test:443", "https://matrix.example.test:18443"} {
+		options := Options{InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix",
+			Listener: NorthboundListener(origin), Port: 8080, NorthboundOrigin: origin}
+		result, err := Compile(topologyManifest(), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var document composeDocument
+		if err := json.Unmarshal(result.ComposeJSON, &document); err != nil {
+			t.Fatal(err)
+		}
+		for name, service := range document.Services {
+			for _, port := range service.Ports {
+				if !strings.HasPrefix(port, "127.0.0.1:") {
+					t.Fatalf("HTTPS ingress published %s outside loopback", name)
+				}
+			}
+		}
+		if document.Services["paas-api"].Environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] != "true" ||
+			document.Services["paas-api"].Environment["MATRIX_PAAS_NORTHBOUND_ORIGIN"] != origin ||
+			document.Services["audit"].Environment["MATRIX_AUDIT_NORTHBOUND_ORIGIN"] != origin {
+			t.Fatal("HTTPS public identity or cookie protection was lost")
+		}
+		options.Listener = "0.0.0.0"
+		if _, err := Compile(topologyManifest(), options); err == nil {
+			t.Fatal("HTTPS proxy origin exposed publicly")
+		}
+	}
+}
+
+func TestCanonicalNorthboundOriginPreservesOnlySupportedURLs(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://matrix.example.test":       "https://matrix.example.test:443",
+		"https://matrix.example.test:443":   "https://matrix.example.test:443",
+		"https://matrix.example.test:18443": "https://matrix.example.test:18443",
+		"http://matrix.example.test:8080":   "http://matrix.example.test:8080",
+	} {
+		got, err := CanonicalNorthboundOrigin(raw, 8080)
+		if err != nil || got != want {
+			t.Fatalf("origin %q => %q / %v", raw, got, err)
+		}
+	}
+	for _, raw := range []string{
+		"https://matrix.example.test/", "https://matrix.example.test?", "https://matrix.example.test#",
+		"https://user:secret@matrix.example.test", "https://matrix.example.test:",
+		"https://matrix.example.test:0", "https://matrix.example.test:65536", "https://matrix.example.test:0443",
+		"https://MATRIX.example.test", "http://matrix.example.test", "http://matrix.example.test:443",
+	} {
+		if _, err := CanonicalNorthboundOrigin(raw, 8080); err == nil {
+			t.Fatalf("invalid origin admitted: %q", raw)
+		}
+	}
+}
+
 func TestOptionsCannotCarryProviderNativeTopology(t *testing.T) {
 	typeOfOptions := reflect.TypeFor[Options]()
 	want := []string{"InstallationID", "Root", "Listener", "Port", "NorthboundOrigin"}

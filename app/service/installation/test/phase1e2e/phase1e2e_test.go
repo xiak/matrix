@@ -2213,7 +2213,7 @@ func optionsFromEnvironment() (options, error) {
 		edge = defaultEdgeEndpoint
 	}
 	endpoint, err := url.Parse(edge)
-	if err != nil || endpoint.Scheme != "http" || endpoint.User != nil || endpoint.Path != "" ||
+	if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") || endpoint.User != nil || endpoint.Path != "" ||
 		endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return options{}, fail("command-input")
 	}

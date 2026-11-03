@@ -88,7 +88,7 @@ func (value *handler) connectTerminalSession(response http.ResponseWriter, reque
 	if !ok {
 		return
 	}
-	if !validNorthboundTerminalUpgrade(request) {
+	if !validNorthboundTerminalUpgrade(request, value.config.TerminalCookieSecure) {
 		writeProblem(response, requestID, http.StatusBadRequest, paasv1.ErrorInvalidArgument,
 			"Invalid terminal connection", "terminal connection requires an exact same-origin one-time WebSocket upgrade", false)
 		return
@@ -375,10 +375,11 @@ func terminalNodeRequest(
 	}, nil
 }
 
-func validNorthboundTerminalUpgrade(request *http.Request) bool {
+func validNorthboundTerminalUpgrade(request *http.Request, secure bool) bool {
 	if request == nil || request.URL.RawPath != "" || request.URL.RawQuery != "" ||
 		request.URL.ForceQuery || request.ContentLength != 0 || len(request.TransferEncoding) != 0 ||
 		request.Header.Get("Content-Encoding") != "" || request.Header.Get("Authorization") != "" ||
+		(secure && !strings.HasPrefix(request.Header.Get("Origin"), "https://")) ||
 		len(request.Header.Values("Matrix-Subject-Credential")) != 0 ||
 		!exactNorthboundSubprotocol(request) || !sameTerminalOrigin(request) {
 		return false

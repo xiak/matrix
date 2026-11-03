@@ -29,7 +29,6 @@ import (
 )
 
 const (
-	defaultListener                     = "0.0.0.0"
 	defaultPort                         = uint16(8080)
 	MaximumCredentialRecoveryInputBytes = 16 * 1024
 )
@@ -348,9 +347,12 @@ func (backend *Backend) Run(ctx context.Context, request cli.Request) (cli.Resul
 	if request.NorthboundOrigin != "" && request.Action != lifecycle.ActionInstall {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_UNSUPPORTED")
 	}
-	if request.Action == lifecycle.ActionInstall &&
-		topology.ValidateNorthboundOrigin(request.NorthboundOrigin, defaultPort) != nil {
-		return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_INVALID")
+	if request.Action == lifecycle.ActionInstall {
+		origin, err := topology.CanonicalNorthboundOrigin(request.NorthboundOrigin, defaultPort)
+		if err != nil {
+			return cli.Result{}, fault(cli.FaultInvalidArgument, "NORTHBOUND_ORIGIN_INVALID")
+		}
+		request.NorthboundOrigin = origin
 	}
 	if request.SecurityMailConfiguration != "" && request.Action != lifecycle.ActionInstall && request.Action != lifecycle.ActionUpgrade {
 		return cli.Result{}, fault(cli.FaultInvalidArgument, "SECURITY_MAIL_CONFIGURATION_UNSUPPORTED")
@@ -589,7 +591,7 @@ func supportOutputBinding(root, output string) (string, string, error) {
 func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
-		Listener: defaultListener, Port: defaultPort,
+		Listener: topology.NorthboundListener(state.NorthboundOrigin), Port: defaultPort,
 		NorthboundOrigin:   state.NorthboundOrigin,
 		SecurityMailDigest: state.SecurityMailDigest,
 		ReleaseID:          state.CurrentReleaseID, ReleaseDigest: state.CurrentReleaseDigest,
@@ -602,7 +604,7 @@ func installedPlan(root string, state lifecycle.Journal) InstalledPlan {
 func previousInstalledPlan(root string, state lifecycle.Journal) InstalledPlan {
 	return InstalledPlan{
 		Root: root, InstallationID: state.InstallationID,
-		Listener: defaultListener, Port: defaultPort,
+		Listener: topology.NorthboundListener(state.NorthboundOrigin), Port: defaultPort,
 		NorthboundOrigin:   state.NorthboundOrigin,
 		SecurityMailDigest: state.SecurityMailDigest,
 		ReleaseID:          state.PreviousRelease, ReleaseDigest: state.PreviousReleaseDigest,
@@ -757,7 +759,7 @@ func (backend *Backend) install(
 	plan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
-		Listener: defaultListener, Port: defaultPort,
+		Listener: topology.NorthboundListener(started.Execution.Command.NorthboundOrigin), Port: defaultPort,
 		NorthboundOrigin: started.Execution.Command.NorthboundOrigin, Bundle: verified,
 		Trust: trust, TrustBytes: append([]byte(nil), trustBytes...),
 		SecurityMail: securityMail,
@@ -908,7 +910,7 @@ func (backend *Backend) upgrade(
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
-		Listener: defaultListener, Port: defaultPort,
+		Listener: topology.NorthboundListener(northboundOrigin), Port: defaultPort,
 		NorthboundOrigin: northboundOrigin,
 		PreviousID:       sourcePlan.ReleaseID, PreviousDigest: sourcePlan.ReleaseDigest,
 		Bundle: targetBundle,
@@ -1039,7 +1041,7 @@ func (backend *Backend) rollback(
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
-		Listener: defaultListener, Port: defaultPort,
+		Listener: topology.NorthboundListener(started.Journal.NorthboundOrigin), Port: defaultPort,
 		NorthboundOrigin: started.Journal.NorthboundOrigin,
 		SecurityMail:     SecurityMailInput{Digest: started.Journal.SecurityMailDigest},
 		PreviousID:       started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
@@ -1201,7 +1203,7 @@ func (backend *Backend) recover(
 	currentPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
-		Listener: defaultListener, Port: defaultPort,
+		Listener: topology.NorthboundListener(started.Journal.NorthboundOrigin), Port: defaultPort,
 		NorthboundOrigin: started.Journal.NorthboundOrigin,
 		SecurityMail:     SecurityMailInput{Digest: started.Journal.SecurityMailDigest},
 		PreviousID:       started.Journal.PreviousRelease, PreviousDigest: started.Journal.PreviousReleaseDigest,
@@ -1212,7 +1214,7 @@ func (backend *Backend) recover(
 	targetPlan := InstallPlan{
 		Root: session.Root(), InstallationID: started.Journal.InstallationID,
 		CorrelationID: commandID, CommandStartedAt: started.Execution.StartedAt,
-		Listener: defaultListener, Port: defaultPort,
+		Listener: topology.NorthboundListener(destinationOrigin), Port: defaultPort,
 		NorthboundOrigin: destinationOrigin,
 		SecurityMail:     SecurityMailInput{Digest: targetSecurityMailDigest},
 		Bundle:           targetBundle,

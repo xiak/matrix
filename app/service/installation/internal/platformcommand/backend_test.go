@@ -74,7 +74,7 @@ func TestInstallCommitsPinnedReleaseOnlyAfterEffectsAndReplays(t *testing.T) {
 func TestInstallRejectsUnsupportedNorthboundOriginBeforeState(t *testing.T) {
 	fixture := writeReleaseFixture(t)
 	backend := newTestBackend(t, &installEffects{})
-	for _, origin := range []string{"", "https://matrix.example.test:8080", "http://matrix.example.test:8443", "http://MATRIX.example.test:8080"} {
+	for _, origin := range []string{"", "https://matrix.example.test:0", "http://matrix.example.test:8443", "http://MATRIX.example.test:8080"} {
 		root := filepath.Join(t.TempDir(), "matrix")
 		request := installRequest(root, fixture)
 		request.NorthboundOrigin = origin
@@ -84,6 +84,35 @@ func TestInstallRejectsUnsupportedNorthboundOriginBeforeState(t *testing.T) {
 			t.Fatalf("invalid origin %q changed installation state", origin)
 		}
 	}
+}
+
+func TestHTTPSInstallSealsOriginAndReplaysCanonicalInput(t *testing.T) {
+	fixture := writeReleaseFixture(t)
+	effects := &installEffects{}
+	backend := newTestBackend(t, effects)
+	root := filepath.Join(t.TempDir(), "matrix")
+	request := installRequest(root, fixture)
+	request.NorthboundOrigin = "https://matrix.example.test"
+	if _, err := backend.Run(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	state := readJournal(t, root)
+	if state.NorthboundOrigin != "https://matrix.example.test:443" {
+		t.Fatal("public origin was not sealed canonically")
+	}
+	for _, plan := range []InstalledPlan{installedPlan(root, state), previousInstalledPlan(root, state)} {
+		if plan.Listener != "127.0.0.1" || plan.NorthboundOrigin != state.NorthboundOrigin {
+			t.Fatal("lifecycle lost loopback ingress")
+		}
+	}
+	request.NorthboundOrigin += ":443"
+	result, err := backend.Run(context.Background(), request)
+	if err != nil || result.Changed {
+		t.Fatalf("canonical replay changed installation: %v", err)
+	}
+	request.NorthboundOrigin = "https://other.example.test"
+	_, err = backend.Run(context.Background(), request)
+	assertFault(t, err, cli.FaultConflict, "NORTHBOUND_ORIGIN_CONFLICT")
 }
 
 func TestInstallResumesUnknownEffectWithTheSameDurableCommand(t *testing.T) {
@@ -1211,6 +1240,9 @@ func (effects *installEffects) ApplyInstallPhase(
 		effects.calls = make(map[lifecycle.Phase]int)
 	}
 	effects.calls[phase]++
+	if strings.HasPrefix(plan.NorthboundOrigin, "https://") && plan.Listener != "127.0.0.1" {
+		return errors.New("HTTPS installation escaped loopback")
+	}
 	if plan.Root == "" || plan.InstallationID == "" || plan.Bundle.Manifest.Release.ID == "" ||
 		plan.CorrelationID == "" || plan.Trust.KeyID == "" ||
 		len(plan.TrustBytes) == 0 || plan.Port == 0 || plan.NorthboundOrigin == "" || plan.SecurityMail.Digest == "" ||

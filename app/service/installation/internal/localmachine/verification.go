@@ -9,8 +9,10 @@ import (
 	"mime"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
@@ -55,6 +57,7 @@ type httpInstallationVerifier struct {
 	wait         func(context.Context, time.Duration) error
 	pollInterval time.Duration
 	maximumPolls int
+	publicHost   string
 }
 
 func newHTTPInstallationVerifier(client *http.Client) *httpInstallationVerifier {
@@ -108,6 +111,17 @@ func (verifier *httpInstallationVerifier) Verify(
 	}
 	defer clear(credential)
 	endpoint := "http://" + net.JoinHostPort("127.0.0.1", strconv.Itoa(int(plan.Port)))
+	if strings.HasPrefix(plan.NorthboundOrigin, "https://") {
+		origin, parseErr := url.Parse(plan.NorthboundOrigin)
+		if parseErr != nil || origin.Host == "" || plan.Listener != "127.0.0.1" {
+			return paasv1.InstallationVerification{}, verificationFailure()
+		}
+		// Keep the verifier offline and on loopback, including while the tunnel
+		// is down. Only the Host is taken from authenticated installation input.
+		clone := *verifier
+		clone.publicHost = origin.Host
+		verifier = &clone
+	}
 	idempotencyKey := "verify-" + plan.CorrelationID
 	if paasv1.ValidateSafeExternalText(
 		"Idempotency-Key", idempotencyKey, 128, true,
@@ -145,6 +159,9 @@ func (verifier *httpInstallationVerifier) verifyConsole(ctx context.Context, end
 		return verificationFailure()
 	}
 	request.Header.Set("Accept", "text/html")
+	if verifier.publicHost != "" {
+		request.Host = verifier.publicHost
+	}
 	// The UI is public static content and must never receive verifier credentials.
 	response, err := verifier.client.Do(request)
 	if err != nil {
@@ -290,6 +307,9 @@ func (verifier *httpInstallationVerifier) postJSON(
 		return verificationCallInvalid, nil
 	}
 	request.Header.Set("Accept", "application/json")
+	if verifier.publicHost != "" {
+		request.Host = verifier.publicHost
+	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Authorization", "Bearer "+string(credential))
 	if idempotencyKey != "" {

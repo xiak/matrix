@@ -628,7 +628,7 @@ func bindCommandFlags(
 			flags.StringVar(&options.join, "join", "", "protected one-time node join file")
 		} else {
 			flags.StringVar(&options.securityMailConfiguration, "security-mail-configuration", "", "protected SMTP security-mail configuration file")
-			flags.StringVar(&options.northboundOrigin, "northbound-origin", "", "canonical public HTTP origin with explicit port")
+			flags.StringVar(&options.northboundOrigin, "northbound-origin", "", "public HTTP origin on port 8080, or HTTPS origin through a local proxy (binds to 127.0.0.1)")
 		}
 	case lifecycle.ActionUpgrade:
 		flags.StringVar(&options.bundle, "bundle", "", "verified offline release bundle directory")

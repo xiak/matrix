@@ -684,7 +684,7 @@ func expectedPlatformServices(
 	compiled, err := topology.Compile(manifest, topology.Options{
 		InstallationID:   installationID,
 		Root:             filepath.ToSlash(root),
-		Listener:         "0.0.0.0",
+		Listener:         topology.NorthboundListener(northboundOrigin),
 		Port:             8080,
 		NorthboundOrigin: northboundOrigin,
 	})

@@ -52,6 +52,28 @@ verified
 
 ## Release inventory and ownership
 
+### Local HTTPS proxy ingress (in progress)
+
+The next fresh-install candidate admits a canonical external HTTPS origin
+through a host-local proxy such as Cloudflare Tunnel. HTTP remains the
+published v0.3.0 profile. This is not a change to that immutable release.
+
+The HTTPS profile seals the external scheme, host and port in the existing
+installation journal, binds host ingress to `127.0.0.1`, preserves this choice
+through verification and lifecycle recovery, and makes terminal cookies
+Secure. The gateway rejects foreign Host/Origin values and ignores caller
+forwarding metadata. SourceIP conditions continue to describe the observed
+proxy connection, not an unverified visitor IP. It does not add a Cloudflare
+runtime dependency to Matrix or expose a Docker daemon over the network.
+
+Acceptance requires unit/architecture/security gates, the real pinned APISIX
+gateway, an HTTPS browser journey against the native Docker installation,
+restart/recovery with the same origin, and the Debian deployment workflow.
+Public Cloudflare/Tencent connectivity is a separate live gate requiring the
+operator's prepared server and domain; local TLS evidence cannot stand in
+for that result. Credentials, tunnel tokens, SMTP passwords and signing keys
+remain outside Git and public evidence.
+
 An accepted bundle contains the exact immutable payloads required by
 [`ADR-0002`](../architecture/ADR-0002-product-boundary.md):
 

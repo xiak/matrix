@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash, X509Certificate } from "node:crypto";
 import { constants } from "node:fs";
-import { mkdir, open, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
@@ -9,14 +10,15 @@ import { pathToFileURL } from "node:url";
 // network namespace, after the Go lifecycle and engine-restart gates succeed.
 // Only public UI evidence is exported. Never emit browser errors, HTTP bodies,
 // storage, traces or the private retention fixture: they may contain secrets.
-const [retentionPath, playwrightPath, evidencePath] = process.argv.slice(2);
-const origin = "http://127.0.0.1:8080";
-const products = [
+const [retentionPath, playwrightPath, evidencePath, mode] = process.argv.slice(2);
+const firstUse = mode === "first-use";
+const origin = process.env.MATRIX_PHASE1_EDGE || "http://127.0.0.1:8080";
+const products = (firstUse ? [] : [
   { id: "elasticsearch", name: "Elasticsearch 接入示例" },
   { id: "logstash", name: "Logstash 接入示例" },
   { id: "kibana", name: "Kibana 接入示例" },
   { id: "redis", name: "Redis 接入示例" },
-].map((product) => ({ ...product, instance: `handbook-browser-${product.id}` }));
+]).map((product) => ({ ...product, instance: `handbook-browser-${product.id}` }));
 const report = {
   kind: "matrix-signed-product-browser-acceptance-v1",
   status: "FAILED",
@@ -32,6 +34,7 @@ const report = {
 let browser;
 let page;
 let password;
+let replacementPassword;
 
 async function step(name, action) {
   report.stage = name;
@@ -125,8 +128,10 @@ async function readInstance(product, phase) {
 }
 
 try {
-  assert.equal(process.argv.length, 5);
+  assert.ok(process.argv.length === 5 || (process.argv.length === 6 && firstUse));
   assert.equal(process.platform, "linux");
+  assert.equal(new URL(origin).hostname, "127.0.0.1");
+  assert.ok(["http:", "https:"].includes(new URL(origin).protocol));
   assert.ok(path.isAbsolute(retentionPath) && path.isAbsolute(playwrightPath) && path.isAbsolute(evidencePath));
   const file = await open(retentionPath, constants.O_RDONLY | constants.O_NOFOLLOW);
   try {
@@ -141,13 +146,27 @@ try {
         assert.ok(decoded.length >= 12 && decoded.length <= 128);
         password = decoded.toString("utf8");
       } finally { decoded.fill(0); }
+      if (firstUse) {
+        const replacement = Buffer.from(retained.NewPassword, "base64");
+        try {
+          assert.ok(replacement.length >= 12 && replacement.length <= 128);
+          replacementPassword = replacement.toString("utf8");
+        } finally { replacement.fill(0); }
+      }
     } finally { contents.fill(0); }
   } finally { await file.close(); }
   await mkdir(evidencePath, { mode: 0o700 });
 
   await step("browser-launch", async () => {
     const { chromium } = await import(pathToFileURL(playwrightPath).href);
-    browser = await chromium.launch({ channel: "chromium", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+    const args = ["--no-sandbox", "--disable-dev-shm-usage"];
+    if (new URL(origin).protocol === "https:") {
+      // Trust only this run's disposable certificate, not all HTTPS errors.
+      const certificate = new X509Certificate(await readFile(process.env.SSL_CERT_FILE));
+      const spki = certificate.publicKey.export({ type: "spki", format: "der" });
+      args.push(`--ignore-certificate-errors-spki-list=${createHash("sha256").update(spki).digest("base64")}`);
+    }
+    browser = await chromium.launch({ channel: "chromium", headless: true, args });
     const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, locale: "zh-CN" });
     page = await context.newPage();
     page.setDefaultTimeout(30_000);
@@ -157,7 +176,7 @@ try {
       if (new URL(response.url()).origin === origin && response.status() >= 500) report.serverErrors += 1;
     });
   });
-  await step("retained-administrator-ui-login", async () => {
+  await step(firstUse ? "initial-administrator-ui-login" : "retained-administrator-ui-login", async () => {
     await page.goto(`${origin}/console/`);
     await page.locator("#login-name").fill("admin");
     await page.locator("#login-password").fill(password);
@@ -165,6 +184,35 @@ try {
     await page.waitForURL(`${origin}/console/`);
     await page.locator("#login-form").waitFor({ state: "detached" });
   });
+
+  if (firstUse) {
+    await step("first-password-change-enters-console", async () => {
+      const form = page.locator("#password-change-form");
+      await form.locator('[name="currentPassword"]').fill(password);
+      await form.locator('[name="newPassword"]').fill(replacementPassword);
+      await form.locator('[name="confirmedPassword"]').fill(replacementPassword);
+      await form.getByRole("button", { name: "保存并进入控制台", exact: true }).click();
+      await form.waitFor({ state: "detached" });
+      await page.getByRole("button", { name: "打开账号菜单，当前用户 admin", exact: true }).waitFor();
+      assert.equal(await page.locator("#login-form").count(), 0);
+      password = replacementPassword;
+      replacementPassword = undefined;
+      assert.equal(await page.locator('input[type="password"]:visible').count(), 0);
+      assert.equal((await page.locator("body").innerText()).includes(password), false);
+      await page.screenshot({ path: path.join(evidencePath, "https-first-use-console.jpg"), type: "jpeg", quality: 80, fullPage: true });
+    });
+    await step("logout-and-new-password-relogin", async () => {
+      await page.getByRole("button", { name: "打开账号菜单，当前用户 admin", exact: true }).click();
+      await page.getByRole("button", { name: "注销并撤销 IAM 会话", exact: true }).click();
+      await page.locator("#login-form").waitFor();
+      await page.locator("#login-name").fill("admin");
+      await page.locator("#login-password").fill(password);
+      await page.getByRole("button", { name: "登录控制台", exact: true }).click();
+      await page.locator("#login-form").waitFor({ state: "detached" });
+      await page.getByRole("button", { name: "打开账号菜单，当前用户 admin", exact: true }).waitFor();
+      assert.equal(await page.locator("#password-change-form").count(), 0);
+    });
+  }
 
   for (const product of products) {
     await step(`${product.id}-service-activation`, async () => {
@@ -238,6 +286,7 @@ try {
   process.exitCode = 1;
 } finally {
   password = undefined;
+  replacementPassword = undefined;
   if (browser) await browser.close().catch(() => { report.status = "FAILED"; process.exitCode = 1; });
   report.completedAt = new Date().toISOString();
   const encoded = JSON.stringify(report, null, 2) + "\n";

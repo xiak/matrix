@@ -40,7 +40,13 @@ func TestHTTPInstallationVerifierPollsExactPaaSAndAuditFacts(t *testing.T) {
 	auditCalls := 0
 	consoleCalls := 0
 	consoleStatus, consoleType, consoleBody := http.StatusOK, "text/html; charset=utf-8", "<!DOCTYPE html><title>Matrix</title>"
+	expectedHost := ""
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if expectedHost != "" && (request.Host != expectedHost || request.Header.Get("X-Forwarded-Host") != "") {
+			t.Error("local verifier lost its sealed public Host or trusted a proxy header")
+			response.WriteHeader(http.StatusMisdirectedRequest)
+			return
+		}
 		if request.URL.Path == "/" {
 			consoleCalls++
 			if request.Method != http.MethodGet || request.URL.RawQuery != "" || request.Header.Get("Authorization") != "" || request.Header.Get("Matrix-Subject-Credential") != "" {
@@ -143,6 +149,17 @@ func TestHTTPInstallationVerifierPollsExactPaaSAndAuditFacts(t *testing.T) {
 	if paasCalls != 2 || auditCalls != 2 || consoleCalls != 1 || result.DeploymentID != deploymentID ||
 		result.Generation != 1 {
 		t.Fatalf("verification calls PaaS=%d Audit=%d", paasCalls, auditCalls)
+	}
+	// A deliberately non-resolving external domain proves verification stays
+	// on loopback even before the proxy is installed or after it disconnects.
+	plan.Listener = "127.0.0.1"
+	plan.NorthboundOrigin = "https://offline-proxy.example.invalid:443"
+	expectedHost = "offline-proxy.example.invalid:443"
+	if _, err := verifier.Verify(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if verifier.publicHost != "" {
+		t.Fatal("verification mutated a shared client")
 	}
 	for _, scenario := range []struct {
 		name              string

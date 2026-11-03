@@ -385,6 +385,9 @@ func legacyProductlessContractDescription() contract {
 }
 
 func validateOptions(options Options) error {
+	if strings.HasPrefix(options.NorthboundOrigin, "https://") && options.Listener != "127.0.0.1" {
+		return errors.New("HTTPS proxy ingress must bind to IPv4 loopback")
+	}
 	return errors.Join(
 		validateLegacyOptions(options),
 		ValidateNorthboundOrigin(options.NorthboundOrigin, options.Port),
@@ -412,20 +415,48 @@ func validateLegacyOptions(options Options) error {
 	return errors.Join(problems...)
 }
 
-// ValidateNorthboundOrigin admits the public origin actually served by the
-// current direct, plaintext APISIX edge. TLS termination and trusted proxy
-// chains require a separate topology contract; accepting https here would
-// advertise a transport this release does not configure.
+// CanonicalNorthboundOrigin accepts the ordinary HTTPS URL supplied by an
+// operator and seals its explicit port for request signatures and lifecycle
+// replay. Paths, credentials and other URL components are never discarded.
+func CanonicalNorthboundOrigin(origin string, listenerPort uint16) (string, error) {
+	parsed, err := url.Parse(origin)
+	if err == nil && parsed.Scheme == "https" && parsed.Host != "" &&
+		origin == "https://"+parsed.Host &&
+		parsed.Port() == "" && !strings.HasSuffix(parsed.Host, ":") {
+		parsed.Host += ":443"
+		origin = parsed.String()
+	}
+	if err := ValidateNorthboundOrigin(origin, listenerPort); err != nil {
+		return "", err
+	}
+	return origin, nil
+}
+
+// NorthboundListener derives the transport boundary from the sealed origin.
+// HTTPS is terminated by an operator-owned local proxy (e.g. cloudflared).
+// Its plaintext origin is never published on an external host interface.
+func NorthboundListener(origin string) string {
+	if strings.HasPrefix(origin, "https://") {
+		return "127.0.0.1"
+	}
+	return "0.0.0.0"
+}
+
+// ValidateNorthboundOrigin admits direct HTTP on the listener port, or HTTPS
+// terminated by a local proxy on an independently specified public port.
+// Forwarded headers cannot select either the public origin or this mode.
 func ValidateNorthboundOrigin(origin string, listenerPort uint16) error {
 	if externalrequest.ValidateOrigin(origin) != nil || listenerPort == 0 {
 		return errors.New("platform northbound origin is invalid")
 	}
 	parsed, err := url.Parse(origin)
-	if err != nil || parsed.Scheme != "http" {
+	if err != nil {
 		return errors.New("platform northbound origin is invalid")
 	}
 	_, port, err := net.SplitHostPort(parsed.Host)
-	if err != nil || port != strconv.FormatUint(uint64(listenerPort), 10) {
+	number, portErr := strconv.ParseUint(port, 10, 16)
+	if err != nil || portErr != nil || number == 0 || strconv.FormatUint(number, 10) != port ||
+		(parsed.Scheme == "http" && number != uint64(listenerPort)) {
 		return errors.New("platform northbound origin is invalid")
 	}
 	return nil
@@ -743,7 +774,7 @@ func compileServices(
 		paasAPI.Environment[enrollmentIssuerCertificateEnvironment] = enrollmentIssuerCertificateTarget
 		paasAPI.Environment[enrollmentIssuerPrivateKeyEnvironment] = enrollmentIssuerPrivateKeyTarget
 		paasAPI.Environment["MATRIX_PAAS_PUBLIC_BASE_PATH"] = "/api/paas/v1"
-		paasAPI.Environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] = "false"
+		paasAPI.Environment["MATRIX_PAAS_TERMINAL_COOKIE_SECURE"] = strconv.FormatBool(strings.HasPrefix(options.NorthboundOrigin, "https://"))
 		paasAPI.Volumes = append(paasAPI.Volumes,
 			bind(paasCursorKey, "/run/matrix/paas-cursor-key", true),
 			bind(paasEdgeAssertion, "/run/matrix/paas-edge-assertion", true),

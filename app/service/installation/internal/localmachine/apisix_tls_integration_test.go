@@ -9,6 +9,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -39,17 +42,23 @@ func TestAPISIXServesInstallationAuthenticatedEnrollmentTLS(t *testing.T) {
 		t.Fatal("APISIX TLS integration requires the Docker CLI")
 	}
 	for _, selected := range []bool{false, true} {
-		t.Run(fmt.Sprintf("devops-selected-%t", selected), func(t *testing.T) {
-			assertAPISIXProductAndEnrollmentBoundaries(t, image, selected)
-		})
+		for _, httpsProxy := range []bool{false, true} {
+			t.Run(fmt.Sprintf("devops-selected-%t-https-proxy-%t", selected, httpsProxy), func(t *testing.T) {
+				assertAPISIXProductAndEnrollmentBoundaries(t, image, selected, httpsProxy)
+			})
+		}
 	}
 }
 
-func assertAPISIXProductAndEnrollmentBoundaries(t *testing.T, image string, devopsSelected bool) {
+func assertAPISIXProductAndEnrollmentBoundaries(t *testing.T, image string, devopsSelected, httpsProxy bool) {
 	t.Helper()
 	plan := newInstallPlan(t)
 	if devopsSelected {
 		plan = newDevOpsInstallPlan(t)
+	}
+	if httpsProxy {
+		plan.Listener = "127.0.0.1"
+		plan.NorthboundOrigin = "https://matrix.example.test:443"
 	}
 	if err := stageInstallation(plan, rand.Reader); err != nil {
 		t.Fatalf("stage APISIX TLS integration installation: %v", err)
@@ -112,6 +121,11 @@ http {
       add_header X-Matrix-Test-Gitea-Event $http_x_gitea_event always;
       add_header X-Matrix-Test-Gitea-Delivery $http_x_gitea_delivery always;
       add_header X-Matrix-Test-Gitea-Signature $http_x_gitea_signature always;
+      add_header X-Matrix-Test-External-Origin $http_x_matrix_external_origin always;
+      add_header X-Matrix-Test-External-Source-IP $http_x_matrix_external_source_ip always;
+      add_header X-Matrix-Test-Forwarded $http_forwarded always;
+      add_header X-Matrix-Test-Forwarded-Host $http_x_forwarded_host always;
+      add_header X-Matrix-Test-CF-IP $http_cf_connecting_ip always;
       return 204;
     }
   }
@@ -128,6 +142,7 @@ http {
 		"--user", "0:0",
 		"--network", networkName, "--network-alias", "paas-api",
 		"--network-alias", "devops-api", "--network-alias", "matrix-ui",
+		"--network-alias", "iam", "--network-alias", "audit",
 		"--mount", "type=bind,source="+upstreamConfig+",target=/tmp/matrix-paas-api.conf,readonly",
 		"--entrypoint", "/usr/local/openresty/bin/openresty", image,
 		"-c", "/tmp/matrix-paas-api.conf", "-g", "daemon off;",
@@ -178,6 +193,8 @@ http {
 		{layout.APISIXNginx, "/usr/local/apisix/conf/nginx.conf", false},
 		{layout.EnrollmentIngressCertificate, topology.NodeEnrollmentIngressCertificateTarget, true},
 		{layout.EnrollmentIngressPrivateKey, topology.NodeEnrollmentIngressPrivateKeyTarget, true},
+		{layout.AuditEdgeAssertion, "/run/matrix/audit-edge-assertion", true},
+		{layout.PaaSEdgeAssertion, "/run/matrix/paas-edge-assertion", true},
 	} {
 		source := filepath.Join(plan.Root, filepath.FromSlash(mount.source))
 		declaration := "type=bind,source=" + source + ",target=" + mount.target
@@ -255,7 +272,13 @@ http {
 			t.Fatalf("APISIX enrollment TLS front admitted an unrelated route: %d", denied.StatusCode)
 		}
 	}
-	assertAPISIXDevOpsRoutes(t, "http://127.0.0.1:"+strconv.Itoa(publicPort), devopsSelected)
+	publicEndpoint := "http://127.0.0.1:" + strconv.Itoa(publicPort)
+	publicHost := ""
+	if httpsProxy {
+		publicHost = "matrix.example.test"
+		assertAPISIXHTTPSProxyBoundary(t, publicEndpoint)
+	}
+	assertAPISIXDevOpsRoutes(t, publicEndpoint, publicHost, devopsSelected)
 	oversized, err := http.NewRequest(
 		http.MethodPost,
 		baseURL+"/api/paas/v1/node-enrollments/node-enrollment-11111111111111111111111111111111/exchange",
@@ -287,7 +310,7 @@ http {
 	})
 }
 
-func assertAPISIXDevOpsRoutes(t *testing.T, endpoint string, selected bool) {
+func assertAPISIXDevOpsRoutes(t *testing.T, endpoint, publicHost string, selected bool) {
 	t.Helper()
 	client := newAPISIXTLSClient(nil, 5*time.Second)
 	for _, webhook := range []bool{false, true} {
@@ -300,6 +323,9 @@ func assertAPISIXDevOpsRoutes(t *testing.T, endpoint string, selected bool) {
 			t.Fatal(err)
 		}
 		request.Header.Set("Content-Type", "application/json")
+		if publicHost != "" {
+			request.Host = publicHost
+		}
 		for name, value := range map[string]string{
 			"Authorization": "Bearer test-user", "Cookie": "test=cookie",
 			"Idempotency-Key": "test-mutation", "If-Match": `"1"`,
@@ -350,6 +376,85 @@ func assertAPISIXDevOpsRoutes(t *testing.T, endpoint string, selected bool) {
 				t.Fatalf("DevOps route lost provider authentication: header=%s", suffix)
 			}
 		}
+	}
+}
+
+func assertAPISIXHTTPSProxyBoundary(t *testing.T, endpoint string) {
+	t.Helper()
+	target, err := url.Parse(endpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = &http.Transport{Proxy: nil}
+	server := httptest.NewTLSServer(proxy)
+	defer server.Close()
+	defer proxy.Transport.(*http.Transport).CloseIdleConnections()
+	for _, scenario := range []struct {
+		name, host, origin, path string
+		status                   int
+	}{
+		{"HTTPS API", "matrix.example.test", "https://matrix.example.test", "/api/paas/v1/applications", 204},
+		{"explicit default port", "matrix.example.test:443", "https://matrix.example.test:443", "/api/audit/v1/events", 204},
+		{"IAM login path", "matrix.example.test", "https://matrix.example.test", "/api/iam/v1/sessions", 204},
+		{"foreign host", "attacker.invalid", "", "/api/paas/v1/applications", 421},
+		{"foreign origin", "matrix.example.test", "https://attacker.invalid", "/api/paas/v1/applications", 403},
+		{"plaintext origin", "matrix.example.test", "http://matrix.example.test", "/api/paas/v1/applications", 403},
+		{"opaque origin", "matrix.example.test", "null", "/api/paas/v1/applications", 403},
+		{"browser document", "matrix.example.test", "", "/", 204},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
+			request, err := http.NewRequest(http.MethodGet, server.URL+scenario.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Host = scenario.host
+			if scenario.origin != "" {
+				request.Header.Set("Origin", scenario.origin)
+			}
+			for name, value := range map[string]string{
+				"Forwarded":       "for=198.51.100.9;host=attacker.invalid;proto=http",
+				"X-Forwarded-For": "198.51.100.9", "X-Real-IP": "198.51.100.9",
+				"X-Forwarded-Host": "attacker.invalid", "X-Forwarded-Proto": "http",
+				"CF-Connecting-IP": "198.51.100.9", "X-Matrix-External-Origin": "http://attacker.invalid:80",
+				"X-Matrix-External-Source-IP": "198.51.100.9", "X-Matrix-Edge-Assertion": "forged",
+			} {
+				request.Header.Set(name, value)
+			}
+			response, err := server.Client().Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			if response.TLS == nil || response.StatusCode != scenario.status {
+				t.Fatalf("HTTPS proxy boundary status=%d, want %d", response.StatusCode, scenario.status)
+			}
+			if scenario.status != 204 {
+				return
+			}
+			if response.Header.Get("Strict-Transport-Security") != "max-age=86400" {
+				t.Fatal("HTTPS response lost HSTS")
+			}
+			if strings.HasPrefix(scenario.path, "/api/") && response.Header.Get("Cache-Control") != "no-store" {
+				t.Fatal("API response is cacheable")
+			}
+			for _, suffix := range []string{"Forwarded", "CF-IP"} {
+				if response.Header.Get("X-Matrix-Test-"+suffix) != "" {
+					t.Fatal("caller proxy metadata reached the product")
+				}
+			}
+			if response.Header.Get("X-Matrix-Test-Forwarded-Host") == "attacker.invalid" {
+				t.Fatal("caller forwarding host survived")
+			}
+			if strings.HasPrefix(scenario.path, "/api/paas/") || strings.HasPrefix(scenario.path, "/api/audit/") {
+				if response.Header.Get("X-Matrix-Test-External-Origin") != "https://matrix.example.test:443" ||
+					net.ParseIP(response.Header.Get("X-Matrix-Test-External-Source-IP")) == nil ||
+					response.Header.Get("X-Matrix-Test-External-Source-IP") == "198.51.100.9" ||
+					len(response.Header.Get("X-Matrix-Test-Edge-Assertion")) != 64 {
+					t.Fatal("signed request boundary lost configured origin or trusted peer")
+				}
+			}
+		})
 	}
 }
 
