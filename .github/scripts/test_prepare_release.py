@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from unittest import mock
 import urllib.error
+import zipfile
 
 
 PREPARE = runpy.run_path(str(Path(__file__).with_name('prepare-release.py')))['main']
@@ -55,6 +56,8 @@ class ReleaseDeliveryTests(unittest.TestCase):
         (self.delivery / (self.archive + '.part-001')).write_bytes(payload[20:])
         (self.delivery / 'bundle.sha256').write_text(
             hashlib.sha256(payload).hexdigest() + '  ' + self.archive + '\n', encoding='ascii')
+        with zipfile.ZipFile(self.delivery / 'acceptance-evidence.zip', 'w') as evidence:
+            evidence.writestr('fixture.json', '{"status":"test-fixture"}')
         self.refresh_checksums()
         self.environment = {
             'RUNNER_TEMP': str(self.root), 'RELEASE_VERSION': self.version,

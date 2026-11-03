@@ -1,6 +1,6 @@
 # FEAT-005: Offline platform distribution and lifecycle
 
-- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current managed-product candidate (ELK and Redis) is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. The fixed ELK source `a162c1cc25591139aaa9ec5f662488da7ad30084` passed exact-source independent CI and its local signed same-profile lifecycle/browser gate; complete cold-cache disconnected Gate C and public release remain open. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. These bounded private-candidate results do not constitute complete Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
+- Status: The signed release consumer at fixed `a45f6abf8ec7d532dd56ff707d8989eb2dc6d441`, IAM/Audit/PaaS `87/39/7+r37`, remains accepted after the 2250.65-second native-Linux A/B lifecycle and 99.26-second post-restart gate. The current managed-product candidate (ELK and Redis) is separately composed at `88/40/9+r41`; the accepted private Logstash candidate remains at `88/40/8+r40`. Fixed source `8b06d49c377d1be57ed36f0d3e4b7cb0db7e1edc` passed the complete native cold-cache disconnected lifecycle, engine restart, real browser journey and retained acceptance-archive gate. Protected production signing and public release remain open. The [local Docker validation](#当前主线本机-docker-安装复核) records fixes for the `e1145c2c25f5` installation failure, the `.2` fresh installation, `.3` backup/recovery, and `.4` upgrade and handbook checks. Those earlier local checks alone do not establish cold-cache Gate C or a public release. Revision 40 owns backup wire v4 and its provider-neutral managed-service inventory fence; published wire v3 retains its canonical bytes and remains historical input, not a recoverable current-profile backup. The I/O-performance limitation stays open in [#3](https://github.com/xiak/matrix/issues/3); functional acceptance is not a latency SLO. The exact installed-release AccessKey browser slice is owned by FEAT-IAM-010 and is not generalized to unexecuted page paths.
 - Target release: Private Application PaaS v0.1
 - Target design date: 2026-08-25
 - Release contract: accepted foundation `v1`; current candidates use manifest `v2` and are admitted only when the complete authority tuple and contract revision match. The current ELK candidate is exactly IAM 88 / Audit 40 / PaaS 9 at contract revision 41. The retained SQL migration gates are development evidence, not permission for a cross-profile release upgrade; revision 40 and revision 41 transitions remain rejected, and no earlier profile is silently promoted to a supported predecessor. Earlier accepted slices remain historical evidence, not an alternate current profile
@@ -302,42 +302,47 @@ Redis 候选沿用 `88/40/9+r41`，新增固定 Redis 制品和受信 worker 输
 签名及每个组件的回退保护回归已通过。产品切片与独立 CI 归
 [FEAT-007](FEAT-007-control-plane-console.md#redis-接入切片)。
 
-当前原生 Linux 空缓存验收扩展为保留 ELK/Redis，逐次核对运行身份、端点、网络、
-挂载、全部顶层保护材料及业务数据。CI 使用独立的原生 Docker 数据根与网络命名空间，
-不使用 DinD。固定源码 `6778b01b984e605dd885e92d24aa9f2d2e9767bc` 的
-[运行 41537242511](https://github.com/xiak/matrix/actions/runs/41537242511)
-通过真实 APISIX 选择与转发、封闭 enrollment TLS、离线安装、IAM/DevOps 和七种
-产品的生产 API 门禁。重启前的完整阶段在 2037.53 秒内通过，包含失败升级自动回滚、
-正常升级、显式回滚、指定备份恢复；每次都确认 ELK/Redis 原容器、端点、网络、挂载、
-全部保护文件及原有业务数据保留。引擎重启阶段在 229.14 秒内通过，确认自动就绪、
-ELK/Redis 保留与精确清理、AccessKey 退役、MFA 新登录、租户恢复/撤权及最终
-status/verify。已读取证据制品 `13187164321`，SHA-256 为
-`793b8c24ea7f5bcbca1762a202bfe29e7dd03112797168e6c74be3755ea0452b`。
+固定源码 `8b06d49c377d1be57ed36f0d3e4b7cb0db7e1edc` 的
+[运行 41557209199](https://github.com/xiak/matrix/actions/runs/41557209199)
+完成原生 Linux 空缓存、断网安装的完整 Gate C，未使用 DinD。重启前阶段在
+3083.29 秒内通过，包含真实 APISIX/IAM、七种产品、审计、备份、失败升级自动回滚、
+正常升级、显式回滚与指定备份恢复。每次维护均确认 ELK/Redis 原运行身份、端点、
+网络、挂载、保护文件及业务数据保留。引擎重启阶段在 277.69 秒内通过，确认自动就绪、
+保留与精确清理、AccessKey 退役、MFA 新登录、租户恢复/撤权及最终 status/verify。
 
-该运行仍为失败：后续 Chromium 已启动并完成真实管理员登录，但在
-`elasticsearch-service-activation` 超时；没有完成产品页面旅程或交付包保留。
-浏览器脚本错误地使用整页跳转，而控制台的凭据只保存在页面内存中。当前修正按
-手册点击产品入口和产品菜单，保留同一页面会话；配额以实际资源卡片为准，
-不等待可能随面板关闭而消失的成功提示。失败诊断只输出封闭错误分类和已知控件
-是否可见，不导出页面正文、凭据或异常原文。
+同一安装上的 Chromium 真实旅程在 196.75 秒内通过全部 27 项检查。ELK、Redis 均
+完成服务与配额激活、实例创建、详情读取、终止及配额归还；Kibana 选择准确的
+Elasticsearch 依赖。实际报告为 `PASSED`，页面与服务器错误均为零。十二张安装、
+运行、终止截图已逐张查看；它们是该次运行证据，不改写早先本机手册截图的源码归属。
+证据制品 `13199096150` 已下载并校验，SHA-256 为
+`fa0a1d77d8c32e32ada7bcab7e0838d3d08e48151ca8809fec0cd4e06dfa4d51`。
 
-后继源码 `7f3be983265ca7d3ea33aca8d3cacfc07d42a276` 的
-[运行 41552570204](https://github.com/xiak/matrix/actions/runs/41552570204)
-在 875.39 秒后失败于 `signed-managed-product-audit-mysql`，未进入备份、升级、
-引擎重启、浏览器或交付包保留。实际证据制品 `13195265152` 的 SHA-256 为
-`e80276a5a105fc07b1755112e9ab48cae927df649e840fa411cbccc2eb55c220`。
-安装、IAM、安全邮件、MFA 和 DevOps 阶段通过；失败现场平台为 READY、核心服务健康。
-该断言发生在 MySQL 原生运行、终止和配额归还核对之后，但原报告没有区分审计动作
-缺失、查询失败或响应被秘密扫描拒绝，不能据此断言审计数据丢失或问题已经修复。
+| 固定签名候选 | Manifest SHA-256 |
+| --- | --- |
+| `matrix-v0.3.0-products.1-8b06d49c377d`，全新安装 A | `3ba101085678d538d04aa1d48cb86f04dca18cc40ac417bc1e5f0870afeee544` |
+| `matrix-v0.3.0-products.2-8b06d49c377d`，准确前驱为 A | `aa75368bec2c69a7ab1a398c95aa114418c23f836a73cb10d1fe845540b503d8` |
 
-当前驱动保留审计查询的封闭失败分类，输出四项固定审计动作的已观察布尔值，
-不输出响应、身份、凭据或匹配片段。认证、授权、响应契约和泄露检查失败立即停止；
-异步动作等待与暂时不可用仍受原 90 秒上限约束，短验证码的逐字节扫描也未放宽。
-Windows/Linux 驱动测试分别在 3.255/0.555 秒内通过，vet 通过；完整运行仍须重验。
-管理员在明确的前台操作边界通过公开接口记录准确会话活动，失败即停止，不自动
-重新登录或修改过期策略；恢复前须同时确认备份前后两份会话有效，再检查恢复后
-均被拒绝。上述维护阶段与浏览器导航修正仍待本轮完整验收，不能把此前通过的阶段
-改写为完整 Gate C 或公开发布。
+通过后保留的制品为 `13199880241`。已从远端 ZIP 目录确认其中唯一的
+`offline-release-candidates.tar.gz` 为 5,717,655,860 字节，并读取到有效 gzip 头；
+没有把多 GB 归档下载到本机。CI 完成 tar 逐项比较，实际证据中的归档 SHA-256 为
+`6233d1dabfe0f849d605b2ce0e43938c87e0fdd0284fee4c006ed1e0cadf472b`。
+归档包含准确的 A/B 与公开信任文件，排除签名私钥、SMTP 凭据与安装数据。
+它使用一次性 `offline-acceptance` 签名；正式密钥包、发布草稿与公开 Release 仍须
+经过下述受保护发布流程，不能把验收包直接改称生产发布。
+
+后续固定源码 `ff688e24fce3a7bf80e07bfe7cadc591bfef181f` 的
+[运行 41565287835](https://github.com/xiak/matrix/actions/runs/41565287835)
+以失败结束。准备、原生隔离探针与 A/B 组装步骤通过，生命周期步骤失败；GitHub
+注释明确记录托管运行器失联。证据上传被跳过，日志对象返回 404，没有可读取的
+生命周期诊断，不能据此指定产品缺陷或失联根因。该源码未通过完整 Gate C；
+此前固定源码的通过结果不能替代后续源码和受保护生产发布的实际验收。
+
+当前驱动保留审计查询的封闭失败分类，只输出四项固定动作的已观察布尔值。
+认证、授权、响应契约与泄露失败立即停止，异步等待保持原 90 秒上限及严格短码扫描。
+十二项回归及 Windows/Linux 驱动测试、vet 已通过；本次完整运行也通过。管理员在
+明确的前台边界记录准确会话活动，不自动重新登录或修改过期策略；恢复前确认两份
+旧会话均有效，再验证恢复后均被拒绝。此前通用审计失败未保留足够诊断，仍不指定
+未经证实的根因；当前完整验收结果与历史失败分别以各自固定源码为准。
 
 2026-11-03，从干净固定源码 `764cff427698377f70c24264be59a9fc5606d123`
 组装的两个 Redis 私有候选完成本机宿主 Docker 生命周期，没有 DinD。
@@ -1491,7 +1496,9 @@ SHA-256 checksums. This is transport packaging for GitHub's per-asset limit;
 the installer still accepts one complete bundle and gains no split-media
 contract. The draft-preparation script checks exact source/version, protected
 trust, the Ed25519 manifest signature, complete chunk/checksum inventory and
-uploaded asset sizes/digests. Existing published releases, unrelated tags and
+uploaded asset sizes/digests. The public report and twelve real screenshots
+are retained with the Release as `acceptance-evidence.zip`, beyond temporary
+Actions artifact retention. Existing published releases, unrelated tags and
 different assets are rejected without replacement. A lost upload response can
 resume only matching assets. The result remains an unpublished draft for
 final delivery review.

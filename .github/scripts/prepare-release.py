@@ -10,7 +10,8 @@ def main():
     if not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', version):
         raise SystemExit('invalid release version')
     archive = f'matrix-{version}-linux-amd64.tar.gz'
-    metadata = {'release-trust.json', 'release.json', 'release.sig', 'bundle.sha256', 'SHA256SUMS'}
+    metadata = {'release-trust.json', 'release.json', 'release.sig', 'bundle.sha256',
+                'SHA256SUMS', 'acceptance-evidence.zip'}
     files = sorted(delivery.iterdir())
     parts = [p for p in files if re.fullmatch(re.escape(archive) + r'\.part-[0-9]{3}', p.name)]
     if not parts or len(files) > 90 or {p.name for p in files} != metadata | {p.name for p in parts}:
@@ -20,7 +21,8 @@ def main():
     for item in files:
         if item.is_symlink() or not item.is_file() or not 0 < item.stat().st_size < 2 * 1024**3:
             raise SystemExit('unsafe release delivery file')
-    if any((delivery / name).stat().st_size > 1024 * 1024 for name in metadata):
+    if (any((delivery / name).stat().st_size > 1024 * 1024 for name in metadata - {'acceptance-evidence.zip'})
+            or (delivery / 'acceptance-evidence.zip').stat().st_size > 32 * 1024 * 1024):
         raise SystemExit('oversized release delivery metadata')
     checksums = {}
     for item in files:
@@ -83,6 +85,7 @@ def main():
     支持 Linux amd64 宿主 Docker，无需 DinD。本包用于全新安装；旧私有候选不能据此直接升级。Redis 为单节点 AOF；平台备份不替代产品业务数据备份。
 
     源码：`{source}`。完整离线安装、升级回滚、恢复、引擎重启及浏览器验收：[运行证据](https://github.com/{repo}/actions/runs/{os.environ['GITHUB_RUN_ID']})。
+    实际验收报告和 12 张页面截图保存在本 Release 的 `acceptance-evidence.zip` 中。
 
     下载本 Release 的全部附件，放在同一目录执行：
 

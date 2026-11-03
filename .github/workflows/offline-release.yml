@@ -377,9 +377,26 @@ jobs:
           cat "$work/delivery/$archive".part-* | cmp - "$work/$archive"
           cp "$work/trust.json" "$work/delivery/release-trust.json"
           cp "$work/release-a/release.json" "$work/release-a/release.sig" "$work/delivery/"
+          # Keep the already-public report and real screenshots with the Release;
+          # Actions evidence retention must not erase the delivery's proof.
+          python3 - <<'PY'
+          import os, pathlib, zipfile
+          work = pathlib.Path(os.environ['MATRIX_OFFLINE_WORK'])
+          names = ['after-restart.log', 'browser.log', 'browser/report.json', 'candidates.sha256',
+                   'lifecycle.log', 'mail-fixture-identity.json', 'native-runtime-probe.txt',
+                   'release-a.json', 'release-b.json', 'trust.json']
+          names += [f'browser/{product}-{state}.jpg' for product in ('elasticsearch', 'logstash', 'kibana', 'redis')
+                    for state in ('install', 'running', 'terminated')]
+          with zipfile.ZipFile(work / 'delivery/acceptance-evidence.zip', 'x', zipfile.ZIP_DEFLATED) as archive:
+              for name in names:
+                  source = work / 'evidence' / name
+                  if source.is_symlink() or not source.is_file() or not 0 < source.stat().st_size <= 2 * 1024 * 1024:
+                      raise SystemExit('required public release evidence is missing or invalid')
+                  archive.write(source, name)
+          PY
           (cd "$work" && sha256sum "$archive") > "$work/delivery/bundle.sha256"
           cd "$work/delivery"
-          sha256sum "$archive".part-* release-trust.json release.json release.sig bundle.sha256 > SHA256SUMS
+          sha256sum "$archive".part-* release-trust.json release.json release.sig bundle.sha256 acceptance-evidence.zip > SHA256SUMS
           sha256sum --check SHA256SUMS
           cp SHA256SUMS "$work/evidence/delivery.sha256"
       - name: Retain accepted installation candidates

@@ -575,14 +575,14 @@ Linux/amd64 官方镜像固定为
 [独立 Verification](https://github.com/xiak/matrix/actions/runs/41485948364)
 十九项全部通过，真实七产品 P1 为 325.39 秒；覆盖目录、原生读写、IAM 精确授权与
 撤权、跨账号拒绝、配额、Operation、删除及 Audit。当前候选
-`8b06d49c377d1be57ed36f0d3e4b7cb0db7e1edc` 的
-[Product onboarding](https://github.com/xiak/matrix/actions/runs/41557211590)
-十八项在 824.73 秒内全部通过。已读取实际制品 `13196196138`，SHA-256 为
-`552a99ba82433bb894318b0f7d3ab07c597a99dbbbec4ae1e1af207d2ba6ebb7`；
+`ff688e24fce3a7bf80e07bfe7cadc591bfef181f` 的
+[Product onboarding](https://github.com/xiak/matrix/actions/runs/41565294637)
+十八项在 764.76 秒内全部通过。已读取实际制品 `13199897022`，SHA-256 为
+`18813345fce31daa190fe07e2e11e748e66de3fca4327120aed15788938d6f97`；
 报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。同源码的
-[PR Verification](https://github.com/xiak/matrix/actions/runs/41557211592) 与
-[push Verification](https://github.com/xiak/matrix/actions/runs/41557209086)
-首轮各十九项全部通过，实际日志确认真实七产品 P1 分别为 396.77 秒和 384.84 秒。
+[PR Verification](https://github.com/xiak/matrix/actions/runs/41565295181) 与
+[push Verification](https://github.com/xiak/matrix/actions/runs/41565287724)
+各十九项全部通过，两次实际日志均确认真实七产品 P1 通过。
 上述独立门禁不替代签名包的完整离线生命周期和浏览器验收。
 
 当前离线门禁在原生引擎重启验收后，用同一签名安装中的真实页面完成 ELK、Redis
@@ -590,10 +590,11 @@ Linux/amd64 官方镜像固定为
 Kibana 从页面选择准确 Elasticsearch 依赖；每种产品保留安装、运行、终止三张截图。
 浏览器只使用已有私有夹具中的管理员登录，不注入 Session 或改写产品响应。
 浏览器驱动沿手册中的产品入口及菜单导航保留内存会话，并读取实际配额卡片确认
-成功。当前 `7f3be9832` 的完整包运行在 MySQL 审计核对失败，未进入浏览器；后继
-补充封闭审计诊断，保留全部检查与既有等待上限，尚不宣称该失败已修复。准确的
-生命周期证据由 [FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)
-拥有。早先本机截图的固定源码边界保持不变，不能据此宣称新浏览器门禁通过。
+成功。固定源码 `8b06d49c3` 的完整签名运行已通过全部 27 项浏览器检查，实际报告
+与十二张截图均已读取复核；页面与服务器错误均为零。准确的生命周期、归档与
+源码证据由 [FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)
+拥有。该运行使用验收密钥；正式签名交付与公开发布仍待完成。早先本机手册截图的
+固定源码归属保持不变。
 
 本机 Windows P1 首次因 Docker 默认地址池耗尽而失败；有界探针复现后，只回收归属
 明确的停用测试平台容器和网络，保留安装数据。重跑在第二个 Kibana 的三分钟就绪
