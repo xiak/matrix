@@ -581,9 +581,8 @@ Linux/amd64 官方镜像固定为
 已读取实际制品 `13205378632`，SHA-256 为
 `6244f617b69460feb7c57a18e24a2dc63aefa88216c894370f6c903891ec9a7e`；
 报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。同源码的
-[PR Verification](https://github.com/xiak/matrix/actions/runs/41576457997) 与
-[push Verification](https://github.com/xiak/matrix/actions/runs/41576453984)
-各十九项全部通过，实际日志确认真实七产品 P1 分别为 390.91 秒和 332.70 秒。
+[main Verification](https://github.com/xiak/matrix/actions/runs/41580270859)
+十九项全部通过，实际日志确认真实七产品 P1 在 409.50 秒内通过。
 上述独立门禁不替代签名包的完整离线生命周期和浏览器验收。
 
 当前离线门禁在原生引擎重启验收后，用同一签名安装中的真实页面完成 ELK、Redis
