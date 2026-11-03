@@ -348,19 +348,11 @@ CI 完成 tar 逐项比较，实际证据中的归档 SHA-256 为
 正确的 `release.json`。安装领取流程由[运行手册](../runbooks/platform-installation.md#领取与核验安装包)
 拥有；本发布仍仅接受全新安装，B 不作为第二个公开版本。
 
-此前固定源码 `ff688e24fce3a7bf80e07bfe7cadc591bfef181f` 的
-[运行 41565287835](https://github.com/xiak/matrix/actions/runs/41565287835)
-以失败结束。准备、原生隔离探针与 A/B 组装步骤通过，生命周期步骤失败；GitHub
-注释明确记录托管运行器失联。证据上传被跳过，日志对象返回 404，没有可读取的
-生命周期诊断，不能据此指定产品缺陷或失联根因。该源码未通过完整 Gate C；
-此前固定源码的通过结果不能替代后续源码和受保护生产发布的实际验收。
-
 当前驱动保留审计查询的封闭失败分类，只输出四项固定动作的已观察布尔值。
 认证、授权、响应契约与泄露失败立即停止，异步等待保持原 90 秒上限及严格短码扫描。
 十二项回归及 Windows/Linux 驱动测试、vet 已通过；本次完整运行也通过。管理员在
 明确的前台边界记录准确会话活动，不自动重新登录或修改过期策略；恢复前确认两份
-旧会话均有效，再验证恢复后均被拒绝。此前通用审计失败未保留足够诊断，仍不指定
-未经证实的根因；当前完整验收结果与历史失败分别以各自固定源码为准。
+旧会话均有效，再验证恢复后均被拒绝。
 
 2026-11-03，从干净固定源码 `764cff427698377f70c24264be59a9fc5606d123`
 组装的两个 Redis 私有候选完成本机宿主 Docker 生命周期，没有 DinD。
@@ -1547,7 +1539,10 @@ They use real Ed25519 verification and simulate GitHub HTTP/CLI effects
 without network requests. Workflow YAML, Bash and Python syntax
 checks passed, including both workflow files and all 38 Bash steps. The repaired
 publisher passed all twenty [PR Verification jobs](https://github.com/xiak/matrix/actions/runs/41595424725),
-with actual seven-product P1 PASS in 395.98 seconds. The protected main recovery
+with actual seven-product P1 PASS in 395.98 seconds. The same repair source
+`63c1fcc82f6a66af20770db1c2db048f7cce7ec2` subsequently passed all twenty
+[direct-main Verification jobs](https://github.com/xiak/matrix/actions/runs/41599492116);
+its actual seven-product P1 log records PASS in 401.01 seconds. The protected main recovery
 ran all 33 boundary tests again, verified the real Ed25519 signature, and checked
 the complete uploaded asset inventory before the independent publication review
 recorded above. Verification runs this suite independently of the full cold gate.
