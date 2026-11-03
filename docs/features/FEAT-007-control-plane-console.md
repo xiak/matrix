@@ -576,9 +576,10 @@ Linux/amd64 官方镜像固定为
 十九项全部通过，真实七产品 P1 为 325.39 秒；覆盖目录、原生读写、IAM 精确授权与
 撤权、跨账号拒绝、配额、Operation、删除及 Audit。主线集成提交
 `fd1eaa88879edb5d18879c2e55fb9175a190711d` 的
-[Product onboarding](https://github.com/xiak/matrix/actions/runs/41576458008)
-十八项在 818.39 秒内全部通过。已读取实际制品 `13204241730`，SHA-256 为
-`cd3a9d0e4663d21a6bd30400fe19fa2dc8290694696916dbf33fa2380af2dbd8`；
+[main Product onboarding](https://github.com/xiak/matrix/actions/runs/41580343839)
+十八项在 702.94 秒内全部通过。该次运行直接检出 main 的准确源码，不使用 PR 合成提交。
+已读取实际制品 `13205378632`，SHA-256 为
+`6244f617b69460feb7c57a18e24a2dc63aefa88216c894370f6c903891ec9a7e`；
 报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。同源码的
 [PR Verification](https://github.com/xiak/matrix/actions/runs/41576457997) 与
 [push Verification](https://github.com/xiak/matrix/actions/runs/41576453984)
@@ -590,7 +591,7 @@ Linux/amd64 官方镜像固定为
 Kibana 从页面选择准确 Elasticsearch 依赖；每种产品保留安装、运行、终止三张截图。
 浏览器只使用已有私有夹具中的管理员登录，不注入 Session 或改写产品响应。
 浏览器驱动沿手册中的产品入口及菜单导航保留内存会话，并读取实际配额卡片确认
-成功。固定源码 `8b06d49c3` 的完整签名运行已通过全部 27 项浏览器检查，实际报告
+成功。固定源码 `5ab41d4c1` 的完整签名运行已通过全部 27 项浏览器检查，实际报告
 与十二张截图均已读取复核；页面与服务器错误均为零。准确的生命周期、归档与
 源码证据由 [FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)
 拥有。该运行使用验收密钥；正式签名交付与公开发布仍待完成。早先本机手册截图的
