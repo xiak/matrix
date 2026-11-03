@@ -1212,13 +1212,23 @@ func (value *gate) terminateSignedManagedProduct(ctx context.Context, tenant *te
 		released.ID != installation.QuotaEntitlementID || released.ReservedCount != 0 || released.ConsumedCount != 0 {
 		return fail("signed-managed-product-quota-release-" + product.component)
 	}
-	if _, err := value.edge.waitAuditActions(ctx, bearer, tenant.Account.ID, map[auditv1.Action]string{
+	wantedAudit := map[auditv1.Action]string{
 		auditv1.ActionManagedServiceInstallationCreated:              product.installationID,
 		auditv1.ActionManagedServiceInstallationReady:                product.installationID,
 		auditv1.ActionManagedServiceInstallationTerminationRequested: product.installationID,
 		auditv1.ActionManagedServiceInstallationTerminated:           product.installationID,
-	}); err != nil {
-		return fail("signed-managed-product-audit-" + product.component)
+	}
+	if records, err := value.edge.waitAuditActions(ctx, bearer, tenant.Account.ID, wantedAudit); err != nil {
+		for _, action := range []auditv1.Action{
+			auditv1.ActionManagedServiceInstallationCreated, auditv1.ActionManagedServiceInstallationReady,
+			auditv1.ActionManagedServiceInstallationTerminationRequested, auditv1.ActionManagedServiceInstallationTerminated,
+		} {
+			present := slices.ContainsFunc(records, func(record auditv1.AuditRecord) bool {
+				return record.Event.Action == action && record.Event.Target.ID == product.installationID
+			})
+			_, _ = fmt.Printf("AUDIT %s %s observed=%t\n", product.component, action, present)
+		}
+		return fail("signed-managed-product-audit-" + product.component + "-" + auditFailureCategory(err))
 	}
 	return nil
 }

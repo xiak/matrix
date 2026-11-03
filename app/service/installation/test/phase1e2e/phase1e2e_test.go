@@ -31,6 +31,7 @@ import (
 	"testing/synctest"
 	"time"
 
+	auditv1 "github.com/xiak/matrix/api/audit/v1"
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	installationv1 "github.com/xiak/matrix/api/installation/v1"
@@ -1472,6 +1473,78 @@ func TestInstalledProductFailuresKeepClosedCategories(t *testing.T) {
 				t.Fatal("inventory failure lost its closed diagnostic boundary")
 			}
 		})
+	}
+}
+
+type acceptanceHTTPTransport func(*http.Request) (*http.Response, error)
+
+func (transport acceptanceHTTPTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	return transport(request)
+}
+
+func TestAuditObservationRetainsClosedFailuresWithoutRetryingPermanentFaults(t *testing.T) {
+	emptyPage := `{"apiVersion":"audit.matrix.xiak.com/v1","kind":"AuditRecordPage","tenantId":"account-phase1","records":[]}`
+	for _, test := range []struct {
+		name, body, want string
+		status           int
+		transportFailure bool
+		wait             bool
+	}{
+		{name: "missing asynchronous actions", status: http.StatusOK, body: emptyPage, want: "audit-actions-missing", wait: true},
+		{name: "unavailable service", status: http.StatusServiceUnavailable, body: `{}`, want: "audit-unavailable", wait: true},
+		{name: "transport unavailable", transportFailure: true, want: "audit-transport", wait: true},
+		{name: "expired session", status: http.StatusUnauthorized, body: `{}`, want: "audit-authentication"},
+		{name: "denied authority", status: http.StatusForbidden, body: `{}`, want: "audit-authorization"},
+		{name: "invalid page", status: http.StatusOK, body: `{}`, want: "audit-response-contract"},
+		{name: "foreign authority", status: http.StatusOK, body: strings.Replace(emptyPage, "account-phase1", "account-other", 1), want: "audit-response-contract"},
+		{name: "bounded response", status: http.StatusOK, body: strings.Repeat("x", maximumHTTPBody+1), want: "http-response-limit"},
+		{name: "short code stays rejected", status: http.StatusOK, body: `{"detail":"123456"}`, want: "http-response-short-code-match"},
+		{name: "embedded short code stays rejected", status: http.StatusOK, body: `{"detail":"abc123456def"}`, want: "http-response-short-code-match"},
+		{name: "long secret stays rejected", status: http.StatusOK, body: `{"detail":"private-value"}`, want: "http-response-sensitive-match"},
+		{name: "long match takes priority", status: http.StatusOK, body: `{"detail":"123456 private-value"}`, want: "http-response-sensitive-match"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				client := newEdgeClient("http://fixture.invalid")
+				defer client.close()
+				client.addForbidden([]byte("123456"), []byte("private-value"))
+				calls := 0
+				client.http.Transport = acceptanceHTTPTransport(func(request *http.Request) (*http.Response, error) {
+					calls++
+					if request.Method != http.MethodPost || request.URL.Path != "/api/audit/v1/records:query" ||
+						request.Header.Get("Authorization") != "Bearer possessed-session" {
+						t.Error("Audit observation changed its authority or attempted login")
+					}
+					if test.transportFailure {
+						return nil, errors.New("private-value")
+					}
+					mediaType := jsonMediaType
+					if test.status >= http.StatusBadRequest {
+						mediaType = problemJSONMediaType
+					}
+					return &http.Response{StatusCode: test.status,
+						Header: http.Header{"Content-Type": []string{mediaType}},
+						Body:   io.NopCloser(strings.NewReader(test.body))}, nil
+				})
+				started := time.Now()
+				_, err := client.waitAuditActions(context.Background(), []byte("possessed-session"), "account-phase1",
+					map[auditv1.Action]string{auditv1.ActionManagedServiceInstallationReady: "managed-mysql"})
+				if err == nil || auditFailureCategory(err) != test.want || strings.Contains(err.Error(), "private-value") ||
+					strings.Contains(err.Error(), "123456") || strings.Contains(err.Error(), "fixture.invalid") {
+					t.Fatal("Audit observation lost its closed failure category")
+				}
+				if test.wait {
+					if time.Since(started) != 90*time.Second || calls < 2 {
+						t.Fatalf("asynchronous observation escaped its existing bounded wait: elapsed=%s requests=%d", time.Since(started), calls)
+					}
+				} else if calls != 1 || time.Since(started) != 0 {
+					t.Fatal("permanent failure was hidden by retry")
+				}
+			})
+		})
+	}
+	if auditFailureCategory(fail("private-value")) != "audit-query" {
+		t.Fatal("unknown diagnostic content escaped the closed vocabulary")
 	}
 }
 

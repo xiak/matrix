@@ -575,28 +575,23 @@ Linux/amd64 官方镜像固定为
 [独立 Verification](https://github.com/xiak/matrix/actions/runs/41485948364)
 十九项全部通过，真实七产品 P1 为 325.39 秒；覆盖目录、原生读写、IAM 精确授权与
 撤权、跨账号拒绝、配额、Operation、删除及 Audit。当前候选
-`3df9f7a8d27a6f9804a3281d66aaad56f0cd806c` 的
-[Product onboarding](https://github.com/xiak/matrix/actions/runs/41545016020)
-十八项在 844.71 秒内全部通过。已读取实际制品 `13189132679`，SHA-256 为
-`e448ea4e0c2c11e6dfcc1bfb394fcef37119f3f4cac08fc4d714da0094653f11`；
+`7f3be983265ca7d3ea33aca8d3cacfc07d42a276` 的
+[Product onboarding](https://github.com/xiak/matrix/actions/runs/41552581873)
+十八项在 580.18 秒内全部通过。已读取实际制品 `13193023685`，SHA-256 为
+`48ad1dac91e48b76200db3d95c947ccf7d7e6175da8a3b36843f226d675c7a99`；
 报告为 `PASSED`，平台/发布状态仍为 `NOT_RUN`。同源码的
-[PR Verification](https://github.com/xiak/matrix/actions/runs/41545015925)
-十九项全部通过，实际日志确认七产品 P1 为 402.02 秒。
-[push Verification](https://github.com/xiak/matrix/actions/runs/41545009287)
-的七产品 P1 在 390.94 秒内通过。首次整轮因 IAM 组权限存储子项达到既有 120 秒
-时限而失败；同一源码树的 PR 检查通过该项，本机独立数据库复查也通过。
-仅重跑失败存储及其依赖汇总的第二次尝试已完成：该存储子项 102.86 秒、整组
-376.16 秒通过，整轮十九项全部通过。未放宽时限或减少检查，首次失败仍保留。
+[PR Verification](https://github.com/xiak/matrix/actions/runs/41552581845) 与
+[push Verification](https://github.com/xiak/matrix/actions/runs/41552570207)
+各十九项全部通过，实际日志确认真实七产品 P1 分别为 333.25 秒和 393.99 秒。
 上述独立门禁不替代签名包的完整离线生命周期和浏览器验收。
 
 当前离线门禁在原生引擎重启验收后，用同一签名安装中的真实页面完成 ELK、Redis
 开通、单份配额、实例创建与详情读取，再按依赖顺序终止并确认端点释放及配额归还。
 Kibana 从页面选择准确 Elasticsearch 依赖；每种产品保留安装、运行、终止三张截图。
 浏览器只使用已有私有夹具中的管理员登录，不注入 Session 或改写产品响应。
-固定源码 `6778b01b9` 的首次运行完成浏览器启动与真实登录，在 Elasticsearch
-开通步骤超时；脚本的整页跳转丢失内存会话。当前改为手册中的产品入口及菜单导航，
-并读取实际配额卡片确认成功，仍待真实重验。后继 `3df9f7a8d` 运行停在自动回滚后
-的目录复查，未进入浏览器；当前补上管理员前台会话活动与封闭目录诊断。准确的
+浏览器驱动沿手册中的产品入口及菜单导航保留内存会话，并读取实际配额卡片确认
+成功。当前 `7f3be9832` 的完整包运行在 MySQL 审计核对失败，未进入浏览器；后继
+补充封闭审计诊断，保留全部检查与既有等待上限，尚不宣称该失败已修复。准确的
 生命周期证据由 [FEAT-005](FEAT-005-offline-platform-lifecycle.md#当前主线本机-docker-安装复核)
 拥有。早先本机截图的固定源码边界保持不变，不能据此宣称新浏览器门禁通过。
 

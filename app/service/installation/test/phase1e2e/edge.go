@@ -599,11 +599,21 @@ func (client *edgeClient) jsonWithResponseMediaType(
 		}
 	}
 	content, readErr := io.ReadAll(io.LimitReader(response.Body, maximumHTTPBody+1))
-	if readErr != nil || len(content) > maximumHTTPBody || mediaErr != nil ||
-		mediaType != wantMediaType || response.Header.Get("Content-Encoding") != "" ||
-		containsAny(content, client.forbidden) {
+	if readErr != nil {
 		clear(content)
-		return httpResult{status: response.StatusCode}, errors.New("HTTP response contract failed")
+		return httpResult{status: response.StatusCode}, fail("http-response-read")
+	}
+	if len(content) > maximumHTTPBody {
+		clear(content)
+		return httpResult{status: response.StatusCode}, fail("http-response-limit")
+	}
+	if mediaErr != nil || mediaType != wantMediaType || response.Header.Get("Content-Encoding") != "" {
+		clear(content)
+		return httpResult{status: response.StatusCode}, fail("http-response-contract")
+	}
+	if category := httpSensitiveMatch(content, client.forbidden); category != "" {
+		clear(content)
+		return httpResult{status: response.StatusCode}, fail(category)
 	}
 	accepted := false
 	for _, status := range wantStatus {
@@ -614,6 +624,27 @@ func (client *edgeClient) jsonWithResponseMediaType(
 		return httpResult{status: response.StatusCode}, errors.New("HTTP response status failed")
 	}
 	return httpResult{status: response.StatusCode, header: response.Header.Clone(), body: content}, nil
+}
+
+// Classification does not relax the byte-for-byte leakage check. Short-code
+// matches stay failures; only their closed category, never the matched bytes
+// or surrounding response, can enter an acceptance diagnostic.
+func httpSensitiveMatch(content []byte, forbidden [][]byte) string {
+	category := ""
+	for _, value := range forbidden {
+		if len(value) == 0 || !bytes.Contains(content, value) {
+			continue
+		}
+		shortCode := len(value) == 6
+		for _, character := range value {
+			shortCode = shortCode && character >= '0' && character <= '9'
+		}
+		if !shortCode {
+			return "http-response-sensitive-match"
+		}
+		category = "http-response-short-code-match"
+	}
+	return category
 }
 
 type loginWire struct {
@@ -1426,13 +1457,29 @@ func (client *edgeClient) queryAudit(
 		ctx, http.MethodPost, path, bearer, request, nil, http.StatusOK,
 	)
 	if err != nil {
-		return auditv1.RecordPage{}, err
+		category := auditFailureCategory(err)
+		if category != "audit-query" {
+			return auditv1.RecordPage{}, fail(category)
+		}
+		switch response.status {
+		case http.StatusUnauthorized:
+			category = "audit-authentication"
+		case http.StatusForbidden:
+			category = "audit-authorization"
+		case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+			category = "audit-unavailable"
+		case 0:
+			category = "audit-transport"
+		default:
+			category = "audit-response-status"
+		}
+		return auditv1.RecordPage{}, fail(category)
 	}
 	defer clear(response.body)
 	var page auditv1.RecordPage
 	if decodeOne(response.body, &page) != nil || auditv1.ValidateRecordPage(page) != nil ||
 		string(page.TenantID) != string(tenantID) || page.InstallationID != installationID {
-		return auditv1.RecordPage{}, errors.New("Audit query response failed")
+		return auditv1.RecordPage{}, fail("audit-response-contract")
 	}
 	return page, nil
 }
@@ -1456,7 +1503,7 @@ func (client *edgeClient) allAuditRecords(
 		}
 		request.Cursor = page.NextCursor
 	}
-	return nil, errors.New("Audit query exceeded acceptance page bound")
+	return nil, fail("audit-page-bound")
 }
 
 func (client *edgeClient) waitAuditActions(
@@ -1467,9 +1514,13 @@ func (client *edgeClient) waitAuditActions(
 ) ([]auditv1.AuditRecord, error) {
 	poll, cancel := context.WithTimeout(ctx, 90*time.Second)
 	defer cancel()
+	var observed []auditv1.AuditRecord
+	lastFailure := fail("audit-observation-deadline")
 	for poll.Err() == nil {
 		records, err := client.allAuditRecords(poll, bearer, tenantID, "")
 		if err == nil {
+			observed = records
+			lastFailure = fail("audit-actions-missing")
 			remaining := make(map[auditv1.Action]string, len(want))
 			for action, target := range want {
 				remaining[action] = target
@@ -1483,12 +1534,35 @@ func (client *edgeClient) waitAuditActions(
 			if len(remaining) == 0 {
 				return records, nil
 			}
+		} else if poll.Err() == nil {
+			lastFailure = err
+			category := auditFailureCategory(err)
+			// Waiting for asynchronous delivery is valid; continuing after a
+			// rejected authority, invalid contract or leakage match is not.
+			if category != "audit-unavailable" && category != "audit-transport" {
+				return observed, err
+			}
 		}
 		if !waitPoll(poll, 250*time.Millisecond) {
 			break
 		}
 	}
-	return nil, errors.New("Audit actions did not arrive")
+	return observed, lastFailure
+}
+
+func auditFailureCategory(err error) string {
+	var diagnostic *safeError
+	if errors.As(err, &diagnostic) {
+		switch diagnostic.step {
+		case "http-response-read", "http-response-limit", "http-response-contract",
+			"http-response-sensitive-match", "http-response-short-code-match",
+			"audit-authentication", "audit-authorization", "audit-unavailable", "audit-transport",
+			"audit-response-status", "audit-response-contract", "audit-page-bound",
+			"audit-actions-missing", "audit-observation-deadline":
+			return diagnostic.step
+		}
+	}
+	return "audit-query"
 }
 
 func (client *edgeClient) verifyAuditChain(
