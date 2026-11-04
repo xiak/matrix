@@ -42,7 +42,23 @@ func (service *Authority) CurrentSession(ctx context.Context, credential iamv1.S
 		if subject.Organization.Status != iamv1.AccountActive || subject.Principal.Status != iamv1.PrincipalActive {
 			return ErrUnauthenticated
 		}
-		result = CurrentSession{Session: subject.Session, LoginName: subject.Principal.LoginName,
+		account, err := tx.ReadAccount(ctx, subject.Organization.ID, subject.Principal.ID)
+		if err != nil {
+			return err
+		}
+		if iamv1.ValidateAccount(account) != nil || account.ID != subject.Organization.ID {
+			return ErrUnavailable
+		}
+		if account.Status != iamv1.AccountActive {
+			return ErrUnauthenticated
+		}
+		loginName := subject.Principal.LoginName
+		if account.RootIdentity.PrincipalID != subject.Principal.ID {
+			// Preserve the account-qualified member identity after reload. A bare
+			// member name must never be presented as an account root login.
+			loginName += "@" + string(account.ID)
+		}
+		result = CurrentSession{Session: subject.Session, LoginName: loginName,
 			MustChangePassword: subject.Principal.MustChangePassword}
 		return nil
 	})

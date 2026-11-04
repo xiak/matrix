@@ -14245,6 +14245,7 @@ func proveBrowserSessionRestoration(t *testing.T, ctx context.Context, handlers 
 		Session    iamv1.Session `json:"session"`
 		Reference  string        `json:"browserCredential"`
 		MustChange bool          `json:"mustChangePassword"`
+		LoginName  string        `json:"loginName"`
 	}
 	call := func(replica int, method, path string, cookie *http.Cookie, reference string, body any, expected int) *httptest.ResponseRecorder {
 		t.Helper()
@@ -14290,7 +14291,8 @@ func proveBrowserSessionRestoration(t *testing.T, ctx context.Context, handlers 
 	a, cookieA := login(temporary)
 	var restored browserResult
 	w := call(1, http.MethodGet, "/v1/auth/browser-session", cookieA, "", nil, http.StatusOK)
-	if json.Unmarshal(w.Body.Bytes(), &restored) != nil || restored.Session != a.Session || !restored.MustChange || restored.Reference != a.Reference {
+	if json.Unmarshal(w.Body.Bytes(), &restored) != nil || restored.Session != a.Session || !restored.MustChange || restored.Reference != a.Reference ||
+		restored.LoginName != user.LoginName+"@"+string(user.AccountID) {
 		t.Fatal("restoration lost the original restricted session")
 	}
 	b, cookieB := login(temporary)

@@ -5024,6 +5024,17 @@ func (transaction *coreTransaction) TransactionTime(context.Context) (time.Time,
 	return transaction.now, nil
 }
 
+func (transaction *coreTransaction) ReadAccount(_ context.Context, account iamv1.AccountID, _ iamv1.PrincipalID) (iamv1.Account, error) {
+	organization := transaction.organization
+	if organization.ID != account {
+		return iamv1.Account{}, ErrUnavailable
+	}
+	return iamv1.Account{APIVersion: iamv1.APIVersion, Kind: "Account", ID: account,
+		DisplayName: organization.DisplayName, Status: organization.Status,
+		RootIdentity:    iamv1.RootIdentity{PrincipalID: transaction.principal.ID, LoginName: transaction.principal.LoginName},
+		ResourceVersion: organization.ResourceVersion, CreatedAt: organization.CreatedAt, UpdatedAt: organization.UpdatedAt}, nil
+}
+
 func (transaction *coreTransaction) BootstrapStatus(context.Context) (iamv1.BootstrapStatus, error) {
 	if transaction.status.State == "" {
 		return iamv1.BootstrapStatus{
