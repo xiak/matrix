@@ -17,6 +17,8 @@ import urllib.error
 import urllib.request
 import uuid
 
+from provision import matrix_mail_client
+
 CONFIG = pathlib.Path('/etc/matrix-demo-mail')
 CHANNEL = pathlib.Path('/etc/matrix/security-mail.json')
 RECIPIENT = 'receiver@demo.matrix.test'
@@ -37,7 +39,7 @@ def docker(*args):
 
 
 def main():
-    if sys.platform != 'linux' or os.geteuid() != 0 or len(sys.argv) != 1:
+    if sys.platform != 'linux' or os.geteuid() != 0 or sys.argv[1:] not in ([], ['--matrix-client']):
         raise RuntimeError('root-required')
     channel = json.loads(CHANNEL.read_text())
     access = json.loads((CONFIG / 'operator-access.json').read_text())
@@ -138,7 +140,45 @@ def main():
     require(len(matches) == 1, 'message-stored-once-in-internal-mailbox')
     item = mailbox('/api/v1/message/' + matches[0]['ID'])
     require(body in item['Text'] and channel['password'] not in json.dumps(item), 'stored-message-matches-without-credential')
+    if sys.argv[1:] == ['--matrix-client']:
+        verify_matrix_client()
     print(json.dumps({'status': 'passed', 'checks': checks, 'externalDelivery': False}))
+
+
+def verify_matrix_client():
+    client, _, _ = matrix_mail_client()
+    # Enter only the network namespace. The private configuration stays in the
+    # host filesystem and no secret is copied into the application container.
+    probe = r'''
+import json,pathlib,smtplib,ssl
+stage='connect'
+try:
+    c=json.loads(pathlib.Path('/etc/matrix/security-mail.json').read_text())
+    with smtplib.SMTP(c['host'],c['port'],timeout=7) as s:
+        stage='tls'
+        s.ehlo()
+        s.starttls(context=ssl.create_default_context(cadata=c['trustedCaPem']))
+        s.ehlo()
+        stage='authentication'
+        s.login(c['username'],c['password'])
+        stage='recipient'
+        assert s.mail(c['from'])[0]==250
+        assert s.rcpt('receiver@demo.matrix.test')[0]==250
+        s.rset()
+        assert s.mail(c['from'])[0]==250
+        assert s.rcpt('blocked@demo.matrix.test')[0]>=500
+    print(json.dumps({'status':'passed'}))
+except Exception:
+    print(json.dumps({'status':'failed','stage':stage}))
+'''
+    result = subprocess.run(['nsenter', '-t', str(client['State']['Pid']), '-n', 'python3', '-'],
+                            input=probe.encode(), capture_output=True, timeout=35)
+    require(result.returncode == 0, 'matrix-client-probe-executed')
+    observed = json.loads(result.stdout)
+    stage = observed.get('stage')
+    if stage not in ('connect', 'tls', 'authentication', 'recipient'):
+        stage = 'submission'
+    require(observed.get('status') == 'passed', 'matrix-client-smtp-' + stage)
 
 
 if __name__ == '__main__':

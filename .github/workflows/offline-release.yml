@@ -504,7 +504,7 @@ jobs:
           python3 - <<'PY'
           import os, pathlib, zipfile
           work = pathlib.Path(os.environ['MATRIX_OFFLINE_WORK'])
-          names = ['after-restart.log', 'browser.log', 'browser/report.json', 'candidates.sha256',
+          names = ['after-restart.log', 'browser.log', 'browser/report.json', 'candidates.sha256', 'containerd-image-load.json',
                    'lifecycle.log', 'mail-fixture-identity.json', 'native-runtime-probe.txt',
                    'release-a.json', 'release-b.json', 'trust.json']
           names += [f'browser/{product}-{state}.jpg' for product in ('elasticsearch', 'logstash', 'kibana', 'redis')

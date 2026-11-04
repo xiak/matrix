@@ -74,19 +74,19 @@ remain outside Git and public evidence.
 
 Current evidence (checked 2026-11-04):
 
-- Independent [Verification 41612656543](https://github.com/xiak/matrix/actions/runs/41612656543)
-  passed all 20 jobs for implementation `f6cf6e76fb5f4df028e7e57ad877dbf0e9fcbf60`.
-  The documentation follow-up `c47afd6f4420b4c967e669a681a775909e9e1f06` also
-  passed independent [Verification 41621512173](https://github.com/xiak/matrix/actions/runs/41621512173).
+- Independent [Verification 41767519880](https://github.com/xiak/matrix/actions/runs/41767519880)
+  passed all 20 jobs for implementation `710d69cdd1882d2561e764cde412cfdb5955e9c6`.
 - Unit gates pass for topology, installation commands, local verification and
   the terminal same-origin boundary. Plain HTTP behavior remains covered.
 - The real pinned APISIX gate passes HTTP/HTTPS with DevOps selected and
   omitted, including Host/Origin rejection, forged forwarding metadata and
   no-store API responses. The upstream in this gate is a test echo service.
-- Native HTTPS acceptance [41612484059](https://github.com/xiak/matrix/actions/runs/41612484059)
-  passed for that exact implementation. The disconnected cold-cache lifecycle
-  passed in 2623.89 seconds and the engine-restart retained-state gate in
-  192.11 seconds, without DinD. They cover signed installation, upgrade,
+- Native HTTPS acceptance [41767522093](https://github.com/xiak/matrix/actions/runs/41767522093)
+  passed for that exact implementation. A separate cold native containerd
+  engine loaded all 15 images, resolved their exact signed archive identities
+  and executed containers. The disconnected classic-engine lifecycle passed
+  in 3824.76 seconds and the engine-restart retained-state gate in 484.68
+  seconds, without DinD. They cover signed installation, upgrade,
   rollback, selected-backup recovery and retained IAM/product state.
   Six first-use browser checks passed, including initial administrator login,
   forced password change directly into the console, logout and new-password
@@ -94,7 +94,7 @@ Current evidence (checked 2026-11-04):
   reports recorded zero page or server errors. Stopping the HTTPS proxy made
   external access unavailable while local status and verification remained
   READY; restarting it restored the HTTPS endpoint. The run retains these
-  public reports and 13 screenshots. It used a disposable acceptance signer,
+  public reports, the containerd report and 13 screenshots. It used a disposable acceptance signer,
   so this is an accepted candidate, not a published production release or
   proof of the live Cloudflare/Tencent chain.
 - Debian 13/amd64 package preparation was executed in an unprivileged
@@ -108,43 +108,87 @@ Current evidence (checked 2026-11-04):
   Docker and the connector are enabled and active; the connector's loopback
   readiness endpoint returns 200 after TCP/UDP 7844 egress was allowed.
   Token custody is root-only, outside the checkout and service arguments.
-  Live installation of that accepted candidate did not reach READY. Its CLI
-  prematurely rejected an HTTPS URL without explicit port 443; the CLI now
-  passes origin validation to the existing canonicalizing installation owner,
-  with a command-surface regression and passing CLI/backend/topology tests.
-  Retrying the candidate with explicit 443 reached image loading, then safely
-  rolled back with `IMAGE_VERIFICATION_FAILED`. The classic build engine's
-  archive config ID differs from the OCI manifest ID exposed by this host's
-  containerd image store. A direct load of the authenticated APISIX archive
-  reproduced that mismatch. The builder now binds the signed `sourceDigest`
-  and local tag to the archive's verified OCI descriptor, alongside its
-  existing config `imageId`; no new manifest field or relaxed allowlist is
-  introduced. Both identities are chained to the inspected source and config.
-  Unit tests cover classic/OCI/index exports and tampered descriptor rejection;
-  a read-only integration check on the actual Debian containerd engine matched
-  the corrected archive identity to the loaded image. The release workflow
-  now requires all images to load and resolve exactly on a separate cold
-  native containerd engine before its classic-engine lifecycle. A new signed
-  candidate must pass those gates before live first use, proxy interruption
-  and host reboot can pass; the already accepted bundle is not rewritten.
-  Tunnel health alone does not accept the public deployment.
+  The accepted CLI delegates HTTPS origin validation to the existing
+  canonicalizing installation owner, including omitted default port 443.
+  The accepted builder binds signed `sourceDigest` and local tags to the
+  archive's verified OCI descriptor alongside its config `imageId`, so the
+  same authenticated payload can be verified on classic and containerd image
+  stores. Unit gates cover classic/OCI/index exports and reject tampered
+  descriptors; no manifest field or identity check was weakened. The accepted
+  candidate was delivered with both transport hashes verified and installed
+  successfully with an ordinary HTTPS origin, without an explicit `:443`.
+  All 15 images verified on the host's existing containerd store; installation,
+  local status and verification returned READY. The earlier failed installation
+  has no workload data and is retained for diagnosis. No existing host images
+  were pruned and the image store was not changed.
+- The public Cloudflare/Tencent browser journey passed initial login, forced
+  password change directly into the console and current-password login.
+  The platform administrator created an isolated DEMO tenant; its owner
+  prepared one small MySQL instance and an individual IAM user. Both new
+  identities completed forced password change. The child user received
+  PaaSViewer as both permission boundary and policy attachment and read the
+  running MySQL instance. Seventeen browser checks passed, with two reviewed,
+  secret-free illustrations in the user guide. Cloudflare's injected analytics
+  beacon was rejected by the existing CSP; business navigation and API calls
+  succeeded. This live browser result does not claim zero console messages.
+- Public API acceptance passed 17 access checks: the child can read the
+  correct tenant's READY MySQL, while quota activation, instance creation,
+  termination and user creation return 403. The platform operator receives
+  404 for that tenant's instance. Anonymous account/user/mail-verification
+  submissions return 401 and send no email. Denied operations leave the
+  original instance unchanged. Nine withdrawal checks passed: disabling the
+  child rejects both its existing session and a new login; re-enabling it
+  permits a fresh login and reading the same instance. Public registration,
+  shared administrator credentials, automatic DEMO expiry and daily resets
+  are not offered by this controlled deployment.
+- A real connector interruption returned HTTP 530 to the public client while
+  local platform status and verification remained READY. The original MySQL
+  credential still read a known row. Restarting the same connector restored
+  public HTTP 200 and the browser read the same instance through its existing
+  session. A bounded host-side restart guard protected the interruption test.
+- After the mailbox boot-order repair, a second full host reboot passed ten
+  local recovery checks: Docker, Tunnel and both mail sockets started
+  automatically, the kernel setting persisted, platform status/verify returned
+  READY, and the original MySQL credential read the known row. All 22 mailbox
+  isolation/worker-connectivity checks passed again. Six public API recovery
+  checks confirmed all three current passwords, the same READY instance,
+  tenant/read-only authorization and the verified notification contact.
+  A fresh browser login also read that instance. The Web/mailbox/connector
+  metrics listeners remain loopback-only and private input files remain
+  root-owned with mode 0600. Raw server reports and credentials are retained
+  privately rather than uploaded as public evidence.
+  After that reboot, the private platform administrator completed a separate
+  six-check verification/code-confirmation/security-notice journey through the
+  actual Matrix notification worker into the internal mailbox.
 - The operator-owned [internal demo mailbox](../runbooks/platform-installation.md#仅内部收件的演示邮箱)
-  was provisioned on that host with pinned Mailpit v1.33.0. Twenty runtime
+  was provisioned on that host with pinned Mailpit v1.33.0. Twenty-two runtime
   checks pass: authenticated STARTTLS/SASL PLAIN delivery to one allowed
   internal address, denial of plaintext/unauthenticated/wrong-password and
   other-recipient submissions, protected UI/API reads, and retained messages.
   The container has only an internal network, no default route, no Docker
   socket or published ports; a real network-namespace Internet connection
   fails with no route. Fixed host socket proxies expose the UI only on
-  loopback. A Docker Engine restart retained messages and credentials and
+  loopback. The sockets can bind their exact private addresses before Docker
+  creates its bridges; only their activated proxy services wait for Docker.
+  This removes the boot ordering cycle that previously caused systemd to
+  discard the enabled socket start jobs. A Docker Engine restart retained messages and credentials and
   restored both socket proxies. Leaf-certificate renewal preserved the CA and
   canonical Matrix mail configuration and passed all checks again. The
-  production configuration codec accepted that input. This proves the mail
-  dependency, not yet Matrix notification delivery or delivery to real users.
+  production configuration codec accepted that input. A real host UFW rule
+  initially blocked the notification worker despite successful host-side
+  SMTP checks. The runbook's scoped repair permits only the verified Matrix
+  notification bridge/subnet to the private SMTP listener and preserves UFW
+  and unrelated rules; repeating it creates no duplicate rule. The additional
+  network-namespace checks prove worker connectivity, TLS/authentication and
+  recipient denial. Six public Matrix mail checks passed: request verification,
+  observe accepted delivery in the internal mailbox, confirm the actual code,
+  read the verified contact and receive the subsequent security notice. This
+  does not prove Internet delivery or individual users' mailbox ownership.
   Its configuration, private CA and access credentials remain outside Git;
   the mailbox is an operator deployment component, not a Matrix runtime or
-  signed-release dependency. Only invited, individual read-only DEMO users
-  are intended; their account and permission checks still require live READY.
+  signed-release dependency. The private operator/owner and individual
+  read-only DEMO workflow is documented in the
+  [IAM user guide](../user-guide/access-management.md#受控演示环境).
 - The [deployment workflow](../runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel)
   uses a fixed public hostname and host-native connector. In this profile,
   node/runner ingress ports also remain on loopback; remote enrollment is not
@@ -1611,7 +1655,7 @@ SHA-256 checksums. This is transport packaging for GitHub's per-asset limit;
 the installer still accepts one complete bundle and gains no split-media
 contract. The draft-preparation script checks exact source/version, protected
 trust, the Ed25519 manifest signature, complete chunk/checksum inventory and
-uploaded asset sizes/digests. The public report and twelve real screenshots
+uploaded asset sizes/digests. The public reports and real screenshots
 are retained with the Release as `acceptance-evidence.zip`, beyond temporary
 Actions artifact retention. Existing published releases, unrelated tags and
 different assets are rejected without replacement. Draft discovery uses the

@@ -13,7 +13,7 @@
 
 ### 领取与核验安装包
 
-打开 [Matrix v0.3.0 发布页](https://github.com/xiak/matrix/releases/tag/v0.3.0)，
+打开 [Matrix 发布页](https://github.com/xiak/matrix/releases)，选择与部署入口匹配的版本，
 下载 Assets 中的全部安装附件到同一目录。安装包分为两个 `.part-*` 文件，
 需要同时领取校验文件、发布清单、签名、信任文件及 `acceptance-evidence.zip`。
 GitHub 自动提供的 **Source code** 是源码，不能用作安装包。
@@ -224,6 +224,62 @@ flowchart LR
 安装前检查中的剩余空间门槛不能当作运行所有产品的容量承诺。
 磁盘容量按演示要创建的实例预留，避免把系统盘填满。
 
+#### Windows PowerShell 管理连接
+
+先由主机管理员准备一个能使用 sudo 的普通登录用户。Windows 使用专用 SSH 密钥连接，
+私钥留在自己的用户目录；服务器只接收 `.pub` 公钥。已有专用密钥时复用原密钥，跳过生成步骤。
+下面的密钥生成、目录权限和别名连接流程已在 Windows PowerShell 验证：
+
+```powershell
+$matrixSshDir = Join-Path $env:USERPROFILE '.ssh\matrix-demo'
+$matrixSshKey = Join-Path $matrixSshDir 'id_ed25519'
+if (Test-Path -LiteralPath $matrixSshKey) { throw '专用密钥已存在，请复用，不要覆盖' }
+New-Item -ItemType Directory -Path $matrixSshDir -Force | Out-Null
+$matrixSshOwner = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+icacls $matrixSshDir /inheritance:r /grant:r "${matrixSshOwner}:(OI)(CI)F" | Out-Null
+if ($LASTEXITCODE -ne 0) { throw '无法设置 SSH 目录权限' }
+ssh-keygen -t ed25519 -f $matrixSshKey -C matrix-demo
+if ($LASTEXITCODE -ne 0) { throw 'SSH 密钥生成失败，请保留现场检查' }
+Get-Content -LiteralPath ($matrixSshKey + '.pub')
+```
+
+按提示设置私钥口令并妥善保存，后续连接时按提示输入。最后一步显示的是公钥，
+把这一整行交给主机管理员，追加到该普通用户的 `~/.ssh/authorized_keys`，保留已有公钥。
+不要复制没有 `.pub` 后缀的私钥，也不要把整个 `.ssh` 目录放进源码仓库。
+服务器上由该普通用户准备目录与文件，追加公钥前执行：
+
+```bash
+umask 077
+mkdir -p ~/.ssh
+chmod 700 ~/.ssh
+touch ~/.ssh/authorized_keys
+chmod 600 ~/.ssh/authorized_keys
+```
+
+在 Windows 的专用目录保存文本文件 `config`，将下面三个占位符换成自己的服务器信息。
+该文件也只保存在本机，不提交 Git：
+
+```sshconfig
+Host matrix-demo
+    HostName SERVER_PUBLIC_IP
+    User DEPLOY_USER
+    Port SSH_PORT
+    IdentityFile ~/.ssh/matrix-demo/id_ed25519
+    IdentitiesOnly yes
+```
+
+在自己的 `%USERPROFILE%\.ssh\config` 中加入一行
+`Include ~/.ssh/matrix-demo/config`，保留原有配置，且不要重复定义同名别名。
+随后在 PowerShell 验证连接：
+
+```powershell
+ssh matrix-demo 'id -un'
+```
+
+首次连接时对照可信主机控制台核对 SSH 主机指纹。成功后显示的应是准备好的普通用户。
+后文的 `matrix-demo` 都使用这个本机别名；服务器地址和非默认 SSH 端口不需要写进手册或 Git。
+日常维护在登录后使用 sudo 并输入自己的密码，不需要长期保留临时的全权限免密 sudo。
+
 ### 2. 安装主机软件
 
 以下软件源与包安装命令已在 Debian 13/amd64 环境执行。使用 root，先执行 `umask 077`。
@@ -265,7 +321,7 @@ cloudflared --version
 [主机检查](#1-进入安装身份并检查主机)。Docker 服务端也必须能够响应，不能只看客户端版本。
 同时按[托管服务主机参数](#检查托管服务的主机参数)将 `vm.max_map_count` 持久化为不低于
 `1048576`，再检查当前值。软件安装验证没有启动嵌套 daemon；
-实机已确认 Docker 与连接器设置为开机启动，主机重启后的完整恢复仍需在交接时验证。
+实机已通过 Docker、连接器和内部邮箱的主机重启恢复；每台新交付主机仍需按第 6 步复核。
 
 ### 3. 安装 Matrix 并先完成本机检查
 
@@ -275,13 +331,14 @@ cloudflared --version
 
 按[安装平台](#安装平台)准备目录与受保护材料。
 HTTPS 版安装时，将同一条 `platform install` 命令的最后一项设为
-`--northbound-origin https://matrix.example.com:443`。
+`--northbound-origin https://matrix.example.com`。
 这个地址同时决定域名校验和 HTTPS 模式；安装器将本机入口限制为 `127.0.0.1:8080`。
 不要加 `/console/`，也不要填 cloudflared 的本机回源地址。
-`:443` 是 HTTPS 的默认端口，使用者仍打开 `https://matrix.example.com`。
+使用者打开同一个 HTTPS 地址即可，不需要手工补写默认端口。
 
 安装完成后执行前述 `platform verify` 和 `platform status`，两者都应成功，平台为 `READY`。
 这些命令通过本机回环检查平台，因此 Tunnel 尚未连接时也可执行。
+采用内部演示邮箱时，再完成下方的[通知容器连接检查](#通知容器连接检查)。
 本机检查成功只说明 Matrix 正常，公网交接还需完成以下步骤。
 
 ### 4. 在 Cloudflare 创建固定域名入口
@@ -409,6 +466,7 @@ Tunnel Token 轮换时只替换受保护的 Token 文件并重启连接器，
 | `421` | 回源 Host 与安装时域名不一致，修正路由的 HTTP Host Header |
 | `403` 或页面 API 被拒绝 | 确认浏览器确实使用已配置的 HTTPS 域名，再检查 Cloudflare 是否拦截请求；不通过关闭域名或 Origin 校验绕过 |
 | 页面仍是旧版、登录结果异常 | 排查强制缓存规则并清理该域名的错误缓存；不要缓存 API 或把不同入口的会话混用 |
+| 控制台可用，但浏览器报告 `static.cloudflareinsights.com` 被 CSP 拒绝 | 实机观察到 Cloudflare 自动插入统计脚本，Matrix 仍拒绝未获准的外部脚本；这不是业务 API 故障。无需修改 Matrix CSP；不需要统计时，由域名管理员按 [Web Analytics 设置](https://developers.cloudflare.com/web-analytics/get-started/)关闭该站点的自动注入 |
 | Tunnel 恢复后仍打不开 | 分别检查 Cloudflare 的 DNS/证书、连接器健康与本机平台状态，保留各层错误供交付人员定位 |
 
 此模式的 IAM `SourceIP` 指平台实际看到的代理连接地址，不能用它限制访问者的真实公网 IP。
@@ -426,8 +484,8 @@ Tunnel Token 轮换时只替换受保护的 Token 文件并重启连接器，
 安装前从同一交付分支取得
 [provision.py](demo-mail/provision.py) 与
 [verify.py](demo-mail/verify.py)。它们属于本手册的运维工具，不参与 Matrix 发布包构建。
-在 Windows PowerShell 中，从仓库目录
-通过自己的 SSH 别名复制工具；示例别名是 `matrix-demo`：
+在 Windows PowerShell 中，先按[管理连接](#windows-powershell-管理连接)准备好自己的 SSH 别名，
+再从仓库目录复制工具；示例别名是 `matrix-demo`：
 
 ```powershell
 ssh matrix-demo 'umask 077; mkdir -p ~/matrix-demo-mail-tools; chmod 700 ~/matrix-demo-mail-tools'
@@ -461,6 +519,34 @@ SMTP 密码、收件箱登录密码和私有 CA 均在服务器生成，不写�
 收件界面仅在主机 `127.0.0.1:8025` 监听并要求独立登录。
 单封邮件最多 1 MB、一个收件人，最多保留 100 封且保留期为 24 小时。
 这些限制只适用于此演示邮箱，不表示平台所有邮件都有同样的全局限额。
+
+#### 通知容器连接检查
+
+安装 Matrix 后，从通知服务实际所在的网络再次检查；宿主机发送成功不能代替这一步：
+
+```bash
+sudo python3 /usr/local/lib/matrix-demo-mail/verify.py --matrix-client
+```
+
+该检查验证通知容器到内部 SMTP 的连接、STARTTLS、认证和收件人限制，
+不会把秘密文件复制到容器内。返回 `status: passed` 后，再由管理员完成
+[通知邮箱验证](../user-guide/access-management.md#保护自己的账号)，
+确认验证码与后续安全通知都实际进入内部收件箱。
+
+若普通检查成功，而容器连接检查失败在 `connect`，检查主机防火墙。
+已启用 UFW 且默认拒绝入站的主机，可执行以下已在实机验证的修复，再重新检查：
+
+```bash
+sudo ufw status
+sudo python3 /usr/local/lib/matrix-demo-mail/provision.py --allow-matrix-client
+sudo python3 /usr/local/lib/matrix-demo-mail/verify.py --matrix-client
+```
+
+工具核对唯一的 Matrix 通知服务及其专用邮件网络，仅允许该桥接口、该源网段到
+宿主机私有 SMTP 地址的 TCP `2525`；保持 UFW 和其他规则不变，重复执行不会增加重复规则。
+它不会在腾讯云安全组开放邮件端口，也不会公开收件界面。
+UFW 未启用、存在多个通知服务或网络归属不明时，工具会停止，由运维核对现场。
+主机重启后重复连接检查；若重新安装导致 Docker 网络重建，应重新核对规则并撤销旧网络对应的规则。
 
 **管理员查看邮件**：Windows PowerShell 保持下面的 SSH 窗口打开，
 然后用浏览器访问 `http://127.0.0.1:18025`，使用私下取得的收件箱账号登录。
@@ -496,7 +582,7 @@ python3 /usr/local/lib/matrix-demo-mail/verify.py
 
 续签会短暂重启收件容器，原邮件、密码、CA 和 Matrix 安装输入保持不变。
 私有 CA 有效期十年；不足一年时续签会拒绝，应安排受控的信任迁移，不能关闭 TLS 校验。
-主机或 Docker 重启后也运行 `verify.py`。收件失败时，先分别确认 SMTP/UI socket
+主机或 Docker 重启后也运行 `verify.py --matrix-client`。收件失败时，先分别确认 SMTP/UI socket
 与邮箱容器状态，再检查证书和地址白名单；不添加外发中继来消除投递错误。
 这个外部演示邮箱不属于 Matrix 平台备份，应由运维单独保管配置和必要数据。
 

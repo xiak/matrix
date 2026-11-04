@@ -4,6 +4,7 @@
 This is not a Matrix runtime component or an Internet mail delivery service.
 Run once as root on the dedicated Linux Docker host. Secrets stay on that host.
 Use --renew-certificate for annual leaf renewal under the existing private CA.
+Use --allow-matrix-client after installation when UFW blocks the mail client.
 """
 import ipaddress
 import json
@@ -36,6 +37,62 @@ def write(path, content):
     path.chmod(0o600)
 
 
+def matrix_mail_client():
+    identifiers = command(['docker', 'ps', '-q', '--filter',
+                           'label=com.docker.compose.service=iam-notification-dispatcher']).decode().split()
+    if len(identifiers) != 1:
+        raise RuntimeError('exactly one running Matrix notification dispatcher is required')
+    client = json.loads(command(['docker', 'inspect', identifiers[0]]))[0]
+    labels = client['Config']['Labels']
+    if labels.get('com.xiak.matrix.managed') != 'true' or not labels.get('com.xiak.matrix.installation'):
+        raise RuntimeError('notification dispatcher ownership is unavailable')
+    eligible = []
+    for name in client['NetworkSettings']['Networks']:
+        network = json.loads(command(['docker', 'network', 'inspect', name]))[0]
+        owned = network.get('Labels') or {}
+        if owned.get('com.docker.compose.network') != 'mail-egress':
+            continue
+        if (network['Driver'] != 'bridge' or network['Internal'] or
+                any(owned.get(key) != labels.get(key) for key in
+                    ('com.docker.compose.project', 'com.xiak.matrix.installation'))):
+            raise RuntimeError('notification egress network ownership differs')
+        ranges = [ipaddress.ip_network(item['Subnet']) for item in network['IPAM']['Config']
+                  if item.get('Subnet') and ipaddress.ip_network(item['Subnet']).version == 4]
+        if len(ranges) != 1 or not ranges[0].is_private or ranges[0].prefixlen < 16:
+            raise RuntimeError('one bounded private notification egress subnet is required')
+        address = ipaddress.ip_interface(network['Containers'][client['Id']]['IPv4Address']).ip
+        if address not in ranges[0]:
+            raise RuntimeError('notification client is outside its egress subnet')
+        bridge = network['Options'].get('com.docker.network.bridge.name') or 'br-' + network['Id'][:12]
+        links = json.loads(command(['ip', '-j', '-d', 'link', 'show', 'dev', bridge]))
+        if len(links) != 1 or links[0].get('linkinfo', {}).get('info_kind') != 'bridge':
+            raise RuntimeError('notification egress bridge is unavailable')
+        eligible.append((client, bridge, str(ranges[0])))
+    if len(eligible) != 1:
+        raise RuntimeError('one owned notification egress network is required')
+    return eligible[0]
+
+
+def allow_matrix_client():
+    client, bridge, subnet = matrix_mail_client()
+    channel = json.loads(CHANNEL.read_text())
+    docker_bridge = json.loads(command(['docker', 'network', 'inspect', 'bridge']))[0]
+    gateway = docker_bridge['IPAM']['Config'][0]['Gateway']
+    if (channel['host'] != gateway or channel['port'] != 2525 or
+            channel['tlsMode'] != 'STARTTLS' or not ipaddress.ip_address(gateway).is_private):
+        raise RuntimeError('existing demo SMTP listener differs')
+    status = subprocess.run(['ufw', 'status'], capture_output=True, timeout=15,
+                            env=dict(os.environ, LC_ALL='C'))
+    if status.returncode or b'Status: active' not in status.stdout:
+        raise RuntimeError('this repair requires an already active UFW firewall')
+    # Restrict interface, source subnet, destination address, protocol and port.
+    # Keep UFW enabled and preserve every unrelated host rule.
+    command(['ufw', 'allow', 'in', 'on', bridge, 'from', subnet, 'to', gateway,
+             'port', '2525', 'proto', 'tcp', 'comment', 'Matrix internal demo SMTP'])
+    print(json.dumps({'status': 'matrix-client-authorized', 'firewall': 'ufw',
+                      'scope': 'notification-egress-only', 'externalDelivery': False}))
+
+
 def free_subnet():
     occupied = []
     networks = command(['docker', 'network', 'ls', '-q']).decode().split()
@@ -66,10 +123,13 @@ def install_proxies(gateway, mailbox_ip):
         ('ui', 8025, ['127.0.0.1:8025']),
     ):
         unit = 'matrix-demo-mail-' + name
+        # Sockets precede sockets.target/basic.target; Docker starts afterwards.
+        # Bind the private address before its bridge exists. Only the activated
+        # proxy service waits for Docker, avoiding a boot ordering cycle.
         socket_text = ('[Unit]\nDescription=Matrix private demo mail ' + name + '\n'
-                       'After=docker.service\nRequires=docker.service\nPartOf=docker.service\n\n[Socket]\n' +
+                       'Requires=docker.service\nPartOf=docker.service\n\n[Socket]\n' +
                        ''.join('ListenStream=' + listener + '\n' for listener in listeners) +
-                       'NoDelay=true\n\n[Install]\nWantedBy=multi-user.target\n')
+                       'FreeBind=yes\nNoDelay=true\n\n[Install]\nWantedBy=multi-user.target\n')
         service_text = ('[Unit]\nDescription=Matrix private demo mail proxy\n'
                         'After=docker.service ' + unit + '.socket\nRequires=docker.service\nBindsTo=' + unit + '.socket\n\n[Service]\n'
                         'ExecStart=' + str(proxy) + ' --exit-idle-time=300s ' + mailbox_ip + ':' + str(destination) + '\n'
@@ -103,10 +163,13 @@ def renew_certificate():
 
 
 def main():
-    if sys.platform != 'linux' or os.geteuid() != 0 or sys.argv[1:] not in ([], ['--renew-certificate']):
-        raise RuntimeError('run as root; the only optional argument is --renew-certificate')
+    if sys.platform != 'linux' or os.geteuid() != 0 or sys.argv[1:] not in ([], ['--renew-certificate'], ['--allow-matrix-client']):
+        raise RuntimeError('run as root with no argument, --renew-certificate or --allow-matrix-client')
     os.umask(0o077)
-    if sys.argv[1:]:
+    if sys.argv[1:] == ['--allow-matrix-client']:
+        allow_matrix_client()
+        return
+    if sys.argv[1:] == ['--renew-certificate']:
         renew_certificate()
         return
     for path in (CONFIG, DATA, CHANNEL):

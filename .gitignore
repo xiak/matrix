@@ -8,6 +8,10 @@
 *.token
 signer.json
 security-mail.json
+operator-access.json
+demo-accounts.json
+demo-access.json
+.ssh/
 secrets/
 
 # Editors and operating systems
@@ -30,6 +34,7 @@ coverage/
 *.tsbuildinfo
 
 # Generated and local runtime state
+__pycache__/
 build/
 dist/
 tmp/

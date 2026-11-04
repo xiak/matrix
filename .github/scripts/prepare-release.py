@@ -194,12 +194,12 @@ def main(accepted_run_id=None):
     if existing_tag is not None and (existing_tag['object']['type'] != 'commit' or existing_tag['object']['sha'] != source):
         raise SystemExit('release tag already identifies a different source')
     notes = root / 'release-notes.md'
-    notes.write_text(f'''本安装包提供 Elasticsearch、Logstash、Kibana 和 Redis 的统一纳管，沿用平台的权限、配额、任务及审计流程。
+    notes.write_text(f'''本安装包提供统一的账号权限、配额、任务与审计能力，纳管 PostgreSQL、MySQL、Elasticsearch、Logstash、Kibana、Redis 和 RabbitMQ。
 
     支持 Linux amd64 宿主 Docker，无需 DinD。本包用于全新安装；旧私有候选不能据此直接升级。Redis 为单节点 AOF；平台备份不替代产品业务数据备份。
 
     源码：`{source}`。完整离线安装、升级回滚、恢复、引擎重启及浏览器验收：[运行证据](https://github.com/{repo}/actions/runs/{acceptance_run})。
-    实际验收报告和 12 张页面截图保存在本 Release 的 `acceptance-evidence.zip` 中。
+    实际验收报告和页面截图保存在本 Release 的 `acceptance-evidence.zip` 中。
 
     下载本 Release 的全部附件，放在同一目录执行：
 
