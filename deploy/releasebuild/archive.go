@@ -58,10 +58,10 @@ type imageConfig struct {
 }
 
 // inspectImageArchive authenticates the image configuration named by
-// manifest.json and its chain from the inspected source digest. It deliberately
-// does not call the configuration digest a load identity: Docker 29's
-// containerd store retains the source manifest digest after `docker image
-// load`, while the classic store exposes this configuration digest.
+// manifest.json and the archive's OCI descriptor, binding both to the inspected
+// source. A classic build engine may export an OCI descriptor whose digest is
+// different from its source config ID. The containerd store exposes that archive
+// descriptor after load, while the classic store exposes the config digest.
 func inspectImageArchive(archive, sourceID string) (ImageMetadata, error) {
 	if !validArchiveDigest(sourceID) {
 		return ImageMetadata{}, errors.New("source image identity is invalid")
@@ -85,18 +85,22 @@ func inspectImageArchive(archive, sourceID string) (ImageMetadata, error) {
 
 	targets := map[string]int64{manifests[0].Config: maximumArchiveMetadataBytes}
 	var sourceDescriptor ociDescriptor
-	if sourceID != configID {
+	archiveSourceDigest := configID
+	if len(first["index.json"]) != 0 {
 		var index ociIndex
 		if err := json.Unmarshal(first["index.json"], &index); err != nil ||
 			index.SchemaVersion != 2 || index.MediaType != ociIndexMediaType ||
-			len(index.Manifests) != 1 || index.Manifests[0].Digest != sourceID {
+			len(index.Manifests) != 1 || (sourceID != configID && index.Manifests[0].Digest != sourceID) {
 			return ImageMetadata{}, errors.New("Docker archive source descriptor is invalid")
 		}
 		sourceDescriptor = index.Manifests[0]
 		if err := validateImageDescriptor(sourceDescriptor); err != nil {
 			return ImageMetadata{}, err
 		}
-		targets[archiveBlobPath(sourceID)] = maximumArchiveMetadataBytes
+		archiveSourceDigest = sourceDescriptor.Digest
+		targets[archiveBlobPath(archiveSourceDigest)] = maximumArchiveMetadataBytes
+	} else if sourceID != configID {
+		return ImageMetadata{}, errors.New("Docker archive source descriptor is absent")
 	}
 	second, err := readArchiveEntries(archive, targets)
 	if err != nil {
@@ -110,15 +114,15 @@ func inspectImageArchive(archive, sourceID string) (ImageMetadata, error) {
 	if err := json.Unmarshal(configBytes, &config); err != nil {
 		return ImageMetadata{}, errors.New("Docker archive image config is invalid")
 	}
-	identity := ImageMetadata{ID: configID, OS: config.OS, Architecture: config.Architecture}
+	identity := ImageMetadata{ID: configID, ArchiveSourceDigest: archiveSourceDigest, OS: config.OS, Architecture: config.Architecture}
 	if validateImageMetadata(identity) != nil {
 		return ImageMetadata{}, errors.New("Docker archive config identity is invalid")
 	}
-	if sourceID == configID {
+	if sourceDescriptor.Digest == "" {
 		return identity, nil
 	}
 
-	sourceBytes, found := second[archiveBlobPath(sourceID)]
+	sourceBytes, found := second[archiveBlobPath(archiveSourceDigest)]
 	if !found || verifyDescriptorContent(sourceDescriptor, sourceBytes) != nil {
 		return ImageMetadata{}, errors.New("Docker archive source descriptor is invalid")
 	}

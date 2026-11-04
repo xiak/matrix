@@ -138,7 +138,7 @@ func (fake *fakeEffects) BuildImage(_ context.Context, contextRoot, tag string) 
 
 func (fake *fakeEffects) SaveImage(_ context.Context, imageID, output string) (ImageMetadata, error) {
 	identity := ImageMetadata{
-		ID: testDigest("load:" + imageID), OS: "linux", Architecture: "amd64",
+		ID: testDigest("load:" + imageID), ArchiveSourceDigest: testDigest("archive:" + imageID), OS: "linux", Architecture: "amd64",
 	}
 	if imageID == RunnerToolchainSourceID || imageID == RunnerToolchainArchiveConfigID {
 		identity.ID = RunnerToolchainArchiveConfigID
@@ -298,9 +298,14 @@ func TestAssembleProducesAuthenticatedCompleteRelease(t *testing.T) {
 		t.Fatal("release image recipes do not pin their base manifest digests")
 	}
 	for _, image := range verified.Manifest.Images {
-		loadIdentity, found := effects.saved[image.SourceDigest]
-		if !found || image.ImageID != loadIdentity.ID || image.ImageID == image.SourceDigest {
-			t.Fatalf("image %s did not preserve distinct source and portable load identities", image.Component)
+		var loadIdentity ImageMetadata
+		for _, saved := range effects.saved {
+			if saved.ArchiveSourceDigest == image.SourceDigest {
+				loadIdentity = saved
+			}
+		}
+		if image.ImageID != loadIdentity.ID || image.ImageID == image.SourceDigest {
+			t.Fatalf("image %s did not bind both store identities from the saved archive", image.Component)
 		}
 		if image.Component == "postgres" && image.SourceDigest == PostgresManifestDigest {
 			t.Fatal("PostgreSQL archive used the registry manifest digest as a local image identity")

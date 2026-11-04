@@ -8,15 +8,17 @@ import (
 	"testing"
 )
 
-func TestImageArchiveMapsContainerdSourceToPortableLoadIdentity(t *testing.T) {
+func TestImageArchiveBindsBothDockerStoreIdentities(t *testing.T) {
 	for _, test := range []struct {
 		name          string
 		indexMedia    string
 		manifestMedia string
 		configMedia   string
+		manifestRoot  bool
 	}{
 		{name: "OCI", indexMedia: ociIndexMediaType, manifestMedia: ociManifestMediaType, configMedia: ociConfigMediaType},
 		{name: "Docker v2", indexMedia: dockerManifestListMediaType, manifestMedia: dockerManifestMediaType, configMedia: dockerConfigMediaType},
+		{name: "classic OCI export", indexMedia: ociIndexMediaType, manifestMedia: ociManifestMediaType, configMedia: ociConfigMediaType, manifestRoot: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			config := []byte(`{"architecture":"amd64","os":"linux"}`)
@@ -46,11 +48,15 @@ func TestImageArchiveMapsContainerdSourceToPortableLoadIdentity(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			sourceID := digestBytes(sourceIndex)
+			rootBytes, rootMedia := sourceIndex, test.indexMedia
+			if test.manifestRoot {
+				rootBytes, rootMedia = platformManifest, test.manifestMedia
+			}
+			sourceID := digestBytes(rootBytes)
 			archiveIndex, err := json.Marshal(ociIndex{
 				SchemaVersion: 2, MediaType: ociIndexMediaType,
 				Manifests: []ociDescriptor{{
-					MediaType: test.indexMedia, Digest: sourceID, Size: int64(len(sourceIndex)),
+					MediaType: rootMedia, Digest: sourceID, Size: int64(len(rootBytes)),
 				}},
 			})
 			if err != nil {
@@ -63,26 +69,57 @@ func TestImageArchiveMapsContainerdSourceToPortableLoadIdentity(t *testing.T) {
 				t.Fatal(err)
 			}
 			archive := filepath.Join(t.TempDir(), "image.tar")
-			writeTestImageArchive(t, archive, map[string][]byte{
+			entries := map[string][]byte{
 				archiveBlobPath(configID):   config,
 				archiveBlobPath(platformID): platformManifest,
-				archiveBlobPath(sourceID):   sourceIndex,
 				"index.json":                archiveIndex,
 				"manifest.json":             dockerManifest,
-			})
-
-			identity, err := inspectImageArchive(archive, sourceID)
-			if err != nil {
-				t.Fatal(err)
 			}
-			if identity.ID != configID || identity.ID == sourceID ||
-				identity.OS != "linux" || identity.Architecture != "amd64" {
-				t.Fatalf("portable identity = %#v", identity)
+			entries[archiveBlobPath(sourceID)] = rootBytes
+			writeTestImageArchive(t, archive, entries)
+
+			for _, inspectedSource := range []string{sourceID, configID} {
+				identity, err := inspectImageArchive(archive, inspectedSource)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if identity.ID != configID || identity.ArchiveSourceDigest != sourceID ||
+					identity.OS != "linux" || identity.Architecture != "amd64" {
+					t.Fatalf("portable identities = %#v", identity)
+				}
 			}
 			if _, err := inspectImageArchive(archive, testDigest("unrelated-source")); err == nil {
 				t.Fatal("archive unrelated to the inspected source identity was accepted")
 			}
+			entries[archiveBlobPath(sourceID)] = []byte(`{"unrelated":"manifest"}`)
+			tampered := filepath.Join(t.TempDir(), "tampered.tar")
+			writeTestImageArchive(t, tampered, entries)
+			if _, err := inspectImageArchive(tampered, configID); err == nil {
+				t.Fatal("classic source bypassed the archive descriptor's content binding")
+			}
 		})
+	}
+}
+
+func TestImageArchiveWithoutOCIIndexKeepsClassicIdentity(t *testing.T) {
+	config := []byte(`{"architecture":"amd64","os":"linux"}`)
+	configID := digestBytes(config)
+	manifest, err := json.Marshal([]dockerArchiveManifest{{
+		Config: archiveBlobPath(configID), Layers: []string{"layer/layer.tar"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(t.TempDir(), "legacy.tar")
+	writeTestImageArchive(t, archive, map[string][]byte{
+		archiveBlobPath(configID): config, "manifest.json": manifest,
+	})
+	identity, err := inspectImageArchive(archive, configID)
+	if err != nil || identity.ID != configID || identity.ArchiveSourceDigest != configID {
+		t.Fatalf("classic archive identities=%#v err=%v", identity, err)
+	}
+	if _, err := inspectImageArchive(archive, testDigest("foreign-source")); err == nil {
+		t.Fatal("unbound source without an OCI index was accepted")
 	}
 }
 

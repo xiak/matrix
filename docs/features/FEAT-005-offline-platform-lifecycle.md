@@ -116,8 +116,17 @@ Current evidence (checked 2026-11-04):
   rolled back with `IMAGE_VERIFICATION_FAILED`. The classic build engine's
   archive config ID differs from the OCI manifest ID exposed by this host's
   containerd image store. A direct load of the authenticated APISIX archive
-  reproduced that mismatch. Cross-store archive identity acceptance remains
-  required before live first use, proxy interruption and host reboot can pass.
+  reproduced that mismatch. The builder now binds the signed `sourceDigest`
+  and local tag to the archive's verified OCI descriptor, alongside its
+  existing config `imageId`; no new manifest field or relaxed allowlist is
+  introduced. Both identities are chained to the inspected source and config.
+  Unit tests cover classic/OCI/index exports and tampered descriptor rejection;
+  a read-only integration check on the actual Debian containerd engine matched
+  the corrected archive identity to the loaded image. The release workflow
+  now requires all images to load and resolve exactly on a separate cold
+  native containerd engine before its classic-engine lifecycle. A new signed
+  candidate must pass those gates before live first use, proxy interruption
+  and host reboot can pass; the already accepted bundle is not rewritten.
   Tunnel health alone does not accept the public deployment.
 - The operator-owned [internal demo mailbox](../runbooks/platform-installation.md#仅内部收件的演示邮箱)
   was provisioned on that host with pinned Mailpit v1.33.0. Twenty runtime

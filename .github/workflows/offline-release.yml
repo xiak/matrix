@@ -106,6 +106,7 @@ jobs:
           go test -count=1 ./app/service/installation/test/phase1e2e ./deploy/cmd/matrix-offline-fixture
           go build -o "$work/matrix-release" ./deploy/cmd/matrix-release
           go test -c -o "$work/phase1.test" ./app/service/installation/test/phase1e2e
+          go test -c -o "$work/releasebuild.test" ./deploy/releasebuild
           go run ./deploy/cmd/matrix-offline-fixture "$work/private"
           docker info --format '{{.ServerVersion}} {{.Driver}} {{json .DriverStatus}}'
           curl --fail --location --retry 3 --output "$work/gvisor.tar.zstd" \
@@ -250,6 +251,77 @@ jobs:
           MATRIX_APISIX_TLS_TEST_IMAGE="$apisix_identity" go test -count=1 -v \
             -run '^TestAPISIXServesInstallationAuthenticatedEnrollmentTLS$' \
             ./app/service/installation/internal/localmachine
+      - name: Verify every signed image on a cold native containerd store
+        shell: bash
+        run: |
+          set -euo pipefail
+          sudo env MATRIX_OFFLINE_WORK="$MATRIX_OFFLINE_WORK" unshare --net --mount bash -s <<'IMAGE_STORE'
+          set -euo pipefail
+          umask 077
+          work="$MATRIX_OFFLINE_WORK"
+          mount --make-rprivate /
+          mkdir "$work/containerd-run"
+          mount --bind "$work/containerd-run" /run
+          export XDG_RUNTIME_DIR=/run/matrix-offline-runtime
+          mkdir -m 700 "$XDG_RUNTIME_DIR"
+          ip link set lo up
+          export DOCKER_HOST=unix:///var/run/docker.sock
+          export DOCKER_CONFIG="$work/containerd-client"
+          printf '{"features":{"containerd-snapshotter":true}}\n' > "$work/containerd-daemon.json"
+          dockerd --config-file "$work/containerd-daemon.json" --data-root "$work/containerd-engine" --exec-root /run/docker \
+            --pidfile /run/docker.pid --host "$DOCKER_HOST" > "$work/containerd-engine.log" 2>&1 &
+          engine_pid=$!
+          cleanup() {
+            result=$?
+            kill -TERM "$engine_pid" 2>/dev/null || true
+            wait "$engine_pid" || true
+            if [[ "$result" == 0 ]]; then
+              python3 - "$work" <<'PY'
+          import pathlib, shutil, sys
+          root = pathlib.Path(sys.argv[1]).resolve()
+          target = (root / 'containerd-engine').resolve()
+          assert target.parent == root and target.name == 'containerd-engine'
+          shutil.rmtree(target)
+          PY
+            fi
+          }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            if docker info > /dev/null 2>&1; then break; fi
+            kill -0 "$engine_pid"
+            sleep 1
+          done
+          python3 - "$work" <<'PY'
+          import json, pathlib, subprocess, sys
+          root = pathlib.Path(sys.argv[1])
+          def docker(*args):
+              result = subprocess.run(['docker', *args], capture_output=True, timeout=240)
+              if result.returncode:
+                  raise SystemExit('containerd image gate command failed')
+              return result.stdout
+          assert b'io.containerd.snapshotter.v1' in docker('info', '--format', '{{json .DriverStatus}}')
+          manifest = json.loads((root / 'release-a/release.json').read_text())
+          checked = []
+          for image in manifest['images']:
+              docker('image', 'load', '--quiet', '--input', str(root / 'release-a' / image['archivePath']))
+              expected = image['sourceDigest']
+              actual = docker('image', 'inspect', '--format', '{{.Id}}|{{.Os}}|{{.Architecture}}', expected).decode().strip()
+              assert actual == expected + '|linux|amd64', 'archive source identity differs after containerd load'
+              docker('image', 'tag', expected, image['localReference'])
+              assert docker('image', 'inspect', '--format', '{{.Id}}', image['localReference']).decode().strip() == expected
+              checked.append(image['component'])
+          paas = next(image for image in manifest['images'] if image['component'] == 'paas')
+          docker('run', '--rm', '--network', 'none', '--entrypoint', 'docker', paas['localReference'], 'compose', 'version', '--short')
+          (root / 'evidence/containerd-image-load.json').write_text(json.dumps({
+              'status': 'PASSED', 'imageStore': 'containerd', 'components': checked,
+              'exactArchiveIdentities': True, 'containerExecution': True,
+          }) + '\n')
+          PY
+          export MATRIX_TEST_SAVED_IMAGE_ARCHIVE="$work/release-a/images/apisix.tar"
+          export MATRIX_TEST_SOURCE_IMAGE_ID="$(jq -r '.images[] | select(.component == "apisix") | .imageId' "$work/release-a/release.json")"
+          export MATRIX_TEST_ARCHIVE_DOCKER_HOST="$DOCKER_HOST"
+          "$work/releasebuild.test" -test.v -test.run '^TestSavedArchiveMatchesContainerdIdentity$'
+          IMAGE_STORE
       - name: Run cold-cache lifecycle and engine restart without DinD
         shell: bash
         run: |

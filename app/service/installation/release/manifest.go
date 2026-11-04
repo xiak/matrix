@@ -171,15 +171,17 @@ type File struct {
 }
 
 type Image struct {
-	Component      string       `json:"component"`
-	Purpose        ImagePurpose `json:"purpose"`
-	ArchivePath    string       `json:"archivePath"`
-	ImageID        string       `json:"imageId"`
-	SourceDigest   string       `json:"sourceDigest"`
-	LocalReference string       `json:"localReference,omitempty"`
-	OS             string       `json:"os"`
-	Architecture   string       `json:"architecture"`
-	HealthContract string       `json:"healthContract"`
+	Component   string       `json:"component"`
+	Purpose     ImagePurpose `json:"purpose"`
+	ArchivePath string       `json:"archivePath"`
+	ImageID     string       `json:"imageId"`
+	// SourceDigest identifies the archive's OCI source descriptor (or its
+	// configuration for a classic-only archive), not the online build cache.
+	SourceDigest   string `json:"sourceDigest"`
+	LocalReference string `json:"localReference,omitempty"`
+	OS             string `json:"os"`
+	Architecture   string `json:"architecture"`
+	HealthContract string `json:"healthContract"`
 }
 
 // LocalImageReference is the deterministic installation-owned Docker

@@ -18,6 +18,38 @@ import (
 
 const maximumDockerIntegrationOutput = 1024 * 1024
 
+// This read-only gate observes an archive already loaded into the explicitly
+// selected containerd daemon. It does not alter the developer's Docker store.
+func TestSavedArchiveMatchesContainerdIdentity(t *testing.T) {
+	archive := os.Getenv("MATRIX_TEST_SAVED_IMAGE_ARCHIVE")
+	if archive == "" {
+		t.Skip("saved image archive integration is not enabled")
+	}
+	sourceID := os.Getenv("MATRIX_TEST_SOURCE_IMAGE_ID")
+	host := os.Getenv("MATRIX_TEST_ARCHIVE_DOCKER_HOST")
+	if !filepath.IsAbs(archive) || !validArchiveDigest(sourceID) || !strings.HasPrefix(host, "unix:///") {
+		t.Fatal("an absolute archive, source digest and explicit native Docker socket are required")
+	}
+	identity, err := inspectImageArchive(archive, sourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	store, err := integrationDocker(ctx, host, "info", "--format", "{{json .DriverStatus}}")
+	if err != nil || !strings.Contains(string(store), "io.containerd.snapshotter.v1") {
+		t.Fatal("gate requires the explicitly selected containerd image store")
+	}
+	actual, err := integrationDocker(ctx, host, "image", "inspect", "--format",
+		"{{.Id}}|{{.Os}}|{{.Architecture}}", identity.ArchiveSourceDigest)
+	if err != nil || strings.TrimSpace(string(actual)) != identity.ArchiveSourceDigest+"|linux|amd64" {
+		t.Fatal("authenticated archive descriptor does not identify the loaded image")
+	}
+	if sourceID == identity.ID && identity.ArchiveSourceDigest == identity.ID {
+		t.Fatal("classic export did not exercise its distinct containerd identity")
+	}
+}
+
 // TestRunnerToolchainOfflineLoadIntegration targets a fresh, disposable Docker
 // 29 daemon. The harness must isolate that daemon from every network before it
 // opts in; this test refuses the developer's ambient Docker endpoint.

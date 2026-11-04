@@ -57,10 +57,13 @@ type Result struct {
 }
 
 type ImageMetadata struct {
-	ID                string
-	RepositoryDigests []string
-	OS                string
-	Architecture      string
+	ID string
+	// ArchiveSourceDigest is populated by SaveImage from the authenticated
+	// archive descriptor, which can differ from the build engine's source ID.
+	ArchiveSourceDigest string
+	RepositoryDigests   []string
+	OS                  string
+	Architecture        string
 }
 
 type RunnerSandboxMetadata struct {
@@ -365,15 +368,15 @@ func buildImages(
 		}
 		archive := filepath.Join(bundle, "images", requirement.Component+".tar")
 		loadIdentity, err := effects.SaveImage(ctx, image.ID, archive)
-		if err != nil || validateImageMetadata(loadIdentity) != nil {
+		if err != nil || validateImageMetadata(loadIdentity) != nil || !validImageDigest(loadIdentity.ArchiveSourceDigest) {
 			return nil, tags, errors.New("save fixed release image failed")
 		}
 		images = append(images, installationrelease.Image{
 			Component: requirement.Component, Purpose: requirement.Purpose,
 			ArchivePath: "images/" + requirement.Component + ".tar",
-			ImageID:     loadIdentity.ID, SourceDigest: image.ID,
+			ImageID:     loadIdentity.ID, SourceDigest: loadIdentity.ArchiveSourceDigest,
 			LocalReference: installationrelease.LocalImageReference(
-				requirement.Component, image.ID,
+				requirement.Component, loadIdentity.ArchiveSourceDigest,
 			),
 			OS: loadIdentity.OS, Architecture: loadIdentity.Architecture,
 			HealthContract: requirement.HealthContract,
