@@ -2,7 +2,7 @@
 
 > Non-authoritative portable memory. Validate against Git and the owning FEAT.
 
-- Updated: 2026-11-03
+- Updated: 2026-11-04
 - Repository: https://github.com/xiak/matrix.git
 - Branch: feat/cloudflare-tunnel-entry
 - Outcome requested: accept a host-local HTTPS proxy entry and a usable Tencent Debian / Cloudflare Tunnel deployment workflow, using native Docker and keeping all credentials outside GitHub.
@@ -18,11 +18,13 @@ observed proxy peer. Remote node/runner enrollment is not covered by the Web
 Tunnel profile. HTTP release behavior is retained.
 
 Implementation `f6cf6e76fb5f4df028e7e57ad877dbf0e9fcbf60` passed all 20 jobs
-in independent Verification 41612656543. Local unit gates and the actual
-pinned APISIX gate passed. Native HTTPS acceptance 41612484059 is still running;
-do not dispatch a duplicate. Earlier run 41609621167 failed at the browser
-logout harness after install and first password change; that selector is
-corrected, but the earlier run is not accepted. FEAT-005 owns precise evidence.
+in independent Verification 41612656543 and complete native HTTPS acceptance
+41612484059. Its small public evidence archive was inspected: lifecycle,
+engine restart, six first-use browser checks, 27 ELK/Redis browser checks and
+proxy interruption/recovery all passed. Local unit gates and the real pinned
+APISIX gate also passed. Documentation follow-up c47afd6f4420b4c967e669a681a775909e9e1f06
+passed Verification 41621512173. FEAT-005 owns precise evidence. The accepted
+candidate uses an ephemeral CI signer; it is not a production-signed release.
 
 The dedicated Tencent Debian 12 host now has a running host-native Cloudflare
 connector, enabled at boot, with loopback readiness 200 and root-only token
@@ -31,12 +33,16 @@ a Tunnel route, but Matrix is not installed, so public application access is
 not accepted. Debian 13 package preparation was separately verified without
 a nested daemon. No host reboot or live application recovery is accepted yet.
 The current installer still requires SMTP configuration. The user wants to
-defer supplying a mailbox; do not request or configure credentials until the
-mail-disabled installation scope is resolved. Do not use dummy mail settings
-to bypass the existing requirement or silently weaken MFA enrollment.
+avoid exposing an enterprise mailbox to mail-bombing and is considering a
+self-hosted service. An internal demo mailbox with external delivery disabled
+was recommended; it must not be presented as delivery to real external users.
+No mailbox choice or credential has been supplied. Do not deploy an external
+relay or connect an enterprise mailbox without resolving that intended use.
+Do not use dummy mail settings to bypass the existing requirement or silently
+weaken MFA enrollment. The alternative mail-disabled product mode is not
+implemented and should not be claimed as supported.
 
-Next: finish native CI, inspect safe browser evidence, resolve the deferred
-mail configuration, then complete live deployment/recovery with an accepted
+Next: resolve the mail configuration, then complete live deployment/recovery with an accepted
 HTTPS package. Draft PR #16 tracks the change. No release publication or merge
 has occurred for this task. The operator configured the Cloudflare route;
 never retag the existing release as an HTTPS build. Keep server identifiers,

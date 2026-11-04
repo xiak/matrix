@@ -72,22 +72,31 @@ operator's prepared server and domain; local TLS evidence cannot stand in
 for that result. Credentials, tunnel tokens, SMTP passwords and signing keys
 remain outside Git and public evidence.
 
-Current evidence (2026-11-03):
+Current evidence (checked 2026-11-04):
 
 - Independent [Verification 41612656543](https://github.com/xiak/matrix/actions/runs/41612656543)
   passed all 20 jobs for implementation `f6cf6e76fb5f4df028e7e57ad877dbf0e9fcbf60`.
-  The full native HTTPS lifecycle [41612484059](https://github.com/xiak/matrix/actions/runs/41612484059)
-  is still running; independent unit gates do not replace its result.
+  The documentation follow-up `c47afd6f4420b4c967e669a681a775909e9e1f06` also
+  passed independent [Verification 41621512173](https://github.com/xiak/matrix/actions/runs/41621512173).
 - Unit gates pass for topology, installation commands, local verification and
   the terminal same-origin boundary. Plain HTTP behavior remains covered.
 - The real pinned APISIX gate passes HTTP/HTTPS with DevOps selected and
   omitted, including Host/Origin rejection, forged forwarding metadata and
   no-store API responses. The upstream in this gate is a test echo service.
-- Native acceptance [41609621167](https://github.com/xiak/matrix/actions/runs/41609621167)
-  installed and verified the signed HTTPS candidate. Its browser completed
-  first login and forced password change without returning to login. The
-  complete run is **not accepted**; the corrected logout selector and proxy
-  interruption drill require a fresh run.
+- Native HTTPS acceptance [41612484059](https://github.com/xiak/matrix/actions/runs/41612484059)
+  passed for that exact implementation. The disconnected cold-cache lifecycle
+  passed in 2623.89 seconds and the engine-restart retained-state gate in
+  192.11 seconds, without DinD. They cover signed installation, upgrade,
+  rollback, selected-backup recovery and retained IAM/product state.
+  Six first-use browser checks passed, including initial administrator login,
+  forced password change directly into the console, logout and new-password
+  login. The retained ELK/Redis browser journey passed all 27 checks; both
+  reports recorded zero page or server errors. Stopping the HTTPS proxy made
+  external access unavailable while local status and verification remained
+  READY; restarting it restored the HTTPS endpoint. The run retains these
+  public reports and 13 screenshots. It used a disposable acceptance signer,
+  so this is an accepted candidate, not a published production release or
+  proof of the live Cloudflare/Tencent chain.
 - Debian 13/amd64 package preparation was executed in an unprivileged
   disposable container, without a Docker socket or nested daemon. Installed
   versions were Docker CLI 29.9.2, Compose 5.7.0 and cloudflared 2026.10.7.
