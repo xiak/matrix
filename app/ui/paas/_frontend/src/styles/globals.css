@@ -1,7 +1,9 @@
-@layer base, xiak;
+@layer xiak;
 @import "./tokens.css";
 
-@layer base {
+/* The reset is a sublayer, so xiak controls outrank it even when Next loads
+   component chunks before this stylesheet. Sibling layer order is not stable. */
+@layer xiak.base {
 
 *,
 *::before,
