@@ -5,64 +5,40 @@
 - Updated: 2026-11-04
 - Repository: https://github.com/xiak/matrix.git
 - Branch: feat/cloudflare-tunnel-entry
-- Outcome: native Docker HTTPS deployment through Cloudflare Tunnel on Tencent Debian, with verified user workflows and no credentials in GitHub.
-- Base main: c609e1078cee3c55442d0164738f03fc28676f15. Published v0.3.0 is immutable and has no HTTPS profile.
+- Pushed delivery milestone: e864c375a8995c853f1d7d07feff3fd08c284bc6
+- Outcome: native Docker HTTPS deployment through Cloudflare Tunnel, controlled DEMO access, internal-only mail, verified recovery and user guides; no credentials in Git.
 
 Follow AGENTS.md and repository-local identity `Xiak <Jellal@aliyun.com>`.
 Read [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#local-https-proxy-ingress), then the owning code/tests and [deployment runbook](../../docs/runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel).
 
-Implementation f6cf6e76fb5f4df028e7e57ad877dbf0e9fcbf60 passed independent
-Verification 41612656543 and native HTTPS lifecycle 41612484059. The latter
-includes six first-use browser checks, 27 retained ELK/Redis browser checks,
-engine restart and proxy interruption/recovery. Its candidate uses an
-ephemeral acceptance signer, not the production signer. FEAT-005 owns
-precise evidence; these gates do not prove the public Tencent deployment.
+Implementation 710d69cdd1882d2561e764cde412cfdb5955e9c6 passed independent
+Verification 41767519880 and native HTTPS acceptance 41767522093, including
+cold containerd image identity, classic-engine offline lifecycle, restart,
+first-use and ELK/Redis browser journeys. Its disposable acceptance signer
+does not authorize a production Release. The existing v0.3.0 is immutable.
 
-The dedicated Debian 12 host has its existing Docker engine and a healthy,
-boot-enabled host-native Cloudflare connector. The accepted candidate and
-public trust were delivered with both transport hashes verified. Live
-installation remains incomplete. The CLI rejected an ordinary HTTPS URL
-before the backend could add port 443. This snapshot fixes that premature
-validation and passes CLI/backend/topology tests. The old accepted package
-was retried with explicit 443, then rolled back safely with
-IMAGE_VERIFICATION_FAILED: its classic-engine image config ID differs from
-the archive OCI manifest ID loaded by the server's containerd store. A direct
-authenticated APISIX archive load reproduced this. Do not weaken identity
-verification, modify signed bundles, or switch the host image store to hide
-the problem. Next inspect the existing releasebuild archive owner and signed
-runtime identity contract, fix cross-store acceptance, and run its actual
-runtime gate before retrying the public install. Preserve the failed
-installation journal and original host images. The archive-identity fix is now
-implemented: it derives the signed sourceDigest/local tag from the validated
-OCI descriptor, without changing the manifest fields or relaxing runtime
-checks. Unit tests and a read-only integration against the actual server's
-loaded archive pass. The updated native release workflow first checks every
-image on a cold containerd daemon, then runs the existing classic-engine full
-lifecycle. The new candidate still needs that complete gate.
+That exact candidate is now accepted on the dedicated Tencent Debian host.
+The public first-use, three private/individual identities, read-only MySQL,
+permission denials, account withdrawal, actual Matrix internal mail, Tunnel
+interruption and host reboot gates passed. FEAT-005 owns their evidence and
+limits. The operator mailbox tools now cover the UFW notification-network
+rule and the socket boot-order correction. User guides include real reviewed
+screenshots and the actual create-user/boundary/grant sequence.
 
-The user approved internal-only SMTP and a controlled DEMO: no public
-registration or shared owner account; private owner and invited independent
-read-only child accounts, using PaaSViewer as both boundary and grant.
-docs/runbooks/demo-mail owns operator-side provisioning/verification, outside the
-Matrix runtime and release bundle. Pinned Mailpit has passed twenty live
-checks, Docker restart with retained messages, and certificate renewal with
-unchanged CA/configuration. The canonical production SMTP codec accepts its
-input. UI access through an authenticated SSH forward also works. The helpers
-belong with this external-mail runbook, not deploy/, whose existing architecture
-gate reserves product release orchestration for Go; that gate is unchanged. FEAT-005
-owns the limits: this is not external delivery, and Matrix's own notification
-workflow awaits READY. Demo tenant/users have not yet been created.
+The user now explicitly requests the GitHub Release workflow. Finish PR #16
+checks and merge normally, then run independent exact-main Verification and
+Product onboarding. Prepare v0.4.0 with successor v0.4.1 used only for
+lifecycle acceptance, `prepare_release=true` and `https_proxy=true`. Use the
+existing protected production signer; never regenerate it or relabel the
+accepted feature candidate. Review the resulting draft's signature, source,
+complete assets and evidence before publishing. No formal release for this
+HTTPS change has occurred yet.
 
-Complete the public HTTPS first-use journey, Matrix-to-mailbox verification,
-DEMO permission denials, proxy interruption and host reboot recovery. Then
-finish reader-facing screenshots/workflows and acceptance evidence. Draft
-PR #16 tracks this work; no merge or formal release has occurred. Do not
-bypass main-only production signing or regenerate established signing keys.
-A temporary broad sudo grant must be removed after deployment verification
-as promised. Token rotation remains an operator-private handoff.
-
-Keep all server identifiers, SSH access material, SMTP/Tunnel credentials,
-browser storage and signing secrets out of Git and public evidence. Preserve
-the user's original local Matrix installation and data. No large candidate
-archive is stored on the Windows disks. The prior ELK/Redis goal is complete;
-do not restart it.
+Keep server identifiers, SSH material, SMTP/Tunnel credentials, browser
+storage and signing secrets outside Git and public evidence. The server's
+temporary broad passwordless sudo grant has been removed; normal password
+sudo remains. Private account handoff is outside the checkout and only the
+current Windows user can read it. Token rotation remains an operator-private
+handoff. Preserve the installed demo, original failed-installation diagnosis
+and the user's original local Matrix data. No large archive is stored on the
+Windows disks. The earlier ELK/Redis goal is complete; do not restart it.
