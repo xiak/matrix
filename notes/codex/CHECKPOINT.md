@@ -25,9 +25,13 @@ limits. The operator mailbox tools now cover the UFW notification-network
 rule and the socket boot-order correction. User guides include real reviewed
 screenshots and the actual create-user/boundary/grant sequence.
 
-The user now explicitly requests the GitHub Release workflow. Finish PR #16
-checks and merge normally, then run independent exact-main Verification and
-Product onboarding. Prepare v0.4.0 with successor v0.4.1 used only for
+The user explicitly requests the GitHub Release workflow. PR #16 passed all
+20 checks in 41786587929 and was fast-forward merged with the required Git
+identity. Main is 0afed148437c9241ccd61e62742a7577c7f15176. Its independent
+Verification 41790163222 and Product onboarding 41790180425 are running.
+Keep main fixed until that source's production delivery is accepted. This
+branch may retain documentation/checkpoint updates separately. After both
+main gates pass, prepare v0.4.0 with successor v0.4.1 used only for
 lifecycle acceptance, `prepare_release=true` and `https_proxy=true`. Use the
 existing protected production signer; never regenerate it or relabel the
 accepted feature candidate. Review the resulting draft's signature, source,
