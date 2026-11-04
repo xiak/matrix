@@ -4,45 +4,43 @@
 
 - Updated: 2026-11-04
 - Repository: https://github.com/xiak/matrix.git
-- Branch: feat/cloudflare-tunnel-entry
-- Pushed delivery milestone: e864c375a8995c853f1d7d07feff3fd08c284bc6
-- Outcome: native Docker HTTPS deployment through Cloudflare Tunnel, controlled DEMO access, internal-only mail, verified recovery and user guides; no credentials in Git.
+- Branch: feat/console-theme-session-ux
+- Pushed implementation: 578c0540a58c3e7fa4bb879df504464f12ee527d
+- Outcome: readable themed buttons and browser login restoration, preserving
+  existing IAM authority, revocation and role boundaries; no credentials in Git.
 
 Follow AGENTS.md and repository-local identity `Xiak <Jellal@aliyun.com>`.
-Read [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#local-https-proxy-ingress), then the owning code/tests and [deployment runbook](../../docs/runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel).
+Read [FEAT-IAM-010](../../docs/features/iam/FEAT-IAM-010-console.md#浏览器登录持久化),
+then the owning source/tests. Shared theme evidence belongs to
+[FEAT-007](../../docs/features/FEAT-007-control-plane-console.md#theme-contrast);
+installed topology and release boundaries belong to
+[FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#local-https-proxy-ingress).
 
-Implementation 710d69cdd1882d2561e764cde412cfdb5955e9c6 passed independent
-Verification 41767519880 and native HTTPS acceptance 41767522093, including
-cold containerd image identity, classic-engine offline lifecycle, restart,
-first-use and ELK/Redis browser journeys. Its disposable acceptance signer
-does not authorize a production Release. The existing v0.3.0 is immutable.
+The pushed implementation has native Docker browser evidence, independent
+PostgreSQL session regression, affected Go/architecture gates, targeted frontend
+regressions, production-export equivalence and reviewed login-page imagery.
+The FEAT owns precise limits. Full independent CI and the user's hands-on UI
+acceptance remain required. A local source-development environment is not an
+accepted sealed Release. The user wants to continue UI review before publishing.
 
-That exact candidate is now accepted on the dedicated Tencent Debian host.
-The public first-use, three private/individual identities, read-only MySQL,
-permission denials, account withdrawal, actual Matrix internal mail, Tunnel
-interruption and host reboot gates passed. FEAT-005 owns their evidence and
-limits. The operator mailbox tools now cover the UFW notification-network
-rule and the socket boot-order correction. User guides include real reviewed
-screenshots and the actual create-user/boundary/grant sequence.
+PR #16 was fast-forward merged to main 0afed148437c9241ccd61e62742a7577c7f15176.
+That main source passed Verification 41790163222 and Product onboarding
+41790180425. It predates this browser-session slice. Do not dispatch a production
+release of that older source while the user is accepting this replacement.
+After the final UI source is accepted and merged, require all independent gates
+on its exact main SHA, then prepare v0.4.0 with successor v0.4.1 only for lifecycle
+acceptance, `prepare_release=true` and `https_proxy=true`. Review signatures,
+source, complete assets and evidence before publishing. v0.3.0 is immutable;
+no formal v0.4.0 release has occurred. Use the existing protected production
+signer; never regenerate it or relabel an acceptance-signed candidate.
 
-The user explicitly requests the GitHub Release workflow. PR #16 passed all
-20 checks in 41786587929 and was fast-forward merged with the required Git
-identity. Main is 0afed148437c9241ccd61e62742a7577c7f15176. Its independent
-Verification 41790163222 and Product onboarding 41790180425 are running.
-Keep main fixed until that source's production delivery is accepted. This
-branch may retain documentation/checkpoint updates separately. After both
-main gates pass, prepare v0.4.0 with successor v0.4.1 used only for
-lifecycle acceptance, `prepare_release=true` and `https_proxy=true`. Use the
-existing protected production signer; never regenerate it or relabel the
-accepted feature candidate. Review the resulting draft's signature, source,
-complete assets and evidence before publishing. No formal release for this
-HTTPS change has occurred yet.
-
-Keep server identifiers, SSH material, SMTP/Tunnel credentials, browser
-storage and signing secrets outside Git and public evidence. The server's
-temporary broad passwordless sudo grant has been removed; normal password
-sudo remains. Private account handoff is outside the checkout and only the
-current Windows user can read it. Token rotation remains an operator-private
-handoff. Preserve the installed demo, original failed-installation diagnosis
-and the user's original local Matrix data. No large archive is stored on the
-Windows disks. The earlier ELK/Redis goal is complete; do not restart it.
+The dedicated Tencent Debian DEMO still runs accepted source
+710d69cdd1882d2561e764cde412cfdb5955e9c6, whose disposable acceptance signer does
+not authorize a production Release. This UI/session slice is not deployed there.
+The native Docker, Cloudflare Tunnel, controlled accounts, internal-only mail,
+first-use and recovery evidence remain owned by FEAT-005 and its linked guides.
+Temporary broad passwordless sudo was removed. Token rotation remains an
+operator-private handoff. Keep server identifiers, SSH/SMTP/Tunnel/signing
+material, browser storage and account handoffs outside Git and public evidence.
+Preserve the installed DEMO and the user's original local Matrix data. The
+earlier ELK/Redis goal is complete; do not restart it.
