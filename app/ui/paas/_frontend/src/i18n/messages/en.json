@@ -310,7 +310,6 @@
     "previewEnrollmentAction": "Preview required first-time MFA setup",
     "previewChallengeHint": "MOCK codes: {code} signs in; 624811 previews password change after verification.",
     "previewPending": "Preparing your demo…",
-    "security": "Stay signed in when refreshing. Sign out before leaving a shared device.",
     "restoringSession": "Checking your session…",
     "restoreSessionUnavailable": "We cannot check your session right now. Check your connection and try again.",
     "retrySessionRestore": "Reconnect",

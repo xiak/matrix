@@ -74,7 +74,7 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
             : challenged ? <AuthenticationChallengeForm returnTo={returnTo} />
             : firstLogin ? <PasswordChangeForm returnTo={returnTo} />
               : <AccountLoginForm returnTo={returnTo} onPreviewEnrollment={() => setPreviewEnrollmentOpen(true)} />}
-          <p className={styles.securityNote}><ShieldCheck aria-hidden="true" /><span>{t(uxPreviewEnabled ? "previewSecurity" : "security")}</span></p>
+          {uxPreviewEnabled ? <p className={styles.securityNote}><ShieldCheck aria-hidden="true" /><span>{t("previewSecurity")}</span></p> : null}
         </section>
       </main>
       <footer className={styles.footer}><span>Matrix Cloud <span aria-hidden="true">/</span> {t("footer")}</span>
