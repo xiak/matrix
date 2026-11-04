@@ -424,13 +424,14 @@ Tunnel Token 轮换时只替换受保护的 Token 文件并重启连接器，
 它不是体验者的个人邮箱，不能用同一个收件箱为不同体验者证明邮箱所有权。
 
 安装前从同一交付分支取得
-[provision.py](../../deploy/demo-mail/provision.py) 与
-[verify.py](../../deploy/demo-mail/verify.py)。在 Windows PowerShell 中，从仓库目录
+[provision.py](demo-mail/provision.py) 与
+[verify.py](demo-mail/verify.py)。它们属于本手册的运维工具，不参与 Matrix 发布包构建。
+在 Windows PowerShell 中，从仓库目录
 通过自己的 SSH 别名复制工具；示例别名是 `matrix-demo`：
 
 ```powershell
 ssh matrix-demo 'umask 077; mkdir -p ~/matrix-demo-mail-tools; chmod 700 ~/matrix-demo-mail-tools'
-scp .\deploy\demo-mail\provision.py .\deploy\demo-mail\verify.py matrix-demo:matrix-demo-mail-tools/
+scp .\docs\runbooks\demo-mail\provision.py .\docs\runbooks\demo-mail\verify.py matrix-demo:matrix-demo-mail-tools/
 ```
 
 在 Debian 上用同一个管理账号执行，需要 sudo 权限：

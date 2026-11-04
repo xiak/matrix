@@ -32,16 +32,24 @@ verification, modify signed bundles, or switch the host image store to hide
 the problem. Next inspect the existing releasebuild archive owner and signed
 runtime identity contract, fix cross-store acceptance, and run its actual
 runtime gate before retrying the public install. Preserve the failed
-installation journal and original host images.
+installation journal and original host images. The archive-identity fix is now
+implemented: it derives the signed sourceDigest/local tag from the validated
+OCI descriptor, without changing the manifest fields or relaxing runtime
+checks. Unit tests and a read-only integration against the actual server's
+loaded archive pass. The updated native release workflow first checks every
+image on a cold containerd daemon, then runs the existing classic-engine full
+lifecycle. The new candidate still needs that complete gate.
 
 The user approved internal-only SMTP and a controlled DEMO: no public
 registration or shared owner account; private owner and invited independent
 read-only child accounts, using PaaSViewer as both boundary and grant.
-deploy/demo-mail owns operator-side provisioning/verification, outside the
+docs/runbooks/demo-mail owns operator-side provisioning/verification, outside the
 Matrix runtime and release bundle. Pinned Mailpit has passed twenty live
 checks, Docker restart with retained messages, and certificate renewal with
 unchanged CA/configuration. The canonical production SMTP codec accepts its
-input. UI access through an authenticated SSH forward also works. FEAT-005
+input. UI access through an authenticated SSH forward also works. The helpers
+belong with this external-mail runbook, not deploy/, whose existing architecture
+gate reserves product release orchestration for Go; that gate is unchanged. FEAT-005
 owns the limits: this is not external delivery, and Matrix's own notification
 workflow awaits READY. Demo tenant/users have not yet been created.
 
