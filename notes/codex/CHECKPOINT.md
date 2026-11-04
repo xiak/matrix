@@ -5,7 +5,7 @@
 - Updated: 2026-11-04
 - Repository: https://github.com/xiak/matrix.git
 - Branch: feat/console-theme-session-ux
-- Pushed implementation: 578c0540a58c3e7fa4bb879df504464f12ee527d
+- Pushed implementation: 272b3538360caddc69c1d82fdc19a05131729008
 - Outcome: readable themed buttons and browser login restoration, preserving
   existing IAM authority, revocation and role boundaries; no credentials in Git.
 
@@ -19,6 +19,7 @@ installed topology and release boundaries belong to
 The pushed implementation has native Docker browser evidence, independent
 PostgreSQL session regression, affected Go/architecture gates, targeted frontend
 regressions, production-export equivalence and reviewed login-page imagery.
+PR #17 is the draft review: https://github.com/xiak/matrix/pull/17.
 The FEAT owns precise limits. Full independent CI and the user's hands-on UI
 acceptance remain required. A local source-development environment is not an
 accepted sealed Release. The user wants to continue UI review before publishing.
