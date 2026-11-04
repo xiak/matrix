@@ -214,6 +214,7 @@ func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 		want Request
 	}{
 		{"install", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--security-mail-configuration", "/media/security-mail.json", "--northbound-origin", "http://matrix.example.test:8080"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json", SecurityMailConfiguration: "/media/security-mail.json", NorthboundOrigin: "http://matrix.example.test:8080"}},
+		{"install HTTPS default port", []string{"platform", "install", "--bundle", "/media/release", "--root", "/srv/matrix", "--trust-key", "/media/trust.json", "--security-mail-configuration", "/media/security-mail.json", "--northbound-origin", "https://matrix.example.test"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionInstall, Root: "/srv/matrix", Bundle: "/media/release", TrustKey: "/media/trust.json", SecurityMailConfiguration: "/media/security-mail.json", NorthboundOrigin: "https://matrix.example.test"}},
 		{"verify", []string{"platform", "verify", "--root", "/srv/matrix"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionVerify, Root: "/srv/matrix"}},
 		{"status", []string{"platform", "status", "--root", "/srv/matrix"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionStatus, Root: "/srv/matrix"}},
 		{"backup", []string{"platform", "backup", "--root", "/srv/matrix"}, Request{Subject: SubjectPlatform, Action: lifecycle.ActionBackup, Root: "/srv/matrix"}},
@@ -244,7 +245,7 @@ func TestPlatformCommandSurfaceBuildsExactRequests(t *testing.T) {
 			if got != test.want {
 				t.Fatalf("backend request = %#v, want %#v", got, test.want)
 			}
-			if errOut.Len() != 0 || !strings.HasPrefix(out.String(), strings.ToUpper(test.name)+" SUCCEEDED") {
+			if errOut.Len() != 0 || !strings.HasPrefix(out.String(), string(test.want.Action)+" SUCCEEDED") {
 				t.Fatalf("command output = %q / %q", out.String(), errOut.String())
 			}
 		})

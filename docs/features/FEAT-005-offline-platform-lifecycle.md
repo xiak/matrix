@@ -108,9 +108,34 @@ Current evidence (checked 2026-11-04):
   Docker and the connector are enabled and active; the connector's loopback
   readiness endpoint returns 200 after TCP/UDP 7844 egress was allowed.
   Token custody is root-only, outside the checkout and service arguments.
-  Matrix is not yet installed there: public first use, SMTP delivery, proxy
-  interruption and host reboot are still unverified. Tunnel health alone
-  does not accept the public deployment.
+  Live installation of that accepted candidate did not reach READY. Its CLI
+  prematurely rejected an HTTPS URL without explicit port 443; the CLI now
+  passes origin validation to the existing canonicalizing installation owner,
+  with a command-surface regression and passing CLI/backend/topology tests.
+  Retrying the candidate with explicit 443 reached image loading, then safely
+  rolled back with `IMAGE_VERIFICATION_FAILED`. The classic build engine's
+  archive config ID differs from the OCI manifest ID exposed by this host's
+  containerd image store. A direct load of the authenticated APISIX archive
+  reproduced that mismatch. Cross-store archive identity acceptance remains
+  required before live first use, proxy interruption and host reboot can pass.
+  Tunnel health alone does not accept the public deployment.
+- The operator-owned [internal demo mailbox](../runbooks/platform-installation.md#仅内部收件的演示邮箱)
+  was provisioned on that host with pinned Mailpit v1.33.0. Twenty runtime
+  checks pass: authenticated STARTTLS/SASL PLAIN delivery to one allowed
+  internal address, denial of plaintext/unauthenticated/wrong-password and
+  other-recipient submissions, protected UI/API reads, and retained messages.
+  The container has only an internal network, no default route, no Docker
+  socket or published ports; a real network-namespace Internet connection
+  fails with no route. Fixed host socket proxies expose the UI only on
+  loopback. A Docker Engine restart retained messages and credentials and
+  restored both socket proxies. Leaf-certificate renewal preserved the CA and
+  canonical Matrix mail configuration and passed all checks again. The
+  production configuration codec accepted that input. This proves the mail
+  dependency, not yet Matrix notification delivery or delivery to real users.
+  Its configuration, private CA and access credentials remain outside Git;
+  the mailbox is an operator deployment component, not a Matrix runtime or
+  signed-release dependency. Only invited, individual read-only DEMO users
+  are intended; their account and permission checks still require live READY.
 - The [deployment workflow](../runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel)
   uses a fixed public hostname and host-native connector. In this profile,
   node/runner ingress ports also remain on loopback; remote enrollment is not

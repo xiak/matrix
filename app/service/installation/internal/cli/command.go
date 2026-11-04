@@ -13,7 +13,6 @@ import (
 	devopsv1 "github.com/xiak/matrix/api/devops/v1"
 	"github.com/xiak/matrix/app/service/devops/sourcecredential"
 	"github.com/xiak/matrix/app/service/installation/internal/lifecycle"
-	"github.com/xiak/matrix/app/service/internal/externalrequest"
 )
 
 const (
@@ -675,8 +674,8 @@ func validateCommandFlags(subject Subject, action lifecycle.Action, options *com
 		}
 		if subject == SubjectPlatform &&
 			(strings.TrimSpace(options.securityMailConfiguration) == "" ||
-				externalrequest.ValidateOrigin(options.northboundOrigin) != nil) {
-			return errors.New("security-mail configuration and canonical northbound origin are required")
+				strings.TrimSpace(options.northboundOrigin) == "") {
+			return errors.New("security-mail configuration and public northbound origin are required")
 		}
 	case lifecycle.ActionUpgrade:
 		if subject == SubjectNode {

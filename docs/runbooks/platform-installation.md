@@ -183,7 +183,7 @@ root# /usr/local/sbin/mx --format json platform status --root /var/lib/matrix
 
 ## 腾讯云 Debian 与 Cloudflare Tunnel
 
-适合一台 Debian 13、x86_64 服务器上的演示环境。Docker Engine、安装工具和
+适合一台 Debian 12 或 13、x86_64 服务器上的演示环境。Docker Engine、安装工具和
 cloudflared 都运行在这台主机上，平台容器使用主机的 Docker；没有 DinD。
 示例域名为 `matrix.example.com`，现场统一替换成自己的域名，安装后不能随意更换。
 本流程对应的新版本与已完成验收项目见
@@ -269,11 +269,16 @@ cloudflared --version
 
 ### 3. 安装 Matrix 并先完成本机检查
 
+没有企业 SMTP、只需要内部演示时，先完成下方的
+[内部演示邮箱](#仅内部收件的演示邮箱)。它生成真正可用的受保护邮件配置，
+但不会把验证码发送到体验者的真实邮箱。
+
 按[安装平台](#安装平台)准备目录与受保护材料。
 HTTPS 版安装时，将同一条 `platform install` 命令的最后一项设为
-`--northbound-origin https://matrix.example.com`。
+`--northbound-origin https://matrix.example.com:443`。
 这个地址同时决定域名校验和 HTTPS 模式；安装器将本机入口限制为 `127.0.0.1:8080`。
 不要加 `/console/`，也不要填 cloudflared 的本机回源地址。
+`:443` 是 HTTPS 的默认端口，使用者仍打开 `https://matrix.example.com`。
 
 安装完成后执行前述 `platform verify` 和 `platform status`，两者都应成功，平台为 `READY`。
 这些命令通过本机回环检查平台，因此 Tunnel 尚未连接时也可执行。
@@ -410,6 +415,89 @@ Tunnel Token 轮换时只替换受保护的 Token 文件并重启连接器，
 需要限制演示访问来源时，在 Cloudflare 入口实施访问控制并单独验证，
 不要把客户端自带的转发请求头当作可信身份。
 远程节点接入、DevOps runner 和数据库客户端连接需要各自的网络方案，本页没有将它们纳入 Web 隧道。
+
+### 仅内部收件的演示邮箱
+
+这是运维管理的测试收件箱，适合专用 DEMO。它只接收
+`receiver@demo.matrix.test`，拒收其他地址，不配置任何邮件转发或外发中继。
+不需要企业邮箱授权码，不修改域名 MX，也不开放公网邮件端口。
+它不是体验者的个人邮箱，不能用同一个收件箱为不同体验者证明邮箱所有权。
+
+安装前从同一交付分支取得
+[provision.py](../../deploy/demo-mail/provision.py) 与
+[verify.py](../../deploy/demo-mail/verify.py)。在 Windows PowerShell 中，从仓库目录
+通过自己的 SSH 别名复制工具；示例别名是 `matrix-demo`：
+
+```powershell
+ssh matrix-demo 'umask 077; mkdir -p ~/matrix-demo-mail-tools; chmod 700 ~/matrix-demo-mail-tools'
+scp .\deploy\demo-mail\provision.py .\deploy\demo-mail\verify.py matrix-demo:matrix-demo-mail-tools/
+```
+
+在 Debian 上用同一个管理账号执行，需要 sudo 权限：
+
+```bash
+sudo install -d -o root -g root -m 0755 /usr/local/lib/matrix-demo-mail
+sudo install -o root -g root -m 0755 "$HOME/matrix-demo-mail-tools/provision.py" "$HOME/matrix-demo-mail-tools/verify.py" /usr/local/lib/matrix-demo-mail/
+sudo docker pull axllent/mailpit@sha256:9b3a463be15354c0f0eba91697d80e3e0d8a5623ef0e627cacc836bc17fd5231
+sudo python3 /usr/local/lib/matrix-demo-mail/provision.py
+sudo python3 /usr/local/lib/matrix-demo-mail/verify.py
+```
+
+这套固定镜像为 Mailpit v1.33.0。首次部署返回 `status: started`，验证返回
+`status: passed`、`externalDelivery: false` 后，再安装 Matrix。
+脚本要求原生 Docker、Compose、Python 3、OpenSSL、systemd 和空闲的私有监听端口。
+已有同名配置、数据或 Docker 对象时会停止，不能删除原目录后强行重跑。
+失败时保留现场，由运维核对已有状态。
+
+部署会生成 `/etc/matrix/security-mail.json`，直接作为 Matrix 安装输入。
+SMTP 密码、收件箱登录密码和私有 CA 均在服务器生成，不写入仓库或命令参数。
+`/etc/matrix-demo-mail/` 与 `/var/lib/matrix-demo-mail/` 由 root 独占访问；
+其中 `operator-access.json` 保存收件箱管理员登录材料，只通过组织认可的秘密渠道交付。
+不要将这些目录、安装秘密或浏览器认证数据提交到 GitHub。
+
+收件服务运行在单独的 Docker 内部网络，没有默认路由；真实联网探测也须失败。
+主机仅将 SMTP 转接到回环与 Docker 主机桥接地址，并要求 STARTTLS 和认证。
+收件界面仅在主机 `127.0.0.1:8025` 监听并要求独立登录。
+单封邮件最多 1 MB、一个收件人，最多保留 100 封且保留期为 24 小时。
+这些限制只适用于此演示邮箱，不表示平台所有邮件都有同样的全局限额。
+
+**管理员查看邮件**：Windows PowerShell 保持下面的 SSH 窗口打开，
+然后用浏览器访问 `http://127.0.0.1:18025`，使用私下取得的收件箱账号登录。
+这台电脑的回环端口经 SSH 连接到服务器回环端口，不需要 Cloudflare 发布邮箱路由。
+
+```powershell
+ssh -N -T -o ExitOnForwardFailure=yes -L 127.0.0.1:18025:127.0.0.1:8025 matrix-demo
+```
+
+若 SSH 提示 `administratively prohibited`，由主机管理员为自己的管理用户允许
+**仅本地转发，且仅目标 `127.0.0.1:8025`**。实机验证的独立配置如下，
+先把 `DEPLOY_USER` 替换为自己的 SSH 管理用户名：
+
+```text
+Match User DEPLOY_USER
+    AllowTcpForwarding local
+    PermitOpen 127.0.0.1:8025
+    PermitListen none
+Match all
+```
+
+保存到 `/etc/ssh/sshd_config.d/40-matrix-demo-mail-forward.conf` 后，先执行
+`sshd -t` 验证，再执行 `systemctl reload ssh`；保留原 SSH 会话，重新建立转发验证。
+此配置不授予 SSH 登录或 sudo 权限。主机若另有强制转发禁令，先由管理员核对用途。
+
+**证书维护**：SMTP 叶证书有效期为一年。到期前由 root 使用原 CA 续签，
+随后重新执行验证；不用重新部署邮箱，也不生成另一套安装配置：
+
+```bash
+python3 /usr/local/lib/matrix-demo-mail/provision.py --renew-certificate
+python3 /usr/local/lib/matrix-demo-mail/verify.py
+```
+
+续签会短暂重启收件容器，原邮件、密码、CA 和 Matrix 安装输入保持不变。
+私有 CA 有效期十年；不足一年时续签会拒绝，应安排受控的信任迁移，不能关闭 TLS 校验。
+主机或 Docker 重启后也运行 `verify.py`。收件失败时，先分别确认 SMTP/UI socket
+与邮箱容器状态，再检查证书和地址白名单；不添加外发中继来消除投递错误。
+这个外部演示邮箱不属于 Matrix 平台备份，应由运维单独保管配置和必要数据。
 
 ## 日常检查
 

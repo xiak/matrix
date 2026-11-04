@@ -5,54 +5,56 @@
 - Updated: 2026-11-04
 - Repository: https://github.com/xiak/matrix.git
 - Branch: feat/cloudflare-tunnel-entry
-- Outcome requested: accept a host-local HTTPS proxy entry and a usable Tencent Debian / Cloudflare Tunnel deployment workflow, using native Docker and keeping all credentials outside GitHub.
-- Base main: c609e1078cee3c55442d0164738f03fc28676f15. The published v0.3.0 payload is unchanged and does not include the new HTTPS profile.
+- Outcome: native Docker HTTPS deployment through Cloudflare Tunnel on Tencent Debian, with verified user workflows and no credentials in GitHub.
+- Base main: c609e1078cee3c55442d0164738f03fc28676f15. Published v0.3.0 is immutable and has no HTTPS profile.
 
 Follow AGENTS.md and repository-local identity `Xiak <Jellal@aliyun.com>`.
-Read [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#local-https-proxy-ingress), then the owning installation code/tests and [deployment runbook](../../docs/runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel).
+Read [FEAT-005](../../docs/features/FEAT-005-offline-platform-lifecycle.md#local-https-proxy-ingress), then the owning code/tests and [deployment runbook](../../docs/runbooks/platform-installation.md#腾讯云-debian-与-cloudflare-tunnel).
 
-The branch implements external HTTPS origin sealing, loopback-only host ingress,
-Host/Origin checks, ignored forwarding metadata, Secure terminal cookies and
-local maintenance independent of proxy availability. SourceIP still means the
-observed proxy peer. Remote node/runner enrollment is not covered by the Web
-Tunnel profile. HTTP release behavior is retained.
+Implementation f6cf6e76fb5f4df028e7e57ad877dbf0e9fcbf60 passed independent
+Verification 41612656543 and native HTTPS lifecycle 41612484059. The latter
+includes six first-use browser checks, 27 retained ELK/Redis browser checks,
+engine restart and proxy interruption/recovery. Its candidate uses an
+ephemeral acceptance signer, not the production signer. FEAT-005 owns
+precise evidence; these gates do not prove the public Tencent deployment.
 
-Implementation `f6cf6e76fb5f4df028e7e57ad877dbf0e9fcbf60` passed all 20 jobs
-in independent Verification 41612656543 and complete native HTTPS acceptance
-41612484059. Its small public evidence archive was inspected: lifecycle,
-engine restart, six first-use browser checks, 27 ELK/Redis browser checks and
-proxy interruption/recovery all passed. Local unit gates and the real pinned
-APISIX gate also passed. Documentation follow-up c47afd6f4420b4c967e669a681a775909e9e1f06
-passed Verification 41621512173. FEAT-005 owns precise evidence. The accepted
-candidate uses an ephemeral CI signer; it is not a production-signed release.
+The dedicated Debian 12 host has its existing Docker engine and a healthy,
+boot-enabled host-native Cloudflare connector. The accepted candidate and
+public trust were delivered with both transport hashes verified. Live
+installation remains incomplete. The CLI rejected an ordinary HTTPS URL
+before the backend could add port 443. This snapshot fixes that premature
+validation and passes CLI/backend/topology tests. The old accepted package
+was retried with explicit 443, then rolled back safely with
+IMAGE_VERIFICATION_FAILED: its classic-engine image config ID differs from
+the archive OCI manifest ID loaded by the server's containerd store. A direct
+authenticated APISIX archive load reproduced this. Do not weaken identity
+verification, modify signed bundles, or switch the host image store to hide
+the problem. Next inspect the existing releasebuild archive owner and signed
+runtime identity contract, fix cross-store acceptance, and run its actual
+runtime gate before retrying the public install. Preserve the failed
+installation journal and original host images.
 
-The dedicated Tencent Debian 12 host now has a running host-native Cloudflare
-connector, enabled at boot, with loopback readiness 200 and root-only token
-custody. Its existing Docker engine is preserved. The published hostname has
-a Tunnel route, but Matrix is not installed, so public application access is
-not accepted. Debian 13 package preparation was separately verified without
-a nested daemon. No host reboot or live application recovery is accepted yet.
-The current installer still requires SMTP configuration. The user wants to
-avoid exposing an enterprise mailbox to mail-bombing and is considering a
-self-hosted service. An internal demo mailbox with external delivery disabled
-was recommended; it must not be presented as delivery to real external users.
-No mailbox choice or credential has been supplied. Do not deploy an external
-relay or connect an enterprise mailbox without resolving that intended use.
-Do not use dummy mail settings to bypass the existing requirement or silently
-weaken MFA enrollment. The alternative mail-disabled product mode is not
-implemented and should not be claimed as supported.
+The user approved internal-only SMTP and a controlled DEMO: no public
+registration or shared owner account; private owner and invited independent
+read-only child accounts, using PaaSViewer as both boundary and grant.
+deploy/demo-mail owns operator-side provisioning/verification, outside the
+Matrix runtime and release bundle. Pinned Mailpit has passed twenty live
+checks, Docker restart with retained messages, and certificate renewal with
+unchanged CA/configuration. The canonical production SMTP codec accepts its
+input. UI access through an authenticated SSH forward also works. FEAT-005
+owns the limits: this is not external delivery, and Matrix's own notification
+workflow awaits READY. Demo tenant/users have not yet been created.
 
-Next: resolve the mail configuration, then complete live deployment/recovery with an accepted
-HTTPS package. Draft PR #16 tracks the change. No release publication or merge
-has occurred for this task. The operator configured the Cloudflare route;
-never retag the existing release as an HTTPS build. Keep server identifiers,
-credentials and local access files outside repository evidence. A temporary
-sudo grant must be removed after deployment verification as promised to the
-operator. Token rotation remains an operator-private handoff, not a chat input.
+Complete the public HTTPS first-use journey, Matrix-to-mailbox verification,
+DEMO permission denials, proxy interruption and host reboot recovery. Then
+finish reader-facing screenshots/workflows and acceptance evidence. Draft
+PR #16 tracks this work; no merge or formal release has occurred. Do not
+bypass main-only production signing or regenerate established signing keys.
+A temporary broad sudo grant must be removed after deployment verification
+as promised. Token rotation remains an operator-private handoff.
 
-Preserve the original local installation and its data. Remove only this task's
-disposable Debian preparation container/image after validation. The prior
-ELK/Redis release goal is complete and must not be restarted. Dedicated signing
-custody already exists; do not generate replacement signing keys. Production
-signing inputs, SMTP configuration and Tunnel tokens must never enter Git,
-public logs, screenshots or CI artifacts.
+Keep all server identifiers, SSH access material, SMTP/Tunnel credentials,
+browser storage and signing secrets out of Git and public evidence. Preserve
+the user's original local Matrix installation and data. No large candidate
+archive is stored on the Windows disks. The prior ELK/Redis goal is complete;
+do not restart it.
