@@ -36,7 +36,7 @@ test("generates the same build ID without locale-dependent collation", () => {
   assert.equal(withoutLocaleCollation.id, canonical.id);
 });
 
-test("keeps explicit preview distinct and preserves the actual DEV runtime branch", () => {
+test("uses the real API in development unless preview is explicitly enabled", () => {
   const disabled = configuration("0");
   const enabled = configuration("1");
   const development = configuration(undefined, "development");
@@ -45,7 +45,7 @@ test("keeps explicit preview distinct and preserves the actual DEV runtime branc
   assert.equal(development.nodeEnv, "development");
   const source = readFileSync(new URL("../src/infrastructure/runtime/uxPreviewMode.ts", import.meta.url), "utf8");
   const javascript = ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText;
-  for (const [config, expected] of [[disabled, false], [enabled, true], [development, true]]) {
+  for (const [config, expected] of [[disabled, false], [enabled, true], [development, false], [configuration("1", "development"), true]]) {
     const context = { exports: {}, process: { env: { ...config.env, NODE_ENV: config.nodeEnv } } };
     runInNewContext(javascript, context);
     assert.equal(context.exports.uxPreviewEnabled, expected);

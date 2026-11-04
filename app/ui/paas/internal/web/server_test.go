@@ -21,7 +21,9 @@ func TestHandlerServesNextControlPlane(t *testing.T) {
 		t.Fatalf("control-plane response is incomplete: status=%d headers=%v", response.Code, response.Header())
 	}
 	body := response.Body.String()
-	for _, required := range []string{"login-form", "Matrix Control Plane", "/_next/static/"} {
+	// Static HTML must show an accessible restoration state. The browser checks
+	// its existing session before exposing a password form or protected content.
+	for _, required := range []string{`role="status"`, "Matrix Control Plane", "/_next/static/"} {
 		if !strings.Contains(body, required) {
 			t.Fatalf("control plane is missing %q", required)
 		}

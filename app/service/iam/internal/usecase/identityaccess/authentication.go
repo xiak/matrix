@@ -19,6 +19,39 @@ type loginDigestInput struct {
 	RequestID string `json:"requestId"`
 }
 
+// CurrentSession is a read of the existing authority, never a new issuance or
+// activity touch. Reloading a page cannot extend the idle or absolute deadline.
+type CurrentSession struct {
+	Session            iamv1.Session `json:"session"`
+	LoginName          string        `json:"loginName"`
+	MustChangePassword bool          `json:"mustChangePassword"`
+}
+
+func (service *Authority) CurrentSession(ctx context.Context, credential iamv1.Secret) (CurrentSession, error) {
+	var result CurrentSession
+	err := service.withinTransaction(ctx, func(ctx context.Context, tx Transaction) error {
+		now, err := transactionTime(ctx, tx)
+		if err != nil {
+			return err
+		}
+		binding, err := service.authenticateSession(ctx, tx, credential, now)
+		if err != nil {
+			return err
+		}
+		subject := binding.Subject
+		if subject.Organization.Status != iamv1.AccountActive || subject.Principal.Status != iamv1.PrincipalActive {
+			return ErrUnauthenticated
+		}
+		result = CurrentSession{Session: subject.Session, LoginName: subject.Principal.LoginName,
+			MustChangePassword: subject.Principal.MustChangePassword}
+		return nil
+	})
+	if err != nil {
+		return CurrentSession{}, err
+	}
+	return result, nil
+}
+
 func (service *Authority) Login(
 	ctx context.Context,
 	request iamv1.LoginRequest,

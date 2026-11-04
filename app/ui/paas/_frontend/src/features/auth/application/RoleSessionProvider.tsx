@@ -97,6 +97,26 @@ function sameSession(left: LiveRoleSession, right: LiveRoleSession): boolean {
     left.sourceUserId === right.sourceUserId && left.issuedAt === right.issuedAt && left.expiresAt === right.expiresAt;
 }
 
+const browserRoleKey = "matrix.browser-role";
+type BrowserRole = { source: string; reference: string | null; logoutRequestId: string };
+function saveBrowserRole(value: BrowserRole): void {
+  if (!value.source.startsWith("mxb1.s.")) return;
+  sessionStorage.setItem(browserRoleKey, JSON.stringify(value));
+}
+function readBrowserRole(source: string): BrowserRole | null {
+  const encoded = sessionStorage.getItem(browserRoleKey);
+  if (!encoded) return null;
+  const value: unknown = JSON.parse(encoded);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("INVALID_BROWSER_ROLE");
+  const record = value as Record<string, unknown>;
+  if (Object.keys(record).sort().join() !== "logoutRequestId,reference,source" ||
+      typeof record.source !== "string" || !/^mxb1\.s\.[0-9a-f]{64}$/.test(record.source) ||
+      !(record.reference === null || typeof record.reference === "string" && /^mxb1\.r\.[0-9a-f]{64}$/.test(record.reference)) ||
+      typeof record.logoutRequestId !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(record.logoutRequestId)) throw new Error("INVALID_BROWSER_ROLE");
+  if (record.source !== source) { sessionStorage.removeItem(browserRoleKey); return null; }
+  return record as BrowserRole;
+}
+
 export function RoleSessionProvider({
   children,
   current,
@@ -120,11 +140,14 @@ export function RoleSessionProvider({
   const [identity, setIdentity] = useState<CurrentRoleIdentity | null>(null);
   const [activeCredential, setActiveCredential] = useState<string | null>(null);
   const [activeSourceCredential, setActiveSourceCredential] = useState<string | null>(null);
-  const blocked = stage === "exit-unknown" || stage === "source-validation-unknown" || stage === "role-expired";
+  const [restoredSource, setRestoredSource] = useState<string | null>(null);
+  const restoringRole = Boolean(sourceCredential?.startsWith("mxb1.s.") && restoredSource !== sourceCredential);
+  const blocked = restoringRole || stage === "exit-unknown" || stage === "source-validation-unknown" || stage === "role-expired";
   const mode = stage === "role-active" ? "ROLE" : blocked ? "BLOCKED" : "USER";
   const sourceCredentialUnchanged = sourceCredential !== null && sourceCredential === activeSourceCredential;
   const effectiveCredential = mode === "ROLE" ? sourceCredentialUnchanged ? activeCredential : null : mode === "USER" ? sourceCredential : null;
   const roleCredential = useRef<string | null>(null);
+  const restoredLogoutRequestId = useRef<string | null>(null);
   const sourceCredentialRef = useRef(sourceCredential);
   const expireSourceRef = useRef(expireSource);
   const effectiveOwnerRef = useRef<{ credential: string; mode: "USER" | "ROLE" } | null>(effectiveCredential
@@ -146,6 +169,7 @@ export function RoleSessionProvider({
   const resetRole = useCallback((nextStage: RoleSessionStage = "idle") => {
     operationRevision.current += 1;
     roleCredential.current = null;
+    restoredLogoutRequestId.current = null;
     setActiveCredential(null);
     setActiveSourceCredential(null);
     intentRef.current = null;
@@ -170,6 +194,42 @@ export function RoleSessionProvider({
       void service.logout(credential, activeIntent.logoutRequestId).catch(() => undefined);
     }
   }, [resetRole, service, sourceCredential]);
+
+  useEffect(() => {
+    if (!sourceCredential?.startsWith("mxb1.s.") || !current || !service) return;
+    const revision = ++operationRevision.current;
+    let disposed = false;
+    const owns = () => !disposed && revision === operationRevision.current && sourceCredentialRef.current === sourceCredential;
+    const restore = async () => {
+      try {
+        const saved = readBrowserRole(sourceCredential);
+        if (!saved) { if (owns()) setRestoredSource(sourceCredential); return; }
+        if (!saved.reference) throw new Error("BROWSER_ROLE_OUTCOME_UNKNOWN");
+        setBusy("activate");
+        const observed = await service.currentIdentity(saved.reference);
+        if (!owns()) return;
+        if (observed.session.accountId !== current.session.organizationId ||
+            observed.sourceUser.id !== current.session.principalId) throw new Error("INVALID_IAM_RESPONSE");
+        roleCredential.current = saved.reference;
+        restoredLogoutRequestId.current = saved.logoutRequestId;
+        identityRef.current = observed;
+        setActiveCredential(saved.reference);
+        setActiveSourceCredential(sourceCredential);
+        setIdentity(observed);
+        setObservedSession(observed.session);
+        setStage("role-active");
+      } catch {
+        if (!owns()) return;
+        // A missing/expired role never resumes the more privileged source user.
+        setStage("source-validation-unknown");
+        setError("unavailable");
+      } finally {
+        if (owns()) { setRestoredSource(sourceCredential); setBusy(null); }
+      }
+    };
+    void restore();
+    return () => { disposed = true; };
+  }, [current, service, sourceCredential]);
 
   useEffect(() => {
     if (stage !== "role-active" || !identity) return;
@@ -271,6 +331,13 @@ export function RoleSessionProvider({
       if (revision !== operationRevision.current || roleCredential.current !== credential) return false;
       if (!sameSession(nextIdentity.session, expected) || nextIdentity.account.id !== current.session.organizationId ||
           nextIdentity.sourceUser.id !== current.session.principalId) throw new Error("INVALID_IAM_RESPONSE");
+      const source = sourceCredentialRef.current;
+      const logoutRequestId = intentRef.current?.logoutRequestId;
+      if (source?.startsWith("mxb1.s.")) {
+        if (!logoutRequestId) throw new Error("INVALID_BROWSER_ROLE");
+        saveBrowserRole({ source, reference: credential, logoutRequestId });
+        restoredLogoutRequestId.current = logoutRequestId;
+      }
       identityRef.current = nextIdentity;
       setActiveCredential(credential);
       setActiveSourceCredential(sourceCredentialRef.current);
@@ -305,6 +372,7 @@ export function RoleSessionProvider({
     intentRef.current = frozen;
     setObservedSession(null);
     try {
+      saveBrowserRole({ source: credential, reference: null, logoutRequestId: frozen.logoutRequestId });
       const result = await service.assume(credential, frozen.role.roleId, {
         resourceVersion: frozen.role.resourceVersion,
         durationSeconds: frozen.durationSeconds,
@@ -418,6 +486,7 @@ export function RoleSessionProvider({
     try {
       await service.revalidateSource(credential, current.session.organizationId, current.session.principalId);
       if (revision !== operationRevision.current || sourceCredentialRef.current !== credential) return false;
+      if (credential.startsWith("mxb1.s.")) sessionStorage.removeItem(browserRoleKey);
       resetRole();
       return true;
     } catch (failure) {
@@ -435,7 +504,8 @@ export function RoleSessionProvider({
     const credential = roleCredential.current;
     const activeIntent = intentRef.current;
     const activeSession = identityRef.current?.session ?? observedSession;
-    if (!service || !credential || !activeIntent || !activeSession || busy) return false;
+    const logoutRequestId = activeIntent?.logoutRequestId ?? restoredLogoutRequestId.current;
+    if (!service || !credential || !logoutRequestId || !activeSession || busy) return false;
     const revision = ++operationRevision.current;
     setBusy("exit");
     setError(null);
@@ -443,7 +513,7 @@ export function RoleSessionProvider({
     setActiveCredential(null);
     setActiveSourceCredential(null);
     try {
-      const session = await service.logout(credential, activeIntent.logoutRequestId);
+      const session = await service.logout(credential, logoutRequestId);
       if (revision !== operationRevision.current || roleCredential.current !== credential) return false;
       if (!sameSession(session, activeSession) || session.status !== "REVOKED") throw new Error("INVALID_IAM_RESPONSE");
       roleCredential.current = null;
@@ -476,6 +546,7 @@ export function RoleSessionProvider({
       const session = await service.revokeByRequest(credential, activeIntent.requestId, activeIntent.revokeRequestId);
       if (revision !== operationRevision.current || sourceCredentialRef.current !== credential) return false;
       if (!sameSession(session, activeSession) || session.status !== "REVOKED") throw new Error("INVALID_IAM_RESPONSE");
+      if (credential.startsWith("mxb1.s.")) sessionStorage.removeItem(browserRoleKey);
       roleCredential.current = null;
       setActiveCredential(null);
       setActiveSourceCredential(null);
@@ -499,7 +570,10 @@ export function RoleSessionProvider({
   }, [busy, finishSourceRestore, stage]);
 
   const clearAttempt = useCallback(() => {
-    if (busy || stage === "activation-unknown" || stage === "role-active" || stage === "exit-unknown" || stage === "source-validation-unknown") return;
+    if (busy || stage === "activation-unknown" || stage === "role-active" || stage === "exit-unknown" || stage === "source-validation-unknown" || stage === "role-expired") return;
+    if (sourceCredentialRef.current?.startsWith("mxb1.s.")) {
+      try { sessionStorage.removeItem(browserRoleKey); } catch { setStage("source-validation-unknown"); return; }
+    }
     operationRevision.current += 1;
     roleCredential.current = null;
     setActiveCredential(null);

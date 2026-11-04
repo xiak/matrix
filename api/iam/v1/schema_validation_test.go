@@ -16,6 +16,42 @@ import (
 	auditv1 "github.com/xiak/matrix/api/audit/v1"
 )
 
+func TestBrowserSessionSchemasExcludeReusableCredentials(t *testing.T) {
+	api := loadIAMOpenAPI(t)
+	session := map[string]any{"apiVersion": APIVersion, "kind": "Session", "id": "browser-session", "organizationId": "account-one", "principalId": "user-one",
+		"status": "ACTIVE", "issuedAt": "2026-11-04T08:00:00Z", "expiresAt": "2026-11-04T16:00:00Z"}
+	reference := "mxb1.s." + strings.Repeat("a", 64)
+	for _, name := range []string{"BrowserAuthenticatedResponse", "BrowserSessionResponse"} {
+		schema := compileIAMOpenAPISchema(t, api, name)
+		wire := map[string]any{"session": session, "mustChangePassword": true, "browserCredential": reference}
+		if name == "BrowserAuthenticatedResponse" {
+			wire["outcome"] = "AUTHENTICATED"
+		} else {
+			wire["loginName"] = "alex"
+		}
+		if err := schema.Validate(wire); err != nil {
+			t.Fatalf("valid browser response: %v", err)
+		}
+		for _, field := range []string{"credential", "challengeCredential", "accountId", "sessionId"} {
+			wire[field] = "unexpected"
+			if schema.Validate(wire) == nil {
+				t.Fatalf("browser response accepted %s", field)
+			}
+			delete(wire, field)
+		}
+		wire["browserCredential"] = "mxb1.r." + strings.Repeat("b", 64)
+		if schema.Validate(wire) == nil {
+			t.Fatal("role reference substituted for a login")
+		}
+		wire["browserCredential"] = reference
+		session["status"] = "REVOKED"
+		if schema.Validate(wire) == nil {
+			t.Fatal("revoked login restored")
+		}
+		session["status"] = "ACTIVE"
+	}
+}
+
 func TestAccountLifecycleCompletionSchemaAndStrictCodec(t *testing.T) {
 	schema := compileIAMOpenAPISchema(t, loadIAMOpenAPI(t), "AccountLifecycleCompletion")
 	valid := []string{

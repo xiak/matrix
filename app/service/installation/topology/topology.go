@@ -47,6 +47,9 @@ const logstashImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_LOGSTASH_IMAGE_IDS
 const kibanaImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_KIBANA_IMAGE_IDS"
 const redisImagesEnvironment = "MATRIX_PAAS_WORKER_MANAGED_REDIS_IMAGE_IDS"
 const sixManagedProductsContractDigest = "sha256:a5e88ed17c95e286c9b028d10a669f459f2c280612bc37314fbcf152ec840c6c"
+
+// Accepted seven-product installations predate browser cookie transport.
+const bearerOnlyContractDigest = "sha256:f109f3d65a99228e5af69b9f606630ac9cafb9fa316b35b360cd373cc5f231a6"
 const fiveManagedProductsContractDigest = "sha256:14d8147b81e9a642c798a6a043c56265d770c0b433e9146729a022291aaaf52d"
 
 // Installed handbook.5 already uses isolated MySQL, without Logstash.
@@ -121,6 +124,14 @@ func contractDescriptionDigest(value contract) string {
 	}
 	digest := sha256.Sum256(content)
 	return "sha256:" + hex.EncodeToString(digest[:])
+}
+
+func bearerOnlyContractDescription() contract {
+	previous := contractDescription()
+	for _, name := range []string{"iam", "audit", "paas-api", "devops-api"} {
+		delete(previous.Compose.Services[name].Environment, "MATRIX_BROWSER_ORIGIN")
+	}
+	return previous
 }
 
 func contractDescription() contract {
@@ -222,6 +233,11 @@ func compileProductTopology(manifest release.Manifest, options Options, isolated
 	if !isolatedMySQL {
 		delete(document.Services["paas-worker"].Environment, mysqlEndpointImagesEnvironment)
 	}
+	if manifest.TopologyDigest != ContractDigest() {
+		for _, name := range []string{"iam", "audit", "paas-api", "devops-api"} {
+			delete(document.Services[name].Environment, "MATRIX_BROWSER_ORIGIN")
+		}
+	}
 	content, err := json.Marshal(document)
 	if err != nil {
 		return Result{}, errors.New("encode platform Compose topology failed")
@@ -239,8 +255,14 @@ func ValidateInstalledContract(manifest release.Manifest) error {
 		return errors.New("installed release manifest contract is unsupported")
 	}
 	expected := ContractDigest()
+	if manifest.TopologyDigest == bearerOnlyContractDigest {
+		expected = bearerOnlyContractDigest
+		if contractDescriptionDigest(bearerOnlyContractDescription()) != expected {
+			return errors.New("installed bearer-only topology implementation is unsupported")
+		}
+	}
 	if release.IsSixManagedProductsManifest(manifest) {
-		previous := contractDescription()
+		previous := bearerOnlyContractDescription()
 		delete(previous.Compose.Services["paas-worker"].Environment, redisImagesEnvironment)
 		expected = sixManagedProductsContractDigest
 		if contractDescriptionDigest(previous) != expected {
@@ -248,7 +270,7 @@ func ValidateInstalledContract(manifest release.Manifest) error {
 		}
 	}
 	if release.IsFiveManagedProductsManifest(manifest) {
-		previous := contractDescription()
+		previous := bearerOnlyContractDescription()
 		delete(previous.Compose.Services["paas-worker"].Environment, redisImagesEnvironment)
 		delete(previous.Compose.Services["paas-worker"].Environment, kibanaImagesEnvironment)
 		expected = fiveManagedProductsContractDigest
@@ -257,7 +279,7 @@ func ValidateInstalledContract(manifest release.Manifest) error {
 		}
 	}
 	if release.IsFourManagedProductsManifest(manifest) {
-		previous := contractDescription()
+		previous := bearerOnlyContractDescription()
 		delete(previous.Compose.Services["paas-worker"].Environment, redisImagesEnvironment)
 		delete(previous.Compose.Services["paas-worker"].Environment, kibanaImagesEnvironment)
 		delete(previous.Compose.Services["paas-worker"].Environment, logstashImagesEnvironment)
@@ -291,7 +313,7 @@ func CompileInstalled(manifest release.Manifest, options Options) (Result, error
 		return Result{}, err
 	}
 	if !release.IsLegacyProductlessManifest(manifest) {
-		if release.IsFiveManagedProductsManifest(manifest) || release.IsSixManagedProductsManifest(manifest) {
+		if manifest.TopologyDigest == bearerOnlyContractDigest || release.IsFiveManagedProductsManifest(manifest) || release.IsSixManagedProductsManifest(manifest) {
 			return compileProductTopology(manifest, options, true)
 		}
 		if release.IsFourManagedProductsManifest(manifest) {
@@ -1121,6 +1143,14 @@ func compileServices(
 	apisix.DependsOn = healthy(apisixDependencies...)
 	services["apisix"] = apisix
 	services["platform-api"] = platformAPI
+	if options.NorthboundOrigin != "" {
+		for _, name := range []string{"iam", "audit", "paas-api", "devops-api"} {
+			if component, ok := services[name]; ok {
+				component.Environment["MATRIX_BROWSER_ORIGIN"] = options.NorthboundOrigin
+				services[name] = component
+			}
+		}
+	}
 	return services
 }
 

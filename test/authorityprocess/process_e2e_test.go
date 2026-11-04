@@ -27,6 +27,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"runtime"
 	"slices"
 	"sort"
@@ -59,7 +60,8 @@ import (
 )
 
 const (
-	authorityProcessDSN = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
+	authorityProcessDSN  = "MATRIX_AUTHORITY_PROCESS_POSTGRES_TEST_DSN"
+	browserProcessOrigin = "http://matrix-browser.test"
 
 	iamAPILogin                       = "matrix_authority_process_iam_api"
 	iamWorkerLogin                    = "matrix_authority_process_iam_worker"
@@ -1124,6 +1126,7 @@ func runAuthorityProcessMode(
 		"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE=" + iamWrappingKeyPath,
 		"MATRIX_IAM_TOTP_KEYRING_FILE=" + iamTOTPKeyPath,
 		"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE=" + iamEmailKeyPath,
+		"MATRIX_BROWSER_ORIGIN=" + browserProcessOrigin,
 	}
 	auditEnvironment := []string{
 		"MATRIX_AUDIT_DATABASE_DSN_FILE=" + auditDSNPath,
@@ -1134,6 +1137,7 @@ func runAuthorityProcessMode(
 		"MATRIX_AUDIT_INSTALLATION_ID=" + bootstrap.InstallationID,
 		"MATRIX_AUDIT_NORTHBOUND_ORIGIN=https://api.matrix.test:443",
 		"MATRIX_AUDIT_EDGE_ASSERTION_FILE=" + auditEdgeAssertionPath,
+		"MATRIX_BROWSER_ORIGIN=" + browserProcessOrigin,
 	}
 	iamDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
@@ -1168,6 +1172,7 @@ func runAuthorityProcessMode(
 		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE=" + enrollmentAuthority.controllerCertificatePath,
 		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_PRIVATE_KEY_FILE=" + enrollmentAuthority.controllerPrivateKeyPath,
 		"MATRIX_PAAS_ENROLLMENT_CONTROLLER_TRUST_FILE=" + enrollmentAuthority.controllerTrustPath,
+		"MATRIX_BROWSER_ORIGIN=" + browserProcessOrigin,
 	}
 	paasDispatcherEnvironment := func(credentialPath string, workerID string) []string {
 		return []string{
@@ -1184,6 +1189,7 @@ func runAuthorityProcessMode(
 		"MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE=" + devopsCredentialPath,
 		"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT=" + webhookSecretRoot,
 		"MATRIX_DEVOPS_LISTEN_ADDRESS=" + devopsAddress,
+		"MATRIX_BROWSER_ORIGIN=" + browserProcessOrigin,
 	}
 	devopsCheckReporterEnvironment := []string{
 		"MATRIX_DEVOPS_CHECK_REPORTER_DATABASE_DSN_FILE=" + devopsCheckReporterDSNPath,
@@ -10891,7 +10897,7 @@ func (probe *browserRoleAuthorityChangeProbe) wrap(upstream http.Handler) http.H
 		}
 		if assume {
 			probe.assumptions++
-			if probe.assumptions != 1 || probe.authorityChanging || !strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+			if probe.assumptions != 1 || probe.authorityChanging || !browserProbeAuthenticated(r) {
 				probe.invalid = true
 			}
 		}
@@ -10927,17 +10933,32 @@ func (probe *browserRoleAuthorityChangeProbe) wrap(upstream http.Handler) http.H
 		}
 		if assume {
 			var result iamv1.AssumeRoleResponse
-			if response.status != http.StatusOK || response.overflow ||
-				iamv1.DecodeRequest(bytes.NewReader(response.document), &result) != nil ||
-				iamv1.ValidateAssumeRoleResponse(result) != nil || result.Outcome != "APPLIED" ||
+			var authorization []byte
+			valid := false
+			if r.Header.Get("Matrix-Browser-Transport") == "cookie" {
+				var browser struct {
+					Outcome   string            `json:"outcome"`
+					Session   iamv1.RoleSession `json:"session"`
+					Reference string            `json:"browserCredential"`
+				}
+				valid = iamv1.DecodeRequest(bytes.NewReader(response.document), &browser) == nil &&
+					iamv1.ValidateRoleSession(browser.Session) == nil && strings.HasPrefix(browser.Reference, "mxb1.r.") && browserProbeReference.MatchString(browser.Reference)
+				result.Outcome, result.Session = browser.Outcome, browser.Session
+				authorization = []byte("MatrixSession " + browser.Reference)
+			} else {
+				valid = iamv1.DecodeRequest(bytes.NewReader(response.document), &result) == nil && iamv1.ValidateAssumeRoleResponse(result) == nil
+				credential := result.Credential.CopyBytes()
+				authorization = append([]byte("Bearer "), credential...)
+				clear(credential)
+			}
+			defer clear(authorization)
+			if response.status != http.StatusOK || response.overflow || !valid || result.Outcome != "APPLIED" ||
 				result.Session.AccountID != probe.account || result.Session.RoleID != probe.role ||
 				result.Session.SourceUserID != probe.user || result.Session.SourceServicePrincipalID != "" ||
 				!result.Session.ExpiresAt.After(observedAt) {
 				probe.invalid = true
 				return
 			}
-			credential := result.Credential.CopyBytes()
-			authorization := append([]byte("Bearer "), credential...)
 			probe.roleDigest = sha256.Sum256(authorization)
 			if probe.sourceAllowPath != "" {
 				if !probe.sourceAllowed || probe.sourceDigest != digest {
@@ -10950,8 +10971,6 @@ func (probe *browserRoleAuthorityChangeProbe) wrap(upstream http.Handler) http.H
 			} else {
 				probe.sourceDigest = digest
 			}
-			clear(credential)
-			clear(authorization)
 			probe.issued = true
 			probe.session = result.Session
 			if probe.sessionRevoke {
@@ -10989,7 +11008,7 @@ func (probe *browserRoleAuthorityChangeProbe) wrap(upstream http.Handler) http.H
 			}
 			if probe.sourceDenyBeforePath != "" && r.Method == http.MethodGet &&
 				r.URL.Path == probe.sourceDenyBeforePath && response.status == http.StatusForbidden &&
-				strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ") {
+				browserProbeAuthenticated(r) {
 				if probe.sourceDeniedBefore && probe.sourceDigest != digest {
 					probe.invalid = true
 				}
@@ -15427,7 +15446,7 @@ func (value *browserPermissionProbe) wrap(upstream http.Handler) http.Handler {
 			authorization := r.Header.Get("Authorization")
 			digest := sha256.Sum256([]byte(authorization))
 			if stage == "initial" && path == strings.TrimSuffix(value.updatePath, ":update") && !value.hasRefreshSession &&
-				strings.HasPrefix(authorization, "Bearer ") && len(authorization) > len("Bearer ") {
+				browserProbeAuthenticated(r) {
 				value.refreshSession, value.hasRefreshSession = digest, true
 			}
 			if stage == "granted" || stage == "exact-revoked" || stage == "revoked" {
@@ -15643,9 +15662,35 @@ func iamConsoleBrowserUpstreams(t *testing.T, transport *http.Transport, iamEndp
 		proxy.ErrorHandler = func(w http.ResponseWriter, _ *http.Request, _ error) {
 			http.Error(w, "upstream unavailable", http.StatusBadGateway)
 		}
-		mux.Handle(route.prefix, http.StripPrefix(route.strip, proxy))
+		upstream := http.StripPrefix(route.strip, proxy)
+		mux.Handle(route.prefix, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Matrix-Browser-Transport") == "cookie" {
+				// The fixture's dynamically allocated same-origin listener maps to
+				// one explicit process origin. Reject external origins before mapping;
+				// never inject a credential or bypass the production cookie adapter.
+				origins := r.Header.Values("Origin")
+				if len(origins) > 1 || len(origins) == 1 && origins[0] != "http://"+r.Host {
+					http.Error(w, "browser origin rejected", http.StatusForbidden)
+					return
+				}
+				r = r.Clone(r.Context())
+				if len(origins) == 1 {
+					r.Header.Set("Origin", browserProcessOrigin)
+				}
+			}
+			upstream.ServeHTTP(w, r)
+		}))
 	}
 	return mux
+}
+
+var browserProbeReference = regexp.MustCompile(`^mxb1\.[sr]\.[0-9a-f]{64}$`)
+
+func browserProbeAuthenticated(r *http.Request) bool {
+	value := r.Header.Get("Authorization")
+	return strings.HasPrefix(value, "Bearer ") && len(value) > len("Bearer ") ||
+		r.Header.Get("Matrix-Browser-Transport") == "cookie" && strings.HasPrefix(value, "MatrixSession ") &&
+			browserProbeReference.MatchString(strings.TrimPrefix(value, "MatrixSession "))
 }
 
 func TestIAMConsoleBrowserRoutesPreserveAuthorityResponses(t *testing.T) {

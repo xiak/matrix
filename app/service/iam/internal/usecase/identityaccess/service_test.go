@@ -1761,6 +1761,11 @@ func TestOwnLoginSessionWorkflowBindsTheActualCallerAndRejectsBadStorage(t *test
 		return result
 	}
 	a, b := login(), login()
+	restored, err := service.CurrentSession(t.Context(), a.Credential)
+	if err != nil || restored.Session != a.Session || restored.LoginName != "admin" || !restored.MustChangePassword ||
+		len(tx.sessions) != 2 || len(tx.sessionTouches) != 0 || len(tx.authorizations) != 0 {
+		t.Fatal("browser restoration changed session authority or lost mandatory password change", err)
+	}
 	// Neither ordinary grants nor clearing forced-change is necessary for this
 	// possession-bound reduction. SQL concurrency/history is proved in PG18.
 	tx.attachments = map[iamv1.PolicyAttachmentID]iamv1.PolicyAttachment{}
@@ -1786,6 +1791,9 @@ func TestOwnLoginSessionWorkflowBindsTheActualCallerAndRejectsBadStorage(t *test
 		}
 		if _, err := service.ListOwnSessions(t.Context(), wrong.Credential, ""); !errors.Is(err, ErrUnauthenticated) {
 			t.Fatal("non-login directory", err)
+		}
+		if _, err := service.CurrentSession(t.Context(), wrong.Credential); !errors.Is(err, ErrUnauthenticated) {
+			t.Fatal("restored a non-login credential", err)
 		}
 		if _, err := service.RevokeOwnSession(t.Context(), wrong.Credential, b.Session.ID, iamv1.RevokeSessionRequest{RequestID: "own-wrong"}); !errors.Is(err, ErrUnauthenticated) || tx.sessionRevocation != nil {
 			t.Fatal("non-login revocation", err)

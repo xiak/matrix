@@ -145,7 +145,7 @@ func run(ctx context.Context) error {
 	if err != nil || ready.State != iamv1.ReadinessReady {
 		return errors.New("IAM authority is not ready")
 	}
-	handler, err := iamhttp.NewHandler(workflow, iamhttp.Config{})
+	handler, err := iamhttp.NewHandler(workflow, iamhttp.Config{BrowserOrigin: os.Getenv("MATRIX_BROWSER_ORIGIN")})
 	if err != nil {
 		return err
 	}

@@ -174,6 +174,18 @@ schema beyond those real implementations.
     visual system. Account aliases and qualified login likewise remain owned by
     the accepted Account contract.
 
+## Theme contrast
+
+The shared `@ui/xiak` button owns its foreground/background token pair in all
+three themes. The global reset is in `xiak.base`, below the component styles
+even when Next loads route CSS chunks in a different order. In particular,
+an anchor rendered as a primary button must retain `--text-on-accent` instead
+of inheriting ordinary page text. The real local dashboard now uses dark text
+on its cyan dark-theme button; light/mixed themes use white text on the darker
+accent. The style gate checks the existing 234 contrast pairs. Development
+uses the real API unless `NEXT_PUBLIC_MATRIX_UX_PREVIEW=1` explicitly selects
+the isolated preview.
+
 ## Ownership and boundaries
 
 | Concern | Owner |
@@ -183,7 +195,7 @@ schema beyond those real implementations.
 | Local region registration and normalized machine capability | `managedservice` through its local-infrastructure port |
 | Managed-product lifecycle effects and credential-file custody | fixed managed-service product provisioner adapters |
 | Application, ApplicationRevision, Deployment, application placement, and application execution | `apphosting` |
-| Browser composition, navigation, session memory, order draft, and result rendering | `app/ui/paas` |
+| Browser composition, navigation, non-secret session references, order draft, and result rendering | `app/ui/paas` |
 | Immutable accepted security and business facts | `audit` |
 | Offline artifact inventory, installation, upgrade, rollback, backup, and recovery | `installation` |
 
