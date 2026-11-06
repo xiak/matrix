@@ -3,7 +3,7 @@
 @layer features {
 .stack {
   display: grid;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-default);
 }
 
 .identity {
@@ -30,13 +30,14 @@
 
 .dashboardPlaceholder {
   display: grid;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-default);
 }
 
 .metricGrid {
+  container: matrix-metric-placeholder / inline-size;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: var(--xiak-spacing-comfortable);
+  gap: var(--xiak-spacing-tight);
 }
 
 .metricPlaceholder,
@@ -46,7 +47,8 @@
 }
 
 .metricPlaceholder {
-  min-height: 7.875rem;
+  min-height: 6rem;
+  gap: var(--xiak-spacing-narrow);
 }
 
 .metricLabel,
@@ -60,7 +62,7 @@
 
 .metricValue {
   width: 38%;
-  min-height: 1.875rem;
+  min-height: 1.5rem;
 }
 
 .metricHint {
@@ -71,15 +73,15 @@
   min-height: 8.25rem;
 }
 
-@container matrix-page-content (max-width: 65rem) {
-  .metricGrid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+@container matrix-metric-placeholder (max-width: 45rem) {
+  .metricGrid > * {
+    grid-column: span 2;
   }
 }
 
-@container matrix-page-content (max-width: 30rem) {
-  .metricGrid {
-    grid-template-columns: 1fr;
+@container matrix-metric-placeholder (max-width: 22.5rem) {
+  .metricGrid > * {
+    grid-column: span 4;
   }
 }
 }

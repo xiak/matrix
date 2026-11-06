@@ -8,7 +8,7 @@
   gap: var(--xiak-spacing-comfortable);
   border-bottom: 0.0625rem solid var(--xiak-color-header-divider);
   padding-inline: var(--xiak-spacing-comfortable);
-  padding-inline-start: var(--xiak-spacing-tight);
+  padding-inline-start: calc((var(--xiak-layout-rail-width) - var(--xiak-control-height)) / 2);
   background: var(--xiak-color-header-bg);
   color: var(--xiak-color-header-text);
   box-shadow: none;
@@ -32,16 +32,9 @@
 .utilities { gap: var(--xiak-spacing-default); }
 .tools { gap: var(--xiak-spacing-narrow); }
 
-.divider {
-  width: 0.0625rem;
-  height: 1.5rem;
-  flex: none;
-  background: var(--xiak-color-header-border);
-}
-
 .brand {
   display: flex;
-  width: 2.5rem;
+  width: var(--xiak-control-height);
   min-height: var(--xiak-control-height);
   flex: none;
   align-items: center;
@@ -81,12 +74,11 @@
 
 @container matrix-control-shell (max-width: 62.5rem) {
   .navigation { gap: var(--xiak-spacing-default); }
-  .divider { display: none; }
   .utilities { gap: var(--xiak-spacing-tight); }
 }
 
 @container matrix-control-shell (max-width: 52.5rem) {
-  .header { gap: var(--xiak-spacing-tight); padding-inline: var(--xiak-spacing-default); padding-inline-start: var(--xiak-spacing-tight); }
+  .header { gap: var(--xiak-spacing-tight); padding-inline-end: var(--xiak-spacing-default); }
   .navigation { gap: var(--xiak-spacing-tight); }
 }
 

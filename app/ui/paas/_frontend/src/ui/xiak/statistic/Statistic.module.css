@@ -1,12 +1,12 @@
 @layer base, xiak, features;
 
 @layer xiak {
-.card { min-height: 8rem; }
-.body { display: grid; gap: var(--xiak-spacing-tight); }
-.heading { display: flex; min-height: 1.75rem; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
+.card { min-height: 6rem; }
+.body { display: grid; gap: var(--xiak-spacing-narrow); }
+.heading { display: flex; min-height: 1.25rem; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-control); line-height: var(--xiak-line-height-control); }
 .value { color: var(--xiak-color-text-strong); font-family: var(--xiak-font-numeric); font-size: var(--xiak-font-size-metric); font-weight: var(--xiak-font-weight-semibold); font-variant-numeric: tabular-nums; line-height: 1.2; overflow-wrap: anywhere; }
-.hint { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); line-height: 1.6; }
-.icon { display: grid; flex: none; width: 1.75rem; height: 1.75rem; place-items: center; border-radius: var(--xiak-radius-control); color: var(--xiak-color-status-neutral); background: var(--xiak-color-status-neutral-bg); }
+.hint { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-control); line-height: var(--xiak-line-height-control); }
+.icon { display: grid; flex: none; width: 1.25rem; height: 1.25rem; place-items: center; border-radius: var(--xiak-radius-control); color: var(--xiak-color-status-neutral); background: var(--xiak-color-status-neutral-bg); }
 .icon svg { width: var(--xiak-icon-size); height: var(--xiak-icon-size); }
 .icon[data-status="info"] { color: var(--xiak-color-status-info); background: var(--xiak-color-status-info-bg); }
 .icon[data-status="success"] { color: var(--xiak-color-status-success); background: var(--xiak-color-status-success-bg); }

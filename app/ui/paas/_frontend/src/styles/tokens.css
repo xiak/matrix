@@ -226,7 +226,7 @@
   --xiak-table-selection-width: 2.75rem;
   --xiak-dialog-width: 37.5rem;
   --xiak-dialog-width-wide: 60rem;
-  --xiak-panel-padding: var(--xiak-spacing-comfortable);
+  --xiak-panel-padding: var(--xiak-spacing-default);
   --xiak-choice-size: 0.75rem;
   --xiak-choice-mark-size: 0.5rem;
   --xiak-radio-dot-size: 0.25rem;
@@ -235,9 +235,9 @@
   --xiak-icon-size: 1rem;
   --xiak-header-trigger-icon-size: 1.125rem;
   --xiak-header-trigger-chevron-size: var(--xiak-control-chevron-size);
-  --xiak-empty-height: 15rem;
-  --xiak-empty-height-compact: 11.25rem;
-  --xiak-font-size-metric: 1.75rem;
+  --xiak-empty-height: 8rem;
+  --xiak-empty-height-compact: 6rem;
+  --xiak-font-size-metric: 1.25rem;
   --xiak-status-dot-size: 0.375rem;
   --xiak-resize-hit-width: 0.625rem;
   --xiak-resize-line-width: 0.125rem;

@@ -1,13 +1,12 @@
 @layer base, xiak, features;
 
 @layer xiak {
-.empty { display: grid; min-width: 0; min-height: var(--xiak-empty-height); align-content: center; justify-items: center; gap: var(--xiak-spacing-tight); padding: var(--xiak-panel-padding); text-align: center; }
-.icon { display: grid; width: 3rem; height: 3rem; place-items: center; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); margin-bottom: var(--xiak-spacing-tight); color: var(--xiak-color-text-subtle); background: var(--xiak-color-bg-panel-hover); }
-.icon svg { width: 1.5rem; height: 1.5rem; }
-.empty p { max-width: 32.5rem; color: var(--xiak-color-text-muted); line-height: 1.7; overflow-wrap: anywhere; }
-.action { margin-top: var(--xiak-spacing-default); }
-.empty[data-compact="true"] { min-height: var(--xiak-empty-height-compact); padding: var(--xiak-spacing-comfortable); }
-.empty[data-compact="true"] .icon { width: var(--xiak-control-height); height: var(--xiak-control-height); }
+.empty { display: grid; min-width: 0; min-height: var(--xiak-empty-height); align-content: center; justify-items: center; gap: var(--xiak-spacing-narrow); padding: var(--xiak-panel-padding); text-align: center; }
+.icon { display: grid; width: var(--xiak-control-height); height: var(--xiak-control-height); place-items: center; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-control); color: var(--xiak-color-text-subtle); background: var(--xiak-color-bg-panel-hover); }
+.icon svg { width: var(--xiak-icon-size); height: var(--xiak-icon-size); }
+.empty p { max-width: 32.5rem; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-control); line-height: var(--xiak-line-height-control); overflow-wrap: anywhere; }
+.action { margin-top: var(--xiak-spacing-tight); }
+.empty[data-compact="true"] { min-height: var(--xiak-empty-height-compact); }
+.empty[data-compact="true"] .icon { width: var(--xiak-control-height-small); height: var(--xiak-control-height-small); }
 .empty[data-compact="true"] h3 { font-size: var(--xiak-font-size-body); }
-.empty[data-compact="true"] p { font-size: var(--xiak-font-size-small); }
 }

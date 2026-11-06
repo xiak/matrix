@@ -70,7 +70,6 @@ export const ConsoleHeader = memo(function ConsoleHeader({ scene, readServiceDef
     <Layout.Header data-surface="shell" aria-label={t("globalNavigation")} className={styles.header}>
       <div className={styles.navigation}>
         <ConsoleBrand inactive={catalogOpen} />
-        <span aria-hidden="true" className={styles.divider} />
         <ProductLauncher onOpenChange={openPanel("products")} open={activePanel === "products"} preview={scene.preview} readServiceDefinitions={readServiceDefinitions} />
       </div>
 

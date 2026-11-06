@@ -130,45 +130,52 @@ function InstallationRows({ items, onOpen, triggerRefs }: {
 function OverviewContent({ scene }: { scene: Extract<ConsoleContentScene, { kind: "overview" }> }) {
   const t = useTranslations("ManagedService");
   return (
-    <ContentLayout>
-      <ContentLayout.Main>
-        <ConsoleMetrics metrics={scene.metrics} />
+    <div className={styles.overview}>
+      <ConsoleMetrics metrics={scene.metrics} />
+      <ContentLayout>
+        <ContentLayout.Main>
+          <Card>
+            <Card.Header>
+              <div>
+                <Typography.Title as="h2" level={3}>{t("recentInstances")}</Typography.Title>
+                <Typography.Text tone="muted">{t("recentHint")}</Typography.Text>
+              </div>
+              <Link className={styles.textLink} href="/console/installations/">
+                {t("viewAll")} <ArrowRight aria-hidden="true" />
+              </Link>
+            </Card.Header>
+            <InstallationRows items={scene.recentInstallations} />
+          </Card>
+        </ContentLayout.Main>
 
-        <Card>
-          <Card.Header>
-            <div>
-              <Typography.Title as="h2" level={3}>{t("recentInstances")}</Typography.Title>
-              <Typography.Text tone="muted">{t("recentHint")}</Typography.Text>
-            </div>
-            <Link className={styles.textLink} href="/console/installations/">
-              {t("viewAll")} <ArrowRight aria-hidden="true" />
-            </Link>
-          </Card.Header>
-          <InstallationRows items={scene.recentInstallations} />
-        </Card>
-      </ContentLayout.Main>
-
-      <ContentLayout.Aside>
-        <Card className={styles.featureCard}>
-          <Card.Body className={styles.featureCardBody}>
-            <div className={styles.databaseIcon}>{scene.offering ? <OfferingIcon serviceId={scene.offering.serviceId} /> : <Database aria-hidden="true" />}</div>
-            <Typography.Eyebrow>{t("databaseEyebrow")}</Typography.Eyebrow>
-            <Typography.Title as="h2" level={2}>
-              {scene.offering?.name ?? t("managedDataServices")}
-            </Typography.Title>
-            <p>{scene.offering?.description ?? t("offeringUnavailable")}</p>
-            <div className={styles.featureMeta}>
-              <span><PackageCheck aria-hidden="true" /> {t("fixedArtifact")}</span>
-              <span><HardDrive aria-hidden="true" /> {t("persistentStorage")}</span>
-              <span><CheckCircle2 aria-hidden="true" /> {t("managedCredentials")}</span>
-            </div>
-            <Button asChild><Link href="/console/catalog/">
-              {t("browseCatalog")} <ArrowRight aria-hidden="true" />
-            </Link></Button>
-          </Card.Body>
-        </Card>
-      </ContentLayout.Aside>
-    </ContentLayout>
+        <ContentLayout.Aside>
+          <Card className={styles.featureCard}>
+            <Card.Header>
+              <div className={styles.productIdentity}>
+                <div className={styles.databaseIcon}>{scene.offering ? <OfferingIcon serviceId={scene.offering.serviceId} /> : <Database aria-hidden="true" />}</div>
+                <div className={styles.productHeading}>
+                  <Typography.Eyebrow>{t("databaseEyebrow")}</Typography.Eyebrow>
+                  <Typography.Title as="h2" level={3}>
+                    {scene.offering?.name ?? t("managedDataServices")}
+                  </Typography.Title>
+                </div>
+              </div>
+            </Card.Header>
+            <Card.Body className={styles.featureCardBody}>
+              <p>{scene.offering?.description ?? t("offeringUnavailable")}</p>
+              <div className={styles.featureMeta}>
+                <span><PackageCheck aria-hidden="true" /> {t("fixedArtifact")}</span>
+                <span><HardDrive aria-hidden="true" /> {t("persistentStorage")}</span>
+                <span><CheckCircle2 aria-hidden="true" /> {t("managedCredentials")}</span>
+              </div>
+              <Button asChild size="small" variant="secondary"><Link href="/console/catalog/">
+                {t("browseCatalog")} <ArrowRight aria-hidden="true" />
+              </Link></Button>
+            </Card.Body>
+          </Card>
+        </ContentLayout.Aside>
+      </ContentLayout>
+    </div>
   );
 }
 

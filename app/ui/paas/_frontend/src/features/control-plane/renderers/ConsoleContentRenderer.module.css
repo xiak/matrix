@@ -5,7 +5,6 @@
   gap: var(--xiak-spacing-default);
 }
 
-.featureCard p,
 .productDescription,
 .regionCard p {
   margin-top: var(--xiak-spacing-tight);
@@ -215,16 +214,29 @@
   background: var(--xiak-color-bg-panel);
 }
 
-.featureCardBody {
+.overview {
   display: grid;
   gap: var(--xiak-spacing-default);
+}
+
+.featureCardBody {
+  display: grid;
+  gap: var(--xiak-spacing-tight);
+}
+
+.featureCardBody p {
+  margin: 0;
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-control);
+  line-height: var(--xiak-line-height-control);
 }
 
 .databaseIcon,
 .regionIcon {
   display: grid;
-  width: 2.75rem;
-  height: 2.75rem;
+  width: var(--xiak-control-height);
+  height: var(--xiak-control-height);
+  flex: none;
   place-items: center;
   border-radius: var(--xiak-radius-panel);
   background: var(--xiak-color-accent-haze);
@@ -233,14 +245,14 @@
 
 .databaseIcon svg,
 .regionIcon svg {
-  width: 1.375rem;
-  height: 1.375rem;
+  width: var(--xiak-icon-size);
+  height: var(--xiak-icon-size);
 }
 
 .featureMeta {
   display: grid;
-  gap: var(--xiak-spacing-tight);
-  margin-block: var(--xiak-spacing-tight);
+  gap: var(--xiak-spacing-narrow);
+  margin: 0;
 }
 
 .featureMeta span,
@@ -249,7 +261,7 @@
   align-items: center;
   gap: var(--xiak-spacing-tight);
   color: var(--xiak-color-text-muted);
-  font-size: var(--xiak-font-size-small);
+  font-size: var(--xiak-font-size-control);
 }
 
 .featureMeta svg,
@@ -261,12 +273,12 @@
 
 .catalogPage {
   display: grid;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-default);
 }
 
 .productOverview {
   display: grid;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-default);
 }
 
 .productOverviewCard {
@@ -279,7 +291,7 @@
 
 .productOverviewBody {
   display: grid;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-default);
 }
 
 .productOverviewBody .productDescription {
@@ -379,7 +391,7 @@
 .regionGrid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 22.5rem), 1fr));
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-default);
 }
 
 .productCard {
@@ -417,7 +429,7 @@
 }
 
 .productCardFooter {
-  min-height: 4rem;
+  min-height: 3rem;
 }
 
 .productFacts {

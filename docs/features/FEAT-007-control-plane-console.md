@@ -1798,8 +1798,9 @@ Matrix Cloud header -> Service directory
 
 The visual contract is owned by semantic tokens and `@ui/xiak`; feature
 renderers compose these primitives without competing control dimensions.
-The default theme reproduces the preferred Figma 125% viewing size at 100%
-browser zoom. `--xiak-ui-scale: 1.25` sets the root font to 125% of the user's
+The default theme retains the preferred Figma 125% text and control size at
+100% browser zoom, with compact content spacing and information cards.
+`--xiak-ui-scale: 1.25` sets the root font to 125% of the user's
 browser font preference. With the standard 16px browser font, one rem is 20px.
 Fonts, controls, icons, panel widths, radii, spacing and scrollbars use rem;
 structural borders retain a crisp 1px hairline. No root CSS zoom or transform
@@ -1808,7 +1809,7 @@ is involved. The following are the resulting CSS dimensions under that default:
 | Component or region | Contract | UX purpose |
 | --- | --- | --- |
 | Global header | `60px` high; `40px` controls | Persistent brand, search, scope, message-center bell and identity |
-| Header brand | `45px` standalone M at its `252:172` aspect ratio, inside a `50px` wide home link (`40px` high; `55px` touch) at every width | Center on the service rail; retain the localized home-link name, tooltip, hover, pressed and keyboard-focus states |
+| Header brand | `30px` standalone M at its `252:172` aspect ratio, inside a `40px` square home link (`55px` touch) | Center on the service rail with no vertical header divider; retain the localized name, tooltip, hover, pressed and keyboard-focus states |
 | Header typography | `13.75px / 20px` controls; `16.25px` section identity | Local Inter and system CJK fallback; compact layouts change composition instead of shrinking text |
 | Header count badge | `22.5px` height; `12.5px` numeric font and `17.5px` line height | Keep numbers independently centered; multiple digits expand horizontally |
 | Login brand | Up to `600px` at the approved `1020:172` aspect ratio; compact header below `950px` | One visible brand placement per viewport |
@@ -1822,8 +1823,11 @@ is involved. The following are the resulting CSS dimensions under that default:
 | Resource table | `45px` header; `55px` minimum row; `10 × 15px` cell padding; `180px` minimum cell width | Rich rows may grow; a labelled region owns horizontal scrolling below its `800px` or content-driven minimum |
 | Form dialog | `750px` desktop width; `10px` compact viewport inset | Fixed title/footer with independently scrolling fields |
 | Context workspace | `450px` default; `400–575px` adjustable | Inspect or review while retaining the source page |
-| Content canvas | Fluid workspace; `40px` desktop gutter; compact `20px` block and `15px` inline inset | Keep context and content aligned with readable forms and full-width collections |
-| Panel geometry | `7.5px` panel/dialog radius; `6.25px` controls and `3.75px` small radius; `5/10/15/20/25/30/40px` spacing rhythm; `20px` panel inset | One theme-owned geometry scale |
+| Content canvas | Fluid workspace; `20px` desktop gutter; compact `20px` block and `15px` inline inset | Align page titles and content while keeping the established control/font scale |
+| Panel geometry | `7.5px` panel/dialog radius; `6.25px` controls and `3.75px` small radius; `15px` panel inset and composition gap | One theme-owned geometry scale |
+| Overview metrics | `120px` minimum card height, `25px` values, `13.75px/20px` labels and hints, `10px` grid gap | Four cards above the overview's main/aside split; each metric grid independently changes to two columns at `900px` and one at `450px` |
+| Main/aside composition | `300px` supporting column and `15px` gap, stacked at `960px` of page content | Keep secondary product information alongside the recent-instance panel when space permits |
+| Empty states | `160px` standard or `120px` compact minimum height; theme-sized icons and `13.75px/20px` descriptions | Communicate absence without stretching a card to fill the canvas |
 
 The theme is owned by `src/styles/tokens.css` through the existing semantic
 `--xiak-*` contract. Dark canvas, panel, header and navigation use `#2c2c2c`.
@@ -1843,7 +1847,11 @@ and hints have a `5px` gap. Tabs and menu options use `30px` rows; tabs retain
 `5px` gaps, `10px` inline padding, `6.25px` corners and no underline. Selected
 tab labels use weight 550. Disabled controls retain their appearance on hover.
 Focus is a theme-scaled `0.125rem` outline; transitions retain `90ms` duration
-and respect reduced motion. Card headers use `15px` block and `20px` inline inset.
+and respect reduced motion. Card headers and footers use `10px` block and
+`15px` inline inset, with control-sized supporting text. Card bodies use `15px`
+inset. Metric hints and empty-state descriptions wrap rather than truncate;
+longer English copy may grow a metric row above its minimum height. Loading
+metric grids follow the same density and independent container breakpoints.
 
 Product and IAM navigation use `40px` single-line rows, `13.75px/20px` strong
 text at weight 400, and no inter-row gap. The `20px` glyph sits in a `30px` slot
@@ -1876,8 +1884,9 @@ font are local static-export assets; the font's SIL license ships under
 `public/licenses`. The server returns WOFF2 as `font/woff2` independently of
 host MIME registration. No external font or image service is required.
 
-Theme acceptance evidence: the complete frontend suite passes 83 files / 2167
-cases. Production TypeScript, full lint, architecture and 312 semantic contrast
+Theme acceptance evidence: the owning shell, content-frame and read-boundary
+suite passes three files / 165 cases. Production TypeScript, owning-file lint,
+architecture and 312 semantic contrast
 pairs, nine Node export-boundary cases, and UI Go test/vet pass. Preview unset
 and zero export the same 369 files byte-for-byte,
 including 69 HTML pages and 66 normalized segment files, matching the Go embed.
@@ -1892,11 +1901,18 @@ cover the 1440px shell, a 450px right workspace and keyboard resizing to
 400/575px, with bounded select popups. At 360px the workspace fills the
 viewport, wraps keyboard focus, and compact search restores its trigger focus.
 Light, mixed and dark themes and Chinese/English appearance controls fit the
-360px viewport without horizontal overflow. The standalone header brand resolves
-to a 50px home link and 45px symbol at desktop and 360px widths; its desktop
-center aligns with the 70px rail. Keyboard activation returns to the console overview; both existing
-overview-identity transition cases pass. These visual checks do not replace the
-existing real-IAM security or release gates.
+360px viewport without horizontal overflow. The header brand resolves to a
+40px home link and 30px symbol, centered at x=35px above the 70px rail;
+there is no separator between it and the product launcher. Authenticated
+Chrome at 1743px and 1440px resolves the overview to four 120px metric cards,
+a 160px empty state and a 300px supporting card. At 1280px the metric grid
+uses two columns, and at 360px one column, without page overflow. English
+metrics grow to 137px at 1440px without clipped copy; light, mixed and dark
+surfaces retain their palette. Product catalog and IAM cards have no
+horizontal overflow at desktop widths, and IAM remains bounded at 360px.
+Keyboard activation returns to the console overview; both existing
+overview-identity transition cases pass. These visual checks do not replace
+the existing real-IAM security or release gates.
 
 Four page compositions are admitted: a cloud overview with readiness and
 attention-first metrics; a collection page with local search, filters, table,

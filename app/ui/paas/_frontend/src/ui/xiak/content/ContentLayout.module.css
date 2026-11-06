@@ -3,8 +3,8 @@
 @layer xiak {
 .layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(15rem, 17.5rem);
-  gap: var(--xiak-spacing-roomy);
+  grid-template-columns: minmax(0, 1fr) 15rem;
+  gap: var(--xiak-spacing-default);
   align-items: start;
 }
 
@@ -12,10 +12,10 @@
 .aside {
   display: grid;
   min-width: 0;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-default);
 }
 
-@container matrix-page-content (max-width: 67.5rem) {
+@container matrix-page-content (max-width: 48rem) {
   .layout {
     grid-template-columns: minmax(0, 1fr);
   }
