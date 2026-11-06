@@ -1808,7 +1808,7 @@ is involved. The following are the resulting CSS dimensions under that default:
 | Component or region | Contract | UX purpose |
 | --- | --- | --- |
 | Global header | `60px` high; `40px` controls | Persistent brand, search, scope, message-center bell and identity |
-| Header brand | `180 × 30px` proportional SVG; `45px` symbol below `1050px` | Preserve the approved lockup proportions |
+| Header brand | `45px` standalone M at its `252:172` aspect ratio, inside a `50px` wide home link (`40px` high; `55px` touch) at every width | Center on the service rail; retain the localized home-link name, tooltip, hover, pressed and keyboard-focus states |
 | Header typography | `13.75px / 20px` controls; `16.25px` section identity | Local Inter and system CJK fallback; compact layouts change composition instead of shrinking text |
 | Header count badge | `22.5px` height; `12.5px` numeric font and `17.5px` line height | Keep numbers independently centered; multiple digits expand horizontally |
 | Login brand | Up to `600px` at the approved `1020:172` aspect ratio; compact header below `950px` | One visible brand placement per viewport |
@@ -1879,7 +1879,7 @@ host MIME registration. No external font or image service is required.
 Theme acceptance evidence: the complete frontend suite passes 83 files / 2167
 cases. Production TypeScript, full lint, architecture and 312 semantic contrast
 pairs, nine Node export-boundary cases, and UI Go test/vet pass. Preview unset
-and zero export the same 371 files byte-for-byte,
+and zero export the same 369 files byte-for-byte,
 including 69 HTML pages and 66 normalized segment files, matching the Go embed.
 Authenticated Chrome checks at 100% browser scale resolve the root to 20px,
 header to 60px, rail to 70px, product content to 300px, rows to 40px and icons
@@ -1892,8 +1892,11 @@ cover the 1440px shell, a 450px right workspace and keyboard resizing to
 400/575px, with bounded select popups. At 360px the workspace fills the
 viewport, wraps keyboard focus, and compact search restores its trigger focus.
 Light, mixed and dark themes and Chinese/English appearance controls fit the
-360px viewport without horizontal overflow. These visual checks do not replace
-the existing real-IAM security or release gates.
+360px viewport without horizontal overflow. The standalone header brand resolves
+to a 50px home link and 45px symbol at desktop and 360px widths; its desktop
+center aligns with the 70px rail. Keyboard activation returns to the console overview; both existing
+overview-identity transition cases pass. These visual checks do not replace the
+existing real-IAM security or release gates.
 
 Four page compositions are admitted: a cloud overview with readiness and
 attention-first metrics; a collection page with local search, filters, table,
