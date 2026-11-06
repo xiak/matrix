@@ -24,8 +24,8 @@
 }
 
 .recovery summary:focus-visible {
-  outline: 2px solid var(--xiak-color-border-focus);
-  outline-offset: 3px;
+  outline: 0.125rem solid var(--xiak-color-border-focus);
+  outline-offset: 0.1875rem;
   border-radius: var(--xiak-radius-control);
 }
 
@@ -86,7 +86,7 @@
   gap: var(--xiak-spacing-tight);
 }
 
-@container matrix-page-content (max-width: 560px) {
+@container matrix-page-content (max-width: 35rem) {
   .notice {
     align-items: stretch;
     flex-direction: column;

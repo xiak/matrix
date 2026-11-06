@@ -24,8 +24,8 @@
 .stageHeader > div { display: grid; gap: var(--xiak-spacing-micro); }
 .stageHeader span:not(.stageIcon) { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .stageHeader h3 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
-.stageIcon { display: grid; place-items: center; flex: none; width: 38px; height: 38px; border-radius: var(--xiak-radius-panel); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
-.stageIcon svg { width: 19px; height: 19px; }
+.stageIcon { display: grid; place-items: center; flex: none; width: 2.375rem; height: 2.375rem; border-radius: var(--xiak-radius-panel); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
+.stageIcon svg { width: 1.1875rem; height: 1.1875rem; }
 .stageBody { display: grid; gap: var(--xiak-spacing-comfortable); }
 .validationPanel { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); padding-block-start: var(--xiak-spacing-comfortable); }
 
@@ -35,12 +35,12 @@
 .facts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
 .facts code, .releaseReference code { white-space: normal; overflow-wrap: anywhere; }
 .facts .fullFact { grid-column: 1 / -1; padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
-.responsibility { padding: var(--xiak-spacing-default); border-inline-start: 3px solid var(--xiak-color-accent-primary); background: var(--xiak-color-accent-haze); }
+.responsibility { padding: var(--xiak-spacing-default); border-inline-start: 0.1875rem solid var(--xiak-color-accent-primary); background: var(--xiak-color-accent-haze); }
 .responsibility strong { display: block; margin-bottom: var(--xiak-spacing-narrow); color: var(--xiak-color-text-strong); }
 
 .reviewList, .boundaries { display: grid; gap: var(--xiak-spacing-default); margin: 0; padding: 0; list-style: none; }
-.reviewList li { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: start; gap: var(--xiak-spacing-default); }
-.reviewList li > span { display: grid; place-items: center; width: 28px; height: 28px; border: var(--xiak-border-control); border-radius: var(--xiak-radius-pill); color: var(--xiak-color-accent-text); font-family: var(--xiak-font-numeric); font-weight: var(--xiak-font-weight-semibold); }
+.reviewList li { display: grid; grid-template-columns: 1.75rem minmax(0, 1fr) auto; align-items: start; gap: var(--xiak-spacing-default); }
+.reviewList li > span { display: grid; place-items: center; width: 1.75rem; height: 1.75rem; border: var(--xiak-border-control); border-radius: var(--xiak-radius-pill); color: var(--xiak-color-accent-text); font-family: var(--xiak-font-numeric); font-weight: var(--xiak-font-weight-semibold); }
 .reviewList strong { display: block; margin-bottom: var(--xiak-spacing-micro); color: var(--xiak-color-text-strong); }
 .snapshot { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); }
 .snapshot > div { display: grid; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); }
@@ -70,7 +70,7 @@
 .changeReferences code, .changeTable code { white-space: normal; overflow-wrap: anywhere; }
 .changeSummary { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-narrow); }
 .changeTable td { vertical-align: top; }
-.changeTable td:first-child { min-width: 160px; }
+.changeTable td:first-child { min-width: 10rem; }
 .changeTable td:first-child > code { display: block; margin-top: var(--xiak-spacing-narrow); }
 .changeTable td > strong { display: block; color: var(--xiak-color-text-strong); }
 .changeTable td > small { display: block; margin-top: var(--xiak-spacing-micro); }
@@ -94,8 +94,8 @@
 .templateReferences dd { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
 .templateReferences code { white-space: normal; overflow-wrap: anywhere; }
 .templateChecks { display: grid; gap: var(--xiak-spacing-narrow); margin: 0; padding: 0; list-style: none; }
-.templateChecks li { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto; align-items: start; gap: var(--xiak-spacing-default); padding-block: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
-.templateChecks li > span { display: grid; place-items: center; width: 24px; height: 24px; border-radius: var(--xiak-radius-pill); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); font-family: var(--xiak-font-numeric); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-semibold); }
+.templateChecks li { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) auto; align-items: start; gap: var(--xiak-spacing-default); padding-block: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
+.templateChecks li > span { display: grid; place-items: center; width: 1.5rem; height: 1.5rem; border-radius: var(--xiak-radius-pill); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); font-family: var(--xiak-font-numeric); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-semibold); }
 .templateChecks strong { display: block; margin-bottom: var(--xiak-spacing-micro); color: var(--xiak-color-text-strong); }
 .templateChecks p, .templateCeilingHint { margin: 0; }
 .templateCeilingHint { padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
@@ -103,7 +103,7 @@
 .reviewActions h4 { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
 .reviewActions p { margin: var(--xiak-spacing-micro) 0 0; color: var(--xiak-color-text-muted); line-height: 1.65; }
 
-.releaseReference { display: grid; grid-template-columns: minmax(110px, .6fr) minmax(90px, .35fr) minmax(0, 2fr); border-block: var(--xiak-border-subtle); }
+.releaseReference { display: grid; grid-template-columns: minmax(6.875rem, .6fr) minmax(5.625rem, .35fr) minmax(0, 2fr); border-block: var(--xiak-border-subtle); }
 .releaseReference > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); }
 .releaseReference strong { min-width: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
 .releasePackage { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); }
@@ -133,12 +133,12 @@
 .actions { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
 .actions > div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--xiak-spacing-default); }
 
-@media (max-width: 600px) {
+@media (max-width: 46.875em) {
   .root { padding-inline: var(--xiak-spacing-default); }
   .heading { grid-template-columns: auto minmax(0, 1fr); }
   .badges { grid-column: 2; justify-content: flex-start; }
   .facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .reviewList li { grid-template-columns: 28px minmax(0, 1fr); }
+  .reviewList li { grid-template-columns: 1.75rem minmax(0, 1fr); }
   .reviewList li > :last-child { grid-column: 2; justify-self: start; }
   .diagnosticGrid { grid-template-columns: minmax(0, 1fr); }
   .changeReviewHeading { align-items: stretch; flex-direction: column; }
@@ -149,7 +149,7 @@
   .templateReviewHeading { align-items: stretch; flex-direction: column; }
   .templateReviewHeading > :last-child { align-self: flex-start; }
   .templateReferences { grid-template-columns: minmax(0, 1fr); }
-  .templateChecks li { grid-template-columns: 24px minmax(0, 1fr); }
+  .templateChecks li { grid-template-columns: 1.5rem minmax(0, 1fr); }
   .templateChecks li > :last-child { grid-column: 2; justify-self: start; }
   .snapshot, .releaseReference, .releasePackageGrid, .releaseGateGrid { grid-template-columns: minmax(0, 1fr); }
   .releasePackageHeading { align-items: stretch; flex-direction: column; }

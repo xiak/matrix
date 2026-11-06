@@ -25,6 +25,7 @@ body {
 }
 
 html {
+  font-size: calc(100% * var(--xiak-ui-scale));
   background: var(--xiak-color-bg-canvas);
 }
 

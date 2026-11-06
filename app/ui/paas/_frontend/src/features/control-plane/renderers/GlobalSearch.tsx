@@ -58,7 +58,7 @@ export function GlobalSearch({ open, onOpenChange, results, onChoose, inactive =
 
   function closeAndRestoreFocus() {
     onOpenChange(false);
-    const compact = typeof window.matchMedia === "function" && window.matchMedia("(max-width: 720px)").matches;
+    const compact = trigger.current && getComputedStyle(trigger.current).display === "flex";
     (compact ? trigger : input).current?.focus();
   }
 

@@ -1,16 +1,16 @@
 .root {
   position: relative;
   width: var(--xiak-layout-search-width);
-  min-width: 160px;
-  flex: 1 1 320px;
-  max-width: 520px;
+  min-width: 10rem;
+  flex: 1 1 20rem;
+  max-width: 32.5rem;
 }
 .field {
   display: flex;
   height: var(--xiak-control-height);
   align-items: center;
   gap: var(--xiak-spacing-tight);
-  border: 1px solid var(--xiak-color-header-border);
+  border: 0.0625rem solid var(--xiak-color-header-border);
   border-radius: var(--xiak-radius-small);
   padding-inline: var(--xiak-control-padding-inline);
   background: var(--xiak-color-header-control);
@@ -34,9 +34,9 @@
 .field input::placeholder { color: var(--xiak-color-header-muted); }
 .field kbd {
   flex: none;
-  border: 1px solid var(--xiak-color-header-border);
+  border: 0.0625rem solid var(--xiak-color-header-border);
   border-radius: var(--xiak-radius-small);
-  padding: 2px 5px;
+  padding: 0.125rem 0.3125rem;
   color: var(--xiak-color-header-muted);
   font-family: var(--xiak-font-mono);
   font-size: var(--xiak-font-size-caption);
@@ -48,12 +48,12 @@
   position: absolute;
   top: calc(100% + var(--xiak-spacing-default));
   z-index: var(--xiak-z-popover);
-  width: max(100%, 480px);
-  max-width: calc(100vw - 32px);
+  width: max(100%, 30rem);
+  max-width: calc(100vw - 2rem);
   max-height: calc(100dvh - var(--xiak-layout-header-height) - var(--xiak-spacing-roomy));
   overflow: auto;
   overscroll-behavior: contain;
-  border: 1px solid var(--xiak-color-header-border);
+  border: 0.0625rem solid var(--xiak-color-header-border);
   border-radius: var(--xiak-radius-control);
   background: var(--xiak-color-header-panel);
   color: var(--xiak-color-header-text);
@@ -65,15 +65,15 @@
 .heading span,
 .footer { color: var(--xiak-color-header-muted); font-size: var(--xiak-font-size-caption); }
 .footer { border-top: var(--xiak-border-subtle); }
-.results { max-height: min(440px, calc(100dvh - 220px)); overflow: auto; overscroll-behavior: contain; padding: var(--xiak-spacing-tight); }
+.results { max-height: min(27.5rem, calc(100dvh - 13.75rem)); overflow: auto; overscroll-behavior: contain; padding: var(--xiak-spacing-tight); }
 .result {
   display: grid;
   width: 100%;
-  min-height: 64px;
-  grid-template-columns: 36px minmax(0, 1fr) auto 14px;
+  min-height: 4rem;
+  grid-template-columns: 2.25rem minmax(0, 1fr) auto 0.875rem;
   align-items: center;
   gap: var(--xiak-spacing-default);
-  border: 1px solid transparent;
+  border: 0.0625rem solid transparent;
   border-radius: var(--xiak-radius-small);
   padding: var(--xiak-spacing-tight) var(--xiak-spacing-default);
   background: transparent;
@@ -84,7 +84,7 @@
   outline: none;
 }
 .result[data-active="true"] { border-color: var(--xiak-color-header-border); background: var(--xiak-color-header-selected); }
-.result > svg { width: 14px; height: 14px; color: var(--xiak-color-header-accent); }
+.result > svg { width: 0.875rem; height: 0.875rem; color: var(--xiak-color-header-accent); }
 .copy { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .copy strong,
 .copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -92,12 +92,12 @@
 .copy small,
 .category { color: var(--xiak-color-header-muted); font-size: var(--xiak-font-size-caption); }
 
-@container matrix-control-shell (max-width: 1380px) { .field kbd { display: none; } }
-@container matrix-control-shell (max-width: 1000px) {
-  .panel { position: fixed; top: calc(var(--xiak-layout-header-height) + var(--xiak-spacing-tight)); right: 0; left: 0; width: min(640px, calc(100vw - 32px)); margin-inline: auto; }
+@container matrix-control-shell (max-width: 86.25rem) { .field kbd { display: none; } }
+@container matrix-control-shell (max-width: 62.5rem) {
+  .panel { position: fixed; top: calc(var(--xiak-layout-header-height) + var(--xiak-spacing-tight)); right: 0; left: 0; width: min(40rem, calc(100vw - 2rem)); margin-inline: auto; }
 }
-@container matrix-control-shell (max-width: 720px) {
-  .root { width: 40px; min-width: 40px; max-width: none; flex: 1; }
+@container matrix-control-shell (max-width: 45rem) {
+  .root { width: 2.5rem; min-width: 2.5rem; max-width: none; flex: 1; }
   .root .mobileTrigger { display: flex; }
   .field { display: none; }
   .root[data-open="true"] .field {
@@ -106,12 +106,12 @@
     right: var(--xiak-spacing-default);
     left: var(--xiak-spacing-default);
     display: flex;
-    height: 48px;
+    height: 3rem;
     z-index: var(--xiak-z-popover);
   }
   .closeButton { display: inline-flex; flex: none; }
-  .panel { max-height: calc(100dvh - var(--xiak-layout-header-height) - 80px); position: fixed; top: calc(var(--xiak-layout-header-height) + 64px); right: var(--xiak-spacing-default); left: var(--xiak-spacing-default); width: auto; max-width: none; margin-inline: 0; }
+  .panel { max-height: calc(100dvh - var(--xiak-layout-header-height) - 5rem); position: fixed; top: calc(var(--xiak-layout-header-height) + 4rem); right: var(--xiak-spacing-default); left: var(--xiak-spacing-default); width: auto; max-width: none; margin-inline: 0; }
   .result { gap: var(--xiak-spacing-tight); padding-inline: var(--xiak-spacing-tight); }
-  .results { max-height: min(440px, calc(100dvh - 270px)); }
+  .results { max-height: min(27.5rem, calc(100dvh - 16.875rem)); }
 }
 @media (prefers-reduced-motion: reduce) { .field { transition: none; } }

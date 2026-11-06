@@ -18,7 +18,7 @@ export function SelectionMenu<T extends string>({ label, value, options, onValue
         {children}<ChevronDown aria-hidden="true" className={styles.chevron} />
       </Menu.Trigger>
       <Menu.Portal>
-        <Menu.Content align="end" aria-label={label} className={styles.popup} collisionPadding={12} sideOffset={8}>
+        <Menu.Content align="end" aria-label={label} className={styles.popup} collisionPadding={15} sideOffset={10}>
           <Menu.Label className={styles.label}>{label}</Menu.Label>
           <Menu.RadioGroup value={value} onValueChange={(next) => {
             const option = options.find((item) => item.value === next);

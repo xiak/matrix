@@ -42,10 +42,10 @@
 }
 
 .table {
-  min-width: 820px;
+  min-width: 51.25rem;
 }
 
-@container xiak-table (max-width: 560px) {
+@container xiak-table (max-width: 35rem) {
   .table[data-mobile-layout="grid"] {
     min-width: 0;
   }
@@ -68,7 +68,7 @@
 
 .confirmation {
   display: grid;
-  min-width: 220px;
+  min-width: 13.75rem;
   gap: var(--xiak-spacing-tight);
 }
 
@@ -98,9 +98,9 @@
   line-height: 1.6;
 }
 
-@media (min-width: 700px) {
+@media (min-width: 54.6875em) {
   .intro {
-    grid-template-columns: minmax(0, 1fr) minmax(300px, 0.9fr);
+    grid-template-columns: minmax(0, 1fr) minmax(18.75rem, 0.9fr);
     align-items: start;
   }
 
@@ -113,7 +113,7 @@
   }
 }
 
-@media (max-width: 600px) {
+@media (max-width: 46.875em) {
   .cardHeader {
     align-items: flex-start;
   }

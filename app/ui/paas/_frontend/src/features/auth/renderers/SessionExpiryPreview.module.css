@@ -45,7 +45,7 @@
 
 .choice {
   align-items: start;
-  border: 1px solid var(--xiak-color-border-subtle);
+  border: 0.0625rem solid var(--xiak-color-border-subtle);
   border-radius: var(--xiak-radius-panel);
   cursor: pointer;
   display: flex;
@@ -88,7 +88,7 @@
   margin: 0;
 }
 
-@container xiak-card (max-width: 700px) {
+@container xiak-card (max-width: 43.75rem) {
   .choices {
     grid-template-columns: minmax(0, 1fr);
   }

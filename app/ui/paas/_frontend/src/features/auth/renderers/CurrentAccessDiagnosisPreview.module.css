@@ -27,7 +27,7 @@
 .reasonList, .restrictionList { display: grid; gap: var(--xiak-spacing-tight); margin: 0; padding: 0; list-style: none; }
 .reasonList li { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: var(--xiak-spacing-default); min-width: 0; }
 .reasonList span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
-.restrictionList li { display: grid; grid-template-columns: minmax(180px, 1fr) auto minmax(220px, 1fr); align-items: center; gap: var(--xiak-spacing-default); min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
+.restrictionList li { display: grid; grid-template-columns: minmax(11.25rem, 1fr) auto minmax(13.75rem, 1fr); align-items: center; gap: var(--xiak-spacing-default); min-width: 0; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); }
 .restrictionList li > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .restrictionList li strong { color: var(--xiak-color-text-strong); }
 .restrictionList li span, .restrictionList li code, .restrictionList li small { overflow-wrap: anywhere; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
@@ -44,7 +44,7 @@
 .sourcesTable { min-width: 0; }
 .sourcesTable td { min-width: 0; }
 .sourcesTable td code { white-space: normal; overflow-wrap: anywhere; word-break: break-word; }
-@container access-diagnosis (max-width: 560px) {
+@container access-diagnosis (max-width: 35rem) {
   .requestGrid, .resultFacts, .boundaryGrid, .liveBoundary { grid-template-columns: minmax(0, 1fr); }
   .restrictionList li { grid-template-columns: minmax(0, 1fr) auto; }
   .restrictionPolicy, .restrictionEmpty { grid-column: 1 / -1; }

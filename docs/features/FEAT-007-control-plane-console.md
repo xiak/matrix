@@ -1797,133 +1797,103 @@ Matrix Cloud header -> Service directory
 ```
 
 The visual contract is owned by semantic tokens and `@ui/xiak`; feature
-renderers may compose these primitives into a dashboard, resource collection,
-or workflow but do not create competing control dimensions. The desktop
-reference dimensions are:
+renderers compose these primitives without competing control dimensions.
+The default theme reproduces the preferred Figma 125% viewing size at 100%
+browser zoom. `--xiak-ui-scale: 1.25` sets the root font to 125% of the user's
+browser font preference. With the standard 16px browser font, one rem is 20px.
+Fonts, controls, icons, panel widths, radii, spacing and scrollbars use rem;
+structural borders retain a crisp 1px hairline. No root CSS zoom or transform
+is involved. The following are the resulting CSS dimensions under that default:
 
 | Component or region | Contract | UX purpose |
 | --- | --- | --- |
-| Global header | `48px` high; `32px` controls | Persistent brand, search, scope, one message-center bell, and identity |
-| Header brand | `144 × 24px` proportional SVG; `36px` symbol below `840px` | One graphic M replaces the initial letter of MATRIX; the approved lockup proportions stay intact |
-| Header typography | `11px / 16px` controls; `13px` section identity | Local Inter with system CJK fallback and stable text sizes; compact layout changes composition instead of shrinking labels |
-| Header count badge | `18px` height; independent `10px` numeric font and `14px` line height | Stable centered digits independent of the Chinese body font; multi-digit counts expand horizontally |
-| Login brand | Approved horizontal SVG, up to `480px` wide at its `1020:172` ratio; compact header lockup below `760px` | One visible brand placement per viewport, without an extra M or an unrelated illustration |
-| Login composition | `1200px` maximum split layout; `40px` fields and submit (`44px` for touch); `440px` maximum compact form | Brand-led desktop entry and focused small-screen sign-in, with visible labels and a separate MOCK entry |
-| Favorite-service rail | `56px` wide; `32px` targets | User-selected service shortcuts, synchronized with directory stars; overflow scrolls within the rail |
-| Service directory | Full viewport below the `48px` header; `224px` desktop category pane; `40px` search and close targets | Three-column grouped discovery, two/single columns as available width falls, horizontal category strip on small screens |
-| Product context navigation | `240px` content width plus `1px` divider; `32px` single-line rows (`44px` for touch) | Product-local IA with label and actionable count; descriptions remain hover and assistive-text hints |
-| Page context bar | `48px` minimum; `13px` title and one reading line, with a `32px` trailing action-menu target at compact widths | One current page/object title, parent navigation and contextual actions; no repeated title/action band in the body |
-| Primary controls | `24px` small, `32px` default, `40px` large; touch targets `36/44/44px` | Predictable density and touch/click targeting by task importance |
-| Status badge | `20px` high | Comparable state language without changing row geometry |
-| Resource table | `36px` header; `44px` minimum data row; `8 × 12px` cell padding; `144px` minimum cell width | Rich cells may grow; a labelled, keyboard-focusable region owns horizontal scrolling below the greater of `640px` and its column/content requirements |
-| Form dialog | `600px` desktop width; `8px` compact viewport inset | Fixed title and action footer, independently scrolling fields, native modal background isolation |
-| Context workspace | `360px` default; `320–460px` adjustable | Review or inspect without losing the source page |
-| Content canvas | Fluid aligned workspace; `32px` desktop gutter | Page context and content share their left edge; prose and forms retain their own readable width, data collections use available space |
-| Panel geometry | `6px` panel/dialog radius; `5px` control/popup and `3px` small radius; `4/8/12/16/20/24/32px` spacing rhythm; `16px` panel inset | Theme-owned geometry keeps content and navigation compact and consistent |
+| Global header | `60px` high; `40px` controls | Persistent brand, search, scope, message-center bell and identity |
+| Header brand | `180 × 30px` proportional SVG; `45px` symbol below `1050px` | Preserve the approved lockup proportions |
+| Header typography | `13.75px / 20px` controls; `16.25px` section identity | Local Inter and system CJK fallback; compact layouts change composition instead of shrinking text |
+| Header count badge | `22.5px` height; `12.5px` numeric font and `17.5px` line height | Keep numbers independently centered; multiple digits expand horizontally |
+| Login brand | Up to `600px` at the approved `1020:172` aspect ratio; compact header below `950px` | One visible brand placement per viewport |
+| Login composition | `1500px` maximum split layout; `50px` fields and submit (`55px` touch); `550px` maximum compact form | Focused sign-in with visible labels and a separate MOCK entry |
+| Favorite-service rail | `70px` wide; `40px` targets | Service shortcuts with independent overflow scrolling |
+| Service directory | Full viewport below the `60px` header; `280px` category pane; `50px` search and close targets | Grouped discovery adapts to available space |
+| Product context navigation | `300px` content plus `1px` divider; `40px` single-line rows (`55px` touch) | Labels and actionable counts; descriptions remain hover and assistive-text hints |
+| Page context bar | `60px` minimum; `16.25px` title; `40px` compact action-menu target | One persistent page/object title with parent navigation and actions |
+| Primary controls | `30px` small, `40px` default, `50px` large; touch `45/55/55px` | Consistent density across buttons, inputs and menus |
+| Status badge | `25px` high | Comparable state language without changing row geometry |
+| Resource table | `45px` header; `55px` minimum row; `10 × 15px` cell padding; `180px` minimum cell width | Rich rows may grow; a labelled region owns horizontal scrolling below its `800px` or content-driven minimum |
+| Form dialog | `750px` desktop width; `10px` compact viewport inset | Fixed title/footer with independently scrolling fields |
+| Context workspace | `450px` default; `400–575px` adjustable | Inspect or review while retaining the source page |
+| Content canvas | Fluid workspace; `40px` desktop gutter; compact `20px` block and `15px` inline inset | Keep context and content aligned with readable forms and full-width collections |
+| Panel geometry | `7.5px` panel/dialog radius; `6.25px` controls and `3.75px` small radius; `5/10/15/20/25/30/40px` spacing rhythm; `20px` panel inset | One theme-owned geometry scale |
 
-The theme is owned by `src/styles/tokens.css` and applied through the existing
-semantic `--xiak-*` contract. Dark panel/header/navigation surfaces use
-`#2c2c2c`, including the content canvas. Unfilled-item hover, selected tabs and
-input surfaces use `#383838`; dividers, filled-control hover and selected-tab
-hover use `#444444`; pressed controls use `#4d4d4d`.
-Selection uses `#394360` with
-`#4a5878` hover. Focus uses Figma blue `#0c8ce9`; filled actions use
-`#0a6dc2` with white text, and dark-surface links use `#a8d7fa` so small
-console text meets AA contrast even on selected hover. Light mode uses the
-same neutral scale and blue accent; mixed mode retains the light workspace
-and dark global shell. Success, warning and danger retain distinct semantics.
-Product, scope, notification, account and search popups inherit their owning
-surface, including an open portal during a theme change.
+The theme is owned by `src/styles/tokens.css` through the existing semantic
+`--xiak-*` contract. Dark canvas, panel, header and navigation use `#2c2c2c`.
+Unfilled hover, selected tabs and input surfaces use `#383838`; dividers and
+filled-control/selected-tab hover use `#444444`; pressed controls use `#4d4d4d`.
+Navigation selection uses `#394360` with `#4a5878` hover. Focus uses `#0c8ce9`;
+filled actions use `#0a6dc2` with white text and dark-surface links use `#a8d7fa`.
+Light mode uses the same neutral and blue vocabulary; mixed mode keeps the
+workspace light and global shell dark. Portalled controls inherit their owning
+surface, including while a theme changes. Status colors retain their semantics.
 
-Local variable Inter supplies Latin text and `400/450/500/550/650` weights, with
-system CJK fallback. Body text is `13px`, compact controls and metadata `11px`, and
-large-action labels `12px`; the UI uses native CSS pixel geometry at 100% browser zoom.
-Ordinary panels have solid `1px` dividers and no decorative gradient or lift
-shadow. Hover and pressed backgrounds, visible `2px` focus, selected and
-disabled states share semantic tokens; transitions take `90ms` and respect
-reduced motion. Shared Input, Select, Button, Tabs, menus, field labels and
-Radio/Checkbox use an explicit `11px / 16px` control text style at weight 450.
-Field labels and hints have a `4px` gap. Compact fields are `24px` high;
-ordinary fields remain `32px`, and labelled menus use `24px` item rows with
-`8px` inline inset. Tabs use a `24px` row, `4px` inter-tab gap and `8px` inline
-inset, with a neutral selected background, `5px` corners and no underline.
-Selected tab labels are weight 550; normal labels remain 450. Disabled tabs
-retain their disabled appearance on hover. A `2px` blue inset outline marks
-keyboard focus, including portalled menu items. Card headers
-use `12px` block padding and `16px` inline padding. Secondary navigation uses
-`32px` single-line rows across products and IAM, with `11px/16px` strong text
-at weight 400 and no inter-row gap. Each icon has a `24px` alignment slot around
-its `16px` glyph, followed by an `8px` label gap. The product context row spans
-the full `240px` content width, with `12px` inline content inset. Its rounded
-background is inset `2px` vertically and `8px` horizontally, yielding a
-`224 × 28px` painted surface. Long labels truncate without growing the row;
-descriptions remain available through the link title and accessible description.
-The product title uses `13px/24px` at weight 500, a neutral `24px` icon slot,
-`8px` gap and `12px` inline inset. Its label aligns with the navigation labels.
-The deployment footer uses `11px/16px` text. Selected navigation uses the
-blue-gray selection surface with strong text; hover and pressed states retain
-that selection identity. The rail uses the same filled selection without a
-separate edge marker. Control, small and panel radii stay
-`5/3/6px`; popup shadows use a restrained `4 × 16px` elevation.
+Local variable Inter supplies Latin text at `400/450/500/550/650` weights, with
+system CJK fallback. Body and section text is `16.25px`, controls and metadata
+`13.75px`, and large-action labels `15px`. Shared Input, Select, Button, Tabs,
+field labels and Radio/Checkbox use `13.75px/20px` at weight 450. Field labels
+and hints have a `5px` gap. Tabs and menu options use `30px` rows; tabs retain
+`5px` gaps, `10px` inline padding, `6.25px` corners and no underline. Selected
+tab labels use weight 550. Disabled controls retain their appearance on hover.
+Focus is a theme-scaled `0.125rem` outline; transitions retain `90ms` duration
+and respect reduced motion. Card headers use `15px` block and `20px` inline inset.
 
-Radio and Checkbox have `12px` glyphs, `4px` radio dots, `8px` checkmarks
-and `2px` checkbox corners,
-`6px` label gaps, `24px` minimum desktop label targets and `12px` between
-options. Multi-line labels align the glyph with the first text line. Native
-radio exclusivity, arrow navigation, checkbox mixed state and disabled/focus
-semantics remain in the existing public Choice owner; hover and pressed
-backgrounds share the same semantic action colors. Touch input uses `12px/18px` control text, `14px` choice glyphs, `44px` label targets and a `56px`
-header. Tabs also expand to `44px` on coarse pointers, while narrow grid tab
-layouts preserve `4px` gaps between items.
-Global scrollbars use an `8px` transparent track, a rounded inset thumb with
-hover/pressed states and no endpoint arrows; standards-based thin scrollbars
-are the fallback. Component-local scrollbar palettes are removed.
+Product and IAM navigation use `40px` single-line rows, `13.75px/20px` strong
+text at weight 400, and no inter-row gap. The `20px` glyph sits in a `30px` slot
+followed by a `10px` label gap. The full-width target has `15px` inline inset;
+its selection is inset `2.5px` vertically and `10px` horizontally, producing
+`280 × 35px` paint. Long labels truncate; descriptions remain in link titles
+and accessible descriptions. The product title uses `16.25px/30px`, weight
+500, with the same icon/label alignment. The footer uses `13.75px/20px` text.
+The rail retains filled selection without a separate edge marker.
+
+Radio and Checkbox use `15px` glyphs, `5px` radio dots, `10px` checkmarks,
+`2.5px` checkbox corners, `7.5px` label gaps and `30px` desktop label targets.
+Options have `15px` horizontal separation. Multiline labels align their glyph
+with the first text line. Touch controls use `15px/22.5px` text, `17.5px` choice
+glyphs, `55px` label/tab targets and a `70px` header. Scrollbars use a `10px`
+transparent track, inset rounded thumb, hover/pressed states and no endpoint
+arrows; standards-based thin scrollbars remain the fallback.
+
+Container breakpoints use root-relative units so the shell drawer starts at
+`1150px`, the rail disappears at `775px`, and compact global search starts at
+`900px`. Media-query em thresholds include the fixed 1.25 theme factor because
+media font units use the browser's initial font size. Viewport-sized surfaces
+still use viewport units and bounded scrolling. Search focus restoration and
+workspace focus trapping inspect the rendered CSS mode; workspace pointer
+resizing measures in rem. Radix's numeric popup offsets and edge padding use
+the corresponding enlarged pixel values.
 
 The horizontal signature, header lockup, standalone M, browser icons and Inter
-font are local static-export assets; the font's SIL Open Font License is shipped
-under `public/licenses`. No external font or image service is required.
-The static server returns WOFF2 with an explicit `font/woff2` content type,
-independent of the host MIME registry.
+font are local static-export assets; the font's SIL license ships under
+`public/licenses`. The server returns WOFF2 as `font/woff2` independently of
+host MIME registration. No external font or image service is required.
 
-Theme acceptance evidence: the focused appearance and shell suite passes two
-files / 154 cases. Nine Node export-boundary cases,
-production TypeScript checks, full lint, architecture and 312 semantic contrast
-pairs also pass. The production build exports 69 HTML pages and normalizes 66
-segment files; preview unset and zero produce the same 371 files, matching the
-Go embed byte-for-byte. UI Go test/vet and the offline font/license response
-check pass. Browser checks cover the 1440px desktop shell, resource table,
-product directory, 360px right workspace, dropdown portal, keyboard focus,
-light/mixed/dark and Chinese/English switching. At 360px touch, the contextual
-panel fills the viewport, fields are 44px, the header is 56px and the page has
-no horizontal overflow; reduced motion and arrow-free 8px scrollbars are
-verified. The native production server loads Inter under the existing
-self-only CSP without browser errors or warnings. These checks prove the
-theme and isolated MOCK presentation; real-IAM and release acceptance remain
-with their existing gates. Actual browser checks after a fresh stylesheet load
-resolve Tabs, menu triggers and field labels to `11px/16px`, rather than the
-inherited `13px` reset. Radio glyphs resolve to `12px`, dots to `4px`, labels to
-`24px` with `6px` gaps and option gaps to `4 × 12px`. Native arrow-key changes
-keep exactly one theme selected. At 360px the six appearance radios remain
-reachable without horizontal overflow. Chrome checks of the file-browser theme
-alignment resolve tabs to `24px`, `4px` gaps, `0 × 8px` padding and `5px`
-corners, with no underline. Actual hovered tabs use `#444444` when selected
-and `#383838` when unselected; keyboard focus retains the `2px` blue outline.
-The single-line navigation target is `32px` with a `28px` painted background,
-`16px` icon inside a `24px` slot and white selected text. Selected navigation
-hover resolves to `#4a5878`, unselected hover to `#383838`, and the dark
-workspace to `#2c2c2c`; desktop content padding resolves to `32px`. At `360px`,
-the access-analysis tabs form two columns with `4px` gaps, and the document
-has no horizontal overflow. Light and dark surfaces and the portalled theme
-menu were checked in Chrome; the existing contrast gate also covers mixed
-surfaces. The main development URL uses the real backend. Authenticated Chrome
-checks cover the actual product and IAM navigation, not only the isolated MOCK
-fixture: every desktop row resolves to `32px`, `11px/16px`, weight 400 and strong
-text; product navigation has a `240px` content width and a `224 × 28px` painted
-selection. The title uses `13px/24px`, weight 500 and a `24px` icon slot. The
-service-directory categories share the same navigation typography and row
-height. At `360 × 500px`, keyboard focus reaches the final IAM item within its
-independent scroller and document width remains `360px`. These visual checks
-do not replace the existing real-IAM security or release gates.
+Theme acceptance evidence: the complete frontend suite passes 83 files / 2167
+cases. Production TypeScript, full lint, architecture and 312 semantic contrast
+pairs, nine Node export-boundary cases, and UI Go test/vet pass. Preview unset
+and zero export the same 371 files byte-for-byte,
+including 69 HTML pages and 66 normalized segment files, matching the Go embed.
+Authenticated Chrome checks at 100% browser scale resolve the root to 20px,
+header to 60px, rail to 70px, product content to 300px, rows to 40px and icons
+to 20px. Controls resolve to `13.75px/20px`; inputs are 40px, tabs/options 30px,
+and radio glyphs/dots 15/5px. At 1151px the sidebar stays inline; at 1150px it
+becomes a drawer. At 360px, access-analysis tabs use two columns with 5px gaps,
+the document remains 360px wide, and keyboard focus reaches the last IAM item
+within the drawer's independent 10px-scrollbar region. Isolated MOCK checks
+cover the 1440px shell, a 450px right workspace and keyboard resizing to
+400/575px, with bounded select popups. At 360px the workspace fills the
+viewport, wraps keyboard focus, and compact search restores its trigger focus.
+Light, mixed and dark themes and Chinese/English appearance controls fit the
+360px viewport without horizontal overflow. These visual checks do not replace
+the existing real-IAM security or release gates.
 
 Four page compositions are admitted: a cloud overview with readiness and
 attention-first metrics; a collection page with local search, filters, table,
@@ -1945,7 +1915,7 @@ their feature providers through an action-only portal. Input does not subscribe
 the shell or title frame to draft changes, while return actions use the current
 draft guard. Pending navigation masks outgoing actions; cancellation restores
 the original context. ContentPage owns the header-to-content gutter for every
-composition: compact canvases retain a `16px` block inset and `12px` inline
+composition: compact canvases retain a `20px` block inset and `15px` inline
 inset. Console navigation disables framework document-scroll adjustment because
 the stable ContentPage viewport owns route scroll position; navigation must not
 consume that inset or make content touch the context header. Same-path
@@ -1962,8 +1932,8 @@ generic title, return toolbar or repeated preview banner. Header MOCK identity a
 remain visible; errors, risks and destructive confirmations are never hidden
 as optional help. Details use aligned multi-column facts when space permits,
 with a single-column compact layout and full readable values. The policy
-overview separates its readable `16px` description from `12px` muted field
-labels and `14px` semibold values; identifiers retain `13px` monospace text.
+overview separates its readable description from muted field labels and
+semibold values; identifiers retain the theme-owned monospace text style.
 Classification badges keep intrinsic width instead of becoming a mobile banner.
 The policy classification and description share one lead row at every width;
 the description wraps only within the remaining inline space.
@@ -2013,7 +1983,7 @@ owned by their product. Input and Select share one control stylesheet. Button
 can style a real navigation link through Radix Slot without nesting interactive
 elements. Select owns a themed combobox/listbox over the existing non-modal
 Radix menu primitives, sharing its option surface with SelectionMenu. Its
-40px rows, bounded viewport, selected check, hover/focus, disabled and invalid
+theme-sized option rows, bounded viewport, selected check, hover/focus, disabled and invalid
 states follow Theme. A hidden native field preserves form submission,
 required validation, empty values and reset; validation focuses the visible
 control. Pointer and arrow/Home/End/typeahead selection, Escape restoration
@@ -2176,8 +2146,8 @@ IAM lists/details and platform-status, quota and installation workspaces. One
 command definition keeps at most one high-frequency primary command direct on
 desktop and groups its secondary peers under one trailing More menu. A page
 without a primary command keeps one secondary command direct, but groups two or
-more secondary commands under More. At most `960px` of available content width
-(also below a `760px` viewport for standalone headings), every command moves
+more secondary commands under More. At most `1200px` of available content width
+(also below a `950px` viewport for standalone headings), every command moves
 into one Page actions menu. Pages without commands show no empty menu. Titles
 keep their typography and truncate within their own slot; commands never wrap
 into another title band.
@@ -2379,9 +2349,8 @@ The interaction contract includes:
 - one explicitly named product launcher and one `Ctrl/Cmd+K` search position
   on every page, including when compact layout hides the visible launcher text;
 - product and region entries compose the public `Button` through one
-  `HeaderPopoverTrigger`. It owns the shared 40px height, 14px/semibold text,
-  18px leading icon, 14px chevron, 8px gap and 12px horizontal inset, with
-  semantic theme tokens for geometry and state colors. Both chevrons turn on
+  `HeaderPopoverTrigger`. It uses the shared theme control height, typography,
+  icons, gaps and inset, with semantic tokens for geometry and state colors. Both chevrons turn on
   expansion. The brand/navigation and utility groups stretch across the same
   Header content height and center their controls; brand dimensions do not
   define a different group height. Parent components retain their panel state,
@@ -2418,9 +2387,9 @@ The interaction contract includes:
   keyboard-operable listbox, and focus restoration. Its resting surface is
   transparent and borderless, sharing hover, expanded and keyboard-focus
   treatment with the Products and services trigger. The same mounted picker
-  works at every width; at `620px` and below its 96px trigger shows the localized
-  region label without shrinking the font; at `420px` and below it becomes a
-  40px icon-only control. The current selection remains in the
+  works at every width; at `775px` and below its 120px trigger shows the localized
+  region label without shrinking the font; at `525px` and below it becomes a
+  theme-sized icon-only control. The current selection remains in the
   accessible name and tooltip, with a visible mobile filtered indicator.
   Resizing an open popup never swaps to a second implementation or leaves an
   invisible popup or backdrop. Its labels and filtering guidance use keyed
@@ -2462,8 +2431,8 @@ The interaction contract includes:
   context and state-specific next-step guidance;
 - `Escape` dismissal, visible focus, native selects, keyboard-resizable
   context panels, and reduced-motion handling;
-- a product/context drawer below `920px`, compact global controls below
-  `720px`, and a rail-free mobile workspace below `620px`. Collections may
+- a product/context drawer below `1150px`, compact global controls below
+  `900px`, and a rail-free mobile workspace below `775px`. Collections may
   scroll within their own table region, but the page shell must not scroll
   horizontally at `360px`.
 

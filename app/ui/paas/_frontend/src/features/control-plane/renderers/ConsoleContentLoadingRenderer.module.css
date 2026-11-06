@@ -8,7 +8,7 @@
 
 .identity {
   display: flex;
-  min-height: 132px;
+  min-height: 8.25rem;
   align-items: flex-end;
   border: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-border-accent);
   border-radius: var(--xiak-radius-panel);
@@ -18,7 +18,7 @@
 
 .identity > div {
   display: grid;
-  max-width: 680px;
+  max-width: 42.5rem;
   gap: var(--xiak-spacing-tight);
 }
 
@@ -46,12 +46,12 @@
 }
 
 .metricPlaceholder {
-  min-height: 126px;
+  min-height: 7.875rem;
 }
 
 .metricLabel,
 .metricHint {
-  min-height: 12px;
+  min-height: 0.75rem;
 }
 
 .metricLabel {
@@ -60,7 +60,7 @@
 
 .metricValue {
   width: 38%;
-  min-height: 30px;
+  min-height: 1.875rem;
 }
 
 .metricHint {
@@ -68,16 +68,16 @@
 }
 
 .readinessPlaceholder {
-  min-height: 132px;
+  min-height: 8.25rem;
 }
 
-@container matrix-page-content (max-width: 1040px) {
+@container matrix-page-content (max-width: 65rem) {
   .metricGrid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 
-@container matrix-page-content (max-width: 480px) {
+@container matrix-page-content (max-width: 30rem) {
   .metricGrid {
     grid-template-columns: 1fr;
   }

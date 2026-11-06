@@ -23,8 +23,8 @@
 }
 
 .iconButton:focus-visible {
-  outline: 2px solid var(--xiak-color-border-focus);
-  outline-offset: 2px;
+  outline: 0.125rem solid var(--xiak-color-border-focus);
+  outline-offset: 0.125rem;
 }
 .iconButton:active:not(:disabled) { background: var(--xiak-color-header-pressed); }
 .iconButton:disabled { color: var(--xiak-color-text-disabled); cursor: not-allowed; }
@@ -36,13 +36,13 @@
 
 .iconButton > span {
   position: absolute;
-  top: 1px;
+  top: 0.0625rem;
   right: 0;
   display: grid;
-  min-width: 18px;
-  height: 18px;
+  min-width: 1.125rem;
+  height: 1.125rem;
   place-items: center;
-  border: 2px var(--xiak-border-style) var(--xiak-color-header-bg);
+  border: 0.125rem var(--xiak-border-style) var(--xiak-color-header-bg);
   border-radius: var(--xiak-radius-pill);
   background: var(--xiak-color-header-danger);
   color: var(--xiak-color-header-bg);
@@ -50,7 +50,7 @@
   font-size: 0.625rem;
   font-variant-numeric: tabular-nums;
   font-weight: var(--xiak-font-weight-bold);
-  line-height: 14px;
+  line-height: 0.875rem;
 }
 
 .iconButton[data-tone="info"] > span { background: var(--xiak-color-header-accent); }

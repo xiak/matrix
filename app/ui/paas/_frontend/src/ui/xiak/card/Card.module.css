@@ -36,7 +36,7 @@
   padding: var(--xiak-panel-padding);
 }
 .header > div { min-width: 0; }
-@container xiak-card (max-width: 480px) {
+@container xiak-card (max-width: 30rem) {
   .header, .body, .footer { padding-inline: var(--xiak-spacing-comfortable); }
 }
 }

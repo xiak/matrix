@@ -9,7 +9,7 @@
 .actorFacts dt, .sessionFacts dt, .reviewFacts dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .actorFacts dd, .sessionFacts dd, .reviewFacts dd { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
 .actorFacts dd span, .reviewFacts dd span { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); }
-.scenarioControl { max-width: 420px; margin-top: var(--xiak-spacing-comfortable); padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
+.scenarioControl { max-width: 26.25rem; margin-top: var(--xiak-spacing-comfortable); padding-top: var(--xiak-spacing-default); border-top: var(--xiak-border-subtle); }
 .discovery { display: grid; gap: var(--xiak-spacing-default); }
 .roleGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-default); }
 .roleHeader code { color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); overflow-wrap: anywhere; }
@@ -18,12 +18,12 @@
 .roleBody > button { justify-self: start; }
 .roleMeta { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .roleMeta span { display: inline-flex; align-items: center; gap: var(--xiak-spacing-narrow); }
-.roleMeta svg { width: 15px; height: 15px; }
-.reviewBody > :global(.xiak-form-field) { max-width: 360px; }
+.roleMeta svg { width: 0.9375rem; height: 0.9375rem; }
+.reviewBody > :global(.xiak-form-field) { max-width: 22.5rem; }
 .reviewActions, .confirmation > div:last-child { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-narrow); }
 .roleIdentity { display: flex; align-items: center; gap: var(--xiak-spacing-default); }
-.roleIdentity > span { display: grid; width: 42px; height: 42px; place-items: center; border-radius: var(--xiak-radius-control); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
-.roleIdentity svg { width: 21px; height: 21px; }
+.roleIdentity > span { display: grid; width: 2.625rem; height: 2.625rem; place-items: center; border-radius: var(--xiak-radius-control); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
+.roleIdentity svg { width: 1.3125rem; height: 1.3125rem; }
 .roleIdentity > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .roleIdentity small { color: var(--xiak-color-text-subtle); overflow-wrap: anywhere; }
 .expiredSession { display: grid; justify-items: start; gap: var(--xiak-spacing-default); }
@@ -38,7 +38,7 @@
 .focusHeading { margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); line-height: var(--xiak-line-height-compact); }
 .focusHeading:focus { outline: none; }
 
-@container role-self-service (max-width: 720px) {
+@container role-self-service (max-width: 45rem) {
   .actorFacts, .sessionFacts, .reviewFacts, .roleGrid { grid-template-columns: minmax(0, 1fr); }
   .roleBody p { min-height: 0; }
   .confirmation, .attempt > div { align-items: flex-start; flex-direction: column; }

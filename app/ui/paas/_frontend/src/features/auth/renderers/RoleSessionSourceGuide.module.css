@@ -72,7 +72,7 @@
   border-top: var(--xiak-border-subtle);
 }
 
-@container role-session-source-guide (max-width: 560px) {
+@container role-session-source-guide (max-width: 35rem) {
   .types {
     grid-template-columns: minmax(0, 1fr);
   }

@@ -72,8 +72,8 @@
 .index {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 1.375rem;
+  height: 1.375rem;
   border-radius: 50%;
   background: var(--xiak-color-accent-haze);
   color: var(--xiak-color-accent-text);
@@ -84,7 +84,7 @@
   margin-top: var(--xiak-spacing-tight);
 }
 
-@container authorization-ownership-flow (max-width: 680px) {
+@container authorization-ownership-flow (max-width: 42.5rem) {
   .stages {
     grid-template-columns: minmax(0, 1fr);
   }

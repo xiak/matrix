@@ -455,9 +455,10 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
     event.preventDefault();
+    const rem = Number.parseFloat(getComputedStyle(document.documentElement).fontSize);
     const update = (pointer: PointerEvent) => {
-      const width = window.innerWidth - pointer.clientX;
-      setWorkspaceSize(width < 330 ? "compact" : width > 450 ? "wide" : "medium");
+      const width = (window.innerWidth - pointer.clientX) / rem;
+      setWorkspaceSize(width < 20.625 ? "compact" : width > 28.125 ? "wide" : "medium");
     };
     const finish = () => {
       window.removeEventListener("pointermove", update);
@@ -495,7 +496,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
       closeWorkspaceAndRestoreFocus();
       return;
     }
-    if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 920px)").matches) {
+    if (workspacePanel.current && getComputedStyle(workspacePanel.current).position === "fixed") {
       loopOverlayFocus(event, workspacePanel.current);
     }
   }

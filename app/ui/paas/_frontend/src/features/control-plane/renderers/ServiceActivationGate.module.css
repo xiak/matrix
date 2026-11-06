@@ -56,8 +56,8 @@
 
 .icon {
   display: grid;
-  width: 44px;
-  height: 44px;
+  width: 2.75rem;
+  height: 2.75rem;
   flex: none;
   place-items: center;
   border-radius: var(--xiak-radius-panel);
@@ -66,8 +66,8 @@
 }
 
 .icon svg {
-  width: 22px;
-  height: 22px;
+  width: 1.375rem;
+  height: 1.375rem;
 }
 
 .body {
@@ -92,8 +92,8 @@
 }
 
 .scope > svg {
-  width: 22px;
-  height: 22px;
+  width: 1.375rem;
+  height: 1.375rem;
   flex: none;
   color: var(--xiak-color-accent-text);
 }
@@ -135,8 +135,8 @@
 }
 
 .facts svg {
-  width: 18px;
-  height: 18px;
+  width: 1.125rem;
+  height: 1.125rem;
   color: var(--xiak-color-accent-text);
 }
 
@@ -182,7 +182,7 @@
   line-height: 1.5;
 }
 
-@container matrix-page-content (max-width: 720px) {
+@container matrix-page-content (max-width: 45rem) {
   .facts,
   .previewBody {
     grid-template-columns: minmax(0, 1fr);

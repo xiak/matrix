@@ -81,10 +81,10 @@ describe("GlobalSearch", () => {
   });
 
   it("opens the compact search and returns focus to its trigger on Escape", async () => {
-    vi.stubGlobal("matchMedia", vi.fn(() => ({ matches: true })));
     const user = userEvent.setup();
     render(<LocaleProvider><SearchFixture /></LocaleProvider>);
     const trigger = screen.getByRole("button", { name: "打开全局搜索" });
+    trigger.style.display = "flex";
     await user.click(trigger);
     expect(document.activeElement).toBe(screen.getByRole("combobox"));
     await user.keyboard("{Escape}");

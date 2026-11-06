@@ -34,25 +34,25 @@
 .trigger[aria-expanded="true"] .triggerChevron { transform: rotate(180deg); }
 .trigger[data-filtered="true"] .triggerIcon { color: var(--xiak-color-header-accent); }
 
-.trigger[data-variant="selection"] { width: 176px; }
+.trigger[data-variant="selection"] { width: 11rem; }
 
-@container matrix-control-shell (max-width: 1000px) {
+@container matrix-control-shell (max-width: 62.5rem) {
   .trigger[data-variant="navigation"] { width: var(--xiak-control-height); grid-template-columns: var(--xiak-header-trigger-icon-size); justify-content: center; padding: 0; }
   .trigger[data-variant="navigation"] .triggerLabel,
   .trigger[data-variant="navigation"] .triggerChevron { display: none; }
-  .trigger[data-variant="selection"] { width: 156px; }
+  .trigger[data-variant="selection"] { width: 9.75rem; }
 }
-@container matrix-control-shell (max-width: 720px) {
-  .trigger[data-variant="selection"] { width: 120px; padding-inline: var(--xiak-spacing-tight); }
+@container matrix-control-shell (max-width: 45rem) {
+  .trigger[data-variant="selection"] { width: 7.5rem; padding-inline: var(--xiak-spacing-tight); }
 }
-@container matrix-control-shell (max-width: 620px) {
-  .trigger[data-variant="selection"] { width: 96px; grid-template-columns: var(--xiak-header-trigger-icon-size) minmax(0, 1fr); gap: var(--xiak-spacing-narrow); }
+@container matrix-control-shell (max-width: 38.75rem) {
+  .trigger[data-variant="selection"] { width: 6rem; grid-template-columns: var(--xiak-header-trigger-icon-size) minmax(0, 1fr); gap: var(--xiak-spacing-narrow); }
   .trigger[data-variant="selection"] .triggerLabel,
   .trigger[data-variant="selection"] .triggerChevron { display: none; }
   .trigger[data-variant="selection"] .triggerCompactLabel { display: inline; }
-  .trigger[data-filtered="true"]::after { content: ""; position: absolute; top: 5px; right: 5px; width: 4px; height: 4px; background: var(--xiak-color-header-accent); }
+  .trigger[data-filtered="true"]::after { content: ""; position: absolute; top: 0.3125rem; right: 0.3125rem; width: 0.25rem; height: 0.25rem; background: var(--xiak-color-header-accent); }
 }
-@container matrix-control-shell (max-width: 420px) {
+@container matrix-control-shell (max-width: 26.25rem) {
   .trigger[data-variant="selection"] { width: var(--xiak-control-height); grid-template-columns: var(--xiak-header-trigger-icon-size); justify-content: center; }
   .trigger[data-variant="selection"] .triggerCompactLabel { display: none; }
 }
@@ -77,7 +77,7 @@
   position: absolute;
   top: calc(100% + var(--xiak-spacing-default));
   z-index: var(--xiak-z-popover);
-  max-height: calc(100dvh - var(--xiak-layout-header-height) - 32px);
+  max-height: calc(100dvh - var(--xiak-layout-header-height) - 2rem);
   overflow: auto;
   overscroll-behavior: contain;
   border: var(--xiak-border-subtle);
@@ -96,22 +96,22 @@
 }
 
 .panel[data-size="compact"] {
-  width: min(320px, calc(100vw - var(--xiak-spacing-roomy) * 2));
+  width: min(20rem, calc(100vw - var(--xiak-spacing-roomy) * 2));
 }
 
 .panel[data-size="medium"] {
-  width: min(440px, calc(100vw - var(--xiak-spacing-roomy) * 2));
+  width: min(27.5rem, calc(100vw - var(--xiak-spacing-roomy) * 2));
 }
 
 .panel[data-size="wide"] {
-  width: min(680px, calc(100vw - var(--xiak-spacing-roomy) * 2));
+  width: min(42.5rem, calc(100vw - var(--xiak-spacing-roomy) * 2));
 }
 
 
 
 .header {
   display: flex;
-  min-height: 64px;
+  min-height: 4rem;
   align-items: center;
   justify-content: space-between;
   gap: var(--xiak-spacing-default);
@@ -140,7 +140,7 @@
   box-shadow: var(--xiak-shadow-focus);
 }
 
-@container matrix-control-shell (max-width: 960px) {
+@container matrix-control-shell (max-width: 60rem) {
   .panel {
     position: fixed;
     top: calc(var(--xiak-layout-header-height) + var(--xiak-spacing-tight));
@@ -150,7 +150,7 @@
   .panel[data-align="end"] { right: var(--xiak-spacing-comfortable); }
 }
 
-@container matrix-control-shell (max-width: 620px) {
+@container matrix-control-shell (max-width: 38.75rem) {
   .panel[data-align] {
     right: var(--xiak-spacing-tight);
     left: var(--xiak-spacing-tight);

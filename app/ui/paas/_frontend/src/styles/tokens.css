@@ -1,6 +1,9 @@
-/* Shared visual contract: neutral surfaces, compact geometry and blue interaction states. */
+/* Native 125% viewing scale: rem geometry follows the themed root font size.
+   Media-query em thresholds include 1.25 because they use the browser's initial
+   font size; container-query rem thresholds follow the themed root directly. */
 :root {
   color-scheme: light;
+  --xiak-ui-scale: 1.25;
 
   --xiak-palette-white: #ffffff;
   --xiak-palette-gray-25: #fcfcfc;
@@ -79,8 +82,8 @@
   --xiak-color-header-danger-bg: var(--xiak-palette-red-50);
   --xiak-color-header-warning: var(--xiak-palette-amber-700);
   --xiak-color-header-warning-bg: var(--xiak-palette-amber-50);
-  --xiak-shadow-header-focus: 0 0 0 2px var(--xiak-palette-focus);
-  --xiak-shadow-header-panel: 0 4px 16px var(--xiak-palette-shadow-strong);
+  --xiak-shadow-header-focus: 0 0 0 0.125rem var(--xiak-palette-focus);
+  --xiak-shadow-header-panel: 0 0.25rem 1rem var(--xiak-palette-shadow-strong);
 
   --xiak-color-bg-canvas: var(--xiak-palette-gray-50);
   --xiak-color-bg-header: var(--xiak-palette-white);
@@ -143,31 +146,32 @@
   --xiak-color-product-observability: var(--xiak-palette-blue-600);
   --xiak-color-product-observability-bg: var(--xiak-palette-blue-50);
 
+  /* Keep structural hairlines on a physical CSS pixel to avoid panel-width drift. */
   --xiak-border-width: 1px;
   --xiak-border-style: solid;
   --xiak-border-subtle: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-border-subtle);
   --xiak-border-control: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-border-control);
   --xiak-border-transparent: var(--xiak-border-width) var(--xiak-border-style) transparent;
-  --xiak-radius-small: 3px;
-  --xiak-radius-control: 5px;
-  --xiak-radius-panel: 6px;
-  --xiak-radius-pill: 999px;
+  --xiak-radius-small: 0.1875rem;
+  --xiak-radius-control: 0.3125rem;
+  --xiak-radius-panel: 0.375rem;
+  --xiak-radius-pill: 62.4375rem;
   --xiak-shadow-header: none;
   --xiak-shadow-panel: none;
-  --xiak-shadow-elevated: 0 4px 16px var(--xiak-palette-shadow-strong);
-  --xiak-shadow-focus: 0 0 0 2px var(--xiak-palette-focus);
+  --xiak-shadow-elevated: 0 0.25rem 1rem var(--xiak-palette-shadow-strong);
+  --xiak-shadow-focus: 0 0 0 0.125rem var(--xiak-palette-focus);
 
   --xiak-spacing-none: 0;
-  --xiak-spacing-micro: 2px;
-  --xiak-spacing-narrow: 4px;
-  --xiak-spacing-compact: 6px;
-  --xiak-spacing-tight: 8px;
-  --xiak-spacing-default: 12px;
-  --xiak-spacing-comfortable: 16px;
-  --xiak-spacing-wide: 20px;
-  --xiak-spacing-roomy: 24px;
-  --xiak-spacing-generous: 32px;
-  --xiak-spacing-section: 40px;
+  --xiak-spacing-micro: 0.125rem;
+  --xiak-spacing-narrow: 0.25rem;
+  --xiak-spacing-compact: 0.375rem;
+  --xiak-spacing-tight: 0.5rem;
+  --xiak-spacing-default: 0.75rem;
+  --xiak-spacing-comfortable: 1rem;
+  --xiak-spacing-wide: 1.25rem;
+  --xiak-spacing-roomy: 1.5rem;
+  --xiak-spacing-generous: 2rem;
+  --xiak-spacing-section: 2.5rem;
 
   --xiak-font-sans: Inter, "Segoe UI", "Microsoft YaHei UI", "PingFang SC", "Noto Sans SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
   --xiak-font-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -176,8 +180,8 @@
   --xiak-font-size-small: 0.75rem;
   --xiak-font-size-body: 0.8125rem;
   --xiak-font-size-control: var(--xiak-font-size-caption);
-  --xiak-line-height-control: 16px;
-  --xiak-line-height-caption: 14px;
+  --xiak-line-height-control: 1rem;
+  --xiak-line-height-caption: 0.875rem;
   --xiak-font-size-subtitle: 0.8125rem;
   --xiak-font-size-title: 1.25rem;
   --xiak-font-size-title-large: clamp(2rem, 3.4vw, 2.625rem);
@@ -191,52 +195,52 @@
   --xiak-letter-spacing-heading: -0.025em;
   --xiak-letter-spacing-eyebrow: 0.08em;
 
-  --xiak-layout-header-height: 48px;
-  --xiak-layout-rail-width: 56px;
-  --xiak-layout-brand-width: 144px;
-  --xiak-rail-target-size: 32px;
-  --xiak-navigation-item-height: 32px;
-  --xiak-layout-context-width: 240px;
+  --xiak-layout-header-height: 3rem;
+  --xiak-layout-rail-width: 3.5rem;
+  --xiak-layout-brand-width: 9rem;
+  --xiak-rail-target-size: 2rem;
+  --xiak-navigation-item-height: 2rem;
+  --xiak-layout-context-width: 15rem;
   --xiak-layout-sider-width: calc(var(--xiak-layout-rail-width) + var(--xiak-layout-context-width) + var(--xiak-border-width));
-  --xiak-layout-workspace-width: 360px;
-  --xiak-layout-content-max-width: 1440px;
-  --xiak-layout-search-width: 520px;
-  --xiak-content-header-height: 48px;
-  --xiak-content-header-height-compact: 48px;
+  --xiak-layout-workspace-width: 22.5rem;
+  --xiak-layout-content-max-width: 90rem;
+  --xiak-layout-search-width: 32.5rem;
+  --xiak-content-header-height: 3rem;
+  --xiak-content-header-height-compact: 3rem;
   --xiak-font-size-page-context: var(--xiak-font-size-body);
-  --xiak-tab-height: 24px;
-  --xiak-control-height-small: 24px;
+  --xiak-tab-height: 1.5rem;
+  --xiak-control-height-small: 1.5rem;
   --xiak-control-padding-inline: var(--xiak-spacing-tight);
-  --xiak-control-padding-block-small: 3px;
-  --xiak-control-chevron-size: 12px;
-  --xiak-control-height: 32px;
-  --xiak-control-height-large: 40px;
-  --xiak-progress-height: 6px;
-  --xiak-badge-height: 20px;
-  --xiak-table-row-height: 44px;
-  --xiak-table-header-height: 36px;
-  --xiak-table-min-width: 640px;
-  --xiak-table-cell-min-width: 144px;
+  --xiak-control-padding-block-small: 0.1875rem;
+  --xiak-control-chevron-size: 0.75rem;
+  --xiak-control-height: 2rem;
+  --xiak-control-height-large: 2.5rem;
+  --xiak-progress-height: 0.375rem;
+  --xiak-badge-height: 1.25rem;
+  --xiak-table-row-height: 2.75rem;
+  --xiak-table-header-height: 2.25rem;
+  --xiak-table-min-width: 40rem;
+  --xiak-table-cell-min-width: 9rem;
   --xiak-table-cell-padding-block: var(--xiak-spacing-tight);
   --xiak-table-cell-padding-inline: var(--xiak-spacing-default);
-  --xiak-table-selection-width: 44px;
-  --xiak-dialog-width: 600px;
-  --xiak-dialog-width-wide: 960px;
+  --xiak-table-selection-width: 2.75rem;
+  --xiak-dialog-width: 37.5rem;
+  --xiak-dialog-width-wide: 60rem;
   --xiak-panel-padding: var(--xiak-spacing-comfortable);
-  --xiak-choice-size: 12px;
-  --xiak-choice-mark-size: 8px;
-  --xiak-radio-dot-size: 4px;
-  --xiak-choice-radius: 2px;
-  --xiak-choice-row-height: 24px;
-  --xiak-icon-size: 16px;
-  --xiak-header-trigger-icon-size: 18px;
+  --xiak-choice-size: 0.75rem;
+  --xiak-choice-mark-size: 0.5rem;
+  --xiak-radio-dot-size: 0.25rem;
+  --xiak-choice-radius: 0.125rem;
+  --xiak-choice-row-height: 1.5rem;
+  --xiak-icon-size: 1rem;
+  --xiak-header-trigger-icon-size: 1.125rem;
   --xiak-header-trigger-chevron-size: var(--xiak-control-chevron-size);
-  --xiak-empty-height: 240px;
-  --xiak-empty-height-compact: 180px;
+  --xiak-empty-height: 15rem;
+  --xiak-empty-height-compact: 11.25rem;
   --xiak-font-size-metric: 1.75rem;
-  --xiak-status-dot-size: 6px;
-  --xiak-resize-hit-width: 10px;
-  --xiak-resize-line-width: 2px;
+  --xiak-status-dot-size: 0.375rem;
+  --xiak-resize-hit-width: 0.625rem;
+  --xiak-resize-line-width: 0.125rem;
   --xiak-opacity-disabled: 0.46;
 
   --xiak-color-bg-control-pressed: var(--xiak-palette-gray-200);
@@ -246,9 +250,9 @@
   --xiak-color-scrollbar-thumb: var(--xiak-palette-scrollbar-light);
   --xiak-color-scrollbar-thumb-hover: var(--xiak-palette-scrollbar-light-hover);
   --xiak-color-scrollbar-thumb-pressed: var(--xiak-palette-scrollbar-light-pressed);
-  --xiak-scrollbar-size: 8px;
-  --xiak-scrollbar-thumb-min-size: 24px;
-  --xiak-scrollbar-thumb-inset: 2px;
+  --xiak-scrollbar-size: 0.5rem;
+  --xiak-scrollbar-thumb-min-size: 1.5rem;
+  --xiak-scrollbar-thumb-inset: 0.125rem;
 
   --xiak-z-header: 30;
   --xiak-z-rail: 20;
@@ -261,7 +265,7 @@
   --xiak-motion-fast: 90ms;
   --xiak-motion-panel: 160ms;
   --xiak-motion-loading: 1.2s;
-  --xiak-navigation-progress-height: 2px;
+  --xiak-navigation-progress-height: 0.125rem;
   --xiak-motion-skeleton: 1.5s;
   --xiak-ease-standard: cubic-bezier(0.2, 0, 0, 1);
 }
@@ -288,8 +292,8 @@
   --xiak-color-header-danger-bg: var(--xiak-palette-danger-bg);
   --xiak-color-header-warning: var(--xiak-palette-warning-text);
   --xiak-color-header-warning-bg: var(--xiak-palette-warning-bg);
-  --xiak-shadow-header-focus: 0 0 0 2px var(--xiak-palette-focus);
-  --xiak-shadow-header-panel: 0 4px 16px var(--xiak-palette-dark-shadow);
+  --xiak-shadow-header-focus: 0 0 0 0.125rem var(--xiak-palette-focus);
+  --xiak-shadow-header-panel: 0 0.25rem 1rem var(--xiak-palette-dark-shadow);
   --xiak-color-bg-global: var(--xiak-palette-gray-850);
   --xiak-color-bg-global-hover: var(--xiak-palette-gray-800);
   --xiak-color-border-global: var(--xiak-palette-gray-700);
@@ -352,8 +356,8 @@
   --xiak-color-product-devops-bg: var(--xiak-palette-violet-bg);
   --xiak-color-product-observability: var(--xiak-palette-blue-text);
   --xiak-color-product-observability-bg: var(--xiak-palette-selection);
-  --xiak-shadow-focus: 0 0 0 2px var(--xiak-palette-focus);
-  --xiak-shadow-elevated: 0 4px 16px var(--xiak-palette-dark-shadow);
+  --xiak-shadow-focus: 0 0 0 0.125rem var(--xiak-palette-focus);
+  --xiak-shadow-elevated: 0 0.25rem 1rem var(--xiak-palette-dark-shadow);
   --xiak-color-bg-control-pressed: var(--xiak-palette-gray-650);
   --xiak-color-header-pressed: var(--xiak-palette-gray-700);
   --xiak-color-scrollbar-thumb: var(--xiak-palette-scrollbar-dark);
@@ -364,20 +368,20 @@
 /* Touch layouts keep the same hierarchy with larger physical targets. */
 @media (pointer: coarse) {
   :root {
-    --xiak-control-height-small: 36px;
-    --xiak-control-height: 44px;
-    --xiak-control-height-large: 44px;
-    --xiak-tab-height: 44px;
+    --xiak-control-height-small: 2.25rem;
+    --xiak-control-height: 2.75rem;
+    --xiak-control-height-large: 2.75rem;
+    --xiak-tab-height: 2.75rem;
     --xiak-font-size-control: var(--xiak-font-size-small);
-    --xiak-line-height-control: 18px;
-    --xiak-choice-size: 14px;
-    --xiak-choice-mark-size: 10px;
-    --xiak-radio-dot-size: 6px;
-    --xiak-choice-row-height: 44px;
-    --xiak-rail-target-size: 44px;
-    --xiak-navigation-item-height: 44px;
-    --xiak-layout-header-height: 56px;
-    --xiak-content-header-height: 56px;
-    --xiak-content-header-height-compact: 56px;
+    --xiak-line-height-control: 1.125rem;
+    --xiak-choice-size: 0.875rem;
+    --xiak-choice-mark-size: 0.625rem;
+    --xiak-radio-dot-size: 0.375rem;
+    --xiak-choice-row-height: 2.75rem;
+    --xiak-rail-target-size: 2.75rem;
+    --xiak-navigation-item-height: 2.75rem;
+    --xiak-layout-header-height: 3.5rem;
+    --xiak-content-header-height: 3.5rem;
+    --xiak-content-header-height-compact: 3.5rem;
   }
 }

@@ -11,7 +11,7 @@
 .loading { display: grid; gap: var(--xiak-spacing-default); color: var(--xiak-color-text-muted); }
 .loading > div { height: var(--xiak-control-height); }
 .footer { display: flex; flex: none; justify-content: flex-end; flex-wrap: wrap; gap: var(--xiak-spacing-tight); border-top: var(--xiak-border-subtle); padding: var(--xiak-spacing-comfortable) var(--xiak-panel-padding); background: var(--xiak-color-bg-panel-hover); }
-@media (max-width: 600px) {
+@media (max-width: 46.875em) {
   .dialog, .dialog[data-size="wide"] { width: calc(100vw - var(--xiak-spacing-tight) * 2); max-height: calc(100dvh - var(--xiak-spacing-tight) * 2); }
   .header, .body, .footer { padding-inline: var(--xiak-spacing-comfortable); }
 }

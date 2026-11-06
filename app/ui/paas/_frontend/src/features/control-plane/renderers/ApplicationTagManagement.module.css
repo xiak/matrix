@@ -25,8 +25,8 @@
 
 .icon {
   display: grid;
-  width: 36px;
-  height: 36px;
+  width: 2.25rem;
+  height: 2.25rem;
   flex: none;
   place-items: center;
   border-radius: var(--xiak-radius-control);
@@ -35,8 +35,8 @@
 }
 
 .icon svg {
-  width: 18px;
-  height: 18px;
+  width: 1.125rem;
+  height: 1.125rem;
 }
 
 .body,
@@ -208,8 +208,8 @@
 }
 
 .reviewFacts dd svg {
-  width: 15px;
-  height: 15px;
+  width: 0.9375rem;
+  height: 0.9375rem;
   color: var(--xiak-color-text-subtle);
 }
 
@@ -240,11 +240,11 @@
 }
 
 .scenarioDetails summary:focus-visible {
-  outline: 2px solid var(--xiak-color-border-focus);
-  outline-offset: 2px;
+  outline: 0.125rem solid var(--xiak-color-border-focus);
+  outline-offset: 0.125rem;
 }
 
-@media (max-width: 720px) {
+@media (max-width: 56.25em) {
   .heading,
   .workflowHeading {
     align-items: stretch;
@@ -269,7 +269,7 @@
   }
 }
 
-@media (max-width: 460px) {
+@media (max-width: 35.9375em) {
   .heading {
     display: grid;
   }

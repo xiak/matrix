@@ -108,7 +108,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
       </Menu.Trigger>
       <Menu.Portal container={portal}>
         <Menu.Content align="start" aria-label={label} aria-labelledby={props["aria-labelledby"]} id={listId}
-          className={classNames(menu.popup, styles.popup)} collisionPadding={8}
+          className={classNames(menu.popup, styles.popup)} collisionPadding={10}
           data-surface={shellSurface ? "shell" : undefined} loop
           onCloseAutoFocus={(event) => { event.preventDefault(); if (!interactedOutside.current) trigger.current?.focus(); }}
           onEscapeKeyDown={(event) => { event.preventDefault(); event.stopPropagation(); setOpen(false); }}
@@ -119,7 +119,7 @@ export const Select = forwardRef<HTMLButtonElement, SelectProps>(function Select
             // the next Tab continues from the control in the form's order.
             if (event.key === "Tab") { event.preventDefault(); setOpen(false); }
           }}
-          ref={popup} role="listbox" sideOffset={6}>
+          ref={popup} role="listbox" sideOffset={7.5}>
           {options.map((option) => <Menu.Item aria-selected={option.value === selectedValue}
             className={menu.item} disabled={option.disabled} key={option.value}
             onKeyDown={(event) => { if (event.key === "Tab" && !option.disabled) choose(option.value); }}

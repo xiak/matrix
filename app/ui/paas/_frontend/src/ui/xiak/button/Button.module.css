@@ -22,8 +22,8 @@
 }
 
 .button:focus-visible {
-  outline: 2px solid var(--xiak-color-border-focus);
-  outline-offset: 2px;
+  outline: 0.125rem solid var(--xiak-color-border-focus);
+  outline-offset: 0.125rem;
 }
 
 .button:disabled {

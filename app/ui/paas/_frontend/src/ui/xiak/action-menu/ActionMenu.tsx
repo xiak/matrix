@@ -22,7 +22,7 @@ export function ActionMenu({ label, disabled, hint, summary, actions, triggerRef
     <Menu.Trigger asChild><Button ref={trigger} className={className} size={iconOnly ? "default" : "small"} iconOnly={iconOnly} variant="secondary" disabled={disabled} aria-label={iconOnly ? label : undefined} title={disabled ? hint : iconOnly ? label : undefined}>
       {iconOnly ? <Ellipsis aria-hidden="true" /> : <>{label}<ChevronDown aria-hidden="true" /></>}
     </Button></Menu.Trigger>
-    <Menu.Portal><Menu.Content aria-label={label} align="end" collisionPadding={12} sideOffset={6} className={styles.popup} onCloseAutoFocus={(event) => {
+    <Menu.Portal><Menu.Content aria-label={label} align="end" collisionPadding={15} sideOffset={7.5} className={styles.popup} onCloseAutoFocus={(event) => {
       if (chosen.current) event.preventDefault();
       else if (fallbackFocusRef?.current && !trigger.current?.getClientRects().length) {
         event.preventDefault();
