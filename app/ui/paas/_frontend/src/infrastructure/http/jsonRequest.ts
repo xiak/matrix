@@ -32,7 +32,7 @@ export async function requestJSONResponse<T>(
   path: string,
   init?: RequestInit
 ): Promise<{ body: T; headers: Headers; status: number }> {
-  const response = await fetch(path, {
+  const response = await requestPlatform(path, {
     ...init,
     cache: "no-store",
     headers: {
@@ -54,6 +54,24 @@ export async function requestJSONResponse<T>(
   }
 
   return { body: body as T, headers: response.headers, status: response.status };
+}
+
+// A browser reference is public, bound to the HttpOnly cookie by the server.
+// Keep the existing repository/provider owner guards without retaining a
+// reusable bearer in JavaScript or sending a cookie reference as a bearer.
+export function requestPlatform(path: string, init?: RequestInit): Promise<Response> {
+  const headers: Record<string, string> = init?.headers instanceof Headers || Array.isArray(init?.headers)
+    ? Object.fromEntries(init.headers) : { ...init?.headers };
+  const authorizationKey = Object.keys(headers).find((key) => key.toLowerCase() === "authorization");
+  const authorization = authorizationKey ? headers[authorizationKey] : undefined;
+  if (authorization?.startsWith("Bearer mxb1.")) {
+    const reference = authorization.slice("Bearer ".length);
+    if (!/^mxb1\.[sr]\.[0-9a-f]{64}$/.test(reference)) throw new Error("INVALID_BROWSER_SESSION");
+    delete headers[authorizationKey!];
+    headers.Authorization = `MatrixSession ${reference}`;
+    headers["Matrix-Browser-Transport"] = "cookie";
+  }
+  return fetch(path, { ...init, credentials: "same-origin", headers });
 }
 
 export async function requestJSON<T>(

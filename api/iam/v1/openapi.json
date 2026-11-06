@@ -2825,6 +2825,16 @@
         ],
         "type": "object"
       },
+      "AssumeRoleTransportResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/AssumeRoleResponse"
+          },
+          {
+            "$ref": "#/components/schemas/BrowserAssumeRoleResponse"
+          }
+        ]
+      },
       "AssumeServiceRoleRequest": {
         "additionalProperties": false,
         "description": "Service-authenticated intent selecting only an existing workload binding and bounded duration. Account, Role, installation, purpose, template and policy are resolved by IAM.",
@@ -20571,6 +20581,120 @@
         ],
         "type": "object"
       },
+      "BrowserAssumeRoleResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "browserCredential": {
+            "pattern": "^mxb1\\.r\\.[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "outcome": {
+            "const": "APPLIED"
+          },
+          "session": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/RoleSession"
+              },
+              {
+                "properties": {
+                  "sourceServicePrincipalId": false,
+                  "status": {
+                    "const": "ACTIVE"
+                  }
+                },
+                "required": [
+                  "sourceUserId"
+                ]
+              }
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "session",
+          "browserCredential"
+        ],
+        "type": "object"
+      },
+      "BrowserAuthenticatedResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "browserCredential": {
+            "description": "Public cookie binding, never a bearer credential.",
+            "pattern": "^mxb1\\.s\\.[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "outcome": {
+            "const": "AUTHENTICATED"
+          },
+          "session": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Session"
+              },
+              {
+                "properties": {
+                  "revokedAt": false,
+                  "status": {
+                    "const": "ACTIVE"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "outcome",
+          "session",
+          "mustChangePassword",
+          "browserCredential"
+        ],
+        "type": "object"
+      },
+      "BrowserSessionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "browserCredential": {
+            "description": "Public cookie binding, never a bearer credential.",
+            "pattern": "^mxb1\\.s\\.[0-9a-f]{64}$",
+            "type": "string"
+          },
+          "loginName": {
+            "maxLength": 193,
+            "minLength": 1,
+            "type": "string"
+          },
+          "mustChangePassword": {
+            "type": "boolean"
+          },
+          "session": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Session"
+              },
+              {
+                "properties": {
+                  "revokedAt": false,
+                  "status": {
+                    "const": "ACTIVE"
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "loginName",
+          "mustChangePassword",
+          "browserCredential"
+        ],
+        "type": "object"
+      },
       "CapabilityRestriction": {
         "enum": [
           "AUTHORITY_REQUIRED",
@@ -33058,6 +33182,16 @@
           "outcome"
         ],
         "type": "object"
+      },
+      "LoginTransportResponse": {
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/LoginResponse"
+          },
+          {
+            "$ref": "#/components/schemas/BrowserAuthenticatedResponse"
+          }
+        ]
       },
       "LogoutRequest": {
         "additionalProperties": false,
@@ -47817,6 +47951,29 @@
       }
     },
     "securitySchemes": {
+      "BrowserReference": {
+        "description": "Non-secret mxb1.s/r reference returned to this page. It must match the selected HttpOnly cookie; it has no bearer authority.",
+        "scheme": "MatrixSession",
+        "type": "http"
+      },
+      "BrowserRoleCookie": {
+        "description": "HttpOnly role cookie bound to the source login cookie. Native HTTP loopback uses matrix-role-session.",
+        "in": "cookie",
+        "name": "__Host-matrix-role-session",
+        "type": "apiKey"
+      },
+      "BrowserSessionCookie": {
+        "description": "HttpOnly, Secure, host-only login cookie on HTTPS. Native HTTP loopback uses matrix-session. The server checks the existing Session on every request.",
+        "in": "cookie",
+        "name": "__Host-matrix-session",
+        "type": "apiKey"
+      },
+      "BrowserTransport": {
+        "description": "Must be cookie. Same-origin browser transport requires the sealed public Origin for writes and rejects cross-site requests. Cookies alone never authorize business requests.",
+        "in": "header",
+        "name": "Matrix-Browser-Transport",
+        "type": "apiKey"
+      },
       "ServiceCredential": {
         "description": "Opaque IAM service credential bound to the calling service.",
         "scheme": "bearer",
@@ -49296,6 +49453,54 @@
         "summary": "Read this actual login USER's persisted factor state; no inferred settings or permissions"
       }
     },
+    "/v1/auth/browser-session": {
+      "get": {
+        "operationId": "restoreBrowserSession",
+        "parameters": [
+          {
+            "description": "Opt in to the same-origin HttpOnly cookie transport. Writes require the exact configured public Origin. Omission preserves the published API bearer transport.",
+            "in": "header",
+            "name": "Matrix-Browser-Transport",
+            "required": true,
+            "schema": {
+              "const": "cookie",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BrowserSessionResponse"
+                }
+              }
+            },
+            "description": "Current authority state."
+          },
+          "401": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "403": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "500": {
+            "$ref": "#/components/responses/ProblemResponse"
+          },
+          "503": {
+            "$ref": "#/components/responses/ProblemResponse"
+          }
+        },
+        "security": [
+          {
+            "BrowserSessionCookie": [],
+            "BrowserTransport": []
+          }
+        ],
+        "summary": "Read the existing current login session after reload; no issuance, activity touch, authority selectors or Authorization header"
+      }
+    },
     "/v1/auth/challenges/{challengeId}/notification-contact/verifications": {
       "post": {
         "operationId": "startChallengeNotificationVerification",
@@ -50047,6 +50252,16 @@
               "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
               "type": "string"
             }
+          },
+          {
+            "description": "Opt in to the same-origin HttpOnly cookie transport. Writes require the exact configured public Origin. Omission preserves the published API bearer transport.",
+            "in": "header",
+            "name": "Matrix-Browser-Transport",
+            "required": false,
+            "schema": {
+              "const": "cookie",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -50064,7 +50279,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LoginResponse"
+                  "$ref": "#/components/schemas/LoginTransportResponse"
                 }
               }
             },
@@ -50099,12 +50314,24 @@
           }
         },
         "security": [],
-        "summary": "Consume the current login challenge and a fresh TOTP; its secret is not a bearer or permission"
+        "summary": "Consume the current login challenge and a fresh TOTP; explicit browser transport issues an HttpOnly cookie on final success"
       }
     },
     "/v1/auth/login": {
       "post": {
         "operationId": "login",
+        "parameters": [
+          {
+            "description": "Opt in to the same-origin HttpOnly cookie transport. Writes require the exact configured public Origin. Omission preserves the published API bearer transport.",
+            "in": "header",
+            "name": "Matrix-Browser-Transport",
+            "required": false,
+            "schema": {
+              "const": "cookie",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -50120,7 +50347,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/LoginResponse"
+                  "$ref": "#/components/schemas/LoginTransportResponse"
                 }
               }
             },
@@ -50173,7 +50400,7 @@
           }
         },
         "security": [],
-        "summary": "Verify a password and issue either a login session or a restricted authentication challenge"
+        "summary": "Verify a password; explicit browser transport keeps the reusable session secret in an HttpOnly cookie"
       }
     },
     "/v1/auth/logout": {
@@ -54769,6 +54996,16 @@
               "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$",
               "type": "string"
             }
+          },
+          {
+            "description": "Opt in to the same-origin HttpOnly cookie transport. Writes require the exact configured public Origin. Omission preserves the published API bearer transport.",
+            "in": "header",
+            "name": "Matrix-Browser-Transport",
+            "required": false,
+            "schema": {
+              "const": "cookie",
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -54786,7 +55023,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AssumeRoleResponse"
+                  "$ref": "#/components/schemas/AssumeRoleTransportResponse"
                 }
               }
             },
@@ -54820,7 +55057,7 @@
             "$ref": "#/components/responses/ProblemResponse"
           }
         },
-        "summary": "Issue an account-local role credential once; equal replay never returns a secret"
+        "summary": "Issue an account-local role credential once; browser cookie transport returns only a bound reference; equal replay never returns a secret"
       }
     },
     "/v1/roles/{roleId}:set-status": {
@@ -56288,6 +56525,17 @@
   "security": [
     {
       "UserSession": []
+    },
+    {
+      "BrowserReference": [],
+      "BrowserSessionCookie": [],
+      "BrowserTransport": []
+    },
+    {
+      "BrowserReference": [],
+      "BrowserRoleCookie": [],
+      "BrowserSessionCookie": [],
+      "BrowserTransport": []
     }
   ]
 }

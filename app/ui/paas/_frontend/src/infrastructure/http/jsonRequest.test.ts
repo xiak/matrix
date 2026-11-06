@@ -1,9 +1,31 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { HttpProblem, requestJSON } from "./jsonRequest";
+import { HttpProblem, requestJSON, requestPlatform } from "./jsonRequest";
 
 afterEach(() => vi.restoreAllMocks());
 
 describe("requestJSON", () => {
+  it.each(["s", "r"])("binds a browser %s reference to same-origin cookies without a bearer", async (kind) => {
+    const reference = `mxb1.${kind}.${"a".repeat(64)}`;
+    const fetcher = vi.fn().mockResolvedValue(new Response("{}"));
+    vi.stubGlobal("fetch", fetcher);
+    await requestPlatform("/api/iam/v1/auth/me", {
+      headers: new Headers({ authorization: `Bearer ${reference}` }), credentials: "include"
+    });
+    const [path, init] = fetcher.mock.calls[0]!;
+    expect(path).toBe("/api/iam/v1/auth/me");
+    expect(init.credentials).toBe("same-origin");
+    const headers = new Headers(init.headers);
+    expect(headers.get("Authorization")).toBe(`MatrixSession ${reference}`);
+    expect(headers.get("Matrix-Browser-Transport")).toBe("cookie");
+  });
+
+  it("rejects a malformed browser reference before sending a request", () => {
+    const fetcher = vi.fn(); vi.stubGlobal("fetch", fetcher);
+    expect(() => requestPlatform("/api/iam/v1/auth/me", { headers: { Authorization: "Bearer mxb1.s.invalid" } }))
+      .toThrow("INVALID_BROWSER_SESSION");
+    expect(fetcher).not.toHaveBeenCalled();
+  });
+
   it("retains only a validated problem request ID for safe diagnostics", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
       status: 403,

@@ -17,9 +17,11 @@ import (
 	"github.com/xiak/matrix/api/contractjson"
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
+	"github.com/xiak/matrix/app/service/internal/processhttp"
 )
 
 type Workflow interface {
+	CurrentSession(context.Context, iamv1.Secret) (identityaccess.CurrentSession, error)
 	ListAccessKeys(context.Context, iamv1.Secret, iamv1.PrincipalID, string) (iamv1.AccessKeyList, error)
 	GetAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.AccessKeyID, string) (iamv1.AccessKeyAccess, error)
 	CreateAccessKey(context.Context, iamv1.Secret, iamv1.PrincipalID, iamv1.CreateAccessKeyRequest) (iamv1.CreateAccessKeyResponse, error)
@@ -185,7 +187,8 @@ type Workflow interface {
 }
 
 type Config struct {
-	NewRequestID func() (string, error)
+	NewRequestID  func() (string, error)
+	BrowserOrigin string
 }
 
 type handler struct {
@@ -210,6 +213,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/service-identity", value.serviceIdentity)
 	routes.HandleFunc("/v1/audit-producer:resolve", value.resolveAuditProducer)
 	routes.HandleFunc("/v1/auth/login", value.login)
+	routes.HandleFunc("/v1/auth/browser-session", value.currentBrowserSession)
 	routes.HandleFunc("/v1/auth/challenges/", value.authenticationChallenge)
 	routes.HandleFunc("/v1/auth/authenticators", value.authenticatorState)
 	routes.HandleFunc("/v1/auth/totp/enrollments", value.startTOTPEnrollment)
@@ -280,7 +284,7 @@ func NewHandler(workflow Workflow, config Config) (http.Handler, error) {
 	routes.HandleFunc("/v1/sessions/", value.revokeSession)
 	routes.HandleFunc("/", value.notFound)
 	value.routes = routes
-	return value, nil
+	return processhttp.BrowserSessionHandler(value, config.BrowserOrigin)
 }
 
 func (value *handler) ServeHTTP(response http.ResponseWriter, request *http.Request) {
@@ -813,12 +817,7 @@ func (value *handler) login(response http.ResponseWriter, request *http.Request)
 		value.writeError(response, request, err)
 		return
 	}
-	encoded, err := iamv1.EncodeLoginResponse(result)
-	if err != nil {
-		value.writeError(response, request, identityaccess.ErrUnavailable)
-		return
-	}
-	writeEncodedJSON(response, http.StatusOK, encoded)
+	value.writeLoginResponse(response, request, result)
 }
 
 func (value *handler) authenticationChallenge(response http.ResponseWriter, request *http.Request) {
@@ -901,12 +900,7 @@ func (value *handler) authenticationChallenge(response http.ResponseWriter, requ
 		value.writeError(response, request, err)
 		return
 	}
-	encoded, err := iamv1.EncodeLoginResponse(result)
-	if err != nil {
-		value.writeError(response, request, identityaccess.ErrUnavailable)
-		return
-	}
-	writeEncodedJSON(response, http.StatusOK, encoded)
+	value.writeLoginResponse(response, request, result)
 }
 
 func (value *handler) logout(response http.ResponseWriter, request *http.Request) {

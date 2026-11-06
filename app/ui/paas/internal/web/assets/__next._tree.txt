@@ -1,4 +1,4 @@
 :HL["/_next/static/chunks/0n8nbzzc7rj6t.css","style"]
-:HL["/_next/static/chunks/2b83u6enhdmav.css","style"]
+:HL["/_next/static/chunks/3wpgb1oaals-l.css","style"]
 1:[["children",{"s":"__PAGE__","h":160}]]
-0:{"b":"matrix-c2e3e6b0dfa9caf13caa","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
+0:{"b":"matrix-8d9e331c9fdbe5221b37","t":{"t":{"s":"","h":80,"c":"$Q1"}}}

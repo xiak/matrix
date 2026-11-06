@@ -38,7 +38,7 @@ describe("User management original-result contract", () => {
   it.each(intents)("reads only the original $operation completion with the current bearer, never the current User", async (intent) => {
     const fetcher = answer(completion(intent)); const value = await httpAccountRepository.userManagement!.readCompletion("fresh-user-bearer", intent);
     expect(fetcher).toHaveBeenCalledExactlyOnceWith(`/api/iam/v1/users/team%3Auser-one/management-completions/original%3Auser-change?operation=${intent.operation}&expectedResourceVersion=3`,
-      { cache: "no-store", headers: { Accept: "application/json", Authorization: "Bearer fresh-user-bearer" } });
+      { cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", Authorization: "Bearer fresh-user-bearer" } });
     expect(value).toMatchObject({ ...scope, commandRequestId: intent.commandRequestId, operation: intent.operation, expectedResourceVersion: 3, result: { resourceVersion: 4 } });
     expect(value).not.toHaveProperty("apiVersion"); expect(value).not.toHaveProperty("credential");
   });
@@ -112,7 +112,7 @@ describe("account lifecycle completion read contract", () => {
     const result = await httpAccountRepository.accountLifecycle!.readCompletion("current-user-bearer", intent);
     expect(fetcher).toHaveBeenCalledExactlyOnceWith(
       `/api/iam/v1/accounts/customer-account/lifecycle-completions/original-account-command?operation=${intent.operation}&expectedResourceVersion=${intent.expectedResourceVersion}`,
-      { cache: "no-store", headers: { Accept: "application/json", Authorization: "Bearer current-user-bearer" } }
+      { cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", Authorization: "Bearer current-user-bearer" } }
     );
     expect(result).toMatchObject({ operation: intent.operation, commandRequestId: intent.commandRequestId,
       expectedResourceVersion: intent.expectedResourceVersion, resultingResourceVersion: intent.expectedResourceVersion + 1 });
@@ -743,13 +743,13 @@ describe("IAM HTTP member role self-service boundary", () => {
     expect(second.items[0]).toMatchObject({ roleId: role.id, capability: { action: "iam.role.assume", available: true } });
   });
 
-  it("sends only the frozen role intent and accepts a secret only on first application", async () => {
+  it("sends only the frozen role intent and accepts a cookie reference only on first application", async () => {
     const command = { resourceVersion: role.resourceVersion, durationSeconds: 3600, requestId: "ui-role-assume-one" };
-    let fetcher = reply({ outcome: "APPLIED", session: roleSession, credential: "role-secret" });
+    let fetcher = reply({ outcome: "APPLIED", session: roleSession, browserCredential: `mxb1.r.${"a".repeat(64)}` });
     const applied = await httpIamRepository.roleSelfService!.assume("user-bearer", role.id, command);
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/roles/${role.id}:assume`);
     expect(requestBody(fetcher)).toEqual(command);
-    expect(applied).toMatchObject({ outcome: "APPLIED", credential: "role-secret", session: { sourceUserId: user.id } });
+    expect(applied).toMatchObject({ outcome: "APPLIED", credential: `mxb1.r.${"a".repeat(64)}`, session: { sourceUserId: user.id } });
 
     fetcher = reply({ outcome: "EQUAL_REPLAY", session: roleSession });
     expect(await httpIamRepository.roleSelfService!.assume("user-bearer", role.id, command)).toMatchObject({ outcome: "EQUAL_REPLAY", credential: null });
@@ -2050,11 +2050,28 @@ describe("IAM HTTP account boundary", () => {
   });
 
   it("sends the qualified username as one login identifier", async () => {
-    const fetcher = reply({ outcome: "AUTHENTICATED", credential: "transient-bearer", mustChangePassword: false,
+    const fetcher = reply({ outcome: "AUTHENTICATED", browserCredential: `mxb1.s.${"a".repeat(64)}`, mustChangePassword: false,
       session: { apiVersion, kind: "Session", id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } });
-    await expect(httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" })).resolves.toMatchObject({ outcome: "AUTHENTICATED", credential: "transient-bearer" });
+    await expect(httpIamRepository.login({ loginName: "alex@acme", password: "synthetic-test-password" })).resolves.toMatchObject({ outcome: "AUTHENTICATED", credential: `mxb1.s.${"a".repeat(64)}` });
+    expect(firstRequest(fetcher)[1].headers).toMatchObject({ "Matrix-Browser-Transport": "cookie" });
     expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/login");
     expect(requestBody(fetcher)).toEqual({ loginName: "alex@acme", password: "synthetic-test-password", requestId: expect.any(String) });
+  });
+
+  it("restores only a valid server-checked browser session and treats 401 as signed out", async () => {
+    const restored = { browserCredential: `mxb1.s.${"a".repeat(64)}`, loginName: "alex", mustChangePassword: false,
+      session: { apiVersion, kind: "Session", id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } };
+    const fetcher = reply(restored);
+    await expect(httpIamRepository.restoreSession!()).resolves.toMatchObject({ loginName: "alex", credential: restored.browserCredential });
+    expect(firstRequest(fetcher)[0]).toBe("/api/iam/v1/auth/browser-session");
+    expect(firstRequest(fetcher)[1]).toMatchObject({ credentials: "same-origin", cache: "no-store", headers: { "Matrix-Browser-Transport": "cookie" } });
+    for (const invalid of [{ ...restored, credential: "must-not-leak" }, { ...restored, browserCredential: `mxb1.r.${"a".repeat(64)}` }, { ...restored, mustChangePassword: "false" }]) {
+      reply(invalid); await expect(httpIamRepository.restoreSession!()).rejects.toThrow("INVALID_IAM_RESPONSE");
+    }
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: "iam.authentication.failed" }), { status: 401 })));
+    await expect(httpIamRepository.restoreSession!()).resolves.toBeNull();
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ code: "iam.unavailable" }), { status: 503 })));
+    await expect(httpIamRepository.restoreSession!()).rejects.toMatchObject({ status: 503 });
   });
 
   it("keeps a login challenge separate from a session and verifies it without a bearer", async () => {
@@ -2067,7 +2084,7 @@ describe("IAM HTTP account boundary", () => {
     });
     expect(firstRequest(loginFetch)[1].headers).not.toMatchObject({ Authorization: expect.any(String) });
 
-    const verifyFetch = reply({ outcome: "AUTHENTICATED", credential: "transient-bearer", mustChangePassword: false,
+    const verifyFetch = reply({ outcome: "AUTHENTICATED", browserCredential: `mxb1.s.${"a".repeat(64)}`, mustChangePassword: false,
       session: { apiVersion, kind: "Session", id: "session", organizationId: "account-acme", principalId: "principal-alex", status: "ACTIVE", issuedAt: timestamp, expiresAt: "2099-08-27T00:00:00Z" } });
     await expect(httpIamRepository.authenticationChallenges!.verify({ challengeId: "challenge-one", challengeCredential: "challenge-secret", code: "123456" })).resolves.toMatchObject({ outcome: "AUTHENTICATED" });
     expect(firstRequest(verifyFetch)[0]).toBe("/api/iam/v1/auth/challenges/challenge-one:verify");
@@ -3523,6 +3540,7 @@ describe("IAM HTTP own-session boundary", () => {
     expect(firstRequest(fetcher)[1]).toEqual({
       method: "POST",
       cache: "no-store",
+      credentials: "same-origin",
       headers: { Accept: "application/json", Authorization: "Bearer transient-bearer" }
     });
   });

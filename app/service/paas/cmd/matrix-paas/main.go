@@ -312,7 +312,11 @@ func run(ctx context.Context) error {
 	handler := http.NewServeMux()
 	handler.Handle("/managed-services/", managedServiceHandler)
 	handler.Handle("/", apphostingHandler)
-	return processhttp.Serve(ctx, config.listenAddress, handler)
+	browserHandler, err := processhttp.BrowserSessionHandler(handler, os.Getenv("MATRIX_BROWSER_ORIGIN"))
+	if err != nil {
+		return err
+	}
+	return processhttp.Serve(ctx, config.listenAddress, browserHandler)
 }
 
 func loadConfiguration() (configuration, error) {

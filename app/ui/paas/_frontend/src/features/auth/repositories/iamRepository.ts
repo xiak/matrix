@@ -3,6 +3,7 @@ import type {
   AuthenticatorRecoveryConfirmation,
   AuthenticatorRecoveryStart,
   LoginResult,
+  RestoredSession,
   OtherSessionsRevocation,
   OwnSessionPage,
   OwnSessionRevocation,
@@ -86,6 +87,7 @@ export type InspectAuthenticatorRecoveryCommand = {
 };
 
 export interface IamRepository {
+  restoreSession?(): Promise<RestoredSession | null>;
   login(command: LoginCommand): Promise<LoginResult>;
   authenticationChallenges?: {
     verify(command: VerifyAuthenticationChallengeCommand): Promise<LoginResult>;

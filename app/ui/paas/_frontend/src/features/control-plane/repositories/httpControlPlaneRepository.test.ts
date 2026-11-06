@@ -28,7 +28,7 @@ describe("bounded managed-service command recovery", () => {
     const results = await httpControlPlaneRepository.listCommandResults!("current-credential", commandType);
     expect(results[0]).toMatchObject({ idempotencyKey: "ui-install-original", commandType, inputDigest: `sha256:${"8".repeat(64)}`, state: "SUCCEEDED" });
     expect(fetch).toHaveBeenCalledWith(`/api/managed-services/v1/command-results/${commandType}`, {
-      cache: "no-store", headers: { Accept: "application/json", Authorization: "Bearer current-credential" }
+      cache: "no-store", credentials: "same-origin", headers: { Accept: "application/json", Authorization: "Bearer current-credential" }
     });
   });
 

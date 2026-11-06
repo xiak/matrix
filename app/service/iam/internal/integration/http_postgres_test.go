@@ -13813,7 +13813,7 @@ func TestIAMOwnSessionPostgres(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		endpoint, err := iamhttp.NewHandler(replica, iamhttp.Config{})
+		endpoint, err := iamhttp.NewHandler(replica, iamhttp.Config{BrowserOrigin: "https://browser.matrix.test"})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -13827,6 +13827,7 @@ func TestIAMOwnSessionPostgres(t *testing.T) {
 	}
 	root := localRecoveryLogin(t, handlers[0], "admin", adminPassword, true)
 	root = localRecoveryChangePassword(t, handlers[0], root, adminPassword, changedAdminPassword)
+	t.Run("browser_session_restoration", func(t *testing.T) { proveBrowserSessionRestoration(t, ctx, handlers, database, root) })
 	verify := proveOwnLoginSessions(t, ctx, handlers, database, root)
 	if _, err := database.Exec(ctx, `DO $role$ BEGIN
         IF NOT EXISTS(SELECT 1 FROM pg_catalog.pg_roles WHERE rolname='`+localRecoveryTestRole+`') THEN
@@ -14227,6 +14228,104 @@ func TestIAMOwnSessionExpiryPostgres(t *testing.T) {
 	if response := performIAMRequest(handlers[0], http.MethodGet, "/v1/auth/sessions", longBearer, nil); response.Code != http.StatusOK {
 		t.Fatal("expired writer revoked the still-valid session")
 	}
+}
+
+func proveBrowserSessionRestoration(t *testing.T, ctx context.Context, handlers []http.Handler, database *pgx.Conn, root string) {
+	t.Helper()
+	const temporary, changed = "Browser-Initial-Password-71!", "Browser-Changed-Password-82!"
+	created := performIAMRequest(handlers[0], http.MethodPost, "/v1/users", root, mustIAMJSON(t, map[string]any{
+		"loginName": "browser.session", "displayName": "Browser session", "initialPassword": temporary,
+		"permissionBoundary": nil, "requestId": "browser-session-create",
+	}))
+	var user iamv1.User
+	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &user) != nil {
+		t.Fatal("create browser session fixture")
+	}
+	type browserResult struct {
+		Session    iamv1.Session `json:"session"`
+		Reference  string        `json:"browserCredential"`
+		MustChange bool          `json:"mustChangePassword"`
+		LoginName  string        `json:"loginName"`
+	}
+	call := func(replica int, method, path string, cookie *http.Cookie, reference string, body any, expected int) *httptest.ResponseRecorder {
+		t.Helper()
+		var encoded []byte
+		if body != nil {
+			encoded = mustIAMJSON(t, body)
+		}
+		r := httptest.NewRequest(method, path, bytes.NewReader(encoded))
+		r.Header.Set("Matrix-Browser-Transport", "cookie")
+		r.Header.Set("Origin", "https://browser.matrix.test")
+		if body != nil {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		if cookie != nil {
+			r.AddCookie(cookie)
+		}
+		if reference != "" {
+			r.Header.Set("Authorization", "MatrixSession "+reference)
+		}
+		w := httptest.NewRecorder()
+		handlers[replica].ServeHTTP(w, r)
+		if w.Code != expected || w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("browser session %s %s status=%d want=%d", method, path, w.Code, expected)
+		}
+		if bytes.Contains(w.Body.Bytes(), []byte(`"credential"`)) || bytes.Contains(w.Body.Bytes(), []byte("mx1.")) {
+			t.Fatal("reusable credential exposed to browser JSON")
+		}
+		return w
+	}
+	login := func(password string) (browserResult, *http.Cookie) {
+		t.Helper()
+		w := call(0, http.MethodPost, "/v1/auth/login", nil, "", map[string]any{
+			"loginName": user.LoginName + "@" + string(user.AccountID), "password": password, "requestId": "browser-session-login",
+		}, http.StatusOK)
+		var result browserResult
+		cookies := w.Result().Cookies()
+		if json.Unmarshal(w.Body.Bytes(), &result) != nil || iamv1.ValidateSession(result.Session) != nil || len(cookies) != 1 ||
+			!cookies[0].HttpOnly || !cookies[0].Secure || cookies[0].Name != "__Host-matrix-session" {
+			t.Fatal("missing browser login authority")
+		}
+		return result, cookies[0]
+	}
+	a, cookieA := login(temporary)
+	var restored browserResult
+	w := call(1, http.MethodGet, "/v1/auth/browser-session", cookieA, "", nil, http.StatusOK)
+	if json.Unmarshal(w.Body.Bytes(), &restored) != nil || restored.Session != a.Session || !restored.MustChange || restored.Reference != a.Reference ||
+		restored.LoginName != user.LoginName+"@"+string(user.AccountID) {
+		t.Fatal("restoration lost the original restricted session")
+	}
+	b, cookieB := login(temporary)
+	call(1, http.MethodPost, "/v1/auth/password", cookieA, a.Reference, map[string]any{
+		"currentPassword": temporary, "newPassword": changed, "requestId": "browser-session-password",
+	}, http.StatusOK)
+	call(0, http.MethodGet, "/v1/auth/browser-session", cookieB, "", nil, http.StatusUnauthorized)
+	w = call(1, http.MethodGet, "/v1/auth/browser-session", cookieA, "", nil, http.StatusOK)
+	if json.Unmarshal(w.Body.Bytes(), &restored) != nil || restored.MustChange || restored.Session != a.Session {
+		t.Fatal("password change did not retain exactly the calling session")
+	}
+	readActivity := func() time.Time {
+		t.Helper()
+		var observed time.Time
+		if err := database.QueryRow(ctx, "SELECT last_activity_at FROM iam.sessions WHERE tenant_id=$1 AND id=$2", user.AccountID, a.Session.ID).Scan(&observed); err != nil {
+			t.Fatal("read original session activity", err)
+		}
+		return observed
+	}
+	before := readActivity()
+	for range 3 {
+		call(1, http.MethodGet, "/v1/auth/browser-session", cookieA, "", nil, http.StatusOK)
+	}
+	if !readActivity().Equal(before) {
+		t.Fatal("page restoration extended idle lifetime")
+	}
+	b, cookieB = login(changed)
+	call(0, http.MethodGet, "/v1/auth/me", cookieB, a.Reference, nil, http.StatusUnauthorized)
+	call(1, http.MethodPost, "/v1/auth/sessions/"+string(a.Session.ID)+":revoke", cookieB, b.Reference,
+		map[string]any{"requestId": "browser-session-revoke"}, http.StatusOK)
+	call(0, http.MethodGet, "/v1/auth/browser-session", cookieA, "", nil, http.StatusUnauthorized)
+	call(0, http.MethodPost, "/v1/auth/logout", cookieB, b.Reference, map[string]any{"requestId": "browser-session-logout"}, http.StatusOK)
+	call(1, http.MethodGet, "/v1/auth/browser-session", cookieB, "", nil, http.StatusUnauthorized)
 }
 
 func proveOwnLoginSessions(t *testing.T, ctx context.Context, handlers []http.Handler, database *pgx.Conn, root string) func() {

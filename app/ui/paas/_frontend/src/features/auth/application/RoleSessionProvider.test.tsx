@@ -104,9 +104,63 @@ function view(iam: IamRepository, expireSource = vi.fn(() => true)) {
   };
 }
 
-afterEach(cleanup);
+afterEach(() => { cleanup(); sessionStorage.clear(); vi.restoreAllMocks(); });
 
 describe("RoleSessionProvider", () => {
+  const browserSource = `mxb1.s.${"a".repeat(64)}`;
+  const browserRole = `mxb1.r.${"b".repeat(64)}`;
+  const savedRole = { source: browserSource, reference: browserRole, logoutRequestId: "logout-restored-role" };
+  function browserView(iam: IamRepository) {
+    return render(<RoleSessionProvider current={current} expireSource={vi.fn(() => true)} repository={iam} sourceCredential={browserSource}><Probe /></RoleSessionProvider>);
+  }
+
+  it("restores and revokes the same role after reload without assuming it again", async () => {
+    sessionStorage.setItem("matrix.browser-role", JSON.stringify(savedRole));
+    let resolve!: (value: CurrentRoleIdentity) => void;
+    const iam = repository({ currentIdentity: vi.fn(() => new Promise<CurrentRoleIdentity>((done) => { resolve = done; })) });
+    browserView(iam);
+    expect(screen.getByLabelText("credential").textContent).toBe("none");
+    await act(async () => resolve(identity));
+    await waitFor(() => expect(screen.getByLabelText("credential").textContent).toBe(browserRole));
+    expect(iam.roleSelfService!.currentIdentity).toHaveBeenCalledWith(browserRole);
+    expect(iam.roleSelfService!.assume).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "exit" }));
+    expect(iam.roleSelfService!.logout).toHaveBeenCalledWith(browserRole, savedRole.logoutRequestId);
+    expect(iam.roleSelfService!.revalidateSource).toHaveBeenCalledWith(browserSource, "account-a", "user-a");
+    expect(sessionStorage.getItem("matrix.browser-role")).toBeNull();
+    expect(screen.getByLabelText("credential").textContent).toBe(browserSource);
+  });
+
+  it.each([401, 503])("keeps failed role restoration blocked (%s) until explicit source validation", async (status) => {
+    sessionStorage.setItem("matrix.browser-role", JSON.stringify(savedRole));
+    const iam = repository({ currentIdentity: vi.fn(async () => { throw new HttpProblem(status, "ROLE_UNAVAILABLE"); }) });
+    browserView(iam);
+    await waitFor(() => expect(screen.getByLabelText("stage").textContent).toBe("source-validation-unknown"));
+    expect(screen.getByLabelText("credential").textContent).toBe("none");
+    await userEvent.click(screen.getByRole("button", { name: "clear" }));
+    expect(screen.getByLabelText("credential").textContent).toBe("none");
+    expect(iam.roleSelfService!.revalidateSource).not.toHaveBeenCalled();
+    await userEvent.click(screen.getByRole("button", { name: "restore-source" }));
+    expect(screen.getByLabelText("credential").textContent).toBe(browserSource);
+    expect(sessionStorage.getItem("matrix.browser-role")).toBeNull();
+  });
+
+  it("never restores a role marker belonging to a different login", async () => {
+    sessionStorage.setItem("matrix.browser-role", JSON.stringify({ ...savedRole, source: `mxb1.s.${"c".repeat(64)}` }));
+    const iam = repository(); browserView(iam);
+    await waitFor(() => expect(screen.getByLabelText("credential").textContent).toBe(browserSource));
+    expect(iam.roleSelfService!.currentIdentity).not.toHaveBeenCalled();
+    expect(sessionStorage.getItem("matrix.browser-role")).toBeNull();
+  });
+
+  it.each(["{", JSON.stringify({ ...savedRole, reference: null })])("does not fall back to User for an unreadable or unfinished role marker", async (marker) => {
+    sessionStorage.setItem("matrix.browser-role", marker);
+    const iam = repository(); browserView(iam);
+    await waitFor(() => expect(screen.getByLabelText("stage").textContent).toBe("source-validation-unknown"));
+    expect(screen.getByLabelText("credential").textContent).toBe("none");
+    expect(iam.roleSelfService!.assume).not.toHaveBeenCalled();
+  });
+
   it("expires only the exact current User credential while User mode owns business requests", async () => {
     const user = userEvent.setup(), iam = repository(), page = view(iam);
     await user.click(screen.getByRole("button", { name: "expire-old-role" }));

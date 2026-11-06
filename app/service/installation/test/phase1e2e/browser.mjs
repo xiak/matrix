@@ -44,8 +44,8 @@ async function step(name, action) {
 }
 
 async function visit(product, view = "") {
-  // SessionProvider keeps credentials in page memory. Follow the same launcher
-  // and sidebar links as a user; a document reload deliberately loses login.
+  // Follow the launcher and sidebar as a user. Reload persistence has its own
+  // authority-bound gate below; navigation must not manufacture another login.
   await closeWorkspace();
   const productPath = `/console/products/${product.id}/`;
   if (!new URL(page.url()).pathname.startsWith(productPath)) {
@@ -205,6 +205,8 @@ try {
       await page.getByRole("button", { name: "打开账号菜单，当前用户 admin", exact: true }).click();
       await page.getByRole("menuitem", { name: "注销并撤销 IAM 会话", exact: true }).click();
       await page.locator("#login-form").waitFor();
+      await page.reload();
+      await page.locator("#login-form").waitFor();
     });
     await step("new-password-ui-relogin", async () => {
       await page.locator("#login-name").fill("admin");
@@ -215,6 +217,34 @@ try {
       assert.equal(await page.locator("#password-change-form").count(), 0);
     });
   }
+
+  await step("same-session-reload-and-new-tab", async () => {
+    const current = async (target) => target.evaluate(async () => {
+      const response = await fetch("/api/iam/v1/auth/browser-session", { headers: { "Matrix-Browser-Transport": "cookie" } });
+      const body = await response.json();
+      if (response.status !== 200 || typeof body.session?.id !== "string" || Object.hasOwn(body, "credential")) throw new Error("Invalid browser session restoration");
+      return body.session.id;
+    });
+    await page.getByRole("button", { name: "打开账号菜单，当前用户 admin", exact: true }).waitFor();
+    const original = await current(page);
+    const secure = new URL(origin).protocol === "https:";
+    const cookie = (await page.context().cookies(origin)).find((value) => value.name === (secure ? "__Host-matrix-session" : "matrix-session"));
+    assert.equal(cookie?.httpOnly, true);
+    assert.equal(cookie?.secure, secure);
+    assert.equal(cookie?.sameSite, "Lax");
+    assert.equal(cookie?.path, "/");
+    assert.ok(cookie.expires > Date.now() / 1000);
+    await page.reload();
+    await page.getByRole("button", { name: "打开账号菜单，当前用户 admin", exact: true }).waitFor();
+    assert.equal(await current(page), original);
+    assert.equal(await page.evaluate(() => [...Object.values(localStorage), ...Object.values(sessionStorage)].some((value) => /mx1\.[A-Za-z0-9_-]{43}/.test(value))), false);
+    const sibling = await page.context().newPage();
+    try {
+      await sibling.goto(`${origin}/console/`);
+      await sibling.getByRole("button", { name: "打开账号菜单，当前用户 admin", exact: true }).waitFor();
+      assert.equal(await current(sibling), original);
+    } finally { await sibling.close(); }
+  });
 
   for (const product of products) {
     await step(`${product.id}-service-activation`, async () => {

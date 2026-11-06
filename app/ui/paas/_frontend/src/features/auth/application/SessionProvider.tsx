@@ -51,6 +51,7 @@ type SessionContextValue = {
   signInNotice: SessionSignInNotice | null;
   error: SessionErrorCode | null;
   clearError(): void;
+  restoreSession(): Promise<void>;
   login(loginName: string, password: string): Promise<LoginOutcome | null>;
   verifyAuthenticationChallenge(code: string): Promise<LoginOutcome | null>;
   enterAuthenticatorRecovery(): boolean;
@@ -135,7 +136,7 @@ export function SessionProvider({
   children: ReactNode;
   repository?: IamRepository;
 }) {
-  const [phase, setPhase] = useState<SessionPhase>("anonymous");
+  const [phase, setPhase] = useState<SessionPhase>(repository.restoreSession ? "restoring" : "anonymous");
   const [current, setCurrent] = useState<AuthenticatedSession | null>(null);
   const [challenge, setChallenge] = useState<PendingAuthenticationChallenge | null>(null);
   const [authenticatorRecovery, setAuthenticatorRecovery] = useState<PendingAuthenticatorRecovery | null>(null);
@@ -146,6 +147,7 @@ export function SessionProvider({
   const [credential, setCredential] = useState<string | null>(null);
   const [sessionRevision, setSessionRevision] = useState(0);
   const credentialRef = useRef<string | null>(null);
+  const browserChannel = useRef<BroadcastChannel | null>(null);
   const challengeRef = useRef<PendingAuthenticationChallenge | null>(null);
   const authenticatorRecoveryRef = useRef<PendingAuthenticatorRecovery | null>(null);
   const authenticationRevisionRef = useRef(0);
@@ -190,6 +192,56 @@ export function SessionProvider({
     setPhase("anonymous");
   }, [replaceAuthenticatorRecovery, replaceChallenge]);
 
+  const announceBrowserSession = useCallback((type: "signed-in" | "signed-out", reference: string) => {
+    if (!/^mxb1\.s\.[0-9a-f]{64}$/.test(reference)) return;
+    try { browserChannel.current?.postMessage({ type, reference }); } catch { /* IAM remains authoritative when tab messaging is unavailable. */ }
+  }, []);
+
+  useEffect(() => {
+    if (!repository.restoreSession || typeof BroadcastChannel === "undefined") return;
+    let channel: BroadcastChannel;
+    try { channel = new BroadcastChannel("matrix.browser-session"); } catch { return; }
+    browserChannel.current = channel;
+    channel.onmessage = ({ data }: MessageEvent<unknown>) => {
+      if (!data || typeof data !== "object" || !("reference" in data) || !("type" in data) ||
+          typeof data.reference !== "string" || !/^mxb1\.s\.[0-9a-f]{64}$/.test(data.reference)) return;
+      const active = credentialRef.current;
+      if (!active) return;
+      if (data.type === "signed-out" && data.reference === active || data.type === "signed-in" && data.reference !== active) forget();
+    };
+    return () => { browserChannel.current = null; channel.close(); };
+  }, [forget, repository]);
+
+  const restoreSession = useCallback(async () => {
+    if (!repository.restoreSession) return;
+    forget();
+    const revision = authenticationRevisionRef.current;
+    setPhase("restoring");
+    try {
+      const restored = await repository.restoreSession();
+      if (authenticationRevisionRef.current !== revision) return;
+      if (!restored) { setPhase("anonymous"); return; }
+      credentialRef.current = restored.credential;
+      setCredential(restored.credential);
+      setCurrent({ loginName: restored.loginName, session: restored.session });
+      setSessionRevision(revision);
+      setPhase(restored.mustChangePassword ? "password-change-required" : "authenticated");
+    } catch {
+      if (authenticationRevisionRef.current !== revision) return;
+      setPhase("restoration-failed");
+    }
+  }, [forget, repository]);
+
+  useEffect(() => {
+    if (!repository.restoreSession) return;
+    const revision = authenticationRevisionRef.current;
+    let disposed = false;
+    void Promise.resolve().then(() => {
+      if (!disposed && authenticationRevisionRef.current === revision) return restoreSession();
+    });
+    return () => { disposed = true; authenticationRevisionRef.current += 1; };
+  }, [repository, restoreSession]);
+
   useEffect(() => {
     if (!challenge) return;
     const remaining = Date.parse(challenge.challenge.expiresAt) - Date.now();
@@ -218,9 +270,10 @@ export function SessionProvider({
   const expire = useCallback((expectedCredential: string, expectedSessionRevision?: number, notice?: SessionSignInNotice) => {
     if (credentialRef.current !== expectedCredential ||
         (expectedSessionRevision !== undefined && authenticationRevisionRef.current !== expectedSessionRevision)) return false;
+    announceBrowserSession("signed-out", expectedCredential);
     forget(notice ?? null);
     return true;
-  }, [forget]);
+  }, [announceBrowserSession, forget]);
   const isCurrentSession = useCallback((expectedCredential: string, expectedRevision: number) =>
     credentialRef.current === expectedCredential && authenticationRevisionRef.current === expectedRevision, []);
 
@@ -301,6 +354,7 @@ export function SessionProvider({
       replaceAuthenticatorRecovery(null);
       credentialRef.current = result.credential;
       setCredential(result.credential);
+      announceBrowserSession("signed-in", result.credential);
       setCurrent({ loginName, session: result.session });
       setSignInNotice(null);
       setSessionRevision(authenticationRevision);
@@ -318,7 +372,7 @@ export function SessionProvider({
       setPhase("anonymous");
       return null;
     }
-  }, [replaceAuthenticatorRecovery, replaceChallenge, repository]);
+  }, [announceBrowserSession, replaceAuthenticatorRecovery, replaceChallenge, repository]);
 
   useEffect(() => {
     if (!challenge || challenge.challenge.purpose !== "ENROLLMENT" || challenge.challenge.nextStep !== "ENROLLMENT" ||
@@ -373,6 +427,7 @@ export function SessionProvider({
       credentialRef.current = result.credential;
       setCredential(result.credential);
       setCurrent({ loginName: challenge.loginName, session: result.session });
+      announceBrowserSession("signed-in", result.credential);
       setSignInNotice(null);
       setSessionRevision(authenticationRevision);
       const outcome: LoginOutcome = result.mustChangePassword ? "password-change-required" : "authenticated";
@@ -384,7 +439,7 @@ export function SessionProvider({
       setPhase("challenge-required");
       return null;
     }
-  }, [challenge, phase, replaceAuthenticatorRecovery, replaceChallenge, repository]);
+  }, [announceBrowserSession, challenge, phase, replaceAuthenticatorRecovery, replaceChallenge, repository]);
 
   const enterAuthenticatorRecovery = useCallback(() => {
     if (!challenge || challenge.challenge.purpose !== "LOGIN" || challenge.challenge.nextStep !== "TOTP" ||
@@ -857,14 +912,20 @@ export function SessionProvider({
       forget();
       return true;
     }
+    const expectedRevision = authenticationRevisionRef.current;
+    const owns = () => isCurrentSession(credential, expectedRevision);
     setPhase("revoking");
     setError(null);
     try {
       await repository.logout(credential);
+      if (!owns()) return false;
+      announceBrowserSession("signed-out", credential);
       forget();
       return true;
     } catch (logoutError) {
+      if (!owns()) return false;
       if (logoutError instanceof HttpProblem && logoutError.status === 401) {
+        announceBrowserSession("signed-out", credential);
         forget();
         return true;
       }
@@ -876,7 +937,7 @@ export function SessionProvider({
       );
       return false;
     }
-  }, [credential, forget, phase, repository]);
+  }, [announceBrowserSession, credential, forget, isCurrentSession, phase, repository]);
 
   const sessionValue = useMemo<SessionContextValue>(() => ({
     phase,
@@ -890,6 +951,7 @@ export function SessionProvider({
     signInNotice,
     error,
     clearError,
+    restoreSession,
     login,
     verifyAuthenticationChallenge,
     enterAuthenticatorRecovery,
@@ -911,7 +973,7 @@ export function SessionProvider({
     logout,
     isCurrentSession,
     expire
-  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, confirmAuthenticatorRecovery, confirmFirstEnrollmentContact, confirmFirstEnrollmentFactor, current, enrollmentRecovery, firstEnrollment, reauthenticationReason, signInNotice, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, isCurrentSession, leaveAuthenticatorRecovery, login, logout, passwordChange, phase, sessionRevision, restartAuthenticatorRecovery, startAuthenticatorRecovery, startFirstEnrollmentContact, startFirstEnrollmentFactor, verifyAuthenticationChallenge]);
+  }), [acknowledgeEnrollmentRecovery, acknowledgeReauthentication, authenticatorRecovery, cancelAuthenticationChallenge, challenge, changeChallengePassword, changePassword, clearError, restoreSession, confirmAuthenticatorRecovery, confirmFirstEnrollmentContact, confirmFirstEnrollmentFactor, current, enrollmentRecovery, firstEnrollment, reauthenticationReason, signInNotice, enterAuthenticatorRecovery, error, expire, inspectAuthenticatorRecovery, isCurrentSession, leaveAuthenticatorRecovery, login, logout, passwordChange, phase, sessionRevision, restartAuthenticatorRecovery, startAuthenticatorRecovery, startFirstEnrollmentContact, startFirstEnrollmentFactor, verifyAuthenticationChallenge]);
   const credentialValue = useMemo(() => ({ credential }), [credential]);
 
   return (
