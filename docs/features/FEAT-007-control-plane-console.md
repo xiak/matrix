@@ -780,7 +780,9 @@ Source, assets and build scripts participate in the deterministic build ID.
 The preview flag has one compiler-boundary interpretation: only explicit `1`
 enables it; unset, `0` and other values compile as `0`. The build ID and Next.js
 environment replacement consume that same canonical value without changing
-the caller's environment or the runtime's independent development-mode branch.
+the caller's environment. Development uses the same explicit flag: hot reload
+does not substitute MOCK repositories for the real API. The runtime gate
+covers unset, zero, invalid and explicitly enabled development configurations.
 The embedded-export gate builds real production output twice, with the flag
 unset and explicitly `0`, and requires both inventories and the committed
 embed to match by path and SHA-256. Drift remains an error, with bounded
@@ -2415,8 +2417,8 @@ working pane stable; and
 provides a cross-product, cross-region resource view that returns users to the
 owning product console for operations.
 
-Development builds, or builds explicitly configured with
-`NEXT_PUBLIC_MATRIX_UX_PREVIEW=1`, expose a visibly labelled `MOCK` journey.
+Only builds explicitly configured with `NEXT_PUBLIC_MATRIX_UX_PREVIEW=1`,
+including local development, expose a visibly labelled `MOCK` journey.
 Its in-memory IAM, control-plane, resource, pipeline, health, alert, and
 Operation repositories exist only to validate information architecture,
 components, dimensions, layout, and interaction before every backend exists.
