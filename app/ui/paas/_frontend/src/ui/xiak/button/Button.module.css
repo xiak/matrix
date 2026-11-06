@@ -16,17 +16,12 @@
   transition:
     background var(--xiak-motion-fast) var(--xiak-ease-standard),
     border-color var(--xiak-motion-fast) var(--xiak-ease-standard),
-    color var(--xiak-motion-fast) var(--xiak-ease-standard),
-    transform var(--xiak-motion-fast) var(--xiak-ease-standard);
+    color var(--xiak-motion-fast) var(--xiak-ease-standard);
 }
 
 .button:focus-visible {
   outline: 2px solid var(--xiak-color-border-focus);
   outline-offset: 2px;
-}
-
-.button:active:not(:disabled) {
-  transform: translateY(var(--xiak-press-offset));
 }
 
 .button:disabled {
@@ -71,9 +66,13 @@
   border-color: var(--xiak-color-accent-hover);
   background: var(--xiak-color-accent-hover);
 }
+.primary:active:not(:disabled) {
+  border-color: var(--xiak-color-accent-pressed);
+  background: var(--xiak-color-accent-pressed);
+}
 
 .secondary {
-  border-color: var(--xiak-color-border-control);
+  border-color: var(--xiak-color-border-subtle);
   background: var(--xiak-color-bg-control);
   color: var(--xiak-color-text-base);
 }
@@ -89,6 +88,10 @@
   color: var(--xiak-color-text-muted);
 }
 .ghost:disabled { border-color: transparent; background: transparent; }
+.secondary:active:not(:disabled), .ghost:active:not(:disabled) {
+  background: var(--xiak-color-bg-control-pressed);
+  color: var(--xiak-color-text-strong);
+}
 
 .danger {
   border-color: var(--xiak-color-danger);
@@ -99,6 +102,10 @@
 .danger:hover:not(:disabled) {
   border-color: var(--xiak-color-danger-hover);
   background: var(--xiak-color-danger-hover);
+}
+.danger:active:not(:disabled) {
+  border-color: var(--xiak-color-danger-pressed);
+  background: var(--xiak-color-danger-pressed);
 }
 
 .block {

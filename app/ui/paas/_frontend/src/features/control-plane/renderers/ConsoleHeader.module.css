@@ -6,9 +6,9 @@
   min-height: var(--xiak-layout-header-height);
   flex: none;
   justify-content: space-between;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-comfortable);
   border-bottom: 1px solid var(--xiak-color-header-divider);
-  padding-inline: var(--xiak-spacing-roomy);
+  padding-inline: var(--xiak-spacing-comfortable);
   background: var(--xiak-color-header-bg);
   color: var(--xiak-color-header-text);
   box-shadow: none;
@@ -41,8 +41,8 @@
 
 .brand {
   display: flex;
-  width: 168px;
-  min-height: var(--xiak-control-height-large);
+  width: var(--xiak-layout-brand-width);
+  min-height: var(--xiak-control-height);
   flex: none;
   align-items: center;
   border-radius: var(--xiak-radius-small);

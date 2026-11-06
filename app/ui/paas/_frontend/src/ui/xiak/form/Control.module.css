@@ -6,7 +6,7 @@
   min-height: var(--xiak-control-height);
   border: var(--xiak-border-control);
   border-radius: var(--xiak-radius-control);
-  padding: var(--xiak-spacing-tight) var(--xiak-spacing-default);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-default);
   background: var(--xiak-color-bg-input);
   color: var(--xiak-color-text-strong);
   font: inherit;
@@ -16,7 +16,7 @@
   transition: border-color var(--xiak-motion-fast) var(--xiak-ease-standard), box-shadow var(--xiak-motion-fast) var(--xiak-ease-standard);
 }
 .control[data-size="small"] { min-height: var(--xiak-control-height-small); padding-block: var(--xiak-spacing-narrow); font-size: var(--xiak-font-size-small); }
-.control[data-size="large"] { min-height: var(--xiak-control-height-large); }
+.control[data-size="large"] { min-height: var(--xiak-control-height-large); padding-block: var(--xiak-spacing-tight); }
 .multiline { resize: vertical; }
 .control::placeholder { color: var(--xiak-color-text-placeholder); opacity: 1; }
 .control:hover:not(:disabled) { border-color: var(--xiak-color-border-control-hover); }

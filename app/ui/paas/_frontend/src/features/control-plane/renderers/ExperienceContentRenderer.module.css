@@ -6,17 +6,15 @@
 .welcomeCard {
   position: relative;
   display: flex;
-  min-height: 156px;
+  min-height: 132px;
   align-items: flex-end;
   justify-content: space-between;
   gap: var(--xiak-spacing-roomy);
   overflow: hidden;
   border: var(--xiak-border-width) var(--xiak-border-style) var(--xiak-color-border-accent);
   border-radius: var(--xiak-radius-panel);
-  padding: var(--xiak-spacing-generous);
-  background:
-    radial-gradient(circle at 86% 24%, var(--xiak-color-accent-glow) 0, transparent 34%),
-    linear-gradient(120deg, var(--xiak-color-accent-haze), var(--xiak-color-bg-panel));
+  padding: var(--xiak-spacing-roomy);
+  background: var(--xiak-color-bg-panel);
 }
 
 .welcomeCard > div:first-child {

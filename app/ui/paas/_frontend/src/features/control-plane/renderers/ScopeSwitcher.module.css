@@ -2,7 +2,7 @@
 
 .scopeIcon { width: 20px; height: 20px; color: var(--xiak-color-header-accent); }
 
-.options { max-height: min(360px, calc(100dvh - 230px)); overflow: auto; overscroll-behavior: contain; padding: var(--xiak-spacing-tight); scrollbar-width: thin; }
+.options { max-height: min(360px, calc(100dvh - 230px)); overflow: auto; overscroll-behavior: contain; padding: var(--xiak-spacing-tight); }
 .option {
   display: grid;
   min-width: 0;

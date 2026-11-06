@@ -250,6 +250,22 @@ func TestBrandAssetsRemainAvailableOffline(t *testing.T) {
 	}
 }
 
+func TestThemeFontAndLicenseRemainAvailableOffline(t *testing.T) {
+	handler := NewHandler()
+	font := httptest.NewRecorder()
+	handler.ServeHTTP(font, httptest.NewRequest(http.MethodGet, "/fonts/InterVariable.woff2", nil))
+	if font.Code != http.StatusOK || font.Header().Get("Content-Type") != "font/woff2" ||
+		font.Header().Get("Cache-Control") != "no-store" || !strings.HasPrefix(font.Body.String(), "wOF2") {
+		t.Fatalf("offline font is unavailable or has an invalid response: status=%d headers=%v", font.Code, font.Header())
+	}
+	license := httptest.NewRecorder()
+	handler.ServeHTTP(license, httptest.NewRequest(http.MethodGet, "/licenses/Inter-LICENSE.txt", nil))
+	if license.Code != http.StatusOK || !strings.HasPrefix(license.Header().Get("Content-Type"), "text/plain") ||
+		!strings.Contains(license.Body.String(), "SIL OPEN FONT LICENSE Version 1.1") {
+		t.Fatal("the bundled font must ship its offline license")
+	}
+}
+
 func TestHandlerRejectsAmbiguousStaticRequestAndUnknownAsset(t *testing.T) {
 	handler := NewHandler()
 	query := httptest.NewRecorder()

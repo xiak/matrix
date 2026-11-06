@@ -168,12 +168,16 @@ func validStaticQuery(request *http.Request, assetName string) bool {
 }
 
 func writeStatic(response http.ResponseWriter, status int, assetName string, asset []byte) {
-	contentType := mime.TypeByExtension(path.Ext(assetName))
-	if contentType == "" {
+	extension := path.Ext(assetName)
+	contentType := mime.TypeByExtension(extension)
+	if extension == ".woff2" {
+		// The offline font must not depend on the host's MIME registry.
+		contentType = "font/woff2"
+	} else if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 	response.Header().Set("Content-Type", contentType)
-	if path.Ext(assetName) == ".html" {
+	if extension == ".html" {
 		response.Header().Set("Content-Security-Policy", staticContentSecurityPolicy(asset))
 	}
 	if strings.HasPrefix(assetName, "_next/static/") {

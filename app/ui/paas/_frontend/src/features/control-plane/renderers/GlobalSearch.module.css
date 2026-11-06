@@ -65,7 +65,7 @@
 .heading span,
 .footer { color: var(--xiak-color-header-muted); font-size: var(--xiak-font-size-caption); }
 .footer { border-top: var(--xiak-border-subtle); }
-.results { max-height: min(440px, calc(100dvh - 220px)); overflow: auto; overscroll-behavior: contain; padding: var(--xiak-spacing-tight); scrollbar-width: thin; }
+.results { max-height: min(440px, calc(100dvh - 220px)); overflow: auto; overscroll-behavior: contain; padding: var(--xiak-spacing-tight); }
 .result {
   display: grid;
   width: 100%;

@@ -19,7 +19,7 @@
   justify-content: space-between;
   gap: var(--xiak-spacing-default);
   border-bottom: var(--xiak-border-subtle);
-  padding: 0 var(--xiak-spacing-roomy);
+  padding: 0 var(--xiak-spacing-wide);
   background: var(--xiak-color-bg-header);
 }
 
@@ -38,14 +38,15 @@
 .standaloneHeading { display: flex; min-width: 0; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-default); }
 
 .body {
-  --xiak-scroll-inset: var(--xiak-spacing-roomy);
-  --xiak-scroll-inset-inline: var(--xiak-spacing-roomy);
+  --xiak-scroll-inset: var(--xiak-spacing-wide);
+  --xiak-scroll-inset-inline: var(--xiak-spacing-wide);
   container-name: matrix-page-content;
   container-type: inline-size;
   min-width: 0;
   min-height: 0;
   flex: 1;
   overflow: auto;
+  scrollbar-gutter: stable;
   padding: var(--xiak-scroll-inset) var(--xiak-scroll-inset-inline);
 }
 

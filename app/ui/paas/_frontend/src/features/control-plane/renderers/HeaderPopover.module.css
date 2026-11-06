@@ -80,7 +80,6 @@
   max-height: calc(100dvh - var(--xiak-layout-header-height) - 32px);
   overflow: auto;
   overscroll-behavior: contain;
-  scrollbar-width: thin;
   border: var(--xiak-border-subtle);
   border-radius: var(--xiak-radius-control);
   background: var(--xiak-color-bg-panel);

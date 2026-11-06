@@ -828,7 +828,7 @@ reset and the palette-to-functional-to-semantic theme tokens; components use
 scoped styles and functional tokens instead of donor hash classes, inline
 styles, or raw theme colors.
 
-The application defaults to a deep-navy, ice-cyan dark theme. `next-themes`
+The application defaults to a Figma-inspired neutral-gray dark theme with blue interaction states. `next-themes`
 registers three explicit preferences: dark, mixed and light; system follows the
 OS light/dark preference and never resolves to mixed. Palette primitives and
 semantic tokens remain in `tokens.css`; `data-theme` selects their mappings at
@@ -1797,33 +1797,69 @@ reference dimensions are:
 
 | Component or region | Contract | UX purpose |
 | --- | --- | --- |
-| Global header | `64px` high; `40px` controls | Persistent brand, search, scope, one message-center bell, and identity |
-| Header brand | `168 × 28px` proportional SVG; `36px` symbol below `840px` | One graphic M replaces the initial letter of MATRIX; the approved lockup proportions stay intact |
-| Header typography | `14px` primary controls; `12px` descriptions | System UI fonts and stable text sizes; compact layout changes composition instead of shrinking labels |
+| Global header | `48px` high; `32px` controls | Persistent brand, search, scope, one message-center bell, and identity |
+| Header brand | `144 × 24px` proportional SVG; `36px` symbol below `840px` | One graphic M replaces the initial letter of MATRIX; the approved lockup proportions stay intact |
+| Header typography | `13px` primary controls; `11px` descriptions | Local Inter with system CJK fallback and stable text sizes; compact layout changes composition instead of shrinking labels |
 | Header count badge | `18px` height; independent `10px` numeric font and `14px` line height | Stable centered digits independent of the Chinese body font; multi-digit counts expand horizontally |
 | Login brand | Approved horizontal SVG, up to `480px` wide at its `1020:172` ratio; compact header lockup below `760px` | One visible brand placement per viewport, without an extra M or an unrelated illustration |
-| Login composition | `1200px` maximum split layout; `44px` fields and submit; `440px` maximum compact form | Brand-led desktop entry and focused small-screen sign-in, with visible labels and a separate MOCK entry |
-| Favorite-service rail | `64px` wide; `40px` targets | User-selected service shortcuts, synchronized with directory stars; overflow scrolls within the rail |
-| Service directory | Full viewport below the `64px` header; `224px` desktop category pane; `44px` search and close targets | Three-column grouped discovery, two/single columns as available width falls, horizontal category strip on small screens |
-| Product context navigation | `240px` wide; `48px` minimum item height | Product-local IA with label, description, and actionable count |
-| Page context bar | `56px` minimum; one reading line, with a `40px` trailing action-menu target at compact widths | One current page/object title, parent navigation and contextual actions; no repeated title/action band in the body |
-| Primary controls | `32px` small, `40px` default, `44px` large | Predictable density and touch/click targeting by task importance |
-| Status badge | `24px` high | Comparable state language without changing row geometry |
-| Resource table | `40px` header; `56px` minimum data row; `12 × 16px` cell padding; `144px` minimum cell width | Rich cells may grow; a labelled, keyboard-focusable region owns horizontal scrolling below the greater of `640px` and its column/content requirements |
+| Login composition | `1200px` maximum split layout; `40px` fields and submit (`44px` for touch); `440px` maximum compact form | Brand-led desktop entry and focused small-screen sign-in, with visible labels and a separate MOCK entry |
+| Favorite-service rail | `56px` wide; `32px` targets | User-selected service shortcuts, synchronized with directory stars; overflow scrolls within the rail |
+| Service directory | Full viewport below the `48px` header; `224px` desktop category pane; `40px` search and close targets | Three-column grouped discovery, two/single columns as available width falls, horizontal category strip on small screens |
+| Product context navigation | `240px` wide; `40px` minimum item height (`32px` for single-line compact navigation) | Product-local IA with label, description, and actionable count |
+| Page context bar | `48px` minimum; `16px` title and one reading line, with a `32px` trailing action-menu target at compact widths | One current page/object title, parent navigation and contextual actions; no repeated title/action band in the body |
+| Primary controls | `28px` small, `32px` default, `40px` large; touch targets `36/44/44px` | Predictable density and touch/click targeting by task importance |
+| Status badge | `20px` high | Comparable state language without changing row geometry |
+| Resource table | `36px` header; `44px` minimum data row; `8 × 12px` cell padding; `144px` minimum cell width | Rich cells may grow; a labelled, keyboard-focusable region owns horizontal scrolling below the greater of `640px` and its column/content requirements |
 | Form dialog | `600px` desktop width; `8px` compact viewport inset | Fixed title and action footer, independently scrolling fields, native modal background isolation |
 | Context workspace | `360px` default; `320–460px` adjustable | Review or inspect without losing the source page |
-| Content canvas | Fluid aligned workspace; `24px` desktop gutter | Page context and content share their left edge; prose and forms retain their own readable width, data collections use available space |
-| Panel geometry | `6px` panel/dialog radius; `4px` control and popup radius; `12/16/24/32px` spacing rhythm | Theme-owned geometry continues the restrained, angular Matrix brand through content and navigation |
+| Content canvas | Fluid aligned workspace; `20px` desktop gutter | Page context and content share their left edge; prose and forms retain their own readable width, data collections use available space |
+| Panel geometry | `6px` panel/dialog radius; `5px` control/popup and `3px` small radius; `4/8/12/16/20/24/32px` spacing rhythm; `16px` panel inset | Theme-owned geometry keeps content and navigation compact and consistent |
 
-The Matrix brand header uses a white surface with deep-cyan accents in light
-mode, or deep navy with ice-cyan accents in mixed/dark modes. All share a
-continuous solid `1px` divider without gradient or glow at the content boundary.
-Product, scope, notification, account and search surfaces follow the global
-shell mapping without overriding the workspace's theme. The vector brand
-uses the same semantic accent and remains legible on both surface tones.
-The full horizontal signature, header lockup, standalone M, and browser icons are local assets included
-in the static export; no external font or image service is required. The
-system font stack and native text rendering also apply to the content canvas.
+The theme is owned by `src/styles/tokens.css` and applied through the existing
+semantic `--xiak-*` contract. Dark panel/header/navigation surfaces use
+`#2c2c2c`, the content canvas `#242424`, and hover/input surfaces `#383838`.
+Dividers and hovered controls use `#444444`; pressed controls use `#4d4d4d`.
+Selection uses `#394360` with
+`#4a5878` hover. Focus uses Figma blue `#0c8ce9`; filled actions use
+`#0a6dc2` with white text, and dark-surface links use `#a8d7fa` so small
+console text meets AA contrast even on selected hover. Light mode uses the
+same neutral scale and blue accent; mixed mode retains the light workspace
+and dark global shell. Success, warning and danger retain distinct semantics.
+Product, scope, notification, account and search popups inherit their owning
+surface, including an open portal during a theme change.
+
+Local variable Inter supplies Latin text and `450/500/550/650` weights, with
+system CJK fallback. Body text is `13px`, secondary controls `12px`, and
+metadata `11px`; the UI uses native CSS pixel geometry at 100% browser zoom.
+Ordinary panels have solid `1px` dividers and no decorative gradient or lift
+shadow. Hover and pressed backgrounds, visible `2px` focus, selected and
+disabled states share semantic tokens; transitions take `90ms` and respect
+reduced motion. Touch input increases target sizes and the header to `56px`.
+Global scrollbars use an `8px` transparent track, a rounded inset thumb with
+hover/pressed states and no endpoint arrows; standards-based thin scrollbars
+are the fallback. Component-local scrollbar palettes are removed.
+
+The horizontal signature, header lockup, standalone M, browser icons and Inter
+font are local static-export assets; the font's SIL Open Font License is shipped
+under `public/licenses`. No external font or image service is required.
+The static server returns WOFF2 with an explicit `font/woff2` content type,
+independent of the host MIME registry.
+
+Theme acceptance evidence: the 83-file / 2,167-case frontend suite, nine Node
+export-boundary cases, typecheck, lint, architecture and 288 semantic contrast
+pairs pass. The production build exports 69 HTML pages and normalizes 66
+segment files; preview unset and zero produce the same 369 files, matching the
+Go embed byte-for-byte. UI Go test/vet and the offline font/license response
+check pass. Browser checks cover the 1440px desktop shell, resource table,
+product directory, 360px right workspace, dropdown portal, keyboard focus,
+light/mixed/dark and Chinese/English switching. At 360px touch, the contextual
+panel fills the viewport, fields are 44px, the header is 56px and the page has
+no horizontal overflow; reduced motion and arrow-free 8px scrollbars are
+verified. The native production server loads Inter under the existing
+self-only CSP without browser errors or warnings. These checks prove the
+theme and isolated MOCK presentation; real-IAM and release acceptance remain
+with their existing gates.
+
 
 Four page compositions are admitted: a cloud overview with readiness and
 attention-first metrics; a collection page with local search, filters, table,

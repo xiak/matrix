@@ -26,10 +26,11 @@
   outline: 2px solid var(--xiak-color-header-accent);
   outline-offset: 2px;
 }
+.iconButton:active { background: var(--xiak-color-header-pressed); }
 
 .iconButton > svg {
-  width: 20px;
-  height: 20px;
+  width: var(--xiak-header-trigger-icon-size);
+  height: var(--xiak-header-trigger-icon-size);
 }
 
 .iconButton > span {

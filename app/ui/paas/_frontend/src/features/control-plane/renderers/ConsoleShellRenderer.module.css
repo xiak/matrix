@@ -31,8 +31,8 @@
 .railItem {
   position: relative;
   display: grid;
-  width: 40px;
-  min-height: 40px;
+  width: var(--xiak-rail-target-size);
+  min-height: var(--xiak-rail-target-size);
   place-items: center;
   flex: none;
   border-radius: var(--xiak-radius-control);
@@ -54,9 +54,12 @@
 }
 
 .railItem[data-selected="true"] {
-  background: var(--xiak-color-accent-primary);
-  color: var(--xiak-color-text-on-accent);
+  background: var(--xiak-color-accent-haze);
+  color: var(--xiak-color-accent-text);
 }
+.railItem[data-selected="true"]:hover { background: var(--xiak-color-accent-haze-hover); }
+.railItem[data-selected="true"]:active { background: var(--xiak-color-accent-haze); }
+.railHome:active, .railItem:active { background: var(--xiak-color-bg-control-pressed); }
 
 .railHome:focus-visible,
 .railItem:focus-visible {
@@ -135,8 +138,8 @@
 
 .contextProductIcon {
   display: grid;
-  width: 34px;
-  height: 34px;
+  width: var(--xiak-control-height);
+  height: var(--xiak-control-height);
   place-items: center;
   border-radius: var(--xiak-radius-control);
   background: var(--xiak-color-accent-haze);
@@ -170,7 +173,7 @@
   flex-direction: column;
   gap: var(--xiak-spacing-narrow);
   overflow: auto;
-  padding: var(--xiak-spacing-comfortable) var(--xiak-spacing-tight);
+  padding: var(--xiak-spacing-tight);
 }
 
 .contextNavigation > p {
@@ -183,7 +186,7 @@
 
 .contextItem {
   display: grid;
-  min-height: 48px;
+  min-height: var(--xiak-navigation-item-height);
   min-width: 0;
   grid-template-columns: auto 1fr auto;
   gap: var(--xiak-spacing-tight);
@@ -191,6 +194,7 @@
   border-radius: var(--xiak-radius-control);
   padding: var(--xiak-spacing-tight);
   color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
   outline: none;
 }
 
@@ -204,14 +208,17 @@
   background: var(--xiak-color-accent-haze);
   color: var(--xiak-color-accent-text);
 }
+.contextItem[data-selected="true"]:hover { background: var(--xiak-color-accent-haze-hover); }
+.contextItem[data-selected="true"]:active { background: var(--xiak-color-accent-haze); }
+.contextItem:active { background: var(--xiak-color-bg-control-pressed); }
 
 .contextItem:focus-visible {
   box-shadow: var(--xiak-shadow-focus);
 }
 
 .contextItem > svg {
-  width: 18px;
-  height: 18px;
+  width: var(--xiak-icon-size);
+  height: var(--xiak-icon-size);
   stroke-width: 1.75;
 }
 
@@ -333,7 +340,7 @@
 
 .workspaceCloseButton {
   position: absolute;
-  top: var(--xiak-spacing-roomy);
+  top: var(--xiak-spacing-comfortable);
   right: var(--xiak-spacing-default);
   z-index: 2;
 }

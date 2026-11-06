@@ -5,9 +5,10 @@
   min-height: 0;
   flex: 1;
   flex-direction: column;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-comfortable);
   overflow: auto;
-  padding: var(--xiak-spacing-roomy);
+  scrollbar-gutter: stable;
+  padding: var(--xiak-spacing-comfortable);
 }
 
 .heading {
@@ -40,7 +41,7 @@
 
 .form {
   display: grid;
-  gap: var(--xiak-spacing-roomy);
+  gap: var(--xiak-spacing-comfortable);
 }
 
 .resourceSummary {
