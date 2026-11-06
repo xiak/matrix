@@ -1,4 +1,4 @@
-import { HttpProblem, requestJSON, requestJSONResponse, requestToken } from "@/infrastructure/http/jsonRequest";
+import { HttpProblem, requestJSON, requestJSONResponse, requestPlatform, requestToken } from "@/infrastructure/http/jsonRequest";
 import { policyDisplayNameValid, policyMetadataResultMatches, policyVersionLimit, userManagementCompletionMatches, userManagementResultMatches } from "../domain/accounts";
 import type {
   Account,
@@ -1568,17 +1568,16 @@ function parseAssumableRoleDirectory(value: unknown, after?: string): AssumableR
 
 function parseAssumeRoleResult(value: unknown, roleId: string, command: AssumeRoleCommand): AssumeRoleResult {
   const wire = accountRecord(value);
-  exactKeys(wire, ["outcome", "session"], ["credential"]);
+  exactKeys(wire, ["outcome", "session"], ["browserCredential"]);
   const session = parseUserRoleSessionRecord(wire.session);
   if (session.roleId !== roleId || session.status !== "ACTIVE" || session.revokedAt !== null ||
       timestampMicros(session.expiresAt) - timestampMicros(session.issuedAt) !== BigInt(command.durationSeconds) * 1_000_000n) {
     throw new Error("INVALID_IAM_RESPONSE");
   }
   if (wire.outcome === "APPLIED") {
-    if (!("credential" in wire)) throw new Error("INVALID_IAM_RESPONSE");
-    return { outcome: "APPLIED", session, credential: responseSecret(wire.credential) };
+    return { outcome: "APPLIED", session, credential: browserCredential(wire.browserCredential, "r") };
   }
-  if (wire.outcome === "EQUAL_REPLAY" && !("credential" in wire)) return { outcome: "EQUAL_REPLAY", session, credential: null };
+  if (wire.outcome === "EQUAL_REPLAY" && !("browserCredential" in wire)) return { outcome: "EQUAL_REPLAY", session, credential: null };
   throw new Error("INVALID_IAM_RESPONSE");
 }
 
@@ -2800,7 +2799,7 @@ function parseAccountSecurityReportCreation(value: unknown, accountId: string, r
 }
 
 async function createAccountSecurityReport(credential: string, accountId: string, requestId: string): Promise<AccountSecurityReportCreation> {
-  const response = await fetch("/api/iam/v1/account/security-reports", {
+  const response = await requestPlatform("/api/iam/v1/account/security-reports", {
     method: "POST",
     cache: "no-store",
     headers: { ...accountHeaders(credential), Accept: "application/json", "Content-Type": "application/json" },
@@ -2828,7 +2827,7 @@ async function rejectedSecurityReportResponse(response: Response): Promise<never
 }
 
 async function readAccountSecurityReport(credential: string, accountId: string, reportId: string): Promise<AccountSecurityReportAccess> {
-  const response = await fetch(`/api/iam/v1/account/security-reports/${encodeURIComponent(reportId)}`, {
+  const response = await requestPlatform(`/api/iam/v1/account/security-reports/${encodeURIComponent(reportId)}`, {
     cache: "no-store",
     headers: { ...accountHeaders(credential), Accept: "application/json" }
   });
@@ -2845,7 +2844,7 @@ async function readAccountSecurityReport(credential: string, accountId: string, 
 
 async function downloadAccountSecurityReportCSV(credential: string, metadata: AccountSecurityReportMetadata): Promise<AccountSecurityReportDownload> {
   const filename = `matrix-iam-security-report-${metadata.id}.csv`;
-  const response = await fetch(`/api/iam/v1/account/security-reports/${encodeURIComponent(metadata.id)}/content`, {
+  const response = await requestPlatform(`/api/iam/v1/account/security-reports/${encodeURIComponent(metadata.id)}/content`, {
     cache: "no-store",
     headers: { ...accountHeaders(credential), Accept: "text/csv" }
   });
@@ -3956,16 +3955,21 @@ function parseAuthenticatorRecoveryConfirmation(
   };
 }
 
+function browserCredential(value: unknown, kind: "s" | "r"): string {
+  if (typeof value !== "string" || !new RegExp(`^mxb1\\.${kind}\\.[0-9a-f]{64}$`).test(value)) throw new Error("INVALID_IAM_RESPONSE");
+  return value;
+}
+
 function parseLogin(value: unknown): LoginResult {
   const wire = accountRecord(value);
   if (wire.outcome === "AUTHENTICATED") {
-    exactKeys(wire, ["outcome", "session", "credential", "mustChangePassword"]);
-    if (typeof wire.credential !== "string" || !wire.credential || typeof wire.mustChangePassword !== "boolean") {
+    exactKeys(wire, ["outcome", "session", "browserCredential", "mustChangePassword"]);
+    if (typeof wire.mustChangePassword !== "boolean") {
       throw new Error("INVALID_IAM_RESPONSE");
     }
     return {
       outcome: "AUTHENTICATED",
-      credential: wire.credential,
+      credential: browserCredential(wire.browserCredential, "s"),
       mustChangePassword: wire.mustChangePassword,
       session: parseActiveSession(wire.session)
     };
@@ -3985,10 +3989,24 @@ function parseLogin(value: unknown): LoginResult {
 }
 
 export const httpIamRepository: IamRepository = {
+  async restoreSession() {
+    try {
+      const wire = accountRecord(await requestJSON<unknown>("/api/iam/v1/auth/browser-session", {
+        headers: { "Matrix-Browser-Transport": "cookie" }
+      }));
+      exactKeys(wire, ["session", "loginName", "mustChangePassword", "browserCredential"]);
+      if (typeof wire.mustChangePassword !== "boolean") throw new Error("INVALID_IAM_RESPONSE");
+      return { session: parseActiveSession(wire.session), loginName: accountText(wire.loginName),
+        mustChangePassword: wire.mustChangePassword, credential: browserCredential(wire.browserCredential, "s") };
+    } catch (error) {
+      if (error instanceof HttpProblem && error.status === 401) return null;
+      throw error;
+    }
+  },
   async login(command: LoginCommand): Promise<LoginResult> {
     const wire = await requestJSON<unknown>("/api/iam/v1/auth/login", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "Matrix-Browser-Transport": "cookie" },
       body: JSON.stringify({ loginName: command.loginName, password: command.password, requestId: requestToken("ui-login-") })
     });
     const result = parseLogin(wire);
@@ -4068,7 +4086,7 @@ export const httpIamRepository: IamRepository = {
     async verify(command) {
       const wire = await requestJSON<unknown>(`/api/iam/v1/auth/challenges/${encodeURIComponent(accountIdentifier(command.challengeId))}:verify`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "Matrix-Browser-Transport": "cookie" },
         body: JSON.stringify({
           requestId: requestToken("ui-login-challenge-"),
           challengeCredential: command.challengeCredential,

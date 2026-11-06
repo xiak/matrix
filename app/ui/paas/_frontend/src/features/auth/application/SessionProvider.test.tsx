@@ -28,6 +28,7 @@ function Probe() {
   return (
     <div>
       <span data-testid="phase">{session.phase}</span>
+      <button onClick={() => void session.restoreSession()} type="button">restore</button>
       <span data-testid="principal">{session.current?.loginName ?? "none"}</span>
       <span data-testid="challenge">{session.challenge?.challenge.nextStep ?? "none"}</span>
       <span data-testid="error">{session.error ?? "none"}</span>
@@ -115,6 +116,90 @@ afterEach(() => {
 });
 
 describe("SessionProvider", () => {
+  it("synchronizes logout across tabs without letting an old signal discard a different session", async () => {
+    const reference = `mxb1.s.${"a".repeat(64)}`;
+    const channels: { onmessage: ((event: MessageEvent<unknown>) => void) | null }[] = [];
+    const postMessage = vi.fn();
+    vi.stubGlobal("BroadcastChannel", class {
+      onmessage: ((event: MessageEvent<unknown>) => void) | null = null;
+      postMessage = postMessage;
+      close() {}
+      constructor() { channels.push(this); }
+    });
+    try {
+      const repo = repository();
+      const result = await repo.login({ loginName: "admin", password: "synthetic" });
+      if (result.outcome !== "AUTHENTICATED") throw new Error("fixture");
+      repo.restoreSession = vi.fn(async () => ({ ...result, credential: reference, loginName: "admin" }));
+      const view = render(<SessionProvider repository={repo}><Probe /></SessionProvider>);
+      await waitFor(() => expect(view.getByTestId("phase").textContent).toBe("authenticated"));
+      const channel = channels[0]!;
+      await act(async () => channel.onmessage?.(new MessageEvent("message", { data: { type: "signed-out", reference: `mxb1.s.${"b".repeat(64)}` } })));
+      expect(view.getByTestId("phase").textContent).toBe("authenticated");
+      await act(async () => channel.onmessage?.(new MessageEvent("message", { data: { type: "signed-out", reference } })));
+      expect(view.getByTestId("phase").textContent).toBe("anonymous");
+      expect(repo.restoreSession).toHaveBeenCalledOnce();
+      expect(postMessage).not.toHaveBeenCalled();
+      view.unmount();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it.each(["success", "failure"])("ignores an old logout %s after a newer login", async (outcome) => {
+    const pending = deferred<void>();
+    const repo = repository(); repo.logout = () => pending.promise;
+    const view = render(<SessionProvider repository={repo}><Probe /></SessionProvider>);
+    await act(async () => fireEvent.click(view.getByText("login")));
+    await act(async () => fireEvent.click(view.getByText("logout")));
+    await act(async () => fireEvent.click(view.getByText("login-b")));
+    await act(async () => { if (outcome === "success") pending.resolve(); else pending.reject(new HttpProblem(401, "EXPIRED")); });
+    expect(view.getByTestId("phase").textContent).toBe("authenticated");
+    expect(view.getByTestId("principal").textContent).toBe("bravo");
+    expect(view.getByTestId("error").textContent).toBe("none");
+  });
+
+  it("retains the server's mandatory password-change restriction when restoring", async () => {
+    const repo = repository({ mustChangePassword: true });
+    const result = await repo.login({ loginName: "admin", password: "synthetic" });
+    if (result.outcome !== "AUTHENTICATED") throw new Error("fixture");
+    repo.restoreSession = async () => ({ ...result, loginName: "admin" });
+    const view = render(<SessionProvider repository={repo}><Probe /></SessionProvider>);
+    await waitFor(() => expect(view.getByTestId("phase").textContent).toBe("password-change-required"));
+  });
+
+  it("restores the existing session on mounting without issuing another login or persisting a bearer", async () => {
+    const repo = repository();
+    const result = await repo.login({ loginName: "qiao", password: "test" });
+    if (result.outcome !== "AUTHENTICATED") throw new Error("fixture");
+    repo.restoreSession = vi.fn(async () => ({ ...result, loginName: "qiao" }));
+    repo.login = vi.fn(repo.login);
+    const view = render(<SessionProvider repository={repo}><Probe /></SessionProvider>);
+    await waitFor(() => expect(view.getByTestId("phase").textContent).toBe("authenticated"));
+    expect(view.getByTestId("principal").textContent).toBe("qiao");
+    expect(repo.login).not.toHaveBeenCalled();
+    expect(localStorage.length).toBe(0); expect(sessionStorage.length).toBe(0);
+  });
+
+  it("keeps a failed restoration distinct from signed out and permits a read-only retry", async () => {
+    const repo = repository();
+    repo.restoreSession = vi.fn().mockRejectedValueOnce(new HttpProblem(503, "iam.unavailable")).mockResolvedValueOnce(null);
+    const view = render(<SessionProvider repository={repo}><Probe /></SessionProvider>);
+    await waitFor(() => expect(view.getByTestId("phase").textContent).toBe("restoration-failed"));
+    await act(async () => fireEvent.click(view.getByText("restore")));
+    expect(view.getByTestId("phase").textContent).toBe("anonymous");
+    expect(repo.restoreSession).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not let a late restoration replace a newly authenticated identity", async () => {
+    const repo = repository();
+    const pending = deferred<null>();
+    repo.restoreSession = () => pending.promise;
+    const view = render(<SessionProvider repository={repo}><Probe /></SessionProvider>);
+    expect(view.getByTestId("phase").textContent).toBe("restoring");
+    await act(async () => fireEvent.click(view.getByText("login")));
+    await act(async () => pending.resolve(null));
+    expect(view.getByTestId("phase").textContent).toBe("authenticated");
+  });
+
   it("retains the exact security-settings sign-in reason until a new authenticated Session is established", async () => {
     const view = render(<SessionProvider repository={repository()}><Probe /></SessionProvider>);
     await act(async () => fireEvent.click(view.getByText("login")));

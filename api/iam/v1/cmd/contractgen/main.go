@@ -34,11 +34,17 @@ func main() {
 
 func buildDocument() object {
 	return openapi31.Build(openapi31.Options{
-		Title:    "Matrix IAM v1 contracts",
-		Version:  "0.1.0",
-		Security: []any{object{"UserSession": []string{}}},
-		Paths:    buildPaths(),
+		Title:   "Matrix IAM v1 contracts",
+		Version: "0.1.0",
+		Security: []any{object{"UserSession": []string{}},
+			object{"BrowserSessionCookie": []string{}, "BrowserReference": []string{}, "BrowserTransport": []string{}},
+			object{"BrowserSessionCookie": []string{}, "BrowserRoleCookie": []string{}, "BrowserReference": []string{}, "BrowserTransport": []string{}}},
+		Paths: buildPaths(),
 		SecuritySchemes: object{
+			"BrowserSessionCookie": object{"type": "apiKey", "in": "cookie", "name": "__Host-matrix-session", "description": "HttpOnly, Secure, host-only login cookie on HTTPS. Native HTTP loopback uses matrix-session. The server checks the existing Session on every request."},
+			"BrowserRoleCookie":    object{"type": "apiKey", "in": "cookie", "name": "__Host-matrix-role-session", "description": "HttpOnly role cookie bound to the source login cookie. Native HTTP loopback uses matrix-role-session."},
+			"BrowserReference":     object{"type": "http", "scheme": "MatrixSession", "description": "Non-secret mxb1.s/r reference returned to this page. It must match the selected HttpOnly cookie; it has no bearer authority."},
+			"BrowserTransport":     object{"type": "apiKey", "in": "header", "name": "Matrix-Browser-Transport", "description": "Must be cookie. Same-origin browser transport requires the sealed public Origin for writes and rejects cross-site requests. Cookies alone never authorize business requests."},
 			"UserSession": object{
 				"type": "http", "scheme": "bearer",
 				"description": "Opaque IAM user session credential.",
@@ -130,7 +136,7 @@ func buildPaths() object {
 			"delete": mutationOperation("removeRolePermissionBoundary", "Remove the role ceiling and close assumption", "RemoveRolePermissionBoundaryRequest", "RolePermissionBoundary", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
 		},
 		"/v1/roles/{roleId}:assume": object{
-			"post": mutationOperation("assumeRole", "Issue an account-local role credential once; equal replay never returns a secret", "AssumeRoleRequest", "AssumeRoleResponse", "200", nil, []any{openapi31.PathIDParameter("roleId")}),
+			"post": mutationOperation("assumeRole", "Issue an account-local role credential once; browser cookie transport returns only a bound reference; equal replay never returns a secret", "AssumeRoleRequest", "AssumeRoleTransportResponse", "200", nil, []any{openapi31.PathIDParameter("roleId"), browserTransportParameter(false)}),
 		},
 		"/v1/roles/{roleId}/sessions": object{
 			"get": readOperation("listRoleSessions", "List a bounded role-session history window; lifecycle is not current business eligibility", "RoleSessionList", nil,
@@ -183,10 +189,14 @@ func buildPaths() object {
 			[]any{object{"ServiceCredential": []string{}}}, nil,
 		)},
 		"/v1/auth/login": object{"post": mutationOperation(
-			"login", "Verify a password and issue either a login session or a restricted authentication challenge", "LoginRequest", "LoginResponse", "200", []any{}, nil,
+			"login", "Verify a password; explicit browser transport keeps the reusable session secret in an HttpOnly cookie", "LoginRequest", "LoginTransportResponse", "200", []any{}, []any{browserTransportParameter(false)},
+		)},
+		"/v1/auth/browser-session": object{"get": readOperation(
+			"restoreBrowserSession", "Read the existing current login session after reload; no issuance, activity touch, authority selectors or Authorization header", "BrowserSessionResponse",
+			[]any{object{"BrowserSessionCookie": []string{}, "BrowserTransport": []string{}}}, []any{browserTransportParameter(true)},
 		)},
 		"/v1/auth/challenges/{challengeId}:verify": object{"post": mutationOperation(
-			"verifyAuthenticationChallenge", "Consume the current login challenge and a fresh TOTP; its secret is not a bearer or permission", "VerifyAuthenticationChallengeRequest", "LoginResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
+			"verifyAuthenticationChallenge", "Consume the current login challenge and a fresh TOTP; explicit browser transport issues an HttpOnly cookie on final success", "VerifyAuthenticationChallengeRequest", "LoginTransportResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId"), browserTransportParameter(false)},
 		)},
 		"/v1/auth/challenges/{challengeId}:password": object{"post": mutationOperation(
 			"changeChallengePassword", "Consume the exact forced-change stage: TOTP-proved LOGIN or password-proved initial ENROLLMENT; revoke all old sessions and challenges, then require a fresh login", "ChallengePasswordChangeRequest", "ChallengePasswordChangeResponse", "200", []any{}, []any{openapi31.PathIDParameter("challengeId")},
@@ -454,6 +464,12 @@ func pageCursorSchema() object {
 
 func roleDiscoveryCursorSchema() object {
 	return object{"type": "string", "pattern": `^ir1\.[A-Za-z0-9_-]+$`, "not": object{"pattern": `[^A-Za-z0-9._-]`}, "minLength": 5, "maxLength": iamv1.MaxPageCursorBytes}
+}
+
+func browserTransportParameter(required bool) object {
+	return object{"name": "Matrix-Browser-Transport", "in": "header", "required": required,
+		"schema":      object{"type": "string", "const": "cookie"},
+		"description": "Opt in to the same-origin HttpOnly cookie transport. Writes require the exact configured public Origin. Omission preserves the published API bearer transport."}
 }
 
 func mutationOperation(
@@ -1487,6 +1503,23 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 }
 
 func applySemanticOverlays(schemas object) {
+	activeSession := object{"allOf": []any{openapi31.Ref("Session"), object{"properties": object{"status": object{"const": "ACTIVE"}, "revokedAt": false}}}}
+	userReference := object{"type": "string", "pattern": `^mxb1\.s\.[0-9a-f]{64}$`, "description": "Public cookie binding, never a bearer credential."}
+	schemas["BrowserAuthenticatedResponse"] = object{"type": "object", "additionalProperties": false,
+		"required": []string{"outcome", "session", "mustChangePassword", "browserCredential"},
+		"properties": object{"outcome": object{"const": "AUTHENTICATED"}, "session": activeSession,
+			"mustChangePassword": object{"type": "boolean"}, "browserCredential": userReference}}
+	schemas["BrowserSessionResponse"] = object{"type": "object", "additionalProperties": false,
+		"required": []string{"session", "loginName", "mustChangePassword", "browserCredential"},
+		"properties": object{"session": activeSession, "loginName": object{"type": "string", "minLength": 1, "maxLength": 193},
+			"mustChangePassword": object{"type": "boolean"}, "browserCredential": userReference}}
+	schemas["BrowserAssumeRoleResponse"] = object{"type": "object", "additionalProperties": false,
+		"required": []string{"outcome", "session", "browserCredential"},
+		"properties": object{"outcome": object{"const": "APPLIED"}, "session": object{"allOf": []any{openapi31.Ref("RoleSession"),
+			object{"required": []string{"sourceUserId"}, "properties": object{"status": object{"const": "ACTIVE"}, "sourceServicePrincipalId": false}}}},
+			"browserCredential": object{"type": "string", "pattern": `^mxb1\.r\.[0-9a-f]{64}$`}}}
+	schemas["LoginTransportResponse"] = object{"oneOf": []any{openapi31.Ref("LoginResponse"), openapi31.Ref("BrowserAuthenticatedResponse")}}
+	schemas["AssumeRoleTransportResponse"] = object{"oneOf": []any{openapi31.Ref("AssumeRoleResponse"), openapi31.Ref("BrowserAssumeRoleResponse")}}
 	schemas["ProductAuthorizationAction"] = object{
 		"type": "string", "maxLength": 128,
 		"pattern":     `^[a-z][a-z0-9_-]{0,63}(\.[a-z][a-z0-9_-]{0,63}){1,4}$`,

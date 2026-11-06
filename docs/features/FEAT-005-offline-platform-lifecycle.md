@@ -52,6 +52,16 @@ verified
 
 ## Local HTTPS proxy ingress
 
+The browser-session candidate additionally seals `MATRIX_BROWSER_ORIGIN` for
+IAM, Audit, PaaS API and DevOps API from the existing public origin. The
+transport and acceptance boundary belong to
+[FEAT-IAM-010](iam/FEAT-IAM-010-console.md#浏览器登录持久化).
+Its topology digest changes without a database/profile change. The exact
+previous seven-product digest remains recognized only as installed input;
+compiling that installed manifest must not invent new environment variables
+for old binaries. New candidates must use the new digest. Native local source
+development checks are not signed-release upgrade acceptance.
+
 The next fresh-install candidate admits a canonical external HTTPS origin
 through a host-local proxy such as Cloudflare Tunnel. HTTP remains the
 published v0.3.0 profile. This is not a change to that immutable release.

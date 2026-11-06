@@ -3,7 +3,7 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ChartNoAxesCombined, Database, Gauge, GitBranch, Layers3, MapPin, ShieldCheck } from "lucide-react";
-import { Alert, App, Brand } from "@ui/xiak";
+import { Alert, App, Brand, Button } from "@ui/xiak";
 import { AppearanceControls } from "@/preferences/AppearanceControls";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
 import { useSession } from "../application/SessionProvider";
@@ -61,7 +61,12 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
           {session.signInNotice?.kind === "SECURITY_SETTINGS_UPDATED" ? <div className={styles.signInNotice}>
             <Alert status="info" role="status"><strong>{t("securitySettingsSignInTitle")}</strong><p>{t("securitySettingsSignInHint")}</p><p>{t("originalRequestId")} <code>{session.signInNotice.requestId}</code></p></Alert>
           </div> : null}
-          {uxPreviewEnabled && previewEnrollmentOpen && session.phase === "anonymous"
+          {session.phase === "restoring" ? <p role="status">{t("restoringSession")}</p>
+            : session.phase === "restoration-failed" ? <>
+              <Alert status="warning">{t("restoreSessionUnavailable")}</Alert>
+              <Button onClick={() => void session.restoreSession()}>{t("retrySessionRestore")}</Button>
+            </>
+            : uxPreviewEnabled && previewEnrollmentOpen && session.phase === "anonymous"
             ? <PreviewMandatoryEnrollment onClose={() => setPreviewEnrollmentOpen(false)} />
             : session.phase === "recovery-codes-required" ? <EnrollmentRecoveryCodes />
             : recovering ? <AuthenticatorRecoveryForm />
@@ -69,7 +74,7 @@ export function LoginRenderer({ returnTo = "/console/" }: { returnTo?: string })
             : challenged ? <AuthenticationChallengeForm returnTo={returnTo} />
             : firstLogin ? <PasswordChangeForm returnTo={returnTo} />
               : <AccountLoginForm returnTo={returnTo} onPreviewEnrollment={() => setPreviewEnrollmentOpen(true)} />}
-          <p className={styles.securityNote}><ShieldCheck aria-hidden="true" /><span>{t(uxPreviewEnabled ? "previewSecurity" : "security")}</span></p>
+          {uxPreviewEnabled ? <p className={styles.securityNote}><ShieldCheck aria-hidden="true" /><span>{t("previewSecurity")}</span></p> : null}
         </section>
       </main>
       <footer className={styles.footer}><span>Matrix Cloud <span aria-hidden="true">/</span> {t("footer")}</span>

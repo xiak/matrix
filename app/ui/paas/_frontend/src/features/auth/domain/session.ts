@@ -132,7 +132,14 @@ export type LoginResult = AuthenticatedLoginResult | ChallengedLoginResult;
 
 export type LoginOutcome = "authenticated" | "password-change-required" | "challenge-required";
 
+export type RestoredSession = AuthenticatedSession & {
+  credential: string;
+  mustChangePassword: boolean;
+};
+
 export type SessionPhase =
+  | "restoring"
+  | "restoration-failed"
   | "anonymous"
   | "authenticating"
   | "challenge-required"

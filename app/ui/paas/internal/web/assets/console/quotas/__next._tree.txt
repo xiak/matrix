@@ -1,8 +1,8 @@
 :HL["/_next/static/chunks/0163mcuvile9m.css","style"]
-:HL["/_next/static/chunks/0z4uk4-o9ypog.css","style"]
+:HL["/_next/static/chunks/0wwhgag4n1o5q.css","style"]
 :HL["/_next/static/chunks/1f5ogwdi7t9tj.css","style"]
 :HL["/_next/static/chunks/0ij15dsyrooo7.css","style"]
 3:[["children",{"s":"__PAGE__","h":160}]]
 2:[["children",{"s":"quotas","h":96,"c":"$Q3"}]]
 1:[["children",{"s":"console","h":96,"c":"$Q2"}]]
-0:{"b":"matrix-7c63a052009cc890183f","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
+0:{"b":"matrix-4c3ec0e360d004232b26","t":{"t":{"s":"","h":80,"c":"$Q1"}}}

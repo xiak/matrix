@@ -138,6 +138,10 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	handler, err = processhttp.BrowserSessionHandler(handler, os.Getenv("MATRIX_BROWSER_ORIGIN"))
+	if err != nil {
+		return err
+	}
 	return processhttp.Serve(ctx, config.listenAddress, handler)
 }
 

@@ -208,6 +208,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 	}
 	expectedEnvironmentKeys := map[string][]string{
 		"audit": {
+			"MATRIX_BROWSER_ORIGIN",
 			"MATRIX_AUDIT_CURSOR_KEY_FILE", "MATRIX_AUDIT_DATABASE_DSN_FILE",
 			"MATRIX_AUDIT_EDGE_ASSERTION_FILE",
 			"MATRIX_AUDIT_IAM_ENDPOINT", "MATRIX_AUDIT_INSTALLATION_ID", "MATRIX_AUDIT_LISTEN_ADDRESS",
@@ -215,11 +216,13 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_AUDIT_SERVICE_CREDENTIAL_FILE",
 		},
 		"iam": {
+			"MATRIX_BROWSER_ORIGIN",
 			"MATRIX_IAM_ACCESS_KEY_WRAPPING_KEYRING_FILE", "MATRIX_IAM_BOOTSTRAP_FILE",
 			"MATRIX_IAM_CURSOR_KEY_FILE", "MATRIX_IAM_DATABASE_DSN_FILE",
 			"MATRIX_IAM_EMAIL_VERIFICATION_KEYRING_FILE", "MATRIX_IAM_LISTEN_ADDRESS", "MATRIX_IAM_TOTP_KEYRING_FILE",
 		},
 		"devops-api": {
+			"MATRIX_BROWSER_ORIGIN",
 			"MATRIX_DEVOPS_DATABASE_DSN_FILE", "MATRIX_DEVOPS_IAM_ENDPOINT",
 			"MATRIX_DEVOPS_LISTEN_ADDRESS", "MATRIX_DEVOPS_SERVICE_CREDENTIAL_FILE",
 			"MATRIX_DEVOPS_WEBHOOK_SECRET_ROOT",
@@ -292,6 +295,7 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			"MATRIX_IAM_SECURITY_MAIL_SMTP_CHANNEL_FILE",
 		},
 		"paas-api": {
+			"MATRIX_BROWSER_ORIGIN",
 			"MATRIX_PAAS_CURSOR_KEY_FILE", "MATRIX_PAAS_DATABASE_DSN_FILE",
 			"MATRIX_PAAS_EDGE_ASSERTION_FILE",
 			"MATRIX_PAAS_ENROLLMENT_CONTROLLER_CERTIFICATE_FILE",
@@ -461,6 +465,11 @@ func TestCompileProducesClosedOfflinePlatformTopology(t *testing.T) {
 			slices.Sort(keys)
 			if !slices.Equal(actualKeys, keys) {
 				t.Fatalf("service %q environment keys=%v want=%v", name, actualKeys, keys)
+			}
+			if name == "iam" || name == "audit" || name == "paas-api" || name == "devops-api" {
+				if environment["MATRIX_BROWSER_ORIGIN"] != options.NorthboundOrigin {
+					t.Fatalf("service %q lost the browser origin boundary", name)
+				}
 			}
 			if name == "audit" || name == "paas-api" {
 				if environment["MATRIX_"+strings.ToUpper(strings.TrimSuffix(name, "-api"))+"_NORTHBOUND_ORIGIN"] != options.NorthboundOrigin {
@@ -1033,6 +1042,31 @@ func TestOptionsCannotCarryProviderNativeTopology(t *testing.T) {
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("topology input capability surface = %v, want %v", got, want)
+	}
+}
+
+func TestInstalledBrowserTransportPredecessorKeepsItsExactTopology(t *testing.T) {
+	if actual := contractDescriptionDigest(bearerOnlyContractDescription()); actual != bearerOnlyContractDigest {
+		t.Fatalf("accepted predecessor digest = %s", actual)
+	}
+	manifest := topologyManifest()
+	manifest.TopologyDigest = bearerOnlyContractDigest
+	options := Options{InstallationID: "mxi-" + strings.Repeat("a", 32), Root: "/srv/matrix", Listener: "127.0.0.1", Port: 8080, NorthboundOrigin: "http://matrix.example.test:8080"}
+	if _, err := Compile(manifest, options); err == nil {
+		t.Fatal("installed predecessor admitted as a new release")
+	}
+	result, err := CompileInstalled(manifest, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document composeDocument
+	if json.Unmarshal(result.ComposeJSON, &document) != nil {
+		t.Fatal("invalid predecessor topology")
+	}
+	for _, name := range []string{"iam", "audit", "paas-api", "devops-api"} {
+		if _, found := document.Services[name].Environment["MATRIX_BROWSER_ORIGIN"]; found {
+			t.Fatal("invented browser transport for old image")
+		}
 	}
 }
 

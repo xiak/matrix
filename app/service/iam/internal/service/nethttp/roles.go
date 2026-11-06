@@ -7,6 +7,7 @@ import (
 
 	iamv1 "github.com/xiak/matrix/api/iam/v1"
 	"github.com/xiak/matrix/app/service/iam/internal/usecase/identityaccess"
+	"github.com/xiak/matrix/app/service/internal/processhttp"
 )
 
 func (value *handler) logoutRoleSession(response http.ResponseWriter, request *http.Request) {
@@ -150,6 +151,19 @@ func (value *handler) role(response http.ResponseWriter, request *http.Request) 
 			return
 		}
 		defer clear(encoded)
+		if processhttp.IsBrowserSessionRequest(request) && result.Outcome == "APPLIED" {
+			secret := result.Credential.CopyBytes()
+			defer clear(secret)
+			reference, cookieErr := processhttp.SetBrowserSession(response, request, value.config.BrowserOrigin,
+				string(secret), result.Session.ExpiresAt, true)
+			if cookieErr != nil {
+				value.writeError(response, request, identityaccess.ErrUnavailable)
+				return
+			}
+			writeJSON(response, http.StatusOK, map[string]any{"outcome": result.Outcome, "session": result.Session,
+				"browserCredential": reference})
+			return
+		}
 		writeEncodedJSON(response, http.StatusOK, encoded)
 		return
 	}
