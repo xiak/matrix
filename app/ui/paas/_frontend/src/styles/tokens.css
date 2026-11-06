@@ -182,6 +182,7 @@
   --xiak-font-size-title: 1.25rem;
   --xiak-font-size-title-large: clamp(2rem, 3.4vw, 2.625rem);
   --xiak-font-weight-regular: 450;
+  --xiak-font-weight-navigation: 400;
   --xiak-font-weight-medium: 500;
   --xiak-font-weight-semibold: 550;
   --xiak-font-weight-bold: 650;
@@ -194,9 +195,9 @@
   --xiak-layout-rail-width: 56px;
   --xiak-layout-brand-width: 144px;
   --xiak-rail-target-size: 32px;
-  --xiak-navigation-item-height: 40px;
+  --xiak-navigation-item-height: 32px;
   --xiak-layout-context-width: 240px;
-  --xiak-layout-sider-width: calc(var(--xiak-layout-rail-width) + var(--xiak-layout-context-width));
+  --xiak-layout-sider-width: calc(var(--xiak-layout-rail-width) + var(--xiak-layout-context-width) + var(--xiak-border-width));
   --xiak-layout-workspace-width: 360px;
   --xiak-layout-content-max-width: 1440px;
   --xiak-layout-search-width: 520px;

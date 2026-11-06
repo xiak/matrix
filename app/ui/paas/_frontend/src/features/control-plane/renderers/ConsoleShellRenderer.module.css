@@ -112,33 +112,34 @@
   min-height: var(--xiak-content-header-height);
   grid-template-columns: auto minmax(0, 1fr) auto;
   flex: none;
-  gap: var(--xiak-spacing-default);
+  gap: var(--xiak-spacing-tight);
   align-items: center;
   border-bottom: var(--xiak-border-subtle);
-  padding-inline: var(--xiak-spacing-comfortable);
+  padding-inline: var(--xiak-spacing-default);
 }
 
 .contextProductIcon {
   display: grid;
-  width: var(--xiak-control-height);
-  height: var(--xiak-control-height);
+  width: 24px;
+  height: 24px;
   place-items: center;
   border-radius: var(--xiak-radius-control);
-  background: var(--xiak-color-accent-haze);
-  color: var(--xiak-color-accent-text);
+  background: transparent;
+  color: var(--xiak-color-text-strong);
 }
 
 .contextProductIcon svg {
-  width: 17px;
-  height: 17px;
+  width: var(--xiak-icon-size);
+  height: var(--xiak-icon-size);
+  stroke-width: 1.75;
 }
 
 .contextHeader strong {
   min-width: 0;
   overflow: hidden;
   font-size: var(--xiak-font-size-body);
-  font-weight: var(--xiak-font-weight-semibold);
-  line-height: var(--xiak-line-height-body);
+  font-weight: var(--xiak-font-weight-medium);
+  line-height: 24px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -155,15 +156,16 @@
   flex-direction: column;
   gap: 0;
   overflow: auto;
-  padding: var(--xiak-spacing-tight);
+  padding-block: var(--xiak-spacing-tight);
 }
 
 .contextNavigation > p {
   margin: var(--xiak-spacing-tight) 0 0;
-  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-tight);
+  padding: var(--xiak-spacing-tight) var(--xiak-spacing-default);
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
   font-weight: var(--xiak-font-weight-medium);
+  line-height: var(--xiak-line-height-control);
 }
 
 .contextItem {
@@ -173,20 +175,24 @@
   flex: none;
   min-height: var(--xiak-navigation-item-height);
   min-width: 0;
-  grid-template-columns: 24px minmax(0, 1fr) auto;
+  grid-template-columns: 24px minmax(0, 1fr);
   gap: var(--xiak-spacing-tight);
   align-items: center;
   border-radius: var(--xiak-radius-control);
-  padding: var(--xiak-spacing-narrow);
-  color: var(--xiak-color-text-muted);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-default);
+  color: var(--xiak-color-text-strong);
   font-size: var(--xiak-font-size-control);
+  font-weight: var(--xiak-font-weight-navigation);
+  line-height: var(--xiak-line-height-control);
   outline: none;
   transition: color var(--xiak-motion-fast) var(--xiak-ease-standard);
 }
 
+.contextItem:has(> em) { grid-template-columns: 24px minmax(0, 1fr) auto; }
+
 .contextItem::before {
   position: absolute;
-  inset: var(--xiak-spacing-micro) 0;
+  inset: var(--xiak-spacing-micro) var(--xiak-spacing-tight);
   z-index: -1;
   border-radius: var(--xiak-radius-control);
   background: transparent;
@@ -199,7 +205,6 @@
   color: var(--xiak-color-text-strong);
 }
 .contextItem:hover::before { background: var(--xiak-color-bg-item-hover); }
-.contextNavigation[data-compact="true"] .contextItem { min-height: var(--xiak-control-height); flex: none; }
 
 .contextItem[data-selected="true"] {
   color: var(--xiak-color-text-strong);
@@ -223,25 +228,10 @@
 }
 
 .contextLabel {
-  display: grid;
   min-width: 0;
-  gap: var(--xiak-spacing-micro);
-}
-
-.contextItem strong {
-  font-weight: var(--xiak-font-weight-regular);
-  line-height: var(--xiak-line-height-control);
-  overflow-wrap: anywhere;
-}
-.contextItem[data-selected="true"] small { color: var(--xiak-color-text-strong); }
-
-.contextItem small {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
-  line-height: var(--xiak-line-height-caption);
 }
 
 .contextItem em {
@@ -270,18 +260,24 @@
   border-radius: var(--xiak-radius-control);
   padding: var(--xiak-spacing-default);
   background: var(--xiak-color-bg-canvas);
+  font-size: var(--xiak-font-size-control);
+  font-weight: var(--xiak-font-weight-navigation);
+  line-height: var(--xiak-line-height-control);
 }
 
 .contextCallout > svg {
-  width: 20px;
-  height: 20px;
+  width: var(--xiak-icon-size);
+  height: var(--xiak-icon-size);
+  flex: none;
   color: var(--xiak-color-status-success);
 }
 
 .contextCallout > div {
   display: grid;
-  gap: var(--xiak-spacing-micro);
+  min-width: 0;
 }
+
+.contextCallout strong { font-weight: var(--xiak-font-weight-medium); }
 
 .contextCallout span {
   color: var(--xiak-color-text-subtle);
@@ -454,8 +450,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .contextMenu,
-  .railIndicator {
+  .contextMenu {
     transition: none;
   }
 }

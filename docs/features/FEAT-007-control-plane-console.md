@@ -1811,7 +1811,7 @@ reference dimensions are:
 | Login composition | `1200px` maximum split layout; `40px` fields and submit (`44px` for touch); `440px` maximum compact form | Brand-led desktop entry and focused small-screen sign-in, with visible labels and a separate MOCK entry |
 | Favorite-service rail | `56px` wide; `32px` targets | User-selected service shortcuts, synchronized with directory stars; overflow scrolls within the rail |
 | Service directory | Full viewport below the `48px` header; `224px` desktop category pane; `40px` search and close targets | Three-column grouped discovery, two/single columns as available width falls, horizontal category strip on small screens |
-| Product context navigation | `240px` wide; `40px` minimum item height (`32px` for single-line compact navigation) | Product-local IA with label, description, and actionable count |
+| Product context navigation | `240px` content width plus `1px` divider; `32px` single-line rows (`44px` for touch) | Product-local IA with label and actionable count; descriptions remain hover and assistive-text hints |
 | Page context bar | `48px` minimum; `13px` title and one reading line, with a `32px` trailing action-menu target at compact widths | One current page/object title, parent navigation and contextual actions; no repeated title/action band in the body |
 | Primary controls | `24px` small, `32px` default, `40px` large; touch targets `36/44/44px` | Predictable density and touch/click targeting by task importance |
 | Status badge | `20px` high | Comparable state language without changing row geometry |
@@ -1835,7 +1835,7 @@ and dark global shell. Success, warning and danger retain distinct semantics.
 Product, scope, notification, account and search popups inherit their owning
 surface, including an open portal during a theme change.
 
-Local variable Inter supplies Latin text and `450/500/550/650` weights, with
+Local variable Inter supplies Latin text and `400/450/500/550/650` weights, with
 system CJK fallback. Body text is `13px`, compact controls and metadata `11px`, and
 large-action labels `12px`; the UI uses native CSS pixel geometry at 100% browser zoom.
 Ordinary panels have solid `1px` dividers and no decorative gradient or lift
@@ -1851,10 +1851,16 @@ Selected tab labels are weight 550; normal labels remain 450. Disabled tabs
 retain their disabled appearance on hover. A `2px` blue inset outline marks
 keyboard focus, including portalled menu items. Card headers
 use `12px` block padding and `16px` inline padding. Secondary navigation uses
-`40px` two-line or `32px` single-line rows, `4px` inset and no inter-row gap.
-Each icon has a `24px` alignment slot around its `16px` glyph, followed by an
-`8px` label gap. Navigation hit targets retain their full height while the
-rounded background is inset `2px` vertically. Selected navigation uses the
+`32px` single-line rows across products and IAM, with `11px/16px` strong text
+at weight 400 and no inter-row gap. Each icon has a `24px` alignment slot around
+its `16px` glyph, followed by an `8px` label gap. The product context row spans
+the full `240px` content width, with `12px` inline content inset. Its rounded
+background is inset `2px` vertically and `8px` horizontally, yielding a
+`224 × 28px` painted surface. Long labels truncate without growing the row;
+descriptions remain available through the link title and accessible description.
+The product title uses `13px/24px` at weight 500, a neutral `24px` icon slot,
+`8px` gap and `12px` inline inset. Its label aligns with the navigation labels.
+The deployment footer uses `11px/16px` text. Selected navigation uses the
 blue-gray selection surface with strong text; hover and pressed states retain
 that selection identity. The rail uses the same filled selection without a
 separate edge marker. Control, small and panel radii stay
@@ -1879,8 +1885,8 @@ under `public/licenses`. No external font or image service is required.
 The static server returns WOFF2 with an explicit `font/woff2` content type,
 independent of the host MIME registry.
 
-Theme acceptance evidence: the focused public-control, Tabs, appearance, shell
-and login suite passes five files / 213 cases. Nine Node export-boundary cases,
+Theme acceptance evidence: the focused appearance and shell suite passes two
+files / 154 cases. Nine Node export-boundary cases,
 production TypeScript checks, full lint, architecture and 312 semantic contrast
 pairs also pass. The production build exports 69 HTML pages and normalizes 66
 segment files; preview unset and zero produce the same 371 files, matching the
@@ -1909,8 +1915,15 @@ workspace to `#2c2c2c`; desktop content padding resolves to `32px`. At `360px`,
 the access-analysis tabs form two columns with `4px` gaps, and the document
 has no horizontal overflow. Light and dark surfaces and the portalled theme
 menu were checked in Chrome; the existing contrast gate also covers mixed
-surfaces. The main development URL continues to use the real backend; full
-shell visual checks use the explicitly enabled isolated MOCK fixture.
+surfaces. The main development URL uses the real backend. Authenticated Chrome
+checks cover the actual product and IAM navigation, not only the isolated MOCK
+fixture: every desktop row resolves to `32px`, `11px/16px`, weight 400 and strong
+text; product navigation has a `240px` content width and a `224 × 28px` painted
+selection. The title uses `13px/24px`, weight 500 and a `24px` icon slot. The
+service-directory categories share the same navigation typography and row
+height. At `360 × 500px`, keyboard focus reaches the final IAM item within its
+independent scroller and document width remains `360px`. These visual checks
+do not replace the existing real-IAM security or release gates.
 
 Four page compositions are admitted: a cloud overview with readiness and
 attention-first metrics; a collection page with local search, filters, table,

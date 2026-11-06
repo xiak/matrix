@@ -552,14 +552,14 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                   <strong title={productName}>{productName}</strong>
                   <Button aria-label={t("closeNavigation")} className={styles.contextCloseButton} onClick={closeSidebarAndRestoreFocus} ref={sidebarCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
                 </div>
-                <nav aria-label={t("navigation")} className={styles.contextNavigation} data-compact={frame.section === "access" ? "true" : undefined}>
+                <nav aria-label={t("navigation")} className={styles.contextNavigation}>
                   {localNavigation.map((item, index) => {
                     const Icon = navigationIcons[item.icon];
                     return (
                       <Fragment key={item.id}>
                       {item.group && item.group !== localNavigation[index - 1]?.group ? <p>{iamWorkspaceText(item.group)}</p> : null}
-                      <Link aria-current={item.selected ? "page" : undefined} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} onAccepted={closeSidebarAndRestoreFocus}>
-                        <span className={styles.contextIcon}><Icon aria-hidden="true" /></span><span className={styles.contextLabel}><strong>{navigationText(`items.${item.messageKey}.label`)}</strong>{frame.section !== "access" ? <small title={navigationText(`items.${item.messageKey}.hint`)}>{navigationText(`items.${item.messageKey}.hint`)}</small> : null}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
+                      <Link aria-current={item.selected ? "page" : undefined} aria-description={navigationText(`items.${item.messageKey}.hint`)} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} onAccepted={closeSidebarAndRestoreFocus} title={navigationText(`items.${item.messageKey}.hint`)}>
+                        <span className={styles.contextIcon}><Icon aria-hidden="true" /></span><span className={styles.contextLabel}>{navigationText(`items.${item.messageKey}.label`)}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
                       </Link>
                       </Fragment>
                     );
