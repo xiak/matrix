@@ -1,3 +1,5 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .card {
   container: xiak-card / inline-size;
@@ -16,7 +18,7 @@
   align-items: center;
   justify-content: space-between;
   gap: var(--xiak-spacing-default);
-  padding: var(--xiak-spacing-comfortable) var(--xiak-panel-padding);
+  padding: var(--xiak-spacing-default) var(--xiak-panel-padding);
 }
 
 .header {

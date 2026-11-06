@@ -1,3 +1,5 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .steps { min-width: 0; container-type: inline-size; }
 .steps ol { display: flex; gap: var(--xiak-spacing-comfortable); margin: 0; padding: 0; list-style: none; }

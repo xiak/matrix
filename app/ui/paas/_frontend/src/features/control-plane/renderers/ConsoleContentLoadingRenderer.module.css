@@ -1,3 +1,5 @@
+@layer base, xiak, features;
+
 @layer features {
 .stack {
   display: grid;

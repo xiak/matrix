@@ -192,9 +192,9 @@
   gap: var(--xiak-spacing-tight);
   align-items: center;
   border-radius: var(--xiak-radius-control);
-  padding: var(--xiak-spacing-tight);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-tight);
   color: var(--xiak-color-text-muted);
-  font-size: var(--xiak-font-size-small);
+  font-size: var(--xiak-font-size-control);
   outline: none;
 }
 
@@ -229,7 +229,7 @@
 }
 
 .contextItem strong {
-  line-height: 1.4;
+  line-height: var(--xiak-line-height-control);
   overflow-wrap: anywhere;
 }
 
@@ -239,6 +239,7 @@
   white-space: nowrap;
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
+  line-height: var(--xiak-line-height-caption);
 }
 
 .contextItem em {

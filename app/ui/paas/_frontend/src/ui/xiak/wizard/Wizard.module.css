@@ -1,3 +1,5 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .wizard { min-width: 0; container: xiak-wizard / inline-size; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
 .stepsBar { padding: var(--xiak-spacing-comfortable) var(--xiak-spacing-roomy); border-bottom: var(--xiak-border-subtle); }

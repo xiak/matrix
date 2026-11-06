@@ -6,15 +6,15 @@
   flex: none;
   grid-template-columns: var(--xiak-header-trigger-icon-size) minmax(0, 1fr) var(--xiak-header-trigger-chevron-size);
   align-items: center;
-  gap: var(--xiak-spacing-tight);
+  gap: var(--xiak-spacing-compact);
   border: var(--xiak-border-transparent);
   border-radius: var(--xiak-radius-small);
-  padding: 0 var(--xiak-spacing-default);
+  padding: 0 var(--xiak-control-padding-inline);
   background: transparent;
   color: var(--xiak-color-header-text);
-  font-size: var(--xiak-font-size-body);
-  font-weight: var(--xiak-font-weight-semibold);
-  line-height: 1.5;
+  font-size: var(--xiak-font-size-control);
+  font-weight: var(--xiak-font-weight-regular);
+  line-height: var(--xiak-line-height-control);
   text-align: start;
 }
 

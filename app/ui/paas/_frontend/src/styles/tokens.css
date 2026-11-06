@@ -80,7 +80,7 @@
   --xiak-color-header-warning: var(--xiak-palette-amber-700);
   --xiak-color-header-warning-bg: var(--xiak-palette-amber-50);
   --xiak-shadow-header-focus: 0 0 0 2px var(--xiak-palette-focus);
-  --xiak-shadow-header-panel: 0 20px 56px var(--xiak-palette-shadow-strong);
+  --xiak-shadow-header-panel: 0 4px 16px var(--xiak-palette-shadow-strong);
 
   --xiak-color-bg-canvas: var(--xiak-palette-gray-50);
   --xiak-color-bg-header: var(--xiak-palette-white);
@@ -152,12 +152,13 @@
   --xiak-radius-pill: 999px;
   --xiak-shadow-header: none;
   --xiak-shadow-panel: none;
-  --xiak-shadow-elevated: 0 16px 48px var(--xiak-palette-shadow-strong);
+  --xiak-shadow-elevated: 0 4px 16px var(--xiak-palette-shadow-strong);
   --xiak-shadow-focus: 0 0 0 2px var(--xiak-palette-focus);
 
   --xiak-spacing-none: 0;
   --xiak-spacing-micro: 2px;
   --xiak-spacing-narrow: 4px;
+  --xiak-spacing-compact: 6px;
   --xiak-spacing-tight: 8px;
   --xiak-spacing-default: 12px;
   --xiak-spacing-comfortable: 16px;
@@ -172,7 +173,10 @@
   --xiak-font-size-caption: 0.6875rem;
   --xiak-font-size-small: 0.75rem;
   --xiak-font-size-body: 0.8125rem;
-  --xiak-font-size-subtitle: 0.875rem;
+  --xiak-font-size-control: var(--xiak-font-size-caption);
+  --xiak-line-height-control: 16px;
+  --xiak-line-height-caption: 14px;
+  --xiak-font-size-subtitle: 0.8125rem;
   --xiak-font-size-title: 1.25rem;
   --xiak-font-size-title-large: clamp(2rem, 3.4vw, 2.625rem);
   --xiak-font-weight-regular: 450;
@@ -197,7 +201,10 @@
   --xiak-content-header-height: 48px;
   --xiak-content-header-height-compact: 48px;
   --xiak-font-size-page-context: 1rem;
-  --xiak-control-height-small: 28px;
+  --xiak-control-height-small: 24px;
+  --xiak-control-padding-inline: var(--xiak-spacing-tight);
+  --xiak-control-padding-block-small: 3px;
+  --xiak-control-chevron-size: 12px;
   --xiak-control-height: 32px;
   --xiak-control-height-large: 40px;
   --xiak-progress-height: 6px;
@@ -212,10 +219,14 @@
   --xiak-dialog-width: 600px;
   --xiak-dialog-width-wide: 960px;
   --xiak-panel-padding: var(--xiak-spacing-comfortable);
-  --xiak-choice-size: 16px;
+  --xiak-choice-size: 12px;
+  --xiak-choice-mark-size: 8px;
+  --xiak-radio-dot-size: 4px;
+  --xiak-choice-radius: 2px;
+  --xiak-choice-row-height: 24px;
   --xiak-icon-size: 16px;
   --xiak-header-trigger-icon-size: 18px;
-  --xiak-header-trigger-chevron-size: 14px;
+  --xiak-header-trigger-chevron-size: var(--xiak-control-chevron-size);
   --xiak-empty-height: 240px;
   --xiak-empty-height-compact: 180px;
   --xiak-font-size-metric: 1.75rem;
@@ -274,7 +285,7 @@
   --xiak-color-header-warning: var(--xiak-palette-warning-text);
   --xiak-color-header-warning-bg: var(--xiak-palette-warning-bg);
   --xiak-shadow-header-focus: 0 0 0 2px var(--xiak-palette-focus);
-  --xiak-shadow-header-panel: 0 20px 56px var(--xiak-palette-dark-shadow);
+  --xiak-shadow-header-panel: 0 4px 16px var(--xiak-palette-dark-shadow);
   --xiak-color-bg-global: var(--xiak-palette-gray-850);
   --xiak-color-bg-global-hover: var(--xiak-palette-gray-800);
   --xiak-color-border-global: var(--xiak-palette-gray-700);
@@ -336,7 +347,7 @@
   --xiak-color-product-observability: var(--xiak-palette-blue-text);
   --xiak-color-product-observability-bg: var(--xiak-palette-selection);
   --xiak-shadow-focus: 0 0 0 2px var(--xiak-palette-focus);
-  --xiak-shadow-elevated: 0 16px 48px var(--xiak-palette-dark-shadow);
+  --xiak-shadow-elevated: 0 4px 16px var(--xiak-palette-dark-shadow);
   --xiak-color-bg-control-pressed: var(--xiak-palette-gray-650);
   --xiak-color-header-pressed: var(--xiak-palette-gray-700);
   --xiak-color-scrollbar-thumb: var(--xiak-palette-scrollbar-dark);
@@ -350,6 +361,12 @@
     --xiak-control-height-small: 36px;
     --xiak-control-height: 44px;
     --xiak-control-height-large: 44px;
+    --xiak-font-size-control: var(--xiak-font-size-small);
+    --xiak-line-height-control: 18px;
+    --xiak-choice-size: 14px;
+    --xiak-choice-mark-size: 10px;
+    --xiak-radio-dot-size: 6px;
+    --xiak-choice-row-height: 44px;
     --xiak-rail-target-size: 44px;
     --xiak-navigation-item-height: 44px;
     --xiak-layout-header-height: 56px;

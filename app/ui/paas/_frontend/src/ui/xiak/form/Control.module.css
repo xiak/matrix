@@ -1,3 +1,5 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .control {
   display: block;
@@ -6,17 +8,18 @@
   min-height: var(--xiak-control-height);
   border: var(--xiak-border-control);
   border-radius: var(--xiak-radius-control);
-  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-default);
+  padding: var(--xiak-spacing-narrow) var(--xiak-control-padding-inline);
   background: var(--xiak-color-bg-input);
   color: var(--xiak-color-text-strong);
   font: inherit;
-  font-size: var(--xiak-font-size-body);
-  line-height: 1.5;
+  font-size: var(--xiak-font-size-control);
+  font-weight: var(--xiak-font-weight-regular);
+  line-height: var(--xiak-line-height-control);
   outline: none;
   transition: border-color var(--xiak-motion-fast) var(--xiak-ease-standard), box-shadow var(--xiak-motion-fast) var(--xiak-ease-standard);
 }
-.control[data-size="small"] { min-height: var(--xiak-control-height-small); padding-block: var(--xiak-spacing-narrow); font-size: var(--xiak-font-size-small); }
-.control[data-size="large"] { min-height: var(--xiak-control-height-large); padding-block: var(--xiak-spacing-tight); }
+.control[data-size="small"] { min-height: var(--xiak-control-height-small); padding-block: var(--xiak-control-padding-block-small); }
+.control[data-size="large"] { min-height: var(--xiak-control-height-large); padding-block: var(--xiak-spacing-tight); font-size: var(--xiak-font-size-body); line-height: var(--xiak-line-height-body); }
 .multiline { resize: vertical; }
 .control::placeholder { color: var(--xiak-color-text-placeholder); opacity: 1; }
 .control:hover:not(:disabled) { border-color: var(--xiak-color-border-control-hover); }

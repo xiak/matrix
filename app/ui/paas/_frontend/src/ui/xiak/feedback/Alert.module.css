@@ -1,3 +1,5 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .alert { display: flex; min-width: 0; align-items: flex-start; gap: var(--xiak-spacing-default); border: 1px solid currentColor; border-radius: var(--xiak-radius-control); padding: var(--xiak-spacing-default) var(--xiak-spacing-comfortable); font-size: var(--xiak-font-size-body); line-height: 1.6; }
 .alert[data-status="info"] { background: var(--xiak-color-status-info-bg); color: var(--xiak-color-status-info); }

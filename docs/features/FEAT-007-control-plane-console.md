@@ -841,8 +841,12 @@ the global header, favorite rail and header popups reuses the complete dark
 semantic mapping. Dark applies that mapping to the entire interface. A
 portalled Select carries its originating surface identity, not a frozen theme
 value, so an already open menu follows theme changes without a remount.
-The cascade order is `base` reset, `xiak` public controls, then unlayered
-feature composition. Layout overrides do not depend on Next.js chunk order.
+The cascade order is `base` reset, `xiak` public controls, `features` loading
+compositions, then unlayered feature composition. Every layered stylesheet
+declares that complete order before its first layer block, so a lazily loaded
+control cannot register `xiak` before `base` and have the form-font reset
+override control typography. The style gate enforces the shared prelude;
+layout and control overrides do not depend on Next.js chunk order.
 Public controls share sizing, radii, focus, disabled, and semantic status treatments.
 The style gate resolves all three themes at workspace and shell boundaries,
 including brand, normal text, status, input boundaries, focus and notification
@@ -1801,7 +1805,7 @@ reference dimensions are:
 | --- | --- | --- |
 | Global header | `48px` high; `32px` controls | Persistent brand, search, scope, one message-center bell, and identity |
 | Header brand | `144 × 24px` proportional SVG; `36px` symbol below `840px` | One graphic M replaces the initial letter of MATRIX; the approved lockup proportions stay intact |
-| Header typography | `13px` primary controls; `11px` descriptions | Local Inter with system CJK fallback and stable text sizes; compact layout changes composition instead of shrinking labels |
+| Header typography | `11px / 16px` controls; `13px` section identity | Local Inter with system CJK fallback and stable text sizes; compact layout changes composition instead of shrinking labels |
 | Header count badge | `18px` height; independent `10px` numeric font and `14px` line height | Stable centered digits independent of the Chinese body font; multi-digit counts expand horizontally |
 | Login brand | Approved horizontal SVG, up to `480px` wide at its `1020:172` ratio; compact header lockup below `760px` | One visible brand placement per viewport, without an extra M or an unrelated illustration |
 | Login composition | `1200px` maximum split layout; `40px` fields and submit (`44px` for touch); `440px` maximum compact form | Brand-led desktop entry and focused small-screen sign-in, with visible labels and a separate MOCK entry |
@@ -1809,7 +1813,7 @@ reference dimensions are:
 | Service directory | Full viewport below the `48px` header; `224px` desktop category pane; `40px` search and close targets | Three-column grouped discovery, two/single columns as available width falls, horizontal category strip on small screens |
 | Product context navigation | `240px` wide; `40px` minimum item height (`32px` for single-line compact navigation) | Product-local IA with label, description, and actionable count |
 | Page context bar | `48px` minimum; `16px` title and one reading line, with a `32px` trailing action-menu target at compact widths | One current page/object title, parent navigation and contextual actions; no repeated title/action band in the body |
-| Primary controls | `28px` small, `32px` default, `40px` large; touch targets `36/44/44px` | Predictable density and touch/click targeting by task importance |
+| Primary controls | `24px` small, `32px` default, `40px` large; touch targets `36/44/44px` | Predictable density and touch/click targeting by task importance |
 | Status badge | `20px` high | Comparable state language without changing row geometry |
 | Resource table | `36px` header; `44px` minimum data row; `8 × 12px` cell padding; `144px` minimum cell width | Rich cells may grow; a labelled, keyboard-focusable region owns horizontal scrolling below the greater of `640px` and its column/content requirements |
 | Form dialog | `600px` desktop width; `8px` compact viewport inset | Fixed title and action footer, independently scrolling fields, native modal background isolation |
@@ -1831,12 +1835,28 @@ Product, scope, notification, account and search popups inherit their owning
 surface, including an open portal during a theme change.
 
 Local variable Inter supplies Latin text and `450/500/550/650` weights, with
-system CJK fallback. Body text is `13px`, secondary controls `12px`, and
-metadata `11px`; the UI uses native CSS pixel geometry at 100% browser zoom.
+system CJK fallback. Body text is `13px`, compact controls and metadata `11px`, and
+large-action labels `12px`; the UI uses native CSS pixel geometry at 100% browser zoom.
 Ordinary panels have solid `1px` dividers and no decorative gradient or lift
 shadow. Hover and pressed backgrounds, visible `2px` focus, selected and
 disabled states share semantic tokens; transitions take `90ms` and respect
-reduced motion. Touch input increases target sizes and the header to `56px`.
+reduced motion. Shared Input, Select, Button, Tabs, menus, field labels and
+Radio/Checkbox use an explicit `11px / 16px` control text style at weight 450.
+Field labels and hints have a `4px` gap. Compact fields are `24px` high;
+ordinary fields remain `32px`, and labelled menus use `24px` item rows with
+`8px` inline inset. Tabs use a `32px` row and `16px` inter-tab gap. Card headers
+use `12px` block padding and `16px` inline padding. Secondary navigation uses
+`40px` two-line rows with `4 × 8px` inset. Control, small and panel radii stay
+`5/3/6px`; popup shadows use a restrained `4 × 16px` elevation.
+
+Radio and Checkbox have `12px` glyphs, `4px` radio dots, `8px` checkmarks
+and `2px` checkbox corners,
+`6px` label gaps, `24px` minimum desktop label targets and `12px` between
+options. Multi-line labels align the glyph with the first text line. Native
+radio exclusivity, arrow navigation, checkbox mixed state and disabled/focus
+semantics remain in the existing public Choice owner; hover and pressed
+backgrounds share the same semantic action colors. Touch input uses `12px/18px` control text, `14px` choice glyphs, `44px` label targets and a `56px`
+header.
 Global scrollbars use an `8px` transparent track, a rounded inset thumb with
 hover/pressed states and no endpoint arrows; standards-based thin scrollbars
 are the fallback. Component-local scrollbar palettes are removed.
@@ -1847,9 +1867,10 @@ under `public/licenses`. No external font or image service is required.
 The static server returns WOFF2 with an explicit `font/woff2` content type,
 independent of the host MIME registry.
 
-Theme acceptance evidence: the 83-file / 2,167-case frontend suite, nine Node
-export-boundary cases, typecheck, lint, architecture and 288 semantic contrast
-pairs pass. The production build exports 69 HTML pages and normalizes 66
+Theme acceptance evidence: the focused public-control, Tabs, appearance, shell
+and login suite passes five files / 213 cases. Nine Node export-boundary cases,
+production TypeScript checks, full lint, architecture and 288 semantic contrast
+pairs also pass. The production build exports 69 HTML pages and normalizes 66
 segment files; preview unset and zero produce the same 369 files, matching the
 Go embed byte-for-byte. UI Go test/vet and the offline font/license response
 check pass. Browser checks cover the 1440px desktop shell, resource table,
@@ -1860,8 +1881,12 @@ no horizontal overflow; reduced motion and arrow-free 8px scrollbars are
 verified. The native production server loads Inter under the existing
 self-only CSP without browser errors or warnings. These checks prove the
 theme and isolated MOCK presentation; real-IAM and release acceptance remain
-with their existing gates.
-
+with their existing gates. Actual browser checks after a fresh stylesheet load
+resolve Tabs, menu triggers and field labels to `11px/16px`, rather than the
+inherited `13px` reset. Radio glyphs resolve to `12px`, dots to `4px`, labels to
+`24px` with `6px` gaps and option gaps to `4 × 12px`. Native arrow-key changes
+keep exactly one theme selected. At 360px the six appearance radios remain
+reachable without horizontal overflow.
 
 Four page compositions are admitted: a cloud overview with readiness and
 attention-first metrics; a collection page with local search, filters, table,

@@ -1,4 +1,4 @@
-@layer base, xiak;
+@layer base, xiak, features;
 @import "./tokens.css";
 
 @layer base {

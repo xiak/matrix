@@ -38,7 +38,10 @@ for (const file of allFiles) {
     for (const match of source.matchAll(/var\((--xiak-[\w-]+)/g)) {
       if (!tokenNames.has(match[1])) violations.push(`${path}: undefined theme token ${match[1]}`);
     }
-    if (path.startsWith("ui/xiak/") && !source.trimStart().startsWith("@layer xiak {")) {
+    if (source.includes("@layer ") && !source.trimStart().startsWith("@layer base, xiak, features;")) {
+      violations.push(`${path}: declare the shared cascade order before defining any layer`);
+    }
+    if (path.startsWith("ui/xiak/") && !source.includes("@layer xiak {")) {
       violations.push(`${path}: public control styles must use the xiak cascade layer`);
     }
     if (path !== "styles/tokens.css" && /var\(--xiak-palette-/.test(source)) {

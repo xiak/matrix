@@ -1,3 +1,5 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .dialog { width: min(var(--xiak-dialog-width), calc(100vw - var(--xiak-spacing-roomy) * 2)); max-width: none; max-height: calc(100dvh - var(--xiak-spacing-roomy) * 2); margin: auto; overflow: hidden; border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); padding: 0; background: var(--xiak-color-bg-panel); color: var(--xiak-color-text-base); box-shadow: var(--xiak-shadow-elevated); }
 .dialog[open] { display: flex; flex-direction: column; }

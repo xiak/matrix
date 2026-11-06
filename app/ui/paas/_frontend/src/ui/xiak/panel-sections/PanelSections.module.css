@@ -1,3 +1,5 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .sections, .section { min-width: 0; }
 .sections > * + * { border-block-start: var(--xiak-border-subtle); }

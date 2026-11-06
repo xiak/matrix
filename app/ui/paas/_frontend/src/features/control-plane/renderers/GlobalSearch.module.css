@@ -12,13 +12,13 @@
   gap: var(--xiak-spacing-tight);
   border: 1px solid var(--xiak-color-header-border);
   border-radius: var(--xiak-radius-small);
-  padding-inline: var(--xiak-spacing-default);
+  padding-inline: var(--xiak-control-padding-inline);
   background: var(--xiak-color-header-control);
   transition: background var(--xiak-motion-fast), border-color var(--xiak-motion-fast);
 }
 .field:hover { border-color: var(--xiak-color-header-control-border); }
 .field:focus-within { border-color: var(--xiak-color-header-accent); box-shadow: var(--xiak-shadow-header-focus); }
-.field > svg { width: 18px; height: 18px; flex: none; color: var(--xiak-color-header-muted); }
+.field > svg { width: var(--xiak-icon-size); height: var(--xiak-icon-size); flex: none; color: var(--xiak-color-header-muted); }
 .field input {
   width: 100%;
   min-width: 0;
@@ -28,7 +28,7 @@
   background: transparent;
   color: var(--xiak-color-header-text);
   font: inherit;
-  font-size: var(--xiak-font-size-small);
+  font-size: var(--xiak-font-size-control);
   outline: none;
 }
 .field input::placeholder { color: var(--xiak-color-header-muted); }

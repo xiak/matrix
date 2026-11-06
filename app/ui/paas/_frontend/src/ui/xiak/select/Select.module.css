@@ -1,10 +1,12 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .root { position: relative; display: inline-block; min-width: 0; width: 100%; }
 .trigger[role="combobox"] { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); text-align: start; cursor: pointer; }
 .trigger[data-state="open"] { border-color: var(--xiak-color-border-focus); }
 .trigger[data-placeholder] { color: var(--xiak-color-text-placeholder); }
 .value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.icon { width: var(--xiak-icon-size); height: var(--xiak-icon-size); flex: none; color: var(--xiak-color-text-muted); transition: transform var(--xiak-motion-fast) var(--xiak-ease-standard); }
+.icon { width: var(--xiak-control-chevron-size); height: var(--xiak-control-chevron-size); flex: none; color: var(--xiak-color-text-muted); transition: transform var(--xiak-motion-fast) var(--xiak-ease-standard); }
 .trigger[data-state="open"] .icon { transform: rotate(180deg); }
 .trigger:disabled .icon { color: var(--xiak-color-text-disabled); }
 .popup[role="listbox"] { min-width: var(--radix-dropdown-menu-trigger-width); max-width: min(420px, var(--radix-dropdown-menu-content-available-width)); max-height: min(320px, var(--radix-dropdown-menu-content-available-height)); overscroll-behavior: contain; }

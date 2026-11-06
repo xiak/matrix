@@ -1,5 +1,4 @@
 .header {
-  --xiak-font-size-small: var(--xiak-font-size-body);
   position: relative;
   z-index: var(--xiak-z-global-header);
   height: var(--xiak-layout-header-height);

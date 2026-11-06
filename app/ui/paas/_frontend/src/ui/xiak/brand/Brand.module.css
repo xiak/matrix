@@ -1,3 +1,5 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .brand { display: block; flex: none; background: currentColor; }
 .lockup { width: var(--xiak-layout-brand-width); aspect-ratio: 6; mask: url("/brand/matrix-header-cyan.svg") center / contain no-repeat; }

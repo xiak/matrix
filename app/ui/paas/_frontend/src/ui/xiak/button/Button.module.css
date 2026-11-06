@@ -1,15 +1,17 @@
+@layer base, xiak, features;
+
 @layer xiak {
 .button {
   display: inline-flex;
   min-width: 0;
   align-items: center;
   justify-content: center;
-  gap: var(--xiak-spacing-tight);
+  gap: var(--xiak-spacing-compact);
   border: var(--xiak-border-transparent);
   border-radius: var(--xiak-radius-control);
   font: inherit;
-  font-weight: var(--xiak-font-weight-medium);
-  line-height: var(--xiak-line-height-compact);
+  font-weight: var(--xiak-font-weight-regular);
+  line-height: var(--xiak-line-height-control);
   text-align: center;
   cursor: pointer;
   outline: none;
@@ -40,20 +42,20 @@
 
 .small {
   min-height: var(--xiak-control-height-small);
-  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-default);
-  font-size: var(--xiak-font-size-small);
+  padding: var(--xiak-control-padding-block-small) var(--xiak-control-padding-inline);
+  font-size: var(--xiak-font-size-control);
 }
 
 .default {
   min-height: var(--xiak-control-height);
-  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-comfortable);
-  font-size: var(--xiak-font-size-body);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-default);
+  font-size: var(--xiak-font-size-control);
 }
 
 .large {
   min-height: var(--xiak-control-height-large);
-  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-roomy);
-  font-size: var(--xiak-font-size-body);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-comfortable);
+  font-size: var(--xiak-font-size-small);
 }
 
 .primary {
