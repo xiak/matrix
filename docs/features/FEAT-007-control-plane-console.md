@@ -1809,7 +1809,7 @@ is involved. The following are the resulting CSS dimensions under that default:
 | Component or region | Contract | UX purpose |
 | --- | --- | --- |
 | Global header | `60px` high; `40px` controls | Persistent brand, search, scope, message-center bell and identity |
-| Header brand | `30px` standalone M at its `252:172` aspect ratio, inside a `40px` square home link (`55px` touch) | Center on the service rail with no vertical header divider; retain the localized name, tooltip, hover, pressed and keyboard-focus states |
+| Header brand | `30 × 22.5px` standalone M: one continuous, uniform stroke with rounded joins and caps, in a `4:3` view box; `40px` square home link (`55px` touch) | Keep the small symbol legible and centered on the service rail with no vertical header divider; retain the localized name, tooltip, hover, pressed and keyboard-focus states |
 | Header typography | `13.75px / 20px` controls; `16.25px` section identity | Local Inter and system CJK fallback; compact layouts change composition instead of shrinking text |
 | Header count badge | `22.5px` height; `12.5px` numeric font and `17.5px` line height | Keep numbers independently centered; multiple digits expand horizontally |
 | Login brand | Up to `600px` at the approved `1020:172` aspect ratio; compact header below `950px` | One visible brand placement per viewport |
