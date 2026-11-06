@@ -195,7 +195,7 @@
   --xiak-letter-spacing-heading: -0.025em;
   --xiak-letter-spacing-eyebrow: 0.08em;
 
-  --xiak-layout-header-height: 3rem;
+  --xiak-layout-header-height: 2.75rem;
   --xiak-layout-rail-width: 3.5rem;
   --xiak-layout-brand-width: 9rem;
   --xiak-rail-target-size: 2rem;
@@ -204,10 +204,15 @@
   --xiak-layout-sider-width: calc(var(--xiak-layout-rail-width) + var(--xiak-layout-context-width) + var(--xiak-border-width));
   --xiak-layout-workspace-width: 22.5rem;
   --xiak-layout-content-max-width: 90rem;
-  --xiak-layout-search-width: 32.5rem;
-  --xiak-content-header-height: 3rem;
-  --xiak-content-header-height-compact: 3rem;
+  --xiak-layout-search-width: 30rem;
+  --xiak-content-header-height: 2.75rem;
+  --xiak-content-header-height-compact: 2.75rem;
   --xiak-font-size-page-context: var(--xiak-font-size-body);
+  --xiak-header-control-height: 1.875rem;
+  --xiak-font-size-header: var(--xiak-font-size-control);
+  --xiak-line-height-header: var(--xiak-line-height-control);
+  --xiak-header-spacing: 0.875rem;
+  --xiak-header-utility-spacing: 0.625rem;
   --xiak-tab-height: 1.5rem;
   --xiak-control-height-small: 1.5rem;
   --xiak-control-padding-inline: var(--xiak-spacing-tight);
@@ -233,8 +238,8 @@
   --xiak-choice-radius: 0.125rem;
   --xiak-choice-row-height: 1.5rem;
   --xiak-icon-size: 1rem;
-  --xiak-header-trigger-icon-size: 1.125rem;
-  --xiak-header-trigger-chevron-size: var(--xiak-control-chevron-size);
+  --xiak-header-trigger-icon-size: 1rem;
+  --xiak-header-trigger-chevron-size: 0.6875rem;
   --xiak-empty-height: 8rem;
   --xiak-empty-height-compact: 6rem;
   --xiak-font-size-metric: 1.25rem;
@@ -381,6 +386,9 @@
     --xiak-rail-target-size: 2.75rem;
     --xiak-navigation-item-height: 2.75rem;
     --xiak-layout-header-height: 3.5rem;
+    --xiak-header-control-height: 2.75rem;
+    --xiak-header-trigger-icon-size: 1.125rem;
+    --xiak-header-trigger-chevron-size: var(--xiak-control-chevron-size);
     --xiak-content-header-height: 3.5rem;
     --xiak-content-header-height-compact: 3.5rem;
   }

@@ -2,19 +2,20 @@
   position: relative;
   display: grid;
   min-width: 0;
-  height: var(--xiak-control-height);
+  height: var(--xiak-header-control-height);
+  min-height: var(--xiak-header-control-height);
   flex: none;
   grid-template-columns: var(--xiak-header-trigger-icon-size) minmax(0, 1fr) var(--xiak-header-trigger-chevron-size);
   align-items: center;
   gap: var(--xiak-spacing-compact);
   border: var(--xiak-border-transparent);
   border-radius: var(--xiak-radius-control);
-  padding: 0 var(--xiak-control-padding-inline);
+  padding: 0 var(--xiak-spacing-compact);
   background: transparent;
   color: var(--xiak-color-header-text);
-  font-size: var(--xiak-font-size-control);
+  font-size: var(--xiak-font-size-header);
   font-weight: var(--xiak-font-weight-regular);
-  line-height: var(--xiak-line-height-control);
+  line-height: var(--xiak-line-height-header);
   text-align: start;
 }
 
@@ -34,26 +35,26 @@
 .trigger[aria-expanded="true"] .triggerChevron { transform: rotate(180deg); }
 .trigger[data-filtered="true"] .triggerIcon { color: var(--xiak-color-header-accent); }
 
-.trigger[data-variant="selection"] { width: 11rem; }
+.trigger[data-variant="selection"] { width: 10rem; }
 
 @container matrix-control-shell (max-width: 62.5rem) {
-  .trigger[data-variant="navigation"] { width: var(--xiak-control-height); grid-template-columns: var(--xiak-header-trigger-icon-size); justify-content: center; padding: 0; }
+  .trigger[data-variant="navigation"] { width: var(--xiak-header-control-height); grid-template-columns: var(--xiak-header-trigger-icon-size); justify-content: center; padding: 0; }
   .trigger[data-variant="navigation"] .triggerLabel,
   .trigger[data-variant="navigation"] .triggerChevron { display: none; }
-  .trigger[data-variant="selection"] { width: 9.75rem; }
+  .trigger[data-variant="selection"] { width: 8.5rem; }
 }
 @container matrix-control-shell (max-width: 45rem) {
-  .trigger[data-variant="selection"] { width: 7.5rem; padding-inline: var(--xiak-spacing-tight); }
+  .trigger[data-variant="selection"] { width: 6.5rem; padding-inline: var(--xiak-spacing-compact); }
 }
 @container matrix-control-shell (max-width: 38.75rem) {
-  .trigger[data-variant="selection"] { width: 6rem; grid-template-columns: var(--xiak-header-trigger-icon-size) minmax(0, 1fr); gap: var(--xiak-spacing-narrow); }
+  .trigger[data-variant="selection"] { width: 5.25rem; grid-template-columns: var(--xiak-header-trigger-icon-size) minmax(0, 1fr); gap: var(--xiak-spacing-narrow); }
   .trigger[data-variant="selection"] .triggerLabel,
   .trigger[data-variant="selection"] .triggerChevron { display: none; }
   .trigger[data-variant="selection"] .triggerCompactLabel { display: inline; }
   .trigger[data-filtered="true"]::after { content: ""; position: absolute; top: 0.3125rem; right: 0.3125rem; width: 0.25rem; height: 0.25rem; background: var(--xiak-color-header-accent); }
 }
 @container matrix-control-shell (max-width: 26.25rem) {
-  .trigger[data-variant="selection"] { width: var(--xiak-control-height); grid-template-columns: var(--xiak-header-trigger-icon-size); justify-content: center; }
+  .trigger[data-variant="selection"] { width: var(--xiak-header-control-height); grid-template-columns: var(--xiak-header-trigger-icon-size); justify-content: center; }
   .trigger[data-variant="selection"] .triggerCompactLabel { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {

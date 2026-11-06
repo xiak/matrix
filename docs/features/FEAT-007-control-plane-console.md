@@ -1808,16 +1808,17 @@ is involved. The following are the resulting CSS dimensions under that default:
 
 | Component or region | Contract | UX purpose |
 | --- | --- | --- |
-| Global header | `60px` high; `40px` controls | Persistent brand, search, scope, message-center bell and identity |
-| Header brand | `30 × 22.5px` standalone M: one continuous, uniform stroke with rounded joins and caps, in a `4:3` view box; `40px` square home link (`55px` touch) | Keep the small symbol legible and centered on the service rail with no vertical header divider; retain the localized name, tooltip, hover, pressed and keyboard-focus states |
-| Header typography | `13.75px / 20px` controls; `16.25px` section identity | Local Inter and system CJK fallback; compact layouts change composition instead of shrinking text |
-| Header count badge | `22.5px` height; `12.5px` numeric font and `17.5px` line height | Keep numbers independently centered; multiple digits expand horizontally |
+| Global header | `55px` high; `37.5px` controls/avatars, `20px` glyphs and `13.75px` chevrons; `17.5px` primary spacing and `12.5px` utility spacing | Persistent brand, search, scope, message-center bell and identity with proportional compact controls |
+| Header brand | `34 × 25.5px` standalone M: one continuous, uniform stroke with rounded joins and caps, in a `4:3` view box; `40px` square home link (`55px` touch) | Match the visible height of the rail's `25px` glyphs and center the target on the same axis, with no vertical header divider; retain the localized name, tooltip, hover, pressed and keyboard-focus states |
+| Header typography | `13.75px / 20px` navigation and avatar text; `16.25px` page and product identity | Local Inter and system CJK fallback; header-specific semantic tokens keep popup and body controls at their own density |
+| Header count badge | `20px` height; `12.5px` numeric font and `15px` line height | Keep numbers independently centered; multiple digits expand horizontally |
+| Header search and scope | `600px` maximum inline search; `200px` region selector; both `37.5px` high | Inputs, glyphs and text share the header scale; compact search opens below the bar |
 | Login brand | Up to `600px` at the approved `1020:172` aspect ratio; compact header below `950px` | One visible brand placement per viewport |
 | Login composition | `1500px` maximum split layout; `50px` fields and submit (`55px` touch); `550px` maximum compact form | Focused sign-in with visible labels and a separate MOCK entry |
 | Favorite-service rail | `70px` wide; `40px` targets | Service shortcuts with independent overflow scrolling |
-| Service directory | Full viewport below the `60px` header; `280px` category pane; `50px` search and close targets | Grouped discovery adapts to available space |
+| Service directory | Full viewport below the `55px` header; `280px` category pane; `50px` search and close targets | Grouped discovery adapts to available space |
 | Product context navigation | `300px` content plus `1px` divider; `40px` single-line rows (`55px` touch) | Labels and actionable counts; descriptions remain hover and assistive-text hints |
-| Page context bar | `60px` minimum; `16.25px` title; `40px` compact action-menu target | One persistent page/object title with parent navigation and actions |
+| Page context bar | `55px` minimum, aligned with the product-navigation heading; `16.25px` title; `40px` compact action-menu target | One persistent page/object title with parent navigation and actions; the two desktop header bands total `110px` |
 | Primary controls | `30px` small, `40px` default, `50px` large; touch `45/55/55px` | Consistent density across buttons, inputs and menus |
 | Status badge | `25px` high | Comparable state language without changing row geometry |
 | Resource table | `45px` header; `55px` minimum row; `10 × 15px` cell padding; `180px` minimum cell width | Rich rows may grow; a labelled region owns horizontal scrolling below its `800px` or content-driven minimum |
@@ -1840,7 +1841,7 @@ workspace light and global shell dark. Portalled controls inherit their owning
 surface, including while a theme changes. Status colors retain their semantics.
 
 Local variable Inter supplies Latin text at `400/450/500/550/650` weights, with
-system CJK fallback. Body and section text is `16.25px`, controls and metadata
+system CJK fallback. Body and page/product title text is `16.25px`, controls and metadata
 `13.75px`, and large-action labels `15px`. Shared Input, Select, Button, Tabs,
 field labels and Radio/Checkbox use `13.75px/20px` at weight 450. Field labels
 and hints have a `5px` gap. Tabs and menu options use `30px` rows; tabs retain
@@ -1853,13 +1854,23 @@ inset. Metric hints and empty-state descriptions wrap rather than truncate;
 longer English copy may grow a metric row above its minimum height. Loading
 metric grids follow the same density and independent container breakpoints.
 
+The control-radius token also owns the header home target, account trigger,
+both account avatars, search fields/results, region choices, product-directory
+links/favorite buttons and product icon tiles. The header avatar fills its
+37.5px trigger exactly, inherits its 6.25px radius, and paints one border;
+its panel counterpart uses the same radius at 55px. Hover/expanded and pressed
+avatar surfaces use header interaction tokens, with the shared focus outline
+and reduced-motion behavior. Tiny keycaps/code fragments keep the small-radius
+token, cards/dialogs keep the panel token, and circular step markers use the
+pill token rather than an independent radius value.
+
 Product and IAM navigation use `40px` single-line rows, `13.75px/20px` strong
 text at weight 400, and no inter-row gap. The `20px` glyph sits in a `30px` slot
 followed by a `10px` label gap. The full-width target has `15px` inline inset;
 its selection is inset `2.5px` vertically and `10px` horizontally, producing
 `280 × 35px` paint. Long labels truncate; descriptions remain in link titles
-and accessible descriptions. The product title uses `16.25px/30px`, weight
-500, with the same icon/label alignment. The footer uses `13.75px/20px` text.
+and accessible descriptions. The product title uses `16.25px/27.5px`, weight
+500, beside the same `30px` icon slot as navigation rows. The footer uses `13.75px/20px` text.
 The rail retains filled selection without a separate edge marker.
 
 Radio and Checkbox use `15px` glyphs, `5px` radio dots, `10px` checkmarks,
@@ -1884,14 +1895,14 @@ font are local static-export assets; the font's SIL license ships under
 `public/licenses`. The server returns WOFF2 as `font/woff2` independently of
 host MIME registration. No external font or image service is required.
 
-Theme acceptance evidence: the owning shell, content-frame and read-boundary
-suite passes three files / 165 cases. Production TypeScript, owning-file lint,
+Theme acceptance evidence: the focused shell, content-frame, header-control
+and activation suite passes six files / 183 cases. Production TypeScript, owning-file lint,
 architecture and 312 semantic contrast
 pairs, nine Node export-boundary cases, and UI Go test/vet pass. Preview unset
 and zero export the same 369 files byte-for-byte,
 including 69 HTML pages and 66 normalized segment files, matching the Go embed.
 Authenticated Chrome checks at 100% browser scale resolve the root to 20px,
-header to 60px, rail to 70px, product content to 300px, rows to 40px and icons
+header to 55px, rail to 70px, product content to 300px, rows to 40px and navigation icons
 to 20px. Controls resolve to `13.75px/20px`; inputs are 40px, tabs/options 30px,
 and radio glyphs/dots 15/5px. At 1151px the sidebar stays inline; at 1150px it
 becomes a drawer. At 360px, access-analysis tabs use two columns with 5px gaps,
@@ -1902,8 +1913,12 @@ cover the 1440px shell, a 450px right workspace and keyboard resizing to
 viewport, wraps keyboard focus, and compact search restores its trigger focus.
 Light, mixed and dark themes and Chinese/English appearance controls fit the
 360px viewport without horizontal overflow. The header brand resolves to a
-40px home link and 30px symbol, centered at x=35px above the 70px rail;
-there is no separator between it and the product launcher. Authenticated
+40px home link and 34px symbol, centered at x=34.5px above the 70px rail,
+accounting for its 1px divider;
+there is no separator between it and the product launcher. The 37.5px header
+avatar and its trigger share the same rectangle and 6.25px corners; at 360px
+the account popup stays within the viewport and Escape returns focus to its
+trigger. Authenticated
 Chrome at 1743px and 1440px resolves the overview to four 120px metric cards,
 a 160px empty state and a 300px supporting card. At 1280px the metric grid
 uses two columns, and at 360px one column, without page overflow. English

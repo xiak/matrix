@@ -137,9 +137,9 @@
 .contextHeader strong {
   min-width: 0;
   overflow: hidden;
-  font-size: var(--xiak-font-size-body);
+  font-size: var(--xiak-font-size-page-context);
   font-weight: var(--xiak-font-weight-medium);
-  line-height: 1.5rem;
+  line-height: 1.375rem;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

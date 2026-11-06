@@ -139,7 +139,7 @@
   width: 2.375rem;
   height: 2.375rem;
   place-items: center;
-  border-radius: var(--xiak-radius-panel);
+  border-radius: var(--xiak-radius-control);
   background: var(--xiak-color-accent-haze);
   color: var(--xiak-color-accent-text);
 }
@@ -238,7 +238,7 @@
   height: var(--xiak-control-height);
   flex: none;
   place-items: center;
-  border-radius: var(--xiak-radius-panel);
+  border-radius: var(--xiak-radius-control);
   background: var(--xiak-color-accent-haze);
   color: var(--xiak-color-accent-text);
 }
@@ -368,7 +368,7 @@
   width: 1.75rem;
   height: 1.75rem;
   place-items: center;
-  border-radius: 62.4375rem;
+  border-radius: var(--xiak-radius-pill);
   background: var(--xiak-color-accent-haze);
   color: var(--xiak-color-accent-text);
   font-size: var(--xiak-font-size-small);

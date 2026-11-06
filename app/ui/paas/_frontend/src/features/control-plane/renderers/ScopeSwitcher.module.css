@@ -12,7 +12,7 @@
   align-items: center;
   gap: var(--xiak-spacing-default);
   border: 0.0625rem solid transparent;
-  border-radius: var(--xiak-radius-small);
+  border-radius: var(--xiak-radius-control);
   padding: var(--xiak-spacing-tight) var(--xiak-spacing-default);
   background: transparent;
   color: var(--xiak-color-header-text);

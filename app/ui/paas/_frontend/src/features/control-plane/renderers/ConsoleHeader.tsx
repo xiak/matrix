@@ -34,7 +34,7 @@ export function ConsoleBrand({ inactive = false }: { inactive?: boolean }) {
   const t = useTranslations("Console");
   return (
     <Link aria-label={t("brandHome")} title={t("brandHome")} className={styles.brand} inert={inactive} href="/console/">
-      <Brand decorative variant="symbol" />
+      <Brand className={styles.brandSymbol} decorative variant="symbol" />
     </Link>
   );
 }

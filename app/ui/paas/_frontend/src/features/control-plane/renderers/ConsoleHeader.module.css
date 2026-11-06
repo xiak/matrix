@@ -5,10 +5,10 @@
   min-height: var(--xiak-layout-header-height);
   flex: none;
   justify-content: space-between;
-  gap: var(--xiak-spacing-comfortable);
+  gap: var(--xiak-header-spacing);
   border-bottom: 0.0625rem solid var(--xiak-color-header-divider);
-  padding-inline: var(--xiak-spacing-comfortable);
-  padding-inline-start: calc((var(--xiak-layout-rail-width) - var(--xiak-control-height)) / 2);
+  padding-inline: var(--xiak-header-spacing);
+  padding-inline-start: calc((var(--xiak-layout-rail-width) - var(--xiak-border-width) - var(--xiak-rail-target-size)) / 2);
   background: var(--xiak-color-header-bg);
   color: var(--xiak-color-header-text);
   box-shadow: none;
@@ -28,40 +28,42 @@
 .navigation,
 .utilities { align-self: stretch; }
 
-.navigation { gap: var(--xiak-spacing-comfortable); }
-.utilities { gap: var(--xiak-spacing-default); }
+.navigation { gap: var(--xiak-header-spacing); }
+.utilities { gap: var(--xiak-header-utility-spacing); }
 .tools { gap: var(--xiak-spacing-narrow); }
 
 .brand {
   display: flex;
-  width: var(--xiak-control-height);
-  min-height: var(--xiak-control-height);
+  width: var(--xiak-rail-target-size);
+  min-height: var(--xiak-rail-target-size);
   flex: none;
   align-items: center;
   justify-content: center;
-  border-radius: var(--xiak-radius-small);
+  border-radius: var(--xiak-radius-control);
   color: var(--xiak-color-header-accent);
   outline: none;
   transition: background var(--xiak-motion-fast) var(--xiak-ease-standard);
 }
 
+.brandSymbol { width: 1.7rem; }
 .brand:hover { background: var(--xiak-color-header-hover); }
 .brand:active { background: var(--xiak-color-header-pressed); }
-.brand:focus-visible { outline: 0.125rem solid var(--xiak-color-header-accent); outline-offset: 0.25rem; }
+.brand:focus-visible { outline: 0.125rem solid var(--xiak-color-border-focus); outline-offset: 0.125rem; }
 
 .previewChip {
   display: inline-flex;
-  min-height: 1.625rem;
+  min-height: 1.25rem;
   flex: none;
   align-items: center;
-  gap: var(--xiak-spacing-tight);
+  gap: var(--xiak-spacing-narrow);
   border: 0.0625rem solid var(--xiak-color-header-border);
   border-radius: var(--xiak-radius-small);
-  padding-inline: var(--xiak-spacing-tight);
+  padding-inline: var(--xiak-spacing-compact);
   background: var(--xiak-color-header-control);
   color: var(--xiak-color-header-accent);
   font-family: var(--xiak-font-mono);
-  font-size: var(--xiak-font-size-caption);
+  font-size: 0.625rem;
+  line-height: 0.875rem;
   font-weight: var(--xiak-font-weight-medium);
   white-space: nowrap;
 }

@@ -60,7 +60,7 @@
   height: 2.75rem;
   flex: none;
   place-items: center;
-  border-radius: var(--xiak-radius-panel);
+  border-radius: var(--xiak-radius-control);
   background: var(--xiak-color-accent-haze);
   color: var(--xiak-color-accent-text);
 }
