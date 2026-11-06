@@ -79,8 +79,7 @@
   color: var(--xiak-color-text-base);
 }
 
-.secondary:hover:not(:disabled),
-.ghost:hover:not(:disabled) {
+.secondary:hover:not(:disabled) {
   background: var(--xiak-color-bg-control-hover);
   color: var(--xiak-color-text-strong);
 }
@@ -89,6 +88,7 @@
   background: transparent;
   color: var(--xiak-color-text-muted);
 }
+.ghost:hover:not(:disabled) { background: var(--xiak-color-bg-item-hover); color: var(--xiak-color-text-strong); }
 .ghost:disabled { border-color: transparent; background: transparent; }
 .secondary:active:not(:disabled), .ghost:active:not(:disabled) {
   background: var(--xiak-color-bg-control-pressed);

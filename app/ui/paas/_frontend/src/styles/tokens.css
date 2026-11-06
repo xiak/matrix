@@ -91,6 +91,8 @@
   --xiak-color-bg-panel-hover: var(--xiak-palette-gray-50);
   --xiak-color-bg-control: var(--xiak-palette-white);
   --xiak-color-bg-control-hover: var(--xiak-palette-gray-100);
+  --xiak-color-bg-item-hover: var(--xiak-palette-gray-50);
+  --xiak-color-bg-item-selected: var(--xiak-palette-gray-100);
   --xiak-color-bg-input: var(--xiak-palette-white);
   --xiak-color-bg-code: var(--xiak-palette-gray-100);
   --xiak-color-bg-skeleton: var(--xiak-palette-gray-150);
@@ -200,7 +202,8 @@
   --xiak-layout-search-width: 520px;
   --xiak-content-header-height: 48px;
   --xiak-content-header-height-compact: 48px;
-  --xiak-font-size-page-context: 1rem;
+  --xiak-font-size-page-context: var(--xiak-font-size-body);
+  --xiak-tab-height: 24px;
   --xiak-control-height-small: 24px;
   --xiak-control-padding-inline: var(--xiak-spacing-tight);
   --xiak-control-padding-block-small: 3px;
@@ -272,7 +275,7 @@
   --xiak-color-header-bg: var(--xiak-palette-gray-850);
   --xiak-color-header-panel: var(--xiak-palette-gray-850);
   --xiak-color-header-control: var(--xiak-palette-gray-800);
-  --xiak-color-header-hover: var(--xiak-palette-gray-700);
+  --xiak-color-header-hover: var(--xiak-palette-gray-800);
   --xiak-color-header-border: var(--xiak-palette-gray-700);
   --xiak-color-header-divider: var(--xiak-palette-gray-700);
   --xiak-color-header-control-border: var(--xiak-palette-gray-500);
@@ -293,15 +296,17 @@
   --xiak-color-text-global-muted: var(--xiak-palette-gray-300);
   --xiak-color-brand: var(--xiak-palette-blue-text);
   --xiak-color-decoration: var(--xiak-palette-gray-700);
-  --xiak-color-bg-canvas: var(--xiak-palette-gray-900);
+  --xiak-color-bg-canvas: var(--xiak-palette-gray-850);
   --xiak-color-bg-header: var(--xiak-palette-gray-850);
   --xiak-color-bg-rail: var(--xiak-palette-gray-850);
   --xiak-color-bg-sider: var(--xiak-palette-gray-850);
-  --xiak-color-bg-content: var(--xiak-palette-gray-900);
+  --xiak-color-bg-content: var(--xiak-palette-gray-850);
   --xiak-color-bg-panel: var(--xiak-palette-gray-850);
   --xiak-color-bg-panel-hover: var(--xiak-palette-gray-800);
   --xiak-color-bg-control: var(--xiak-palette-gray-800);
   --xiak-color-bg-control-hover: var(--xiak-palette-gray-700);
+  --xiak-color-bg-item-hover: var(--xiak-palette-gray-800);
+  --xiak-color-bg-item-selected: var(--xiak-palette-gray-800);
   --xiak-color-bg-input: var(--xiak-palette-gray-800);
   --xiak-color-bg-code: var(--xiak-palette-gray-800);
   --xiak-color-bg-skeleton: var(--xiak-palette-gray-800);
@@ -361,6 +366,7 @@
     --xiak-control-height-small: 36px;
     --xiak-control-height: 44px;
     --xiak-control-height-large: 44px;
+    --xiak-tab-height: 44px;
     --xiak-font-size-control: var(--xiak-font-size-small);
     --xiak-line-height-control: 18px;
     --xiak-choice-size: 14px;

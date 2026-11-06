@@ -1812,19 +1812,20 @@ reference dimensions are:
 | Favorite-service rail | `56px` wide; `32px` targets | User-selected service shortcuts, synchronized with directory stars; overflow scrolls within the rail |
 | Service directory | Full viewport below the `48px` header; `224px` desktop category pane; `40px` search and close targets | Three-column grouped discovery, two/single columns as available width falls, horizontal category strip on small screens |
 | Product context navigation | `240px` wide; `40px` minimum item height (`32px` for single-line compact navigation) | Product-local IA with label, description, and actionable count |
-| Page context bar | `48px` minimum; `16px` title and one reading line, with a `32px` trailing action-menu target at compact widths | One current page/object title, parent navigation and contextual actions; no repeated title/action band in the body |
+| Page context bar | `48px` minimum; `13px` title and one reading line, with a `32px` trailing action-menu target at compact widths | One current page/object title, parent navigation and contextual actions; no repeated title/action band in the body |
 | Primary controls | `24px` small, `32px` default, `40px` large; touch targets `36/44/44px` | Predictable density and touch/click targeting by task importance |
 | Status badge | `20px` high | Comparable state language without changing row geometry |
 | Resource table | `36px` header; `44px` minimum data row; `8 × 12px` cell padding; `144px` minimum cell width | Rich cells may grow; a labelled, keyboard-focusable region owns horizontal scrolling below the greater of `640px` and its column/content requirements |
 | Form dialog | `600px` desktop width; `8px` compact viewport inset | Fixed title and action footer, independently scrolling fields, native modal background isolation |
 | Context workspace | `360px` default; `320–460px` adjustable | Review or inspect without losing the source page |
-| Content canvas | Fluid aligned workspace; `20px` desktop gutter | Page context and content share their left edge; prose and forms retain their own readable width, data collections use available space |
+| Content canvas | Fluid aligned workspace; `32px` desktop gutter | Page context and content share their left edge; prose and forms retain their own readable width, data collections use available space |
 | Panel geometry | `6px` panel/dialog radius; `5px` control/popup and `3px` small radius; `4/8/12/16/20/24/32px` spacing rhythm; `16px` panel inset | Theme-owned geometry keeps content and navigation compact and consistent |
 
 The theme is owned by `src/styles/tokens.css` and applied through the existing
 semantic `--xiak-*` contract. Dark panel/header/navigation surfaces use
-`#2c2c2c`, the content canvas `#242424`, and hover/input surfaces `#383838`.
-Dividers and hovered controls use `#444444`; pressed controls use `#4d4d4d`.
+`#2c2c2c`, including the content canvas. Unfilled-item hover, selected tabs and
+input surfaces use `#383838`; dividers, filled-control hover and selected-tab
+hover use `#444444`; pressed controls use `#4d4d4d`.
 Selection uses `#394360` with
 `#4a5878` hover. Focus uses Figma blue `#0c8ce9`; filled actions use
 `#0a6dc2` with white text, and dark-surface links use `#a8d7fa` so small
@@ -1844,9 +1845,19 @@ reduced motion. Shared Input, Select, Button, Tabs, menus, field labels and
 Radio/Checkbox use an explicit `11px / 16px` control text style at weight 450.
 Field labels and hints have a `4px` gap. Compact fields are `24px` high;
 ordinary fields remain `32px`, and labelled menus use `24px` item rows with
-`8px` inline inset. Tabs use a `32px` row and `16px` inter-tab gap. Card headers
+`8px` inline inset. Tabs use a `24px` row, `4px` inter-tab gap and `8px` inline
+inset, with a neutral selected background, `5px` corners and no underline.
+Selected tab labels are weight 550; normal labels remain 450. Disabled tabs
+retain their disabled appearance on hover. A `2px` blue inset outline marks
+keyboard focus, including portalled menu items. Card headers
 use `12px` block padding and `16px` inline padding. Secondary navigation uses
-`40px` two-line rows with `4 × 8px` inset. Control, small and panel radii stay
+`40px` two-line or `32px` single-line rows, `4px` inset and no inter-row gap.
+Each icon has a `24px` alignment slot around its `16px` glyph, followed by an
+`8px` label gap. Navigation hit targets retain their full height while the
+rounded background is inset `2px` vertically. Selected navigation uses the
+blue-gray selection surface with strong text; hover and pressed states retain
+that selection identity. The rail uses the same filled selection without a
+separate edge marker. Control, small and panel radii stay
 `5/3/6px`; popup shadows use a restrained `4 × 16px` elevation.
 
 Radio and Checkbox have `12px` glyphs, `4px` radio dots, `8px` checkmarks
@@ -1856,7 +1867,8 @@ options. Multi-line labels align the glyph with the first text line. Native
 radio exclusivity, arrow navigation, checkbox mixed state and disabled/focus
 semantics remain in the existing public Choice owner; hover and pressed
 backgrounds share the same semantic action colors. Touch input uses `12px/18px` control text, `14px` choice glyphs, `44px` label targets and a `56px`
-header.
+header. Tabs also expand to `44px` on coarse pointers, while narrow grid tab
+layouts preserve `4px` gaps between items.
 Global scrollbars use an `8px` transparent track, a rounded inset thumb with
 hover/pressed states and no endpoint arrows; standards-based thin scrollbars
 are the fallback. Component-local scrollbar palettes are removed.
@@ -1869,9 +1881,9 @@ independent of the host MIME registry.
 
 Theme acceptance evidence: the focused public-control, Tabs, appearance, shell
 and login suite passes five files / 213 cases. Nine Node export-boundary cases,
-production TypeScript checks, full lint, architecture and 288 semantic contrast
+production TypeScript checks, full lint, architecture and 312 semantic contrast
 pairs also pass. The production build exports 69 HTML pages and normalizes 66
-segment files; preview unset and zero produce the same 369 files, matching the
+segment files; preview unset and zero produce the same 371 files, matching the
 Go embed byte-for-byte. UI Go test/vet and the offline font/license response
 check pass. Browser checks cover the 1440px desktop shell, resource table,
 product directory, 360px right workspace, dropdown portal, keyboard focus,
@@ -1886,7 +1898,19 @@ resolve Tabs, menu triggers and field labels to `11px/16px`, rather than the
 inherited `13px` reset. Radio glyphs resolve to `12px`, dots to `4px`, labels to
 `24px` with `6px` gaps and option gaps to `4 × 12px`. Native arrow-key changes
 keep exactly one theme selected. At 360px the six appearance radios remain
-reachable without horizontal overflow.
+reachable without horizontal overflow. Chrome checks of the file-browser theme
+alignment resolve tabs to `24px`, `4px` gaps, `0 × 8px` padding and `5px`
+corners, with no underline. Actual hovered tabs use `#444444` when selected
+and `#383838` when unselected; keyboard focus retains the `2px` blue outline.
+The single-line navigation target is `32px` with a `28px` painted background,
+`16px` icon inside a `24px` slot and white selected text. Selected navigation
+hover resolves to `#4a5878`, unselected hover to `#383838`, and the dark
+workspace to `#2c2c2c`; desktop content padding resolves to `32px`. At `360px`,
+the access-analysis tabs form two columns with `4px` gaps, and the document
+has no horizontal overflow. Light and dark surfaces and the portalled theme
+menu were checked in Chrome; the existing contrast gate also covers mixed
+surfaces. The main development URL continues to use the real backend; full
+shell visual checks use the explicitly enabled isolated MOCK fixture.
 
 Four page compositions are admitted: a cloud overview with readiness and
 attention-first metrics; a collection page with local search, filters, table,

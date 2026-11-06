@@ -7,7 +7,7 @@
   align-items: center;
   justify-content: center;
   border: 0;
-  border-radius: var(--xiak-radius-small);
+  border-radius: var(--xiak-radius-control);
   padding: 0;
   background: transparent;
   color: var(--xiak-color-header-muted);
@@ -16,17 +16,18 @@
   transition: background var(--xiak-motion-fast), color var(--xiak-motion-fast);
 }
 
-.iconButton:hover,
-.iconButton[aria-expanded="true"] {
+.iconButton:hover:not(:disabled),
+.iconButton[aria-expanded="true"]:not(:disabled) {
   background: var(--xiak-color-header-hover);
-  color: var(--xiak-color-header-accent);
+  color: var(--xiak-color-header-text);
 }
 
 .iconButton:focus-visible {
-  outline: 2px solid var(--xiak-color-header-accent);
+  outline: 2px solid var(--xiak-color-border-focus);
   outline-offset: 2px;
 }
-.iconButton:active { background: var(--xiak-color-header-pressed); }
+.iconButton:active:not(:disabled) { background: var(--xiak-color-header-pressed); }
+.iconButton:disabled { color: var(--xiak-color-text-disabled); cursor: not-allowed; }
 
 .iconButton > svg {
   width: var(--xiak-header-trigger-icon-size);

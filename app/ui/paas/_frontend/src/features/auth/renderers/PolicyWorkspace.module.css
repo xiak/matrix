@@ -5,7 +5,6 @@
 .directoryContent { padding-block-start: 0; }
 .directory { container: policy-directory / inline-size; }
 .directoryHeading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-narrow) var(--xiak-table-cell-padding-inline) 0; border-bottom: var(--xiak-border-subtle); }
-.directoryHeading [role="tablist"] { border-bottom: 0; }
 .note { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.7; margin: 0; overflow-wrap: anywhere; }
 .previewNotice { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--xiak-spacing-tight); min-width: 0; }
@@ -83,7 +82,7 @@
   .policySet { grid-template-columns: minmax(0, 1fr); }
 }
 @container policy-authoring (max-width: 420px) {
-  .diagnosticTabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--xiak-spacing-default); overflow: visible; }
+  .diagnosticTabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-narrow); overflow: visible; }
   .diagnosticTabs > button { justify-content: flex-start; min-width: 0; }
 }
 

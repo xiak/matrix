@@ -8,7 +8,7 @@
   align-items: center;
   gap: var(--xiak-spacing-compact);
   border: var(--xiak-border-transparent);
-  border-radius: var(--xiak-radius-small);
+  border-radius: var(--xiak-radius-control);
   padding: 0 var(--xiak-control-padding-inline);
   background: transparent;
   color: var(--xiak-color-header-text);
@@ -19,12 +19,12 @@
 }
 
 .trigger:hover:not(:disabled),
-.trigger[aria-expanded="true"] {
+.trigger[aria-expanded="true"]:not(:disabled) {
   background: var(--xiak-color-header-hover);
-  color: var(--xiak-color-header-accent);
+  color: var(--xiak-color-header-text);
 }
-.trigger:focus-visible { outline-color: var(--xiak-color-header-accent); }
-.trigger:active:not(:disabled) { transform: none; }
+.trigger:focus-visible { outline-color: var(--xiak-color-border-focus); }
+.trigger:active:not(:disabled) { background: var(--xiak-color-header-pressed); transform: none; }
 .trigger:disabled { background: transparent; color: var(--xiak-color-header-muted); opacity: var(--xiak-opacity-disabled); }
 .triggerLabel { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .triggerCompactLabel { display: none; }

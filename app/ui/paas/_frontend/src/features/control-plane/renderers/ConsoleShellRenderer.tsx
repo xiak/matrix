@@ -525,13 +525,13 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                 {frame.preview ? favorites.flatMap((id) => services.filter((service) => service.id === id)).map((service) => {
                   const Icon = favoriteIcons[service.id];
                   const selected = service.id === activeService?.id;
-                  return <Link aria-current={selected ? "page" : undefined} aria-label={service.label} className={styles.railItem} data-selected={selected ? "true" : undefined} href={service.href} key={service.id} onAccepted={() => { closeSidebarAndRestoreFocus(); useConsoleUiStore.getState().visitService(service.id); }} title={service.label}><span className={styles.railIndicator} /><Icon aria-hidden="true" /><span className={styles.railTooltip}>{service.label}</span></Link>;
+                  return <Link aria-current={selected ? "page" : undefined} aria-label={service.label} className={styles.railItem} data-selected={selected ? "true" : undefined} href={service.href} key={service.id} onAccepted={() => { closeSidebarAndRestoreFocus(); useConsoleUiStore.getState().visitService(service.id); }} title={service.label}><Icon aria-hidden="true" /><span className={styles.railTooltip}>{service.label}</span></Link>;
                 }) : frame.rail.slice(1).map((item) => {
                   const Icon = railIcons[item.icon];
                   const label = directory(`services.${item.id === "access" ? "iam" : item.id === "audit" ? "audit" : "postgresql"}.name`);
                   return (
                     <Link aria-current={item.selected ? "page" : undefined} aria-label={label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onAccepted={closeSidebarAndRestoreFocus}>
-                      <span className={styles.railIndicator} /><Icon aria-hidden="true" /><span className={styles.railTooltip}>{label}</span>
+                      <Icon aria-hidden="true" /><span className={styles.railTooltip}>{label}</span>
                     </Link>
                   );
                 })}
@@ -559,7 +559,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                       <Fragment key={item.id}>
                       {item.group && item.group !== localNavigation[index - 1]?.group ? <p>{iamWorkspaceText(item.group)}</p> : null}
                       <Link aria-current={item.selected ? "page" : undefined} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} onAccepted={closeSidebarAndRestoreFocus}>
-                        <Icon aria-hidden="true" /><span><strong>{navigationText(`items.${item.messageKey}.label`)}</strong>{frame.section !== "access" ? <small title={navigationText(`items.${item.messageKey}.hint`)}>{navigationText(`items.${item.messageKey}.hint`)}</small> : null}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
+                        <span className={styles.contextIcon}><Icon aria-hidden="true" /></span><span className={styles.contextLabel}><strong>{navigationText(`items.${item.messageKey}.label`)}</strong>{frame.section !== "access" ? <small title={navigationText(`items.${item.messageKey}.hint`)}>{navigationText(`items.${item.messageKey}.hint`)}</small> : null}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
                       </Link>
                       </Fragment>
                     );

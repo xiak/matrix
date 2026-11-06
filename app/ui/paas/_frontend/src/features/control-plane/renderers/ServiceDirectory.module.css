@@ -19,11 +19,18 @@
 .workspace { display: grid; min-height: 0; flex: 1; grid-template-columns: 224px minmax(0, 1fr); }
 .navigation { min-width: 0; overflow-y: auto; overscroll-behavior: contain; border-right: var(--xiak-border-subtle); padding: var(--xiak-spacing-default) var(--xiak-spacing-tight); background: var(--xiak-color-bg-content); }
 .navigationLabel { margin: var(--xiak-spacing-comfortable) var(--xiak-spacing-default) var(--xiak-spacing-tight); color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); }
-.categoryButton { display: grid; width: 100%; min-height: var(--xiak-control-height-large); grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: var(--xiak-spacing-tight); border: 0; border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-tight) var(--xiak-spacing-default); outline: none; background: transparent; color: var(--xiak-color-text-muted); cursor: pointer; font: inherit; text-align: start; }
+.categoryButton { position: relative; isolation: isolate; display: grid; width: 100%; min-height: var(--xiak-control-height); grid-template-columns: 16px minmax(0, 1fr) auto; align-items: center; gap: var(--xiak-spacing-tight); border: 0; border-radius: var(--xiak-radius-control); padding: var(--xiak-spacing-narrow) var(--xiak-spacing-tight); outline: none; background: transparent; color: var(--xiak-color-text-muted); cursor: pointer; font-size: var(--xiak-font-size-control); font-weight: var(--xiak-font-weight-regular); line-height: var(--xiak-line-height-control); text-align: start; }
+.categoryButton::before { position: absolute; inset: var(--xiak-spacing-micro) 0; z-index: -1; border-radius: var(--xiak-radius-control); background: transparent; content: ""; pointer-events: none; transition: background var(--xiak-motion-fast) var(--xiak-ease-standard); }
 .categoryButton svg { width: 16px; height: 16px; }
 .categoryButton small { font-size: var(--xiak-font-size-caption); font-variant-numeric: tabular-nums; }
-.categoryButton:hover { background: var(--xiak-color-bg-panel-hover); color: var(--xiak-color-text-strong); }
-.categoryButton[aria-pressed="true"] { background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); font-weight: var(--xiak-font-weight-semibold); }
+.categoryButton:hover { color: var(--xiak-color-text-strong); }
+.categoryButton:hover::before { background: var(--xiak-color-bg-item-hover); }
+.categoryButton:active::before { background: var(--xiak-color-bg-control-pressed); }
+.categoryButton[aria-pressed="true"] { color: var(--xiak-color-text-strong); }
+.categoryButton[aria-pressed="true"]::before { background: var(--xiak-color-accent-haze); }
+.categoryButton[aria-pressed="true"]:hover::before { background: var(--xiak-color-accent-haze-hover); }
+.categoryButton[aria-pressed="true"]:active::before { background: var(--xiak-color-accent-haze); }
+.favorite:active, .serviceLink:active { background: var(--xiak-color-bg-control-pressed); }
 .results { position: relative; min-width: 0; overflow-y: auto; overscroll-behavior: contain; padding: var(--xiak-spacing-roomy); }
 .liveProgress { position: absolute; inset: 0 0 auto; border-radius: 0; }
 .liveFailure { display: flex; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); margin-bottom: var(--xiak-spacing-comfortable); }
