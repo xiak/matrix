@@ -278,6 +278,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const sidebarPanel = useRef<HTMLDivElement>(null);
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
   const sidebarCloseButton = useRef<HTMLButtonElement>(null);
+  const [sidebarIsDrawer, setSidebarIsDrawer] = useState(false);
   const workspacePanel = useRef<HTMLElement>(null);
   const workspaceTrigger = useRef<{ focus(): void }>(null);
   const workspaceCloseButton = useRef<HTMLButtonElement>(null);
@@ -321,9 +322,8 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   useEffect(() => () => useConsoleUiStore.getState().resetSessionUi(), []);
 
   const closeSidebarAndRestoreFocus = useCallback(() => {
-    const shouldRestore = sidebarOverlayOpen;
     closeSidebar();
-    if (shouldRestore) window.setTimeout(() => sidebarTrigger.current?.focus(), 0);
+    if (sidebarOverlayOpen) sidebarTrigger.current?.focus({ preventScroll: true });
   }, [closeSidebar, sidebarOverlayOpen]);
 
   const closeWorkspaceAndRestoreFocus = useCallback(() => {
@@ -357,7 +357,19 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   }, [pendingSelection, prepareControlPlane]);
 
   useEffect(() => {
-    if (sidebarOverlayOpen) sidebarCloseButton.current?.focus();
+    const panel = sidebarPanel.current;
+    if (!panel?.parentElement || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      const isDrawer = getComputedStyle(panel).position === "fixed";
+      setSidebarIsDrawer(isDrawer);
+      if (!isDrawer && useConsoleUiStore.getState().sidebarOverlayOpen) closeSidebar();
+    });
+    observer.observe(panel.parentElement);
+    return () => observer.disconnect();
+  }, [closeSidebar]);
+
+  useEffect(() => {
+    if (sidebarOverlayOpen) sidebarCloseButton.current?.focus({ preventScroll: true });
   }, [sidebarOverlayOpen]);
 
   useEffect(() => {
@@ -544,31 +556,34 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                 aria-modal={sidebarOverlayOpen ? true : undefined}
                 className={styles.contextMenu}
                 id="console-product-navigation"
+                inert={sidebarIsDrawer && !sidebarOverlayOpen}
                 onKeyDown={handleSidebarKeyDown}
                 ref={sidebarPanel}
                 role={sidebarOverlayOpen ? "dialog" : undefined}
               >
-                <div className={styles.contextHeader}>
-                  <span className={styles.contextProductIcon}><ProductContextIcon aria-hidden="true" /></span>
-                  <strong title={productName}>{productName}</strong>
-                  <Button aria-label={t("closeNavigation")} className={styles.contextCloseButton} onClick={closeSidebarAndRestoreFocus} ref={sidebarCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
-                </div>
-                <nav aria-label={t("navigation")} className={styles.contextNavigation}>
-                  {localNavigation.map((item, index) => {
-                    const Icon = navigationIcons[item.icon];
-                    return (
-                      <Fragment key={item.id}>
-                      {item.group && item.group !== localNavigation[index - 1]?.group ? <p>{iamWorkspaceText(item.group)}</p> : null}
-                      <Link aria-current={item.selected ? "page" : undefined} aria-description={navigationText(`items.${item.messageKey}.hint`)} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} onAccepted={closeSidebarAndRestoreFocus} title={navigationText(`items.${item.messageKey}.hint`)}>
-                        <span className={styles.contextIcon}><Icon aria-hidden="true" /></span><span className={styles.contextLabel}>{navigationText(`items.${item.messageKey}.label`)}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
-                      </Link>
-                      </Fragment>
-                    );
-                  })}
-                </nav>
-                <div className={styles.contextCallout}>
-                  <CircleGauge aria-hidden="true" />
-                  <div><strong>{frame.preview ? t("previewEnvironment") : t("localDeployment")}</strong><span>{frame.preview ? t("previewDescription") : t("deploymentDescription")}</span></div>
+                <div className={styles.contextSlide}>
+                  <div className={styles.contextHeader}>
+                    <span className={styles.contextProductIcon}><ProductContextIcon aria-hidden="true" /></span>
+                    <strong title={productName}>{productName}</strong>
+                    <Button aria-label={t("closeNavigation")} className={styles.contextCloseButton} onClick={closeSidebarAndRestoreFocus} ref={sidebarCloseButton} iconOnly size="small" variant="ghost"><X aria-hidden="true" /></Button>
+                  </div>
+                  <nav aria-label={t("navigation")} className={styles.contextNavigation}>
+                    {localNavigation.map((item, index) => {
+                      const Icon = navigationIcons[item.icon];
+                      return (
+                        <Fragment key={item.id}>
+                          {item.group && item.group !== localNavigation[index - 1]?.group ? <p>{iamWorkspaceText(item.group)}</p> : null}
+                          <Link aria-current={item.selected ? "page" : undefined} aria-description={navigationText(`items.${item.messageKey}.hint`)} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} onAccepted={closeSidebarAndRestoreFocus} title={navigationText(`items.${item.messageKey}.hint`)}>
+                            <span className={styles.contextIcon}><Icon aria-hidden="true" /></span><span className={styles.contextLabel}>{navigationText(`items.${item.messageKey}.label`)}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
+                          </Link>
+                        </Fragment>
+                      );
+                    })}
+                  </nav>
+                  <div className={styles.contextCallout}>
+                    <CircleGauge aria-hidden="true" />
+                    <div><strong>{frame.preview ? t("previewEnvironment") : t("localDeployment")}</strong><span>{frame.preview ? t("previewDescription") : t("deploymentDescription")}</span></div>
+                  </div>
                 </div>
               </Sider.ContextMenu>
               <Sider.ResizeHandle />

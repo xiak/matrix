@@ -1924,8 +1924,13 @@ including 69 HTML pages and 66 normalized segment files, matching the Go embed.
 Authenticated Chrome checks at 100% browser scale resolve the root to 20px,
 header to 55px, rail to 70px, product content to 300px, rows to 40px and navigation icons
 to 20px. Controls resolve to `13.75px/20px`; inputs are 40px, tabs/options 30px,
-and radio glyphs/dots 15/5px. At 1151px the sidebar stays inline; at 1150px it
-becomes a drawer. At 360px, access-analysis tabs use two columns with 5px gaps,
+and radio glyphs/dots 15/5px. The sidebar stays inline at 1151px and becomes a
+drawer at 1150px. Its opaque panel slides from the rail edge using the same
+160ms transition as the backdrop fade. Browser frame samples at 360–1150px
+showed a stationary content area throughout opening, dismissal and an
+interrupted close. Reduced-motion mode switches immediately. Crossing back
+to the inline layout clears the open drawer state.
+At 360px, access-analysis tabs use two columns with 5px gaps,
 the document remains 360px wide, and keyboard focus reaches the last IAM item
 within the drawer's independent 10px-scrollbar region. Isolated MOCK checks
 cover the 1440px shell, a 450px right workspace and keyboard resizing to

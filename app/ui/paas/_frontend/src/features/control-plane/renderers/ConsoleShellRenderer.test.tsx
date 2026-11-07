@@ -2905,6 +2905,33 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.queryByRole("dialog", { name: "产品导航" })).toBeNull();
   });
 
+  it("keeps inline navigation usable and returns to a closed drawer after a resize", async () => {
+    let notifyResize: () => void;
+    vi.stubGlobal("ResizeObserver", class {
+      constructor(notify: () => void) { notifyResize = notify; }
+      observe() {}
+      disconnect() {}
+    });
+    const { user } = await renderConsole();
+    const trigger = await screen.findByRole("button", { name: "打开产品导航" });
+    const panel = document.getElementById(trigger.getAttribute("aria-controls")!)!;
+    function resize(position: "static" | "fixed") {
+      act(() => { panel.style.position = position; notifyResize(); });
+    }
+
+    resize("fixed");
+    expect(panel.hasAttribute("inert")).toBe(true);
+    await user.click(trigger);
+    expect(panel.hasAttribute("inert")).toBe(false);
+    resize("static");
+    expect(panel.hasAttribute("inert")).toBe(false);
+    expect(panel.hasAttribute("aria-modal")).toBe(false);
+    expect(within(panel).getAllByRole("link").length).toBeGreaterThan(0);
+    resize("fixed");
+    expect(panel.hasAttribute("inert")).toBe(true);
+    expect(trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
   it("moves focus into the workspace and returns it after Escape", async () => {
     const { user } = await renderConsole({ section: "installations" });
     const trigger = await screen.findByRole("button", { name: "安装服务" });

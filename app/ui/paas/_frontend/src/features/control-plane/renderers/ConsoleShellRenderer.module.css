@@ -107,6 +107,17 @@
   background: var(--xiak-color-bg-sider);
 }
 
+/* The slide has a box only in drawer mode. Its travel depends on the open
+   state, so crossing the layout breakpoint cannot start an exit transition. */
+.contextSlide {
+  display: contents;
+  transform: translateX(-100%);
+}
+
+.shellBase[data-sidebar-overlay-open="true"] .contextSlide {
+  transform: translateX(0);
+}
+
 .contextHeader {
   display: grid;
   min-height: var(--xiak-content-header-height);
@@ -367,26 +378,30 @@
     left: var(--xiak-layout-rail-width);
     z-index: var(--xiak-z-overlay);
     width: min(var(--xiak-layout-context-width), calc(100vw - var(--xiak-layout-rail-width)));
+    overflow: clip;
+    background: transparent;
     visibility: hidden;
-    border-right: var(--xiak-border-subtle);
-    opacity: 0;
     pointer-events: none;
-    transform: translateX(-100%);
-    transition:
-      visibility 0ms linear var(--xiak-motion-panel),
-      opacity var(--xiak-motion-fast) var(--xiak-ease-standard),
-      transform var(--xiak-motion-panel) var(--xiak-ease-standard);
+    transition: visibility 0s linear var(--xiak-motion-panel);
+  }
+
+  .contextSlide {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    border-right: var(--xiak-border-subtle);
+    background: var(--xiak-color-bg-sider);
+    transition: transform var(--xiak-motion-panel) var(--xiak-ease-standard);
   }
 
   .shellBase[data-sidebar-overlay-open="true"] .contextMenu {
     visibility: visible;
-    opacity: 1;
+    transition-delay: 0s;
+  }
+
+  .shellBase[data-sidebar-overlay-open="true"] .contextSlide {
     pointer-events: auto;
-    transform: translateX(0);
-    transition:
-      visibility 0ms,
-      opacity var(--xiak-motion-fast) var(--xiak-ease-standard),
-      transform var(--xiak-motion-panel) var(--xiak-ease-standard);
   }
 
   .contextCloseButton,
@@ -394,7 +409,7 @@
     display: grid;
   }
 
-  .shellBase[data-sidebar-overlay-open="true"] .overlayBackdrop,
+  .overlayBackdrop,
   .shellBase[data-workspace-overlay-open="true"] .workspaceBackdrop {
     position: fixed;
     inset: var(--xiak-layout-header-height) 0 0 var(--xiak-layout-rail-width);
@@ -403,6 +418,22 @@
     border: 0;
     padding: 0;
     background: var(--xiak-color-bg-overlay);
+  }
+
+  .overlayBackdrop {
+    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity var(--xiak-motion-panel) var(--xiak-ease-standard),
+      visibility 0s linear var(--xiak-motion-panel);
+  }
+
+  .shellBase[data-sidebar-overlay-open="true"] .overlayBackdrop {
+    visibility: visible;
+    opacity: 1;
+    pointer-events: auto;
+    transition-delay: 0s;
   }
 
   .workspacePane[data-visible="true"] {
@@ -438,7 +469,7 @@
     width: min(17.75rem, 88vw);
   }
 
-  .shellBase[data-sidebar-overlay-open="true"] .overlayBackdrop,
+  .overlayBackdrop,
   .shellBase[data-workspace-overlay-open="true"] .workspaceBackdrop {
     left: 0;
   }
@@ -450,7 +481,9 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .contextMenu {
+  .contextMenu,
+  .contextSlide,
+  .overlayBackdrop {
     transition: none;
   }
 }
