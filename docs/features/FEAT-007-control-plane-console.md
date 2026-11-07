@@ -1870,7 +1870,8 @@ The control-radius token also owns the header home target, account trigger,
 both account avatars, search fields/results, region choices, product-directory
 links/favorite buttons and product icon tiles. The header avatar fills its
 37.5px trigger exactly, inherits its 6.25px radius, and paints one border;
-its panel counterpart uses the same radius at 55px. Hover/expanded and pressed
+its panel counterpart uses the same radius at the standard control size
+(40px on desktop, 55px on touch). Hover/expanded and pressed
 avatar surfaces use header interaction tokens, with the shared focus outline
 and reduced-motion behavior. Tiny keycaps/code fragments keep the small-radius
 token, cards/dialogs keep the panel token, and circular step markers use the
@@ -1930,7 +1931,11 @@ accounting for its 1px divider;
 there is no separator between it and the product launcher. The 37.5px header
 avatar and its trigger share the same rectangle and 6.25px corners; at 360px
 the account popup stays within the viewport and Escape returns focus to its
-trigger. Authenticated
+trigger. For the local admin account whose tenant name equals its ID, the
+three-action popup measured 400 × 376px in Chinese and English on desktop.
+At a 360px viewport the English popup measured 340 × 426px with a fine
+pointer. On touch its 55px action and radio targets stayed reachable by
+scrolling within the popup. Authenticated
 Chrome at 1743px and 1440px resolves the overview to four 120px metric cards,
 a 160px empty state and a 300px supporting card. At 1280px the metric grid
 uses two columns, and at 360px one column, without page overflow. English
@@ -2448,11 +2453,17 @@ The interaction contract includes:
   principal identity plus a grouped account-action menu, while product-local
   navigation contains no duplicate account dock. Appearance preferences and
   account actions share the panel surface, section-label typography and
-  horizontal inset. The public `PanelSections` composition owns equal section
-  padding and full-width subtle dividers for login identity, tenant/type,
+  horizontal inset. The public `PanelSections` composition uses 10px block
+  and 15px inline padding with full-width subtle dividers for identity, tenant/type,
   theme/language, account access and logout; it inherits the enclosing surface
   instead of assigning a background to individual sections. Account access and
   logout are visually separate sections within the same keyboard menu.
+  The identity header pairs the login name and principal ID with the avatar.
+  A distinct tenant ID appears below its name. Theme and language labels
+  sit beside their choices when at least 18rem of inner width is available
+  and above them on smaller panels. Action links use the navigation row
+  height and standard icon size, with descriptions in their accessible names
+  and hover titles.
   Preferences remain labelled radio groups; actions remain menu items and
   logout retains its semantic danger treatment. The menu exposes `menu` and
   `menuitem` semantics, a separated dangerous logout action, roving arrow and
@@ -4069,8 +4080,7 @@ only selection status and command availability changed. User, Group, Policy,
 Role and AccessKey directories each rendered the shared page status, page-size
 selector and previous/next controls with one table and no horizontal overflow.
 The account menu's tenant, theme/language and account-action sections shared
-the same transparent surface, 16-pixel outer inset and separator grammar;
-account actions no longer introduce a second darker panel. These are
+the same transparent surface, inline inset and full-width separators. These are
 isolated-MOCK presentation and interaction observations only. They neither
 prove a latency service level nor replace the independent LIVE IAM and product
 runtime gates.

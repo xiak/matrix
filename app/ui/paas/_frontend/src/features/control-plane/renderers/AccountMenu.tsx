@@ -119,9 +119,8 @@ export function AccountMenu({ identity, accessHref = "/console/access/", onLogou
               <header className={styles.header}>
                 <span aria-hidden="true" className={styles.panelAvatar}>{initial}</span>
                 <div className={styles.identity}>
-                  <small>{t("signedIn")}</small>
-                  <strong>{identity.loginName}</strong>
-                  <span>{identity.principalId}</span>
+                  <strong title={identity.loginName}>{identity.loginName}</strong>
+                  <span title={identity.principalId}>{identity.principalId}</span>
                 </div>
               </header>
             </PanelSections.Section>
@@ -130,7 +129,12 @@ export function AccountMenu({ identity, accessHref = "/console/access/", onLogou
               <dl className={styles.metadata}>
                 <div>
                   <dt>{t("tenant")}</dt>
-                  <dd><strong>{identity.tenant.name}</strong>{identity.tenant.id ? <span>{identity.tenant.id}</span> : null}</dd>
+                  <dd>
+                    <strong title={identity.tenant.name}>{identity.tenant.name}</strong>
+                    {identity.tenant.id && identity.tenant.id !== identity.tenant.name ? (
+                      <span title={identity.tenant.id}>{identity.tenant.id}</span>
+                    ) : null}
+                  </dd>
                 </div>
                 <div><dt>{t("type")}</dt><dd>{identity.accountType}</dd></div>
               </dl>
@@ -138,33 +142,36 @@ export function AccountMenu({ identity, accessHref = "/console/access/", onLogou
 
             <PanelSections.Section><AppearanceControls variant="panel" /></PanelSections.Section>
             <PanelSections aria-label={t("actions")} onKeyDown={handleMenuKeyDown} role="menu">
-              <PanelSections.Section role="none">
-                <span className={styles.actionLabel}>{t("actions")}</span>
+              {accessHref || roleAccessHref ? <PanelSections.Section role="none">
                 {accessHref ? <Link
+                  aria-label={`${t("access")} ${t("accessHint")}`}
                   className={styles.menuItem}
                   href={accessHref}
                   onAccepted={() => onOpenChange(false)}
                   ref={(node) => { items.current[accessIndex] = node; }}
                   role="menuitem"
                   tabIndex={activeItem === accessIndex ? 0 : -1}
+                  title={t("accessHint")}
                 >
-                  <span aria-hidden="true" className={styles.menuIcon}><ShieldCheck /></span>
-                  <span className={styles.menuCopy}><strong>{t("access")}</strong><small>{t("accessHint")}</small></span>
+                  <ShieldCheck aria-hidden="true" className={styles.menuIcon} />
+                  <span>{t("access")}</span>
                   <ChevronRight aria-hidden="true" className={styles.chevron} />
                 </Link> : null}
                 {roleAccessHref ? <Link
+                  aria-label={`${t("roleAccess")} ${t("roleAccessHint")}`}
                   className={styles.menuItem}
                   href={roleAccessHref}
                   onAccepted={() => onOpenChange(false)}
                   ref={(node) => { items.current[roleIndex] = node; }}
                   role="menuitem"
                   tabIndex={activeItem === roleIndex ? 0 : -1}
+                  title={t("roleAccessHint")}
                 >
-                  <span aria-hidden="true" className={styles.menuIcon}><Repeat2 /></span>
-                  <span className={styles.menuCopy}><strong>{t("roleAccess")}</strong><small>{t("roleAccessHint")}</small></span>
+                  <Repeat2 aria-hidden="true" className={styles.menuIcon} />
+                  <span>{t("roleAccess")}</span>
                   <ChevronRight aria-hidden="true" className={styles.chevron} />
                 </Link> : null}
-              </PanelSections.Section>
+              </PanelSections.Section> : null}
               <PanelSections.Section role="none">
                 <button
                   aria-label={t(roleSessionActive ? "exitRoleLabel" : "logoutLabel")}
@@ -174,11 +181,11 @@ export function AccountMenu({ identity, accessHref = "/console/access/", onLogou
                   ref={(node) => { items.current[logoutIndex] = node; }}
                   role="menuitem"
                   tabIndex={activeItem === logoutIndex ? 0 : -1}
+                  title={t(roleSessionActive ? "exitRoleHint" : "logoutHint")}
                   type="button"
                 >
-                  <span aria-hidden="true" className={styles.menuIcon}><LogOut /></span>
-                  <span className={styles.menuCopy}><strong>{t(roleSessionActive ? revoking ? "exitingRole" : "exitRole" : revoking ? "loggingOut" : "logout")}</strong><small>{t(roleSessionActive ? "exitRoleHint" : "logoutHint")}</small></span>
-                  <span aria-hidden="true" className={styles.chevronSpace} />
+                  <LogOut aria-hidden="true" className={styles.menuIcon} />
+                  <span>{t(roleSessionActive ? revoking ? "exitingRole" : "exitRole" : revoking ? "loggingOut" : "logout")}</span>
                 </button>
               </PanelSections.Section>
             </PanelSections>

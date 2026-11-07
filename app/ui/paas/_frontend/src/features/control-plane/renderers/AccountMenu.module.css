@@ -1,5 +1,6 @@
 .root {
   position: relative;
+  --xiak-account-label-width: 4.75rem;
 }
 
 .trigger {
@@ -51,33 +52,28 @@
   display: grid;
   min-width: 0;
   grid-template-columns: auto minmax(0, 1fr);
-  gap: var(--xiak-spacing-default);
+  gap: var(--xiak-spacing-tight);
   align-items: center;
 }
 
 .panelAvatar {
-  width: 2.75rem;
-  height: 2.75rem;
-  font-size: var(--xiak-font-size-subtitle);
-}
-
-.identity,
-.identity > span,
-.identity > strong {
-  min-width: 0;
+  width: var(--xiak-control-height);
+  height: var(--xiak-control-height);
+  font-size: var(--xiak-font-size-small);
 }
 
 .identity {
   display: grid;
+  min-width: 0;
   gap: var(--xiak-spacing-micro);
-  line-height: 1.6;
+  line-height: var(--xiak-line-height-control);
 }
 
-.identity small,
 .identity span {
   overflow: hidden;
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
+  line-height: var(--xiak-line-height-caption);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -85,21 +81,25 @@
 .identity strong {
   overflow: hidden;
   color: var(--xiak-color-text-strong);
+  font-size: var(--xiak-font-size-small);
+  font-weight: var(--xiak-font-weight-semibold);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .metadata {
   display: grid;
-  gap: var(--xiak-spacing-default);
+  gap: var(--xiak-spacing-narrow);
   margin: 0;
+  font-size: var(--xiak-font-size-control);
+  line-height: var(--xiak-line-height-control);
 }
 
 .metadata > div {
   display: grid;
   min-width: 0;
-  grid-template-columns: 4.5rem minmax(0, 1fr);
-  gap: var(--xiak-spacing-default);
+  grid-template-columns: min(var(--xiak-account-label-width), 38%) minmax(0, 1fr);
+  gap: var(--xiak-spacing-compact);
   align-items: start;
 }
 
@@ -110,15 +110,13 @@
 
 .metadata dt {
   color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
 }
 
 .metadata dd {
   display: grid;
   min-width: 0;
-  gap: var(--xiak-spacing-micro);
   color: var(--xiak-color-text-base);
-  font-size: var(--xiak-font-size-small);
+  overflow-wrap: anywhere;
 }
 
 .metadata dd strong,
@@ -131,91 +129,60 @@
 .metadata dd span {
   color: var(--xiak-color-text-subtle);
   font-size: var(--xiak-font-size-caption);
+  line-height: var(--xiak-line-height-caption);
 }
 
-.actionLabel {
-  display: block;
-  margin-bottom: var(--xiak-spacing-tight);
-  color: var(--xiak-color-text-muted);
-  font-size: var(--xiak-font-size-small);
-  font-weight: var(--xiak-font-weight-regular);
+.metadata dd strong {
+  font-weight: var(--xiak-font-weight-medium);
 }
 
 .menuItem {
   display: grid;
   width: calc(100% + 2 * var(--xiak-spacing-tight));
-  min-height: var(--xiak-control-height-large);
+  min-height: var(--xiak-navigation-item-height);
   margin-inline: calc(-1 * var(--xiak-spacing-tight));
-  grid-template-columns: 2rem minmax(0, 1fr) 1rem;
-  gap: var(--xiak-spacing-default);
+  grid-template-columns: var(--xiak-icon-size) minmax(0, 1fr) auto;
+  gap: var(--xiak-spacing-tight);
   align-items: center;
-  border: var(--xiak-border-transparent);
+  border: 0;
   border-radius: var(--xiak-radius-control);
   padding: var(--xiak-spacing-narrow) var(--xiak-spacing-tight);
   background: transparent;
   color: var(--xiak-color-text-base);
   cursor: pointer;
   font: inherit;
+  font-size: var(--xiak-font-size-control);
+  font-weight: var(--xiak-font-weight-regular);
+  line-height: var(--xiak-line-height-control);
+  overflow-wrap: anywhere;
   outline: none;
-  text-align: left;
+  text-align: start;
 }
 
-.menuItem:hover,
+.menuItem:hover:not(:disabled),
 .menuItem:focus-visible {
-  border-color: var(--xiak-color-border-subtle);
   background: var(--xiak-color-bg-panel-hover);
 }
 
+.menuItem:active:not(:disabled) {
+  background: var(--xiak-color-bg-control-pressed);
+}
+
 .menuItem:focus-visible {
-  box-shadow: var(--xiak-shadow-focus);
+  outline: 0.125rem solid var(--xiak-color-border-focus);
+  outline-offset: -0.125rem;
 }
 
 .menuIcon {
-  display: grid;
-  width: 2rem;
-  height: 2rem;
-  place-items: center;
-  border-radius: var(--xiak-radius-control);
-  background: var(--xiak-color-accent-haze);
-  color: var(--xiak-color-accent-text);
-}
-
-.menuIcon svg {
-  width: 1.0625rem;
-  height: 1.0625rem;
-}
-
-.menuCopy {
-  display: grid;
-  min-width: 0;
-  gap: var(--xiak-spacing-narrow);
-}
-
-.menuCopy strong,
-.menuCopy small {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.menuCopy strong {
-  color: inherit;
-  font-size: var(--xiak-font-size-small);
-  font-weight: var(--xiak-font-weight-semibold);
-}
-
-.menuCopy small {
+  width: var(--xiak-icon-size);
+  height: var(--xiak-icon-size);
   color: var(--xiak-color-text-subtle);
-  font-size: var(--xiak-font-size-caption);
-}
-
-.chevron,
-.chevronSpace {
-  width: 1rem;
-  height: 1rem;
+  stroke-width: 1.75;
 }
 
 .chevron {
+  width: var(--xiak-control-chevron-size);
+  height: var(--xiak-control-chevron-size);
   color: var(--xiak-color-text-subtle);
 }
 
@@ -224,13 +191,11 @@
 }
 
 .dangerItem .menuIcon {
-  background: var(--xiak-color-status-danger-bg);
-  color: var(--xiak-color-status-danger);
+  color: inherit;
 }
 
-.dangerItem:hover,
+.dangerItem:hover:not(:disabled),
 .dangerItem:focus-visible {
-  border-color: var(--xiak-color-status-danger-bg);
   background: var(--xiak-color-status-danger-bg);
 }
 

@@ -1,3 +1,20 @@
 .controls { display: flex; align-items: center; gap: var(--xiak-spacing-narrow); }
 @media (max-width: 37.5em) { .themeLabel { display: none; } }
-.panel { display: grid; gap: var(--xiak-spacing-comfortable); }
+.panel {
+  container: appearance-options / inline-size;
+  display: grid;
+  gap: var(--xiak-spacing-narrow);
+}
+
+.panel fieldset > div { column-gap: var(--xiak-spacing-compact); }
+.panel legend { font-weight: var(--xiak-font-weight-regular); }
+
+@container appearance-options (min-width: 18rem) {
+  .panel legend {
+    float: inline-start;
+    width: var(--xiak-account-label-width, 4.75rem);
+    margin: 0;
+    margin-inline-end: var(--xiak-spacing-compact);
+    padding-block: calc((var(--xiak-choice-row-height) - var(--xiak-line-height-control)) / 2);
+  }
+}
