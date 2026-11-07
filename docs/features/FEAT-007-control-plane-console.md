@@ -1828,7 +1828,7 @@ is involved. The following are the resulting CSS dimensions under that default:
 | Login brand | Up to `600px` at the approved `1020:172` aspect ratio; compact header below `950px` | One visible brand placement per viewport |
 | Login composition | `1500px` maximum split layout; `50px` fields and submit (`55px` touch); `550px` maximum compact form | Focused sign-in with visible labels and a separate MOCK entry |
 | Favorite-service rail | `70px` wide; `40px` targets | Service shortcuts with independent overflow scrolling |
-| Service directory | Full viewport below the `55px` header; `280px` category pane; `50px` search and close targets | Grouped discovery adapts to available space |
+| Service directory | Full viewport below the global header, with a `55px` toolbar, `40px` search/close controls and `50px` minimum two-line product entries | Search aligns with the result headings and each entry keeps its description and favorite action |
 | Product context navigation | `300px` content plus `1px` divider; `40px` single-line rows (`55px` touch) | Labels and actionable counts; descriptions remain hover and assistive-text hints |
 | Page context bar | `55px` minimum, aligned with the product-navigation heading; `16.25px` title; `40px` compact action-menu target | One persistent page/object title with parent navigation and actions; the two desktop header bands total `110px` |
 | Primary controls | `30px` small, `40px` default, `50px` large; touch `45/55/55px` | Consistent density across buttons, inputs and menus |
@@ -2423,7 +2423,13 @@ The interaction contract includes:
   search shortcuts do not dismiss it. Background workspace and other header
   controls are inert while it is open; Tab stays within the dialog. The Header
   trigger stays pointer-operable and names its current open/close action.
-  Categories and service results support arrow navigation;
+  The category pane is 240px wide, reduces to 200px at a directory width of
+  1000px, and becomes a horizontal strip at 775px. The results pane uses
+  the shared 15px panel inset. Its available inner width determines the
+  number of columns, with two from 580px and three from 880px. A single
+  matching category uses those columns for its products. Descriptions wrap
+  on narrow screens, and touch controls have 55px targets. Categories and
+  service results support arrow navigation.
   IME confirmation does not accidentally activate a result. Name, subgroup and
   bilingual capability aliases share normalized, case-insensitive keyword
   matching across categories. Clear and no-match reset have explicit controls;

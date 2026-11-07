@@ -97,11 +97,13 @@ describe("ProductLauncher", () => {
   });
 
   it("keeps only integrated platform workspaces when the managed-product directory is empty", async () => {
-    await openDirectory({ preview: false, readServiceDefinitions: vi.fn().mockResolvedValue(liveDirectory([])) });
+    const { user } = await openDirectory({ preview: false, readServiceDefinitions: vi.fn().mockResolvedValue(liveDirectory([])) });
     expect(await screen.findByRole("link", { name: /应用托管/ })).toBeTruthy();
     expect(screen.getByRole("status").textContent).toBe("3 项服务");
     expect(within(screen.getByRole("dialog")).queryAllByRole("link")).toHaveLength(3);
     expect(screen.queryByRole("link", { name: /DevOps|云监控|日志服务|区域与节点/ })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /^数据库/ }));
+    expect(screen.getByRole("heading", { name: "暂无可用服务" })).toBeTruthy();
   });
 
   it("navigates to a platform workspace before the managed-product read settles", async () => {

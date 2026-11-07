@@ -54,7 +54,7 @@ function ServiceEntry({ service, query = "", onNavigate, onRemoveFavorite }: { s
   const toggleFavorite = useConsoleUiStore((state) => state.toggleFavoriteService);
   const visitService = useConsoleUiStore((state) => state.visitService);
   return <li className={styles.service}>
-    <Link className={styles.serviceLink} data-service-link="true" href={service.href} onAccepted={() => { onNavigate?.(); visitService(service.id); }}>
+    <Link className={styles.serviceLink} data-service-link="true" href={service.href} title={service.description} onAccepted={() => { onNavigate?.(); visitService(service.id); }}>
       <span className={styles.serviceName}><span><MatchText query={query} text={service.label} /></span><ArrowUpRight aria-hidden="true" /></span>
       <span className={styles.serviceDescription}><MatchText query={query} text={service.description} /></span>
     </Link>
@@ -151,26 +151,28 @@ export function ServiceDirectory({ onClose, onNavigate, preview = true, readServ
     links[next]?.focus();
   }
 
-  const emptyTitle = searching ? "noResults" : view === "favorites" ? "noFavorites" : "noRecent";
-  const emptyHint = searching ? "noResultsHint" : view === "favorites" ? "noFavoritesHint" : "noRecentHint";
+  const emptyTitle = searching ? "noResults"
+    : view === "favorites" ? "noFavorites"
+    : view === "recent" ? "noRecent"
+    : "noServices";
   return <div className={styles.directory}>
     <header className={styles.toolbar}>
       <div className={styles.identity}><Grid2X2 aria-hidden="true" /><strong>{t("title")}</strong></div>
       <div className={styles.searchField}>
-        <SearchInput clearAction={query ? { label: t("clear"), onClear: () => setQuery("") } : undefined} controlSize="large" aria-controls={resultId} aria-label={t("search")} autoComplete="off" onChange={(event) => { setQuery(event.target.value); if (results.current) results.current.scrollTop = 0; }} onKeyDown={(event) => {
+        <SearchInput clearAction={query ? { label: t("clear"), onClear: () => setQuery("") } : undefined} aria-controls={resultId} aria-label={t("search")} autoComplete="off" onChange={(event) => { setQuery(event.target.value); if (results.current) results.current.scrollTop = 0; }} onKeyDown={(event) => {
           if (event.nativeEvent.isComposing) return;
           const first = results.current?.querySelector<HTMLAnchorElement>("[data-service-link]");
           if (event.key === "ArrowDown") { event.preventDefault(); first?.focus(); }
           if (event.key === "Enter" && searching) { event.preventDefault(); first?.click(); }
         }} placeholder={t("placeholder")} ref={search} type="search" value={query} />
       </div>
-      <Button aria-label={t("close")} className={styles.close} iconOnly onClick={onClose} size="large" variant="ghost"><X aria-hidden="true" /></Button>
+      <Button aria-label={t("close")} className={styles.close} iconOnly onClick={onClose} variant="ghost"><X aria-hidden="true" /></Button>
     </header>
     <div className={styles.workspace}>
       <nav aria-label={t("categoriesLabel")} className={styles.navigation} onKeyDown={navigateCategories} ref={navigation}>
         {views.map(({ id, label, icon: Icon, count }, index) => <div key={id}>
           {index === 3 ? <p className={styles.navigationLabel}>{t("categoriesLabel")}</p> : null}
-          <button aria-controls={resultId} aria-pressed={selectedView === id} className={styles.categoryButton} onClick={() => changeView(id as DirectoryView)} tabIndex={selectedView === id ? 0 : -1} type="button"><Icon aria-hidden="true" /><span>{label}</span><small>{count}</small></button>
+          <button aria-controls={resultId} aria-pressed={selectedView === id} className={styles.categoryButton} onClick={() => changeView(id as DirectoryView)} tabIndex={selectedView === id ? 0 : -1} title={label} type="button"><Icon aria-hidden="true" /><span>{label}</span><small>{count}</small></button>
         </div>)}
       </nav>
       <div className={styles.results} id={resultId} onKeyDown={navigateResults} ref={results}>
@@ -178,7 +180,7 @@ export function ServiceDirectory({ onClose, onNavigate, preview = true, readServ
         <div className={styles.resultHeading}><div><h2>{searching ? t("searchTitle") : views.find((item) => item.id === view)?.label}</h2><p>{searching ? t("searchScope") : t(preview ? "browseHint" : "live.browseHint")}</p></div><span aria-live="polite" role="status">{t("count", { count: visible.length + unsupportedVisible.length })}</span></div>
         {managedDirectoryFailed ? <Alert className={styles.liveFailure} status="warning"><div><strong>{t(`live.${liveFailure}Title`)}</strong><span>{t(`live.${liveFailure}Hint`)}</span></div><Button onClick={live.retry} size="small" variant="secondary">{t("live.retry")}</Button></Alert> : null}
         {!visible.length && !unsupportedVisible.length ? managedDirectoryPending ? <p className={styles.loadingHint} role="status">{t("live.loading")}</p>
-          : <EmptyState title={t(!preview && !searching && view === "all" ? "live.emptyTitle" : emptyTitle)} description={t(!preview && !searching && view === "all" ? "live.emptyHint" : emptyHint)} icon={<PackageSearch />} action={<Button onClick={() => { changeView("all"); search.current?.focus(); }} variant="secondary">{t("reset")}</Button>} />
+          : <EmptyState compact title={t(emptyTitle)} description={t(`${emptyTitle}Hint`)} icon={<PackageSearch />} action={<Button onClick={() => { changeView("all"); search.current?.focus(); }} variant="secondary">{t("reset")}</Button>} />
           : !searching && (view === "favorites" || view === "recent") ? <ul className={styles.savedServices}>{visible.map((service) => <ServiceEntry key={service.id} onNavigate={onNavigate} onRemoveFavorite={view === "favorites" ? () => search.current?.focus() : undefined} service={service} />)}</ul>
             : <div className={styles.groups}>{serviceCategories.map((category) => {
               const entries = visible.filter((service) => service.category === category);
