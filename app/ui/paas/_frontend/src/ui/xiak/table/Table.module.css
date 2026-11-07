@@ -12,7 +12,7 @@
   border-end-end-radius: var(--xiak-radius-panel);
 }
 .viewport:focus-visible { outline: 0.125rem solid var(--xiak-color-border-focus); outline-offset: -0.125rem; }
-.table { width: 100%; min-width: var(--xiak-table-min-width); border-collapse: separate; border-spacing: 0; text-align: start; font-size: var(--xiak-font-size-body); }
+.table { width: 100%; min-width: var(--xiak-table-min-width); border-collapse: separate; border-spacing: 0; text-align: start; font-size: var(--xiak-font-size-small); }
 .table th, .table td {
   height: var(--xiak-table-row-height);
   min-width: var(--xiak-table-cell-min-width);
@@ -21,16 +21,40 @@
   color: var(--xiak-color-text-base);
   text-align: start;
   vertical-align: middle;
-  line-height: var(--xiak-line-height-body);
+  line-height: var(--xiak-line-height-control);
   overflow-wrap: anywhere;
 }
-.table th { height: var(--xiak-table-header-height); padding-block: var(--xiak-spacing-tight); background: var(--xiak-color-bg-panel-hover); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); font-weight: var(--xiak-font-weight-medium); white-space: normal; }
+.table:where([data-mobile-layout="stack"], [data-mobile-layout="grid"]),
+.table:where([data-mobile-layout="stack"], [data-mobile-layout="grid"]) :is(th, td) { min-width: 0; }
+.table th { height: var(--xiak-table-header-height); background: var(--xiak-color-bg-panel-hover); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); font-weight: var(--xiak-font-weight-medium); white-space: normal; }
 .table thead th { position: sticky; top: 0; z-index: 1; }
 .table tbody tr:hover, .table tbody tr:focus-within { background: var(--xiak-color-bg-panel-hover); }
 .table tbody tr:last-child td { border-bottom: 0; }
 .table td strong { display: block; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
-.table td small { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.table td small { display: block; margin-top: var(--xiak-spacing-micro); color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); line-height: var(--xiak-line-height-caption); }
 .table td code { white-space: nowrap; }
+.table:where([data-mobile-layout="stack"], [data-mobile-layout="grid"]) td code { white-space: normal; }
+.table td .shortIdentifier, .identifier > code { font-size: var(--xiak-font-size-caption); white-space: normal; overflow-wrap: anywhere; }
+.identifier summary {
+  display: flex;
+  width: fit-content;
+  max-width: 100%;
+  align-items: center;
+  gap: var(--xiak-spacing-micro);
+  min-height: var(--xiak-control-height-small);
+  border-radius: var(--xiak-radius-small);
+  color: var(--xiak-color-text-muted);
+  cursor: pointer;
+  list-style: none;
+}
+.identifier summary::-webkit-details-marker { display: none; }
+.identifier summary:hover { color: var(--xiak-color-text-strong); background: var(--xiak-color-bg-panel-hover); }
+.identifier summary:focus-visible { outline: 0.125rem solid var(--xiak-color-border-focus); }
+.identifier summary svg { flex: none; width: 0.625rem; height: 0.625rem; }
+.identifier[open] summary svg { transform: rotate(90deg); }
+.identifier summary code { display: flex; min-width: 0; font-size: var(--xiak-font-size-caption); white-space: nowrap; }
+.identifier summary span { overflow: hidden; }
+.table .identifier > code { display: block; margin-block: var(--xiak-spacing-micro); white-space: normal; user-select: all; }
 .primaryAction {
   display: inline-flex;
   align-items: center;
@@ -66,19 +90,22 @@
 .footer {
   display: grid;
   width: 100%;
-  gap: var(--xiak-spacing-tight);
-  padding: var(--xiak-spacing-default) var(--xiak-panel-padding);
+  gap: var(--xiak-spacing-narrow);
+  padding: var(--xiak-spacing-tight) var(--xiak-panel-padding);
   border-top: var(--xiak-border-subtle);
   background: var(--xiak-color-bg-panel);
 }
 .footerMain { display: flex; width: 100%; min-width: 0; align-items: center; gap: var(--xiak-spacing-tight); }
-.footerNote { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); overflow-wrap: anywhere; }
+.footerNote { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); line-height: var(--xiak-line-height-control); overflow-wrap: anywhere; }
 .pagination { display: flex; width: 100%; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); font-size: var(--xiak-font-size-small); color: var(--xiak-color-text-muted); }
 .paginationControls { display: flex; align-items: center; gap: var(--xiak-spacing-tight); }
 .pageSize { width: 4.75rem; }
 .pageSummary { font-variant-numeric: tabular-nums; }
 @media (max-width: 59.375em) { .actions { display: contents; } }
 @media (pointer: coarse) { .selectionCell > label { min-height: var(--xiak-control-height); } .paginationControls button { min-height: var(--xiak-control-height); min-width: var(--xiak-control-height); } }
+@container xiak-table (35rem < width <= 50rem) {
+  .table:is([data-mobile-layout="stack"], [data-mobile-layout="grid"]) { --xiak-table-cell-padding-inline: var(--xiak-spacing-tight); }
+}
 @container xiak-table (max-width: 35rem) {
   .table:is([data-mobile-layout="stack"], [data-mobile-layout="grid"]),
   .table:is([data-mobile-layout="stack"], [data-mobile-layout="grid"]) tbody {
@@ -154,16 +181,17 @@
     min-width: 0;
     height: auto;
     border: 0;
-    padding: var(--xiak-spacing-tight) var(--xiak-spacing-default);
+    padding: var(--xiak-table-cell-padding-block) var(--xiak-table-cell-padding-inline);
     vertical-align: top;
   }
 
   .table:is([data-mobile-layout="stack"], [data-mobile-layout="grid"]) td[data-label]::before {
     content: attr(data-label);
     display: block;
-    margin-bottom: var(--xiak-spacing-narrow);
+    margin-bottom: var(--xiak-spacing-micro);
     color: var(--xiak-color-text-muted);
-    font-size: var(--xiak-font-size-small);
+    font-size: var(--xiak-font-size-caption);
+    line-height: var(--xiak-line-height-caption);
     font-weight: var(--xiak-font-weight-medium);
   }
 

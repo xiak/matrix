@@ -36,5 +36,31 @@
 .body {
   padding: var(--xiak-panel-padding);
 }
+
+.facts {
+  container: xiak-card-facts / inline-size;
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  font-size: var(--xiak-font-size-small);
+  line-height: var(--xiak-line-height-control);
+}
+.facts > div {
+  display: grid;
+  grid-template-columns: min(36%, 8rem) minmax(0, 1fr);
+  align-content: center;
+  align-items: baseline;
+  gap: var(--xiak-spacing-micro) var(--xiak-spacing-tight);
+  min-height: 1.75rem;
+  padding-block: var(--xiak-spacing-narrow);
+}
+.facts > div + div { border-block-start: var(--xiak-border-subtle); }
+.facts dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); overflow-wrap: anywhere; }
+.facts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+.facts dd code { font-size: var(--xiak-font-size-caption); white-space: normal; }
+.facts dd small { display: block; margin-top: var(--xiak-spacing-micro); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); }
+@container xiak-card-facts (max-width: 13.5rem) {
+  .facts > div { grid-template-columns: minmax(0, 1fr); }
+}
 .header > div { min-width: 0; }
 }

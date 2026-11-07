@@ -290,7 +290,7 @@ function ServiceRoleSessionDirectoryPreview({ accountId }: { accountId: string }
         <div className={styles.stateBadges}><Badge status="warning">MOCK</Badge><Badge status={selected.lifecycle === "EXPIRED" ? "neutral" : "info"}>{t(`observation.session.states.${selected.lifecycle}`)}</Badge></div>
       </div>
       <Alert status="warning">{t(reviewing ? "observation.session.revokeBoundary" : `observation.session.detailBoundaries.${selected.lifecycle}`)}</Alert>
-      <dl className={styles.compactFacts}>
+      <Card.Facts>
         <div><dt>{t("observation.session.fields.id")}</dt><dd><code>{selected.id}</code></dd></div>
         <div><dt>{t("observation.session.fields.account")}</dt><dd><code>{selected.accountId}</code></dd></div>
         <div><dt>{t("observation.session.fields.sourceIdentity")}</dt><dd><Badge status="info">{selected.source.type}</Badge><code>{selected.source.principalId}</code><small><code>{selected.source.installationId}</code> · {selected.source.purpose}</small></dd></div>
@@ -300,7 +300,7 @@ function ServiceRoleSessionDirectoryPreview({ accountId }: { accountId: string }
         {selected.revokedAt ? <div><dt>{t("observation.session.fields.revokedAt")}</dt><dd><WorkspaceTime value={selected.revokedAt} /></dd></div> : null}
         <div><dt>{t("observation.session.fields.state")}</dt><dd>{t(`observation.session.states.${selected.lifecycle}`)}</dd></div>
         <div><dt>{t("observation.session.fields.revokeCapability")}</dt><dd><Badge status={selected.revokeCapability.available ? "info" : "neutral"}>{t(selected.revokeCapability.available ? "observation.session.capabilities.available" : "observation.session.capabilities.unavailable")}</Badge><small><code>{selected.revokeCapability.action}</code></small></dd></div>
-      </dl>
+      </Card.Facts>
       {reviewing ? <>
         <div className={styles.snapshot}><div><strong>{t("observation.session.revokeEffectTitle")}</strong><span>{t("observation.session.revokeEffectHint")}</span></div><ul><li>{t("observation.session.revokeEffectSession")}</li><li>{t("observation.session.revokeEffectNoGrant")}</li><li>{t("observation.session.revokeEffectNoProof")}</li></ul></div>
         <div className={styles.actions}><Button disabled title={t("observation.session.revokeUnavailable")} variant="danger">{t("observation.session.revokeUnavailable")}</Button></div>
@@ -388,7 +388,7 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
         <div className={styles.observationGrid}>
           <Card>
             <Card.Header className={styles.observationHeading}><div><span>{t("observation.template.eyebrow")}</span><h4>{t("observation.template.title")}</h4></div><Badge status="success">{t("states.active")}</Badge></Card.Header>
-            <Card.Body className={styles.cardBody}><dl className={styles.compactFacts}>
+            <Card.Body className={styles.cardBody}><Card.Facts>
               <div><dt>{t("fields.templateId")}</dt><dd><code>{previewTemplate.id}</code></dd></div>
               <div><dt>{t("fields.templateRevision")}</dt><dd>v{previewTemplate.version}</dd></div>
               <div><dt>{t("fields.contentDigest")}</dt><dd><code>{previewTemplate.contentDigest}</code></dd></div>
@@ -397,11 +397,11 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
               <div><dt>{t("fields.bindAction")}</dt><dd><code>{previewTemplate.workload.bindAction}</code></dd></div>
               <div><dt>{t("fields.unbindAction")}</dt><dd><code>{previewTemplate.workload.unbindAction}</code></dd></div>
               <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
-            </dl></Card.Body>
+            </Card.Facts></Card.Body>
           </Card>
           <Card>
             <Card.Header className={styles.observationHeading}><div><span>{t("observation.relation.eyebrow")}</span><h4>{t("observation.relation.title")}</h4></div><Badge status="success">{previewAccountAccess.roleStatus}</Badge></Card.Header>
-            <Card.Body className={styles.cardBody}><dl className={styles.compactFacts}>
+            <Card.Body className={styles.cardBody}><Card.Facts>
               <div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div>
               <div><dt>{t("fields.roleId")}</dt><dd><code>{previewAccountAccess.roleId}</code></dd></div>
               <div><dt>{t("fields.roleManagement")}</dt><dd><code>{previewAccountAccess.roleManagement}</code></dd></div>
@@ -415,7 +415,7 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
               <div><dt>{t("fields.contentDigest")}</dt><dd><code>{previewTemplate.contentDigest}</code></dd></div>
               <div><dt>{t("fields.permissionCeiling")}</dt><dd><code>{previewTemplate.policyId}@{previewTemplate.policyVersionId}</code></dd></div>
               <div><dt>{t("fields.permissionCeilingDigest")}</dt><dd><code>{previewTemplate.policyContentDigest}</code></dd></div>
-            </dl></Card.Body>
+            </Card.Facts></Card.Body>
           </Card>
         </div>
         <Alert status="warning">{t("observation.roleIsNotBinding")}</Alert>
@@ -450,11 +450,11 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
             <Badge status="neutral">{t("observation.session.notIssued")}</Badge>
           </Card.Header>
           <Card.Body className={styles.cardBody}>
-            <dl className={styles.compactFacts}>
+            <Card.Facts>
               <div><dt>{t("observation.session.identityType")}</dt><dd><code>ServiceRoleSession</code></dd></div>
               <div><dt>{t("observation.session.source")}</dt><dd><code>SERVICE_ACCOUNT</code></dd></div>
               <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
-            </dl>
+            </Card.Facts>
             <Alert status="info">{t("observation.session.boundary")}</Alert>
             <ServiceRoleRuntimeTrace />
           </Card.Body>

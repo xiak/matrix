@@ -42,20 +42,12 @@
 }
 
 .table {
-  min-width: 51.25rem;
+  table-layout: fixed;
 }
 
-@container xiak-table (max-width: 35rem) {
-  .table[data-mobile-layout="grid"] {
-    min-width: 0;
-  }
-}
-
-.identifier {
-  color: var(--xiak-color-text-strong);
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
+.table th:first-child { width: 22%; }
+.table th:last-child { width: 23%; }
+.status { justify-items: start; }
 
 .status span:last-child:not(:first-child),
 .confirmation > span,
@@ -68,7 +60,7 @@
 
 .confirmation {
   display: grid;
-  min-width: 13.75rem;
+  min-width: 0;
   gap: var(--xiak-spacing-tight);
 }
 

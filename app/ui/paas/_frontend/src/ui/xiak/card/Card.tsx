@@ -14,8 +14,12 @@ function Body({ className, ...props }: ComponentPropsWithoutRef<"div">) {
   return <div className={classNames(styles.body, className)} {...props} />;
 }
 
+function Facts({ className, ...props }: ComponentPropsWithoutRef<"dl">) {
+  return <dl className={classNames(styles.facts, className)} {...props} />;
+}
+
 function Footer({ className, ...props }: ComponentPropsWithoutRef<"footer">) {
   return <footer className={classNames(styles.footer, className)} {...props} />;
 }
 
-export const Card = Object.assign(CardRoot, { Header, Body, Footer });
+export const Card = Object.assign(CardRoot, { Header, Body, Facts, Footer });

@@ -222,11 +222,11 @@
   --xiak-control-height-large: 2.5rem;
   --xiak-progress-height: 0.375rem;
   --xiak-badge-height: 1.25rem;
-  --xiak-table-row-height: 2.75rem;
-  --xiak-table-header-height: 2.25rem;
+  --xiak-table-row-height: 2.25rem;
+  --xiak-table-header-height: 2rem;
   --xiak-table-min-width: 40rem;
   --xiak-table-cell-min-width: 9rem;
-  --xiak-table-cell-padding-block: var(--xiak-spacing-tight);
+  --xiak-table-cell-padding-block: var(--xiak-spacing-narrow);
   --xiak-table-cell-padding-inline: var(--xiak-spacing-default);
   --xiak-table-selection-width: 2.75rem;
   --xiak-dialog-width: 37.5rem;
@@ -373,6 +373,8 @@
 /* Touch layouts keep the same hierarchy with larger physical targets. */
 @media (pointer: coarse) {
   :root {
+    --xiak-table-row-height: 2.75rem;
+    --xiak-table-header-height: 2.25rem;
     --xiak-control-height-small: 2.25rem;
     --xiak-control-height: 2.75rem;
     --xiak-control-height-large: 2.75rem;

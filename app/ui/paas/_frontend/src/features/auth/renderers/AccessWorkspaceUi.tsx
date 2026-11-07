@@ -11,10 +11,13 @@ import styles from "./AccountAccessRenderer.module.css";
 
 const noop = () => {};
 
-export function WorkspaceTime({ value }: { value: string | null }) {
+export function WorkspaceTime({ value, compact = false }: { value: string | null; compact?: boolean }) {
   const format = useFormatter();
   const t = useTranslations("IamWorkspace");
-  return value ? <time dateTime={value} title={value}>{format.dateTime(new Date(value), { dateStyle: "medium", timeStyle: "short" })}</time> : <span>{t("neverUsed")}</span>;
+  if (!value) return <span>{t("neverUsed")}</span>;
+  return <time dateTime={value} title={value}>{format.dateTime(new Date(value), compact
+    ? { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }
+    : { dateStyle: "medium", timeStyle: "short" })}</time>;
 }
 
 export function AuthorizationOverview({ title, hint, items }: {

@@ -17,11 +17,22 @@
 }
 
 .badge[data-status]::before {
+  flex: none;
   width: var(--xiak-status-dot-size);
   height: var(--xiak-status-dot-size);
   border-radius: var(--xiak-radius-pill);
   background: currentColor;
   content: "";
+}
+
+@container xiak-table (max-width: 56rem) {
+  .badge {
+    max-width: 100%;
+    padding: var(--xiak-spacing-micro) var(--xiak-spacing-narrow);
+    font-size: var(--xiak-font-size-caption);
+    line-height: var(--xiak-line-height-caption);
+    white-space: normal;
+  }
 }
 
 .neutral {

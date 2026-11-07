@@ -1832,8 +1832,9 @@ is involved. The following are the resulting CSS dimensions under that default:
 | Product context navigation | `300px` content plus `1px` divider; `40px` single-line rows (`55px` touch) | Labels and actionable counts; descriptions remain hover and assistive-text hints |
 | Page context bar | `55px` minimum, aligned with the product-navigation heading; `16.25px` title; `40px` compact action-menu target | One persistent page/object title with parent navigation and actions; the two desktop header bands total `110px` |
 | Primary controls | `30px` small, `40px` default, `50px` large; touch `45/55/55px` | Consistent density across buttons, inputs and menus |
-| Status badge | `25px` high | Comparable state language without changing row geometry |
-| Resource table | `45px` header; `55px` minimum row; `10 × 15px` cell padding; `180px` minimum cell width | Rich rows may grow; a labelled region owns horizontal scrolling below its `800px` or content-driven minimum |
+| Status badge | `25px` minimum height | Labels can wrap within narrow table cells |
+| Card field list | `35px` minimum row, `13.75px` labels and `15px` values | Labels share a column, values wrap and adjacent fields have a divider. Lists up to `270px` wide stack each label above its value. |
+| Resource table | `40px` header and `45px` minimum row on desktop, `45/55px` on touch. Standard cell padding is `5 × 15px`. | Comparison tables scroll within their labelled region. Adaptive directories fit their columns to the region and show labelled records at `700px` or narrower. Long version and session IDs expand in place with pointer, touch or keyboard. |
 | Form dialog | `750px` desktop width; `10px` compact viewport inset | Fixed title/footer with independently scrolling fields |
 | Context workspace | `450px` default; `400–575px` adjustable | Inspect or review while retaining the source page |
 | Content canvas | Fluid workspace; `20px` desktop gutter; compact `20px` block and `15px` inline inset | Align page titles and content while keeping the established control/font scale |
@@ -1841,6 +1842,12 @@ is involved. The following are the resulting CSS dimensions under that default:
 | Overview metrics | `120px` minimum card height, `25px` values, `13.75px/20px` labels and hints, `10px` grid gap | Four cards above the overview's main/aside split; each metric grid independently changes to two columns at `900px` and one at `450px` |
 | Main/aside composition | `300px` supporting column and `15px` gap, stacked at `960px` of page content | Keep secondary product information alongside the recent-instance panel when space permits |
 | Empty states | `160px` standard or `120px` compact minimum height; theme-sized icons and `13.75px/20px` descriptions | Communicate absence without stretching a card to fill the canvas |
+
+At an 882px DEV viewport in Chinese, the five account identity fields occupied
+183px and all six policy directory columns fit the 770px table region. The
+first policy row measured 79px with its version collapsed. Browser checks
+covered full identifier disclosure by keyboard and touch, Chinese and English
+directory layouts, and nested policy statements down to a 360px viewport.
 
 The theme is owned by `src/styles/tokens.css` through the existing semantic
 `--xiak-*` contract. Dark canvas, panel, header and navigation use `#2c2c2c`.

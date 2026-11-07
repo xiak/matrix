@@ -1,4 +1,5 @@
 import { Slot } from "@radix-ui/react-slot";
+import { ChevronRight } from "lucide-react";
 import { forwardRef, type ComponentPropsWithoutRef, type ReactNode, type Ref, type TableHTMLAttributes } from "react";
 import { classNames } from "../utils";
 import styles from "./Table.module.css";
@@ -30,7 +31,18 @@ const PrimaryAction = forwardRef<HTMLButtonElement, ComponentPropsWithoutRef<"bu
   return <Element {...props} className={classNames(styles.primaryAction, className)} ref={ref} type={asChild ? undefined : type} />;
 });
 
-export const Table = Object.assign(TableRoot, { Footer, PrimaryAction });
+function Identifier({ value }: { value: string }) {
+  if (value.length <= 20) return <code className={styles.shortIdentifier}>{value}</code>;
+  return <details className={styles.identifier}>
+    <summary aria-label={value} title={value}>
+      <ChevronRight aria-hidden="true" />
+      <code><span>{value.slice(0, 8)}</span>…{value.slice(-6)}</code>
+    </summary>
+    <code>{value}</code>
+  </details>;
+}
+
+export const Table = Object.assign(TableRoot, { Footer, Identifier, PrimaryAction });
 
 export function TableSelectionCell({ header, id, label, checked, disabled, onChange, "aria-describedby": describedBy }: { header?: boolean; id?: string; label: string; checked: boolean | "mixed"; disabled?: boolean; "aria-describedby"?: string; onChange(checked: boolean): void }) {
   const Cell = header ? "th" : "td";

@@ -128,7 +128,7 @@ export function OwnSessionsPage() {
             const isCurrent = item.id === page.currentSessionId;
             const confirming = confirmingId === item.id;
             return <tr key={item.id}>
-              <td data-label={t("sessionId")} data-mobile-span="full"><code className={styles.identifier}>{item.id}</code></td>
+              <td data-label={t("sessionId")} data-mobile-span="full"><Table.Identifier value={item.id} /></td>
               <td data-label={t("issuedAt")}><time dateTime={item.issuedAt} title={item.issuedAt}>{formatTime(item.issuedAt)}</time></td>
               <td data-label={t("expiresAt")}><time dateTime={item.expiresAt} title={item.expiresAt}>{formatTime(item.expiresAt)}</time></td>
               <td data-label={t("status")}><div className={styles.status}><Badge status={isCurrent ? "success" : "neutral"}>{t(isCurrent ? "current" : "active")}</Badge>{isCurrent ? <span>{t("currentHint")}</span> : null}</div></td>

@@ -4179,17 +4179,24 @@ describe("account access", () => {
   });
 
   it("keeps the tenant policy directory usable when only the platform directory is forbidden", async () => {
+    const versionId = "version-tenant-readonly-20261029-001";
     const listPolicies = vi.fn(async (_credential: string, platform: boolean) => {
       if (platform) throw new HttpProblem(403, "FORBIDDEN");
-      return directory(false);
+      const tenantDirectory = directory(false);
+      return { ...tenantDirectory, items: tenantDirectory.items.map((policy) => ({ ...policy, defaultVersionId: versionId })) };
     });
     const repository = accounts({ listPolicies });
-    await openAccess(repository, iam(), "policies");
+    const { user } = await openAccess(repository, iam(), "policies");
     const table = await screen.findByRole("table", { name: "策略元数据目录" });
-    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
     const policyRow = within(table).getByRole("button", { name: "ReadOnlyAccess" }).closest("tr")!;
     expect(policyRow.cells[0]?.getAttribute("data-label")).toBe("策略");
     expect(policyRow.cells[5]?.getAttribute("data-label")).toBe("更新时间");
+    const toggle = within(policyRow).getByLabelText(versionId);
+    const disclosure = toggle.closest("details")!;
+    expect(disclosure.open).toBe(false);
+    await user.click(toggle);
+    expect(disclosure.open).toBe(true);
+    expect(within(disclosure).getByText(versionId)).toBeTruthy();
     expect(screen.getByText("ReadOnlyAccess")).toBeTruthy();
     expect(screen.getByText(/租户策略仍可查看/)).toBeTruthy();
     expect(listPolicies).toHaveBeenCalledTimes(2);

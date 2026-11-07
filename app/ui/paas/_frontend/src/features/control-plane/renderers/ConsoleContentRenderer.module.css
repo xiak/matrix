@@ -432,12 +432,6 @@
   min-height: 3rem;
 }
 
-.productFacts {
-  display: grid;
-  gap: var(--xiak-spacing-tight);
-  margin: var(--xiak-spacing-tight) 0 0;
-}
-
 @media (max-width: 71.875em) {
   .productOverviewFacts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -489,23 +483,6 @@
   .productOverviewFooter > div {
     justify-content: flex-end;
   }
-}
-
-.productFacts div {
-  display: grid;
-  grid-template-columns: 6.875rem minmax(0, 1fr);
-  gap: var(--xiak-spacing-default);
-  border-top: var(--xiak-border-subtle);
-  padding-top: var(--xiak-spacing-tight);
-}
-
-.productFacts dt {
-  color: var(--xiak-color-text-subtle);
-}
-
-.productFacts dd {
-  margin: 0;
-  color: var(--xiak-color-text-base);
 }
 
 .cardList {
@@ -682,10 +659,6 @@
   .regionFacts,
   .regionCard p {
     grid-column: 1;
-  }
-
-  .productFacts div {
-    grid-template-columns: 5.5rem minmax(0, 1fr);
   }
 
   .productCardHeader,

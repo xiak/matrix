@@ -40,7 +40,7 @@ function AccountIdentityCard({ scene }: { scene: AccountAccessScene }) {
     <Card.Header><Typography.Title as="h2" level={3}>{t("accountIdentity")}</Typography.Title><Badge status="info">{scene.isRoot ? t("primary") : t("child")}</Badge></Card.Header>
     <Card.Body className={styles.detail}>
       <div className={styles.accountName}><span className={styles.accountAvatar}><ShieldCheck aria-hidden="true" /></span><div><strong>{scene.accountName}</strong><small>{t("ownership")}</small></div></div>
-      <dl className={styles.compactFacts}>
+      <Card.Facts>
         <div><dt>{t("signedIn")}</dt><dd>{scene.identityLabel}</dd></div>
         <div><dt>{t("currentLoginName")}</dt><dd>{scene.currentLoginName}</dd></div>
         <div><dt>{t("accountId")}</dt><dd><AccountIdentifier label={t("accountId")} value={scene.accountId} /></dd></div>
@@ -48,7 +48,7 @@ function AccountIdentityCard({ scene }: { scene: AccountAccessScene }) {
           `${attachment.label} · ${attachment.source === "group" ? w("inheritedFrom", { name: attachment.groupId! }) : w("directPolicies")}`
         ).join(" · ") || t("noGrantLabel")}</dd></div>
         <div><dt>{b("title")}</dt><dd><UserBoundarySummary boundary={scene.permissionBoundary} /></dd></div>
-      </dl>
+      </Card.Facts>
     </Card.Body>
   </Card>;
 }

@@ -206,11 +206,11 @@ function CatalogContent({ scene, preview }: {
             </Card.Header>
             <Card.Body className={styles.productCardBody}>
               <p className={styles.productDescription}>{offering.description}</p>
-              <dl className={styles.productFacts}>
+              <Card.Facts>
                 <div><dt>{t("engineVersion")}</dt><dd>{offering.version}</dd></div>
                 <div><dt>{t("quotaShapes")}</dt><dd>{t("shapeCount", { count: offering.shapeCount })}</dd></div>
                 <div><dt>{t("availableShapes")}</dt><dd>{offering.shapeSummary}</dd></div>
-              </dl>
+              </Card.Facts>
             </Card.Body>
             <Card.Footer className={styles.productCardFooter}>
               <Typography.Text tone="subtle">{t("serviceEntryHint")}</Typography.Text>
