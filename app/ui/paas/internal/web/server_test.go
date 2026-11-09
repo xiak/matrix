@@ -243,11 +243,18 @@ func TestHandlerRejectsAuthoritySelectorsAndAmbiguousWorkspaceQueries(t *testing
 
 func TestBrandAssetsRemainAvailableOffline(t *testing.T) {
 	handler := NewHandler()
-	for _, path := range []string{"/brand/matrix-horizontal-cyan.svg", "/brand/matrix-header-cyan.svg", "/brand/matrix-symbol-cyan.svg"} {
+	for path, mediaType := range map[string]string{
+		"/brand/matrix-horizontal-cyan.svg": "image/svg+xml",
+		"/brand/matrix-header-cyan.svg":     "image/svg+xml",
+		"/brand/matrix-symbol-cyan.svg":     "image/svg+xml",
+		"/favicon.svg":                      "image/svg+xml",
+		"/favicon.ico":                      "image/x-icon",
+		"/brand/apple-touch-icon.png":       "image/png",
+	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
-		if response.Code != http.StatusOK || !strings.Contains(response.Header().Get("Content-Type"), "image/svg+xml") {
-			t.Fatalf("offline brand asset %s: status=%d", path, response.Code)
+		if response.Code != http.StatusOK || !strings.HasPrefix(response.Header().Get("Content-Type"), mediaType) {
+			t.Fatalf("offline brand asset %s: status=%d type=%q", path, response.Code, response.Header().Get("Content-Type"))
 		}
 	}
 }

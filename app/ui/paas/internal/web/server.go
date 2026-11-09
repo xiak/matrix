@@ -170,10 +170,14 @@ func validStaticQuery(request *http.Request, assetName string) bool {
 func writeStatic(response http.ResponseWriter, status int, assetName string, asset []byte) {
 	extension := path.Ext(assetName)
 	contentType := mime.TypeByExtension(extension)
-	if extension == ".woff2" {
-		// The offline font must not depend on the host's MIME registry.
+	// The offline font and favicon also run on hosts with no MIME registry.
+	switch extension {
+	case ".woff2":
 		contentType = "font/woff2"
-	} else if contentType == "" {
+	case ".ico":
+		contentType = "image/x-icon"
+	}
+	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 	response.Header().Set("Content-Type", contentType)

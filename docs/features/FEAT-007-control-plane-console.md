@@ -1850,7 +1850,7 @@ is involved. The following are the resulting CSS dimensions under that default:
 | Component or region | Contract | UX purpose |
 | --- | --- | --- |
 | Global header | `55px` high; `37.5px` controls/avatars, `20px` glyphs and `13.75px` chevrons; `17.5px` primary spacing and `12.5px` utility spacing | Persistent brand, search, scope, message-center bell and identity with proportional compact controls |
-| Header brand | `34 × 25.5px` standalone M: one continuous, uniform stroke with rounded joins and caps, in a `4:3` view box; `40px` square home link (`55px` touch) | Match the visible height of the rail's `25px` glyphs and center the target on the same axis, with no vertical header divider; retain the localized name, tooltip, hover, pressed and keyboard-focus states |
+| Header brand | `34 × 25.5px` standalone M with one rounded stroke in a `4:3` view box. The square home link measures `40px` (`55px` on touch). Browser and home-screen icons center the same M on a dark tile. | Match the visible height of the rail's `25px` glyphs and center the target on the same axis, with no vertical header divider; retain the localized name, tooltip, hover, pressed and keyboard-focus states |
 | Header typography | `13.75px / 20px` navigation and avatar text; `16.25px` page and product identity | Local Inter and system CJK fallback; header-specific semantic tokens keep popup and body controls at their own density |
 | Header count badge | `20px` height; `12.5px` numeric font and `15px` line height | Keep numbers independently centered; multiple digits expand horizontally |
 | Header search and scope | `600px` maximum inline search; `200px` region selector; both `37.5px` high | Inputs, glyphs and text share the header scale; compact search opens below the bar |

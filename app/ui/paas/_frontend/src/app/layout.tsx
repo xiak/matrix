@@ -11,8 +11,8 @@ export const metadata: Metadata = {
   applicationName: "Matrix Cloud",
   icons: {
     icon: [
-      { url: "/brand/favicon.svg", type: "image/svg+xml" },
-      { url: "/brand/favicon.ico", sizes: "any" }
+      { url: "/favicon.ico", type: "image/x-icon", sizes: "16x16 32x32 48x48 256x256" },
+      { url: "/favicon.svg", type: "image/svg+xml", sizes: "any" }
     ],
     apple: "/brand/apple-touch-icon.png"
   }
