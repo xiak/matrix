@@ -917,7 +917,7 @@ describe("account access", () => {
       accessAnalysis: analysis
     });
     await openAccess(repository, iam(), "access-analysis");
-    await waitFor(() => expect(analysis.listAnalyzers).toHaveBeenCalledExactlyOnceWith(credential, account.id, undefined));
+    await waitFor(() => expect(analysis.listAnalyzers).toHaveBeenCalledExactlyOnceWith(credential, account.id, undefined, expect.any(AbortSignal)));
     expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
     expect(screen.queryByText(/PRIVATE_DIRECTORY_DIAGNOSTIC|INVALID_IAM_RESPONSE/)).toBeNull();
     expect(repository.currentIdentity).toHaveBeenCalledTimes(1);
@@ -942,6 +942,25 @@ describe("account access", () => {
     expect(repository.listAccounts).toHaveBeenCalledTimes(1);
     expect(repository.listPolicies).toHaveBeenCalledTimes(2);
     expect(repository.getUser).not.toHaveBeenCalled();
+    expect(repository.execute).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["access-analysis", "分析结果的含义"],
+    ["security-reports", "报告范围与生成限制"]
+  ] as const)("keeps %s out of the disconnected state while returning from self-service", async (target, helpLabel) => {
+    const repository = accounts({ accessAnalysis: liveAnalysis(), securityReports: { create: vi.fn(), read: vi.fn(), download: vi.fn() } });
+    const { setAccessActive } = await openAccess(repository, iam(), target);
+    await screen.findByText(helpLabel);
+
+    // The shell can project the destination while the committed self-service route still owns the provider.
+    setAccessActive(false);
+    expect(screen.queryByText(/NOT_CONNECTED/)).toBeNull();
+    expect(screen.getByText("正在读取 IAM 账号信息…")).toBeTruthy();
+
+    setAccessActive(true);
+    const help = (await screen.findByText(helpLabel)).closest("details");
+    expect(help).toHaveProperty("open", false);
     expect(repository.execute).not.toHaveBeenCalled();
   });
 

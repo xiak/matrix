@@ -340,13 +340,13 @@ export type AccessAnalysisClient = {
   continuityIdentity: object;
   canList: boolean;
   canCreate: boolean;
-  listAnalyzers(after?: string): Promise<AccessAnalyzerDirectory>;
-  readAnalyzer(analyzerId: string): Promise<AccessAnalyzerAccess>;
+  listAnalyzers(after?: string, signal?: AbortSignal): Promise<AccessAnalyzerDirectory>;
+  readAnalyzer(analyzerId: string, signal?: AbortSignal): Promise<AccessAnalyzerAccess>;
   createAnalyzer(command: CreateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
   updateAnalyzer(analyzerId: string, command: UpdateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
   setDisposition(analyzerId: string, command: SetAccessDispositionCommand): Promise<AccessAnalyzer>;
-  listFindings(analyzerId: string, status: AccessFindingStatusFilter, after?: string): Promise<AccessFindingDirectory>;
-  readFinding(analyzerId: string, findingId: string): Promise<AccessFindingAccess>;
+  listFindings(analyzerId: string, status: AccessFindingStatusFilter, after?: string, signal?: AbortSignal): Promise<AccessFindingDirectory>;
+  readFinding(analyzerId: string, findingId: string, signal?: AbortSignal): Promise<AccessFindingAccess>;
   archiveFinding(analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
   unarchiveFinding(analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
 };
@@ -2606,13 +2606,13 @@ export function AccountAccessProvider({ children, repository = httpAccountReposi
       continuityIdentity: exactAuthorityOwner.continuity,
       canList: scene?.canListAccessAnalyzers ?? false,
       canCreate: scene?.canCreateAccessAnalyzers ?? false,
-      listAnalyzers: (after) => scoped(() => analysisRepository.listAnalyzers(credential, accountId, after)),
-      readAnalyzer: (analyzerId) => scoped(() => analysisRepository.readAnalyzer(credential, accountId, analyzerId)),
+      listAnalyzers: (after, signal) => scoped(() => analysisRepository.listAnalyzers(credential, accountId, after, signal)),
+      readAnalyzer: (analyzerId, signal) => scoped(() => analysisRepository.readAnalyzer(credential, accountId, analyzerId, signal)),
       createAnalyzer: (command) => scoped(() => analysisRepository.createAnalyzer(credential, accountId, command)),
       updateAnalyzer: (analyzerId, command) => scoped(() => analysisRepository.updateAnalyzer(credential, accountId, analyzerId, command)),
       setDisposition: (analyzerId, command) => scoped(() => analysisRepository.setDisposition(credential, accountId, analyzerId, command)),
-      listFindings: (analyzerId, status, after) => scoped(() => analysisRepository.listFindings(credential, accountId, analyzerId, status, after)),
-      readFinding: (analyzerId, findingId) => scoped(() => analysisRepository.readFinding(credential, accountId, analyzerId, findingId)),
+      listFindings: (analyzerId, status, after, signal) => scoped(() => analysisRepository.listFindings(credential, accountId, analyzerId, status, after, signal)),
+      readFinding: (analyzerId, findingId, signal) => scoped(() => analysisRepository.readFinding(credential, accountId, analyzerId, findingId, signal)),
       archiveFinding: (analyzerId, findingId, command) => scoped(() => analysisRepository.archiveFinding(credential, accountId, analyzerId, findingId, command)),
       unarchiveFinding: (analyzerId, findingId, command) => scoped(() => analysisRepository.unarchiveFinding(credential, accountId, analyzerId, findingId, command))
     };

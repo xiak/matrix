@@ -1165,7 +1165,9 @@ describe("IAM HTTP access-analysis boundary", () => {
 
   it("binds the finding lifecycle filter and opaque cursor into the exact list request", async () => {
     const fetcher = reply(accessFindingList());
-    const result = await httpAccountRepository.accessAnalysis!.listFindings("bearer", account.id, accessAnalyzer.id, "ACTIVE", "ic1.next-page");
+    const { signal } = new AbortController();
+    const result = await httpAccountRepository.accessAnalysis!.listFindings("bearer", account.id, accessAnalyzer.id, "ACTIVE", "ic1.next-page", signal);
+    expect(firstRequest(fetcher)[1]?.signal).toBe(signal);
     expect(firstRequest(fetcher)[0]).toBe(`/api/iam/v1/account/access-analyzers/${accessAnalyzer.id}/findings?status=ACTIVE&after=ic1.next-page`);
     expect(result).toMatchObject({ accountId: account.id, analyzerId: accessAnalyzer.id, nextAfter: null });
     expect(result.coverage[0]).toMatchObject({ source: "IAM_PASSWORD_SESSIONS", state: "COMPLETE", reason: null });

@@ -3049,19 +3049,19 @@ export const httpAccountRepository: AccountRepository = {
     }
   },
   accessAnalysis: {
-    async listAnalyzers(credential, accountId, after) {
+    async listAnalyzers(credential, accountId, after, signal) {
       const owner = accountIdentifier(accountId);
       return parseAccessAnalyzerDirectory(await requestJSON<unknown>(
         `/api/iam/v1/account/access-analyzers${pageQuery(after)}`,
-        { headers: accountHeaders(credential) }
+        { headers: accountHeaders(credential), signal }
       ), owner, after);
     },
-    async readAnalyzer(credential, accountId, analyzerId) {
+    async readAnalyzer(credential, accountId, analyzerId, signal) {
       const owner = accountIdentifier(accountId);
       const target = accountIdentifier(analyzerId);
       return parseAccessAnalyzerAccess(await requestJSON<unknown>(
         `/api/iam/v1/account/access-analyzers/${encodeURIComponent(target)}`,
-        { headers: accountHeaders(credential) }
+        { headers: accountHeaders(credential), signal }
       ), owner, target);
     },
     async createAnalyzer(credential, accountId, command) {
@@ -3112,7 +3112,7 @@ export const httpAccountRepository: AccountRepository = {
           result.disposition.findingDelayDays !== disposition.findingDelayDays) throw new Error("INVALID_IAM_RESPONSE");
       return result;
     },
-    async listFindings(credential, accountId, analyzerId, status, after) {
+    async listFindings(credential, accountId, analyzerId, status, after, signal) {
       const owner = accountIdentifier(accountId);
       const target = accountIdentifier(analyzerId);
       if (status !== "ALL" && status !== "ACTIVE" && status !== "ARCHIVED" && status !== "RESOLVED") throw new Error("INVALID_IAM_REQUEST");
@@ -3120,16 +3120,16 @@ export const httpAccountRepository: AccountRepository = {
       if (after !== undefined) query.set("after", pageCursor(after));
       return parseAccessFindingDirectory(await requestJSON<unknown>(
         `/api/iam/v1/account/access-analyzers/${encodeURIComponent(target)}/findings?${query.toString()}`,
-        { headers: accountHeaders(credential) }
+        { headers: accountHeaders(credential), signal }
       ), owner, target, status, after);
     },
-    async readFinding(credential, accountId, analyzerId, findingId) {
+    async readFinding(credential, accountId, analyzerId, findingId, signal) {
       const owner = accountIdentifier(accountId);
       const analyzer = accountIdentifier(analyzerId);
       const target = accountIdentifier(findingId);
       return parseAccessFindingAccess(await requestJSON<unknown>(
         `/api/iam/v1/account/access-analyzers/${encodeURIComponent(analyzer)}/findings/${encodeURIComponent(target)}`,
-        { headers: accountHeaders(credential) }
+        { headers: accountHeaders(credential), signal }
       ), owner, analyzer, target);
     },
     async archiveFinding(credential, accountId, analyzerId, findingId, command) {

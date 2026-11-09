@@ -194,13 +194,13 @@ export interface AccountRepository {
   // Access analysis is account-scoped by the authenticated Session. The
   // account and analyzer IDs below only verify returned resources locally.
   accessAnalysis?: {
-    listAnalyzers(credential: string, accountId: string, after?: string): Promise<AccessAnalyzerDirectory>;
-    readAnalyzer(credential: string, accountId: string, analyzerId: string): Promise<AccessAnalyzerAccess>;
+    listAnalyzers(credential: string, accountId: string, after?: string, signal?: AbortSignal): Promise<AccessAnalyzerDirectory>;
+    readAnalyzer(credential: string, accountId: string, analyzerId: string, signal?: AbortSignal): Promise<AccessAnalyzerAccess>;
     createAnalyzer(credential: string, accountId: string, command: CreateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
     updateAnalyzer(credential: string, accountId: string, analyzerId: string, command: UpdateAccessAnalyzerCommand): Promise<AccessAnalyzer>;
     setDisposition(credential: string, accountId: string, analyzerId: string, command: SetAccessDispositionCommand): Promise<AccessAnalyzer>;
-    listFindings(credential: string, accountId: string, analyzerId: string, status: AccessFindingStatusFilter, after?: string): Promise<AccessFindingDirectory>;
-    readFinding(credential: string, accountId: string, analyzerId: string, findingId: string): Promise<AccessFindingAccess>;
+    listFindings(credential: string, accountId: string, analyzerId: string, status: AccessFindingStatusFilter, after?: string, signal?: AbortSignal): Promise<AccessFindingDirectory>;
+    readFinding(credential: string, accountId: string, analyzerId: string, findingId: string, signal?: AbortSignal): Promise<AccessFindingAccess>;
     archiveFinding(credential: string, accountId: string, analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
     unarchiveFinding(credential: string, accountId: string, analyzerId: string, findingId: string, command: AccessFindingDispositionCommand): Promise<AccessFinding>;
   };

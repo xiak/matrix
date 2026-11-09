@@ -210,6 +210,10 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const capabilities = useAccountCapabilities();
   const scene = access.scene;
   const workspace = access.workspace;
+  // A menu destination can render before its IAM client is ready, even with a cached scene.
+  const waitingForClient = (view === "access-analysis" && capabilities.supportsLiveAccessAnalysis && !access.accessAnalysis) ||
+    (view === "security-reports" && capabilities.supportsLiveSecurityReports && !access.securityReports);
+  const showPageLoading = scene ? waitingForClient : access.loading;
   const unknownReset = access.passwordResetUnknown;
   const resetLookup = access.passwordResetLookup;
   const deletionUnknowns = access.userDeletionUnknowns;
@@ -232,7 +236,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     (view === "service-authorizations" && !workspace && !access.serviceRoleTemplates && !access.serviceLinkedRoles) ||
     (previewOnly && capabilities.hasPreviewWorkspace && !scene.canListUsers)
   );
-  return <section aria-label={t("title")} aria-busy={access.loading || access.busy} className={styles.stack}>
+  return <section aria-label={t("title")} aria-busy={showPageLoading || access.loading || access.busy} className={styles.stack}>
     {access.accountLifecycle && (view === "tenants" || access.accountLifecycle.pending || access.accountLifecycle.recoveryError)
       ? <AccountLifecycleRecoveryNotice client={access.accountLifecycle} key={session.sessionRevision} /> : null}
     {access.userDeletionRecoveryError ? <Alert status="danger" role="alert">{t("userDeleteRecoveryUnavailable")}</Alert> : null}
@@ -252,8 +256,8 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     {access.error && !workflow ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
     {access.success && !workflow && view !== "policies" ? <Alert status="success">{t(access.success)}</Alert> : null}
     {access.workspaceError && !workflow && view !== "policies" ? <Alert status="danger">{w(`errors.${access.workspaceError}`)}</Alert> : null}
-    {access.loading ? scene ? <LoadingNotice className={styles.note} label={t("loading")} /> : <AccountAccessInitialLoading entityId={entityId} view={view} /> : null}
-    {scene ? denied ? <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button onClick={() => onNavigate("overview")} variant="secondary">{t("backToOverview")}</Button>} /> :
+    {showPageLoading ? <AccountAccessInitialLoading entityId={entityId} view={view} /> : access.loading ? <LoadingNotice className={styles.note} label={t("loading")} /> : null}
+    {scene && !showPageLoading ? denied ? <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button onClick={() => onNavigate("overview")} variant="secondary">{t("backToOverview")}</Button>} /> :
       view === "overview" ? <AccountOverview scene={scene} onNavigate={onNavigate} /> :
       view === "users" ? <AccountUserDirectory key={workspace ? `${entityId ?? "users"}:${userTab ?? "identity"}` : entityId ?? "users"} entityId={entityId} initialDetailTab={userTab} onChangeDetailTab={(id, tab) => onNavigate("users", id, undefined, tab)} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :
       view === "create-user" ? <CreateUserWizard onBack={() => onNavigate("users")} /> :

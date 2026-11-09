@@ -143,6 +143,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
   const setBusy = (value: boolean) => setBusyClient((current) => value ? client : current === client ? null : current);
   const [reloadRevision, setReloadRevision] = useState(0);
   const currentClient = useRef<AccessAnalysisClient | null>(client);
+  const pageReads = useRef<AbortController | null>(null);
   const currentAnalyzerId = useRef<string | null>(null);
   const [analyzerAuthorityClient, setAnalyzerAuthorityClient] = useState<AccessAnalysisClient | null>(null);
   const [findingAuthorityClient, setFindingAuthorityClient] = useState<AccessAnalysisClient | null>(null);
@@ -167,8 +168,14 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
     return () => { mounted.current = false; };
   }, []);
   useLayoutEffect(() => {
+    const reads = new AbortController();
+    pageReads.current = reads;
     currentClient.current = client;
-    return () => { if (currentClient.current === client) currentClient.current = null; };
+    return () => {
+      reads.abort();
+      currentClient.current = null;
+      pageReads.current = null;
+    };
   }, [client]);
   useLayoutEffect(() => {
     const known = knownAnalyzerId.trim();
@@ -177,13 +184,14 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
   const ownsClient = () => mounted.current && currentClient.current === client;
 
   useEffect(() => {
-    let active = true;
+    const request = new AbortController();
+    const { signal } = request;
     const retainedAnalyzerId = currentAnalyzerId.current;
     void (async () => {
       let analyzerId = retainedAnalyzerId;
       if (client.canList) {
-        const directory = await client.listAnalyzers();
-        if (!active) return;
+        const directory = await client.listAnalyzers(undefined, signal);
+        if (signal.aborted) return;
         setReadProblem(null);
         setAnalyzers(directory.items);
         analyzerId ??= directory.items[0]?.id ?? null;
@@ -191,53 +199,55 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
         setAnalyzers([]);
       }
       if (!analyzerId) { setAnalyzerAccess(null); setAnalyzerAuthorityClient(null); return; }
-      const access = await client.readAnalyzer(analyzerId);
-      if (!active) return;
+      const access = await client.readAnalyzer(analyzerId, signal);
+      if (signal.aborted) return;
       setKnownAnalyzerId(access.analyzer.id);
       setAnalyzerAccess(access);
       setAnalyzerAuthorityClient(client);
       setFindingsLoading(findActionCapability(access.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", access.analyzer.id)?.available === true);
     })().catch((failure) => {
-      if (!active) return;
+      if (signal.aborted) return;
       setAnalyzers(null);
       setReadProblem(failure instanceof HttpProblem ? failure : null);
       setError(failureCode(failure));
-    }).finally(() => { if (active) setAnalyzersLoading(false); });
-    return () => { active = false; };
+    }).finally(() => { if (!signal.aborted) setAnalyzersLoading(false); });
+    return () => request.abort();
   }, [client, reloadRevision]);
 
   useEffect(() => {
     if (!analyzer || !canListFindings) return;
-    let active = true;
-    void client.listFindings(analyzer.id, filter, currentCursor).then((directory) => {
-      if (!active) return;
+    const request = new AbortController();
+    const { signal } = request;
+    void client.listFindings(analyzer.id, filter, currentCursor, signal).then((directory) => {
+      if (signal.aborted) return;
       setReadProblem(null);
       setFindings(directory);
     }).catch((failure) => {
-      if (!active) return;
+      if (signal.aborted) return;
       setFindings(null);
       setReadProblem(failure instanceof HttpProblem ? failure : null);
       setError(failureCode(failure));
-    }).finally(() => { if (active) setFindingsLoading(false); });
-    return () => { active = false; };
+    }).finally(() => { if (!signal.aborted) setFindingsLoading(false); });
+    return () => request.abort();
   }, [analyzer, canListFindings, client, currentCursor, filter, reloadRevision]);
 
   useEffect(() => {
     if (!selectedReference) return;
-    let active = true;
-    void client.readFinding(selectedReference.analyzerId, selectedReference.findingId).then((finding) => {
-      if (!active) return;
+    const request = new AbortController();
+    const { signal } = request;
+    void client.readFinding(selectedReference.analyzerId, selectedReference.findingId, signal).then((finding) => {
+      if (signal.aborted) return;
       setDetailProblem(null);
       setSelected(finding);
       setFindingAuthorityClient(client);
     }).catch((failure) => {
-      if (!active) return;
+      if (signal.aborted) return;
       setSelected(null);
       setFindingAuthorityClient(null);
       setDetailProblem(failure instanceof HttpProblem ? failure : null);
       setDetailError(failureCode(failure));
-    }).finally(() => { if (active) setSelectedLoading(false); });
-    return () => { active = false; };
+    }).finally(() => { if (!signal.aborted) setSelectedLoading(false); });
+    return () => request.abort();
   }, [client, selectedReference, selectedRevision]);
 
   const changeFilter = (value: string) => {
@@ -274,14 +284,14 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
 
   const refreshAfterConflict = async (intent: AccessAnalysisMutationIntent) => {
     if (intent.operation === "create") {
-      const directory = await client.listAnalyzers();
+      const directory = await client.listAnalyzers(undefined, pageReads.current?.signal);
       if (!ownsClient()) return;
       setAnalyzers(directory.items);
       setFindingsLoading(directory.items.length > 0);
       return;
     }
     if (intent.operation === "update" || intent.operation === "setDisposition") {
-      const latest = await client.readAnalyzer(intent.analyzerId);
+      const latest = await client.readAnalyzer(intent.analyzerId, pageReads.current?.signal);
       if (!ownsClient()) return;
       setAnalyzerAccess(latest);
       setAnalyzerAuthorityClient(client);
@@ -292,7 +302,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
     }
     setSelectedLoading(true);
     try {
-      const latest = await client.readFinding(intent.analyzerId, intent.findingId);
+      const latest = await client.readFinding(intent.analyzerId, intent.findingId, pageReads.current?.signal);
       if (ownsClient()) replaceFinding(latest.finding, latest);
     } finally {
       if (ownsClient()) setSelectedLoading(false);
@@ -354,7 +364,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       if (intent.operation === "create" || intent.operation === "update" || intent.operation === "setDisposition") {
         const analyzerId = (result as AccessAnalyzer).id;
         setKnownAnalyzerId(analyzerId);
-        const latest = await client.readAnalyzer(analyzerId);
+        const latest = await client.readAnalyzer(analyzerId, pageReads.current?.signal);
         if (!ownsClient()) return;
         setAnalyzerAccess(latest); setAnalyzerAuthorityClient(client); setAnalyzers([latest.analyzer]);
         setReadProblem(null); setError(null);
@@ -364,7 +374,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
         setFindingsLoading(findActionCapability(latest.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", latest.analyzer.id)?.available === true);
       } else {
         const updated = result as AccessFinding;
-        const latest = await client.readFinding(updated.analyzerId, updated.id);
+        const latest = await client.readFinding(updated.analyzerId, updated.id, pageReads.current?.signal);
         if (!ownsClient()) return;
         setDetailProblem(null); setDetailError(null);
         replaceFinding(latest.finding, latest);
@@ -406,7 +416,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
     if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(analyzerId)) return;
     setAnalyzersLoading(true); setError(null); setReadProblem(null); setFindings(null);
     try {
-      const access = await client.readAnalyzer(analyzerId);
+      const access = await client.readAnalyzer(analyzerId, pageReads.current?.signal);
       if (!ownsClient()) return;
       setAnalyzerAccess(access); setAnalyzerAuthorityClient(client); setAnalyzers([access.analyzer]);
       setFindingsLoading(findActionCapability(access.capabilities, "iam.access-finding.list", "ACCESS_ANALYZER", access.analyzer.id)?.available === true);

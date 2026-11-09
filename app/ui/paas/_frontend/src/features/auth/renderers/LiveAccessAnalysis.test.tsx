@@ -76,20 +76,25 @@ afterEach(cleanup);
 describe("live access analysis", () => {
   it("renders the stable page shell before the first server response", () => {
     const pending = new Promise<never>(() => undefined);
-    view(client({ listAnalyzers: vi.fn().mockReturnValue(pending) }));
+    const listAnalyzers = vi.fn<AccessAnalysisClient["listAnalyzers"]>().mockReturnValue(pending);
+    const page = view(client({ listAnalyzers }));
     expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "来源覆盖" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "未使用访问" })).toBeTruthy();
     expect(screen.getByRole("tab", { name: "分析规则" })).toBeTruthy();
     expect(screen.getByText(/本页读取当前账号的 Analyzer/)).toBeTruthy();
     expect(screen.queryByText(/LIVE|MOCK/)).toBeNull();
+    const signal = listAnalyzers.mock.calls[0]?.[1];
+    expect(signal?.aborted).toBe(false);
+    page.unmount();
+    expect(signal?.aborted).toBe(true);
   });
 
   it("loads a server-filtered cursor directory without inventing a total", async () => {
     const value = client();
     view(value);
     expect(await screen.findByRole("button", { name: "user-alex" })).toBeTruthy();
-    expect(value.listFindings).toHaveBeenCalledWith(analyzer.id, "ACTIVE", undefined);
+    expect(value.listFindings).toHaveBeenCalledWith(analyzer.id, "ACTIVE", undefined, expect.any(AbortSignal));
     expect(screen.getByText("第 1 页")).toBeTruthy();
     expect(screen.queryByText(/共 .* 条/)).toBeNull();
   });
@@ -103,9 +108,9 @@ describe("live access analysis", () => {
     expect(value.listAnalyzers).not.toHaveBeenCalled();
     await user.type(screen.getByLabelText("分析器 ID", { selector: "input#known-access-analyzer-id" }), analyzer.id);
     await user.click(screen.getByRole("button", { name: "查看分析器" }));
-    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id, expect.any(AbortSignal)));
     expect(await screen.findByRole("button", { name: "user-alex" })).toBeTruthy();
-    expect(value.listFindings).toHaveBeenCalledWith(analyzer.id, "ACTIVE", undefined);
+    expect(value.listFindings).toHaveBeenCalledWith(analyzer.id, "ACTIVE", undefined, expect.any(AbortSignal));
     expect(value.createAnalyzer).not.toHaveBeenCalled();
   });
 
@@ -137,7 +142,7 @@ describe("live access analysis", () => {
     await user.type(screen.getByLabelText("Finding ID"), finding.id);
     await user.click(screen.getByRole("button", { name: "查看 Finding" }));
 
-    await waitFor(() => expect(readFinding).toHaveBeenCalledWith(analyzer.id, finding.id));
+    await waitFor(() => expect(readFinding).toHaveBeenCalledWith(analyzer.id, finding.id, expect.any(AbortSignal)));
     expect(await screen.findByRole("heading", { name: "复核 Finding · user-alex" })).toBeTruthy();
     expect(value.listAnalyzers).not.toHaveBeenCalled();
     expect(value.listFindings).not.toHaveBeenCalled();
@@ -176,7 +181,7 @@ describe("live access analysis", () => {
     if (retryable) {
       await user.click(screen.getByRole("button", { name: "重试读取" }));
       await waitFor(() => expect(readAnalyzer).toHaveBeenCalledTimes(2));
-      expect(readAnalyzer).toHaveBeenLastCalledWith(analyzer.id);
+      expect(readAnalyzer).toHaveBeenLastCalledWith(analyzer.id, expect.any(AbortSignal));
     } else {
       expect(screen.queryByRole("button", { name: "重试读取" })).toBeNull();
     }
@@ -191,7 +196,7 @@ describe("live access analysis", () => {
     await user.click(await screen.findByRole("button", { name: "user-alex" }));
     expect(screen.getByRole("heading", { name: "复核 Finding · user-alex" })).toBeTruthy();
     expect(screen.getByText(/归档与取消归档只改变 Finding/)).toBeTruthy();
-    expect(readFinding).toHaveBeenCalledWith(analyzer.id, finding.id);
+    expect(readFinding).toHaveBeenCalledWith(analyzer.id, finding.id, expect.any(AbortSignal));
     expect(screen.queryByRole("button", { name: "归档 Finding" })).toBeNull();
     resolveFinding(findingAccess());
     expect(await screen.findByRole("button", { name: "归档 Finding" })).toBeTruthy();
@@ -254,7 +259,7 @@ describe("live access analysis", () => {
       listAnalyzers: vi.fn().mockResolvedValue({ accountId: analyzer.accountId, items: [otherAnalyzer, analyzer], nextAfter: null }) });
     rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
 
-    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id, expect.any(AbortSignal)));
     expect(screen.getByRole("tab", { name: "分析规则" }).getAttribute("data-state")).toBe("active");
     expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
     expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
@@ -296,7 +301,7 @@ describe("live access analysis", () => {
     const continuityIdentity = {};
     const first = client({ continuityIdentity, readAnalyzer: vi.fn().mockReturnValue(oldAnalyzer) });
     const rendered = view(first);
-    await waitFor(() => expect(first.readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    await waitFor(() => expect(first.readAnalyzer).toHaveBeenCalledWith(analyzer.id, expect.any(AbortSignal)));
 
     const readAnalyzer = vi.fn().mockResolvedValue({
       analyzer,
@@ -307,7 +312,7 @@ describe("live access analysis", () => {
 
     const user = userEvent.setup();
     await user.click(await screen.findByRole("tab", { name: "分析规则" }));
-    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id, expect.any(AbortSignal)));
     const window = screen.getByRole("spinbutton", { name: "完整观测窗口" });
     expect(window).toHaveProperty("disabled", true);
     expect(screen.getByRole("button", { name: "保存分析规则" })).toHaveProperty("disabled", true);
@@ -480,7 +485,7 @@ describe("live access analysis", () => {
     const retryUpdate = vi.fn().mockRejectedValue(new HttpProblem(403, "AUTHORITY_REQUIRED"));
     const refreshed = client({ continuityIdentity, updateAnalyzer: retryUpdate });
     rendered.rerender(<LocaleProvider><LiveAccessAnalysis client={refreshed} onNavigate={vi.fn()} /></LocaleProvider>);
-    await waitFor(() => expect(refreshed.readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    await waitFor(() => expect(refreshed.readAnalyzer).toHaveBeenCalledWith(analyzer.id, expect.any(AbortSignal)));
     expect(screen.queryByText(/原命令.*仍须由原连接核对/)).toBeNull();
     await user.click(screen.getByRole("button", { name: "重试原命令" }));
 
@@ -509,7 +514,7 @@ describe("live access analysis", () => {
     expect(screen.queryByRole("button", { name: "重试原命令" })).toBeNull();
     await user.click(await screen.findByRole("button", { name: "重试读取" }));
     await waitFor(() => expect(readAnalyzer).toHaveBeenCalledTimes(3));
-    expect(readAnalyzer).toHaveBeenLastCalledWith(analyzer.id);
+    expect(readAnalyzer).toHaveBeenLastCalledWith(analyzer.id, expect.any(AbortSignal));
     expect(updateAnalyzer).toHaveBeenCalledTimes(1);
     await user.click(screen.getByRole("tab", { name: "分析规则" }));
     expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
@@ -529,7 +534,7 @@ describe("live access analysis", () => {
     await user.type(window, "30");
     await user.click(screen.getByRole("button", { name: "保存分析规则" }));
 
-    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id));
+    await waitFor(() => expect(readAnalyzer).toHaveBeenCalledWith(analyzer.id, expect.any(AbortSignal)));
     expect((screen.getByRole("spinbutton", { name: "完整观测窗口" }) as HTMLInputElement).value).toBe("30");
     expect(updateAnalyzer).toHaveBeenCalledTimes(1);
     const firstRequestId = updateAnalyzer.mock.calls[0]?.[1].requestId;
