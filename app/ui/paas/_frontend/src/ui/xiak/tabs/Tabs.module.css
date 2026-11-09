@@ -13,4 +13,40 @@
 .content { min-width: 0; max-width: 100%; padding-block-start: var(--xiak-spacing-comfortable); outline: none; }
 .content[data-state="inactive"] { display: none; }
 .trigger > svg { width: var(--xiak-icon-size); height: var(--xiak-icon-size); }
+
+.underline {
+  gap: var(--xiak-spacing-tight);
+  padding-block-start: var(--xiak-spacing-narrow);
+  padding-inline: calc(var(--xiak-panel-padding) - var(--xiak-spacing-tight));
+  border-block-end: var(--xiak-border-subtle);
+}
+.underline .trigger {
+  position: relative;
+  flex-shrink: 1;
+  min-height: var(--xiak-control-height);
+  padding-block: var(--xiak-spacing-narrow);
+  border-end-start-radius: 0;
+  border-end-end-radius: 0;
+  font-size: var(--xiak-font-size-small);
+  font-weight: var(--xiak-font-weight-semibold);
+  white-space: normal;
+}
+.underline .trigger[data-state="active"]:not(:disabled) {
+  background: transparent;
+  color: var(--xiak-color-accent-text);
+}
+.underline .trigger[data-state="active"]:hover:not(:disabled) {
+  background: var(--xiak-color-bg-item-hover);
+}
+.underline .trigger[data-state="active"]:active:not(:disabled) {
+  background: var(--xiak-color-bg-control-pressed);
+}
+.underline .trigger[data-state="active"]::after {
+  content: "";
+  position: absolute;
+  inset-inline: var(--xiak-spacing-tight);
+  inset-block-end: 0;
+  border-block-end: var(--xiak-spacing-micro) solid currentColor;
+  pointer-events: none;
+}
 }

@@ -1867,8 +1867,9 @@ directory layouts, and nested policy statements down to a 360px viewport.
 
 The theme is owned by `src/styles/tokens.css` through the existing semantic
 `--xiak-*` contract. Dark canvas, panel, header and navigation use `#2c2c2c`.
-Unfilled hover, selected tabs and input surfaces use `#383838`; dividers and
-filled-control/selected-tab hover use `#444444`; pressed controls use `#4d4d4d`.
+Unfilled hover, selected compact tabs and input surfaces use `#383838`.
+Dividers use `#444444`, as do filled controls and selected compact tabs on hover.
+Pressed controls use `#4d4d4d`.
 Navigation selection uses `#394360` with `#4a5878` hover. Focus uses `#0c8ce9`;
 filled actions use `#0a6dc2` with white text and dark-surface links use `#a8d7fa`.
 Light mode uses the same neutral and blue vocabulary; mixed mode keeps the
@@ -1877,11 +1878,16 @@ surface, including while a theme changes. Status colors retain their semantics.
 
 Local variable Inter supplies Latin text at `400/450/500/550/650` weights, with
 system CJK fallback. Body and page/product title text is `16.25px`, controls and metadata
-`13.75px`, and large-action labels `15px`. Shared Input, Select, Button, Tabs,
+`13.75px`, and large-action labels `15px`. Shared Input, Select, Button, compact tabs,
 field labels and Radio/Checkbox use `13.75px/20px` at weight 450. Field labels
-and hints have a `5px` gap. Tabs and menu options use `30px` rows; tabs retain
-`5px` gaps, `10px` inline padding, `6.25px` corners and no underline. Selected
-tab labels use weight 550. Disabled controls retain their appearance on hover.
+and hints have a `5px` gap. Compact tabs and menu options use `30px` rows.
+Compact tabs have `5px` gaps, `10px` inline padding and `6.25px` corners.
+Their selected label uses weight 550. The IAM policy and permission-capability
+directories share a full-width tab row above the catalog. Its `15px` labels
+align with the panel text and keep the same weight when switching. The selected
+label and its persistent underline use the accent text color. Each tab has a
+`40px` desktop target and a `55px` touch target, with a separate keyboard focus
+outline. Disabled controls retain their appearance on hover.
 Focus is a theme-scaled `0.125rem` outline; transitions retain `90ms` duration
 and respect reduced motion. Card headers and footers use `10px` block and
 `15px` inline inset, with control-sized supporting text. Card bodies use `15px`

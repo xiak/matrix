@@ -663,7 +663,10 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
       <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create", label: t("createPolicy"), icon: <Plus aria-hidden="true" />,
         disabled: Boolean(access.policyCreate.pending), onSelect: onCreate }} /> : undefined} />
     <Tabs.Root value={section} onValueChange={(next) => { setSection(next); if (next === "profiles") setCatalogMounted(true); }}>
-      <Tabs.List aria-label={t("sections")} className={styles.policyDirectoryTabs}><Tabs.Trigger value="policies">{t("policiesTab")}</Tabs.Trigger><Tabs.Trigger value="profiles">{t("profilesTab")}</Tabs.Trigger></Tabs.List>
+      <Tabs.List aria-label={t("sections")} variant="underline">
+        <Tabs.Trigger value="policies">{t("policiesTab")}</Tabs.Trigger>
+        <Tabs.Trigger value="profiles">{t("profilesTab")}</Tabs.Trigger>
+      </Tabs.List>
       <Tabs.Content value="policies">
         <div className={styles.policyDirectoryIntro}>
           <p>{t("description")}</p>

@@ -314,7 +314,6 @@
 .userDirectoryNotes p { margin: 0; overflow-wrap: anywhere; }
 .policyDirectoryIntro { display: grid; gap: var(--xiak-spacing-narrow); padding: 0 var(--xiak-panel-padding) var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.65; }
 .policyDirectoryIntro p { margin: 0; }
-.policyDirectoryTabs { padding-inline: var(--xiak-panel-padding); }
 .policyMetadataTable th:first-child { width: 29%; }
 .policyMetadataTable :is(th, td):nth-child(3) { overflow-wrap: normal; word-break: keep-all; }
 .policyMetadataTable th:nth-child(5) { width: 17%; }
