@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
+import { DirectoryScope, useDirectoryQuery, useDirectoryTab } from "@/features/control-plane/routes/ConsoleNavigation";
 import { Ban, Check, ChevronDown, CircleCheck, CircleHelp, CodeXml, KeyRound, Monitor } from "lucide-react";
 import { Alert, Badge, Button, EmptyState, FormField, HelpDisclosure, Input, Table, TableSkeleton, Tabs, useLeaveConfirmation } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
@@ -11,7 +12,7 @@ import type { AccountAccessView, UserDeletion, UserDeletionIntent } from "../dom
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import { containsDenyStatement } from "../domain/policyDocument";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
-import { AuthorizationOverview, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
+import { RelationshipTabs, AuthorizationOverview, RelationshipLink, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessCredentials } from "./AccessCredentials";
 import { UserDirectPolicies, UserSignInSecurity } from "./AccountUserDialogs";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
@@ -356,7 +357,8 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
   const userBoundary = useTranslations("UserBoundary");
   const access = useAccountAccess();
   const [workflow, setWorkflow] = useState<"security" | "edit" | null>(null);
-  const [activeTab, setActiveTab] = useState<AccountUserDetailTab>(initialTab);
+  const [activeTab, setActiveTab] = useDirectoryTab(initialTab, ["identity", "access", "policies", "groups", "security", "keys"]);
+  const scope = useDirectoryQuery()?.get("scope");
   const [focusDetailHeading, setFocusDetailHeading] = useState(true);
   const editActionFocus = useRef<{ focus(): void }>(null);
   const previousEditing = useRef(false);
@@ -371,6 +373,12 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
     const document = policy.versions.find((version) => version.id === policy.defaultVersion)?.document;
     return document ? containsDenyStatement(document) : false;
   }).map((policy) => policy.id));
+  const visiblePolicies = attachedPolicies.filter((policy) => {
+    if (scope === "direct") return direct.includes(policy.id);
+    if (scope === "inherited") return inherited.includes(policy.id);
+    return scope !== "deny" || policiesWithDeny.has(policy.id);
+  });
+  const scopeLabel = scope === "direct" ? t("directPolicies") : scope === "inherited" ? t("inheritedPolicies") : scope === "deny" ? t("policiesWithDeny") : undefined;
   const boundary = workspace.userBoundaries[user.id];
   const profile = workspace.userProfiles[user.id];
   useLayoutEffect(() => {
@@ -394,7 +402,7 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
   return <WorkspaceDetail title={user.loginName} onBack={onBack} focus={focusDetailHeading} actionFocusRef={editActionFocus} actions={workflow === "edit" ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setWorkflow("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: !user.canDelete, disabledReason: !user.canDelete ? a(`restrictions.${user.deleteRestrictionReason ?? "AUTHORITY_REQUIRED"}`) : undefined, onSelect: onDelete }] }}>
     {workflow === "edit" ? <UserEditor user={user} onClose={() => setWorkflow(null)} /> : <>
     <div className={styles.userSummary}><div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div><div className={styles.roleTags}><Badge>{a("child")}</Badge><AccountUserStatus state={user.state} /></div></div>
-    <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as AccountUserDetailTab)}><Tabs.List aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></Tabs.List>
+    <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as AccountUserDetailTab)}><RelationshipTabs aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></RelationshipTabs>
       <Tabs.Content className={styles.stack} value="identity"><dl className={styles.facts}>
         <div><dt>{a("userType")}</dt><dd>{a("child")}</dd></div><div><dt>{a("ownership")}</dt><dd>{scene.accountName}</dd></div><div><dt>{a("tenantId")}</dt><dd>{scene.accountId}</dd></div><div><dt>{a("userId")}</dt><dd>{user.id}</dd></div><div><dt>{a("currentLoginName")}</dt><dd>{user.loginName}</dd></div><div><dt>{a("qualifiedLogin")}</dt><dd>{user.qualifiedName}</dd></div>
         {profile ? <div><dt>{wizard("steps.tags")}</dt><dd>{profile.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}{!profile.tags.length ? wizard("none") : null}</dd></div> : null}
@@ -402,23 +410,23 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
       <Tabs.Content className={styles.stack} value="access"><AccountUserAccessMethods user={user} workspace={workspace} /><p className={styles.note}>{a("accessPermissionHint")}</p><p className={styles.note}>{wizard("keyHint")}</p><p className={styles.note}>{wizard("mockSecurity")}</p></Tabs.Content>
       <Tabs.Content className={styles.stack} value="policies"><div className={styles.actions}><Button variant="secondary" onClick={() => setAssociation("policies")}>{t("associate")}</Button><Button variant="secondary" onClick={() => onOpen("policy-configuration", user.id)}>{t("policyConfigurationReview")}</Button></div><p className={styles.note}>{a("permissionSourceHint")}</p>
         <AuthorizationOverview title={t("grantOverview")} hint={t("grantOverviewHint")} items={[
-          { label: t("directPolicies"), value: <><strong>{direct.length}</strong> {t(direct.length === 1 ? "item" : "items")}</> },
-          { label: t("inheritedPolicies"), value: <><strong>{inherited.length}</strong> {t(inherited.length === 1 ? "item" : "items")}</> },
-          { label: t("policiesWithDeny"), value: <><strong>{policiesWithDeny.size}</strong> {t(policiesWithDeny.size === 1 ? "item" : "items")}</> },
+          { label: t("directPolicies"), value: <RelationshipLink view="users" id={user.id} tab="policies" scope="direct">{direct.length} {t(direct.length === 1 ? "item" : "items")}</RelationshipLink> },
+          { label: t("inheritedPolicies"), value: <RelationshipLink view="users" id={user.id} tab="policies" scope="inherited">{inherited.length} {t(inherited.length === 1 ? "item" : "items")}</RelationshipLink> },
+          { label: t("policiesWithDeny"), value: <RelationshipLink view="users" id={user.id} tab="policies" scope="deny">{policiesWithDeny.size} {t(policiesWithDeny.size === 1 ? "item" : "items")}</RelationshipLink> },
           { label: t("permissionBoundary"), value: t(boundary ? "configured" : "notConfigured") }
         ]} />
-        <WorkspaceRelationshipDirectory title={t("userPolicies")} searchLabel={t("searchUserPolicies")} items={attachedPolicies}
+        <DirectoryScope label={scopeLabel}><WorkspaceRelationshipDirectory title={t("userPolicies")} searchLabel={t("searchUserPolicies")} items={visiblePolicies}
           columns={[t("name"), t("type"), t("documentEffect"), t("grantSource")]} emptyTitle={t("noSelection")}
-          status={(shown) => relationship("completeResults", { shown, total: attachedPolicies.length })} footerNote={relationship("completeScope")}
+          status={(shown) => relationship("completeResults", { shown, total: visiblePolicies.length })} footerNote={relationship("completeScope")}
           keywords={(policy) => [policy.description, t(policy.kind), ...groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => group.name)].join(" ")}
-          row={(policy, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("policies", policy.id)}>{policy.name}</Table.PrimaryAction><small>{policy.description}</small></td><td>{t(policy.kind)}</td><td><Badge status={policiesWithDeny.has(policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge></td><td><div className={styles.stack}>{direct.includes(policy.id) ? <span>{t("directPolicies")}</span> : null}{groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => <button key={group.id} className={styles.userLink} disabled={blocked} onClick={() => onOpen("groups", group.id)}>{t("inheritedFrom", { name: group.name })}</button>)}</div></td></>} />
+          row={(policy, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("policies", policy.id)}>{policy.name}</Table.PrimaryAction><small>{policy.description}</small></td><td>{t(policy.kind)}</td><td><Badge status={policiesWithDeny.has(policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge></td><td><div className={styles.stack}>{direct.includes(policy.id) ? <span>{t("directPolicies")}</span> : null}{groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => <button key={group.id} className={styles.userLink} disabled={blocked} onClick={() => onOpen("groups", group.id)}>{t("inheritedFrom", { name: group.name })}</button>)}</div></td></>} /></DirectoryScope>
         <PermissionBoundary owner="user" workspace={workspace} value={boundary} onSave={(policyId) => access.executeWorkspace({ kind: "set-user-boundary", principalId: user.id, policyId })} onOpen={(id) => onOpen("policies", id)} />
       </Tabs.Content>
       <Tabs.Content className={styles.stack} value="groups"><div><Button variant="secondary" onClick={() => setAssociation("groups")}>{t("edit")}</Button></div><WorkspaceRelationshipDirectory title={t("userGroups")} searchLabel={t("searchUserGroups")} items={groups}
         columns={[t("name"), t("permissions")]} emptyTitle={t("empty")}
         status={(shown) => relationship("completeResults", { shown, total: groups.length })} footerNote={relationship("completeScope")}
         keywords={(group) => [group.description, ...group.policyIds].join(" ")}
-        row={(group, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("groups", group.id)}>{group.name}</Table.PrimaryAction><small>{group.description}</small></td><td>{group.policyIds.length}</td></>} /></Tabs.Content>
+        row={(group, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("groups", group.id)}>{group.name}</Table.PrimaryAction><small>{group.description}</small></td><td><RelationshipLink view="groups" id={group.id} tab="policies" label={group.name + " · " + t("permissions") + " · " + group.policyIds.length}>{group.policyIds.length}</RelationshipLink></td></>} /></Tabs.Content>
       <Tabs.Content className={styles.stack} value="security"><dl className={styles.facts}><div><dt>{a("status")}</dt><dd>{a(`states.${user.state}`)}</dd></div>{profile ? <><div><dt>{wizard("forceReset")}</dt><dd>{wizard(profile.passwordResetRequired ? "enabled" : "disabled")}</dd></div><div><dt>{wizard("loginProtection")}</dt><dd>{wizard(profile.loginProtection ? "enabled" : "disabled")}</dd></div></> : null}<div><dt>{a("directPolicyAttachments")}</dt><dd>{user.attachments.map((attachment) => attachment.label).join(" · ") || a("noGrantLabel")}</dd></div></dl><p className={styles.note}>{wizard("mockSecurity")}</p>{user.protected ? <p className={styles.note}>{a("protectedHint")}</p> : null}<div><Button ref={securityActionFocus} variant="secondary" onClick={() => { setFocusDetailHeading(false); setWorkflow("security"); }}>{a("manage")}</Button></div></Tabs.Content>
       <Tabs.Content value="keys"><AccessCredentials embedded scene={{ ...scene, users: [user] }} workspace={{ ...workspace, keys: workspace.keys.filter((key) => key.ownerId === user.id) }} /></Tabs.Content>
     </Tabs.Root>

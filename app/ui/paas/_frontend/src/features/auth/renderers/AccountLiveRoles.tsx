@@ -9,7 +9,8 @@ import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent, type ServiceLinkedRoleClient, type ServiceRoleTemplateClient } from "../application/AccountAccessProvider";
 import type { AccountAccessView, AccountPolicy } from "../domain/accounts";
 import type { RoleAccess, RoleCapability, RoleCapabilityAction, RoleListing, RolePermissionBoundary, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
-import { AuthorizationOverview, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { useDirectoryTab } from "@/features/control-plane/routes/ConsoleNavigation";
+import { RelationshipTabs, AuthorizationOverview, RelationshipLink, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
 import { LiveRoleDelete, LiveRoleMetadataEditor, LiveRolePolicyEditor, LiveRoleStatusEditor, LiveRoleTrustEditor, type LiveRoleDeletionReceipt } from "./LiveRoleManagement";
 import { readPendingPolicyAttachmentChange } from "./PolicyAttachmentChangeFlow";
@@ -187,8 +188,8 @@ function LiveRoleAuthorizationOverview({ access, client, onAccessChanged, onOpen
         : <span><Badge status="warning">{t("boundaryClosed")}</Badge><small>{t("boundaryClosedHint")}</small></span>;
   return <>
     <AuthorizationOverview title={t("authorizationOverview")} hint={t("liveAuthorizationOverviewHint")} items={[
-      { label: t("trustAdmission"), value: t("trustedUserCount", { count: trustPrincipalCount(access.trustVersion) }) },
-      { label: t("livePermissions"), value: t("attachedPolicyCount", { count: access.policyAttachments.length }) },
+      { label: t("trustAdmission"), value: <RelationshipLink view="roles" id={access.role.id} tab="trust">{t("trustedUserCount", { count: trustPrincipalCount(access.trustVersion) })}</RelationshipLink> },
+      { label: t("livePermissions"), value: <RelationshipLink view="roles" id={access.role.id} tab="permissions">{t("attachedPolicyCount", { count: access.policyAttachments.length })}</RelationshipLink> },
       { label: t("boundary"), value: boundaryValue },
       { label: t("maximumSession"), value: durationLabel(access.role.maxSessionDurationSeconds) }
     ]} />
@@ -303,7 +304,7 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
   const [access, setAccess] = useState<RoleAccess | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
-  const [section, setSection] = useState("permissions");
+  const [section, setSection] = useDirectoryTab("permissions", ["permissions", "trust", "trustHistory", "sessions", "capabilities"]);
   const [workflow, setWorkflow] = useState<"metadata" | "status" | "trust" | "addPolicy" | "removePolicy" | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleted, setDeleted] = useState<LiveRoleDeletionReceipt | null>(null);
@@ -407,13 +408,13 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
       </dl>
       {access.role.tags.length ? <div className={styles.roleTags}>{access.role.tags.map((tag) => <Badge key={tag.key}>{tag.key}: {tag.value}</Badge>)}</div> : null}
       <Tabs.Root value={section} onValueChange={setSection}>
-        <Tabs.List aria-label={access.role.name}>
+        <RelationshipTabs aria-label={access.role.name}>
           <Tabs.Trigger value="permissions">{t("livePermissions")} ({access.policyAttachments.length})</Tabs.Trigger>
           <Tabs.Trigger value="trust">{t("liveTrust")} ({access.trustVersion.document.statements.length})</Tabs.Trigger>
           <Tabs.Trigger value="trustHistory">{t("trustHistory")}</Tabs.Trigger>
           <Tabs.Trigger value="sessions">{t("liveSessions")}</Tabs.Trigger>
           <Tabs.Trigger value="capabilities">{t("availableOperations")}</Tabs.Trigger>
-        </Tabs.List>
+        </RelationshipTabs>
         <Tabs.Content className={styles.stack} value="permissions">
           <div className={styles.actions}>
             <Button variant="secondary" disabled={attachmentCapability?.available !== true} title={attachmentCapability?.available === true ? undefined : actionReason(attachmentCapability)} onClick={() => setWorkflow("addPolicy")}>{t("addPolicies")}</Button>

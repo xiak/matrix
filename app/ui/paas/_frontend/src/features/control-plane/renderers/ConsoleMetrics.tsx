@@ -3,6 +3,7 @@
 import { useFormatter, useTranslations } from "next-intl";
 import { Activity, AlertTriangle, Boxes, ChartNoAxesCombined, CheckCircle2, Database, Gauge, GitBranch, MapPin, PackageSearch, Server, Workflow } from "lucide-react";
 import { Statistic } from "@ui/xiak";
+import { ConsoleLink } from "../routes/ConsoleNavigation";
 import type { MetricScene } from "../scenes/consoleScene";
 import styles from "./ConsoleMetrics.module.css";
 
@@ -28,6 +29,8 @@ export function ConsoleMetrics({ metrics }: { metrics: MetricScene[] }) {
           ? format.number(metric.value, { style: "unit", unit: "minute", unitDisplay: "short" })
           : metric.id === "ingestion" ? `${format.number(metric.value)} GB/h` : format.number(metric.value);
       return <Statistic key={metric.id} label={t(`items.${metric.id}.label`)} value={value}
+        link={metric.href ? <ConsoleLink href={metric.href} /> : undefined}
+        hintLink={metric.detailHref ? <ConsoleLink href={metric.detailHref} /> : undefined}
         hint={t(`items.${metric.id}.hint`, { count: metric.detailCount ?? 0 })} status={metric.status} icon={<Icon />} />;
     })}
   </section>;

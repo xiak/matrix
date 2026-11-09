@@ -1,6 +1,6 @@
 import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
-import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavigation";
+import { ConsoleLink as Link, useConsoleNavigation, useDirectoryQuery, DirectoryScope } from "../routes/ConsoleNavigation";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
 import type { AccountUserDetailTab } from "@/features/auth/renderers/AccountUserWorkspace";
 import {
@@ -261,10 +261,14 @@ function ManagedProductContent({ preview, scene }: {
           <dl className={styles.productOverviewFacts}>
             <div><dt>{t("offeringId")}</dt><dd><Typography.Code>{scene.offering?.id ?? "—"}</Typography.Code></dd></div>
             <div><dt>{t("engineVersion")}</dt><dd>{scene.offering?.version ?? "—"}</dd></div>
-            <div><dt>{t("activatedQuota")}</dt><dd>{scene.purchasedQuota}</dd></div>
-            <div><dt>{t("availableQuota")}</dt><dd>{scene.availableQuota}</dd></div>
-            <div><dt>{t("instances")}</dt><dd>{scene.instanceCount}</dd></div>
-            <div><dt>{t("readyInstances")}</dt><dd>{scene.readyInstanceCount}</dd></div>
+            {([
+              ["activatedQuota", scene.purchasedQuota, quotaHref],
+              ["availableQuota", scene.availableQuota, quotaHref + "?scope=available"],
+              ["instances", scene.instanceCount, instanceHref],
+              ["readyInstances", scene.readyInstanceCount, instanceHref + "?scope=ready"]
+            ] as const).map(([label, count, href]) => <div key={label}><dt>{t(label)}</dt><dd>
+              <Link className={styles.textLink} href={href} aria-label={t(label) + " · " + count}>{count}<ArrowRight aria-hidden="true" /></Link>
+            </dd></div>)}
           </dl>
         </Card.Body>
         <Card.Footer className={styles.productOverviewFooter}>
@@ -606,6 +610,12 @@ function InstallationContent({ scene, preview, accountId }: {
   } = useControlPlane();
   const online = useSyncExternalStore(subscribeNetwork, () => navigator.onLine, () => true);
   const listedProduct = currentScene?.productId;
+  const filter = useDirectoryQuery()?.get("scope");
+  const listed = scene.installations.filter((item) => {
+    if (filter === "processing") return item.phase === "PENDING" || item.phase === "PROVISIONING";
+    return filter !== "ready" || item.phase === "READY";
+  });
+  const scopeLabel = filter === "ready" ? t("readyInstances") : filter === "processing" ? t("processingInstances") : undefined;
   const awaitingCreation = managedServiceCommand?.phase === "unknown" && managedServiceCommand.intent.kind === "CREATE_INSTALLATION" &&
     (!listedProduct || !isManagedServiceProductId(listedProduct) || managedServiceCommand.intent.payload.offeringId === managedServiceProduct(listedProduct).offeringId);
   const [selectedSummary, setSelectedSummary] = useState<InstallationScene | null>(null);
@@ -781,12 +791,14 @@ function InstallationContent({ scene, preview, accountId }: {
           <Typography.Title as="h2" level={3}>{t("organizationInstances")}</Typography.Title>
           <Typography.Text tone="muted">{t(preview ? "installationStateHint" : "installationProgressHint")}</Typography.Text>
         </div>
-        <Badge status="info">{t("instanceCount", { count: scene.installations.length })}</Badge>
+        <Badge status="info">{t("instanceCount", { count: listed.length })}</Badge>
       </Card.Header>
       {preview || !online || error?.kind === "unavailable" ? <Card.Body><Alert status="warning">
         {t(preview ? "instanceVisibilityMockBoundary" : online ? "installationRefreshDelayed" : "installationOffline")}
       </Alert></Card.Body> : null}
-      {scene.installations.length || !awaitingCreation ? <InstallationRows items={scene.installations} onOpen={accountId ? openInstallation : undefined} triggerRefs={rowTriggers} /> : null}
+      <DirectoryScope label={scopeLabel} empty={listed.length === 0}>
+        {listed.length || !awaitingCreation ? <InstallationRows items={listed} onOpen={accountId ? openInstallation : undefined} triggerRefs={rowTriggers} /> : null}
+      </DirectoryScope>
     </Card>
   );
 }
@@ -851,6 +863,8 @@ export function ConsoleContentRenderer({
   scope?: ResourceScope;
 }) {
   const t = useTranslations("AccountAccess");
+  const metric = useTranslations("ConsoleMetrics.items");
+  const filter = useDirectoryQuery()?.get("scope");
   if (scene.kind === "logs") return <LogServiceRenderer regionId={scope?.regionId} scene={scene} />;
   if (scene.kind === "audit") return <AuditWorkspace preview={preview} tenantId={accountId} />;
   if (scene.kind === "access") return <Suspense fallback={<ConsoleContentLoadingRenderer label={t("loading")} selection={{ section: "access", view: scene.view === "overview" ? undefined : scene.view }} />}><AccessContent pendingHref={pendingHref} view={scene.view} /></Suspense>;
@@ -866,8 +880,21 @@ export function ConsoleContentRenderer({
   }
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
   if (scene.kind === "managed-product") return <ManagedProductContent preview={preview} scene={scene} />;
-  if (scene.kind === "catalog") return <CatalogContent scene={scene} preview={preview} />;
-  if (scene.kind === "quotas") return <QuotaContent scene={scene} />;
+  if (scene.kind === "catalog") {
+    const available = filter === "available";
+    const offerings = available ? scene.offerings.filter((item) => item.available) : scene.offerings;
+    return <DirectoryScope label={available ? metric("offerings.label") : undefined} empty={!offerings.length}>
+      <CatalogContent scene={{ ...scene, offerings }} preview={preview} /></DirectoryScope>;
+  }
+  if (scene.kind === "quotas") {
+    const available = filter === "available";
+    const entitlements = available ? scene.entitlements.filter((item) => item.available > 0) : scene.entitlements;
+    return <DirectoryScope label={available ? metric("quota.label") : undefined} empty={!entitlements.length}>
+      <QuotaContent scene={{ ...scene, entitlements }} /></DirectoryScope>;
+  }
   if (scene.kind === "installations") return <InstallationContent scene={scene} preview={preview} accountId={accountId} />;
-  return <RegionContent scene={scene} />;
+  const ready = filter === "ready";
+  const regions = ready ? scene.regions.filter((item) => item.state === "READY") : scene.regions;
+  return <DirectoryScope label={ready ? metric("regions.label") : undefined} empty={!regions.length}>
+    <RegionContent scene={{ ...scene, regions }} /></DirectoryScope>;
 }

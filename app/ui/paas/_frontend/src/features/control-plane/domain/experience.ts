@@ -1,6 +1,9 @@
 import type { ApplicationReadSnapshot } from "./application";
 
 export type ExperienceResourceState = "HEALTHY" | "RUNNING" | "DEGRADED" | "FAILED";
+export function isHealthyResource(resource: { state: ExperienceResourceState }): boolean {
+  return resource.state === "HEALTHY" || resource.state === "RUNNING";
+}
 export type ExperienceOperationState = "SUCCEEDED" | "RUNNING" | "FAILED";
 export type ExperienceAlertSeverity = "CRITICAL" | "WARNING" | "INFO";
 

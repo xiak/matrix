@@ -5,6 +5,7 @@ import { useLocale, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Badge, Button, Card, ContentPage, EmptyState, TableSelectionCell, TablePagination, TableToolbar, Select, Table, Tabs, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
+import { replaceDirectoryQuery, useDirectoryQuery } from "@/features/control-plane/routes/ConsoleNavigation";
 import { defaultPolicyDirectoryView, useAccountAccess, type PolicyDirectoryView } from "../application/AccountAccessProvider";
 import { type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
 import { expandPolicyActions } from "../domain/policyLanguage";
@@ -36,7 +37,10 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate, onPr
   const describe = usePolicyDescription();
   const { policyDirectoryView, busy } = useAccountAccess();
   const collection = useTranslations("Collection");
-  const [view, setView] = useState(policyDirectoryView.read);
+  const requested = useDirectoryQuery()?.get("kind");
+  const linkedKind = requested === "system" || requested === "custom" || requested === "all" ? requested : null;
+  const [storedView, setView] = useState(() => linkedKind ? { ...defaultPolicyDirectoryView, kind: linkedKind } : policyDirectoryView.read());
+  const view = useMemo(() => linkedKind ? { ...storedView, kind: linkedKind } : storedView, [storedView, linkedKind]);
   const [selection, setSelection] = useState<string[]>([]);
   const [section, setSection] = useState("policies");
   const [catalogMounted, setCatalogMounted] = useState(false);
@@ -65,8 +69,11 @@ export function PolicyDirectory({ workspace, onCreate, onOpen, onAssociate, onPr
   const selected = workspace.policies.filter((policy) => selection.includes(policy.id));
   const allSelected = visible.length > 0 && visible.every((row) => selection.includes(row.policy.id));
   const someSelected = visible.some((row) => selection.includes(row.policy.id));
-  const change = (next: Partial<PolicyDirectoryView>) => setView((current) => ({ ...current, page: 1, ...next }));
-  const reset = () => setView({ ...defaultPolicyDirectoryView, pageSize: view.pageSize, sort: view.sort });
+  const change = (next: Partial<PolicyDirectoryView>) => {
+    setView((current) => ({ ...current, page: 1, ...next }));
+    if (linkedKind && next.kind) replaceDirectoryQuery({ kind: next.kind });
+  };
+  const reset = () => change({ ...defaultPolicyDirectoryView, pageSize: view.pageSize, sort: view.sort });
   const customOnly = view.kind === "custom";
   return <Tabs.Root className={styles.directory} value={section} onValueChange={(next) => { setSection(next); setSelection([]); if (next === "profiles") setCatalogMounted(true); }}>
     <ContentPage.Heading title={w("policies")} scrollKey="policy-directory" actions={section === "policies" ? <ContentPage.Commands label={collection("pageActions")} focusRef={createFocusRef}

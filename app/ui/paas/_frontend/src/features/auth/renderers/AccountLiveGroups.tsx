@@ -663,6 +663,7 @@ function LiveGroupDirectory({ client, onCreate, onOpen }: { client: GroupAccessC
     name: entry.group.name,
     description: entry.group.description,
     createdAt: entry.group.createdAt,
+    canRead: groupCapability(entry, "iam.group.read")?.available === true,
     directPolicyCount: entry.policyAttachments.length
   }));
   return <>

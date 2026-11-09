@@ -1,9 +1,10 @@
 "use client";
 
-import { useState, type ReactNode, type RefObject } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, HelpDisclosure, Badge, Button, EmptyState, Table, TableSkeleton, Tabs } from "@ui/xiak";
-import { AuthorizationOverview, WorkspaceCollection, WorkspaceDetail, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
+import { DirectoryScope, useDirectoryQuery, useDirectoryTab } from "@/features/control-plane/routes/ConsoleNavigation";
+import { RelationshipTabs, AuthorizationOverview, RelationshipLink, WorkspaceCollection, WorkspaceDetail, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
 export type GroupActionControl = {
@@ -18,6 +19,7 @@ export type GroupDirectoryRecord = {
   description: string;
   createdAt: string;
   directPolicyCount: number;
+  canRead?: boolean;
   /** Omitted when the repository has not supplied an authoritative total. */
   memberCount?: number;
 };
@@ -98,8 +100,8 @@ export function GroupDirectory({ groups, create, loadMore, status, footerNote, l
         <Table.PrimaryAction onClick={() => onOpen(group.id)}>{group.name}</Table.PrimaryAction>
         <small>{group.description}</small>
       </td>
-      {showMemberCount ? <td>{t("memberCount", { count: group.memberCount! })}</td> : null}
-      <td>{g("directPolicyCount", { count: group.directPolicyCount })}</td>
+      {showMemberCount ? <td><RelationshipLink enabled={group.canRead !== false} view="groups" id={group.id} tab="members">{t("memberCount", { count: group.memberCount! })}</RelationshipLink></td> : null}
+      <td><RelationshipLink enabled={group.canRead !== false} view="groups" id={group.id} tab="policies">{g("directPolicyCount", { count: group.directPolicyCount })}</RelationshipLink></td>
       <td><WorkspaceTime value={group.createdAt} /></td>
     </>}
   />;
@@ -192,7 +194,9 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
 }) {
   const t = useTranslations("IamWorkspace");
   const g = useTranslations("GroupWorkspace");
-  const [activeTab, setActiveTab] = useState<"members" | "policies">("members");
+  const [activeTab, setActiveTab] = useDirectoryTab("members", ["members", "policies"]);
+  const denyOnly = useDirectoryQuery()?.get("scope") === "deny" && group.policyDocumentEffects === "complete";
+  const displayedPolicies = denyOnly ? group.policies.filter((policy) => policy.documentEffect === "containsDeny") : group.policies;
   const policiesWithDeny = group.policies.filter((policy) => policy.documentEffect === "containsDeny").length;
   const showAuthorizationOverview = group.policyDocumentEffects === "complete" && group.memberCount !== undefined;
 
@@ -217,17 +221,17 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
       title={g("authorizationOverview")}
       hint={g("authorizationOverviewHint")}
       items={[
-        { label: t("members"), value: t("memberCount", { count: group.memberCount! }) },
-        { label: g("directPolicies"), value: g("directPolicyCount", { count: group.directPolicyCount }) },
-        { label: t("policiesWithDeny"), value: <><strong>{policiesWithDeny}</strong> {t(policiesWithDeny === 1 ? "item" : "items")}</> },
+        { label: t("members"), value: <RelationshipLink view="groups" id={group.id} tab="members">{t("memberCount", { count: group.memberCount! })}</RelationshipLink> },
+        { label: g("directPolicies"), value: <RelationshipLink view="groups" id={group.id} tab="policies">{g("directPolicyCount", { count: group.directPolicyCount })}</RelationshipLink> },
+        { label: t("policiesWithDeny"), value: <RelationshipLink view="groups" id={group.id} tab="policies" scope="deny">{policiesWithDeny} {t(policiesWithDeny === 1 ? "item" : "items")}</RelationshipLink> },
         { label: t("permissionBoundary"), value: g("noPermissionBoundary") }
       ]}
     /> : null}
     <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as "members" | "policies")}>
-      <Tabs.List aria-label={group.name}>
+      <RelationshipTabs aria-label={group.name}>
         <Tabs.Trigger value="members">{t("members")}{group.memberCount === undefined ? null : ` (${group.memberCount})`}</Tabs.Trigger>
         <Tabs.Trigger value="policies">{g("directPolicies")} ({group.directPolicyCount})</Tabs.Trigger>
-      </Tabs.List>
+      </RelationshipTabs>
       <Tabs.Content className={styles.stack} value="members">
         <div className={styles.actions}>
           <GroupActionButton control={controls.addMember} triggerRef={addMemberTriggerRef}>{g("addMembers")}</GroupActionButton>
@@ -247,9 +251,9 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
           <GroupActionButton control={controls.removePolicy} triggerRef={removePolicyTriggerRef} variant="secondary">{g("removePolicies")}</GroupActionButton>
         </div>
         <HelpDisclosure label={g("groupPolicyHelp")}>{g("policyChangeHint")}</HelpDisclosure>
-        {group.policies.length
-          ? <GroupPolicyTable policies={group.policies} onOpen={onOpenPolicy} />
-          : <EmptyState title={g("noPolicies")} />}
+        <DirectoryScope label={denyOnly ? t("policiesWithDeny") : undefined} empty={!displayedPolicies.length}>{displayedPolicies.length
+          ? <GroupPolicyTable policies={displayedPolicies} onOpen={onOpenPolicy} />
+          : <EmptyState title={g("noPolicies")} />}</DirectoryScope>
       </Tabs.Content>
     </Tabs.Root>
     </>}

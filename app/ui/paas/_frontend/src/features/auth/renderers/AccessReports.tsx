@@ -1,9 +1,10 @@
 "use client";
 
-import { useMemo, useState, type RefObject } from "react";
+import { useMemo, useRef, useState, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight } from "lucide-react";
 import { ActionMenu, Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, Table, Tabs, Typography } from "@ui/xiak";
+import { ConsoleLink, DirectoryScope, replaceDirectoryQuery, useDirectoryQuery } from "@/features/control-plane/routes/ConsoleNavigation";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
@@ -491,6 +492,11 @@ export function SecurityReportDirectoryPreview({ workspace, scene, currentSessio
   const t = useTranslations("IamWorkspace.securityReportDirectory");
   const [referenceAt] = useState(() => new Date().toISOString());
   const [selected, setSelected] = useState<AccountSecurityReportDirectoryEntry | null>(null);
+  const requested = useDirectoryQuery()?.get("retention");
+  const retention = requested && ["all", "readable", "available", "expiringSoon", "expired"].includes(requested) ? requested : undefined;
+  const [summaryVisit, setSummaryVisit] = useState(0);
+  const reportLink = (state: string, label: string, count: number) => <ConsoleLink className={styles.relationshipLink}
+    aria-label={label + " · " + count} href={`/console/access/security-reports/?retention=${state}`} onAccepted={() => setSummaryVisit((n) => n + 1)}>{count}</ConsoleLink>;
   const [creating, setCreating] = useState(false);
   const reports = useMemo(() => workspace
     ? buildAccountSecurityReportDirectoryPreview(workspace, scene, referenceAt, currentSession)
@@ -509,18 +515,20 @@ export function SecurityReportDirectoryPreview({ workspace, scene, currentSessio
   const available = reports.filter((entry) => entry.status !== "expired").length;
   const expiringSoon = reports.filter((entry) => entry.status === "expiringSoon").length;
   const expired = reports.filter((entry) => entry.status === "expired").length;
-  return <WorkspaceCollection title={t("title")} description={t("description")} items={reports}
+  return <WorkspaceCollection key={summaryVisit} title={t("title")} description={t("description")} items={reports}
     create={{ label: t("create"), onClick: () => setCreating(true) }}
     columns={[t("report"), t("observedAt"), t("coverage"), t("rows"), t("retentionStatus")]}
     keywords={(entry) => `${entry.status} ${entry.report.accountId} ${entry.report.formatVersion}`}
-    filter={{ label: t("retentionStatus"), options: (["available", "expiringSoon", "expired"] as const).map((status) => ({ value: status, label: t(`statuses.${status}`) })), matches: (entry, status) => entry.status === status }}
+    filter={{ label: t("retentionStatus"), value: retention, onChange: retention ? (value) => replaceDirectoryQuery({ retention: value }) : undefined,
+      options: [{ value: "readable", label: t("readable") }, ...(["available", "expiringSoon", "expired"] as const).map((status) => ({ value: status, label: t(`statuses.${status}`) }))],
+      matches: (entry, status) => status === "readable" ? entry.status !== "expired" : entry.status === status }}
     intro={<div className={styles.stack}>
       <Alert status="info">{t("mockBoundary")}</Alert>
       <dl className={styles.securityReportSummary} aria-label={t("summary")}>
-        <div><dt>{t("readable")}</dt><dd>{available}</dd></div>
-        <div><dt>{t("expiringSoon")}</dt><dd>{expiringSoon}</dd></div>
-        <div><dt>{t("expired")}</dt><dd>{expired}</dd></div>
-        <div><dt>{t("retentionLimit")}</dt><dd>{reports.length} / {accountSecurityReportLimits.retainedReports}</dd></div>
+        <div><dt>{t("readable")}</dt><dd>{reportLink("readable", t("readable"), available)}</dd></div>
+        <div><dt>{t("expiringSoon")}</dt><dd>{reportLink("expiringSoon", t("expiringSoon"), expiringSoon)}</dd></div>
+        <div><dt>{t("expired")}</dt><dd>{reportLink("expired", t("expired"), expired)}</dd></div>
+        <div><dt>{t("retentionLimit")}</dt><dd>{reportLink("all", t("retentionLimit"), reports.length)} / {accountSecurityReportLimits.retainedReports}</dd></div>
       </dl>
     </div>}
     row={(entry) => <>
@@ -545,6 +553,16 @@ export function AccessReports({ workspace, scene, currentSession = null, onNavig
   const t = useTranslations("IamWorkspace");
   const format = useFormatter();
   const snapshot = buildAccessSecuritySnapshot(workspace, scene.directoryComplete);
+  const query = useDirectoryQuery()?.get("check");
+  const checksRef = useRef<HTMLDivElement>(null);
+  const states = ["review", "configured", "unknown", "notApplicable"] as const;
+  const evidenceStates = ["observed", "incomplete", "unobserved", "notApplicable"] as const;
+  const state = states.find((value) => query === "state." + value);
+  const evidence = evidenceStates.find((value) => query === "evidence." + value);
+  const checks = snapshot.checks.filter((item) => (!state || item.state === state) && (!evidence || item.evidence === evidence));
+  const checkLabel = state ? t(`securityStates.${state}`) : evidence ? t(`securityEvidenceStates.${evidence}`) : undefined;
+  const checkLink = (value: string, label: string, count: number) => <ConsoleLink className={styles.relationshipLink} aria-label={label + " · " + count}
+    href={`/console/access/?check=${value}#iam-security-checks`} onAccepted={() => checksRef.current?.focus()}>{count}</ConsoleLink>;
   const scopedSession = currentSession?.principalId === scene.currentUserId ? currentSession : null;
   const activity = buildAccessActivityObservations(workspace, scopedSession);
   return <Card>
@@ -555,9 +573,9 @@ export function AccessReports({ workspace, scene, currentSession = null, onNavig
     <Card.Body className={styles.securityReportBody}>
       <p className={styles.note}>{t("securityOverviewHint")}</p>
       <dl className={styles.securityReportSummary} aria-label={t("securityStatusSummary")}>
-        {(["review", "configured", "unknown", "notApplicable"] as const).map((state) => <div key={state}>
+        {states.map((state) => <div key={state}>
           <dt>{t(`securityStates.${state}`)}</dt>
-          <dd>{snapshot.counts[state]}</dd>
+          <dd>{checkLink("state." + state, t(`securityStates.${state}`), snapshot.counts[state])}</dd>
         </div>)}
       </dl>
       <div className={styles.securityEvidenceHeading}>
@@ -565,13 +583,14 @@ export function AccessReports({ workspace, scene, currentSession = null, onNavig
         <span>{t("securityEvidenceHint")}</span>
       </div>
       <dl className={styles.securityReportSummary} aria-label={t("securityEvidenceStatusSummary")}>
-        {(["observed", "incomplete", "unobserved", "notApplicable"] as const).map((state) => <div key={state}>
+        {evidenceStates.map((state) => <div key={state}>
           <dt>{t(`securityEvidenceStates.${state}`)}</dt>
-          <dd>{snapshot.evidenceCounts[state]}</dd>
+          <dd>{checkLink("evidence." + state, t(`securityEvidenceStates.${state}`), snapshot.evidenceCounts[state])}</dd>
         </div>)}
       </dl>
-      <ul className={styles.securityChecks}>
-        {snapshot.checks.map((check) => {
+      <div id="iam-security-checks" ref={checksRef} tabIndex={-1}>
+      <DirectoryScope label={checkLabel} parameter="check" empty={!checks.length}><ul className={styles.securityChecks}>
+        {checks.map((check) => {
           const title = t(`securityChecks.${check.id}.title`);
           return <li key={check.id}>
             <div className={styles.securityCheckCopy}>
@@ -587,7 +606,7 @@ export function AccessReports({ workspace, scene, currentSession = null, onNavig
             </Button> : null}
           </li>;
         })}
-      </ul>
+      </ul></DirectoryScope></div>
       <div className={styles.securityEvidenceHeading}>
         <strong>{t("activityEvidenceTitle")}</strong>
         <span>{t("activityEvidenceHint")}</span>

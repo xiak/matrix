@@ -2079,6 +2079,27 @@ page controls and keep the continuation action when there are more roles to load
 Browser checks cover 320px, 390px, 1315px and 1941px layouts and five returns
 to the Role directory through navigation with its explanation collapsed.
 
+Overview counts link to the authorized records behind the number. The card
+and any secondary count with a different destination are separate native
+links. Directory filters and relationship tabs are addressable, survive a
+reload and can be cleared at the destination. Zero opens the same filtered
+directory with an empty result. A snapshot with no corresponding detail
+collection retains an informational value.
+
+IAM counts apply the current directory window and distinguish enabled users,
+pending password changes and absence of direct policy attachments. Group,
+role and user relationships open the exact entity and tab. In the service
+console, readiness filters lifecycle state, available quota opens positive
+balances, and product links retain their product. Regional resource and log
+links carry the selected region. Task, alert and pipeline counts open their
+corresponding states. Unread totals open the unread inbox and leave read
+status untouched until a message is opened. Security checks and readable
+security reports retain their own evidence and retention criteria.
+Live browser checks matched all four IAM counts with their user lists and
+exercised empty service results and ready regions. Preview browser checks
+covered relationship tabs, regional resources, unread messages, keyboard
+activation, opening in a new tab and touch navigation at 390px.
+
 The public Theme foundation covers tables, dialogs, buttons, native radio and
 checkbox controls, input/select fields, search and password affordances,
 alerts, empty states, tabs, selection menus, statistics and progress. All

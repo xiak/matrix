@@ -1,4 +1,5 @@
 "use client";
+import { DirectoryScope, useDirectoryQuery, useDirectoryTab } from "@/features/control-plane/routes/ConsoleNavigation";
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, EmptyState, FormField, Table, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
@@ -8,7 +9,7 @@ import type { AccessRole, AccessWorkspace } from "../domain/accessWorkspace";
 import { containsDenyStatement } from "../domain/policyDocument";
 import { roleTrustPreview, validateRoleTrust, type RoleTrust } from "../domain/roleTrust";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { AuthorizationOverview, WorkspaceCollection, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceRelationshipDirectory, WorkspaceSelection, WorkspaceTime } from "./AccessWorkspaceUi";
+import { RelationshipTabs, AuthorizationOverview, RelationshipLink, WorkspaceCollection, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceRelationshipDirectory, WorkspaceSelection, WorkspaceTime } from "./AccessWorkspaceUi";
 import { RoleSessionSettings, RoleTags, RoleTrustFields } from "./RoleConfiguration";
 import { PermissionBoundary } from "./PermissionBoundary";
 import { RoleSessions } from "./RoleSessions";
@@ -100,7 +101,8 @@ function PreviewRoleDeletionReceipt({ role }: { role: AccessRole }) {
 export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("IamWorkspace"), r = useTranslations("RoleWorkspace"), relationship = useTranslations("RelationshipDirectory"), access = useAccountAccess();
   const [workflow, setWorkflow] = useState<"metadata" | "trust" | "settings" | "add" | "remove" | null>(null);
-  const [tab, setTab] = useState("policies");
+  const [tab, setTab] = useDirectoryTab("policies", ["policies", "trust", "sessions", "settings"]);
+  const denyOnly = useDirectoryQuery()?.get("scope") === "deny";
   const [deleting, setDeleting] = useState<AccessRole | null>(null);
   const [deleted, setDeleted] = useState<AccessRole | null>(null);
   const deletionNavigationStarted = useRef(false);
@@ -135,6 +137,7 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
     const document = policy.versions.find((version) => version.id === policy.defaultVersion)?.document;
     return document ? containsDenyStatement(document) : false;
   }).map((policy) => policy.id));
+  const displayedPolicies = denyOnly ? selectedPolicyRows.filter((entry) => policiesWithDeny.has(entry.id)) : selectedPolicyRows;
   const openWorkflow = (next: NonNullable<typeof workflow>) => { access.clearWorkspaceError(); setWorkflow(next); };
   return <>
     {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("roles")} primaryActionRef={metadataTrigger} actions={workflow ? undefined : { primary: { id: "edit", label: r("editMetadata"), variant: "secondary", onSelect: () => openWorkflow("metadata") }, secondary: [{ id: "delete", label: t("delete"), danger: true, onSelect: () => setDeleting(selected) }] }}>
@@ -145,17 +148,17 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
         : <><p className={styles.note}>{selected.description || "—"}</p><dl className={styles.facts}><div><dt>ID</dt><dd>{selected.id}</dd></div><div><dt>{r("roleType")}</dt><dd>{r("customerRole")}</dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
       {selected.tags.length ? <div className={styles.actions} aria-label={r("tags")}>{selected.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}</div> : null}
       <AuthorizationOverview title={r("authorizationOverview")} hint={r("authorizationOverviewHint")} items={[
-        { label: r("trustAdmission"), value: r("trustedUserCount", { count: selected.trustedUserIds.length }) },
-        { label: t("permissions"), value: <><strong>{selected.policyIds.length}</strong> {t(selected.policyIds.length === 1 ? "item" : "items")}</> },
-        { label: t("policiesWithDeny"), value: <><strong>{policiesWithDeny.size}</strong> {t(policiesWithDeny.size === 1 ? "item" : "items")}</> },
+        { label: r("trustAdmission"), value: <RelationshipLink view="roles" id={selected.id} tab="trust">{r("trustedUserCount", { count: selected.trustedUserIds.length })}</RelationshipLink> },
+        { label: t("permissions"), value: <RelationshipLink view="roles" id={selected.id} tab="policies">{selected.policyIds.length} {t(selected.policyIds.length === 1 ? "item" : "items")}</RelationshipLink> },
+        { label: t("policiesWithDeny"), value: <RelationshipLink view="roles" id={selected.id} tab="policies" scope="deny">{policiesWithDeny.size} {t(policiesWithDeny.size === 1 ? "item" : "items")}</RelationshipLink> },
         { label: t("permissionBoundary"), value: selected.boundaryPolicyId ? t("configured") : <Badge status="warning">{r("boundaryClosed")}</Badge> }
       ]} />
-      <Tabs.Root value={tab} onValueChange={setTab}><Tabs.List aria-label={selected.name}><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="trust">{t("trust")}</Tabs.Trigger><Tabs.Trigger value="sessions">{r("sessions")}</Tabs.Trigger><Tabs.Trigger value="settings">{r("sessionSettings")}</Tabs.Trigger></Tabs.List>
-        <Tabs.Content className={styles.stack} value="policies"><div className={styles.actions}><Button ref={addTrigger} variant="secondary" onClick={() => openWorkflow("add")}>{r("addPolicies")}</Button><Button ref={removeTrigger} variant="ghost" disabled={!selected.policyIds.length} onClick={() => openWorkflow("remove")}>{r("removePolicies")}</Button></div><p className={styles.note}>{r("permissionsHint")}</p><WorkspaceRelationshipDirectory title={t("permissions")} searchLabel={r("searchAttachedPolicies")} items={selectedPolicyRows}
+      <Tabs.Root value={tab} onValueChange={setTab}><RelationshipTabs aria-label={selected.name}><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="trust">{t("trust")}</Tabs.Trigger><Tabs.Trigger value="sessions">{r("sessions")}</Tabs.Trigger><Tabs.Trigger value="settings">{r("sessionSettings")}</Tabs.Trigger></RelationshipTabs>
+        <Tabs.Content className={styles.stack} value="policies"><div className={styles.actions}><Button ref={addTrigger} variant="secondary" onClick={() => openWorkflow("add")}>{r("addPolicies")}</Button><Button ref={removeTrigger} variant="ghost" disabled={!selected.policyIds.length} onClick={() => openWorkflow("remove")}>{r("removePolicies")}</Button></div><p className={styles.note}>{r("permissionsHint")}</p><DirectoryScope label={denyOnly ? t("policiesWithDeny") : undefined}><WorkspaceRelationshipDirectory title={t("permissions")} searchLabel={r("searchAttachedPolicies")} items={displayedPolicies}
           columns={[t("name"), t("type"), r("effectiveVersion"), t("documentEffect")]} emptyTitle={r("noPermissions")}
-          status={(shown) => relationship("completeResults", { shown, total: selectedPolicyRows.length })} footerNote={relationship("completeScope")}
+          status={(shown) => relationship("completeResults", { shown, total: displayedPolicies.length })} footerNote={relationship("completeScope")}
           keywords={(item) => [item.policy?.description ?? "", item.policy ? t(item.policy.kind) : ""].join(" ")}
-          row={(item, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("policies", item.id)}>{item.name}</Table.PrimaryAction><small>{item.policy?.description}</small></td><td>{item.policy ? t(item.policy.kind) : "—"}</td><td>{item.policy ? "v" + item.policy.defaultVersion : "—"}</td><td>{item.policy ? <Badge status={policiesWithDeny.has(item.policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(item.policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge> : "—"}</td></>} />
+          row={(item, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("policies", item.id)}>{item.name}</Table.PrimaryAction><small>{item.policy?.description}</small></td><td>{item.policy ? t(item.policy.kind) : "—"}</td><td>{item.policy ? "v" + item.policy.defaultVersion : "—"}</td><td>{item.policy ? <Badge status={policiesWithDeny.has(item.policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(item.policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge> : "—"}</td></>} /></DirectoryScope>
           <PermissionBoundary owner="role" workspace={workspace} value={selected.boundaryPolicyId} onOpen={(id) => onOpen("policies", id)} onSave={(policyId) => access.executeWorkspace({ kind: "set-role-boundary", id: selected.id, policyId })} />
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="trust"><div><Button ref={trustTrigger} variant="secondary" onClick={() => openWorkflow("trust")}>{r("editTrust")}</Button></div><Alert>{r("trustHints.user")}</Alert><dl className={styles.facts}><div><dt>{r("roleType")}</dt><dd>{r("customerRole")}</dd></div><div><dt>{r("trustedUsers")}</dt><dd><div className={styles.actions}>{selected.trustedUserIds.map((id) => <button key={id} className={styles.userLink} onClick={() => onOpen("users", id)}>{scene.users.find((user) => user.id === id)?.loginName ?? id}</button>)}</div></dd></div></dl><pre className={styles.code} role="region" aria-label={r("trustDocument")} tabIndex={0}>{JSON.stringify(roleTrustPreview(selected), null, 2)}</pre><p className={styles.note}>{r("requiredAction")} <code>iam.role.assume</code> · <code>{selected.id}</code></p></Tabs.Content>
@@ -165,8 +168,8 @@ export function AccessRoles({ workspace, scene, entityId, onCreate, onOpen }: { 
       </>}
     </WorkspaceDetail> : <WorkspaceCollection title={t("roles")} description={t("roleHint")} items={workspace.roles} keywords={(role) => [role.description, trustSearchText(role)].join(" ")} create={{ label: t("createRole"), onClick: onCreate }} secondaryActions={[{ id: "service-authorization", label: r("serviceAuthorization"), variant: "secondary", onSelect: () => onOpen("service-authorizations") }]} createFocusRef={collectionActionFocus} columns={[t("name"), r("directoryTrust"), r("directoryAuthorization"), r("directorySession"), t("created")]} row={(role) => <>
       <td><Table.PrimaryAction onClick={() => onOpen("roles", role.id)}>{role.name}</Table.PrimaryAction><small>{role.description}</small></td>
-      <td className={styles.roleDirectoryTrust}><Badge>{r("customerRole")}</Badge><small>{r("trustedUserCount", { count: role.trustedUserIds.length })}</small></td>
-      <td className={styles.roleDirectorySummary}><strong>{r("attachedPolicyCount", { count: role.policyIds.length })}</strong><small>{t("permissionBoundary")} · {role.boundaryPolicyId ? t("configured") : r("boundaryClosed")}</small></td>
+      <td className={styles.roleDirectoryTrust}><Badge>{r("customerRole")}</Badge><small><RelationshipLink view="roles" id={role.id} tab="trust">{r("trustedUserCount", { count: role.trustedUserIds.length })}</RelationshipLink></small></td>
+      <td className={styles.roleDirectorySummary}><RelationshipLink view="roles" id={role.id} tab="policies">{r("attachedPolicyCount", { count: role.policyIds.length })}</RelationshipLink><small>{t("permissionBoundary")} · {role.boundaryPolicyId ? t("configured") : r("boundaryClosed")}</small></td>
       <td className={styles.roleDirectorySession}><strong>{r("maximumSessionMinutes", { minutes: role.sessionMinutes })}</strong><small>{r("consoleEntry")} · {t(role.consoleAccess ? "enabled" : "disabled")}</small></td>
       <td><WorkspaceTime value={role.createdAt} /></td>
     </>} />}

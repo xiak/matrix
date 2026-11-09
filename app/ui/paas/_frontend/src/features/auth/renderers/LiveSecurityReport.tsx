@@ -55,10 +55,16 @@ function SecurityReportDocument({ report }: { report: AccountSecurityReport }) {
   const t = useTranslations("IamWorkspace.securityReportPreview");
   const live = useTranslations("IamWorkspace.securityReportLive");
   const workspace = useTranslations("IamWorkspace");
+  const tabs = useRef<HTMLDivElement>(null);
+  const [section, setSection] = useState("overview");
+  function showRows(target: "users" | "accessKeys") {
+    setSection(target);
+    requestAnimationFrame(() => tabs.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')?.focus());
+  }
   const users = report.users.map((user) => ({ ...user, name: user.displayName }));
   const accessKeys = report.accessKeys.map((key) => ({ ...key, name: key.id }));
-  return <Tabs.Root defaultValue="overview">
-    <Tabs.List aria-label={t("reportSections")}>
+  return <Tabs.Root value={section} onValueChange={setSection}>
+    <Tabs.List ref={tabs} aria-label={t("reportSections")}>
       <Tabs.Trigger value="overview">{t("overviewTab")}</Tabs.Trigger>
       <Tabs.Trigger value="users">{t("usersTab", { count: report.users.length })}</Tabs.Trigger>
       <Tabs.Trigger value="accessKeys">{t("accessKeysTab", { count: report.accessKeys.length })}</Tabs.Trigger>
@@ -68,8 +74,8 @@ function SecurityReportDocument({ report }: { report: AccountSecurityReport }) {
         <Card.Header><div><Typography.Title as="h2" level={3}>{t("scopeTitle")}</Typography.Title><Typography.Text tone="muted">{t("scopeHint")}</Typography.Text></div><Badge status="success">{live("verifiedSnapshot")}</Badge></Card.Header>
         <Card.Body className={styles.securityReportBody}>
           <dl className={styles.securityReportSummary} aria-label={t("limitsTitle")}>
-            <div><dt>{t("users")}</dt><dd>{report.metadata.userCount} / {accountSecurityReportLimits.users}</dd></div>
-            <div><dt>{t("accessKeys")}</dt><dd>{report.metadata.accessKeyCount} / {accountSecurityReportLimits.accessKeys}</dd></div>
+            <div><dt>{t("users")}</dt><dd><button type="button" className={styles.userLink} aria-label={t("usersTab", { count: report.metadata.userCount })} onClick={() => showRows("users")}>{report.metadata.userCount}</button> / {accountSecurityReportLimits.users}</dd></div>
+            <div><dt>{t("accessKeys")}</dt><dd><button type="button" className={styles.userLink} aria-label={t("accessKeysTab", { count: report.metadata.accessKeyCount })} onClick={() => showRows("accessKeys")}>{report.metadata.accessKeyCount}</button> / {accountSecurityReportLimits.accessKeys}</dd></div>
             <div><dt>{t("rows")}</dt><dd>{report.metadata.rowCount} / {accountSecurityReportLimits.rows}</dd></div>
             <div><dt>{t("content")}</dt><dd>{report.metadata.csvBytes.toLocaleString()} B</dd></div>
           </dl>

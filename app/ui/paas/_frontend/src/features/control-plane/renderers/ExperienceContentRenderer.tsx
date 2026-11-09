@@ -27,6 +27,9 @@ import { CommonServiceLinks } from "./ServiceDirectory";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import styles from "./ExperienceContentRenderer.module.css";
 import { ConsoleMetrics } from "./ConsoleMetrics";
+import { isHealthyResource } from "../domain/experience";
+import { hrefInRegion } from "../domain/selection";
+import { replaceDirectoryQuery, useDirectoryQuery, DirectoryScope } from "../routes/ConsoleNavigation";
 import { useConsoleFormat } from "./useConsoleFormat";
 import { ApplicationTagManagement } from "./ApplicationTagManagement";
 import { ApplicationDeploymentManagement } from "./ApplicationDeploymentManagement";
@@ -42,6 +45,10 @@ export type ResourceScope = {
   regionId: string;
 };
 
+function inRegion(resource: UnifiedResourceScene, scope?: ResourceScope) {
+  return !scope || scope.regionId === "all" || resource.regionId === scope.regionId || resource.regionId === "all";
+}
+
 function ResourceTable({ resources, scope, compact = false }: {
   resources: UnifiedResourceScene[];
   scope?: ResourceScope;
@@ -51,9 +58,7 @@ function ResourceTable({ resources, scope, compact = false }: {
   const scopeMessages = useTranslations("RegionScope");
   const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
   const format = useConsoleFormat();
-  const scoped = resources.filter((resource) => (
-    (!scope || scope.regionId === "all" || resource.regionId === scope.regionId || resource.regionId === "all")
-  ));
+  const scoped = resources.filter((resource) => inRegion(resource, scope));
   if (scoped.length === 0) {
     return <EmptyState title={scopeMessages("emptyTitle")} description={scopeMessages("emptyHint")} />;
   }
@@ -178,6 +183,13 @@ function CloudOverview({ scene, scope }: {
   const t = useTranslations("CloudExperience");
   const setHeaderPanel = useConsoleUiStore((state) => state.setHeaderPanel);
   const ready = scene.regionCount > 0 && scene.readyRegions === scene.regionCount;
+  const resources = scene.resources.filter((item) => inRegion(item, scope));
+  const metrics = scope && scope.regionId !== "all" ? scene.metrics.map((metric) => {
+    if (!metric.href) return metric;
+    if (metric.id === "all-resources") return { ...metric, value: resources.length, detailCount: new Set(resources.map((item) => item.projectId).filter((id) => id !== "all")).size, href: hrefInRegion(metric.href, scope.regionId) };
+    if (metric.id === "healthy-resources") return { ...metric, value: resources.filter(isHealthyResource).length, href: hrefInRegion(metric.href, scope.regionId) };
+    return metric;
+  }) : scene.metrics;
   return (
     <div className={styles.pageStack}>
       <section className={styles.welcomeCard}>
@@ -188,11 +200,11 @@ function CloudOverview({ scene, scope }: {
         </div>
         <div className={styles.quickActions}>
           <Button aria-haspopup="dialog" onClick={() => setHeaderPanel("products")}>{t("createResources")} <ArrowRight aria-hidden="true" /></Button>
-          <Button asChild variant="secondary"><Link href="/console/resources/">{t("viewResources")}</Link></Button>
+          <Button asChild variant="secondary"><Link href={hrefInRegion("/console/resources/", scope?.regionId)}>{t("viewResources")}</Link></Button>
         </div>
       </section>
 
-      <ConsoleMetrics metrics={scene.metrics} />
+      <ConsoleMetrics metrics={metrics} />
 
       <ContentLayout>
         <ContentLayout.Main>
@@ -206,9 +218,9 @@ function CloudOverview({ scene, scope }: {
           <Card>
             <Card.Header>
               <div><Typography.Title as="h2" level={3}>{t("recentResources")}</Typography.Title><Typography.Text tone="muted">{t("recentResourcesHint")}</Typography.Text></div>
-              <Link className={styles.textLink} href="/console/resources/">{t("resourceCenter")} <ArrowRight aria-hidden="true" /></Link>
+              <Link className={styles.textLink} href={hrefInRegion("/console/resources/", scope?.regionId)}>{t("resourceCenter")} <ArrowRight aria-hidden="true" /></Link>
             </Card.Header>
-            <ResourceTable compact resources={scene.recentResources} scope={scope} />
+            <ResourceTable compact resources={resources.slice(0, 5)} />
           </Card>
         </ContentLayout.Main>
         <ContentLayout.Aside>
@@ -223,8 +235,8 @@ function CloudOverview({ scene, scope }: {
           <Card className={styles.readinessCard}>
             <Card.Body>
               <div className={styles.readinessTop}><span className={styles.readinessIcon}><CloudCog aria-hidden="true" /></span><Badge status={ready ? "success" : "warning"}>{t(ready ? "platformReady" : "platformAttention")}</Badge></div>
-              <Typography.Title as="h3" level={3}>{t("regionCount", { count: scene.regionCount })}</Typography.Title>
-              <p>{t("regionsReadyHint", { count: scene.readyRegions })}</p>
+              <Typography.Title as="h3" level={3}><Link className={styles.resourceLink} href="/console/regions/">{t("regionCount", { count: scene.regionCount })}</Link></Typography.Title>
+              <p><Link className={styles.textLink} href="/console/regions/?scope=ready">{t("regionsReadyHint", { count: scene.readyRegions })}</Link></p>
               <Link className={styles.textLink} href="/console/regions/">{t("viewRegionState")} <ArrowRight aria-hidden="true" /></Link>
             </Card.Body>
           </Card>
@@ -242,16 +254,18 @@ function ResourceDirectory({ scene, scope }: {
   const t = useTranslations("CloudExperience");
   const resourceKinds = useTranslations("GlobalSearch.resourceKinds");
   const [query, setQuery] = useState("");
+  const healthy = useDirectoryQuery()?.get("scope") === "healthy" && scene.directory === "all";
+  const metric = useTranslations("ConsoleMetrics.items");
   const resources = useMemo(() => {
     const normalized = query.trim().toLowerCase();
-    return scene.resources.filter((item) => (!scope || scope.regionId === "all" || item.regionId === scope.regionId || item.regionId === "all") && (!normalized || [item.name, item.id, item.kind, resourceKinds(item.kind), t(`resourceStates.${item.state}`), item.productName, item.projectName, item.regionName]
+    return scene.resources.filter((item) => inRegion(item, scope) && (!healthy || isHealthyResource(item)) && (!normalized || [item.name, item.id, item.kind, resourceKinds(item.kind), t(`resourceStates.${item.state}`), item.productName, item.projectName, item.regionName]
       .some((value) => value.toLowerCase().includes(normalized))));
-  }, [query, scene.resources, resourceKinds, t, scope]);
+  }, [query, scene.resources, resourceKinds, t, scope, healthy]);
   if (scene.directory === "applications") return <PreviewApplicationDirectory page={{ items: scene.readSnapshots.map((snapshot) => snapshot.application), nextAfter: null }} />;
   return (
     <Card>
       <TableToolbar labels={toolbarLabels} search={{ label: t("searchResources"), placeholder: t("resourcesPlaceholder"), value: query, onChange: setQuery }} status={t("resultCount", { count: resources.length })} />
-      <ResourceTable resources={resources} scope={scope} />
+      <DirectoryScope label={healthy ? metric("healthy-resources.label") : undefined} empty={!resources.length}><ResourceTable resources={resources} /></DirectoryScope>
     </Card>
   );
 }
@@ -614,8 +628,20 @@ function Resources({ scene, scope }: {
 function Operations({ scene }: { scene: Extract<ConsoleContentScene, { kind: "operations" }> }) {
   const t = useTranslations("CloudExperience");
   const toolbarLabels = useTableToolbarLabels();
-  const [query, setQuery] = useState("");
-  const [status, setStatus] = useState<"all" | OperationScene["state"]>("all");
+  const params = useDirectoryQuery();
+  const requested = params?.get("state");
+  const [localQuery, setLocalQuery] = useState("");
+  const query = requested ? params?.get("q") ?? "" : localQuery;
+  function setQuery(value: string) {
+    setLocalQuery(value);
+    if (requested) replaceDirectoryQuery({ q: value || null });
+  }
+  const [localStatus, setLocalStatus] = useState("all");
+  const status = requested && ["RUNNING", "FAILED", "SUCCEEDED", "all"].includes(requested) ? requested : localStatus;
+  function setStatus(value: string) {
+    setLocalStatus(value);
+    if (requested) replaceDirectoryQuery({ state: value });
+  }
   const operations = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return scene.operations.filter((operation) => (
@@ -629,7 +655,7 @@ function Operations({ scene }: { scene: Extract<ConsoleContentScene, { kind: "op
 
   return (
     <Card>
-      <TableToolbar labels={toolbarLabels} search={{ label: t("searchOperations"), placeholder: t("operationsPlaceholder"), value: query, onChange: setQuery }} filters={[{ id: "state", label: t("filterOperationState"), value: status, onChange: (value) => setStatus(value as typeof status), options: [{ value: "all", label: t("allStates") }, ...(["RUNNING", "FAILED", "SUCCEEDED"] as const).map((state) => ({ value: state, label: t(`operationStates.${state}`) }))] }]} status={t("resultCount", { count: operations.length })} tools={<Badge status="info">{t("runningCount", { count: scene.operations.filter((item) => item.state === "RUNNING").length })}</Badge>} />
+      <TableToolbar labels={toolbarLabels} search={{ label: t("searchOperations"), placeholder: t("operationsPlaceholder"), value: query, onChange: setQuery }} filters={[{ id: "state", label: t("filterOperationState"), value: status, onChange: setStatus, options: [{ value: "all", label: t("allStates") }, ...(["RUNNING", "FAILED", "SUCCEEDED"] as const).map((state) => ({ value: state, label: t(`operationStates.${state}`) }))] }]} status={t("resultCount", { count: operations.length })} tools={<Link className={styles.textLink} href="/console/operations/?state=RUNNING">{t("runningCount", { count: scene.operations.filter((item) => item.state === "RUNNING").length })}</Link>} />
       <Card.Body>
         {operations.length || scene.operations.length === 0 ? <OperationList operations={operations} /> : <EmptyState title={t("noMatchingOperations")} description={t("noMatchingOperationsHint")} />}
       </Card.Body>
@@ -640,12 +666,17 @@ function Operations({ scene }: { scene: Extract<ConsoleContentScene, { kind: "op
 function DevOps({ scene }: { scene: Extract<ConsoleContentScene, { kind: "devops" }> }) {
   const t = useTranslations("CloudExperience");
   const format = useConsoleFormat();
+  const params = useDirectoryQuery();
+  const scope = scene.view === "pipelines" ? params?.get("scope") : undefined;
+  const runState = scope === "running" ? "RUNNING" : scope === "succeeded" ? "SUCCEEDED" : undefined;
+  const environment = scene.view === "pipelines" ? params?.get("environment") : null;
+  const runs = scene.pipelines.filter((item) => (!runState || item.state === runState) && (!environment || item.environment === environment));
   const environments = [...new Set(scene.pipelines.map((pipeline) => pipeline.environment))].map((name) => {
     const runs = scene.pipelines.filter((pipeline) => pipeline.environment === name);
     const status = runs.some((run) => run.state === "FAILED") ? "warning" : runs.some((run) => run.state === "RUNNING") ? "info" : "success";
     return { name, count: runs.length, status } as const;
   });
-  if (scene.pipelines.length === 0) return <EmptyState title={t("pipelinesEmpty")} description={t("pipelinesEmptyHint")} />;
+  if (!scene.pipelines.length && !runState && !environment) return <EmptyState title={t("pipelinesEmpty")} description={t("pipelinesEmptyHint")} />;
   return (
     <div className={styles.pageStack}>
       {!scene.view ? <ConsoleMetrics metrics={scene.metrics} /> : null}
@@ -654,20 +685,22 @@ function DevOps({ scene }: { scene: Extract<ConsoleContentScene, { kind: "devops
           <div><Typography.Title as="h2" level={3}>{t("recentPipelines")}</Typography.Title><Typography.Text tone="muted">{t("pipelinesHint")}</Typography.Text></div>
           <span className={styles.headerHint}>{t("mockSnapshot")}</span>
         </Card.Header>
+        <DirectoryScope label={runState ? t(`operationStates.${runState}`) : undefined} empty={!environment && !runs.length}>
+        <DirectoryScope label={environment || undefined} parameter="environment" empty={!runs.length}>
         <Table aria-label={t("pipelinesTable")} mobileLayout="grid">
               <thead><tr><th scope="col">{t("pipeline")}</th><th scope="col">{t("code")}</th><th scope="col">{t("environment")}</th><th scope="col">{t("state")}</th><th scope="col">{t("duration")}</th><th scope="col">{t("triggered")}</th></tr></thead>
-              <tbody>{scene.pipelines.map((pipeline) => (
+              <tbody>{runs.map((pipeline) => (
                 <tr key={pipeline.id}>
                   <td><strong>{pipeline.name}</strong><small>{pipeline.repository}</small></td>
                   <td data-label={t("code")}><strong>{pipeline.branch}</strong><small>{pipeline.commit}</small></td>
                   <td data-label={t("environment")}>{pipeline.environment}</td><td data-label={t("state")}><Badge status={pipeline.status}>{t(`operationStates.${pipeline.state}`)}</Badge></td><td data-label={t("duration")}>{format.duration(pipeline.durationSeconds)}</td><td data-label={t("triggered")} data-mobile-span="full">{format.timestamp(pipeline.triggeredAt)}</td>
                 </tr>
               ))}</tbody>
-            </Table>
+            </Table></DirectoryScope></DirectoryScope>
       </Card> : null}
       {scene.view !== "pipelines" ? <section className={styles.deliveryGrid} aria-label={t("deliveryEnvironments")}>
         {environments.map((environment) => (
-          <Card key={environment.name}><Card.Body className={styles.environmentCard}><span className={styles.environmentIcon}><Server aria-hidden="true" /></span><div><strong>{environment.name}</strong><span>{t("environmentRuns", { count: environment.count })}</span></div><Badge status={environment.status}>{t(environment.status === "success" ? "stable" : environment.status === "info" ? "deploying" : "needsAttention")}</Badge></Card.Body></Card>
+          <Card key={environment.name}><Card.Body className={styles.environmentCard}><span className={styles.environmentIcon}><Server aria-hidden="true" /></span><div><strong>{environment.name}</strong><Link className={styles.textLink} href={`/console/devops/pipelines/?environment=${encodeURIComponent(environment.name)}`}>{t("environmentRuns", { count: environment.count })}</Link></div><Badge status={environment.status}>{t(environment.status === "success" ? "stable" : environment.status === "info" ? "deploying" : "needsAttention")}</Badge></Card.Body></Card>
         ))}
       </section> : null}
     </div>
@@ -688,11 +721,18 @@ function Trend({ values, label }: { values: number[]; label: string }) {
 function Observability({ scene }: { scene: Extract<ConsoleContentScene, { kind: "observability" }> }) {
   const t = useTranslations("CloudExperience");
   const format = useFormatter();
+  const scope = useDirectoryQuery()?.get("scope");
+  const firing = scope === "firing" && scene.view === "alerts";
+  const degraded = scope === "degraded" && scene.view === "health";
+  const services = degraded ? scene.services.filter((item) => item.state === "DEGRADED" || item.state === "FAILED") : scene.services;
+  const metric = useTranslations("ConsoleMetrics.items");
+  const displayedAlerts = firing ? scene.alerts.filter((item) => item.state === "FIRING") : scene.alerts;
   const health = <Card>
             <Card.Header><div><Typography.Title as="h2" level={3}>{t("serviceHealth")}</Typography.Title><Typography.Text tone="muted">{t("serviceHealthHint")}</Typography.Text></div><span className={styles.headerHint}>MOCK</span></Card.Header>
+            <DirectoryScope label={degraded ? metric("service-health.hint", { count: services.length }) : undefined} empty={!services.length}>
             <Card.Body className={styles.healthList}>
               {scene.services.length === 0 ? <EmptyState title={t("healthEmpty")} description={t("healthEmptyHint")} /> : null}
-              {scene.services.map((service) => (
+              {services.map((service) => (
                 <article className={styles.healthRow} key={service.id}>
                   <div className={styles.healthIdentity}><span className={styles.serviceIcon}><Server aria-hidden="true" /></span><div><strong>{service.name}</strong><span>{service.productName}</span></div></div>
                   <Trend label={t("healthTrend", { name: service.name })} values={service.trend} />
@@ -700,11 +740,12 @@ function Observability({ scene }: { scene: Extract<ConsoleContentScene, { kind: 
                   <Badge status={service.status}>{t(`resourceStates.${service.state}`)}</Badge>
                 </article>
               ))}
-            </Card.Body>
+            </Card.Body></DirectoryScope>
           </Card>;
   const alerts = <Card>
             <Card.Header><div><Typography.Title as="h2" level={3}>{t("currentAlerts")}</Typography.Title><Typography.Text tone="muted">{t("alertsHint")}</Typography.Text></div></Card.Header>
-            <Card.Body><AlertList alerts={scene.alerts} /></Card.Body>
+            <DirectoryScope label={firing ? metric("alert-firing.label") : undefined} empty={!displayedAlerts.length}>
+              <Card.Body><AlertList alerts={displayedAlerts} /></Card.Body></DirectoryScope>
           </Card>;
   if (scene.view === "health") return health;
   if (scene.view === "alerts") return alerts;

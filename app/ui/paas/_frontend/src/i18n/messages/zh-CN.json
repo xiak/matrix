@@ -1,5 +1,6 @@
 {
   "Collection": {
+    "noMatchingItems": "没有符合当前条件的记录",
     "pageActions": "页面操作",
     "moreActions": "更多操作",
     "selectFirst": "请先勾选列表中的对象",
@@ -2084,6 +2085,7 @@
     "qualifiedLogin": "完整登录名",
     "userSummary": "子用户统计",
     "totalUsers": "子用户",
+    "enabledUserFilter": "已启用（含需改密码）",
     "enabledUsers": "已启用",
     "usersWithoutDirectPolicies": "无直接策略的子用户",
     "pendingPasswords": "待改密",
@@ -3845,6 +3847,7 @@
     "activatedQuota": "已激活配额",
     "availableQuota": "可用配额",
     "instances": "实例",
+    "processingInstances": "安装处理中",
     "readyInstances": "就绪实例",
     "productOwnershipHint": "服务开通后，团队成员仍需各自获得相应的操作权限。",
     "openInstances": "进入实例",

@@ -1,5 +1,6 @@
 {
   "Collection": {
+    "noMatchingItems": "No records match this filter",
     "pageActions": "Page actions",
     "moreActions": "More actions",
     "selectFirst": "Select items in the table first",
@@ -2084,6 +2085,7 @@
     "qualifiedLogin": "Qualified sign-in name",
     "userSummary": "Subuser statistics",
     "totalUsers": "Subusers",
+    "enabledUserFilter": "Enabled (includes users who must change their password)",
     "enabledUsers": "Enabled",
     "usersWithoutDirectPolicies": "Users without direct policies",
     "pendingPasswords": "Password pending",
@@ -3845,6 +3847,7 @@
     "activatedQuota": "Activated quota",
     "availableQuota": "Available quota",
     "instances": "Instances",
+    "processingInstances": "Installations in progress",
     "readyInstances": "Ready instances",
     "productOwnershipHint": "After service activation, each team member still needs permission for the operations they perform.",
     "openInstances": "Open instances",

@@ -1,4 +1,6 @@
 "use client";
+
+import { useDirectoryTab } from "@/features/control-plane/routes/ConsoleNavigation";
 import { useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { ActionMenu, Alert, Badge, Button, EmptyState, FormField, Table, TablePagination, TableToolbar, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
@@ -7,7 +9,7 @@ import { useAccountAccess } from "../application/AccountAccessProvider";
 import { policyUsageCounts, policyVersionLimit, type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceTime } from "./AccessWorkspaceUi";
+import { RelationshipTabs, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceTime } from "./AccessWorkspaceUi";
 import { PolicyDocumentViewer } from "./PolicyDocumentViewer";
 import { PolicyAuthoringWizard } from "./PolicyAuthoringWizard";
 import { PolicyDirectory, usePolicyDescription } from "./PolicyDirectory";
@@ -179,6 +181,7 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
   const creationActionFocus = useRef<PageCommandsHandle>(null);
   const previousChoosingMethod = useRef(false);
   const [versionWorkflow, setVersionWorkflow] = useState(false);
+  const [detailTab, setDetailTab] = useDirectoryTab("document", ["document", "versions", "usage"]);
   const selected = workspace.policies.find((policy) => policy.id === entityId);
   const usage = selected ? policyUsageCounts(workspace, selected.id) : null;
   useLayoutEffect(() => {
@@ -220,7 +223,7 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
       {selected.tags.length ? <section aria-label={p("metadataTags")} className={styles.actions}><span className={styles.note}>{p("metadataTags")}</span>{selected.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}</section> : null}
       {selected.kind === "system" ? <p className={styles.note}>{t("systemReadOnly")}</p> : null}
       <PolicySecurityReview policies={[selected]} />
-      <Tabs.Root defaultValue="document"><Tabs.List aria-label={selected.name}><Tabs.Trigger value="document">{t("document")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versions")}</Tabs.Trigger><Tabs.Trigger value="usage">{t("usage")} ({usage!.total})</Tabs.Trigger></Tabs.List>
+      <Tabs.Root value={detailTab} onValueChange={setDetailTab}><RelationshipTabs aria-label={selected.name}><Tabs.Trigger value="document">{t("document")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versions")}</Tabs.Trigger><Tabs.Trigger value="usage">{t("usage")} ({usage!.total})</Tabs.Trigger></RelationshipTabs>
         <Tabs.Content value="document"><PolicyDocumentViewer document={currentDocument(selected)} /></Tabs.Content>
         <Tabs.Content value="versions"><PolicyVersionHistory policy={selected} usageCount={usage!.total} workspace={workspace} scene={scene} onWorkflowChange={setVersionWorkflow} /></Tabs.Content>
         <Tabs.Content value="usage"><PolicyUses policyId={selected.id} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>

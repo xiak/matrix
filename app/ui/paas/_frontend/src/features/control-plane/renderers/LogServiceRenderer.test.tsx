@@ -35,7 +35,9 @@ describe("LogServiceRenderer", () => {
     const view = render(<LocaleProvider><LogServiceRenderer regionId="shanghai-b" scene={{ kind: "logs", view: "topics", data }} /></LocaleProvider>);
     expect(screen.getByRole("table", { name: "日志主题" }).getAttribute("data-mobile-layout")).toBe("stack");
     expect(screen.getByText("host-system").closest("td")?.getAttribute("data-label")).toBe("日志主题");
-    expect(screen.getByText("host-system")).toBeTruthy();
+    const destination = new URL(screen.getByRole("link", { name: "host-system" }).getAttribute("href")!, "https://matrix.invalid");
+    expect(destination.pathname.replace(/\/$/, "")).toBe("/console/logs/search");
+    expect(Object.fromEntries(destination.searchParams)).toEqual({ topic: "system", region: "shanghai-b" });
     expect(screen.getByText("14 天")).toBeTruthy();
     expect(screen.queryByText("application-production")).toBeNull();
     view.rerender(<LocaleProvider><LogServiceRenderer regionId="shanghai-b" scene={{ kind: "logs", view: "collection", data }} /></LocaleProvider>);

@@ -62,10 +62,10 @@ export function NotificationCenter({ activeOperationCount, messages, onOpenChang
         <HeaderPopover align="end" id={panelId} label={t("title")} onKeyDown={handleKeyDown} size="medium">
           <HeaderPopoverHeader
             action={<Link href="/console/messages/" onAccepted={() => onOpenChange(false)}>{t("viewAll")}</Link>}
-            description={t("count", { count })}
+            description={<Link href="/console/messages/?read=unread" onAccepted={() => onOpenChange(false)}>{t("count", { count })}</Link>}
             title={t("title")}
           />
-          {activeOperationCount > 0 ? <Link className={styles.activeTasks} href="/console/operations/" onAccepted={() => onOpenChange(false)}><Workflow aria-hidden="true" /><span><strong>{t("runningTasks", { count: activeOperationCount })}</strong><small>{t("taskProgressHint")}</small></span><ChevronRight aria-hidden="true" /></Link> : null}
+          {activeOperationCount > 0 ? <Link className={styles.activeTasks} href="/console/operations/?state=RUNNING" onAccepted={() => onOpenChange(false)}><Workflow aria-hidden="true" /><span><strong>{t("runningTasks", { count: activeOperationCount })}</strong><small>{t("taskProgressHint")}</small></span><ChevronRight aria-hidden="true" /></Link> : null}
           <MessageInbox compact messages={messages} onNavigate={() => onOpenChange(false)} />
         </HeaderPopover>
       ) : null}

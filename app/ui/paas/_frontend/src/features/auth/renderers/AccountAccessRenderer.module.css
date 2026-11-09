@@ -26,14 +26,11 @@
 .settingsGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-roomy); }
 .settingsGrid > :last-child:nth-child(odd) { grid-column: 1 / -1; }
 .flow { border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); padding: var(--xiak-spacing-comfortable); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); line-height: 1.8; }
-.metricLink { display: grid; gap: var(--xiak-spacing-tight); min-width: 0; padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); color: var(--xiak-color-text-muted); text-decoration: none; }
-.metricLink:hover { background: var(--xiak-color-bg-panel-hover); border-color: var(--xiak-color-border-accent); }
-.metricLink:focus-visible { outline: 0.125rem solid var(--xiak-color-border-focus); outline-offset: 0.125rem; }
-.metricLink strong { font-size: var(--xiak-font-size-metric); font-family: var(--xiak-font-numeric); font-weight: var(--xiak-font-weight-medium); color: var(--xiak-color-accent-text); }
-.workspaceMetrics { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--xiak-spacing-default); }
+.relationshipLink { color: var(--xiak-color-accent-text); text-decoration: none; border-radius: var(--xiak-radius-small); }
+.relationshipLink:hover { text-decoration: underline; }
+.relationshipLink:focus-visible { outline: 0.125rem solid var(--xiak-color-border-focus); outline-offset: 0.125rem; }
 .keySecret { display: block; padding: var(--xiak-spacing-comfortable); border: var(--xiak-border-subtle); background: var(--xiak-color-bg-code); color: var(--xiak-color-text-code); overflow-wrap: anywhere; user-select: all; }
-@media (max-width: 85.9375em) { .workspaceMetrics { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@media (max-width: 48.4375em) { .settingsGrid { grid-template-columns: minmax(0, 1fr); } .workspaceMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 48.4375em) { .settingsGrid { grid-template-columns: minmax(0, 1fr); } }
 
 .actions,
 .roleTags,

@@ -7,6 +7,7 @@ import type { ConsoleMessageScene } from "../scenes/consoleScene";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import { NotificationCenter } from "./NotificationCenter";
 import { MessageCenterRenderer } from "./MessageCenterRenderer";
+import { DirectoryQueryProvider } from "../routes/ConsoleNavigation";
 
 const messages: ConsoleMessageScene[] = [
   { id: "alert-payment", category: "alert", title: "支付服务错误率升高", description: "支付服务 · SRE 值班组", status: "danger", createdAt: "2026-09-08T09:07:00Z", href: "/console/observability/alerts/" },
@@ -22,6 +23,17 @@ function NotificationCenterHarness() {
 afterEach(() => { cleanup(); localStorage.clear(); useConsoleUiStore.getState().resetSessionUi(); });
 
 describe("Message center", () => {
+  it("lands on the unread messages counted by the badge without opening or marking any message", () => {
+    useConsoleUiStore.getState().markMessagesRead(["alert-payment"]);
+    render(<LocaleProvider><DirectoryQueryProvider pendingHref="/console/messages/?read=unread">
+      <MessageCenterRenderer scene={{ kind: "messages", messages, preview: true }} />
+    </DirectoryQueryProvider></LocaleProvider>);
+    expect(screen.getByRole("radio", { name: "未读" })).toHaveProperty("checked", true);
+    expect(screen.getByRole("link", { name: "2 条未读" })).toBeTruthy();
+    expect(screen.getAllByRole("listitem")).toHaveLength(2);
+    expect(screen.queryByText("支付服务错误率升高")).toBeNull();
+    expect(useConsoleUiStore.getState().readMessageIds).toEqual(["alert-payment"]);
+  });
   it("provides a translated empty state and a full inbox destination, not an alert-only destination", () => {
     localStorage.setItem("matrix.locale", "en");
     render(<LocaleProvider><NotificationCenter activeOperationCount={0} messages={[]} onOpenChange={() => {}} open /></LocaleProvider>);
@@ -39,6 +51,8 @@ describe("Message center", () => {
     await user.click(trigger);
     expect(trigger.getAttribute("aria-controls")).toBe("global-notification-center");
     expect(document.activeElement).toBe(screen.getByRole("tab", { name: "全部" }));
+    expect(screen.getByRole("link", { name: "3 条未读" }).getAttribute("href")).toMatch(/\/console\/messages\/?\?read=unread$/);
+    expect(screen.getByRole("link", { name: /1 个任务进行中/ }).getAttribute("href")).toMatch(/\/console\/operations\/?\?state=RUNNING$/);
     expect(useConsoleUiStore.getState().readMessageIds).toEqual([]);
     expect(screen.queryByText(messages[0]!.description)).toBeNull();
     expect(screen.queryByRole("link", { name: "前往告警页面", hidden: true })).toBeNull();
@@ -62,7 +76,7 @@ describe("Message center", () => {
     expect(screen.getByRole("button", { name: "关闭消息中心，2 条未读消息" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "全部已读" }));
     expect(screen.getByRole("button", { name: "关闭消息中心，0 条未读消息" })).toBeTruthy();
-    expect(screen.getByRole("link", { name: /1 个任务进行中/ }).getAttribute("href")).toMatch(/\/console\/operations\/?$/);
+    expect(screen.getByRole("link", { name: /1 个任务进行中/ }).getAttribute("href")).toMatch(/\/console\/operations\/?\?state=RUNNING$/);
     await user.click(screen.getByRole("tab", { name: "告警" }));
     await user.click(screen.getByLabelText("支付服务错误率升高，已读，查看消息"));
     expect(screen.getByText(/已读仅改变消息状态/)).toBeTruthy();

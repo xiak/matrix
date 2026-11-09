@@ -47,7 +47,9 @@ export type ConsoleNavigationItemScene = {
 export type MetricScene = {
   id: "offerings" | "quota" | "services" | "regions" | "all-resources" | "healthy-resources" | "active-operations" | "active-alerts" | "pipeline-success" | "pipeline-running" | "lead-time" | "deployment-frequency" | "service-health" | "availability" | "alert-firing" | "ingestion";
   value: number;
+  href?: string;
   detailCount?: number;
+  detailHref?: string;
   status: SceneStatus;
 };
 
@@ -176,7 +178,7 @@ export type ConsoleContentScene =
       regionCount: number;
       readyRegions: number;
       metrics: MetricScene[];
-      recentResources: UnifiedResourceScene[];
+      resources: UnifiedResourceScene[];
       operations: OperationScene[];
       alerts: AlertScene[];
     }

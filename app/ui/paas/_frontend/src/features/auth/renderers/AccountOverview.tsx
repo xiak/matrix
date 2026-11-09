@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
+import { ConsoleLink } from "@/features/control-plane/routes/ConsoleNavigation";
 import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight, Check, Copy, KeyRound, Plus, ShieldCheck, UserCheck, Users } from "lucide-react";
 import { Alert, Badge, Button, Card, Statistic, Table, Typography } from "@ui/xiak";
@@ -9,7 +10,7 @@ import type { AccountAccessView } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { useSession } from "../application/SessionProvider";
-import { WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { RelationshipLink, WorkspaceCollection, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessReportPreview, AccessReports } from "./AccessReports";
 import { UserBoundarySummary } from "./PermissionBoundary";
 import { policyUsageCounts } from "../domain/accessWorkspace";
@@ -81,12 +82,12 @@ export function AccountOverview({ scene, onNavigate }: { scene: AccountAccessSce
 if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperations")} onBack={() => setShowEvents(false)}><p className={styles.note}>{w("eventHistoryHint")}</p><WorkspaceCollection embedded title={w("sensitiveOperations")} description={w("eventHistoryHint")} items={workspace.events.map((event) => ({ ...event, name: w(`events.${event.action}`) }))} keywords={(event) => event.target} columns={[w("event"), w("target"), w("time")]} row={(event) => <><td>{event.name}</td><td>{event.target}</td><td><WorkspaceTime value={event.at} /></td></>} /></WorkspaceDetail>;
   if (reportKind && workspace) return <AccessReportPreview kind={reportKind} workspace={workspace} scene={scene} currentSession={session.current?.session} onBack={() => { restoreReportFocus.current = true; setReportKind(null); }} />;
   return <div className={styles.accessOverview + " " + styles.stack}>
-    {workspace ? <div className={styles.workspaceMetrics} aria-label={t("userSummary")}>{([
-      ["users", "subusers", scene.users.length],
-      ["groups", "groups", workspace.groups.length],
-      ["policies", "customPolicyCount", workspace.policies.filter((policy) => policy.kind === "custom").length],
-      ["roles", "roles", workspace.roles.length]
-    ] as const).map(([view, label, count]) => <Link className={styles.metricLink} key={view} href={`/console/access/${view}/`} onNavigate={open(view)}><span>{w(label)}</span><strong>{format.number(count)}</strong></Link>)}</div> : null}
+    {workspace && scene.canListUsers ? <div className={styles.overviewMetrics} aria-label={t("userSummary")}>{([
+      ["/console/access/users/?state=all", "subusers", scene.directoryFailures?.users ? null : scene.users.length],
+      ["/console/access/groups/", "groups", workspace.groups.length],
+      ["/console/access/policies/?kind=custom", "customPolicyCount", workspace.policies.filter((policy) => policy.kind === "custom").length],
+      ["/console/access/roles/", "roles", workspace.roles.length]
+    ] as const).map(([href, label, count]) => <Statistic key={href} label={w(label)} value={count === null ? "—" : format.number(count)} link={count === null ? undefined : <ConsoleLink href={href} />} />)}</div> : null}
     <div className={styles.overviewGrid}>
       <div className={styles.stack}>
         <div className={styles.overviewToolbar}>
@@ -95,10 +96,10 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
         </div>
         {scene.directoryFailures?.users ? <Card><Card.Body><AccountDirectoryReadFailure kind="users" /></Card.Body></Card> : scene.canListUsers ? <>
           {!workspace ? <div aria-label={t("userSummary")} className={styles.overviewMetrics}>
-            <Statistic label={t("totalUsers")} value={format.number(scene.users.length)} icon={<Users />} />
-            <Statistic label={t("enabledUsers")} value={format.number(active)} icon={<UserCheck />} status="success" />
-            <Statistic label={t("usersWithoutDirectPolicies")} value={format.number(withoutDirectPolicies)} icon={<ShieldCheck />} />
-            <Statistic label={t("pendingPasswords")} value={format.number(pending)} icon={<KeyRound />} status={pending ? "warning" : "neutral"} />
+            <Statistic label={t("totalUsers")} value={format.number(scene.users.length)} icon={<Users />} link={<ConsoleLink href="/console/access/users/?state=all" />} />
+            <Statistic label={t("enabledUsers")} value={format.number(active)} icon={<UserCheck />} status="success" link={<ConsoleLink href="/console/access/users/?state=enabled" />} />
+            <Statistic label={t("usersWithoutDirectPolicies")} value={format.number(withoutDirectPolicies)} icon={<ShieldCheck />} link={<ConsoleLink href="/console/access/users/?association=no-direct" />} />
+            <Statistic label={t("pendingPasswords")} value={format.number(pending)} icon={<KeyRound />} status={pending ? "warning" : "neutral"} link={<ConsoleLink href="/console/access/users/?state=passwordChangeRequired" />} />
           </div> : null}
           {!scene.directoryComplete ? <Alert status="info">{t("partialSummary")}</Alert> : null}
           {workspace ? <Card><Card.Header><Typography.Title as="h2" level={3}>{w("sensitiveOperations")}</Typography.Title><Button variant="ghost" size="small" onClick={() => setShowEvents(true)}>{w("viewAllEvents")}<ArrowRight aria-hidden="true" /></Button></Card.Header><Table className={styles.compactTable} aria-label={w("sensitiveOperations")}><thead><tr><th scope="col">{w("event")}</th><th scope="col">{w("target")}</th><th scope="col">{w("time")}</th></tr></thead><tbody>{workspace.events.slice(0, 5).map((event) => <tr key={event.id}><td>{w(`events.${event.action}`)}</td><td>{event.target}</td><td><WorkspaceTime value={event.at} /></td></tr>)}</tbody></Table></Card> : null}
@@ -113,7 +114,7 @@ if (showEvents && workspace) return <WorkspaceDetail title={w("sensitiveOperatio
           <Card.Body><p className={styles.note}>{w("highPoliciesHint")}</p></Card.Body>
           <Table className={styles.compactTable} aria-label={w("highPolicies")}>
             <thead><tr><th scope="col">{w("name")}</th><th scope="col">{w("associations")}</th></tr></thead>
-            <tbody>{reviewPolicies.map((policy) => <tr key={policy.id}><td><Table.PrimaryAction asChild><Link href={`/console/access/policies/?id=${encodeURIComponent(policy.id)}`} onNavigate={open("policies", policy.id)}>{policy.name}</Link></Table.PrimaryAction></td><td>{policyUsageCounts(workspace, policy.id).total}</td></tr>)}</tbody>
+            <tbody>{reviewPolicies.map((policy) => <tr key={policy.id}><td><Table.PrimaryAction asChild><Link href={`/console/access/policies/?id=${encodeURIComponent(policy.id)}`} onNavigate={open("policies", policy.id)}>{policy.name}</Link></Table.PrimaryAction></td><td><RelationshipLink view="policies" id={policy.id} tab="usage" label={policy.name + " · " + w("associations") + " · " + policyUsageCounts(workspace, policy.id).total}>{policyUsageCounts(workspace, policy.id).total}</RelationshipLink></td></tr>)}</tbody>
           </Table>
         </Card> : null}
       </div>

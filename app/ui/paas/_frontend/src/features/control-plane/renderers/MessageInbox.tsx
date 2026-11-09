@@ -6,7 +6,7 @@ import { Bell, CheckCheck, ChevronDown, Megaphone, Workflow } from "lucide-react
 import { Button, Checkbox, EmptyState, RadioGroup, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useConsoleUiStore } from "../application/consoleUiStore";
-import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
+import { ConsoleLink as Link, replaceDirectoryQuery, useDirectoryQuery } from "../routes/ConsoleNavigation";
 import type { ConsoleMessageScene } from "../scenes/consoleScene";
 import { useConsoleFormat } from "./useConsoleFormat";
 import styles from "./MessageInbox.module.css";
@@ -42,9 +42,26 @@ export function MessageInbox({ messages, compact = false, onNavigate }: { messag
   const toolbarLabels = useTableToolbarLabels();
   const readIds = useConsoleUiStore((state) => state.readMessageIds);
   const markRead = useConsoleUiStore((state) => state.markMessagesRead);
-  const [category, setCategory] = useState<MessageCategory>("all");
-  const [readFilter, setReadFilter] = useState("all");
-  const [query, setQuery] = useState("");
+  const params = useDirectoryQuery();
+  const linked = !compact && params?.has("read");
+  const [localCategory, setLocalCategory] = useState<MessageCategory>("all");
+  const [localRead, setLocalRead] = useState("all");
+  const [localQuery, setLocalQuery] = useState("");
+  const category = linked ? categories.find((item) => item === params?.get("category")) ?? "all" : localCategory;
+  const readFilter = linked ? ["unread", "read"].find((item) => item === params?.get("read")) ?? "all" : localRead;
+  const query = linked ? params?.get("q") ?? "" : localQuery;
+  function setCategory(value: MessageCategory) {
+    setLocalCategory(value);
+    if (linked) replaceDirectoryQuery({ category: value === "all" ? null : value });
+  }
+  function setReadFilter(value: string) {
+    setLocalRead(value);
+    if (linked) replaceDirectoryQuery({ read: value });
+  }
+  function setQuery(value: string) {
+    setLocalQuery(value);
+    if (linked) replaceDirectoryQuery({ q: value || null });
+  }
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const filterControl = useRef<HTMLDivElement>(null);
   const unread = messages.filter((message) => !readIds.includes(message.id));

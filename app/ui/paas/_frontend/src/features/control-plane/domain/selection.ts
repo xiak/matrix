@@ -32,6 +32,13 @@ export const serviceViews = {
 } as const;
 export type ServiceView = typeof serviceViews[keyof typeof serviceViews][number];
 
+export function hrefInRegion(href: string, regionId?: string): string {
+  if (!regionId || regionId === "all") return href;
+  const url = new URL(href, "https://matrix.invalid");
+  url.searchParams.set("region", regionId);
+  return url.pathname + url.search + url.hash;
+}
+
 export function consoleRouteHref({ section, view, product }: ControlPlaneRouteSelection): string {
   if (product) {
     const page = section === "installations" ? "instances/" : section === "quotas" ? "quotas/" : "";

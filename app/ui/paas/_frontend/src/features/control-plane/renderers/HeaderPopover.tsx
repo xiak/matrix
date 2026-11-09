@@ -68,7 +68,7 @@ export function HeaderPopover({ align, children, id, label, modal, onKeyDown, si
 
 type HeaderPopoverHeaderProps = Readonly<{
   action: ReactNode;
-  description: string;
+  description: ReactNode;
   title: string;
 }>;
 

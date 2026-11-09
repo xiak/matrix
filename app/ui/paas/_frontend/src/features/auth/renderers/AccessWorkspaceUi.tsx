@@ -3,13 +3,42 @@
 import { Children, Fragment, cloneElement, isValidElement, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type Ref, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableSkeleton, TableToolbar, TablePagination, Transfer, type PageCommand, type PageCommandsHandle } from "@ui/xiak";
+import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableSkeleton, TableToolbar, TablePagination, Tabs, Transfer, type PageCommand, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
+import { ConsoleLink, useDirectoryQuery } from "@/features/control-plane/routes/ConsoleNavigation";
 import { useOptionalAccountAccess } from "../application/AccountAccessProvider";
 import { useAccessDraft } from "./useAccessDraft";
 import styles from "./AccountAccessRenderer.module.css";
 
 const noop = () => {};
+
+export function RelationshipLink({ view, id, tab, scope, label, enabled = true, children }: {
+  view: "users" | "groups" | "roles" | "policies"; id: string; tab: string; scope?: string; label?: string; enabled?: boolean; children: ReactNode;
+}) {
+  if (!enabled) return <span>{children}</span>;
+  const query = new URLSearchParams({ id, tab });
+  if (scope) query.set("scope", scope);
+  return <ConsoleLink className={styles.relationshipLink} prefetch={false} href={`/console/access/${view}/?${query}`} aria-label={label}>{children}</ConsoleLink>;
+}
+
+// A relationship can be below an identity summary. Bring the selected tab
+// into view once its data is mounted, including on a direct link or Back.
+export function RelationshipTabs(props: ComponentProps<typeof Tabs.List>) {
+  const list = useRef<HTMLDivElement>(null);
+  const params = useDirectoryQuery();
+  const tab = params?.get("tab");
+  const scope = params?.get("scope");
+  useLayoutEffect(() => {
+    if (!tab) return;
+    const frame = requestAnimationFrame(() => {
+      const active = list.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      active?.focus({ preventScroll: true });
+      active?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [tab, scope]);
+  return <Tabs.List {...props} ref={list} />;
+}
 
 export function WorkspaceTime({ value, compact = false }: { value: string | null; compact?: boolean }) {
   const format = useFormatter();
@@ -93,7 +122,7 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   row(item: T): ReactNode; create?: { label: string; disabled?: boolean; reason?: string; onClick(): void }; embedded?: boolean;
   secondaryActions?: readonly PageCommand[];
   keywords?(item: T): string;
-  filter?: { label: string; options: { value: string; label: string }[]; defaultValue?: string; matches(item: T, value: string): boolean };
+  filter?: { label: string; options: { value: string; label: string }[]; defaultValue?: string; value?: string; onChange?(value: string): void; matches(item: T, value: string): boolean };
   status?: string;
   loadMore?: { label: string; disabled?: boolean; busy?: boolean; onClick(): void };
   footerNote?: ReactNode;
@@ -109,7 +138,9 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const toolbarLabels = useTableToolbarLabels();
   const [query, setQuery] = useState("");
   const filterDefault = filter?.defaultValue ?? "all";
-  const [kind, setKind] = useState(filterDefault);
+  const [localKind, setLocalKind] = useState(filterDefault);
+  const kind = filter?.value ?? localKind;
+  const setKind = (value: string) => { setLocalKind(value); filter?.onChange?.(value); };
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const deferredQuery = useDeferredValue(query);

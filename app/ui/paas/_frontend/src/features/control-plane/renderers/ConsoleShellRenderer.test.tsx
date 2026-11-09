@@ -358,6 +358,51 @@ afterEach(() => {
 });
 
 describe("ConsoleShellRenderer", () => {
+  it("opens each IAM summary with precisely the users counted, including password changes among enabled users", async () => {
+    const sample = await previewAccountRepository.listUsers(previewCredential);
+    const items = sample.items.slice(0, 3).map((entry, index) => ({
+      ...entry, user: { ...entry.user, status: index === 2 ? "DISABLED" as const : "ACTIVE" as const, mustChangePassword: index === 0 },
+      policyAttachments: index === 0 ? [] : entry.policyAttachments
+    }));
+    expect(items).toHaveLength(3);
+    const repository = { ...previewAccountRepository, workspace: undefined, listUsers: vi.fn().mockResolvedValue({ items, nextAfter: null }) };
+    const { user, commitRoute } = await renderConsole({ section: "access", accountRepository: repository, iamRepository: previewIamRepository });
+    navigation.push.mockImplementation(commitRoute);
+    for (const [query, expected] of [
+      ["state=all", items], ["state=enabled", items.slice(0, 2)], ["state=passwordChangeRequired", items.slice(0, 1)],
+      ["association=no-direct", items.filter((entry) => !entry.policyAttachments.length)]
+    ] as const) {
+      const href = "/console/access/users/?" + query;
+      await waitFor(() => expect(document.querySelector(`a[href="${href}"]`)).toBeTruthy());
+      const link = document.querySelector<HTMLAnchorElement>(`a[href="${href}"]`)!;
+      expect(link.querySelector("strong")?.textContent).toBe(String(expected.length));
+      await user.click(link);
+      const table = await screen.findByRole("table", { name: "租户用户列表" });
+      expect(within(table).getAllByRole("row")).toHaveLength(expected.length + 1);
+      for (const entry of expected) expect(within(table).getByText(entry.user.loginName, { exact: true })).toBeTruthy();
+      act(() => commitRoute("/console/access/"));
+    }
+  });
+
+  it("takes ready and in-progress totals to different installation records", async () => {
+    const makeInstallation = (id: string, phase: "READY" | "PROVISIONING"): ServiceInstallation => ({
+      id, name: id, offeringId: "postgresql-18", engineVersion: "18", quotaEntitlementId: "quota-primary", regionId: "local-primary",
+      phase, operation: { id: "op-" + id, kind: "PROVISION", phase, safeFailureCode: null, observedAt: "2026-11-02T08:00:00Z" },
+      endpoint: null, credentialReference: null, resourceVersion: 1, createdAt: "2026-11-02T08:00:00Z"
+    });
+    const load = vi.fn().mockResolvedValue({ ...snapshot, installations: [makeInstallation("db-online", "READY"), makeInstallation("db-starting", "PROVISIONING")] });
+    const { user, commitRoute } = await renderConsole({ load });
+    navigation.push.mockImplementation(commitRoute);
+    for (const [scope, name] of [["ready", "db-online"], ["processing", "db-starting"]] as const) {
+      const href = "/console/installations/?scope=" + scope;
+      await waitFor(() => expect(document.querySelector(`a[href="${href}"]`)).toBeTruthy());
+      await user.click(document.querySelector<HTMLAnchorElement>(`a[href="${href}"]`)!);
+      const row = (await screen.findByText(name, { exact: true })).closest("tr")!;
+      expect(row.closest("tbody")?.rows).toHaveLength(1);
+      expect(screen.getByRole("button", { name: /移除筛选/ })).toBeTruthy();
+      act(() => commitRoute("/console/"));
+    }
+  });
   it.each([
     { selection: { section: "overview" }, role: "article", name: "最近服务实例" },
     { selection: { section: "catalog" }, role: "region", name: "产品规格" },
@@ -2324,7 +2369,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("heading", { level: 1 }).textContent).toBe("控制台总览");
     await user.click(screen.getByRole("button", { name: "打开消息中心，7 条未读消息" }));
     const inbox = screen.getByRole("dialog", { name: "消息中心" });
-    expect(within(inbox).getByRole("link", { name: /1 个任务进行中/ }).getAttribute("href")).toMatch(/\/console\/operations\/?$/);
+    expect(within(inbox).getByRole("link", { name: /1 个任务进行中/ }).getAttribute("href")).toMatch(/\/console\/operations\/?\?state=RUNNING$/);
     expect(within(inbox).getByRole("link", { name: "查看全部消息" }).getAttribute("href")).toMatch(/\/console\/messages\/?$/);
   });
 

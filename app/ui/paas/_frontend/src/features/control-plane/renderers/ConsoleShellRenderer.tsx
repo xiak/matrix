@@ -12,7 +12,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent
 } from "react";
-import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
+import { ConsoleLink as Link, DirectoryQueryProvider, replaceDirectoryQuery } from "../routes/ConsoleNavigation";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
@@ -320,7 +320,10 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
     principalId: principal?.session.principalId ?? "IAM session",
     tenant: { id: effectiveOrganizationId, name: organizationName ?? principal?.session.organizationId ?? t("unspecifiedTenant") }
   }), [principal, effectiveOrganizationId, organizationName, accountMessages, roleSession.identity, t]);
-  const headerScope = useMemo(() => ({ regionId, onRegionChange: setRegionId }), [regionId]);
+  const headerScope = useMemo(() => ({ regionId, onRegionChange: (next: string) => {
+    setRegionId(next);
+    replaceDirectoryQuery({ region: next === "all" ? null : next });
+  } }), [regionId]);
   useEffect(() => () => useConsoleUiStore.getState().resetSessionUi(), []);
 
   const closeSidebarAndRestoreFocus = useCallback(() => {
@@ -470,7 +473,10 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
     : managedServicePage ? <ManagedServicePageActions key={`${dataOwnerKey}:${navigation.currentHref}`} focusRef={workspaceTrigger} primary={workspaceCommand} />
     : workspaceAction ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={workspaceCommand} /> : undefined;
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
-  const pageContent = content ? <ConsoleContentRenderer accountId={activationAccountId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={pendingSelection ?? navigation.selection} /> : null;
+  const contentLoading = <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={pendingSelection ?? navigation.selection} />;
+  const pageContent = content ? <Suspense fallback={contentLoading}><DirectoryQueryProvider pendingHref={pendingContent ? navigation.pendingHref : null} regions={frame.scope?.regions} selectRegion={setRegionId}>
+    <ConsoleContentRenderer accountId={activationAccountId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} />
+  </DirectoryQueryProvider></Suspense> : !controlPlane.error ? contentLoading : null;
   const resourceContent = <Fragment key={dataOwnerKey}>
     {controlPlane.error && !(content?.kind === "installations" && controlPlane.error.kind === "unavailable")
       ? <ConsoleReadFailure failure={controlPlane.error} loading={controlPlane.loading} onRetry={controlPlane.reload} /> : pageContent}

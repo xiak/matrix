@@ -1,4 +1,5 @@
 import { serviceForSelection, serviceNavigation } from "./serviceDirectory";
+import { isHealthyResource } from "../domain/experience";
 import { accountAccessViews, type AccountAccessView } from "@/features/auth/domain/accounts";
 import type {
   ExperienceAlert,
@@ -364,10 +365,10 @@ function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot, 
     offering: offerings[0] ?? null,
     recentInstallations: installations.slice(0, 5),
     metrics: [
-      { id: "offerings", value: snapshot.offerings.filter((item) => item.state === "AVAILABLE").length, status: "info" },
-      { id: "quota", value: availableQuota, status: availableQuota > 0 ? "success" : "warning" },
-      { id: "services", value: ready, detailCount: active, status: active > 0 ? "info" : "neutral" },
-      { id: "regions", value: snapshot.regions.filter((item) => item.state === "READY").length, status: snapshot.regions.some((item) => item.state === "READY") ? "success" : "warning" }
+      { id: "offerings", href: "/console/catalog/?scope=available", value: offerings.filter((item) => item.available).length, status: "info" },
+      { id: "quota", href: "/console/quotas/?scope=available", value: availableQuota, status: availableQuota > 0 ? "success" : "warning" },
+      { id: "services", href: "/console/installations/?scope=ready", value: ready, detailCount: active, detailHref: "/console/installations/?scope=processing", status: active > 0 ? "info" : "neutral" },
+      { id: "regions", href: "/console/regions/?scope=ready", value: snapshot.regions.filter((item) => item.state === "READY").length, status: snapshot.regions.some((item) => item.state === "READY") ? "success" : "warning" }
     ]
   };
 }
@@ -378,7 +379,7 @@ function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapsh
   const alerts = alertScenes(experience);
   if (section === "overview") {
     if (!snapshot) return null;
-    const healthy = experience.resources.filter((item) => item.state === "HEALTHY" || item.state === "RUNNING").length;
+    const healthy = experience.resources.filter(isHealthyResource).length;
     const firing = experience.alerts.filter((item) => item.state === "FIRING").length;
     const running = experience.operations.filter((item) => item.state === "RUNNING").length;
     return {
@@ -386,12 +387,12 @@ function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapsh
       regionCount: snapshot.regions.length,
       readyRegions: snapshot.regions.filter((item) => item.state === "READY").length,
       metrics: [
-        { id: "all-resources", value: experience.resources.length, detailCount: experience.projects.filter((item) => item.id !== "all").length, status: "info" },
-        { id: "healthy-resources", value: healthy, status: "success" },
-        { id: "active-operations", value: running, status: running > 0 ? "info" : "neutral" },
-        { id: "active-alerts", value: firing, status: firing > 0 ? "warning" : "success" }
+        { id: "all-resources", href: "/console/resources/", value: experience.resources.length, detailCount: new Set(resources.map((item) => item.projectId).filter((id) => id !== "all")).size, status: "info" },
+        { id: "healthy-resources", href: "/console/resources/?scope=healthy", value: healthy, status: "success" },
+        { id: "active-operations", href: "/console/operations/?state=RUNNING", value: running, status: running > 0 ? "info" : "neutral" },
+        { id: "active-alerts", href: "/console/observability/alerts/?scope=firing", value: firing, status: firing > 0 ? "warning" : "success" }
       ],
-      recentResources: resources.slice(0, 5),
+      resources,
       operations: operations.filter((item) => item.state === "RUNNING"),
       alerts: alerts.filter((item) => item.state === "FIRING").slice(0, 2)
     };
@@ -415,8 +416,8 @@ function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapsh
     return {
       kind: "devops",
       metrics: [
-        { id: "pipeline-success", value: 0.946, detailCount: successful, status: "success" },
-        { id: "pipeline-running", value: running, status: running > 0 ? "info" : "neutral" },
+        { id: "pipeline-success", value: 0.946, detailCount: successful, detailHref: "/console/devops/pipelines/?scope=succeeded", status: "success" },
+        { id: "pipeline-running", href: "/console/devops/pipelines/?scope=running", value: running, status: running > 0 ? "info" : "neutral" },
         { id: "lead-time", value: 18, status: "success" },
         { id: "deployment-frequency", value: 12, status: "info" }
       ],
@@ -428,9 +429,9 @@ function experienceContent(section: ConsoleSection, snapshot: ControlPlaneSnapsh
     return {
       kind: "observability",
       metrics: [
-        { id: "service-health", value: experience.serviceHealth.length, detailCount: degraded, status: degraded > 0 ? "warning" : "success" },
+        { id: "service-health", href: "/console/observability/health/", value: experience.serviceHealth.length, detailCount: degraded, detailHref: "/console/observability/health/?scope=degraded", status: degraded > 0 ? "warning" : "success" },
         { id: "availability", value: 0.9994, status: "success" },
-        { id: "alert-firing", value: experience.alerts.filter((item) => item.state === "FIRING").length, status: "warning" },
+        { id: "alert-firing", href: "/console/observability/alerts/?scope=firing", value: experience.alerts.filter((item) => item.state === "FIRING").length, status: "warning" },
         { id: "ingestion", value: 1.8, status: "info" }
       ],
       services: serviceHealthScenes(experience),

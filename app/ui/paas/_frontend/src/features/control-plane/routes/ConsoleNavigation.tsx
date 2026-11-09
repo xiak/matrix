@@ -2,8 +2,10 @@
 
 import { createContext, useContext, useLayoutEffect, useRef, useState, useTransition, type ComponentProps, type ReactNode } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
+import { useRouter, useSearchParams } from "next/navigation";
+import { X } from "lucide-react";
+import { useTranslations } from "next-intl";
+import { Button, Card, EmptyState, UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/selection";
 import { parseControlPlanePathname } from "./parseControlPlaneRoute";
 
@@ -18,6 +20,56 @@ type ConsoleNavigationState = {
 };
 
 const NavigationContext = createContext<ConsoleNavigationState | null>(null);
+const DirectoryQueryContext = createContext<Pick<URLSearchParams, "get" | "has"> | null>(null);
+
+export function DirectoryQueryProvider({ pendingHref, regions, selectRegion, children }: {
+  pendingHref?: string | null; regions?: readonly { id: string }[]; selectRegion?(id: string): void; children: ReactNode;
+}) {
+  const committed = useSearchParams();
+  const query = pendingHref ? new URL(pendingHref, "https://matrix.invalid").searchParams : committed;
+  const region = query?.get("region");
+  useLayoutEffect(() => {
+    if (region && (region === "all" || regions?.some((entry) => entry.id === region))) selectRegion?.(region);
+  }, [region, regions, selectRegion]);
+  return <DirectoryQueryContext.Provider value={query}>{children}</DirectoryQueryContext.Provider>;
+}
+
+export function useDirectoryQuery() {
+  return useContext(DirectoryQueryContext);
+}
+
+// Next observes native same-page history changes. Editing a filter replaces
+// this directory entry so Back still returns to the originating overview.
+export function replaceDirectoryQuery(changes: Record<string, string | null>) {
+  const url = new URL(window.location.href);
+  for (const [name, value] of Object.entries(changes)) {
+    if (value === null) url.searchParams.delete(name);
+    else url.searchParams.set(name, value);
+  }
+  window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+}
+export function DirectoryScope({ label, parameter = "scope", empty = false, children }: { label?: string; parameter?: string; empty?: boolean; children: ReactNode }) {
+  const t = useTranslations("Collection");
+  if (!label) return <>{children}</>;
+  return <><Card.Header><Button size="small" variant="secondary" aria-label={t("removeFilter", { label })}
+    onClick={(event) => {
+      const owner = event.currentTarget.closest("article");
+      const target = owner?.querySelector<HTMLElement>('input[type="search"], [role="tab"][aria-selected="true"]') ?? document.querySelector<HTMLElement>("h1[tabindex]");
+      replaceDirectoryQuery({ [parameter]: null });
+      target?.focus({ preventScroll: true });
+    }}>{label}<X aria-hidden="true" /></Button></Card.Header>
+    {empty ? <EmptyState title={t("noMatchingItems")} /> : children}</>;
+}
+
+export function useDirectoryTab(initial: string, allowed: readonly string[]): [string, (tab: string) => void] {
+  const requested = useDirectoryQuery()?.get("tab");
+  const [local, setLocal] = useState(initial);
+  return [requested && allowed.includes(requested) ? requested : local, (tab) => {
+    setLocal(tab);
+    if (requested) replaceDirectoryQuery({ tab, scope: null });
+  }];
+}
+
 const canonicalHref = (href: string) => {
   const url = new URL(href, "https://matrix.invalid");
   return `${url.pathname.replace(/\/$/, "")}/${url.search}${url.hash}`;

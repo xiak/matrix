@@ -2,6 +2,19 @@
 
 @layer xiak {
 .card { min-height: 6rem; }
+.card:has(> a) { display: flex; flex-direction: column; }
+.card > a { flex: 1; min-width: 0; border-radius: inherit; color: inherit; text-decoration: none; }
+.card:has(> a:hover) { background: var(--xiak-color-bg-panel-hover); border-color: var(--xiak-color-border-accent); }
+.card > a:focus-visible { outline: 0.125rem solid var(--xiak-color-border-focus); outline-offset: -0.125rem; }
+.label { display: inline-flex; align-items: center; gap: var(--xiak-spacing-narrow); }
+.card > a .label { color: var(--xiak-color-accent-text); }
+.label svg { flex: none; width: var(--xiak-font-size-caption); height: var(--xiak-font-size-caption); }
+.card[data-secondary] .body { padding-bottom: var(--xiak-spacing-narrow); }
+.secondary { padding: 0 var(--xiak-panel-padding) var(--xiak-panel-padding); }
+.secondary > a { display: inline-flex; gap: var(--xiak-spacing-narrow); align-items: center; min-height: var(--xiak-control-height-small); color: var(--xiak-color-accent-text); font-size: var(--xiak-font-size-control); text-decoration: none; }
+.secondary > a:hover { text-decoration: underline; }
+.secondary > a:focus-visible { outline: 0.125rem solid var(--xiak-color-border-focus); }
+.secondary svg { width: var(--xiak-font-size-caption); height: var(--xiak-font-size-caption); }
 .body { display: grid; gap: var(--xiak-spacing-narrow); }
 .heading { display: flex; min-height: 1.25rem; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-tight); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-control); line-height: var(--xiak-line-height-control); }
 .value { color: var(--xiak-color-text-strong); font-family: var(--xiak-font-numeric); font-size: var(--xiak-font-size-metric); font-weight: var(--xiak-font-weight-semibold); font-variant-numeric: tabular-nums; line-height: 1.2; overflow-wrap: anywhere; }

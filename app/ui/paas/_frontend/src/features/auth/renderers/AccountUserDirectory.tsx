@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, HelpDisclosure, Table, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
+import { replaceDirectoryQuery, useDirectoryQuery } from "@/features/control-plane/routes/ConsoleNavigation";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
@@ -14,7 +15,7 @@ import { isUserBatchAssociationAction, UserBatchConfirmationDialog, UserBatchWor
 import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
 import styles from "./AccountAccessRenderer.module.css";
 import { AccountDirectoryReadFailure } from "./AccountReadBoundary";
-import { WorkspaceDelete, WorkspaceDetail } from "./AccessWorkspaceUi";
+import { RelationshipLink, WorkspaceDelete, WorkspaceDetail } from "./AccessWorkspaceUi";
 
 function AccountUserRow({ user, principalId, workspace, grants, checked, disabled, onSelect, onOpen }: {
   user: DirectoryUser; principalId: string; workspace: AccessWorkspace | null;
@@ -31,12 +32,12 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
     <td>{t("child")}{user.id === principalId ? <small>{t("signedIn")}</small> : null}</td>
     <td data-label={t("accessMethods")}><AccountUserAccessMethods user={user} workspace={workspace} directory /></td>
     <td data-label={workspace ? w("policyAssociations") : t("directPolicyAttachments")}>{workspace ? <div className={styles.permissionSources}>
-      {grants!.direct > 0 ? <span>{w("directPolicyCount", { count: grants!.direct })}</span> : null}
-      {grants!.inherited > 0 ? <span>{w("groupPolicyCount", { count: grants!.inherited })}</span> : null}
+      {grants!.direct > 0 ? <RelationshipLink view="users" id={user.id} tab="policies" scope="direct" enabled={user.canRead}>{w("directPolicyCount", { count: grants!.direct })}</RelationshipLink> : null}
+      {grants!.inherited > 0 ? <RelationshipLink view="users" id={user.id} tab="policies" scope="inherited" enabled={user.canRead}>{w("groupPolicyCount", { count: grants!.inherited })}</RelationshipLink> : null}
       {!grants!.direct && !grants!.inherited ? w("noPolicyGrants") : null}
     </div> : <div className={styles.roleTags}>{user.attachments.length ? <>
       {user.attachments.slice(0, 2).map((attachment) => <Badge key={attachment.id} status={attachment.policyStatus === "RETIRED" ? "neutral" : undefined}>{attachment.label}</Badge>)}
-      {user.attachments.length > 2 ? <span>{t("morePolicyAttachments", { count: user.attachments.length - 2 })}</span> : null}
+      {user.attachments.length > 2 ? <RelationshipLink view="users" id={user.id} tab="policies" enabled={user.canRead}>{t("morePolicyAttachments", { count: user.attachments.length - 2 })}</RelationshipLink> : null}
     </> : t("noDirectPolicyAttachments")}</div>}</td>
     <td>{user.state ? <AccountUserStatus state={user.state} directory /> : t("unknown")}</td>
   </tr>;
@@ -84,9 +85,17 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onChan
   const workspace = access.workspace;
   const directoryFailed = Boolean(scene.directoryFailures?.users);
   const { userDirectoryView } = access;
-  const [query, setQuery] = useState(() => userDirectoryView.read().query);
-  const [state, setState] = useState(() => userDirectoryView.read().state);
-  const [role, setRole] = useState(() => userDirectoryView.read().role);
+  const params = useDirectoryQuery();
+  const linked = !entityId && (params?.has("state") || params?.has("association"));
+  const [storedQuery, setQuery] = useState(() => userDirectoryView.read().query);
+  const [storedState, setState] = useState(() => userDirectoryView.read().state);
+  const [storedRole, setRole] = useState(() => userDirectoryView.read().role);
+  const requestedState = params?.get("state") ?? "";
+  const requestedRole = params?.get("association") ?? "";
+  const query = linked ? params?.get("q") ?? "" : storedQuery;
+  const state = linked ? ["enabled", "active", "passwordChangeRequired", "disabled"].includes(requestedState) ? requestedState : "all" : storedState;
+  const roles = workspace ? ["direct", "ungranted", "inherited"] : ["direct", "no-direct", "platform"];
+  const role = linked ? roles.includes(requestedRole) ? requestedRole : "all" : storedRole;
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [cursorPage, setCursorPage] = useState(1);
@@ -120,7 +129,10 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onChan
     }, 0);
     return () => window.clearTimeout(timer);
   }, [access.busy, access.loading, batchOperation]);
-  const changeFilter = (change: () => void) => { clearSelection(); setPage(1); change(); };
+  const changeFilter = (change: () => void, changes: Record<string, string | null>) => {
+    clearSelection(); setPage(1); change();
+    if (linked) replaceDirectoryQuery(changes);
+  };
   const detail = scene.users.find((user) => user.id === entityId) ?? (deleting && deleting.id === entityId ? deleting : undefined);
   const words = useMemo(() => deferredQuery.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean), [deferredQuery]);
   const associations = useMemo(() => {
@@ -142,10 +154,11 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onChan
     const roleMatches = workspace ?
       role === "all" || (role === "ungranted" ? !grants!.direct && !grants!.inherited : role === "direct" ? grants!.direct > 0 : grants!.inherited > 0) :
       role === "all" || (role === "no-direct" ? !user.attachments.length : role === "direct" ? user.attachments.length > 0 : user.attachments.some((attachment) => attachment.scope === "INSTALLATION"));
-    return words.every((word) => text.includes(word)) && (state === "all" || state === user.state) && roleMatches;
+    const stateMatches = state === "enabled" ? user.enabled : state === "all" || state === user.state;
+    return words.every((word) => text.includes(word)) && stateMatches && roleMatches;
   }), [associations, role, scene.users, state, t, words, workspace]);
   const hasFilters = Boolean(query || state !== "all" || role !== "all");
-  const clearFilters = () => { clearSelection(); setPage(1); setQuery(""); setState("all"); setRole("all"); };
+  const clearFilters = () => changeFilter(() => { setQuery(""); setState("all"); setRole("all"); }, { state: "all", association: null, q: null });
   const cursorMode = cursorPage > 1 || !scene.directoryComplete;
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, pages);
@@ -192,10 +205,10 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onChan
         primary={scene.canCreateUsers ? { id: "create", label: t("createUser"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: onCreate } : undefined}
       />} />
       <AccountOwnerSummary scene={scene} onOpen={() => onOpen("users", scene.accountOwner.id)} />
-      <TableToolbar labels={toolbarLabels} search={{ label: t("searchUsers"), placeholder: t("searchUsersPlaceholder"), value: query, onChange: (value) => changeFilter(() => setQuery(value)) }}
+      <TableToolbar labels={toolbarLabels} search={{ label: t("searchUsers"), placeholder: t("searchUsersPlaceholder"), value: query, onChange: (value) => changeFilter(() => setQuery(value), { q: value || null }) }}
         status={directoryFailed ? undefined : [t("userResults", { shown: filtered.length, loaded: scene.users.length }), ...(checkedUsers.length ? [batch("selected", { count: checkedUsers.length })] : [])].join(" · ")} filters={[
-          { id: "state", label: t("filterUserState"), value: state, onChange: (value) => changeFilter(() => setState(value)), options: [{ value: "all", label: t("allStates") }, ...(["active", "passwordChangeRequired", "disabled"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] },
-          { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "no-direct", label: t("noDirectPolicyAttachments") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
+          { id: "state", label: t("filterUserState"), value: state, onChange: (value) => changeFilter(() => setState(value), { state: value }), options: [{ value: "all", label: t("allStates") }, { value: "enabled", label: t("enabledUserFilter") }, ...(["active", "passwordChangeRequired", "disabled"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] },
+          { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value), { association: value }), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "no-direct", label: t("noDirectPolicyAttachments") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
         ]} />
       {!workspace || !access.supportsUserBatch ? <HelpDisclosure className={styles.userDirectoryHelp} label={t("userDirectoryHelp")}>
         {!workspace ? <p>{t("directPolicySourcesHint")}</p> : null}

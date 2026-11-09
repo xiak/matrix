@@ -1,6 +1,7 @@
 "use client";
 
-import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
+import { ConsoleLink as Link, replaceDirectoryQuery, useDirectoryQuery } from "../routes/ConsoleNavigation";
+import { hrefInRegion } from "../domain/selection";
 import { useState } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight, FileSearch, FileText } from "lucide-react";
@@ -33,7 +34,13 @@ function LogSearch({ data }: { data: ExperienceLogs }) {
   const t = useTranslations("LogService");
   const toolbarLabels = useTableToolbarLabels();
   const [query, setQuery] = useState("");
-  const [topic, setTopic] = useState("all");
+  const requestedTopic = useDirectoryQuery()?.get("topic");
+  const [localTopic, setLocalTopic] = useState("all");
+  const topic = requestedTopic ?? localTopic;
+  function setTopic(value: string) {
+    setLocalTopic(value);
+    if (requestedTopic) replaceDirectoryQuery({ topic: value === "all" ? null : value });
+  }
   const [level, setLevel] = useState("all");
   const words = query.normalize("NFKC").trim().toLowerCase().split(/\s+/).filter(Boolean);
   const events = data.events.filter((event) => (topic === "all" || event.topicId === topic) && (level === "all" || event.level === level) && words.every((word) => [event.message, event.service, event.traceId, event.id].join(" ").normalize("NFKC").toLowerCase().includes(word)));
@@ -47,15 +54,15 @@ function LogSearch({ data }: { data: ExperienceLogs }) {
   </Card>;
 }
 
-function LogTopics({ data, collection }: { data: ExperienceLogs; collection: boolean }) {
+function LogTopics({ data, collection, regionId }: { data: ExperienceLogs; collection: boolean; regionId: string }) {
   const t = useTranslations("LogService");
   const format = useFormatter();
   return <Card>
     <Card.Header><div><Typography.Title as="h2" level={3}>{t(collection ? "collectionTitle" : "topicsTitle")}</Typography.Title><Typography.Text tone="muted">{t(collection ? "collectionHint" : "topicsHint")}</Typography.Text></div></Card.Header>
     <Table aria-label={t(collection ? "collectionTitle" : "topicsTitle")} mobileLayout="stack"><thead><tr><th scope="col">{t("topic")}</th><th scope="col">{t(collection ? "source" : "retention")}</th><th scope="col">{t(collection ? "path" : "stored")}</th><th scope="col">{t(collection ? "nodes" : "region")}</th><th scope="col">{t("status")}</th></tr></thead>
-        <tbody>{data.topics.map((topic) => <tr key={topic.id}><td data-label={t("topic")}><strong>{topic.name}</strong><small>{topic.id}</small></td><td data-label={t(collection ? "source" : "retention")}>{collection ? t(topic.source === "KUBERNETES" ? "kubernetes" : "host") : t("retentionDays", { count: topic.retentionDays })}</td><td data-label={t(collection ? "path" : "stored")}>{collection ? <code>{topic.path}</code> : `${format.number(topic.storageGiB)} GiB`}</td><td data-label={t(collection ? "nodes" : "region")}>{collection ? format.number(topic.nodeCount) : topic.regionId}</td><td data-label={t("status")}><Badge status={topic.state === "ACTIVE" ? "success" : "neutral"}>{t(topic.state === "ACTIVE" ? "active" : "paused")}</Badge></td></tr>)}</tbody>
+        <tbody>{data.topics.map((topic) => <tr key={topic.id}><td data-label={t("topic")}><Table.PrimaryAction asChild><Link href={hrefInRegion(`/console/logs/search/?topic=${encodeURIComponent(topic.id)}`, regionId)}>{topic.name}</Link></Table.PrimaryAction><small>{topic.id}</small></td><td data-label={t(collection ? "source" : "retention")}>{collection ? t(topic.source === "KUBERNETES" ? "kubernetes" : "host") : t("retentionDays", { count: topic.retentionDays })}</td><td data-label={t(collection ? "path" : "stored")}>{collection ? <code>{topic.path}</code> : `${format.number(topic.storageGiB)} GiB`}</td><td data-label={t(collection ? "nodes" : "region")}>{collection ? format.number(topic.nodeCount) : topic.regionId}</td><td data-label={t("status")}><Badge status={topic.state === "ACTIVE" ? "success" : "neutral"}>{t(topic.state === "ACTIVE" ? "active" : "paused")}</Badge></td></tr>)}</tbody>
       </Table>
-    <Card.Footer><Link className={styles.textLink} href="/console/logs/search/">{t("allLogs")}<ArrowRight aria-hidden="true" /></Link></Card.Footer>
+    <Card.Footer><Link className={styles.textLink} href={hrefInRegion("/console/logs/search/", regionId)}>{t("allLogs")}<ArrowRight aria-hidden="true" /></Link></Card.Footer>
   </Card>;
 }
 
@@ -66,16 +73,16 @@ export function LogServiceRenderer({ scene, regionId = "all" }: { scene: Extract
   const topics = scene.data.topics.filter((topic) => regionId === "all" || topic.regionId === regionId);
   const data = { topics, events: scene.data.events.filter((event) => topics.some((topic) => topic.id === event.topicId)) };
   const metrics = [
-    { label: "topicCount", value: format.number(data.topics.length) },
-    { label: "storage", value: `${format.number(data.topics.reduce((total, topic) => total + topic.storageGiB, 0), { maximumFractionDigits: 1 })} GiB` },
-    { label: "indexed", value: format.number(data.events.length) },
-    { label: "agents", value: format.number(data.topics.reduce((total, topic) => total + topic.nodeCount, 0)) }
+    { label: "topicCount", href: "/console/logs/topics/", value: format.number(data.topics.length) },
+    { label: "storage", href: "/console/logs/topics/", value: `${format.number(data.topics.reduce((total, topic) => total + topic.storageGiB, 0), { maximumFractionDigits: 1 })} GiB` },
+    { label: "indexed", href: "/console/logs/search/", value: format.number(data.events.length) },
+    { label: "agents", href: "/console/logs/collection/", value: format.number(data.topics.reduce((total, topic) => total + topic.nodeCount, 0)) }
   ] as const;
   return <div className={styles.stack}>
-    {scene.view === "search" ? <LogSearch data={data} key={regionId} /> : scene.view === "topics" || scene.view === "collection" ? <LogTopics collection={scene.view === "collection"} data={data} /> : <>
-      <section className={styles.welcome}><div><Typography.Eyebrow>Matrix · Log Service</Typography.Eyebrow><h2>{t("overviewTitle")}</h2><p>{t("overviewHint")}</p></div><div className={styles.actions}><Button asChild><Link href="/console/logs/search/">{t("openSearch")}<ArrowRight aria-hidden="true" /></Link></Button><Link className={styles.textLink} href="/console/logs/topics/">{t("viewTopics")}</Link></div></section>
-      <section className={styles.metrics}>{metrics.map((metric) => <Statistic key={metric.label} label={t(metric.label)} value={metric.value} />)}</section>
-      <Card><Card.Header><div><Typography.Title as="h2" level={3}>{t("recent")}</Typography.Title><Typography.Text tone="muted">{t("recentHint")}</Typography.Text></div><Link className={styles.textLink} href="/console/logs/search/">{t("allLogs")}<ArrowRight aria-hidden="true" /></Link></Card.Header><LogEvents events={data.events.slice(0, 4)} /></Card>
+    {scene.view === "search" ? <LogSearch data={data} key={regionId} /> : scene.view === "topics" || scene.view === "collection" ? <LogTopics collection={scene.view === "collection"} data={data} regionId={regionId} /> : <>
+      <section className={styles.welcome}><div><Typography.Eyebrow>Matrix · Log Service</Typography.Eyebrow><h2>{t("overviewTitle")}</h2><p>{t("overviewHint")}</p></div><div className={styles.actions}><Button asChild><Link href={hrefInRegion("/console/logs/search/", regionId)}>{t("openSearch")}<ArrowRight aria-hidden="true" /></Link></Button><Link className={styles.textLink} href={hrefInRegion("/console/logs/topics/", regionId)}>{t("viewTopics")}</Link></div></section>
+      <section className={styles.metrics}>{metrics.map((metric) => <Statistic key={metric.label} label={t(metric.label)} value={metric.value} link={<Link href={hrefInRegion(metric.href, regionId)} />} />)}</section>
+      <Card><Card.Header><div><Typography.Title as="h2" level={3}>{t("recent")}</Typography.Title><Typography.Text tone="muted">{t("recentHint")}</Typography.Text></div><Link className={styles.textLink} href={hrefInRegion("/console/logs/search/", regionId)}>{t("allLogs")}<ArrowRight aria-hidden="true" /></Link></Card.Header><LogEvents events={data.events.slice(0, 4)} /></Card>
     </>}
   </div>;
 }
