@@ -10,7 +10,7 @@ import {
 import type { AuditRepository } from "./auditRepository";
 
 const digest = (character: string) => `sha256:${character.repeat(64)}`;
-const tenantId = "org-xiak";
+export const previewAuditTenantId = "org-xiak";
 const cursorSignature = "A".repeat(43);
 
 type Fixture = {
@@ -52,7 +52,7 @@ const records: AuditRecord[] = fixtures.map((fixture, index) => {
       kind: "AuditEvent",
       eventId,
       authorityKind: "TENANT",
-      tenantId,
+      tenantId: previewAuditTenantId,
       actor: fixture.actor ?? { type: "USER", id: "principal-preview-admin" },
       iamDecisionId: fixture.action === "iam.session.issued" ? undefined : decisionId,
       action: fixture.action,
@@ -98,8 +98,9 @@ export const previewAuditRepository: AuditRepository = {
       apiVersion: AUDIT_API_VERSION,
       kind: "AuditRecordPage",
       authorityKind: "TENANT",
-      tenantId,
+      tenantId: previewAuditTenantId,
       records: page,
+      omittedRecordCount: 0,
       nextCursor: nextOffset < filtered.length ? cursorFor(nextOffset) : undefined
     };
   },
@@ -113,7 +114,7 @@ export const previewAuditRepository: AuditRepository = {
       apiVersion: AUDIT_API_VERSION,
       kind: "ChainVerification",
       authorityKind: "TENANT",
-      tenantId,
+      tenantId: previewAuditTenantId,
       state: "VERIFIED",
       fromSequence: request.fromSequence,
       toSequence,

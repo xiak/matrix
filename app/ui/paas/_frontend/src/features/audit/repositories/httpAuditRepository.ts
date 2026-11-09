@@ -11,10 +11,15 @@ function post(credential: string, body: unknown): RequestInit {
 }
 
 export const httpAuditRepository: AuditRepository = {
-  async query(credential: string, request: AuditQueryRequest) {
-    return parseAuditRecordPage(await requestJSON<unknown>("/api/audit/v1/records:query", post(credential, request)), "TENANT");
+  async query(credential: string, request: AuditQueryRequest, tenantId: string) {
+    const body = await requestJSON<unknown>("/api/audit/v1/records:query", post(credential, request));
+    // The installed v1 service encodes its empty Go slice as null. Only its
+    // terminal, uncounted empty page has this representation.
+    const page = body && typeof body === "object" && "records" in body && body.records === null &&
+      !("nextCursor" in body) && !("omittedRecordCount" in body) ? { ...body, records: [] } : body;
+    return parseAuditRecordPage(page, { authorityKind: "TENANT", tenantId }, request.pageSize);
   },
-  async verify(credential: string, request: AuditVerifyRequest) {
-    return parseAuditChainVerification(await requestJSON<unknown>("/api/audit/v1/integrity:verify", post(credential, request)), "TENANT");
+  async verify(credential: string, request: AuditVerifyRequest, tenantId: string) {
+    return parseAuditChainVerification(await requestJSON<unknown>("/api/audit/v1/integrity:verify", post(credential, request)), { authorityKind: "TENANT", tenantId });
   }
 };

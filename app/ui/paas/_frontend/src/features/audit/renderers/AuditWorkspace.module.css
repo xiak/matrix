@@ -28,8 +28,9 @@
 .sectionTitle { margin: 0 0 var(--xiak-spacing-default); color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
 .resultMeaning { display: grid; gap: var(--xiak-spacing-narrow); padding: var(--xiak-spacing-default); border-inline-start: 0.1875rem solid var(--xiak-color-status-neutral); background: var(--xiak-color-bg-panel-hover); }
 .resultMeaning[data-result="ACCEPTED"] { border-inline-start-color: var(--xiak-color-status-info); }
-.resultMeaning[data-result="SUCCEEDED"], .resultMeaning[data-result="ALLOWED"] { border-inline-start-color: var(--xiak-color-status-success); }
-.resultMeaning[data-result="DENIED"] { border-inline-start-color: var(--xiak-color-status-danger); }
+.resultMeaning[data-result="SUCCEEDED"], .resultMeaning[data-result="ALLOWED"], .resultMeaning[data-result="COMPLETED"] { border-inline-start-color: var(--xiak-color-status-success); }
+.resultMeaning[data-result="DENIED"], .resultMeaning[data-result="FAILED"] { border-inline-start-color: var(--xiak-color-status-danger); }
+.resultMeaning[data-result="UNSUPPORTED"], .resultMeaning[data-result="DISCONNECTED"] { border-inline-start-color: var(--xiak-color-status-warning); }
 .resultMeaning strong { color: var(--xiak-color-text-strong); }
 .resultMeaning span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
 .facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; }

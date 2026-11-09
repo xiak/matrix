@@ -3353,6 +3353,8 @@
     },
     "directory": {
       "heading": "租户审计轨迹",
+      "omitted": "本页有 {count} 条记录未通过数据校验，已隐藏。",
+      "invalidCursor": "下一页的分页信息无效。可以刷新本页或调整查询条件。",
       "pageStatus": "第 {page} 页 · {count} 条记录",
       "loading": "正在读取审计记录",
       "refreshing": "正在更新当前结果…",
@@ -3381,6 +3383,13 @@
     },
     "results": {
       "ACCEPTED": "已接受",
+      "COMPLETED": "已完成",
+      "UNSUPPORTED": "不支持",
+      "EXPIRED": "已过期",
+      "DISCONNECTED": "已断开",
+      "REVOKED": "已撤销",
+      "REPLACED": "已替换",
+      "FAILED": "失败",
       "SUCCEEDED": "成功",
       "ALLOWED": "允许",
       "DENIED": "拒绝"
@@ -3404,7 +3413,18 @@
       "indefinite": "无限期保留",
       "ingested": "写入时间：{time}",
       "resultMeaningTitle": "本条结果如何理解",
+      "pipelineOutcome": "流水线运行结果为{outcome}，原因代码为 {reason}。",
+      "outcomes": {
+        "SUCCEEDED": "成功", "FAILED": "失败", "CANCELLED": "已取消", "MANUAL_INTERVENTION": "需要人工处理"
+      },
       "resultMeaning": {
+        "COMPLETED": "终端会话已正常结束。",
+        "UNSUPPORTED": "当前环境不支持这次终端会话。",
+        "EXPIRED": "这次终端会话已过期。",
+        "DISCONNECTED": "终端连接已断开。",
+        "REVOKED": "这次终端会话已被撤销。",
+        "REPLACED": "新的终端会话已替换这次会话。",
+        "FAILED": "终端服务记录了这次会话失败。",
         "ACCEPTED": "来源服务已接受该异步操作；这不证明 Operation 已完成，也不证明目标已达到期望状态。",
         "SUCCEEDED": "来源服务记录该事件已按自身语义完成；这不授予后续访问，也不证明相关异步业务的最终结果。",
         "ALLOWED": "IAM 对这一授权请求作出了允许判定；这不证明产品已执行请求、资源存在或业务结果成功。",

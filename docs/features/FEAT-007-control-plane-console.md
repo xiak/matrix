@@ -3410,24 +3410,20 @@ authority-process aggregate. This closes the independent CI gate for that
 source; real-IAM browser acceptance and signed installed-release replay remain
 required and are not inferred from CI.
 
-The Audit reader consumes the optional `authorityEvidenceDigest` from public
-Audit Event at fixed IAM/Audit source
-`5effc802fa8116d14420188d9075d6fe3ab1ceaa`. A present value must match
-`sha256:[0-9a-f]{64}` and is preserved independently of `requestDigest`;
-historical omission remains valid. Empty, null, non-string or malformed
-values and every other unknown Event field remain rejected. The existing
-read-only detail conditionally displays the digest with a localized statement
-that it is not a current authorization permit. It does not expose producer
-evidence, invent a digest, verify a hash chain, alter query fields or add a
-directory column.
+The Audit reader checks the published action, source, target and result
+vocabularies against the [Audit v1 contract](../../api/audit/v1/openapi.json).
+A well-scoped page renders its readable rows and reports the combined number
+of server and client omissions. An all-omitted page retains its navigation
+and warning. An invalid continuation disables forward navigation while the
+current rows remain readable. A mismatched response tenant, invalid envelope
+or conflicting sequence order prevents display. Integrity verification is
+an independent authorized read. The installed v1 service's terminal empty
+response (`records: null`, with no cursor or omission count) is accepted by
+the HTTP reader while installations upgrade to the array-returning service.
 
-That projection is fixed in
-[`dc6410238f40d1a91bdb236fa030a584d4703b0f`](https://github.com/xiak/matrix/commit/dc6410238f40d1a91bdb236fa030a584d4703b0f).
-Its 23 regression cases continue to cover valid producer facts, historical
-omission, malformed and unknown fields, strict HTTP preservation and sanitized
-read-only rendering. Its named earlier acceptance does not turn the current
-authenticator candidate's failed complete run into a pass or inherit a new
-signed-runtime result.
+Details preserve optional SHA-256 authority evidence independently of the
+request digest. The result of a completed pipeline run and its published
+reason are displayed separately from the result of recording the event.
 
 The retained Role-exit and recovered-quota behavior is fixed in
 [`a661779a5a00aa731544e86fc571ad5f4dcf8e68`](https://github.com/xiak/matrix/commit/a661779a5a00aa731544e86fc571ad5f4dcf8e68).

@@ -104,12 +104,13 @@ type QueryRecordsRequest struct {
 }
 
 type RecordPage struct {
-	APIVersion     string        `json:"apiVersion"`
-	Kind           string        `json:"kind"`
-	TenantID       TenantID      `json:"tenantId,omitempty"`
-	InstallationID string        `json:"installationId,omitempty"`
-	Records        []AuditRecord `json:"records"`
-	NextCursor     Cursor        `json:"nextCursor,omitempty"`
+	APIVersion         string        `json:"apiVersion"`
+	Kind               string        `json:"kind"`
+	TenantID           TenantID      `json:"tenantId,omitempty"`
+	InstallationID     string        `json:"installationId,omitempty"`
+	Records            []AuditRecord `json:"records"`
+	OmittedRecordCount int           `json:"omittedRecordCount,omitempty"`
+	NextCursor         Cursor        `json:"nextCursor,omitempty"`
 }
 
 type VerifyChainRequest struct {

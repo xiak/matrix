@@ -11086,6 +11086,11 @@
           "nextCursor": {
             "$ref": "#/components/schemas/Cursor"
           },
+          "omittedRecordCount": {
+            "maximum": 200,
+            "minimum": 0,
+            "type": "integer"
+          },
           "records": {
             "items": {
               "$ref": "#/components/schemas/AuditRecord"

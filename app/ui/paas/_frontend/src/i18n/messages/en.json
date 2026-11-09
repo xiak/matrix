@@ -3354,6 +3354,8 @@
     "directory": {
       "heading": "Tenant audit trail",
       "pageStatus": "Page {page} · {count} records",
+      "omitted": "{count, plural, one {# record on this page failed validation and was hidden.} other {# records on this page failed validation and were hidden.}}",
+      "invalidCursor": "The next page link is invalid. Refresh this page or change the filters.",
       "loading": "Reading audit records",
       "refreshing": "Updating current results…",
       "table": "Audit records",
@@ -3381,6 +3383,13 @@
     },
     "results": {
       "ACCEPTED": "Accepted",
+      "COMPLETED": "Completed",
+      "UNSUPPORTED": "Unsupported",
+      "EXPIRED": "Expired",
+      "DISCONNECTED": "Disconnected",
+      "REVOKED": "Revoked",
+      "REPLACED": "Replaced",
+      "FAILED": "Failed",
       "SUCCEEDED": "Succeeded",
       "ALLOWED": "Allowed",
       "DENIED": "Denied"
@@ -3404,7 +3413,18 @@
       "indefinite": "Retained indefinitely",
       "ingested": "Ingested: {time}",
       "resultMeaningTitle": "How to interpret this result",
+      "pipelineOutcome": "The pipeline run recorded {outcome} with reason code {reason}.",
+      "outcomes": {
+        "SUCCEEDED": "Succeeded", "FAILED": "Failed", "CANCELLED": "Cancelled", "MANUAL_INTERVENTION": "Manual intervention required"
+      },
       "resultMeaning": {
+        "COMPLETED": "The terminal session ended normally.",
+        "UNSUPPORTED": "The environment did not support this terminal session.",
+        "EXPIRED": "This terminal session expired.",
+        "DISCONNECTED": "The terminal connection was lost.",
+        "REVOKED": "This terminal session was revoked.",
+        "REPLACED": "A new terminal session replaced this session.",
+        "FAILED": "The terminal service recorded a failure for this session.",
         "ACCEPTED": "The source service accepted this asynchronous operation. It does not prove that the Operation completed or the target reached its desired state.",
         "SUCCEEDED": "The source service recorded this event as complete under its own semantics. It grants no later access and does not prove the final result of related asynchronous work.",
         "ALLOWED": "IAM allowed this authorization request. It does not prove that the product executed the request, that the resource exists, or that the business outcome succeeded.",

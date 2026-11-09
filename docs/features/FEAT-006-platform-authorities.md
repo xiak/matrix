@@ -571,6 +571,16 @@ time/action/actor filters. The signed request binds the complete JSON body and
 preserves USER plus accessKeyId in the local access fact; a valid signature
 from another tenant still cannot use the original cursor.
 
+A query page contains an array of readable records. When a payload at a
+trusted chain position fails decoding, public record validation or the
+stored canonical content check, that
+position consumes a page slot and increments the optional
+`omittedRecordCount`. Only the count is disclosed. The signed continuation
+uses the last scanned position, including when every payload on that page
+was omitted. Invalid scope, sequence ordering and database read failures
+fail the query. Chain verification reads every
+record in the requested range and requires intact evidence throughout.
+
 Platform records use `/v1/platform/records:query` and
 `/v1/platform/integrity:verify`, backed by the separate
 `audit.platform-record.read` / `audit.platform-integrity.verify` IAM actions.

@@ -105,31 +105,34 @@ func (service *Service) queryRecords(
 		if len(records) > request.PageSize+1 {
 			return ErrUnavailable
 		}
-		for _, record := range records {
-			if !recordMatchesQuery(record, chainID, request) {
-				return ErrUnavailable
-			}
-		}
-		visible := records
-		if len(visible) > request.PageSize {
-			visible = visible[:request.PageSize]
-		}
 		page = auditv1.RecordPage{
 			APIVersion:     auditv1.APIVersion,
 			Kind:           "AuditRecordPage",
 			TenantID:       chainID.TenantID(),
 			InstallationID: chainID.InstallationID(),
-			Records:        append([]auditv1.AuditRecord(nil), visible...),
+			Records:        make([]auditv1.AuditRecord, 0, len(records)),
 		}
-		if len(records) > request.PageSize {
-			page.NextCursor, err = service.cursors.Encode(
-				chainID,
-				request,
-				visible[len(visible)-1].Sequence,
-			)
-			if err != nil {
+		previous := beforeSequence
+		for i, row := range records {
+			if row.Sequence == 0 || row.Sequence >= previous {
 				return ErrUnavailable
 			}
+			if row.Record != nil && (row.Record.Sequence != row.Sequence || !recordMatchesQuery(*row.Record, chainID, request)) {
+				return ErrUnavailable
+			}
+			if i == request.PageSize {
+				page.NextCursor, err = service.cursors.Encode(chainID, request, previous)
+				if err != nil {
+					return ErrUnavailable
+				}
+				break
+			}
+			previous = row.Sequence
+			if row.Record == nil || auditv1.ValidateAuditRecord(*row.Record) != nil {
+				page.OmittedRecordCount++
+				continue
+			}
+			page.Records = append(page.Records, *row.Record)
 		}
 		return appendPreparedAccessEvent(transactionContext, transaction, access)
 	})
@@ -427,7 +430,7 @@ func recordMatchesQuery(
 	chainID authority.ChainID,
 	request auditv1.QueryRecordsRequest,
 ) bool {
-	if auditv1.ValidateAuditRecord(record) != nil || authority.ChainFor(record.Event.TenantID, record.Event.InstallationID) != chainID {
+	if authority.ChainFor(record.Event.TenantID, record.Event.InstallationID) != chainID {
 		return false
 	}
 	if request.From != nil && record.Event.OccurredAt.Before(*request.From) {

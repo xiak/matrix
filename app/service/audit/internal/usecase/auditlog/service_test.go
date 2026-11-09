@@ -703,9 +703,9 @@ func (transaction *auditTransaction) AppendRecord(
 func (transaction *auditTransaction) ReadRecords(
 	_ context.Context,
 	query RecordQuery,
-) ([]auditv1.AuditRecord, error) {
+) ([]RecordQueryRow, error) {
 	stored := transaction.records[query.ChainID]
-	result := make([]auditv1.AuditRecord, 0, query.Limit)
+	result := make([]RecordQueryRow, 0, query.Limit)
 	for index := len(stored) - 1; index >= 0 && len(result) < query.Limit; index-- {
 		record := stored[index]
 		if record.Sequence >= query.BeforeSequence || !recordMatchesQuery(record, query.ChainID, auditv1.QueryRecordsRequest{
@@ -717,7 +717,7 @@ func (transaction *auditTransaction) ReadRecords(
 		}) {
 			continue
 		}
-		result = append(result, record)
+		result = append(result, RecordQueryRow{Sequence: record.Sequence, Record: &record})
 	}
 	return result, nil
 }

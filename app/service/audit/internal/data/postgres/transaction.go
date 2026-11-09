@@ -148,7 +148,7 @@ func (value *transaction) AppendRecord(
 func (value *transaction) ReadRecords(
 	ctx context.Context,
 	query auditlog.RecordQuery,
-) ([]auditv1.AuditRecord, error) {
+) ([]auditlog.RecordQueryRow, error) {
 	var action any
 	if query.Action != "" {
 		action = string(query.Action)
@@ -179,13 +179,18 @@ func (value *transaction) ReadRecords(
 		return nil, mapDatabaseError("query Audit records", err)
 	}
 	defer rows.Close()
-	records := make([]auditv1.AuditRecord, 0)
+	records := make([]auditlog.RecordQueryRow, 0)
 	for rows.Next() {
 		record, _, err := scanAuditRecord(rows)
+		var unreadable *unreadableAuditPayload
+		if errors.As(err, &unreadable) && unreadable.chain == query.ChainID {
+			records = append(records, auditlog.RecordQueryRow{Sequence: unreadable.sequence})
+			continue
+		}
 		if err != nil {
 			return nil, mapDatabaseError("scan Audit query record", err)
 		}
-		records = append(records, record)
+		records = append(records, auditlog.RecordQueryRow{Sequence: record.Sequence, Record: &record})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, mapDatabaseError("iterate Audit query records", err)
@@ -295,6 +300,14 @@ type auditRecordScanner interface {
 	Scan(...any) error
 }
 
+type unreadableAuditPayload struct {
+	chain    authority.ChainID
+	sequence uint64
+}
+
+func (*unreadableAuditPayload) Error() string { return "unreadable Audit record payload" }
+func (*unreadableAuditPayload) Unwrap() error { return auditlog.ErrUnavailable }
+
 func scanAuditRecord(scanner auditRecordScanner) (auditv1.AuditRecord, string, error) {
 	var chainID, source, eventID, canonicalDocument string
 	var eventDocument []byte
@@ -316,10 +329,13 @@ func scanAuditRecord(scanner auditRecordScanner) (auditv1.AuditRecord, string, e
 		return auditv1.AuditRecord{}, "", err
 	}
 	defer clear(eventDocument)
-	if sequence < 1 || uint64(sequence) > maximumAuditSequence ||
-		auditv1.DecodeRequest(bytes.NewReader(eventDocument), &record.Event) != nil ||
-		authority.ChainFor(record.Event.TenantID, record.Event.InstallationID) != authority.ChainID(chainID) ||
-		record.Event.EventID != auditv1.EventID(eventID) {
+	if sequence < 1 || uint64(sequence) > maximumAuditSequence {
+		return auditv1.AuditRecord{}, "", auditlog.ErrUnavailable
+	}
+	if auditv1.DecodeRequest(bytes.NewReader(eventDocument), &record.Event) != nil {
+		return auditv1.AuditRecord{}, "", &unreadableAuditPayload{authority.ChainID(chainID), uint64(sequence)}
+	}
+	if authority.ChainFor(record.Event.TenantID, record.Event.InstallationID) != authority.ChainID(chainID) {
 		return auditv1.AuditRecord{}, "", auditlog.ErrUnavailable
 	}
 	record.APIVersion = auditv1.APIVersion
@@ -328,9 +344,9 @@ func scanAuditRecord(scanner auditRecordScanner) (auditv1.AuditRecord, string, e
 	record.Sequence = uint64(sequence)
 	record.IngestedAt = record.IngestedAt.UTC()
 	fact, err := authority.Canonicalize(record.Source, record.Event)
-	if err != nil || fact.Document != canonicalDocument ||
-		fact.ContentDigest != record.ContentDigest {
-		return auditv1.AuditRecord{}, "", auditlog.ErrUnavailable
+	if err != nil || record.Event.EventID != auditv1.EventID(eventID) ||
+		fact.Document != canonicalDocument || fact.ContentDigest != record.ContentDigest {
+		return auditv1.AuditRecord{}, "", &unreadableAuditPayload{authority.ChainID(chainID), uint64(sequence)}
 	}
 	return record, canonicalDocument, nil
 }

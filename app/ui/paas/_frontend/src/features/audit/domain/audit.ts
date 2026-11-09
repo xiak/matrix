@@ -2,52 +2,152 @@ export const AUDIT_API_VERSION = "audit.matrix.xiak.com/v1";
 export const AUDIT_MAX_PAGE_SIZE = 200;
 export const AUDIT_MAX_VERIFY_RECORDS = 10_000;
 
-export const auditSources = ["IAM", "PAAS", "AUDIT"] as const;
+export const auditSources = ["IAM", "PAAS", "DEVOPS", "AUDIT"] as const;
 export const auditActorTypes = ["USER", "ROLE", "SERVICE_ACCOUNT", "SYSTEM"] as const;
-export const auditResults = ["ACCEPTED", "SUCCEEDED", "ALLOWED", "DENIED"] as const;
 export const auditRetentions = ["INDEFINITE"] as const;
-export const auditTargetKinds = [
-  "ACCOUNT", "USER", "GROUP", "ROLE", "ROLE_SESSION", "ACCESS_KEY", "POLICY", "GROUP_MEMBERSHIP",
-  "ORGANIZATION", "INSTALLATION", "PRINCIPAL", "ROLE_BINDING", "WORKLOAD_ROLE_BINDING", "POLICY_ATTACHMENT",
-  "SESSION", "AUTHORIZATION_DECISION", "APPLICATION", "CONFIGURATION", "CONFIGURATION_REVISION",
-  "APPLICATION_REVISION", "DEPLOYMENT", "EXECUTION_POOL", "EXECUTION_TARGET", "QUOTA_ENTITLEMENT",
-  "SERVICE_INSTALLATION", "AUDIT_RECORDS", "AUDIT_CHAIN"
+// Each action admits one target kind and a closed set of results in Audit v1.
+export const auditEventVariants = [
+  { target: "ACCOUNT", results: ["SUCCEEDED"], actions: [
+    "iam.account.created", "iam.account.disabled", "iam.account.enabled", "iam.account.alias-set",
+    "iam.security-settings.updated"
+  ] },
+  { target: "USER", results: ["SUCCEEDED"], actions: [
+    "iam.account-root.credentials-recovered", "iam.user.created", "iam.user.updated", "iam.user.deleted",
+    "iam.user.permission-boundary.set", "iam.user.permission-boundary.removed", "iam.user.status-set",
+    "iam.user.password-reset", "iam.user.password-changed", "iam.notification-contact.verification-started",
+    "iam.notification-contact.verified", "iam.notification-contact.replaced"
+  ] },
+  { target: "USER", results: ["DENIED"], actions: ["iam.user.password-reset-required"] },
+  { target: "PRINCIPAL", results: ["SUCCEEDED"], actions: [
+    "iam.authenticator.bound", "iam.authenticator.replaced", "iam.authenticator.removed",
+    "iam.authenticator.recovery-started", "iam.authenticator.recovered", "iam.recovery-codes.regenerated",
+    "iam.tenant-administrator.recovered", "iam.installation-primary.credentials-recovered",
+    "iam.principal.status-set", "iam.password.reset", "iam.session.others-revoked", "iam.password.changed",
+    "iam.principal.created"
+  ] },
+  { target: "GROUP", results: ["SUCCEEDED"], actions: [
+    "iam.group.created", "iam.group.updated", "iam.group.deleted"
+  ] },
+  { target: "ROLE", results: ["SUCCEEDED"], actions: [
+    "iam.role.created", "iam.role.updated", "iam.role.disabled", "iam.role.enabled", "iam.role.trust-set",
+    "iam.role.deleted", "iam.role.permission-boundary.set", "iam.role.permission-boundary.removed",
+    "iam.service-linked-role.created"
+  ] },
+  { target: "ROLE_SESSION", results: ["SUCCEEDED"], actions: [
+    "iam.role-session.issued", "iam.role-session.revoked", "iam.role-session.admin-revoked",
+    "iam.role-session.exited", "iam.service-role-session.issued"
+  ] },
+  { target: "WORKLOAD_ROLE_BINDING", results: ["SUCCEEDED"], actions: [
+    "iam.workload-role-binding.created", "iam.workload-role-binding.revoked"
+  ] },
+  { target: "ACCESS_KEY", results: ["SUCCEEDED"], actions: [
+    "iam.access-key.created", "iam.access-key.enabled", "iam.access-key.disabled",
+    "iam.access-key.network-restrictions-updated", "iam.access-key.deleted",
+    "iam.access-key.automatically-disabled"
+  ] },
+  { target: "SECURITY_REPORT", results: ["SUCCEEDED"], actions: [
+    "iam.security-report.created", "iam.security-report.download-started"
+  ] },
+  { target: "ACCESS_ANALYZER", results: ["SUCCEEDED"], actions: [
+    "iam.access-analyzer.created", "iam.access-analyzer.updated", "iam.access-analyzer.disposition-updated"
+  ] },
+  { target: "ACCESS_FINDING", results: ["SUCCEEDED"], actions: [
+    "iam.access-finding.detected", "iam.access-finding.resolved", "iam.access-finding.archived",
+    "iam.access-finding.unarchived"
+  ] },
+  { target: "POLICY", results: ["SUCCEEDED"], actions: [
+    "iam.policy.created", "iam.policy-version.created", "iam.policy-version.deleted",
+    "iam.policy.default-version-set", "iam.policy.updated", "iam.policy.deleted"
+  ] },
+  { target: "GROUP_MEMBERSHIP", results: ["SUCCEEDED"], actions: [
+    "iam.group-membership.created", "iam.group-membership.removed"
+  ] },
+  { target: "ORGANIZATION", results: ["SUCCEEDED"], actions: [
+    "iam.organization.created", "iam.tenant.created", "iam.tenant.disabled", "iam.tenant.enabled",
+    "iam.account-alias.set"
+  ] },
+  { target: "INSTALLATION", results: ["SUCCEEDED"], actions: [
+    "iam.authentication-recovery.closed", "iam.authentication-recovery.reconciled",
+    "iam.authentication-recovery.reopened", "iam.bootstrap.applied"
+  ] },
+  { target: "SESSION", results: ["SUCCEEDED"], actions: [
+    "iam.session.issued", "iam.session.revoked"
+  ] },
+  { target: "ROLE_BINDING", results: ["SUCCEEDED"], actions: [
+    "iam.role-binding.put", "iam.role-binding.revoked"
+  ] },
+  { target: "POLICY_ATTACHMENT", results: ["SUCCEEDED"], actions: [
+    "iam.policy-attachment.created", "iam.policy-attachment.revoked", "iam.platform-policy-attachment.created",
+    "iam.platform-policy-attachment.revoked"
+  ] },
+  { target: "AUTHORIZATION_DECISION", results: ["ALLOWED", "DENIED"], actions: ["iam.authorization.decided"] },
+  { target: "APPLICATION", results: ["SUCCEEDED"], actions: [
+    "paas.application.created", "paas.application-label.updated", "paas.application-label.deleted"
+  ] },
+  { target: "CONFIGURATION", results: ["SUCCEEDED"], actions: ["paas.configuration.created"] },
+  { target: "CONFIGURATION_REVISION", results: ["SUCCEEDED"], actions: ["paas.configuration-revision.created"] },
+  { target: "APPLICATION_REVISION", results: ["SUCCEEDED"], actions: ["paas.application-revision.created"] },
+  { target: "DEPLOYMENT", results: ["ACCEPTED"], actions: [
+    "paas.deployment.created", "paas.deployment.updated", "paas.deployment.stopped", "paas.deployment.rolled-back"
+  ] },
+  { target: "EXECUTION_POOL", results: ["SUCCEEDED"], actions: ["paas.execution-pool.created"] },
+  { target: "EXECUTION_TARGET", results: ["SUCCEEDED"], actions: [
+    "paas.execution-target.registered", "paas.execution-target.drained", "paas.execution-target.activated",
+    "paas.execution-target.removed"
+  ] },
+  { target: "TERMINAL_SESSION", results: ["ACCEPTED"], actions: ["paas.terminal-session.created"] },
+  { target: "TERMINAL_SESSION", results: ["SUCCEEDED"], actions: ["paas.terminal-session.started"] },
+  { target: "TERMINAL_SESSION", results: ["COMPLETED", "UNSUPPORTED", "EXPIRED", "DISCONNECTED", "REVOKED", "REPLACED", "FAILED"], actions: ["paas.terminal-session.ended"] },
+  { target: "QUOTA_ENTITLEMENT", results: ["SUCCEEDED"], actions: ["managedservice.quota-entitlement.activated"] },
+  { target: "SERVICE_ACTIVATION", results: ["SUCCEEDED"], actions: ["managedservice.service-activation.activated"] },
+  { target: "SERVICE_INSTALLATION", results: ["ACCEPTED"], actions: [
+    "managedservice.service-installation.created", "managedservice.service-installation.termination-requested"
+  ] },
+  { target: "SERVICE_INSTALLATION", results: ["SUCCEEDED"], actions: [
+    "managedservice.service-installation.ready", "managedservice.service-installation.terminated"
+  ] },
+  { target: "DEVOPS_PROJECT", results: ["SUCCEEDED"], actions: ["devops.project.created"] },
+  { target: "SOURCE_CONNECTION", results: ["SUCCEEDED"], actions: [
+    "devops.source-connection.created", "devops.source-connection.updated",
+    "devops.source-connection.recheck-scheduled", "devops.source-connection.health-transitioned"
+  ] },
+  { target: "REPOSITORY_BINDING", results: ["SUCCEEDED"], actions: [
+    "devops.repository-binding.created", "devops.repository-binding.updated",
+    "devops.repository-binding.recheck-scheduled", "devops.repository-binding.health-transitioned"
+  ] },
+  { target: "PIPELINE", results: ["SUCCEEDED"], actions: [
+    "devops.pipeline.created", "devops.pipeline.draft-updated"
+  ] },
+  { target: "PIPELINE_REVISION", results: ["SUCCEEDED"], actions: ["devops.pipeline-revision.activated"] },
+  { target: "SOURCE_EVENT", results: ["ACCEPTED"], actions: ["devops.source-event.admitted"] },
+  { target: "PIPELINE_RUN", results: ["ACCEPTED"], actions: [
+    "devops.pipeline-run.created", "devops.pipeline-run.replayed", "devops.pipeline-run.cancellation-requested"
+  ] },
+  { target: "PIPELINE_RUN", results: ["SUCCEEDED"], actions: [
+    "devops.pipeline-run.completed", "devops.pipeline-run.logs-read"
+  ] },
+  { target: "AUDIT_RECORDS", results: ["SUCCEEDED"], actions: [
+    "audit.records.read", "audit.platform-records.read"
+  ] },
+  { target: "AUDIT_CHAIN", results: ["SUCCEEDED"], actions: [
+    "audit.integrity.verified", "audit.platform-integrity.verified"
+  ] },
 ] as const;
-export const auditActions = [
-  "iam.account.created", "iam.account.disabled", "iam.account.enabled", "iam.account-root.credentials-recovered",
-  "iam.account.alias-set", "iam.security-settings.updated", "iam.user.created", "iam.user.updated", "iam.user.deleted",
-  "iam.user.permission-boundary.set", "iam.user.permission-boundary.removed", "iam.user.status-set", "iam.user.password-reset",
-  "iam.user.password-changed", "iam.user.password-reset-required", "iam.notification-contact.verification-started",
-  "iam.notification-contact.verified", "iam.authenticator.bound", "iam.authenticator.replaced", "iam.authenticator.removed",
-  "iam.authenticator.recovery-started", "iam.authenticator.recovered", "iam.recovery-codes.regenerated", "iam.role.created",
-  "iam.role.updated", "iam.role.disabled", "iam.role.enabled", "iam.role.trust-set", "iam.role.deleted",
-  "iam.role.permission-boundary.set", "iam.role.permission-boundary.removed", "iam.role-session.issued",
-  "iam.role-session.revoked", "iam.role-session.admin-revoked", "iam.role-session.exited", "iam.service-role-session.issued",
-  "iam.service-linked-role.created", "iam.workload-role-binding.created", "iam.workload-role-binding.revoked",
-  "iam.access-key.created", "iam.access-key.enabled", "iam.access-key.disabled", "iam.access-key.deleted", "iam.group.created",
-  "iam.policy.created", "iam.policy-version.created", "iam.policy-version.deleted", "iam.policy.default-version-set",
-  "iam.policy.updated", "iam.policy.deleted", "iam.group.updated", "iam.group.deleted", "iam.group-membership.created",
-  "iam.group-membership.removed", "iam.organization.created", "iam.tenant.created", "iam.tenant.disabled", "iam.tenant.enabled",
-  "iam.tenant-administrator.recovered", "iam.installation-primary.credentials-recovered", "iam.authentication-recovery.closed",
-  "iam.authentication-recovery.reconciled", "iam.authentication-recovery.reopened", "iam.account-alias.set",
-  "iam.principal.status-set", "iam.password.reset", "iam.bootstrap.applied", "iam.session.issued", "iam.session.revoked",
-  "iam.session.others-revoked", "iam.password.changed", "iam.principal.created", "iam.role-binding.put",
-  "iam.role-binding.revoked", "iam.policy-attachment.created", "iam.policy-attachment.revoked",
-  "iam.platform-policy-attachment.created", "iam.platform-policy-attachment.revoked", "iam.authorization.decided",
-  "paas.application.created", "paas.configuration.created", "paas.configuration-revision.created",
-  "paas.application-revision.created", "paas.deployment.created", "paas.deployment.updated", "paas.deployment.stopped",
-  "paas.deployment.rolled-back", "paas.execution-pool.created", "paas.execution-target.registered",
-  "paas.execution-target.drained", "paas.execution-target.activated", "paas.execution-target.removed",
-  "managedservice.quota-entitlement.activated", "managedservice.service-installation.created",
-  "managedservice.service-installation.ready", "audit.records.read", "audit.integrity.verified",
-  "audit.platform-records.read", "audit.platform-integrity.verified"
-] as const;
+
+type AuditEventVariant = typeof auditEventVariants[number];
+export type AuditAction = AuditEventVariant["actions"][number];
+export type AuditResult = AuditEventVariant["results"][number];
+export type AuditTargetKind = AuditEventVariant["target"];
+export const auditResults = [...new Set(auditEventVariants.flatMap<AuditResult>(variant => variant.results))];
+export const auditTargetKinds = [...new Set(auditEventVariants.map(variant => variant.target))];
+const variantByAction = new Map<AuditAction, AuditEventVariant>();
+for (const variant of auditEventVariants) {
+  for (const action of variant.actions) variantByAction.set(action, variant);
+}
+export const auditActions = [...variantByAction.keys()];
 
 export type AuditSource = typeof auditSources[number];
 export type AuditActorType = typeof auditActorTypes[number];
-export type AuditResult = typeof auditResults[number];
-export type AuditAction = typeof auditActions[number];
-export type AuditTargetKind = typeof auditTargetKinds[number];
 export type AuditAuthorityKind = "TENANT" | "INSTALLATION";
 export type AuditAuthority =
   | { authorityKind: "TENANT"; tenantId: string; installationId?: never }
@@ -60,6 +160,14 @@ export type AuditActor =
   | { type: "ROLE"; id: string; roleSession: AuditRoleSession }
   | { type: "SERVICE_ACCOUNT" | "SYSTEM"; id: string };
 export type AuditTarget = { kind: AuditTargetKind; id: string; tenantId?: string };
+const pipelineOutcomes = ["SUCCEEDED", "FAILED", "CANCELLED", "MANUAL_INTERVENTION"] as const;
+const pipelineReasons = {
+  SUCCEEDED: ["COMPLETED"],
+  FAILED: ["SOURCE_UNAVAILABLE", "COMMIT_MISMATCH", "EXECUTOR_UNAVAILABLE", "VERIFICATION_FAILED", "DEADLINE_EXCEEDED", "REPORT_UNAVAILABLE", "REPORT_CONFLICT"],
+  CANCELLED: ["CANCELLED"],
+  MANUAL_INTERVENTION: ["RECONCILIATION_EXHAUSTED"]
+} as const;
+type PipelineOutcome = typeof pipelineOutcomes[number];
 export type AuditEvent = AuditAuthority & {
   apiVersion: typeof AUDIT_API_VERSION;
   kind: "AuditEvent";
@@ -69,6 +177,8 @@ export type AuditEvent = AuditAuthority & {
   action: AuditAction;
   target: AuditTarget;
   result: AuditResult;
+  outcome?: PipelineOutcome;
+  reason?: typeof pipelineReasons[PipelineOutcome][number];
   requestDigest: string;
   authorityEvidenceDigest?: string;
   requestId: string;
@@ -101,7 +211,9 @@ export type AuditRecordPage = AuditAuthority & {
   apiVersion: typeof AUDIT_API_VERSION;
   kind: "AuditRecordPage";
   records: AuditRecord[];
+  omittedRecordCount: number;
   nextCursor?: string;
+  paginationUnavailable?: boolean;
 };
 export type AuditVerifyRequest = { fromSequence: number; maximumRecords: number };
 export type AuditChainVerification = AuditAuthority & {
@@ -144,21 +256,22 @@ function integer(value: unknown, minimum: number, maximum: number, label: string
   return value;
 }
 function timestamp(value: unknown, label: string): string {
-  const result = text(value, label);
-  if (!result.endsWith("Z") || Number.isNaN(Date.parse(result))) throw new Error(`INVALID_${label}`);
+  const result = text(value, label, /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?Z$/);
+  const date = new Date(result);
+  if (Number.isNaN(date.valueOf()) || date.toISOString().slice(0, 19) !== result.slice(0, 19)) throw new Error(`INVALID_${label}`);
   return result;
 }
 function optionalText(value: Record<string, unknown>, key: string, label: string, pattern?: RegExp): string | undefined {
   return key in value ? text(value[key], label, pattern) : undefined;
 }
-function parseAuthority(value: Record<string, unknown>, expected?: AuditAuthorityKind): AuditAuthority {
+function parseAuthority(value: Record<string, unknown>, expected?: AuditAuthorityKind | AuditAuthority): AuditAuthority {
   const hasTenant = "tenantId" in value;
   const hasInstallation = "installationId" in value;
   if (hasTenant === hasInstallation) throw new Error("INVALID_AUDIT_AUTHORITY");
   const authority: AuditAuthority = hasTenant
     ? { authorityKind: "TENANT", tenantId: text(value.tenantId, "AUDIT_TENANT_ID", idPattern) }
     : { authorityKind: "INSTALLATION", installationId: text(value.installationId, "AUDIT_INSTALLATION_ID", idPattern) };
-  if (expected && authority.authorityKind !== expected) throw new Error("INVALID_AUDIT_AUTHORITY");
+  if (expected && (typeof expected === "string" ? authority.authorityKind !== expected : !sameAuthority(authority, expected))) throw new Error("INVALID_AUDIT_AUTHORITY");
   return authority;
 }
 function sameAuthority(left: AuditAuthority, right: AuditAuthority): boolean {
@@ -193,21 +306,33 @@ function parseActor(value: unknown): AuditActor {
 function sourceForAction(action: AuditAction): AuditSource {
   if (action.startsWith("iam.")) return "IAM";
   if (action.startsWith("audit.")) return "AUDIT";
+  if (action.startsWith("devops.")) return "DEVOPS";
   return "PAAS";
 }
 function parseEvent(value: unknown): AuditEvent {
   const data = object(value, "AUDIT_EVENT");
-  exactKeys(data, ["apiVersion", "kind", "eventId", "actor", "action", "target", "result", "requestDigest", "requestId", "correlationId", "occurredAt"], ["tenantId", "installationId", "iamDecisionId", "operationId", "traceparent", "authorityEvidenceDigest"], "AUDIT_EVENT");
+  exactKeys(data, ["apiVersion", "kind", "eventId", "actor", "action", "target", "result", "requestDigest", "requestId", "correlationId", "occurredAt"], ["tenantId", "installationId", "iamDecisionId", "operationId", "traceparent", "authorityEvidenceDigest", "outcome", "reason"], "AUDIT_EVENT");
   if (data.apiVersion !== AUDIT_API_VERSION || data.kind !== "AuditEvent") throw new Error("INVALID_AUDIT_EVENT_TYPE");
   const target = object(data.target, "AUDIT_TARGET");
   exactKeys(target, ["kind", "id"], ["tenantId"], "AUDIT_TARGET");
+  const action = member(data.action, auditActions, "AUDIT_ACTION");
+  const variant = variantByAction.get(action)!;
+  if (target.kind !== variant.target) throw new Error("INVALID_AUDIT_TARGET_KIND");
+  let outcome: PipelineOutcome | undefined;
+  let reason: AuditEvent["reason"];
+  if (action === "devops.pipeline-run.completed") {
+    outcome = member(data.outcome, pipelineOutcomes, "AUDIT_OUTCOME");
+    reason = member(data.reason, pipelineReasons[outcome], "AUDIT_REASON");
+  } else if ("outcome" in data || "reason" in data) {
+    throw new Error("INVALID_AUDIT_OUTCOME");
+  }
   return {
     ...parseAuthority(data), apiVersion: AUDIT_API_VERSION, kind: "AuditEvent",
     eventId: text(data.eventId, "AUDIT_EVENT_ID", idPattern), actor: parseActor(data.actor),
     iamDecisionId: optionalText(data, "iamDecisionId", "AUDIT_DECISION_ID", idPattern),
-    action: member(data.action, auditActions, "AUDIT_ACTION"),
-    target: { kind: member(target.kind, auditTargetKinds, "AUDIT_TARGET_KIND"), id: text(target.id, "AUDIT_TARGET_ID", idPattern), tenantId: optionalText(target, "tenantId", "AUDIT_TARGET_TENANT_ID", idPattern) },
-    result: member(data.result, auditResults, "AUDIT_RESULT"), requestDigest: text(data.requestDigest, "AUDIT_REQUEST_DIGEST", digestPattern),
+    action, outcome, reason,
+    target: { kind: variant.target, id: text(target.id, "AUDIT_TARGET_ID", idPattern), tenantId: optionalText(target, "tenantId", "AUDIT_TARGET_TENANT_ID", idPattern) },
+    result: member(data.result, variant.results, "AUDIT_RESULT"), requestDigest: text(data.requestDigest, "AUDIT_REQUEST_DIGEST", digestPattern),
     authorityEvidenceDigest: optionalText(data, "authorityEvidenceDigest", "AUDIT_AUTHORITY_EVIDENCE_DIGEST", digestPattern),
     requestId: text(data.requestId, "AUDIT_REQUEST_ID", idPattern), correlationId: text(data.correlationId, "AUDIT_CORRELATION_ID", idPattern),
     operationId: optionalText(data, "operationId", "AUDIT_OPERATION_ID", idPattern), traceparent: optionalText(data, "traceparent", "AUDIT_TRACEPARENT", traceparentPattern),
@@ -227,16 +352,33 @@ function parseRecord(value: unknown): AuditRecord {
     retention: member(data.retention, auditRetentions, "AUDIT_RETENTION") };
 }
 
-export function parseAuditRecordPage(value: unknown, expectedAuthority?: AuditAuthorityKind): AuditRecordPage {
+export function parseAuditRecordPage(value: unknown, expectedAuthority?: AuditAuthorityKind | AuditAuthority, pageSize = AUDIT_MAX_PAGE_SIZE): AuditRecordPage {
   const data = object(value, "AUDIT_RECORD_PAGE");
-  exactKeys(data, ["apiVersion", "kind", "records"], ["tenantId", "installationId", "nextCursor"], "AUDIT_RECORD_PAGE");
+  exactKeys(data, ["apiVersion", "kind", "records"], ["tenantId", "installationId", "nextCursor", "omittedRecordCount"], "AUDIT_RECORD_PAGE");
   if (data.apiVersion !== AUDIT_API_VERSION || data.kind !== "AuditRecordPage" || !Array.isArray(data.records) || data.records.length > AUDIT_MAX_PAGE_SIZE) throw new Error("INVALID_AUDIT_RECORD_PAGE");
   const authority = parseAuthority(data, expectedAuthority);
-  const records = data.records.map(parseRecord);
-  if (records.some((record) => !sameAuthority(record.event, authority)) || records.some((record, index) => index > 0 && records[index - 1]!.sequence <= record.sequence)) throw new Error("INVALID_AUDIT_RECORD_ORDER");
-  return { ...authority, apiVersion: AUDIT_API_VERSION, kind: "AuditRecordPage", records, nextCursor: optionalText(data, "nextCursor", "AUDIT_CURSOR", cursorPattern) };
+  let omittedRecordCount = "omittedRecordCount" in data ? integer(data.omittedRecordCount, 0, AUDIT_MAX_PAGE_SIZE, "AUDIT_RECORD_COUNT") : 0;
+  if (data.records.length + omittedRecordCount > Math.min(pageSize, AUDIT_MAX_PAGE_SIZE)) throw new Error("INVALID_AUDIT_RECORD_PAGE");
+  const records: AuditRecord[] = [];
+  for (const raw of data.records) {
+    let record: AuditRecord;
+    try {
+      record = parseRecord(raw);
+    } catch (failure) {
+      if (!(failure instanceof Error) || !failure.message.startsWith("INVALID_AUDIT_")) throw failure;
+      omittedRecordCount++;
+      continue;
+    }
+    if (!sameAuthority(record.event, authority)) throw new Error("INVALID_AUDIT_AUTHORITY");
+    if (records.length && records[records.length - 1]!.sequence <= record.sequence) throw new Error("INVALID_AUDIT_RECORD_ORDER");
+    records.push(record);
+  }
+  const nextCursor = typeof data.nextCursor === "string" && data.nextCursor.trim() === data.nextCursor && cursorPattern.test(data.nextCursor)
+    ? data.nextCursor : undefined;
+  return { ...authority, apiVersion: AUDIT_API_VERSION, kind: "AuditRecordPage", records, omittedRecordCount,
+    nextCursor, paginationUnavailable: "nextCursor" in data && !nextCursor };
 }
-export function parseAuditChainVerification(value: unknown, expectedAuthority?: AuditAuthorityKind): AuditChainVerification {
+export function parseAuditChainVerification(value: unknown, expectedAuthority?: AuditAuthorityKind | AuditAuthority): AuditChainVerification {
   const data = object(value, "AUDIT_CHAIN_VERIFICATION");
   exactKeys(data, ["apiVersion", "kind", "state", "fromSequence", "toSequence", "recordCount", "firstPreviousHash", "lastRecordHash", "complete", "verifiedAt"], ["tenantId", "installationId", "nextSequence"], "AUDIT_CHAIN_VERIFICATION");
   if (data.apiVersion !== AUDIT_API_VERSION || data.kind !== "ChainVerification" || data.state !== "VERIFIED" || typeof data.complete !== "boolean") throw new Error("INVALID_AUDIT_CHAIN_VERIFICATION");

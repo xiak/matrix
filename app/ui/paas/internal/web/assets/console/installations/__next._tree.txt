@@ -1,8 +1,8 @@
 :HL["/_next/static/chunks/3bvu7vdynfpoj.css","style"]
 :HL["/_next/static/chunks/24ep0wqdmaqa8.css","style"]
 :HL["/_next/static/chunks/0q-w8xy4dod-r.css","style"]
-:HL["/_next/static/chunks/0j4u6c6kwzz60.css","style"]
+:HL["/_next/static/chunks/44xdhe21jfd2y.css","style"]
 3:[["children",{"s":"__PAGE__","h":160}]]
 2:[["children",{"s":"installations","h":96,"c":"$Q3"}]]
 1:[["children",{"s":"console","h":96,"c":"$Q2"}]]
-0:{"b":"matrix-6cdbbc485d74f5b2a3a6","t":{"t":{"s":"","h":80,"c":"$Q1"}}}
+0:{"b":"matrix-169c9cce9c7e91df139c","t":{"t":{"s":"","h":80,"c":"$Q1"}}}

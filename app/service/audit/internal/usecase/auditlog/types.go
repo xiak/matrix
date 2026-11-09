@@ -60,7 +60,7 @@ type Transaction interface {
 	LookupRecord(context.Context, auditv1.Source, auditv1.EventID) (StoredRecord, bool, error)
 	LockChainHead(context.Context, authority.ChainID) (authority.Checkpoint, time.Time, error)
 	AppendRecord(context.Context, AppendMutation) (auditv1.IngestionOutcome, error)
-	ReadRecords(context.Context, RecordQuery) ([]auditv1.AuditRecord, error)
+	ReadRecords(context.Context, RecordQuery) ([]RecordQueryRow, error)
 	ReadCheckpoint(context.Context, authority.ChainID, uint64) (authority.Checkpoint, bool, error)
 	ReadChain(context.Context, authority.ChainID, uint64, int) ([]auditv1.AuditRecord, error)
 	LookupPaaSOperationRecord(
@@ -89,6 +89,13 @@ type RecordQuery struct {
 	To             *time.Time
 	Action         auditv1.Action
 	Actor          *auditv1.ActorReference
+}
+
+// A directory read retains the scoped position of an unreadable payload so it
+// can count it and page past it. Integrity verification reads the full chain.
+type RecordQueryRow struct {
+	Sequence uint64
+	Record   *auditv1.AuditRecord
 }
 
 type ReadinessSnapshot struct {

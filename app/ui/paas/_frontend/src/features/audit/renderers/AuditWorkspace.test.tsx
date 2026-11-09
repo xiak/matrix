@@ -23,17 +23,18 @@ function evidencePage(fields: Record<string, unknown>) {
 
 function LiveAudit() {
   const session = useSession();
-  return session.phase === "authenticated" ? <AuditWorkspace /> : <button onClick={() => void session.login("auditor", "synthetic-audit-password")}>start fixture session</button>;
+  return session.phase === "authenticated" ? <AuditWorkspace tenantId={session.current?.session.organizationId} /> : <button onClick={() => void session.login("auditor", "synthetic-audit-password")}>start fixture session</button>;
 }
 
-async function renderLiveEvidence(fields: Record<string, unknown>) {
+async function renderLiveEvidence(fields: Record<string, unknown>, pages: unknown[] = [evidencePage(fields)]) {
   const repository: IamRepository = {
     async login() { return { outcome: "AUTHENTICATED", credential: "synthetic-audit-session", mustChangePassword: false,
       session: { id: "session-audit-fixture", organizationId: "organization-test", principalId: "principal-auditor", status: "ACTIVE",
         issuedAt: "2026-10-09T01:00:00Z", expiresAt: "2099-10-09T02:00:00Z" } }; },
     async changePassword() {}, async logout() {}
   };
-  const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(evidencePage(fields)), { status: 200, headers: { "Content-Type": "application/json" } }));
+  const fetchMock = vi.fn();
+  for (const page of pages) fetchMock.mockResolvedValueOnce(new Response(JSON.stringify(page), { status: 200, headers: { "Content-Type": "application/json" } }));
   vi.stubGlobal("fetch", fetchMock);
   const user = userEvent.setup();
   render(<LocaleProvider><SessionProvider repository={repository}><LiveAudit /></SessionProvider></LocaleProvider>);
@@ -72,11 +73,45 @@ describe("AuditWorkspace", () => {
     { authorityEvidenceDigest: evidenceDigest, authorityProof: "synthetic-hidden-evidence" }
   ])("rejects malformed or unsupported live evidence without rendering raw values %#", async fields => {
     await renderLiveEvidence(fields);
-    expect(await screen.findByText("审计服务返回了不符合契约的数据，页面已拒绝展示。")).toBeTruthy();
+    expect(await screen.findByText("本页有 1 条记录未通过数据校验，已隐藏。")).toBeTruthy();
+    expect(screen.queryByText("没有匹配的审计记录")).toBeNull();
     expect(screen.queryByRole("table", { name: "审计记录" })).toBeNull();
     expect(screen.queryByText("授权证据摘要")).toBeNull();
     expect(screen.queryByText("synthetic-hidden-evidence")).toBeNull();
     expect(screen.queryByText("sha256:short")).toBeNull();
+  });
+
+  it("keeps valid rows interactive and pages through a completely unreadable page using the server cursor", async () => {
+    const page = evidencePage({});
+    const good = page.records[0]!;
+    const bad = { ...good, event: { ...good.event, unexpected: "hidden-payload" } };
+    const cursor = `v1.${"a".repeat(18)}.${"b".repeat(43)}`;
+    const nextCursor = `v1.${"c".repeat(18)}.${"d".repeat(43)}`;
+    const { user, fetchMock } = await renderLiveEvidence({}, [
+      { ...page, records: [bad, { ...good, sequence: 40 }], omittedRecordCount: 1, nextCursor: cursor },
+      { ...page, records: [bad], nextCursor },
+      { ...page, records: [{ ...good, sequence: 20 }] }
+    ]);
+    expect(await screen.findByText("本页有 2 条记录未通过数据校验，已隐藏。")).toBeTruthy();
+    await user.click(within(screen.getByRole("table")).getByRole("button", { name: good.event.action }));
+    expect(screen.getByRole("heading", { name: "审计记录 #40" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "返回审计记录" }));
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByText("本页有 1 条记录未通过数据校验，已隐藏。");
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body).cursor).toBe(cursor);
+    expect(screen.queryByText("没有匹配的审计记录")).toBeNull();
+    expect(screen.queryByText("hidden-payload")).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await screen.findByRole("table");
+    expect(JSON.parse(fetchMock.mock.calls[2]![1].body).cursor).toBe(nextCursor);
+    expect(screen.queryByText(/未通过数据校验/)).toBeNull();
+  });
+
+  it("keeps valid rows visible when the continuation is unusable", async () => {
+    await renderLiveEvidence({}, [{ ...evidencePage({}), nextCursor: "invalid" }]);
+    expect(await screen.findByRole("table")).toBeTruthy();
+    expect(screen.getByText(/下一页的分页信息无效/)).toBeTruthy();
+    expect((screen.getByRole("button", { name: "下一页" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("keeps the route chrome stable while paging an opaque tenant cursor", async () => {

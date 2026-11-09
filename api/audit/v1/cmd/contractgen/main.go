@@ -227,6 +227,9 @@ func fieldOverlay(owner string, field reflect.StructField, jsonName string, base
 	case "pageSize":
 		base["minimum"] = 1
 		base["maximum"] = auditv1.MaxPageSize
+	case "omittedRecordCount":
+		base["minimum"] = 0
+		base["maximum"] = auditv1.MaxPageSize
 	case "maximumRecords", "recordCount":
 		base["minimum"] = 1
 		base["maximum"] = auditv1.MaxVerifyRecords

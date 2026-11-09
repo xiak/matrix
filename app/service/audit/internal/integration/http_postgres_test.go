@@ -419,6 +419,62 @@ func TestAuditHTTPPostgresVerticalSlice(t *testing.T) {
 			string(mustJSON(t, unrelated))).Scan(&ignored)
 		assertPostgresCode(t, err, "22023")
 	})
+	t.Run("unreadable payloads preserve scoped cursor positions and cannot verify", func(t *testing.T) {
+		actor := auditv1.ActorReference{Type: auditv1.ActorUser, ID: "audit-partial-page-user"}
+		var sequences []uint64
+		for i := 1; i <= 5; i++ {
+			event := integrationEvent(auditv1.EventID(fmt.Sprintf("event-partial-%d", i)), "organization-a",
+				auditv1.ActionIAMSessionIssued, auditv1.TargetSession, "test-session", iam.now)
+			event.Actor = actor
+			accepted := ingestAuditEvent(t, handler, producerCredentialA, event, http.StatusCreated)
+			sequences = append(sequences, accepted.Record.Sequence)
+		}
+		// Inject unreadable historical documents only into this disposable database.
+		// The production role keeps its normal immutable-table restrictions.
+		tx, err := admin.Begin(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = tx.Rollback(ctx) }()
+		if _, err = tx.Exec(ctx, "SET LOCAL session_replication_role = replica"); err != nil {
+			t.Fatal(err)
+		}
+		changed, err := tx.Exec(ctx, `UPDATE audit.records SET event_document = event_document || CASE event_id
+			WHEN 'event-partial-2' THEN '{"unexpected":"fixture"}'::jsonb
+			WHEN 'event-partial-3' THEN '{"result":"FAILED"}'::jsonb
+			ELSE '{"correlationId":"different-payload"}'::jsonb END
+			WHERE chain_id = 'tenant:organization-a' AND event_id IN ('event-partial-2','event-partial-3','event-partial-4')`)
+		if err != nil || changed.RowsAffected() != 3 {
+			t.Fatalf("seed unreadable positions: %v, %v", changed, err)
+		}
+		if err = tx.Commit(ctx); err != nil {
+			t.Fatal(err)
+		}
+
+		query := auditv1.QueryRecordsRequest{PageSize: 2, Actor: &actor}
+		first := queryAuditRecords(t, handler, readerCredentialA, query, http.StatusOK)
+		if first.OmittedRecordCount != 1 || len(first.Records) != 1 || first.Records[0].Sequence != sequences[4] || first.NextCursor == "" {
+			t.Fatalf("unexpected mixed page: %#v", first)
+		}
+		query.Cursor = first.NextCursor
+		middle := queryAuditRecords(t, handler, readerCredentialA, query, http.StatusOK)
+		if middle.OmittedRecordCount != 2 || len(middle.Records) != 0 || middle.NextCursor == "" || middle.NextCursor == first.NextCursor {
+			t.Fatalf("missing continuation for unreadable page: %#v", middle)
+		}
+		query.Cursor = middle.NextCursor
+		last := queryAuditRecords(t, handler, readerCredentialA, query, http.StatusOK)
+		if last.OmittedRecordCount != 0 || len(last.Records) != 1 || last.Records[0].Sequence != sequences[0] || last.NextCursor != "" {
+			t.Fatalf("unexpected final page: %#v", last)
+		}
+		query.Cursor = ""
+		other := queryAuditRecords(t, handler, readerCredentialB, query, http.StatusOK)
+		if other.OmittedRecordCount != 0 || len(other.Records) != 0 {
+			t.Fatalf("partial projection crossed tenants: %#v", other)
+		}
+		for _, unreadable := range sequences[1:4] {
+			verifyAuditChain(t, handler, readerCredentialA, auditv1.VerifyChainRequest{FromSequence: unreadable, MaximumRecords: 1}, http.StatusServiceUnavailable)
+		}
+	})
 	iam.failure = errors.New("native IAM failure contains " + readerCredentialA + " and native-provider-path")
 	failure := performAuditRequest(
 		handler,
@@ -891,7 +947,7 @@ func (transaction auditReadPauseTransaction) pause(ctx context.Context) error {
 	return nil
 }
 
-func (transaction auditReadPauseTransaction) ReadRecords(ctx context.Context, query auditlog.RecordQuery) ([]auditv1.AuditRecord, error) {
+func (transaction auditReadPauseTransaction) ReadRecords(ctx context.Context, query auditlog.RecordQuery) ([]auditlog.RecordQueryRow, error) {
 	result, err := transaction.Transaction.ReadRecords(ctx, query)
 	if err == nil {
 		err = transaction.pause(ctx)

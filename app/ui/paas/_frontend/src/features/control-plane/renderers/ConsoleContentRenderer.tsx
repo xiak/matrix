@@ -850,7 +850,7 @@ export function ConsoleContentRenderer({
 }) {
   const t = useTranslations("AccountAccess");
   if (scene.kind === "logs") return <LogServiceRenderer regionId={scope?.regionId} scene={scene} />;
-  if (scene.kind === "audit") return <AuditWorkspace preview={preview} />;
+  if (scene.kind === "audit") return <AuditWorkspace preview={preview} tenantId={accountId} />;
   if (scene.kind === "access") return <Suspense fallback={<ConsoleContentLoadingRenderer label={t("loading")} selection={{ section: "access", view: scene.view === "overview" ? undefined : scene.view }} />}><AccessContent pendingHref={pendingHref} view={scene.view} /></Suspense>;
   if (scene.kind === "messages") return <MessageCenterRenderer scene={scene} />;
   if (

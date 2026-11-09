@@ -34,11 +34,12 @@ import {
   type AuditChainVerification,
   type AuditQueryRequest,
   type AuditRecord,
-  type AuditRecordPage
+  type AuditRecordPage,
+  type AuditResult
 } from "../domain/audit";
 import type { AuditRepository } from "../repositories/auditRepository";
 import { httpAuditRepository } from "../repositories/httpAuditRepository";
-import { previewAuditRepository } from "../repositories/previewAuditRepository";
+import { previewAuditRepository, previewAuditTenantId } from "../repositories/previewAuditRepository";
 import styles from "./AuditWorkspace.module.css";
 
 type LoadError = "expired" | "forbidden" | "conflict" | "invalid" | "unavailable";
@@ -151,13 +152,14 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
     <ContentPage.Heading title={t("detail.title", { sequence: record.sequence })} scrollKey={`audit-record:${record.sequence}`} back={{ label: t("actions.back"), onClick: onBack }} focus />
     <Card>
       <Card.Header className={styles.detailHeader}>
-        <div><Badge status={event.result === "DENIED" ? "danger" : event.result === "ACCEPTED" ? "info" : "success"}>{t(`results.${event.result}`)}</Badge><Typography.Title as="h2" level={3}>{event.action}</Typography.Title></div>
+        <div><Badge status={resultStatuses[event.result]}>{t(`results.${event.result}`)}</Badge><Typography.Title as="h2" level={3}>{event.action}</Typography.Title></div>
         <span>{format.dateTime(new Date(event.occurredAt), { dateStyle: "medium", timeStyle: "long" })}</span>
       </Card.Header>
       <Card.Body className={styles.stack}>
         <div className={styles.resultMeaning} data-result={event.result}>
           <strong>{t("detail.resultMeaningTitle")}</strong>
           <span>{t(`detail.resultMeaning.${event.result}`)}</span>
+          {event.outcome && event.reason ? <span>{t("detail.pipelineOutcome", { outcome: t(`detail.outcomes.${event.outcome}`), reason: event.reason })}</span> : null}
         </div>
         <section aria-labelledby="audit-event-context">
           <h3 id="audit-event-context" className={styles.sectionTitle}>{t("detail.context")}</h3>
@@ -195,9 +197,10 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
   </section>;
 }
 
-function IntegrityWorkspace({ repository, credential, expireCredential, onBack }: {
+function IntegrityWorkspace({ repository, credential, tenantId, expireCredential, onBack }: {
   repository: AuditRepository;
   credential: string | null;
+  tenantId?: string;
   expireCredential(expectedCredential: string): boolean;
   onBack(): void;
 }) {
@@ -212,14 +215,14 @@ function IntegrityWorkspace({ repository, credential, expireCredential, onBack }
   async function verify() {
     const from = Number(fromSequence);
     const maximum = Number(maximumRecords);
-    if (!credential || !Number.isSafeInteger(from) || from < 1 || !Number.isSafeInteger(maximum) || maximum < 1 || maximum > AUDIT_MAX_VERIFY_RECORDS) {
+    if (!credential || !tenantId || !Number.isSafeInteger(from) || from < 1 || !Number.isSafeInteger(maximum) || maximum < 1 || maximum > AUDIT_MAX_VERIFY_RECORDS) {
       setError("invalid");
       return;
     }
     setBusy(true);
     setError(null);
     try {
-      setResult(await repository.verify(credential, { fromSequence: from, maximumRecords: maximum }));
+      setResult(await repository.verify(credential, { fromSequence: from, maximumRecords: maximum }, tenantId));
     } catch (reason) {
       setResult(null);
       if (credential && reason instanceof HttpProblem && reason.status === 401) expireCredential(credential);
@@ -260,7 +263,12 @@ function IntegrityWorkspace({ repository, credential, expireCredential, onBack }
   </section>;
 }
 
-export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
+const resultStatuses = {
+  ACCEPTED: "info", SUCCEEDED: "success", ALLOWED: "success", DENIED: "danger", COMPLETED: "success",
+  UNSUPPORTED: "warning", EXPIRED: "neutral", DISCONNECTED: "warning", REVOKED: "neutral", REPLACED: "neutral", FAILED: "danger"
+} as const satisfies Record<AuditResult, string>;
+
+export function AuditWorkspace({ preview = false, tenantId: accountId }: { preview?: boolean; tenantId?: string }) {
   const t = useTranslations("AuditService");
   const collection = useTranslations("Collection");
   const format = useFormatter();
@@ -268,6 +276,7 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
   const expireEffectiveCredential = useExpireEffectiveCredential();
   const credential = effectiveCredential ?? (preview ? "preview-audit-session" : null);
   const repository = preview ? previewAuditRepository : httpAuditRepository;
+  const tenantId = preview ? previewAuditTenantId : accountId;
   const [appliedFilters, setAppliedFilters] = useState<DraftFilters>(emptyFilters);
   const [request, setRequest] = useState<AuditQueryRequest>(() => requestFrom(emptyFilters));
   const [cursors, setCursors] = useState<Array<string | undefined>>([undefined]);
@@ -292,7 +301,7 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
     void (async () => {
       await Promise.resolve();
       if (revision !== loadRevision.current) return;
-      if (!credential) {
+      if (!credential || !tenantId) {
           setError("expired");
           setPage(null);
           return;
@@ -300,18 +309,19 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
       setLoading(true);
       setError(null);
       try {
-        const next = await repository.query(credential, { ...request, cursor });
+        const next = await repository.query(credential, { ...request, cursor }, tenantId);
         if (revision === loadRevision.current) setPage(next);
       } catch (reason) {
         if (revision === loadRevision.current) {
           if (reason instanceof HttpProblem && reason.status === 401) expireEffectiveCredential(credential);
+          setPage(null);
           setError(loadError(reason));
         }
       } finally {
         if (revision === loadRevision.current) setLoading(false);
       }
     })();
-  }, [credential, cursor, expireEffectiveCredential, refreshRevision, repository, request]);
+  }, [credential, cursor, expireEffectiveCredential, refreshRevision, repository, request, tenantId]);
 
   useEffect(() => () => { loadRevision.current += 1; }, []);
   useLayoutEffect(() => {
@@ -349,7 +359,7 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
     restoreSequence.current = opener.current;
     setSelected(null);
   }} />;
-  if (verifying) return <IntegrityWorkspace credential={credential} expireCredential={expireEffectiveCredential} repository={repository} onBack={() => setVerifying(false)} />;
+  if (verifying) return <IntegrityWorkspace credential={credential} tenantId={tenantId} expireCredential={expireEffectiveCredential} repository={repository} onBack={() => setVerifying(false)} />;
 
   const status = page ? t("directory.pageStatus", { page: pageIndex + 1, count: page.records.length }) : t("directory.loading");
   return <section className={styles.stack}>
@@ -367,6 +377,8 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
         {!error && !page ? <TableSkeleton label={t("directory.loading")} labelVisible={false} rows={6} header={false} /> : null}
         {!error && page ? <div className={styles.collection} aria-busy={loading || undefined}>
           <div className={styles.collectionStatus}><span role="status">{status}</span>{loading ? <span>{t("directory.refreshing")}</span> : null}</div>
+          {page.omittedRecordCount > 0 ? <Alert status="warning" role="status">{t("directory.omitted", { count: page.omittedRecordCount })}</Alert> : null}
+          {page.paginationUnavailable ? <Alert status="warning">{t("directory.invalidCursor")}</Alert> : null}
           <p className={styles.resultGuide}>{t("directory.resultGuide")}</p>
           {page.records.length ? <Table aria-label={t("directory.table")} className={styles.auditTable} mobileLayout="stack">
             <thead><tr><th scope="col">{t("columns.action")}</th><th scope="col">{t("columns.actor")}</th><th scope="col">{t("columns.target")}</th><th scope="col">{t("columns.result")}</th></tr></thead>
@@ -374,9 +386,9 @@ export function AuditWorkspace({ preview = false }: { preview?: boolean }) {
               <td data-label={t("columns.action")}><button className={styles.recordLink} ref={(node) => { if (node) rowButtons.current.set(record.sequence, node); else rowButtons.current.delete(record.sequence); }} onClick={() => { opener.current = record.sequence; setSelected(record); }}><code>{record.event.action}</code></button><small>{record.source} · {format.dateTime(new Date(record.event.occurredAt), { dateStyle: "medium", timeStyle: "short" })} · #{record.sequence}</small></td>
               <td data-label={t("columns.actor")}><strong>{record.event.actor.id}</strong><small>{record.event.actor.type === "ROLE" ? t("detail.roleLineage", { session: record.event.actor.roleSession.sessionId, source: record.event.actor.roleSession.sourceUserId ?? record.event.actor.roleSession.sourceServicePrincipalId }) : record.event.actor.type === "USER" && record.event.actor.accessKeyId ? t("detail.accessKeyLineage", { accessKey: record.event.actor.accessKeyId }) : t(`actorTypes.${record.event.actor.type}`)}</small></td>
               <td data-label={t("columns.target")}><strong>{record.event.target.id}</strong><small>{record.event.target.kind}</small></td>
-              <td data-label={t("columns.result")}><Badge status={record.event.result === "DENIED" ? "danger" : record.event.result === "ACCEPTED" ? "info" : "success"}>{t(`results.${record.event.result}`)}</Badge></td>
+              <td data-label={t("columns.result")}><Badge status={resultStatuses[record.event.result]}>{t(`results.${record.event.result}`)}</Badge></td>
             </tr>)}</tbody>
-          </Table> : <EmptyState title={t("directory.empty")} description={t("directory.emptyHint")} action={<Button variant="secondary" onClick={reset}>{t("actions.reset")}</Button>} />}
+          </Table> : page.omittedRecordCount === 0 ? <EmptyState title={t("directory.empty")} description={t("directory.emptyHint")} action={<Button variant="secondary" onClick={reset}>{t("actions.reset")}</Button>} /> : null}
           <Table.Footer note={t("directory.footer", { authority: t(`authority.${page.authorityKind}`), id: authorityId(page) })}><TablePagination mode="cursor" disabled={loading} summary={t("directory.page", { page: pageIndex + 1 })}
             previous={{ label: t("actions.previous"), disabled: pageIndex === 0, onClick: () => setPageIndex((value) => Math.max(0, value - 1)) }}
             next={{ label: t("actions.next"), disabled: !page.nextCursor, onClick: () => { if (!page.nextCursor) return; setCursors((current) => [...current.slice(0, pageIndex + 1), page.nextCursor]); setPageIndex((value) => value + 1); } }} /></Table.Footer>

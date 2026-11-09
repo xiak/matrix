@@ -300,8 +300,9 @@ func ValidateRecordPage(value RecordPage) error {
 		problems = append(problems, errors.New("Audit record page type metadata is invalid"))
 	}
 	problems = append(problems, ValidateAuthority(value.TenantID, value.InstallationID))
-	if len(value.Records) > MaxPageSize {
-		problems = append(problems, errors.New("Audit record page is too large"))
+	if value.Records == nil || value.OmittedRecordCount < 0 || value.OmittedRecordCount > MaxPageSize ||
+		len(value.Records) > MaxPageSize-value.OmittedRecordCount {
+		problems = append(problems, errors.New("Audit record page counts are invalid"))
 	}
 	for index, record := range value.Records {
 		problems = append(problems, ValidateAuditRecord(record))
