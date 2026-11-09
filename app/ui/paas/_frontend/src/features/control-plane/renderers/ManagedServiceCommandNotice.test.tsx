@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { SessionProvider, useSession } from "@/features/auth/application/SessionProvider";
@@ -7,7 +8,7 @@ import { ControlPlaneProvider, useControlPlane } from "../application/ControlPla
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import type { ManagedServiceCommandIntent, ManagedServiceCommandResult } from "../domain/managedServiceCommand";
 import { managedServiceCommandType } from "../domain/managedServiceCommand";
-import { ManagedServiceCommandNotice } from "./ManagedServiceCommandNotice";
+import { ManagedServiceCommandNotice, ManagedServicePageActions } from "./ManagedServiceCommandNotice";
 
 const intent: ManagedServiceCommandIntent = {
   owner: { accountId: "account-a", actorKind: "USER", actorId: "user-a" }, requestId: "original-public-key",
@@ -24,7 +25,15 @@ function Actions({ original }: { original: ManagedServiceCommandIntent }) {
   const session = useSession(), control = useControlPlane();
   return <><button onClick={() => void session.login("user-a@account-a", "in-memory-password")}>login</button>
     <button onClick={() => control.restoreManagedServiceCommand(JSON.stringify(original))}>bring original</button>
-    <ManagedServiceCommandNotice /></>;
+    <ManagedServicePageActions /><ManagedServiceCommandNotice /></>;
+}
+
+async function openRecovery() {
+  const user = userEvent.setup();
+  expect(screen.queryByText("恢复原操作")).toBeNull();
+  await user.click(screen.getByRole("button", { name: "更多操作" }));
+  await user.click(screen.getByRole("menuitem", { name: "恢复原操作" }));
+  return within(screen.getByRole("dialog", { name: "恢复原操作" }));
 }
 
 function view(read: NonNullable<ControlPlaneRepository["listCommandResults"]>, original = intent) {
@@ -53,7 +62,8 @@ describe("original-operation recovery experience", () => {
     const first = view(read, original);
     await act(async () => { fireEvent.click(screen.getByText("login")); });
     await act(async () => { fireEvent.click(screen.getByText("bring original")); });
-    const summary = (screen.getByLabelText("只读恢复摘要") as HTMLTextAreaElement).value;
+    const firstDialog = await openRecovery();
+    const summary = (firstDialog.getByLabelText("只读恢复摘要") as HTMLTextAreaElement).value;
     expect(JSON.parse(summary)).toEqual(original);
     expect(summary).not.toContain("never-persist-this-credential");
     expect(summary).not.toContain("in-memory-password");
@@ -62,11 +72,11 @@ describe("original-operation recovery experience", () => {
     localStorage.clear(); // The second browser has no shared site storage.
     const second = view(read);
     await act(async () => { fireEvent.click(screen.getByText("login")); });
-    fireEvent.click(screen.getByText("恢复原操作"));
+    const secondDialog = await openRecovery();
     fireEvent.change(screen.getByLabelText("原操作非秘密摘要"), { target: { value: summary } });
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "带入摘要并检查" })); });
-    expect(screen.getByText(/服务端已确认匹配的原操作成功/)).toBeTruthy();
-    expect(screen.getByText(result.inputDigest)).toBeTruthy();
+    expect(secondDialog.getByText(/服务端已确认匹配的原操作成功/)).toBeTruthy();
+    expect(secondDialog.getByText(result.inputDigest)).toBeTruthy();
     for (const page of [first, second]) {
       for (const write of [page.repository.activateQuota, page.repository.createInstallation,
         page.repository.terminateInstallation, page.repository.bindServiceRole, page.repository.unbindServiceRole]) {
@@ -76,7 +86,8 @@ describe("original-operation recovery experience", () => {
     expect(second.repository.getInstallation).not.toHaveBeenCalled();
     expect(read).toHaveBeenCalledExactlyOnceWith("never-persist-this-credential",
       kind === "TERMINATE_INSTALLATION" ? "INSTALLATION_TERMINATE" : managedServiceCommandType(kind));
-    expect(document.querySelector("[role=dialog]")).toBeNull();
+    fireEvent.click(secondDialog.getByRole("button", { name: "关闭恢复原操作" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 
   it("keeps an empty authoritative result unknown and offers inspection, not resubmission", async () => {
@@ -95,7 +106,7 @@ describe("original-operation recovery experience", () => {
     const read = vi.fn(async () => [result]);
     view(read);
     await act(async () => { fireEvent.click(screen.getByText("login")); });
-    fireEvent.click(screen.getByText("恢复原操作"));
+    await openRecovery();
     for (const invalid of [{ ...intent, credential: "forbidden-secret" }, { ...intent, owner: { ...intent.owner, actorId: "other-user" } }]) {
       fireEvent.change(screen.getByLabelText("原操作非秘密摘要"), { target: { value: JSON.stringify(invalid) } });
       await act(async () => { fireEvent.click(screen.getByRole("button", { name: "带入摘要并检查" })); });

@@ -851,7 +851,7 @@ describe("ConsoleShellRenderer", () => {
     const firstRequestId = terminateInstallation.mock.calls[0]![2];
     await user.click(screen.getByRole("button", { name: "返回实例并保留原请求" }));
     expect(await screen.findByRole("button", { name: "继续处理未确认终止" })).toBeTruthy();
-    expect(screen.getByText(firstRequestId)).toBeTruthy();
+    expect(screen.getByText(new RegExp(firstRequestId))).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "继续处理未确认终止" }));
     await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
@@ -1066,13 +1066,16 @@ describe("ConsoleShellRenderer", () => {
 
     expect(await screen.findByText(/服务端结果尚未确认/)).toBeTruthy();
     const firstCommand = bindServiceRole.mock.calls[0]![2];
+    await user.click(screen.getAllByRole("button", { name: "更多操作" })[0]!);
+    await user.click(screen.getByRole("menuitem", { name: "恢复原操作" }));
     const summary = JSON.parse((screen.getByLabelText("只读恢复摘要") as HTMLTextAreaElement).value);
     expect(summary.requestId).toBe(firstCommand.requestId);
     expect(summary.owner).toEqual({ accountId: "organization-test", actorKind: "USER", actorId: "principal-test" });
     expect(summary.payload.template).toEqual({ id: "managedservice.installation-reader", version: 2, contentDigest: liveServiceRoleTemplate.contentDigest });
+    await user.click(screen.getByRole("button", { name: "关闭恢复原操作" }));
     await user.click(screen.getByRole("button", { name: "返回实例并保留原请求" }));
     expect(await screen.findByRole("button", { name: "继续处理未确认请求" })).toBeTruthy();
-    expect(screen.getByText(firstCommand.requestId)).toBeTruthy();
+    expect(screen.getByText(new RegExp(firstCommand.requestId))).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "继续处理未确认请求" }));
     await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
@@ -2447,7 +2450,7 @@ describe("ConsoleShellRenderer", () => {
       await user.click(confirm);
       await waitFor(() => expect((confirm as HTMLButtonElement).disabled).toBe(true));
       await user.click(screen.getByRole("button", { name: "检查原请求结果" }));
-      await screen.findByText(recoveredQuota.id);
+      await screen.findByText(/服务端已确认匹配的原操作成功/);
       await waitFor(() => expect(screen.queryByRole("button", { name: "确认激活配额" })).toBeNull());
       expect(!confirm.isConnected || confirm.closest("[inert]")).toBeTruthy();
       expect(activateQuota).toHaveBeenCalledTimes(1);
@@ -2847,6 +2850,9 @@ describe("ConsoleShellRenderer", () => {
       id: "service-primary", name: "service-primary", offeringId: "kibana-8.19", quotaEntitlementId: "quota-primary",
       regionId: "local-primary", elasticsearch: { installationId: "es-ready", resourceVersion: 4 }
     }, expect.stringMatching(/^ui-install-/)));
+    const created = await screen.findByRole("row", { name: /service-primary/ });
+    expect(within(created).getByText("排队中")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "提交安装任务" })).toBeNull();
   });
 
   it("explains how to obtain an eligible Elasticsearch when the Kibana dependency list is empty", async () => {

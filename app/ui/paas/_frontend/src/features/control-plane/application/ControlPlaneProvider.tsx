@@ -19,7 +19,7 @@ import {
 import { useSession, useSessionCredential } from "@/features/auth/application/SessionProvider";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { ExperienceSnapshot } from "../domain/experience";
-import type { ManagedServiceProductId } from "../domain/managedServiceProduct";
+import { managedServiceProduct, type ManagedServiceProductId } from "../domain/managedServiceProduct";
 import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
 import {
   validApplicationCursor,
@@ -31,6 +31,7 @@ import type {
   ActivateQuotaCommand,
   ControlPlaneSnapshot,
   CreateInstallationCommand,
+  InstallationPhase,
   InstallationTerminationIntent,
   InstallationTerminationMutationError,
   InstallationReadLoad
@@ -180,6 +181,10 @@ function mergeResources(
   return next;
 }
 
+function installationInProgress(phase: InstallationPhase) {
+  return phase === "PENDING" || phase === "PROVISIONING" || phase === "TERMINATION_PENDING" || phase === "TERMINATING";
+}
+
 function loadFailure(error: unknown): ControlPlaneReadFailure {
   if (!(error instanceof HttpProblem)) return { kind: "unavailable", problem: null };
   if (error.status === 401) return { kind: "expired", problem: error };
@@ -237,6 +242,7 @@ export function ControlPlaneProvider({
   const managedServiceCommandSlowTimer = useRef<number | null>(null);
   const inFlight = useRef(new Map<ControlPlaneResourceKind, { owner: string; promise: Promise<void> }>());
   const prepareRevision = useRef(0);
+  const listPollingOwner = useRef<ControlPlaneRequestOwner | null>(null);
   const managedServiceCommandOwner = useMemo<ManagedServiceCommandOwner | null>(() => {
     if (roleSession.mode === "ROLE" && roleSession.identity) {
       return {
@@ -449,7 +455,7 @@ export function ControlPlaneProvider({
           throw failure;
         })
         .then((loaded) => {
-          if (mayCommit && !mayCommit()) return;
+          if (!ownsRequest(owner) || (mayCommit && !mayCommit())) return;
           const owned = missing.filter(resource => inFlight.current.get(resource)?.promise === request);
           if (owned.length > 0) commitResources(credential, owned, loaded);
         })
@@ -462,7 +468,7 @@ export function ControlPlaneProvider({
       waits.add(request);
     }
     await Promise.all(waits);
-  }, [commitResources, credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, repository, sessionRevision, sourceCredential]);
+  }, [commitResources, credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, ownsRequest, repository, sessionRevision, sourceCredential]);
 
   const readEnrichments = useCallback((
     resources: readonly ControlPlaneResourceKind[],
@@ -574,71 +580,93 @@ export function ControlPlaneProvider({
 
   const ownedCache = cache?.owner === credential ? cache : null;
   const productResourcesReady = productDataReady(selection, productAccess);
+  const listedOffering = selection.product && managedServiceProduct(selection.product).offeringId;
+  const liveInstallationDirectory = selection.section === "installations" && productResourcesReady && !experience && Boolean(credential);
 
   useEffect(() => {
     if (!credential || selection.section !== "installations" || !productResourcesReady) return;
     if (!ownedCache?.loaded.has("installations")) return;
-    const owner: ControlPlaneRequestOwner = { credential, sourceCredential, repository, sessionRevision, ownerKey: managedServiceCommandOwnerKey };
-    const pending = ownedCache.snapshot.installations.filter((item) => [
-      "PENDING", "PROVISIONING", "TERMINATION_PENDING", "TERMINATING"
-    ].includes(item.phase));
+    const owner = commandReadOwner.current;
+    const pending = ownedCache.snapshot.installations.filter(item =>
+      installationInProgress(item.phase) && (!listedOffering || item.offeringId === listedOffering));
     if (pending.length === 0) return;
     let active = true;
-    const timer = window.setTimeout(() => {
-      void (async () => {
-        try {
-          const reads = await Promise.all(pending.map(async (item) => {
-            try {
-              return { installation: await repository.getInstallation(credential, item.id), missing: false };
-            } catch (pollError) {
-              const terminating = item.phase === "TERMINATION_PENDING" || item.phase === "TERMINATING";
-              if (terminating && pollError instanceof HttpProblem && pollError.status === 404) {
-                return { installation: null, missing: true };
-              }
-              throw pollError;
-            }
-          }));
-          if (!active) return;
-          if (reads.some((read) => read.missing)) {
-            await readResources(["installations"], true);
-            if (active) readEnrichments(["entitlements"], true);
-            return;
-          }
-          const updates = reads.flatMap((read) => read.installation ? [read.installation] : []);
+    let timer: number;
+    const poll = async () => {
+      if (!experience && (navigator.onLine === false || document.visibilityState === "hidden")) return;
+      try {
+        if (listPollingOwner.current === owner) {
+          // Collection and exact-instance reads have separate IAM decisions.
+          await readResources(["installations"], true, () => active && ownsRequest(owner));
+          if (!active || !ownsRequest(owner)) return;
           setError(null);
-          const byId = new Map(updates.map((item) => [item.id, item]));
-          const current = cacheRef.current;
-          if (current?.owner === credential) {
-            const next = {
-              ...current,
-              snapshot: {
-                ...current.snapshot,
-                installations: current.snapshot.installations.map((item) => byId.get(item.id) ?? item)
-              }
-            };
-            cacheRef.current = next;
-            setCache(next);
+          const observed = new Map(cacheRef.current?.snapshot.installations.map(item => [item.id, item.phase]));
+          if (pending.some(item => {
+            const phase = observed.get(item.id);
+            return phase ? !installationInProgress(phase) : item.phase === "TERMINATION_PENDING" || item.phase === "TERMINATING";
+          })) readEnrichments(["entitlements"], true);
+          return;
+        }
+        const reads = await Promise.all(pending.map(async (item) => {
+          try {
+            return { installation: await repository.getInstallation(credential, item.id), missing: false };
+          } catch (pollError) {
+            const terminating = item.phase === "TERMINATION_PENDING" || item.phase === "TERMINATING";
+            if (terminating && pollError instanceof HttpProblem && pollError.status === 404) {
+              return { installation: null, missing: true };
+            }
+            throw pollError;
           }
-          if (!updates.some((item) => [
-            "READY", "FAILED", "ROLLBACK_FAILED", "TERMINATION_FAILED", "TERMINATED"
-          ].includes(item.phase))) {
-            return;
-          }
+        }));
+        if (!active || !ownsRequest(owner)) return;
+        if (reads.some((read) => read.missing)) {
           await readResources(["installations"], true);
           if (active) readEnrichments(["entitlements"], true);
-        } catch (pollError: unknown) {
-          if (active) {
-            expireUnauthorizedCredential(pollError, owner);
-            setError(loadFailure(pollError));
-          }
+          return;
         }
-      })();
-    }, 4_000);
+        const updates = reads.flatMap((read) => read.installation ? [read.installation] : []);
+        setError(null);
+        const byId = new Map(updates.map((item) => [item.id, item]));
+        const current = cacheRef.current;
+        if (current?.owner === credential) {
+          const next = {
+            ...current,
+            snapshot: {
+              ...current.snapshot,
+              installations: current.snapshot.installations.map((item) => {
+                const observed = byId.get(item.id);
+                return observed && observed.resourceVersion >= item.resourceVersion ? observed : item;
+              })
+            }
+          };
+          cacheRef.current = next;
+          setCache(next);
+        }
+        if (!updates.some(item => !installationInProgress(item.phase))) {
+          return;
+        }
+        await readResources(["installations"], true);
+        if (active) readEnrichments(["entitlements"], true);
+      } catch (pollError: unknown) {
+        if (active && ownsRequest(owner)) {
+          if (pollError instanceof HttpProblem && pollError.status === 403 && listPollingOwner.current !== owner) {
+            listPollingOwner.current = owner;
+            timer = window.setTimeout(poll, 0);
+            return;
+          }
+          expireUnauthorizedCredential(pollError, owner);
+          const failure = loadFailure(pollError);
+          setError(failure);
+          if (failure.kind === "unavailable") timer = window.setTimeout(poll, 8_000);
+        }
+      }
+    };
+    timer = window.setTimeout(poll, 4_000);
     return () => {
       active = false;
       window.clearTimeout(timer);
     };
-  }, [credential, expireUnauthorizedCredential, managedServiceCommandOwnerKey, ownedCache, productResourcesReady, readEnrichments, readResources, repository, selection.product, selection.section, sessionRevision, sourceCredential]);
+  }, [credential, experience, expireUnauthorizedCredential, listedOffering, managedServiceCommandOwnerKey, ownedCache, ownsRequest, productResourcesReady, readEnrichments, readResources, repository, selection.section, sessionRevision, sourceCredential]);
 
   const activateQuota = useCallback(async (command: ActivateQuotaCommand) => {
     if (!credential || !managedServiceCommandOwner) return false;
@@ -706,6 +734,8 @@ export function ControlPlaneProvider({
       if (!settledByCurrentOwner) return false;
       const current = cacheRef.current;
       if (current?.owner === credential) {
+        // A directory read started before acceptance may still return an empty list.
+        if (current.loaded.has("installations")) inFlight.current.delete("installations");
         const next = {
           ...current,
           snapshot: {
@@ -1117,6 +1147,90 @@ export function ControlPlaneProvider({
     }
   }, [clearPersistedManagedServiceCommand, commitInstallationTerminationIntent, commitManagedServiceCommand, commitServiceAuthorizationIntent, credential, expireUnauthorizedCredential, managedServiceCommandOwner, readResources, repository]);
 
+  const currentCommand = managedServiceCommand && managedServiceCommandOwner && sameManagedServiceCommandOwner(managedServiceCommand.intent.owner, managedServiceCommandOwner)
+    ? managedServiceCommand : null;
+  const creation = currentCommand?.intent.kind === "CREATE_INSTALLATION" &&
+    (!listedOffering || currentCommand.intent.payload.offeringId === listedOffering) ? currentCommand : null;
+  const receipt = creation?.result;
+  const unconfirmedCreation = creation?.phase === "unknown" ? creation.intent : null;
+  const finishedInstallation = creation?.phase === "inProgress" && ownedCache?.snapshot.installations.some(item =>
+    item.id === creation.intent.targetId && item.operation.id === receipt?.operation?.id &&
+    ["READY", "FAILED", "ROLLBACK_FAILED"].includes(item.phase)) ? creation.intent : null;
+
+  useEffect(() => {
+    if (!liveInstallationDirectory) return;
+    const owner = commandReadOwner.current;
+    let active = true;
+    let generation = 0;
+    let timer: number;
+    const targetId = unconfirmedCreation?.targetId ?? receipt?.target.id;
+    const refresh = async (attempt: number) => {
+      if (!active || !ownsRequest(owner) || navigator.onLine === false || document.visibilityState === "hidden") return;
+      window.clearTimeout(timer);
+      const revision = ++generation;
+      const isCurrent = () => active && revision === generation && ownsRequest(owner);
+      try {
+        await readResources(["installations"], true, isCurrent);
+        if (!isCurrent()) return;
+        setError(null);
+        readEnrichments(["offerings", "regions", "entitlements"], false);
+        if (!targetId || cacheRef.current?.snapshot.installations.some(item => item.id === targetId)) return;
+      } catch (failure) {
+        if (!isCurrent()) return;
+        const reason = loadFailure(failure);
+        setError(reason);
+        if (reason.kind !== "unavailable") return;
+      }
+      if (attempt < 2) timer = window.setTimeout(() => void refresh(attempt + 1), attempt === 0 ? 2_000 : 6_000);
+    };
+    const resume = () => void refresh(0);
+    // The first list read may race acceptance. Read it again once the server
+    // supplies a receipt, even if the request-result lookup finished second.
+    if (receipt || unconfirmedCreation || cacheRef.current?.loaded.has("installations")) resume();
+    window.addEventListener("online", resume);
+    document.addEventListener("visibilitychange", resume);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      window.removeEventListener("online", resume);
+      document.removeEventListener("visibilitychange", resume);
+    };
+  }, [liveInstallationDirectory, listedOffering, ownsRequest, readEnrichments, readResources, receipt, unconfirmedCreation]);
+
+  useEffect(() => {
+    const intent = unconfirmedCreation ?? finishedInstallation;
+    if (!liveInstallationDirectory || !commandRecoveryAvailable || !intent) return;
+    const owner = commandReadOwner.current;
+    let active = true;
+    let timer: number;
+    let attempt = 0;
+    const delays = [0, 2_000, 6_000];
+    const check = async () => {
+      if (!active || !ownsRequest(owner) || navigator.onLine === false || document.visibilityState === "hidden") return;
+      const current = managedServiceCommandRef.current;
+      if (current?.intent !== intent || current.checking) return;
+      await inspectManagedServiceCommand();
+      const next = managedServiceCommandRef.current;
+      if (active && next?.intent === intent && (next.error === "notFound" || next.error === "unavailable") && ++attempt < delays.length) {
+        timer = window.setTimeout(check, delays[attempt]);
+      }
+    };
+    const start = () => {
+      window.clearTimeout(timer);
+      attempt = 0;
+      timer = window.setTimeout(check, 0);
+    };
+    start();
+    window.addEventListener("online", start);
+    document.addEventListener("visibilitychange", start);
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+      window.removeEventListener("online", start);
+      document.removeEventListener("visibilitychange", start);
+    };
+  }, [commandRecoveryAvailable, finishedInstallation, inspectManagedServiceCommand, liveInstallationDirectory, ownsRequest, unconfirmedCreation]);
+
   const clearManagedServiceCommandNotice = useCallback(() => {
     const state = managedServiceCommandRef.current;
     if (state && !state.checking && (state.phase === "failed" || state.phase === "completed" || state.phase === "inProgress")) {
@@ -1156,7 +1270,7 @@ export function ControlPlaneProvider({
     error: isAccess || requiredResourcesFor(selection, Boolean(experience), productAccess).length === 0 ? null : error,
     mutation,
     readServiceDefinitions,
-    managedServiceCommand,
+    managedServiceCommand: currentCommand,
     commandRecoveryAvailable,
     restoreManagedServiceCommand,
     inspectManagedServiceCommand,
@@ -1178,7 +1292,7 @@ export function ControlPlaneProvider({
     submitServiceAuthorization,
     closeServiceAuthorizationIntent,
     reopenServiceAuthorizationIntent
-  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, clearManagedServiceCommandNotice, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, commandRecoveryAvailable, createInstallation, error, experience, inspectManagedServiceCommand, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, managedServiceCommand, mutation, prepare, productAccess, projectScene, readApplication, readInstallation, readServiceDefinitions, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, restoreManagedServiceCommand, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
+  }), [activateQuota, beginInstallationTermination, beginServiceAuthorization, clearManagedServiceCommandNotice, closeInstallationTerminationIntent, closeServiceAuthorizationIntent, commandRecoveryAvailable, createInstallation, currentCommand, error, experience, inspectManagedServiceCommand, inspectServiceAuthorization, installationTerminationIntent, isAccess, listApplications, loading, mutation, prepare, productAccess, projectScene, readApplication, readInstallation, readServiceDefinitions, reload, reopenInstallationTerminationIntent, reopenServiceAuthorizationIntent, restoreManagedServiceCommand, scene, selection, serviceAuthorizationIntent, submitInstallationTermination, submitServiceAuthorization]);
 
   return (
     <ControlPlaneContext.Provider value={value}>

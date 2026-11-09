@@ -782,6 +782,113 @@ describe("ControlPlaneProvider", () => {
     ]));
     expect(load.mock.calls.every(([, resources]) => resources.length === 1)).toBe(true);
   });
+  it("rechecks a lost create receipt after reconnect, including when the first read beats acceptance", async () => {
+    vi.useFakeTimers();
+    const connection = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    try {
+      let visible = false;
+      const create = vi.fn<ControlPlaneRepository["createInstallation"]>().mockRejectedValue(new TypeError("connection lost"));
+      const read = vi.fn<NonNullable<ControlPlaneRepository["listCommandResults"]>>(async () => {
+        if (read.mock.calls.length === 1) return [];
+        visible = true;
+        return [{ ...originalResult(originalCommand("CREATE_INSTALLATION")), idempotencyKey: create.mock.calls[0]![2],
+          target: { kind: "SERVICE_INSTALLATION", id: "postgres-recovery" } }];
+      });
+      const load = vi.fn<ControlPlaneRepository["load"]>(async (_, resources) => resourceSlice({
+        ...snapshot(readyInstallation, 1), installations: visible ? [{ ...readyInstallation, id: "postgres-recovery" }] : []
+      }, resources));
+      const repo = { createInstallation: create, listCommandResults: read, load, activateQuota: vi.fn(), getInstallation: vi.fn() };
+      const view = render(<SessionProvider repository={iamRepository()}><ControlPlaneProvider repository={repo} selection={{ section: "installations" }}><Probe /></ControlPlaneProvider></SessionProvider>);
+      await act(async () => { fireEvent.click(view.getByText("login")); });
+      await act(async () => { fireEvent.click(view.getByText("create recovery installation")); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(500); });
+      expect(read).not.toHaveBeenCalled();
+      connection.mockReturnValue(true);
+      await act(async () => { window.dispatchEvent(new Event("online")); await vi.advanceTimersByTimeAsync(1); });
+      expect(view.getByTestId("command-phase").textContent).toBe("unknown");
+      expect(view.getByTestId("phase").textContent).toBe("none");
+      await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+      expect(view.getByTestId("phase").textContent).toBe("READY");
+      expect(view.getByTestId("command-phase").textContent).toBe("completed");
+      expect(create).toHaveBeenCalledTimes(1);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(localStorage.getItem("matrix.managed-service.commands.v1")).toBeNull();
+    } finally {
+      connection.mockRestore();
+    }
+  });
+
+  it("bounds empty receipt checks and leaves the original unknown without creating a list row", async () => {
+    vi.useFakeTimers();
+    const read = vi.fn(async () => []);
+    const load = vi.fn<ControlPlaneRepository["load"]>(async (_, resources) =>
+      resourceSlice({ ...snapshot(readyInstallation, 0), installations: [] }, resources));
+    const view = recoveryView(read, iamRepository(), { selection: { section: "installations" }, load });
+    await bringOriginal(view, originalCommand("CREATE_INSTALLATION"));
+    await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(view.getByTestId("command-phase").textContent).toBe("unknown");
+    expect(view.getByTestId("phase").textContent).toBe("none");
+    expect(view.repository.createInstallation).not.toHaveBeenCalled();
+  });
+
+  it("loads progress with empty browser storage and keeps polling after a transient read failure", async () => {
+    vi.useFakeTimers();
+    let latest = pendingInstallation;
+    const load = vi.fn<ControlPlaneRepository["load"]>(async (_, resources) => resourceSlice(snapshot(latest, 0), resources));
+    const view = recoveryView(vi.fn(async () => []), iamRepository(), { selection: { section: "installations" }, load });
+    vi.mocked(view.repository.getInstallation).mockRejectedValueOnce(new TypeError("temporarily unavailable"))
+      .mockImplementation(async () => (latest = readyInstallation));
+    await act(async () => { fireEvent.click(view.getByText("login")); });
+    expect(view.getByTestId("phase").textContent).toBe("PENDING");
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(view.getByTestId("phase").textContent).toBe("PENDING");
+    expect(view.getByTestId("error").textContent).toBe("unavailable");
+    await act(async () => { await vi.advanceTimersByTimeAsync(8_000); });
+    expect(view.getByTestId("phase").textContent).toBe("READY");
+    expect(view.getByTestId("error").textContent).toBe("none");
+    expect(view.repository.listCommandResults).not.toHaveBeenCalled();
+    expect(view.repository.createInstallation).not.toHaveBeenCalled();
+  });
+
+  it("reads the authorized list even when receipt access is denied and acceptance is delayed", async () => {
+    vi.useFakeTimers();
+    const intent = originalCommand("CREATE_INSTALLATION");
+    let accepted = false;
+    const read = vi.fn(async () => { throw new HttpProblem(403, "DENIED"); });
+    const load = vi.fn<ControlPlaneRepository["load"]>(async (_, resources) => resourceSlice({
+      ...snapshot(readyInstallation, 1), installations: accepted ? [{ ...readyInstallation, id: intent.targetId }] : []
+    }, resources));
+    const view = recoveryView(read, iamRepository(), { selection: { section: "installations" }, load });
+    await bringOriginal(view, intent);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(view.getByTestId("command-error").textContent).toBe("forbidden");
+    expect(view.getByTestId("phase").textContent).toBe("none");
+    accepted = true;
+    await act(async () => { await vi.advanceTimersByTimeAsync(2_000); });
+    expect(view.getByTestId("phase").textContent).toBe("READY");
+    expect(view.getByTestId("command-phase").textContent).toBe("unknown");
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(view.repository.createInstallation).not.toHaveBeenCalled();
+  });
+
+  it("follows collection progress when an identity can list instances but cannot read their details", async () => {
+    vi.useFakeTimers();
+    let latest = pendingInstallation;
+    const load = vi.fn<ControlPlaneRepository["load"]>(async (_, resources) => resourceSlice(snapshot(latest, 0), resources));
+    const view = recoveryView(vi.fn(async () => []), iamRepository(), { selection: { section: "installations" }, load });
+    vi.mocked(view.repository.getInstallation).mockRejectedValue(new HttpProblem(403, "DENIED"));
+    await act(async () => { fireEvent.click(view.getByText("login")); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_001); });
+    expect(view.getByTestId("phase").textContent).toBe("PENDING");
+    expect(view.getByTestId("error").textContent).toBe("none");
+    latest = readyInstallation;
+    await act(async () => { await vi.advanceTimersByTimeAsync(4_000); });
+    expect(view.getByTestId("phase").textContent).toBe("READY");
+    expect(view.repository.getInstallation).toHaveBeenCalledTimes(1);
+    expect(view.repository.listCommandResults).not.toHaveBeenCalled();
+  });
+
   it("polls only pending installation resources before refreshing terminal quota state", async () => {
     vi.useFakeTimers();
     let installationReads = 0;

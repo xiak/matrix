@@ -130,7 +130,6 @@ function InstallationOrder({
   const [name, setName] = useState("service-primary");
   const [id, setId] = useState("service-primary");
   const [elasticsearch, setElasticsearch] = useState<ElasticsearchReference | null>(null);
-  const [accepted, setAccepted] = useState(false);
   const selectedEntitlement = scene.entitlementOptions.find((item) => item.entitlementId === entitlementId);
   const requiresElasticsearch = selectedEntitlement?.offeringId === "kibana-8.19";
   const eligibleDependencies = scene.elasticsearchOptions.filter((item) =>
@@ -143,8 +142,7 @@ function InstallationOrder({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedEntitlement || !canSubmit) return;
-    setAccepted(false);
-    const success = await controlPlane.createInstallation({
+    await controlPlane.createInstallation({
       id,
       name: name.trim(),
       offeringId: selectedEntitlement.offeringId,
@@ -154,7 +152,6 @@ function InstallationOrder({
         elasticsearch: { installationId: selectedDependency.id, resourceVersion: selectedDependency.resourceVersion }
       } : {})
     });
-    setAccepted(success);
   }
 
   return (
@@ -180,21 +177,21 @@ function InstallationOrder({
               minLength={2}
               maxLength={63}
               invalid={Boolean(id) && !installationIDPattern.test(id)}
-              onChange={(event) => { setId(event.target.value); setAccepted(false); }}
+              onChange={(event) => setId(event.target.value)}
               pattern={installationIDPatternSource}
               required
               value={id}
             />
           </FormField>
           <FormField label={t("displayName")}>
-            <Input onChange={(event) => { setName(event.target.value); setAccepted(false); }} required value={name} />
+            <Input onChange={(event) => setName(event.target.value)} required value={name} />
           </FormField>
           <FormField label={t("quota")}>
-            <Select onValueChange={(next) => { setEntitlementId(next); setElasticsearch(null); setAccepted(false); }} value={entitlementId}
+            <Select onValueChange={(next) => { setEntitlementId(next); setElasticsearch(null); }} value={entitlementId}
               options={scene.entitlementOptions.map((item) => ({ value: item.entitlementId, label: `${item.label} · ${t("available", { count: item.available })}` }))} />
           </FormField>
           <FormField label={t("installRegion")}>
-            <Select onValueChange={(next) => { setRegionId(next); setElasticsearch(null); setAccepted(false); }} value={regionId}
+            <Select onValueChange={(next) => { setRegionId(next); setElasticsearch(null); }} value={regionId}
               options={scene.regionOptions.map((item) => ({ value: item.id, label: item.label }))} />
           </FormField>
           {requiresElasticsearch ? <>
@@ -204,7 +201,6 @@ function InstallationOrder({
                 onValueChange={(next) => {
                   const dependency = eligibleDependencies.find((item) => `${item.id}@${item.resourceVersion}` === next);
                   setElasticsearch(dependency ? { installationId: dependency.id, resourceVersion: dependency.resourceVersion } : null);
-                  setAccepted(false);
                 }}
                 options={eligibleDependencies.map((item) => ({ value: `${item.id}@${item.resourceVersion}`, label: `${item.label} · ${item.id}` }))} />
             </FormField>
@@ -216,7 +212,6 @@ function InstallationOrder({
             <MapPin aria-hidden="true" />
             <div><strong>{t("localInstall")}</strong><span>{t("serverPolicy")}</span></div>
           </div>
-          {accepted ? <Alert status="success">{t("installAccepted")}</Alert> : null}
           <Button block disabled={!canSubmit || controlPlane.loading || controlPlane.mutation === "installation" || controlPlane.managedServiceCommand?.phase === "unknown" || controlPlane.managedServiceCommand?.checking} size="large" type="submit">
             <ServerCog aria-hidden="true" />
             {controlPlane.mutation === "installation" ? t("submitting") : t("install")}

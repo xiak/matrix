@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type MutableRefObject } from "react";
+import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { useSearchParams } from "next/navigation";
 import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
@@ -52,7 +52,7 @@ import type {
 } from "../domain/serviceAuthorization";
 import type { InstallationReadLoad, InstallationTerminationIntent, ServiceInstallation, ServiceOffering } from "../domain/resources";
 import { managedProductIcons } from "./ServiceDirectory";
-import { isManagedServiceProductId, managedServiceProducts } from "../domain/managedServiceProduct";
+import { isManagedServiceProductId, managedServiceProduct, managedServiceProducts } from "../domain/managedServiceProduct";
 import { consoleRouteHref } from "../domain/selection";
 
 type InstallationDetailLoad =
@@ -89,6 +89,8 @@ function OfferingIcon({ serviceId }: { serviceId: ServiceOffering["service"]["id
   return <Icon aria-hidden="true" />;
 }
 
+const installationFailureCodes = ["INSTALLATION_PROFILE_INVALID", "PROVIDER_PROVISIONING_FAILED", "PROVIDER_CLEANUP_FAILED", "PROVIDER_TERMINATION_FAILED"] as const;
+
 function InstallationRows({ items, onOpen, triggerRefs }: {
   items: InstallationScene[];
   onOpen?(item: InstallationScene): void;
@@ -107,21 +109,24 @@ function InstallationRows({ items, onOpen, triggerRefs }: {
   return (
     <Table aria-label={t("instancesTable")} mobileLayout="grid">
         <thead>
-          <tr><th scope="col">{t("instance")}</th><th scope="col">{t("region")}</th><th scope="col">{t("status")}</th><th scope="col">{t("endpoint")}</th><th scope="col">{t("observed")}</th></tr>
+          <tr><th scope="col">{t("instance")}</th><th scope="col">{t("status")}</th><th scope="col">{t("observed")}</th><th scope="col">{t("region")}</th><th scope="col">{t("endpoint")}</th></tr>
         </thead>
         <tbody>
-          {items.map((item) => (
-            <tr key={item.id}>
+          {items.map((item) => {
+            const failure = installationFailureCodes.find(code => code === item.safeFailureCode);
+            return <tr key={item.id}>
               <td>{onOpen ? <button className={styles.instanceLink} ref={(node) => {
                 if (node) triggerRefs?.current.set(item.id, node);
                 else triggerRefs?.current.delete(item.id);
               }} onClick={() => onOpen(item)}>{item.name}</button> : <strong>{item.name}</strong>}<small>{item.engine}</small></td>
-              <td data-label={t("region")}>{item.regionName}</td>
-              <td data-label={t("status")}><Badge status={item.status}>{t(`installationPhases.${item.phase}`)}</Badge></td>
-              <td data-label={t("endpoint")} data-mobile-span="full"><Typography.Code>{item.endpoint ?? t("unassigned")}</Typography.Code></td>
+              <td data-label={t("status")}><Badge status={item.status}>{t(`installationPhases.${item.phase}`)}</Badge>
+                {item.safeFailureCode ? <small>{failure ? t(`installationFailures.${failure}`) : item.safeFailureCode}</small> : null}
+              </td>
               <td data-label={t("observed")} data-mobile-span="full">{format.timestamp(item.observedAt)}</td>
-            </tr>
-          ))}
+              <td data-label={t("region")}>{item.regionName}</td>
+              <td data-label={t("endpoint")} data-mobile-span="full"><Typography.Code>{item.endpoint ?? t("unassigned")}</Typography.Code></td>
+            </tr>;
+          })}
         </tbody>
       </Table>
   );
@@ -572,6 +577,15 @@ function InstallationLifecycleCard({
   </Card>;
 }
 
+function subscribeNetwork(listener: () => void) {
+  window.addEventListener("online", listener);
+  window.addEventListener("offline", listener);
+  return () => {
+    window.removeEventListener("online", listener);
+    window.removeEventListener("offline", listener);
+  };
+}
+
 function InstallationContent({ scene, preview, accountId }: {
   scene: Extract<ConsoleContentScene, { kind: "installations" }>;
   preview: boolean;
@@ -582,11 +596,17 @@ function InstallationContent({ scene, preview, accountId }: {
   const {
     closeInstallationTerminationIntent,
     closeServiceAuthorizationIntent,
+    error,
     installationTerminationIntent,
     managedServiceCommand,
     readInstallation,
+    scene: currentScene,
     serviceAuthorizationIntent
   } = useControlPlane();
+  const online = useSyncExternalStore(subscribeNetwork, () => navigator.onLine, () => true);
+  const listedProduct = currentScene?.productId;
+  const awaitingCreation = managedServiceCommand?.phase === "unknown" && managedServiceCommand.intent.kind === "CREATE_INSTALLATION" &&
+    (!listedProduct || !isManagedServiceProductId(listedProduct) || managedServiceCommand.intent.payload.offeringId === managedServiceProduct(listedProduct).offeringId);
   const [selectedSummary, setSelectedSummary] = useState<InstallationScene | null>(null);
   const [detailLoad, setDetailLoad] = useState<InstallationDetailLoad>({ status: "idle" });
   const [review, setReview] = useState<"authorize" | "unbind" | null>(null);
@@ -758,16 +778,14 @@ function InstallationContent({ scene, preview, accountId }: {
       <Card.Header>
         <div>
           <Typography.Title as="h2" level={3}>{t("organizationInstances")}</Typography.Title>
-          <Typography.Text tone="muted">{t("installationStateHint")}</Typography.Text>
+          <Typography.Text tone="muted">{t(preview ? "installationStateHint" : "installationProgressHint")}</Typography.Text>
         </div>
         <Badge status="info">{t("instanceCount", { count: scene.installations.length })}</Badge>
       </Card.Header>
-      <Card.Body>
-        <Alert status={preview ? "warning" : "info"}>
-          {t(preview ? "instanceVisibilityMockBoundary" : "instanceVisibilityBoundary")}
-        </Alert>
-      </Card.Body>
-      <InstallationRows items={scene.installations} onOpen={accountId ? openInstallation : undefined} triggerRefs={rowTriggers} />
+      {preview || !online || error?.kind === "unavailable" ? <Card.Body><Alert status="warning">
+        {t(preview ? "instanceVisibilityMockBoundary" : online ? "installationRefreshDelayed" : "installationOffline")}
+      </Alert></Card.Body> : null}
+      {scene.installations.length || !awaitingCreation ? <InstallationRows items={scene.installations} onOpen={accountId ? openInstallation : undefined} triggerRefs={rowTriggers} /> : null}
     </Card>
   );
 }

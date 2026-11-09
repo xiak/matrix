@@ -18,11 +18,6 @@
   font-size: var(--xiak-font-size-small);
 }
 
-.import[open] {
-  display: grid;
-  gap: var(--xiak-spacing-default);
-}
-
 .recovery summary:focus-visible {
   outline: 0.125rem solid var(--xiak-color-border-focus);
   outline-offset: 0.1875rem;

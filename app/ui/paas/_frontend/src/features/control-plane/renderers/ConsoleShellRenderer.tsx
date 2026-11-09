@@ -61,13 +61,15 @@ import {
   PageSkeleton,
   Progress,
   ReadBoundary,
-  useLeaveConfirmation
+  useLeaveConfirmation,
+  type PageCommand
 } from "@ui/xiak";
 import { ControlPlaneProvider, useControlPlane } from "../application/ControlPlaneProvider";
 import { useConsoleUiStore } from "../application/consoleUiStore";
 import { useLiveServiceActivation } from "../application/liveServiceActivation";
 import { usePreviewServiceActivation } from "../application/previewServiceActivation";
 import type { ExperienceSnapshot } from "../domain/experience";
+import { managedServiceProduct } from "../domain/managedServiceProduct";
 import { serviceWorkspaceMayLoad } from "../domain/serviceActivation";
 import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
@@ -82,7 +84,7 @@ import { ConsoleContentLoadingRenderer } from "./ConsoleContentLoadingRenderer";
 import { ConsoleContentRenderer } from "./ConsoleContentRenderer";
 import { ManagedProductActivation } from "./ManagedProductActivation";
 import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
-import { ManagedServiceCommandNotice } from "./ManagedServiceCommandNotice";
+import { ManagedServiceCommandNotice, ManagedServicePageActions } from "./ManagedServiceCommandNotice";
 import styles from "./ConsoleShellRenderer.module.css";
 import { managedProductIcons, useServiceDirectory } from "./ServiceDirectory";
 import { serviceForSelection, type ServiceId } from "../scenes/serviceDirectory";
@@ -283,7 +285,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const workspaceTrigger = useRef<{ focus(): void }>(null);
   const workspaceCloseButton = useRef<HTMLButtonElement>(null);
   const workspaceFocusRequested = useRef(false);
-  const recoveredQuotaHandled = useRef<string | null>(null);
+  const handledWorkspaceRequest = useRef<string | null>(null);
   const sidebarOverlayOpen = useConsoleUiStore((state) => state.sidebarOverlayOpen);
   const workspaceOpen = useConsoleUiStore((state) => state.workspaceOpen);
   const openSidebar = useConsoleUiStore((state) => state.openSidebar);
@@ -334,14 +336,16 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const workspaceKey = scene?.workspace ? `${scene.section}:${scene.workspace.kind}` : null;
   useEffect(() => { closeWorkspace(); }, [workspaceKey, closeWorkspace, productReady]);
 
-  const recoveredQuotaRequest = controlPlane.managedServiceCommand?.intent.kind === "ACTIVATE_QUOTA" &&
-    controlPlane.managedServiceCommand.phase === "completed" && controlPlane.managedServiceCommand.result?.state === "SUCCEEDED"
-    ? controlPlane.managedServiceCommand.intent.requestId : null;
+  const command = controlPlane.managedServiceCommand;
   useEffect(() => {
-    if (!recoveredQuotaRequest || recoveredQuotaHandled.current === recoveredQuotaRequest) return;
-    recoveredQuotaHandled.current = recoveredQuotaRequest;
-    if (scene?.workspace?.kind === "quota-order" && workspaceOpen) closeWorkspaceAndRestoreFocus();
-  }, [closeWorkspaceAndRestoreFocus, recoveredQuotaRequest, scene?.workspace?.kind, workspaceOpen]);
+    if (!command || handledWorkspaceRequest.current === command.intent.requestId) return;
+    const submitted = command.intent.kind === "CREATE_INSTALLATION" && !command.restored &&
+      (command.phase === "completed" || command.phase === "unknown");
+    const recoveredQuota = command.intent.kind === "ACTIVATE_QUOTA" && command.result?.state === "SUCCEEDED";
+    if (!submitted && !recoveredQuota) return;
+    handledWorkspaceRequest.current = command.intent.requestId;
+    if (workspaceOpen && scene?.workspace?.kind === (submitted ? "installation-order" : "quota-order")) closeWorkspaceAndRestoreFocus();
+  }, [closeWorkspaceAndRestoreFocus, command, scene?.workspace?.kind, workspaceOpen]);
 
   useEffect(() => {
     if (!navigation.pendingHref) return;
@@ -448,6 +452,13 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const accessTitles = { "create-user": accountText("createUserTitle"), "create-group": iamWorkspaceText("createGroup"), "create-policy": iamWorkspaceText("createPolicy"), "policy-language": iamWorkspaceText("policyLanguagePreview"), "create-role": iamWorkspaceText("createRole"), "service-authorizations": roleWorkspaceText("serviceAuthorization"), "role-access": accountText("roleAccessTitle"), "authorization-profiles": profilePublishingText("workspaceTitle"), tenants: accountText("tenantAccounts") };
   const accessView = frame.section === "access" ? pendingSelection?.view ?? navigation.selection.view : undefined;
   const pageTitle = accessView && accessView in accessTitles ? accessTitles[accessView as keyof typeof accessTitles] : selectedPage ? navigationText(`items.${selectedPage.messageKey}.label`) : frame.section === "overview" ? dashboard("title") : t(`pages.${frame.section}.title`);
+  const workspaceCommand: PageCommand | undefined = workspaceAction && WorkspaceActionIcon ? {
+    id: "workspace", label: t(`workspaceActions.${scene!.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`),
+    icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />,
+    disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible,
+    onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary"
+  } : undefined;
+  const managedServicePage = !roleBlocked && productReady && !pendingSelection && ["catalog", "quotas", "installations"].includes(frame.section);
   const headerCommands = frame.section === "access" && !frame.preview && roleSession.mode === "USER" && accessView !== "sessions" && accessView !== "role-access"
     ? <ContentPage.Commands label={collection("pageActions")} secondary={[{
         id: "refresh-iam-permissions",
@@ -456,13 +467,13 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
         disabled: Boolean(pendingSelection) || accountAccess.loading,
         onSelect: accountAccess.reload
       }]} />
-    : workspaceAction && WorkspaceActionIcon
-      ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={{ id: "workspace", label: t(`workspaceActions.${scene!.workspace!.kind}.${workspaceVisible ? "expanded" : "collapsed"}`), icon: workspaceVisible ? <PanelRightClose aria-hidden="true" /> : <WorkspaceActionIcon aria-hidden="true" />, disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible, onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary" }} />
-      : undefined;
+    : managedServicePage ? <ManagedServicePageActions key={`${dataOwnerKey}:${navigation.currentHref}`} focusRef={workspaceTrigger} primary={workspaceCommand} />
+    : workspaceAction ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={workspaceCommand} /> : undefined;
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
   const pageContent = content ? <ConsoleContentRenderer accountId={activationAccountId} pendingHref={pendingContent ? navigation.pendingHref : null} preview={frame.preview} scene={content} scope={{ regionId }} /> : !controlPlane.error ? <ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={pendingSelection ?? navigation.selection} /> : null;
   const resourceContent = <Fragment key={dataOwnerKey}>
-    {controlPlane.error ? <ConsoleReadFailure failure={controlPlane.error} loading={controlPlane.loading} onRetry={controlPlane.reload} /> : pageContent}
+    {controlPlane.error && !(content?.kind === "installations" && controlPlane.error.kind === "unavailable")
+      ? <ConsoleReadFailure failure={controlPlane.error} loading={controlPlane.loading} onRetry={controlPlane.reload} /> : pageContent}
   </Fragment>;
 
   function resizeWorkspace(event: ReactPointerEvent<HTMLDivElement>) {
@@ -600,7 +611,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                 <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><ConsoleContentLoadingRenderer experience={Boolean(experience)} key={navigation.pendingHref} label={loadingLabel} selection={pendingSelection} /></div> : undefined}>
                   <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
                     {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
-                    {!roleBlocked && ["catalog", "quotas", "installations"].includes(frame.section) && !workspaceVisible ? <ManagedServiceCommandNotice /> : null}
+                    {managedServicePage && !workspaceVisible ? <ManagedServiceCommandNotice installations={content?.kind === "installations" ? content.installations : undefined} offeringId={navigation.selection.product && managedServiceProduct(navigation.selection.product).offeringId} /> : null}
                     {roleBlocked ? <LiveRoleSelfService /> : product ? <ManagedProductActivation account={{ id: activationAccountId ?? "", name: frame.scope?.organization.name }} activation={activation} preview={frame.preview} product={product}>
                       {resourceContent}
                     </ManagedProductActivation> : resourceContent}

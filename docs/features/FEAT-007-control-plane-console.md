@@ -275,6 +275,19 @@ transaction, then returns `202 Accepted`. The worker acquires a bounded lease
 and fencing token, reconciles uncertain effects before retry, and records a
 sanitized Audit outbox fact in the owning transaction.
 
+The service instance list shows the persisted phase, last observation time
+and safe failure reason. After submitting, the console returns to the list
+on acceptance or a lost response. Opening the list in a fresh browser reads
+the current identity's visible instances. Reconnecting or returning to the tab
+refreshes the directory. Visible installations in progress are checked every
+four seconds. When exact-instance reads are denied, progress follows the
+authorized directory. A transient read failure retains the last observation and backs
+off before checking again. A missing create receipt triggers bounded read-only
+checks for the original request. A matching receipt refreshes the independently
+authorized directory. An empty result leaves acceptance unconfirmed.
+Manual summary import and export are available under **More actions → Recover
+original operation**.
+
 Each local product provisioner uses only its release-owned digest-pinned
 artifact and server-generated restrictive credential material. It performs no
 pull or build, never executes caller input, and owns only objects labeled with
