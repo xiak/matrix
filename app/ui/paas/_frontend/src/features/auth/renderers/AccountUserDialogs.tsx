@@ -2,11 +2,11 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type Ref } from "react";
 import { useTranslations } from "next-intl";
-import { KeyRound, ShieldCheck, UserRound } from "lucide-react";
-import { Alert, HelpDisclosure, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
+import { Plus } from "lucide-react";
+import { Alert, HelpDisclosure, FormField, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
-import { LiveAccessCredentials } from "./LiveAccessCredentials";
+import { useAccessDraft } from "./useAccessDraft";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import type { CapabilityRestriction } from "../domain/accounts";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
@@ -66,32 +66,17 @@ export function CreateTenantWorkspace({ onClose }: { onClose(): void }) {
   </WorkspaceDetail>;
 }
 
-export function UserAccessManagement({ user, onDelete, managementCommands, renameActionRef, statusActionRef, showLiveEvidenceBoundary = false, initialSection }: {
-  user: AccountUserScene;
-  onDelete?(): void;
-  managementCommands?: { disabled: boolean; onRename(): void; onStatus(): void };
-  renameActionRef?: Ref<HTMLButtonElement>;
-  statusActionRef?: Ref<HTMLButtonElement>;
-  showLiveEvidenceBoundary?: boolean;
-  initialSection?: "policies" | "keys";
-}) {
+export function UserDirectPolicies({ user }: { user: AccountUserScene }) {
   const t = useTranslations("AccountAccess");
   const policyChange = useTranslations("PolicyAttachmentChange");
   const access = useAccountAccess();
-  const [password, setPassword] = useState("");
-  const [confirmStatus, setConfirmStatus] = useState(false);
-  const [resettingPassword, setResettingPassword] = useState(false);
-  const [reviewingReset, setReviewingReset] = useState(false);
-  const [showKeys, setShowKeys] = useState(initialSection === "keys");
+  const [choosing, setChoosing] = useState(false);
   const [selectedPolicy, setSelectedPolicy] = useState<{ id: string; resourceVersion: number } | null>(null);
   const relationIntent = access.userPolicyChangeIntent;
   const reviewingPolicy = relationIntent?.userId === user.id;
   const otherUserIntent = relationIntent && !reviewingPolicy ? relationIntent : null;
   const reviewHeading = useRef<HTMLHeadingElement>(null);
-  const resetReviewHeading = useRef<HTMLHeadingElement>(null);
-  const keysSection = useRef<HTMLElement>(null);
-  const policiesSection = useRef<HTMLElement>(null);
-  const pendingInitialSection = useRef(initialSection);
+  const attachTrigger = useRef<HTMLButtonElement>(null);
   const reviewTrigger = useRef<HTMLButtonElement>(null);
   const returnToTrigger = useRef(false);
   const lastTrigger = useRef<HTMLButtonElement | null>(null);
@@ -104,6 +89,7 @@ export function UserAccessManagement({ user, onDelete, managementCommands, renam
   const attachablePolicies = availablePolicies.filter((policy) => policy.scope === "INSTALLATION" ? user.canAttachPlatformPolicy : user.canAttachTenantPolicy);
   const platformAttachmentBlocked = !user.canAttachPlatformPolicy && availablePolicies.some((policy) => policy.scope === "INSTALLATION");
   const tenantAttachmentBlocked = !user.canAttachTenantPolicy && availablePolicies.some((policy) => policy.scope === "TENANT");
+  const showRestrictions = !reviewingPolicy && (choosing || attachablePolicies.length === 0);
   const currentPolicy = selectedPolicy ? attachablePolicies.find((policy) => policy.id === selectedPolicy.id) : undefined;
   const policyChanged = Boolean(selectedPolicy && (!currentPolicy || currentPolicy.resourceVersion !== selectedPolicy.resourceVersion));
   const restriction = (reason: CapabilityRestriction | null) => t(`restrictions.${reason ?? "AUTHORITY_REQUIRED"}`);
@@ -111,52 +97,26 @@ export function UserAccessManagement({ user, onDelete, managementCommands, renam
     if (reviewingPolicy) reviewHeading.current?.focus({ preventScroll: true });
     else if (returnToTrigger.current) {
       returnToTrigger.current = false;
-      (lastTrigger.current?.isConnected ? lastTrigger.current : reviewTrigger.current)?.focus({ preventScroll: true });
+      (lastTrigger.current?.isConnected ? lastTrigger.current : reviewTrigger.current ?? attachTrigger.current)?.focus({ preventScroll: true });
     }
   }, [reviewingPolicy]);
-  useLayoutEffect(() => {
-    if (resettingPassword && reviewingReset) resetReviewHeading.current?.focus({ preventScroll: true });
-  }, [resettingPassword, reviewingReset]);
-  useLayoutEffect(() => {
-    const section = pendingInitialSection.current;
-    if (!section) return;
-    const target = section === "keys" ? keysSection.current : policiesSection.current;
-    if (!target) return;
-    pendingInitialSection.current = undefined;
-    target.focus({ preventScroll: true });
-    target.scrollIntoView?.({ block: "start" });
-  }, [showKeys]);
-
-  async function resetPassword() {
-    const initialPassword = password;
-    setPassword("");
-    setReviewingReset(false);
-    setResettingPassword(false);
-    await access.resetUserPassword(user, initialPassword);
+  function finishReview(requestId: string) {
+    if (access.endUserPolicyChange(requestId)) {
+      returnToTrigger.current = true;
+      setSelectedPolicy(null);
+      setChoosing(false);
+    }
   }
-  return <div className={styles.detail}>
-      <div className={styles.userSummary}><div><strong>{user.name}</strong><Typography.Text tone="muted">{user.qualifiedName}</Typography.Text></div><Badge status={user.enabled ? "success" : "neutral"}>{t(`states.${user.state}`)}</Badge></div>
-      <dl className={styles.facts}><div><dt>{t("userType")}</dt><dd>{t("child")}</dd></div><div><dt>{t("ownership")}</dt><dd>{access.scene?.accountName}</dd></div><div><dt>{t("userId")}</dt><dd><Typography.Code>{user.id}</Typography.Code></dd></div></dl>
-      <p className={styles.note}>{t("subuserOwnershipHint")}</p>
-      {access.error ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
-      {access.success ? <Alert status="success">{t(access.success)}</Alert> : null}
-      {managementCommands ? <section className={styles.identitySection}>
-        <div className={styles.sectionHeading}><UserRound aria-hidden="true" /><strong>{t("userProfile")}</strong></div>
-        <div className={styles.actions}><Button ref={renameActionRef} disabled={disabled || managementCommands.disabled || !user.canUpdate} onClick={managementCommands.onRename} title={!user.canUpdate ? restriction(user.updateRestrictionReason) : undefined} variant="secondary">{t("editDisplayName")}</Button></div>
-        <p className={styles.note}>{t("immutableUserFieldsHint")}</p>
-      </section> : null}
-      {showLiveEvidenceBoundary ? <section aria-label={t("accessMethodsAndCredentials")} className={styles.identitySection} ref={keysSection} role="region" tabIndex={-1}>
-        <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("accessMethodsAndCredentials")}</strong></div>
-        <p className={styles.note}>{t(access.accessKeys ? "liveCredentialManagedHint" : "liveCredentialContractHint")}</p>
-        {access.accessKeys && access.scene ? <>
-          <div className={styles.actions}><Button onClick={() => setShowKeys((current) => !current)} variant="secondary">{t(showKeys ? "hideAccessKeys" : "manageAccessKeys")}</Button></div>
-          {showKeys ? <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles} client={access.accessKeys} scene={access.scene} createIntent={access.accessKeyCreateIntent} mutationIntent={access.accessKeyMutationIntent} recoveryError={access.accessKeyRecoveryError} scopedOwner={user}
-            userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} /> : null}
-        </> : null}
-      </section> : null}
-      <section aria-label={t("directPolicyAttachments")} ref={policiesSection} role="region" tabIndex={-1}>
-      <div className={styles.sectionHeading}><ShieldCheck aria-hidden="true" /><strong>{t("directPolicyAttachments")}</strong></div>
-      <p className={styles.note}>{t("policyAttachmentHint")}</p>
+  return <section aria-label={t("directPolicyAttachments")} className={styles.userSection}>
+    <div className={styles.userSectionHeader}>
+      <h3>{t("directPolicyAttachments")}</h3>
+      {!reviewingPolicy && attachablePolicies.length > 0 ? <Button ref={attachTrigger} size="small"
+        variant={choosing ? "ghost" : "primary"} disabled={relationDisabled} aria-expanded={choosing}
+        onClick={() => { setChoosing(!choosing); setSelectedPolicy(null); }}>
+        {choosing ? null : <Plus aria-hidden="true" />}{t(choosing ? "cancel" : "attachPolicy")}
+      </Button> : null}
+    </div>
+    {user.attachments.length > 0 ? <>
       <ul className={styles.bindingList}>
         {user.attachments.map((attachment) => <li key={attachment.id}>
           <div><strong>{attachment.label}</strong><small>{attachment.policyId} · {t(attachment.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}{attachment.policyStatus === "RETIRED" ? ` · ${t("retiredPolicy")}` : ""}</small></div>
@@ -165,113 +125,162 @@ export function UserAccessManagement({ user, onDelete, managementCommands, renam
           }} size="small" variant="ghost">{t("revoke")}</Button>
         </li>)}
       </ul>
-      {user.attachments.length === 0 ? <p className={styles.note}>{t("noPolicyAttachmentsHint")}</p> : null}
-      {policyChanged ? <Alert status="warning">{t("policyRevisionChanged")} <Button size="small" variant="ghost" onClick={() => setSelectedPolicy(null)}>{t("reselectPolicy")}</Button></Alert> : null}
-      {otherUserIntent ? <Alert status="warning">{t(otherUserIntent.phase === "review" ? "attachmentOtherUserReview" : "attachmentOtherUserPending", { user: otherUserIntent.userQualifiedName })}</Alert> : null}
-      {reviewingPolicy && relationIntent ? <section aria-label={t(relationIntent.kind === "attach" ? "attachmentReviewTitle" : "revocationReviewTitle")} className={styles.policyAttachmentReview}>
-        <h3 ref={reviewHeading} tabIndex={-1} className={styles.stepTitle}>{t(relationIntent.kind === "attach" ? "attachmentReviewTitle" : "revocationReviewTitle")}</h3>
+      <HelpDisclosure label={t("policySources")}>{t("policyAttachmentHint")}</HelpDisclosure>
+    </> : <p className={styles.note}>{t("noPolicyAttachmentsHint")}</p>}
+    {policyChanged ? <Alert status="warning">{t("policyRevisionChanged")} <Button size="small" variant="ghost" onClick={() => setSelectedPolicy(null)}>{t("reselectPolicy")}</Button></Alert> : null}
+    {otherUserIntent ? <Alert status="warning">{t(otherUserIntent.phase === "review" ? "attachmentOtherUserReview" : "attachmentOtherUserPending", { user: otherUserIntent.userQualifiedName })}</Alert> : null}
+    {reviewingPolicy && relationIntent ? <section aria-label={t(relationIntent.kind === "attach" ? "attachmentReviewTitle" : "revocationReviewTitle")} className={styles.policyAttachmentReview}>
+      <h3 ref={reviewHeading} tabIndex={-1} className={styles.stepTitle}>{t(relationIntent.kind === "attach" ? "attachmentReviewTitle" : "revocationReviewTitle")}</h3>
+      <dl className={styles.facts}>
+        <div><dt>{t("attachmentTarget")}</dt><dd>{relationIntent.userQualifiedName}<small>{relationIntent.userId}</small></dd></div>
+        <div><dt>{t("attachmentPolicy")}</dt><dd>{relationIntent.policyDisplayName}<small>{relationIntent.policyId}</small></dd></div>
+        <div><dt>{t("attachmentScope")}</dt><dd>{t(relationIntent.policyScope === "INSTALLATION" ? "installationScope" : "tenantScope")}</dd></div>
+        {relationIntent.kind === "attach" ? <div><dt>{t("attachmentVersion")}</dt><dd>{relationIntent.defaultVersionId} · {t("attachmentRevision", { revision: relationIntent.policyResourceVersion })}</dd></div>
+          : <div><dt>{t("revocationAttachment")}</dt><dd><Typography.Code>{relationIntent.attachmentId}</Typography.Code> · {t("attachmentRevision", { revision: relationIntent.attachmentResourceVersion })}</dd></div>}
+      </dl>
+      <Alert status="warning">{t(relationIntent.kind === "revoke" ? "revocationReviewHint" : relationIntent.policyScope === "INSTALLATION" ? "platformAttachmentReviewHint" : "tenantAttachmentReviewHint")}</Alert>
+      {relationIntent.phase === "unknown" || relationIntent.phase === "checking" ? <Alert status="warning"><div className={styles.confirmation}>
+        <strong>{t("attachmentUnknownTitle")}</strong>
+        <p>{t(relationIntent.kind === "revoke" ? "revocationUnknownResult" : "attachmentUnknownResult", { requestId: relationIntent.requestId })}</p>
+        {relationIntent.lookupStatus !== "unchecked" ? <p role="status">{t(`attachmentLookup.${relationIntent.lookupStatus}`)}</p> : null}
+        <p>{t("attachmentUnknownLockHint")}</p>
+      </div></Alert> : null}
+      {relationIntent.phase === "confirmed" && relationIntent.completion ? <Alert status="success" role="status" aria-label={policyChange("completedTitle")}><div className={styles.confirmation}>
+        <strong>{policyChange("completedTitle")}</strong>
+        <p>{policyChange("completedHint")}</p>
         <dl className={styles.facts}>
-          <div><dt>{t("attachmentTarget")}</dt><dd>{relationIntent.userQualifiedName}<small>{relationIntent.userId}</small></dd></div>
-          <div><dt>{t("attachmentPolicy")}</dt><dd>{relationIntent.policyDisplayName}<small>{relationIntent.policyId}</small></dd></div>
-          <div><dt>{t("attachmentScope")}</dt><dd>{t(relationIntent.policyScope === "INSTALLATION" ? "installationScope" : "tenantScope")}</dd></div>
-          {relationIntent.kind === "attach" ? <div><dt>{t("attachmentVersion")}</dt><dd>{relationIntent.defaultVersionId} · {t("attachmentRevision", { revision: relationIntent.policyResourceVersion })}</dd></div>
-            : <div><dt>{t("revocationAttachment")}</dt><dd><Typography.Code>{relationIntent.attachmentId}</Typography.Code> · {t("attachmentRevision", { revision: relationIntent.attachmentResourceVersion })}</dd></div>}
+          <div><dt>{policyChange("operation")}</dt><dd>{policyChange(relationIntent.completion.operation === "CREATE" ? "attach" : "revoke")}</dd></div>
+          <div><dt>{policyChange("requestId")}</dt><dd><Typography.Code>{relationIntent.completion.requestId}</Typography.Code></dd></div>
+          <div><dt>{policyChange("completedAt")}</dt><dd><WorkspaceTime value={relationIntent.completion.completedAt} /></dd></div>
+          <div><dt>{policyChange("target")}</dt><dd><Typography.Code>{relationIntent.userId}</Typography.Code></dd></div>
+          <div><dt>{policyChange("policyId")}</dt><dd><Typography.Code>{relationIntent.policyId}</Typography.Code></dd></div>
+          <div><dt>{policyChange("attachmentId")}</dt><dd><Typography.Code>{relationIntent.completion.operation === "CREATE" ? relationIntent.completion.attachment.id : relationIntent.completion.attachmentId}</Typography.Code></dd></div>
+          <div><dt>{policyChange("resultingRevision")}</dt><dd>{relationIntent.completion.operation === "CREATE" ? relationIntent.completion.attachment.resourceVersion : relationIntent.completion.revocation.resourceVersion}</dd></div>
         </dl>
-        <Alert status="warning">{t(relationIntent.kind === "revoke" ? "revocationReviewHint" : relationIntent.policyScope === "INSTALLATION" ? "platformAttachmentReviewHint" : "tenantAttachmentReviewHint")}</Alert>
-        {relationIntent.phase === "unknown" || relationIntent.phase === "checking" ? <Alert status="warning"><div className={styles.confirmation}>
-          <strong>{t("attachmentUnknownTitle")}</strong>
-          <p>{t(relationIntent.kind === "revoke" ? "revocationUnknownResult" : "attachmentUnknownResult", { requestId: relationIntent.requestId })}</p>
-          {relationIntent.lookupStatus !== "unchecked" ? <p role="status">{t(`attachmentLookup.${relationIntent.lookupStatus}`)}</p> : null}
-          <p>{t("attachmentUnknownLockHint")}</p>
-        </div></Alert> : null}
-        {relationIntent.phase === "confirmed" && relationIntent.completion ? <Alert status="success" role="status" aria-label={policyChange("completedTitle")}><div className={styles.confirmation}>
-          <strong>{policyChange("completedTitle")}</strong>
-          <p>{policyChange("completedHint")}</p>
-          <dl className={styles.facts}>
-            <div><dt>{policyChange("operation")}</dt><dd>{policyChange(relationIntent.completion.operation === "CREATE" ? "attach" : "revoke")}</dd></div>
-            <div><dt>{policyChange("requestId")}</dt><dd><Typography.Code>{relationIntent.completion.requestId}</Typography.Code></dd></div>
-            <div><dt>{policyChange("completedAt")}</dt><dd><WorkspaceTime value={relationIntent.completion.completedAt} /></dd></div>
-            <div><dt>{policyChange("target")}</dt><dd><Typography.Code>{relationIntent.userId}</Typography.Code></dd></div>
-            <div><dt>{policyChange("policyId")}</dt><dd><Typography.Code>{relationIntent.policyId}</Typography.Code></dd></div>
-            <div><dt>{policyChange("attachmentId")}</dt><dd><Typography.Code>{relationIntent.completion.operation === "CREATE" ? relationIntent.completion.attachment.id : relationIntent.completion.attachmentId}</Typography.Code></dd></div>
-            <div><dt>{policyChange("resultingRevision")}</dt><dd>{relationIntent.completion.operation === "CREATE" ? relationIntent.completion.attachment.resourceVersion : relationIntent.completion.revocation.resourceVersion}</dd></div>
-          </dl>
-        </div></Alert> : null}
-        {relationIntent.phase === "conflict" || relationIntent.phase === "rejected" ? <Alert status="danger">{t("attachmentRetryNeedsReview", { requestId: relationIntent.requestId })}{relationIntent.error ? ` ${t(`errors.${relationIntent.error}`)}` : ""}</Alert> : null}
-        <div className={styles.actions}>
-          {relationIntent.phase === "review" ? <>
-            <Button disabled={policyChangeDisabled} onClick={async () => {
-              if (await access.submitUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
-            }} variant={relationIntent.kind === "revoke" ? "danger" : "primary"}>{t(relationIntent.kind === "revoke" ? "confirmRevoke" : "confirmAttachPolicy")}</Button>
-            <Button disabled={disabled} onClick={() => {
-              returnToTrigger.current = true;
-              access.endUserPolicyChange(relationIntent.requestId);
-            }} variant="secondary">{t(relationIntent.kind === "attach" ? "changeAttachmentSelection" : "cancel")}</Button>
-          </> : null}
-          {relationIntent.phase === "unknown" || relationIntent.phase === "checking" ? <>
-            <Button disabled={policyChangeDisabled || relationIntent.phase === "checking"} onClick={() => void access.inspectUserPolicyChange(relationIntent.requestId)}>{t(relationIntent.phase === "checking" ? "checkingOriginalAttachment" : "checkOriginalAttachment")}</Button>
-          </> : null}
-          {relationIntent.phase === "confirmed" ? <Button disabled={disabled} onClick={() => {
-            if (access.endUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
-          }}>{t("acknowledgeAttachmentCompletion")}</Button> : null}
-          {relationIntent.phase === "conflict" || relationIntent.phase === "rejected" ? <Button disabled={disabled} onClick={() => {
-            if (access.endUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
-          }} variant="secondary">{t("endAttachmentIntent")}</Button> : null}
-        </div>
-      </section> : attachablePolicies.length > 0 ? <form className={styles.inlineForm} onSubmit={(event) => {
-        event.preventDefault();
-        if (selectedPolicy && !policyChanged && !relationIntent) {
-          lastTrigger.current = reviewTrigger.current;
-          access.beginUserPolicyAttachment(user, selectedPolicy.id);
-        }
-      }}>
-        <FormField label={t("attachPolicy")}><Select disabled={relationDisabled} onValueChange={(policyId) => { const policy = attachablePolicies.find((item) => item.id === policyId); setSelectedPolicy(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null); }} required value={selectedPolicy?.id ?? ""} placeholder={t("choosePolicy")} options={attachablePolicies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${t(policy.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}` }))} /></FormField>
-        <Button ref={reviewTrigger} disabled={relationDisabled || !selectedPolicy || policyChanged} type="submit" variant="secondary">{t("reviewAttachPolicy")}</Button>
-      </form> : <p className={styles.note}>{availablePolicies.length ? t("noAttachablePolicies") : access.scene?.canViewPolicies ? t("allPoliciesAttached") : t("policyDirectoryUnavailable")}</p>}
-      {platformAttachmentBlocked ? <p className={styles.note}>{t("platformAttachmentUnavailable", { reason: restriction(user.platformAttachmentRestrictionReason) })}</p> : null}
-      {tenantAttachmentBlocked ? <p className={styles.note}>{t("tenantAttachmentUnavailable", { reason: restriction(user.tenantAttachmentRestrictionReason) })}</p> : null}
-      </section>
-      <div className={styles.sectionHeading}><KeyRound aria-hidden="true" /><strong>{t("loginSecurity")}</strong></div>
+      </div></Alert> : null}
+      {relationIntent.phase === "conflict" || relationIntent.phase === "rejected" ? <Alert status="danger">{t("attachmentRetryNeedsReview", { requestId: relationIntent.requestId })}{relationIntent.error ? ` ${t(`errors.${relationIntent.error}`)}` : ""}</Alert> : null}
       <div className={styles.actions}>
-          <Button ref={statusActionRef} disabled={disabled || managementCommands?.disabled || !user.canSetStatus} title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => { if (managementCommands) managementCommands.onStatus(); else { setConfirmStatus(true); setResettingPassword(false); setPassword(""); } }} variant="secondary">{user.enabled ? t("disableUser") : t("enableUser")}</Button>
-          <Button disabled={disabled || !user.canResetPassword || Boolean(access.passwordResetUnknown)} title={access.passwordResetUnknown ? t("resetUnknownBlocked") : !user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined} onClick={() => { setResettingPassword(true); setReviewingReset(false); setConfirmStatus(false); }} variant="secondary">{t("resetPassword")}</Button>
-          {onDelete ? <Button disabled={disabled || !user.canDelete} title={!user.canDelete ? restriction(user.deleteRestrictionReason) : undefined} onClick={() => { setConfirmStatus(false); setResettingPassword(false); onDelete(); }} variant="danger">{t("deleteUser")}</Button> : null}
+        {relationIntent.phase === "review" ? <>
+          <Button disabled={policyChangeDisabled} onClick={async () => {
+            if (await access.submitUserPolicyChange(relationIntent.requestId)) setSelectedPolicy(null);
+          }} variant={relationIntent.kind === "revoke" ? "danger" : "primary"}>{t(relationIntent.kind === "revoke" ? "confirmRevoke" : "confirmAttachPolicy")}</Button>
+          <Button disabled={disabled} onClick={() => {
+            if (relationIntent.kind === "attach") setChoosing(true);
+            returnToTrigger.current = true;
+            access.endUserPolicyChange(relationIntent.requestId);
+          }} variant="secondary">{t(relationIntent.kind === "attach" ? "changeAttachmentSelection" : "cancel")}</Button>
+        </> : null}
+        {relationIntent.phase === "unknown" || relationIntent.phase === "checking" ? <>
+          <Button disabled={policyChangeDisabled || relationIntent.phase === "checking"} onClick={() => void access.inspectUserPolicyChange(relationIntent.requestId)}>{t(relationIntent.phase === "checking" ? "checkingOriginalAttachment" : "checkOriginalAttachment")}</Button>
+        </> : null}
+        {relationIntent.phase === "confirmed" ? <Button disabled={disabled} onClick={() => finishReview(relationIntent.requestId)}>{t("acknowledgeAttachmentCompletion")}</Button> : null}
+        {relationIntent.phase === "conflict" || relationIntent.phase === "rejected" ? <Button disabled={disabled} onClick={() => finishReview(relationIntent.requestId)} variant="secondary">{t("endAttachmentIntent")}</Button> : null}
       </div>
-      {!user.canSetStatus || !user.canResetPassword ? <p className={styles.note}>{restriction(user.statusRestrictionReason ?? user.passwordRestrictionReason)}</p> : null}
-      {onDelete && !user.canDelete ? <p className={styles.note}>{t("deleteUnavailable", { reason: restriction(user.deleteRestrictionReason) })}</p> : null}
-        {confirmStatus ? <Alert status={user.enabled ? "warning" : "info"}><div className={styles.confirmation}>
-          <p>{user.enabled ? t("disableHint") : t("enableHint")}</p>
-          <div className={styles.actions}>
-            <Button disabled={disabled || !user.canSetStatus} onClick={async () => { if (await access.execute({ kind: "set-status", userId: user.id, status: user.enabled ? "DISABLED" : "ACTIVE", resourceVersion: user.resourceVersion })) setConfirmStatus(false); }} variant={user.enabled ? "danger" : "primary"}>{user.enabled ? t("confirmDisable") : t("confirmEnable")}</Button>
-            <Button disabled={disabled} onClick={() => setConfirmStatus(false)} variant="ghost">{t("cancel")}</Button>
-          </div>
-        </div></Alert> : null}
-        {resettingPassword && !reviewingReset ? <form className={styles.form} onSubmit={(event) => { event.preventDefault(); if (withinNewPasswordProductBounds(password) && !disabled) setReviewingReset(true); }}>
-          <PasswordField autoFocus onChange={setPassword} value={password} />
-          <p className={styles.note}>{t("resetHint")}</p>
-          <div className={styles.actions}><Button disabled={disabled || !withinNewPasswordProductBounds(password)} type="submit">{t("reviewReset")}</Button><Button disabled={disabled} onClick={() => { setResettingPassword(false); setPassword(""); }} variant="ghost">{t("cancel")}</Button></div>
-        </form> : null}
-        {resettingPassword && reviewingReset ? <section aria-label={t("resetReviewTitle")} className={styles.policyAttachmentReview}>
-          <h3 ref={resetReviewHeading} tabIndex={-1} className={styles.stepTitle}>{t("resetReviewTitle")}</h3>
-          <dl className={styles.facts}>
-            <div><dt>{t("attachmentTarget")}</dt><dd>{user.qualifiedName}<small>{user.id}</small></dd></div>
-            <div><dt>{t("ownership")}</dt><dd>{access.scene?.accountName}</dd></div>
-          </dl>
-          <Alert status="warning">{t("resetHint")}</Alert>
-          <p className={styles.note}>{t("resetReviewSecretHint")}</p>
-          <div className={styles.actions}>
-            <Button disabled={disabled || !user.canResetPassword || Boolean(access.passwordResetUnknown)} onClick={() => void resetPassword()}>{t("confirmReset")}</Button>
-            <Button disabled={disabled} onClick={() => setReviewingReset(false)} variant="secondary">{t("changeResetPassword")}</Button>
-            <Button disabled={disabled} onClick={() => { setResettingPassword(false); setReviewingReset(false); setPassword(""); }} variant="ghost">{t("cancel")}</Button>
-          </div>
-        </section> : null}
-    </div>;
+    </section> : choosing && attachablePolicies.length > 0 ? <form className={styles.inlineForm} onSubmit={(event) => {
+      event.preventDefault();
+      if (selectedPolicy && !policyChanged && !relationIntent) {
+        lastTrigger.current = reviewTrigger.current;
+        access.beginUserPolicyAttachment(user, selectedPolicy.id);
+      }
+    }}>
+      <FormField label={t("attachPolicy")}><Select autoFocus disabled={relationDisabled} onValueChange={(policyId) => { const policy = attachablePolicies.find((item) => item.id === policyId); setSelectedPolicy(policy ? { id: policy.id, resourceVersion: policy.resourceVersion } : null); }} required value={selectedPolicy?.id ?? ""} placeholder={t("choosePolicy")} options={attachablePolicies.map((policy) => ({ value: policy.id, label: `${policy.displayName} · ${t(policy.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}` }))} /></FormField>
+      <Button ref={reviewTrigger} disabled={relationDisabled || !selectedPolicy || policyChanged} type="submit" variant="secondary">{t("reviewAttachPolicy")}</Button>
+    </form> : null}
+    {showRestrictions && attachablePolicies.length === 0 ? <p className={styles.note}>{availablePolicies.length ? t("noAttachablePolicies") : access.scene?.canViewPolicies ? t("allPoliciesAttached") : t("policyDirectoryUnavailable")}</p> : null}
+    {showRestrictions && platformAttachmentBlocked ? <p className={styles.note}>{t("platformAttachmentUnavailable", { reason: restriction(user.platformAttachmentRestrictionReason) })}</p> : null}
+    {showRestrictions && tenantAttachmentBlocked ? <p className={styles.note}>{t("tenantAttachmentUnavailable", { reason: restriction(user.tenantAttachmentRestrictionReason) })}</p> : null}
+  </section>;
 }
 
-export function UserAccessWorkspace({ user, onClose }: { user: AccountUserScene; onClose(): void }) {
+export function UserSignInSecurity({ user, onDelete, onStatus, statusDisabled, statusActionRef }: {
+  user: AccountUserScene;
+  onDelete?(): void;
+  onStatus?(): void;
+  statusDisabled?: boolean;
+  statusActionRef?: Ref<HTMLButtonElement>;
+}) {
   const t = useTranslations("AccountAccess");
-  const boundary = useTranslations("UserBoundary");
-  return <WorkspaceDetail title={t("manageUser", { name: user.name })} backLabel={boundary("backToUserDetails")} onBack={onClose}>
-    <UserAccessManagement key={`${user.id}:${user.resourceVersion}`} user={user} />
-  </WorkspaceDetail>;
+  const auth = useTranslations("Auth");
+  const wizard = useTranslations("UserWizard");
+  const access = useAccountAccess();
+  const [password, setPassword] = useState("");
+  const [confirmStatus, setConfirmStatus] = useState(false);
+  const [resettingPassword, setResettingPassword] = useState(false);
+  const [reviewingReset, setReviewingReset] = useState(false);
+  const resetReviewHeading = useRef<HTMLHeadingElement>(null);
+  const passwordRow = useRef<HTMLElement>(null);
+  const resetTrigger = useRef<HTMLButtonElement>(null);
+  const disabled = access.busy || access.loading;
+  const restriction = (reason: CapabilityRestriction | null) => t(`restrictions.${reason ?? "AUTHORITY_REQUIRED"}`);
+  const resetReason = access.passwordResetUnknown ? t("resetUnknownBlocked") : !user.canResetPassword ? restriction(user.passwordRestrictionReason) : undefined;
+  const requestLeave = useAccessDraft({ dirty: resettingPassword && Boolean(password), busy: false, title: t("resetPassword"), description: t("discardResetDraft"), form: passwordRow });
+  useLayoutEffect(() => {
+    if (resettingPassword && reviewingReset) resetReviewHeading.current?.focus({ preventScroll: true });
+  }, [resettingPassword, reviewingReset]);
+  function closeReset() {
+    setPassword("");
+    setReviewingReset(false);
+    setResettingPassword(false);
+    resetTrigger.current?.focus({ preventScroll: true });
+  }
+  async function resetPassword() {
+    const initialPassword = password;
+    closeReset();
+    await access.resetUserPassword(user, initialPassword);
+  }
+  return <div className={styles.userSections}>
+    <section className={styles.userSection} ref={passwordRow}>
+      <div className={styles.userSectionHeader}>
+        <h3>{auth("password")}</h3>
+        <Button ref={resetTrigger} disabled={disabled || Boolean(resetReason)} title={resetReason} aria-expanded={resettingPassword}
+          onClick={() => { setResettingPassword(true); setReviewingReset(false); setConfirmStatus(false); }} size="small" variant="secondary">{t("resetPassword")}</Button>
+      </div>
+      {resetReason ? <p className={styles.note}>{resetReason}</p> : user.state === "passwordChangeRequired" ? <p className={styles.note}>{t("initialPasswordNextSignIn")}</p> : null}
+      {resettingPassword && !reviewingReset ? <form className={styles.form} onSubmit={(event) => { event.preventDefault(); if (withinNewPasswordProductBounds(password) && !disabled) setReviewingReset(true); }}>
+        <PasswordField autoFocus onChange={setPassword} value={password} />
+        <p className={styles.note}>{t("resetHint")}</p>
+        <div className={styles.actions}><Button disabled={disabled || !withinNewPasswordProductBounds(password)} type="submit">{t("reviewReset")}</Button><Button disabled={disabled} onClick={closeReset} variant="ghost">{t("cancel")}</Button></div>
+      </form> : null}
+      {resettingPassword && reviewingReset ? <section aria-label={t("resetReviewTitle")} className={styles.policyAttachmentReview}>
+        <h3 ref={resetReviewHeading} tabIndex={-1} className={styles.stepTitle}>{t("resetReviewTitle")}</h3>
+        <dl className={styles.facts}>
+          <div><dt>{t("attachmentTarget")}</dt><dd>{user.qualifiedName}<small>{user.id}</small></dd></div>
+          <div><dt>{t("ownership")}</dt><dd>{access.scene?.accountName}</dd></div>
+        </dl>
+        <Alert status="warning">{t("resetHint")}</Alert>
+        <p className={styles.note}>{t("resetReviewSecretHint")}</p>
+        <div className={styles.actions}>
+          <Button disabled={disabled || !user.canResetPassword || Boolean(access.passwordResetUnknown)} onClick={() => void resetPassword()}>{t("confirmReset")}</Button>
+          <Button disabled={disabled} onClick={() => setReviewingReset(false)} variant="secondary">{t("changeResetPassword")}</Button>
+          <Button disabled={disabled} onClick={closeReset} variant="ghost">{t("cancel")}</Button>
+        </div>
+      </section> : null}
+    </section>
+    <section className={styles.userSection}>
+      <div className={styles.userSectionHeader}>
+        <h3>{t("userStatus")}</h3>
+        <Button ref={statusActionRef} disabled={disabled || statusDisabled || !user.canSetStatus}
+          title={!user.canSetStatus ? restriction(user.statusRestrictionReason) : undefined} onClick={() => requestLeave(() => {
+            if (onStatus) onStatus();
+            else { setConfirmStatus(true); setResettingPassword(false); setReviewingReset(false); setPassword(""); }
+          })} size="small" variant="secondary">{t(user.enabled ? "disableUser" : "enableUser")}</Button>
+      </div>
+      <p className={styles.note}>{wizard(user.enabled ? "enabled" : "disabled")}</p>
+      {!user.canSetStatus ? <p className={styles.note}>{restriction(user.statusRestrictionReason)}</p> : null}
+      {confirmStatus ? <Alert status={user.enabled ? "warning" : "info"}><div className={styles.confirmation}>
+        <p>{user.enabled ? t("disableHint") : t("enableHint")}</p>
+        <div className={styles.actions}>
+          <Button disabled={disabled || !user.canSetStatus} onClick={async () => { if (await access.execute({ kind: "set-status", userId: user.id, status: user.enabled ? "DISABLED" : "ACTIVE", resourceVersion: user.resourceVersion })) setConfirmStatus(false); }} variant={user.enabled ? "danger" : "primary"}>{user.enabled ? t("confirmDisable") : t("confirmEnable")}</Button>
+          <Button disabled={disabled} onClick={() => setConfirmStatus(false)} variant="ghost">{t("cancel")}</Button>
+        </div>
+      </div></Alert> : null}
+    </section>
+    {onDelete ? <section className={styles.userSection}>
+      <div className={styles.userSectionHeader}>
+        <h3>{t("accountRemoval")}</h3>
+        <Button disabled={disabled || !user.canDelete} onClick={onDelete} size="small" variant="danger">{t("deleteUser")}</Button>
+      </div>
+      <p className={styles.note}>{user.canDelete ? t("deleteUserShortImpact") : restriction(user.deleteRestrictionReason)}</p>
+    </section> : null}
+  </div>;
 }

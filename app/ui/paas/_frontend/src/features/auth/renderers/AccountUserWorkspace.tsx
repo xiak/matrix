@@ -1,7 +1,7 @@
 "use client";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, EmptyState, FormField, Input, Table, TableSkeleton, Tabs } from "@ui/xiak";
+import { Alert, Badge, Button, EmptyState, FormField, HelpDisclosure, Input, Table, TableSkeleton, Tabs, useLeaveConfirmation } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { UserDeletionRecoveryUnavailable, UserDeletionRejected, useAccountAccess, type UserBoundarySnapshot, type UserDeletionClient } from "../application/AccountAccessProvider";
 import { useUserManagementMutation } from "../application/userManagementMutation";
@@ -12,7 +12,9 @@ import { containsDenyStatement } from "../domain/policyDocument";
 import type { AccountAccessScene, AccountUserScene } from "../scenes/accountAccessScene";
 import { AuthorizationOverview, WorkspaceDelete, WorkspaceDetail, WorkspaceInlineForm, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccessCredentials } from "./AccessCredentials";
-import { UserAccessManagement, UserAccessWorkspace } from "./AccountUserDialogs";
+import { UserDirectPolicies, UserSignInSecurity } from "./AccountUserDialogs";
+import { LiveAccessCredentials } from "./LiveAccessCredentials";
+import { AccountIdentifier } from "./AccountOverview";
 import { LivePermissionBoundary, PermissionBoundary } from "./PermissionBoundary";
 import { UserAssociationWorkflow } from "./UserAssociationWorkflow";
 import styles from "./AccountAccessRenderer.module.css";
@@ -29,27 +31,41 @@ export function AccountUserAccessMethods({ user, workspace }: { user: AccountUse
   </ul>;
 }
 
-function AccountUserSnapshot({ user, busy, children }: { user: AccountUserScene; busy: boolean; children?: ReactNode }) {
+export function AccountUserStatus({ state }: { state: AccountUserScene["state"] }) {
   const t = useTranslations("AccountAccess");
-  return <div className={styles.detail} aria-busy={busy || undefined}>
-    <div className={styles.userSummary}>
-      <div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div>
-      <Badge status={user.enabled ? "success" : "neutral"}>{t(`states.${user.state}`)}</Badge>
-    </div>
-    <dl className={styles.facts}>
-      <div><dt>{t("userType")}</dt><dd>{t("child")}</dd></div>
-      <div><dt>{t("ownership")}</dt><dd>{user.accountId}</dd></div>
-      <div><dt>{t("userId")}</dt><dd>{user.id}</dd></div>
-    </dl>
-    <p className={styles.note}>{t("subuserOwnershipHint")}</p>
-    {children}
-  </div>;
+  const tone = { active: "success", passwordChangeRequired: "warning", disabled: "neutral" } as const;
+  return <Badge status={tone[state]}>{t(`states.${state}`)}</Badge>;
 }
 
+function UserIdentitySummary({ user, editAction }: { user: AccountUserScene; editAction?: ReactNode }) {
+  const t = useTranslations("AccountAccess");
+  const auth = useTranslations("Auth");
+  const { scene } = useAccountAccess();
+  return <section className={styles.identitySummary} aria-label={t("userProfile")}>
+    <div className={styles.userSectionHeader}>
+      <div className={styles.userName}><h2>{user.name}</h2><AccountUserStatus state={user.state} /></div>
+      {editAction}
+    </div>
+    <dl className={styles.userMeta}>
+      <div><dt>{auth("loginName")}</dt><dd>{user.qualifiedName}</dd></div>
+      <div><dt>{t("owningAccount")}</dt><dd>{scene?.accountName ?? user.accountId}</dd></div>
+    </dl>
+    <HelpDisclosure label={t("identityInfo")}>
+      <dl className={styles.userMeta}>
+        <div><dt>{t("userType")}</dt><dd>{t("child")}</dd></div>
+        <div><dt>{t("userId")}</dt><dd><AccountIdentifier label={t("userId")} value={user.id} /></dd></div>
+      </dl>
+      <p>{t("subuserOwnershipHint")}</p>
+    </HelpDisclosure>
+  </section>;
+}
+
+type LiveUserTab = "policies" | "keys" | "security";
 type LiveUserWorkspaceProps = {
   userId: string;
   summary?: AccountUserScene;
-  initialSection?: Extract<AccountUserDetailTab, "policies" | "keys">;
+  tab?: LiveUserTab;
+  onTabChange(tab: LiveUserTab): void;
   onBack(): void;
 };
 
@@ -148,12 +164,13 @@ export function AccountLiveUserWorkspace(props: LiveUserWorkspaceProps) {
   return <LiveUserWorkspace key={`${userManagement?.identity ?? "read"}:${userDeletion?.identity ?? "no-delete"}:${props.userId}`} {...props} />;
 }
 
-function LiveUserWorkspace({ userId, summary, initialSection, onBack }: LiveUserWorkspaceProps) {
+function LiveUserWorkspace({ userId, summary, tab, onTabChange, onBack }: LiveUserWorkspaceProps) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const management = useTranslations("UserManagementCommand");
   const access = useAccountAccess();
   const { loadUser, permissionBoundaries, userDeletion, userManagement } = access;
+  const requestLeave = useLeaveConfirmation();
   const command = useUserManagementMutation(userManagement, userId);
   const [workflow, setWorkflow] = useState<"rename" | "status" | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -174,6 +191,14 @@ function LiveUserWorkspace({ userId, summary, initialSection, onBack }: LiveUser
     (returnAction.current === "rename" ? renameRef : statusRef).current?.focus({ preventScroll: true });
     returnAction.current = null;
   }, [command.pending, loaded.state, workflow]);
+  const tabList = useRef<HTMLDivElement>(null);
+  const focusRequestedTab = useRef(Boolean(tab));
+  useLayoutEffect(() => {
+    if (loaded.state === "ready" && focusRequestedTab.current && tabList.current) {
+      focusRequestedTab.current = false;
+      tabList.current.querySelector<HTMLElement>('[aria-selected="true"]')?.focus({ preventScroll: true });
+    }
+  }, [loaded.state]);
   const boundaryChanged = useCallback((boundary: UserBoundarySnapshot) => {
     if (currentOwner.current === owner) setSnapshot({ owner, value: { state: "ready", user: boundary.user, boundary } });
   }, [owner]);
@@ -208,24 +233,52 @@ function LiveUserWorkspace({ userId, summary, initialSection, onBack }: LiveUser
     <UserManagementEditor userId={userId} user={loaded.state === "ready" ? loaded.user : undefined} mode={workflow ?? (command.pending?.operation === "USER_UPDATE" ? "rename" : "status")} command={command}
       onClose={command.pending ? onBack : () => setWorkflow(null)} onCompleted={completed} onStale={completed} />
   </WorkspaceDetail>;
-  if (loaded.state === "loading") return <WorkspaceDetail title={title} onBack={onBack}>{commandFeedback}{summary && !command.receipt ? <AccountUserSnapshot user={summary} busy>
-    <TableSkeleton label={t("loadingUser")} rows={3} header={false} />
-  </AccountUserSnapshot> : <TableSkeleton label={t("loadingUser")} rows={3} header={false} />}</WorkspaceDetail>;
+  if (loaded.state === "loading") return <WorkspaceDetail title={title} onBack={onBack}>{commandFeedback}
+    {summary && !command.receipt ? <UserIdentitySummary user={summary} /> : null}
+    <TableSkeleton label={t("loadingUser")} rows={3} header={false} /></WorkspaceDetail>;
   if (loaded.state === "error") return <WorkspaceDetail title={title} onBack={onBack}>
     {commandFeedback}
-    {summary && !command.receipt ? <AccountUserSnapshot user={summary} busy={false} /> : null}
+    {summary && !command.receipt ? <UserIdentitySummary user={summary} /> : null}
     <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<div className={styles.actions}>
       <Button onClick={() => setLoadVersion((current) => current + 1)}>{t("retryUser")}</Button>
       <Button variant="secondary" onClick={onBack}>{w("back")}</Button>
     </div>} />
   </WorkspaceDetail>;
-  return <WorkspaceDetail title={loaded.user.loginName} onBack={onBack}>
+  const { user } = loaded;
+  const section = tab ?? "policies";
+  const canManage = command.ready && userManagement && !access.busy && !access.loading;
+  return <WorkspaceDetail title={user.loginName} onBack={onBack}>
+    <UserIdentitySummary user={user} editAction={<Button ref={renameRef} disabled={!canManage || !user.canUpdate}
+      title={!user.canUpdate ? t(`restrictions.${user.updateRestrictionReason ?? "AUTHORITY_REQUIRED"}`) : undefined}
+      onClick={() => requestLeave(() => { returnAction.current = "rename"; setWorkflow("rename"); })} size="small" variant="secondary">{t("editDisplayName")}</Button>} />
     {commandFeedback}
-    <UserAccessManagement key={`${loaded.user.id}:${loaded.user.resourceVersion}`} showLiveEvidenceBoundary initialSection={initialSection} user={loaded.user}
-      onDelete={userDeletion && !access.userDeletionRecoveryError && !unknown ? () => setDeleting(true) : undefined} renameActionRef={renameRef} statusActionRef={statusRef}
-      managementCommands={{ disabled: !command.ready || !userManagement,
-        onRename() { returnAction.current = "rename"; setWorkflow("rename"); }, onStatus() { returnAction.current = "status"; setWorkflow("status"); } }} />
-    {permissionBoundaries && loaded.boundary ? <LivePermissionBoundary key={`${permissionBoundaries.accountId}:${loaded.user.id}`} client={permissionBoundaries} snapshot={loaded.boundary} onChanged={boundaryChanged} /> : null}
+    {access.error ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
+    {access.success ? <Alert status="success">{t(access.success)}</Alert> : null}
+    <Tabs.Root activationMode="manual" value={section} onValueChange={(next) => onTabChange(next as LiveUserTab)}>
+      <Tabs.List ref={tabList} variant="underline" aria-label={t("userProfile")} className={styles.userTabs}>
+        <Tabs.Trigger value="policies">{w("permissions")}</Tabs.Trigger>
+        <Tabs.Trigger value="keys">{w("keys")}</Tabs.Trigger>
+        <Tabs.Trigger value="security">{t("loginSecurity")}</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content value="policies" className={styles.userSections}>
+        <UserDirectPolicies key={user.resourceVersion} user={user} />
+        {permissionBoundaries && loaded.boundary ? <LivePermissionBoundary client={permissionBoundaries} snapshot={loaded.boundary} onChanged={boundaryChanged} /> : null}
+      </Tabs.Content>
+      <Tabs.Content value="keys" className={styles.userSections}>
+        {access.accessKeys && access.scene ? <>
+          <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles}
+            client={access.accessKeys} scene={access.scene} createIntent={access.accessKeyCreateIntent} mutationIntent={access.accessKeyMutationIntent}
+            recoveryError={access.accessKeyRecoveryError} scopedOwner={user} userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }}
+            onInspectPermissions={() => onTabChange("policies")} />
+          <HelpDisclosure label={t("accessMethodsAndCredentials")}>{t("liveCredentialManagedHint")}</HelpDisclosure>
+        </> : <p className={styles.note}>{t("liveCredentialContractHint")}</p>}
+      </Tabs.Content>
+      <Tabs.Content value="security">
+        <UserSignInSecurity key={`${user.id}:${user.resourceVersion}`} user={user} statusDisabled={!canManage} statusActionRef={statusRef}
+          onStatus={() => { returnAction.current = "status"; setWorkflow("status"); }}
+          onDelete={userDeletion && !access.userDeletionRecoveryError && !unknown ? () => setDeleting(true) : undefined} />
+      </Tabs.Content>
+    </Tabs.Root>
     {deleting && userDeletion ? <LiveUserDelete key={`${userDeletion.identity}:${loaded.user.id}`} user={loaded.user} client={userDeletion}
       onClose={() => setDeleting(false)} onDeleted={setDeleted} onUnknown={() => setDeleting(false)} /> : null}
   </WorkspaceDetail>;
@@ -266,6 +319,7 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
   const a = useTranslations("AccountAccess");
   const wizard = useTranslations("UserWizard");
   const relationship = useTranslations("RelationshipDirectory");
+  const userBoundary = useTranslations("UserBoundary");
   const access = useAccountAccess();
   const [workflow, setWorkflow] = useState<"security" | "edit" | null>(null);
   const [activeTab, setActiveTab] = useState<AccountUserDetailTab>(initialTab);
@@ -296,10 +350,16 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
     if (wasSecurity && workflow !== "security") securityActionFocus.current?.focus({ preventScroll: true });
   }, [workflow]);
   if (association) return <UserAssociationWorkflow user={user} workspace={workspace} kind={association} onBack={() => setAssociation(null)} />;
-  if (workflow === "security") return <UserAccessWorkspace user={user} onClose={() => setWorkflow(null)} />;
+  if (workflow === "security") return <WorkspaceDetail key="security" title={a("manageUser", { name: user.name })} backLabel={userBoundary("backToUserDetails")} onBack={() => setWorkflow(null)}>
+    <UserIdentitySummary user={user} />
+    {access.error ? <Alert status="danger">{a(`errors.${access.error}`)}</Alert> : null}
+    {access.success ? <Alert status="success">{a(access.success)}</Alert> : null}
+    <UserDirectPolicies user={user} />
+    <UserSignInSecurity key={`${user.id}:${user.resourceVersion}`} user={user} />
+  </WorkspaceDetail>;
   return <WorkspaceDetail title={user.loginName} onBack={onBack} focus={focusDetailHeading} actionFocusRef={editActionFocus} actions={workflow === "edit" ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setWorkflow("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: !user.canDelete, disabledReason: !user.canDelete ? a(`restrictions.${user.deleteRestrictionReason ?? "AUTHORITY_REQUIRED"}`) : undefined, onSelect: onDelete }] }}>
     {workflow === "edit" ? <UserEditor user={user} onClose={() => setWorkflow(null)} /> : <>
-    <div className={styles.userSummary}><div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div><div className={styles.roleTags}><Badge>{a("child")}</Badge><Badge status={user.enabled ? "success" : "neutral"}>{a(`states.${user.state}`)}</Badge></div></div>
+    <div className={styles.userSummary}><div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div><div className={styles.roleTags}><Badge>{a("child")}</Badge><AccountUserStatus state={user.state} /></div></div>
     <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as AccountUserDetailTab)}><Tabs.List aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content className={styles.stack} value="identity"><dl className={styles.facts}>
         <div><dt>{a("userType")}</dt><dd>{a("child")}</dd></div><div><dt>{a("ownership")}</dt><dd>{scene.accountName}</dd></div><div><dt>{a("tenantId")}</dt><dd>{scene.accountId}</dd></div><div><dt>{a("userId")}</dt><dd>{user.id}</dd></div><div><dt>{a("currentLoginName")}</dt><dd>{user.loginName}</dd></div><div><dt>{a("qualifiedLogin")}</dt><dd>{user.qualifiedName}</dd></div>

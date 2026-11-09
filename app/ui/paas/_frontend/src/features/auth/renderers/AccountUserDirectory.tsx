@@ -9,7 +9,7 @@ import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
-import { AccountLiveUserWorkspace, AccountPrimaryWorkspace, AccountUserAccessMethods, AccountUserWorkspace, type AccountUserDetailTab } from "./AccountUserWorkspace";
+import { AccountLiveUserWorkspace, AccountPrimaryWorkspace, AccountUserAccessMethods, AccountUserStatus, AccountUserWorkspace, type AccountUserDetailTab } from "./AccountUserWorkspace";
 import { isUserBatchAssociationAction, UserBatchConfirmationDialog, UserBatchWorkflow, type DirectoryUser } from "./UserBatchOperation";
 import { userBatchActions, userBatchDisabledReason, userBatchLimit, type UserBatchAction } from "../domain/userBatch";
 import styles from "./AccountAccessRenderer.module.css";
@@ -38,7 +38,7 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
       {user.attachments.slice(0, 2).map((attachment) => <Badge key={attachment.id} status={attachment.policyStatus === "RETIRED" ? "neutral" : undefined}>{attachment.label}</Badge>)}
       {user.attachments.length > 2 ? <span>{t("morePolicyAttachments", { count: user.attachments.length - 2 })}</span> : null}
     </> : t("noDirectPolicyAttachments")}</div>}</td>
-    <td>{user.state ? <Badge status={user.state === "disabled" ? "neutral" : user.state === "passwordChangeRequired" ? "warning" : "success"}>{t(`states.${user.state}`)}</Badge> : t("unknown")}</td>
+    <td>{user.state ? <AccountUserStatus state={user.state} /> : t("unknown")}</td>
   </tr>;
 }
 
@@ -74,7 +74,7 @@ function PreviewUserDeletionReceipt({ user }: { user: DirectoryUser }) {
   </Alert>;
 }
 
-export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCreate, onOpen }: { scene: AccountAccessScene; entityId?: string; initialDetailTab?: AccountUserDetailTab; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
+export function AccountUserDirectory({ scene, entityId, initialDetailTab, onChangeDetailTab, onCreate, onOpen }: { scene: AccountAccessScene; entityId?: string; initialDetailTab?: AccountUserDetailTab; onChangeDetailTab(id: string, tab: AccountUserDetailTab): void; onCreate(): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const batch = useTranslations("UserBatch");
@@ -168,7 +168,8 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
   }
   if (entityId === scene.accountOwner.id) return <AccountPrimaryWorkspace scene={scene} onBack={() => onOpen("users")} onOpen={onOpen} />;
   if (entityId && !workspace) return <AccountLiveUserWorkspace key={entityId} userId={entityId} summary={detail}
-    initialSection={initialDetailTab === "policies" || initialDetailTab === "keys" ? initialDetailTab : undefined}
+    tab={initialDetailTab === "policies" || initialDetailTab === "keys" || initialDetailTab === "security" ? initialDetailTab : undefined}
+    onTabChange={(next) => onChangeDetailTab(entityId, next)}
     onBack={() => onOpen("users")} />;
   if (entityId && !detail) return <EmptyState title={w("entityUnavailable")} description={w("entityUnavailableHint")} action={<Button variant="secondary" onClick={() => onOpen("users")}>{w("back")}</Button>} />;
   if (detail && access.workspace) return <><AccountUserWorkspace user={detail} workspace={access.workspace} scene={scene} initialTab={initialDetailTab} onBack={() => onOpen("users")} onOpen={onOpen}

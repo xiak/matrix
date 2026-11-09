@@ -376,6 +376,45 @@
   .roleDirectorySummary { min-width: 9rem; }
   .roleDirectorySession { min-width: 11rem; }
 }
+.identitySummary,
+.userSection,
+.userSections:not([hidden]) {
+  display: grid;
+  min-width: 0;
+  gap: var(--xiak-spacing-default);
+}
+.detailWorkspace:has(> .identitySummary) { max-inline-size: 60rem; }
+.identitySummary { gap: var(--xiak-spacing-narrow); }
+.userSectionHeader,
+.userName,
+.userMeta,
+.userMeta > div {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  min-width: 0;
+  gap: var(--xiak-spacing-tight);
+}
+.userSectionHeader { justify-content: space-between; }
+.userName h2, .userSectionHeader h3 {
+  min-width: 0;
+  margin: 0;
+  color: var(--xiak-color-text-strong);
+  overflow-wrap: anywhere;
+}
+.userName h2 { font-size: var(--xiak-font-size-title); line-height: var(--xiak-line-height-compact); }
+.userSectionHeader h3 { font-size: var(--xiak-font-size-body); }
+.userMeta { margin: 0; gap: var(--xiak-spacing-narrow) var(--xiak-spacing-roomy); font-size: var(--xiak-font-size-small); }
+.userMeta dt { color: var(--xiak-color-text-muted); }
+.userMeta dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.userSections:not([hidden]) { gap: var(--xiak-spacing-comfortable); }
+.userSection + .userSection { padding-block-start: var(--xiak-spacing-comfortable); border-block-start: var(--xiak-border-subtle); }
+.userSection > p { max-width: 75ch; }
+@container matrix-page-content (max-width: 24rem) {
+  .userTabs { flex-wrap: wrap; }
+  .userTabs > button { padding-inline: var(--xiak-spacing-tight); }
+  .userSections .inlineForm > * { max-width: 100%; }
+}
 .userSummary > div { overflow-wrap: anywhere; }
 
 @container account-access (max-width: 53.75rem) { .overviewGrid { grid-template-columns: minmax(0, 1fr); } }

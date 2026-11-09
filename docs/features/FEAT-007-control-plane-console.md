@@ -4320,9 +4320,13 @@ and is not inherited as a new backend acceptance result.
   route resolves; no write affordance appears before exact capabilities, and
   failure retains the read-only identity context with an in-place retry. The
   global shell and directory provider do not own that request's loading state.
-  The resulting detail updates only `displayName`
-  with optimistic resource-version concurrency and does not infer console
-  access, programmatic access or credentials from user status. Irreversible
+  The user header pairs the display name with the IAM state and keeps the
+  login and owning account visible. Identity details disclose the stable ID.
+  The default Permissions tab shows direct policies and the permission boundary.
+  Access keys load on opening their tab. Sign-in and security groups password
+  reset, account status and irreversible removal. Each tab has a direct URL.
+  Profile edits change only `displayName` with optimistic resource-version
+  concurrency. Access methods and credentials cannot be inferred from user status. Irreversible
   deletion stays unavailable while IAM reports `TARGET_MUST_BE_DISABLED`; once
   available, the user must type the immutable login name after reviewing the
   retained identity and resource effects. The client accepts only the strict

@@ -255,7 +255,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     {access.loading ? scene ? <LoadingNotice className={styles.note} label={t("loading")} /> : <AccountAccessInitialLoading entityId={entityId} view={view} /> : null}
     {scene ? denied ? <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button onClick={() => onNavigate("overview")} variant="secondary">{t("backToOverview")}</Button>} /> :
       view === "overview" ? <AccountOverview scene={scene} onNavigate={onNavigate} /> :
-      view === "users" ? <AccountUserDirectory key={`${entityId ?? "users"}:${userTab ?? "identity"}`} entityId={entityId} initialDetailTab={userTab} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :
+      view === "users" ? <AccountUserDirectory key={workspace ? `${entityId ?? "users"}:${userTab ?? "identity"}` : entityId ?? "users"} entityId={entityId} initialDetailTab={userTab} onChangeDetailTab={(id, tab) => onNavigate("users", id, undefined, tab)} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :
       view === "create-user" ? <CreateUserWizard onBack={() => onNavigate("users")} /> :
       view === "tenants" && access.accountLifecycle ? <LiveAccountTenants client={access.accountLifecycle} scene={scene} /> :
       view === "tenants" ? <TenantDirectory scene={scene} /> :

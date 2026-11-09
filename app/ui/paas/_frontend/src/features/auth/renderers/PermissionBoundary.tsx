@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Button, FormField, Select, Typography } from "@ui/xiak";
+import { Alert, Button, FormField, HelpDisclosure, Select, Typography } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { accountError, type UserBoundaryClient, type UserBoundarySnapshot } from "../application/AccountAccessProvider";
 import type { UserPermissionBoundary } from "../domain/accounts";
@@ -37,10 +37,10 @@ export function PermissionBoundary({ owner, workspace, value, onSave, onOpen }: 
   return <section className={styles.stack} aria-label={t("boundary")}><div className={styles.actionHeader}><h3>{t("boundary")}</h3><Button ref={editTrigger} variant="ghost" onClick={() => setEditing(true)}>{t("editBoundary")}</Button></div><p className={styles.note}>{owner === "user" ? u("hint") : t("boundaryHint")}</p>{value ? <div><button className={styles.userLink} onClick={() => onOpen(value)}>{workspace.policies.find((policy) => policy.id === value)?.name ?? value}</button></div> : <p className={styles.note}>{owner === "role" ? t("boundaryClosedHint") : u("none")}</p>}</section>;
 }
 
-export function UserBoundarySummary({ boundary, policyName }: { boundary: UserPermissionBoundary; policyName?: string }) {
+export function UserBoundarySummary({ boundary }: { boundary: UserPermissionBoundary }) {
   const t = useTranslations("UserBoundary");
   return boundary.policy ? <dl className={styles.facts}>
-    <div><dt>{t("policyId")}</dt><dd>{policyName ? <span><strong>{policyName}</strong><small><Typography.Code>{boundary.policy.policyId}</Typography.Code></small></span> : <Typography.Code>{boundary.policy.policyId}</Typography.Code>}</dd></div>
+    <div><dt>{t("policyId")}</dt><dd><Typography.Code>{boundary.policy.policyId}</Typography.Code></dd></div>
     <div><dt>{t("defaultVersion")}</dt><dd>{boundary.policy.versionId}</dd></div>
     <div><dt>{t("contentDigest")}</dt><dd><Typography.Code>{boundary.policy.contentDigest}</Typography.Code></dd></div>
   </dl> : <p className={styles.note}>{t("none")}</p>;
@@ -133,11 +133,14 @@ export function LivePermissionBoundary({ client, snapshot, onChanged }: {
     await refresh("confirmed");
   };
 
-  return <section className={styles.identitySection} aria-label={r("boundary")}>
-    <div className={styles.actionHeader}><h3>{r("boundary")}</h3>{!editing && canChange ? <Button ref={editTrigger} variant="secondary" disabled={locked} onClick={() => { setValue(boundary.policy?.policyId ?? ""); setEditing(true); setOperation({ state: "idle" }); }}>{r("editBoundary")}</Button> : null}</div>
-    <p className={styles.note}>{t("hint")}</p>
-    <UserBoundarySummary boundary={boundary} policyName={currentPolicy?.displayName} />
-    <p className={styles.note}>{t("userRevision", { version: boundary.resourceVersion })}</p>
+  return <section className={styles.userSection} aria-label={r("boundary")}>
+    <div className={styles.userSectionHeader}><h3>{r("boundary")}</h3>{!editing && canChange ? <Button ref={editTrigger} size="small" variant="secondary" disabled={locked} onClick={() => { setValue(boundary.policy?.policyId ?? ""); setEditing(true); setOperation({ state: "idle" }); }}>{r("editBoundary")}</Button> : null}</div>
+    <p className={styles.note}>{currentPolicy?.displayName ?? boundary.policy?.policyId ?? t("none")}</p>
+    <HelpDisclosure label={t("details")}>
+      <p>{t("hint")}</p>
+      {boundary.policy ? <UserBoundarySummary boundary={boundary} /> : null}
+      <p>{t("userRevision", { version: boundary.resourceVersion })}</p>
+    </HelpDisclosure>
     {!canChange ? <p className={styles.note}>{t("readOnly")}</p> : null}
     {operation.state === "completed" ? <Alert status="success">{t("completed")}</Alert> : null}
     {operation.error || operation.state === "uncertain" || operation.state === "refreshFailed" ? <Alert status="warning">

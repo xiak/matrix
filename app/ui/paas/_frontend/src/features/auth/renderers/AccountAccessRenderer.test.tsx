@@ -1217,7 +1217,7 @@ describe("account access", () => {
       return read(credential, platform);
     });
     await openBoundary(fixture);
-    expect(await screen.findByText("用户资料")).toBeTruthy();
+    expect(await screen.findByRole("tablist", { name: "用户资料" })).toBeTruthy();
     expect(screen.queryByText("对象不可用")).toBeNull();
     expect(fixture.repository.getUser).toHaveBeenCalledTimes(1);
     expect(fixture.boundaries.read).toHaveBeenCalledTimes(1);
@@ -1602,7 +1602,9 @@ describe("account access", () => {
     const region = screen.getByRole("region", { name: "Identity and access" });
     expect(region.textContent).not.toMatch(/\p{Script=Han}/u);
     expect(within(region).getByRole("button", { name: "Revoke policy ReadOnlyAccess" })).toBeTruthy();
+    await user.click(within(region).getByRole("button", { name: "Attach policy" }));
     expect((within(region).getByRole("button", { name: "Review attachment" }) as HTMLButtonElement).disabled).toBe(true);
+    await user.click(within(region).getByRole("tab", { name: "Sign-in and security" }));
     await user.click(within(region).getByRole("button", { name: "Reset password" }));
     expect(document.activeElement).toBe(within(region).getByLabelText("Initial password"));
     expect(region.textContent).not.toMatch(/\p{Script=Han}/u);
@@ -2170,7 +2172,7 @@ describe("account access", () => {
     foreign.user.accountId = "foreign-directory-account";
     const repository = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [foreign], nextAfter: null }) });
     await openAccess(repository, iam(), "users", credential, childUser.id);
-    expect(await screen.findByText("用户资料")).toBeTruthy();
+    expect(await screen.findByRole("tablist", { name: "用户资料" })).toBeTruthy();
     expect(screen.queryByText("foreign-directory-account")).toBeNull();
     expect(repository.getUser).toHaveBeenCalledExactlyOnceWith(credential, childUser.id);
     expect(repository.execute).not.toHaveBeenCalled();
@@ -2192,9 +2194,24 @@ describe("account access", () => {
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }),
       accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
     const { user } = await openAccess(repository, iam(), "users", credential, childUser.id);
-    await user.click(await screen.findByRole("button", { name: "查看/管理访问密钥" }));
+    const policies = await screen.findByRole("tab", { name: "权限策略", selected: true });
+    expect(screen.queryByRole("combobox", { name: "关联策略" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "重置密码" })).toBeNull();
+    expect(list).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("tab", { name: "登录与安全" }));
+    await user.click(screen.getByRole("button", { name: "重置密码" }));
+    const draft = screen.getByLabelText(/^初始密码/);
+    await user.type(draft, "draft-only");
+    await user.click(policies);
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "继续编辑" }));
+    expect(draft).toHaveProperty("value", "draft-only");
+    await user.click(screen.getByRole("tab", { name: "访问密钥" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "放弃并离开" }));
     expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
     expect(list).toHaveBeenCalledExactlyOnceWith(credential, account.id, childUser.id);
+    await user.click(screen.getByRole("tab", { name: "登录与安全" }));
+    expect(screen.queryByLabelText(/^初始密码/)).toBeNull();
+    expect(repository.execute).not.toHaveBeenCalled();
     expect(repository.getUser).toHaveBeenCalledTimes(1);
     expect(repository.listUsers).not.toHaveBeenCalled();
     expect(repository.accessKeys!.create).not.toHaveBeenCalled();
@@ -2204,8 +2221,8 @@ describe("account access", () => {
     const repository = accounts({ currentIdentity: vi.fn().mockResolvedValue({ ...identity, capabilities: currentCapabilities(false) }) });
     await openAccess(repository, iam(), "users", credential, childUser.id, "policies");
 
-    const section = await screen.findByRole("region", { name: "直接关联策略" });
-    await waitFor(() => expect(document.activeElement).toBe(section));
+    const tab = await screen.findByRole("tab", { name: "权限策略", selected: true });
+    await waitFor(() => expect(document.activeElement).toBe(tab));
     expect(repository.getUser).toHaveBeenCalledExactlyOnceWith(credential, childUser.id);
     expect(repository.listUsers).not.toHaveBeenCalled();
   });
@@ -2216,8 +2233,8 @@ describe("account access", () => {
       accessKeys: { list, read: vi.fn(), create: vi.fn(), setStatus: vi.fn(), setNetworkRestrictions: vi.fn(), delete: vi.fn() } });
     await openAccess(repository, iam(), "users", credential, childUser.id, "keys");
 
-    const section = await screen.findByRole("region", { name: "访问方式与凭据" });
-    await waitFor(() => expect(document.activeElement).toBe(section));
+    const tab = await screen.findByRole("tab", { name: "访问密钥", selected: true });
+    await waitFor(() => expect(document.activeElement).toBe(tab));
     expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
     expect(list).toHaveBeenCalledExactlyOnceWith(credential, account.id, childUser.id);
     expect(repository.listUsers).not.toHaveBeenCalled();
@@ -2247,13 +2264,14 @@ describe("account access", () => {
     expect(screen.getByText("Developer A")).toBeTruthy();
     expect(screen.getByText("developer@tenant-a")).toBeTruthy();
     expect(screen.getByText("正在读取用户详情…")).toBeTruthy();
-    expect(screen.queryByText("用户资料")).toBeNull();
+    expect(screen.queryByRole("tablist", { name: "用户资料" })).toBeNull();
     expect(screen.queryByRole("button", { name: "修改显示名称" })).toBeNull();
     await act(async () => { resolveUser(structuredClone(child)); });
-    expect(await screen.findByText("用户资料")).toBeTruthy();
+    expect(await screen.findByRole("tablist", { name: "用户资料" })).toBeTruthy();
     expect(getUser).toHaveBeenCalledWith(credential, "child-a");
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByText(/不根据用户状态推断访问方式/)).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "访问密钥" }));
+    expect(await screen.findByText("当前连接无法读取此用户的密钥或访问方式状态。")).toBeTruthy();
   });
 
   it("keeps the verified user snapshot and retries an unavailable exact detail in place", async () => {
@@ -2276,7 +2294,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "重试读取" }));
     expect(screen.getByText("正在读取用户详情…")).toBeTruthy();
     await act(async () => { resolveUser(structuredClone(child)); });
-    expect(await screen.findByText("用户资料")).toBeTruthy();
+    expect(await screen.findByRole("tablist", { name: "用户资料" })).toBeTruthy();
     expect(getUser).toHaveBeenCalledTimes(2);
   });
 
@@ -2286,8 +2304,9 @@ describe("account access", () => {
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
 
-    expect(await screen.findByText(/控制台登录与编程访问的启用状态尚无独立契约/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "查看\/管理访问密钥" }));
+    expect(list).not.toHaveBeenCalled();
+    await user.click(await screen.findByRole("tab", { name: "访问密钥" }));
+    expect(await screen.findByText(/此处列出 IAM 允许你查看的密钥/)).toBeTruthy();
     expect(await screen.findByText("尚未创建访问密钥")).toBeTruthy();
     expect(list).toHaveBeenCalledWith(credential, account.id, childUser.id);
     expect(screen.queryByRole("dialog")).toBeNull();
@@ -2780,6 +2799,7 @@ describe("account access", () => {
     const repository = accounts({ userManagement: undefined }); const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     expect(await screen.findByText("当前环境未提供用户变更的安全结果恢复能力，资料与状态操作暂为只读。")).toBeTruthy();
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     expect(screen.getByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", true); expect(screen.getByRole("button", { name: "禁用用户" })).toHaveProperty("disabled", true);
     expect(repository.execute).not.toHaveBeenCalled();
   });
@@ -2793,6 +2813,7 @@ describe("account access", () => {
     try {
       const repository = accounts(); const { user } = await openAccess(repository); await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
       expect(await screen.findByText(/无法安全读取或保存原请求提醒/)).toBeTruthy();
+      await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
       expect(screen.getByRole("button", { name: "修改显示名称" })).toHaveProperty("disabled", true); expect(screen.getByRole("button", { name: "禁用用户" })).toHaveProperty("disabled", true);
       expect(repository.userManagement!.submit).not.toHaveBeenCalled(); expect(repository.execute).not.toHaveBeenCalled();
     } finally { fault.mockRestore(); }
@@ -2820,7 +2841,9 @@ describe("account access", () => {
   it.each([403, 404, 409, 503])("retains one original User command after a %s lookup without a replacement or automatic write", async (status) => {
     const submit = vi.fn().mockRejectedValue(new Error("lost write response")); const readCompletion = vi.fn().mockRejectedValue(new HttpProblem(status, "PRIVATE LOOKUP"));
     const repository = accounts({ userManagement: { submit, readCompletion } }); const { user, view } = await openAccess(repository);
-    await user.click(await screen.findByRole("button", { name: "查看用户 developer" })); await user.click(await screen.findByRole("button", { name: "禁用用户" }));
+    await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
+    await user.click(await screen.findByRole("button", { name: "禁用用户" }));
     await user.click(screen.getByRole("button", { name: "确认禁用" }));
     await screen.findByRole("button", { name: "查询原请求结果" });
     const intent = vi.mocked(submit).mock.calls[0]![1] as UserManagementIntent;
@@ -2842,6 +2865,7 @@ describe("account access", () => {
   it("retains a confirmed User change when its independent current read fails and only retries that read", async () => {
     const repository = accounts({ getUser: vi.fn().mockResolvedValueOnce(structuredClone(child)).mockRejectedValue(new HttpProblem(503, "READ UNAVAILABLE")) });
     const { user } = await openAccess(repository); await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(await screen.findByRole("button", { name: "禁用用户" })); await user.click(screen.getByRole("button", { name: "确认禁用" }));
     expect(await screen.findByRole("status", { name: "已确认原用户变更" })).toBeTruthy();
     await user.click(await screen.findByRole("button", { name: "重试读取" }));
@@ -2857,6 +2881,7 @@ describe("account access", () => {
     const submit = vi.fn().mockRejectedValueOnce(new HttpProblem(409, "CONFLICT")).mockResolvedValue({ ...newerUser, resourceVersion: 4, status: "DISABLED" });
     const repository = accounts({ getUser: vi.fn().mockResolvedValueOnce(structuredClone(child)).mockResolvedValue(newer), userManagement: { submit, readCompletion: vi.fn() } });
     const { user } = await openAccess(repository); await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(await screen.findByRole("button", { name: "禁用用户" })); await user.click(screen.getByRole("button", { name: "确认禁用" }));
     await waitFor(() => expect(repository.getUser).toHaveBeenCalledTimes(2));
     expect(await screen.findByText("目标或当前权限已变化，请重新读取用户并审阅新的更改。")).toBeTruthy();
@@ -2927,6 +2952,7 @@ describe("account access", () => {
     });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     const deleteButton = await screen.findByRole("button", { name: "删除用户" });
     expect((deleteButton as HTMLButtonElement).disabled).toBe(false);
     await user.click(deleteButton);
@@ -2959,6 +2985,7 @@ describe("account access", () => {
       getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(await screen.findByRole("button", { name: "删除用户" }));
     await user.type(screen.getByLabelText("输入名称以确认"), disabledUser.loginName);
     await user.click(screen.getByRole("button", { name: "确认删除" }));
@@ -2998,7 +3025,7 @@ describe("account access", () => {
     const nextDelete = vi.fn().mockRejectedValue(new Error("replacement delete must not run"));
     const next = accounts({ listUsers: vi.fn().mockResolvedValue({ items: [disabled], nextAfter: null }),
       getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser: nextDelete });
-    const opened = await openAccess(previous, iam(), "users", credential, disabledUser.id);
+    const opened = await openAccess(previous, iam(), "users", credential, disabledUser.id, "security");
     await opened.user.click(await screen.findByRole("button", { name: "删除用户" }));
     await opened.user.type(screen.getByLabelText("输入名称以确认"), disabledUser.loginName);
     await opened.user.click(screen.getByRole("button", { name: "确认删除" }));
@@ -3026,6 +3053,7 @@ describe("account access", () => {
       getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(await screen.findByRole("button", { name: "删除用户" }));
     const originalSetItem = Storage.prototype.setItem;
     const key = userDeletionStorageKey({ accountId: account.id, actorPrincipalId: rootUser.id, userId: disabledUser.id });
@@ -3050,6 +3078,7 @@ describe("account access", () => {
     expect(await screen.findByText(/真实用户删除入口已关闭/)).toBeTruthy();
     expect(await screen.findByRole("table", { name: "租户用户列表" })).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     expect(screen.queryByRole("button", { name: "删除用户" })).toBeNull();
     expect(deleteUser).not.toHaveBeenCalled();
   });
@@ -3062,6 +3091,7 @@ describe("account access", () => {
       getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
     const first = await openAccess(repository);
     await first.user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await first.user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await first.user.click(await screen.findByRole("button", { name: "删除用户" }));
     await first.user.type(screen.getByLabelText("输入名称以确认"), disabledUser.loginName);
     await first.user.click(screen.getByRole("button", { name: "确认删除" }));
@@ -3099,6 +3129,7 @@ describe("account access", () => {
       getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(await screen.findByRole("button", { name: "删除用户" }));
     const originalRemoveItem = Storage.prototype.removeItem;
     const key = userDeletionStorageKey({ accountId: account.id, actorPrincipalId: rootUser.id, userId: disabledUser.id });
@@ -3126,6 +3157,7 @@ describe("account access", () => {
       getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(await screen.findByRole("button", { name: "删除用户" }));
     await user.type(screen.getByLabelText("输入名称以确认"), disabledUser.loginName);
     await user.click(screen.getByRole("button", { name: "确认删除" }));
@@ -3154,6 +3186,7 @@ describe("account access", () => {
       getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(await screen.findByRole("button", { name: "删除用户" }));
     await user.type(screen.getByLabelText("输入名称以确认"), disabledUser.loginName);
     await user.click(screen.getByRole("button", { name: "确认删除" }));
@@ -3180,6 +3213,7 @@ describe("account access", () => {
       getUser: vi.fn().mockResolvedValue(structuredClone(disabled)), deleteUser });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(await screen.findByRole("button", { name: "删除用户" }));
     await user.type(screen.getByLabelText("输入名称以确认"), disabledUser.loginName);
     await user.click(screen.getByRole("button", { name: "确认删除" }));
@@ -6120,6 +6154,7 @@ describe("account access", () => {
     const { user, replaceRepository } = await openAccess(previous);
 
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6156,20 +6191,21 @@ describe("account access", () => {
     });
     const { user, replaceRepository } = await openAccess();
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
-    await screen.findByRole("combobox", { name: "关联策略" });
+    await screen.findByRole("button", { name: "关联策略" });
 
     replaceRepository(replacement);
     await waitFor(() => expect(replacement.currentIdentity).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(replacement.getUser).toHaveBeenCalledTimes(1));
-    const policySelector = await screen.findByRole("combobox", { name: "关联策略" }) as HTMLButtonElement;
+    const attach = await screen.findByRole("button", { name: "关联策略" }) as HTMLButtonElement;
     const revoke = screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }) as HTMLButtonElement;
-    expect(policySelector.disabled).toBe(true);
+    expect(attach.disabled).toBe(true);
     expect(revoke.disabled).toBe(true);
     expect(replacementExecute).not.toHaveBeenCalled();
     expect(replacementRevoke).not.toHaveBeenCalled();
 
     await act(async () => { verifyReplacement(structuredClone(identity)); });
-    await waitFor(() => expect((screen.getByRole("combobox", { name: "关联策略" }) as HTMLButtonElement).disabled).toBe(false));
+    await waitFor(() => expect(screen.getByRole("button", { name: "关联策略" })).toHaveProperty("disabled", false));
+    await user.click(screen.getByRole("button", { name: "关联策略" }));
     expect((screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }) as HTMLButtonElement).disabled).toBe(false);
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
@@ -6202,6 +6238,7 @@ describe("account access", () => {
     });
     const { user, replaceRepository } = await openAccess(accounts({ execute }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6333,6 +6370,7 @@ describe("account access", () => {
     const { user } = await openAccess(accounts({ execute }));
 
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6372,6 +6410,7 @@ describe("account access", () => {
   it("reviews the exact user, scope and current policy revision before a direct attachment", async () => {
     const { user, repository } = await openAccess();
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     expect((screen.getByRole("button", { name: "审阅关联" }) as HTMLButtonElement).disabled).toBe(true);
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
@@ -6391,7 +6430,8 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
     await user.click(screen.getByRole("button", { name: "确认关联" }));
     await waitFor(() => expect(repository.execute).toHaveBeenCalledWith(credential, { kind: "create-policy-attachment", userId: "child-a", policyId: "system.platform-admin", policyResourceVersion: 2, requestId: expect.any(String) }));
-    await waitFor(() => expect(screen.getByRole("combobox", { name: "关联策略" }).textContent).toBe("选择可关联策略"));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
+    expect(screen.getByRole("combobox", { name: "关联策略" }).textContent).toBe("选择可关联策略");
     expect((screen.getByRole("button", { name: "审阅关联" }) as HTMLButtonElement).disabled).toBe(true);
   });
 
@@ -6408,6 +6448,7 @@ describe("account access", () => {
     });
     const { user } = await openAccess(repository);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     expect(screen.getByText(/平台安装策略不可关联/).textContent).toContain("当前身份没有执行此操作所需的权限");
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     expect(screen.queryByRole("option", { name: /PlatformAdministrator/ })).toBeNull();
@@ -6423,6 +6464,7 @@ describe("account access", () => {
     const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
     const { user } = await openAccess(accounts({ execute }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6453,6 +6495,7 @@ describe("account access", () => {
     });
     const { user } = await openAccess(accounts({ execute, readPolicyAttachmentChange }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6495,6 +6538,7 @@ describe("account access", () => {
       : new HttpProblem(status, status === 404 ? "IAM_NOT_FOUND" : status === 403 ? "IAM_FORBIDDEN" : "IAM_UNAVAILABLE"));
     const { user } = await openAccess(accounts({ execute, readPolicyAttachmentChange }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6517,6 +6561,7 @@ describe("account access", () => {
     const auth = iam();
     const { user } = await openAccess(repository, auth);
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6542,6 +6587,7 @@ describe("account access", () => {
     const repository = accounts({ execute, readPolicyAttachmentChange });
     const first = await openAccess(repository);
     await first.user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await first.user.click(await screen.findByRole("button", { name: "关联策略" }));
     await first.user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await first.user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await first.user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6569,7 +6615,7 @@ describe("account access", () => {
     const foreign = await openAccess(repository);
     await foreign.user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
     expect(screen.queryByText("策略关系结果待确认")).toBeNull();
-    expect(screen.getByRole("button", { name: "审阅关联" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: "关联策略" })).toBeTruthy();
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
@@ -6577,6 +6623,7 @@ describe("account access", () => {
     const execute = vi.fn().mockRejectedValue(new Error("connection lost after commit"));
     const { user } = await openAccess(accounts({ execute }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6605,6 +6652,7 @@ describe("account access", () => {
       getUser: vi.fn(async (_credential: string, id: string) => structuredClone(id === childUser.id ? child : other))
     }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("button", { name: "关联策略" }));
     await user.click(screen.getByRole("combobox", { name: "关联策略" }));
     await user.click(screen.getByRole("option", { name: /PlatformAdministrator/ }));
     await user.click(screen.getByRole("button", { name: "审阅关联" }));
@@ -6613,7 +6661,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "返回列表" }));
     await user.click(await screen.findByRole("button", { name: "查看用户 operator" }));
     expect(screen.getByText(/developer@tenant-a 的策略关系请求仍待处理/)).toBeTruthy();
-    expect((screen.getByRole("button", { name: "审阅关联" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("button", { name: "关联策略" })).toHaveProperty("disabled", true);
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
@@ -6634,6 +6682,7 @@ describe("account access", () => {
     review = screen.getByRole("region", { name: "确认撤销直接关联" });
     await user.click(within(review).getByRole("button", { name: "确认撤销" }));
     await waitFor(() => expect(repository.revokePolicyAttachment).toHaveBeenCalledWith(credential, "attachment-child-a-system.paas-viewer", { resourceVersion: 1, requestId: expect.stringMatching(/^ui-user-revocation-/) }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await waitFor(() => expect((screen.getByRole("button", { name: "禁用用户" }) as HTMLButtonElement).disabled).toBe(false));
     await user.click(screen.getByRole("button", { name: "禁用用户" }));
     expect(repository.execute).not.toHaveBeenCalled();
@@ -6669,6 +6718,7 @@ describe("account access", () => {
     }));
     const { user } = await openAccess(accounts({ execute, readPasswordResetCompletion }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(screen.getByRole("button", { name: "重置密码" }));
     await user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
     await user.click(screen.getByRole("button", { name: "审阅重置" }));
@@ -6689,6 +6739,7 @@ describe("account access", () => {
     expect(screen.getByText("重置密码结果尚未确认")).toBeTruthy();
     await user.click(screen.getByTestId("nav-users"));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     expect((screen.getByRole("button", { name: "重置密码" }) as HTMLButtonElement).disabled).toBe(true);
     expect(execute).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("button", { name: "完成审阅" })).toBeNull();
@@ -6709,6 +6760,7 @@ describe("account access", () => {
     const repository = accounts({ execute });
     const first = await openAccess(repository);
     await first.user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await first.user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await first.user.click(screen.getByRole("button", { name: "重置密码" }));
     await first.user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
     await first.user.click(screen.getByRole("button", { name: "审阅重置" }));
@@ -6735,6 +6787,7 @@ describe("account access", () => {
     });
     const { user } = await openAccess(accounts({ execute }));
     await user.click(await screen.findByRole("button", { name: "查看用户 developer" }));
+    await user.click(await screen.findByRole("tab", { name: "登录与安全" }));
     await user.click(screen.getByRole("button", { name: "重置密码" }));
     await user.type(screen.getByLabelText(/^初始密码/), "Reset-Only-Test-Password-74!");
     await user.click(screen.getByRole("button", { name: "审阅重置" }));

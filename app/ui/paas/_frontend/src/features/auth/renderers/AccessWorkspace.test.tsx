@@ -92,7 +92,7 @@ function Harness({ repository, initialView, initialEntityId }: { repository: Acc
   const [policyMethod, setPolicyMethod] = useState<string>();
   const [userTab, setUserTab] = useState<AccountUserDetailTab>();
   if (!session.current) return <button onClick={() => void session.login("admin", "preview")}>Enter</button>;
-  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><ReauthenticationGuardProbe /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "") + ":" + (userTab ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} userTab={userTab} onNavigate={(next, id, method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); setUserTab(nextUserTab); })} /></AccountAccessProvider>;
+  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><ReauthenticationGuardProbe /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} userTab={userTab} onNavigate={(next, id, method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); setUserTab(nextUserTab); })} /></AccountAccessProvider>;
 }
 async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: UserAccess[]; repository?: Partial<AccountRepository>; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
   const directoryUsers = options?.users ?? users;
@@ -462,10 +462,11 @@ describe("selection-driven user directory", () => {
     expect(screen.getByRole("button", { name: "更多操作" }).hasAttribute("disabled")).toBe(true);
     expect(screen.getByText(/当前连接未提供批量操作/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看用户 lin" }));
-    expect(await screen.findByRole("heading", { name: "lin" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { level: 1, name: "lin" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "返回列表" })).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByText(/不根据用户状态推断访问方式/)).toBeTruthy();
+    await user.click(await screen.findByRole("tab", { name: "访问密钥" }));
+    expect(await screen.findByText("当前连接无法读取此用户的密钥或访问方式状态。")).toBeTruthy();
     expect(repository.execute).not.toHaveBeenCalled();
   });
 });
