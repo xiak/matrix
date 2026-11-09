@@ -447,6 +447,7 @@
     "returnToSignIn": "返回登录"
   },
   "MfaPreview": {
+    "accountRulesHelp": "账号安全规则如何生效",
     "progress": "验证器设置进度",
     "steps": {
       "prepare": "准备",
@@ -897,6 +898,7 @@
     "confirm": "确认地址"
   },
   "OwnSessions": {
+    "sessionHelp": "会话与设备的关系",
     "title": "登录会话",
     "scopeTitle": "当前用户的有效登录凭证",
     "description": "查看当前用户仍有效的登录会话，并结束不再使用的其他会话。",
@@ -1182,6 +1184,7 @@
     }
   },
   "ApplicationDeploymentManagement": {
+      "deploymentHelp": "部署状态与执行权限",
       "title": "部署与版本",
       "hint": "应用身份与运行部署相互独立；这里管理期望版本，并通过异步操作观察结果。",
       "mockCandidate": "MOCK · 待联调",
@@ -1358,6 +1361,7 @@
     "role": "临时角色会话"
   },
   "RoleSelfService": {
+    "sessionPermissionsHelp": "角色会话的权限范围",
     "title": "角色切换体验",
     "mockBoundary": "独立 MOCK 成员场景：用于评审角色发现、承担与退出体验。不会改变顶部当前登录用户，不会签发真实凭据，也不读取管理员角色目录。",
     "actorTitle": "成员自助场景",
@@ -1431,6 +1435,8 @@
     "confirmExit": "确认结束"
   },
   "RoleSelfServiceLive": {
+    "roleDirectoryHelp": "哪些角色可以承担",
+    "sessionPermissionsHelp": "角色会话的权限范围",
     "title": "角色会话",
     "liveBoundary": "LIVE 成员自助入口：角色目录只返回当前用户此刻可承担的角色。角色管理、信任策略和管理员会话列表是另一套权限边界。",
     "sourceTitle": "来源身份",
@@ -1522,6 +1528,8 @@
     }
   },
   "UserWizard": {
+    "permissionSourcesHelp": "如何选择权限来源",
+    "boundaryHelp": "权限边界的作用",
     "steps": {
       "type": "选择使用场景",
       "identity": "填写用户信息",
@@ -1690,6 +1698,9 @@
     }
   },
   "AccountAccess": {
+    "tenantHelp": "新租户的账号与资源",
+    "tenantDirectoryHelp": "租户目录的可见范围",
+    "userDirectoryHelp": "用户列表与批量操作说明",
     "roleAccessTitle": "角色切换体验",
     "createUserTitle": "创建子用户",
     "createTenantTitle": "开通租户账号",
@@ -2453,6 +2464,7 @@
     "next": "下一页"
   },
   "LivePolicyCreate": {
+    "scopeHelp": "自定义策略的适用范围",
     "title": "新建自定义策略",
     "previewTitle": "体验 IAM 策略声明",
     "previewScopeNotice": "MOCK 体验 · 此页复用 LIVE 策略作者，但目录是示例数据。审阅与完成体验均不调用真实 IAM，不创建策略，也不授予权限。",
@@ -2504,6 +2516,7 @@
     "endOldIntent": "结束旧意图"
   },
   "PolicyVisualAuthoring": {
+    "actionCatalogHelp": "如何选择可组合的操作",
     "catalogNotice": "只使用当前目录中的租户级精确 Action；兼容操作可合并在同一声明中，不兼容时请添加声明。目录不是授权结果，最终有效性由 IAM 校验。",
     "catalogSnapshotTitle": "当前声明依赖的产品目录",
     "catalogSnapshotItem": "{product} @ r{revision}",
@@ -2699,6 +2712,8 @@
     }
   },
   "AuthorizationProfilePublishingPreview": {
+    "validationHelp": "校验结果的适用范围",
+    "releaseHelp": "产品声明如何发布",
     "workspaceTitle": "产品权限接入",
     "workspaceHint": "供产品研发与 IAM 平台提前核对权限声明、真实 PEP 鉴权责任和受信发布门禁；租户策略作者不在这里注册产品能力。",
     "workspaceBoundary": "这是隔离 MOCK 的内部协作体验，不是租户功能，也没有连接草稿、校验、审批或发布 API；所有门禁状态都保持未执行或未验证。",
@@ -2762,6 +2777,7 @@
         "runtimeEvidenceHint": "该 MOCK 没有连接产品 PEP、网关或审计证据，不能证明请求会被允许或拒绝。"
       },
       "changeImpact": {
+        "changesHelp": "如何理解声明差异",
         "title": "候选修订影响",
         "hint": "在受信发布前比较当前目录修订与一份合成 AuthorizationProfile 候选，只呈现完整声明的结构变化。",
         "synthetic": "合成候选 · MOCK",
@@ -2806,6 +2822,7 @@
         }
       },
       "templateReview": {
+        "templateHelp": "模板兼容性说明",
         "title": "服务授权模板交叉校验",
         "hint": "发布前把模板引用的产品、服务用途和工作负载 Action 与这一份不可变 AuthorizationProfile 快照逐项对齐。",
         "boundary": "这里只验证两份发布契约是否兼容。模板可见、Profile 已登记或校验通过，都不代表客户账号已经同意，也不会创建服务关联角色、资源绑定或临时会话。",
@@ -2872,6 +2889,8 @@
     "finish": "结束体验"
   },
   "ServiceAuthorizationPreview": {
+    "serviceAccessHelp": "服务访问的授权条件",
+    "sessionHelp": "绑定与临时凭据的关系",
     "backToDirectory": "返回服务授权",
     "backToTemplate": "返回授权模板",
     "title": "服务授权",
@@ -3159,6 +3178,9 @@
     }
   },
   "ServiceAuthorizationDirectory": {
+    "relationshipsHelp": "授权关系与绑定记录",
+    "linkedRoleHelp": "服务关联角色由谁管理",
+    "bindingHelp": "绑定与服务会话的关系",
     "title": "服务授权",
     "hint": "查看当前账号已同意的服务关联角色、资源绑定历史，以及平台可用于后续同意流程的模板。",
     "boundary": "平台模板、账号同意与资源绑定是三个独立边界；模板可用不代表账号已授权，账号已授权也不代表所有资源已绑定。",
@@ -3242,6 +3264,7 @@
     }
   },
   "ServiceRoleTemplateDirectory": {
+    "templateHelp": "模板与账号授权的关系",
     "title": "服务授权模板",
     "directoryHint": "查看由云产品和 IAM 平台受控发布的服务角色模板。模板定义未来授权可使用的固定权限上限和工作负载类型。",
     "boundary": "此目录只表达平台能力，不是当前账号的授权清单。客户同意、服务关联角色和具体资源绑定是另外的状态。",
@@ -3315,8 +3338,8 @@
     "preview": "MOCK 体验",
     "live": "实时服务",
     "boundary": {
-      "title": "租户边界来自当前 IAM 会话",
-      "description": "页面不接受租户选择器；仅展示服务端按当前凭证裁剪后的脱敏记录。"
+      "title": "审计记录的可见范围",
+      "description": "当前 IAM 会话确定租户范围。服务端按登录身份筛选记录并脱敏。"
     },
     "actions": {
       "verify": "校验完整性",
@@ -3794,11 +3817,12 @@
     }
   },
   "ManagedService": {
+    "catalogVisibilityHelp": "哪些规格可以查看",
+    "bindingHelp": "服务绑定与授权的关系",
     "redisConnectionHint": "请使用 Redis 客户端连接上方端点，业务用户名为 matrix。向平台管理员领取本实例的密码；Matrix 登录密码不能用于 Redis。",
     "kibanaLoginHint": "在浏览器中打开上方端点，使用关联 Elasticsearch 的业务账号登录。请向平台管理员领取该实例的业务凭据；Matrix 登录账号不能用于 Kibana 登录。",
     "elasticsearchDependency": "关联 Elasticsearch",
     "productMockBoundary": "这是隔离的 UX MOCK 产品工作区，不会创建真实资源。对应后端能力仍是待独立验收的候选，不能据此判断已发布、已具备高可用或可用于生产。",
-    "productLiveBoundary": "当前页面显示你有权查看的服务规格、配额和实例。",
     "managedCloudService": "托管云服务",
     "productData": "产品资源状态",
     "productDataLoadingHint": "正在读取这个产品的可用规格、配额和实例状态。",
@@ -4091,6 +4115,8 @@
     }
   },
   "ServiceWorkflow": {
+    "quotaHelp": "激活配额会创建什么",
+    "countsHelp": "状态数据如何统计",
     "reloadElasticsearch": "刷新可用实例",
     "elasticsearchChanged": "所选实例已变化或不再匹配，请刷新列表并重新选择。",
     "elasticsearchEmpty": "没有匹配的 Elasticsearch。请先安装同版本、同区域的实例，确认拥有查看和使用权限，再刷新列表。",
@@ -4129,6 +4155,8 @@
     "statusNotice": "数值来自当前组织的控制面快照。未知或失败状态不会被折算成健康。"
   },
   "CloudExperience": {
+    "resourceAccessHelp": "应用详情的可见范围",
+    "tagScopeHelp": "资源标签如何用于策略",
     "resourceTable": "统一资源列表",
     "resource": "资源",
     "product": "产品",
@@ -4433,6 +4461,8 @@
     }
   },
   "GroupWorkspace": {
+    "groupPolicyHelp": "组策略如何影响成员",
+    "membershipHelp": "成员关系与权限继承",
     "back": "返回用户组列表",
     "backToGroupDetails": "返回用户组详情",
     "steps": {
@@ -4548,6 +4578,12 @@
     "confirm": "确认变更"
   },
   "RoleWorkspace": {
+    "rolePermissionsHelp": "角色权限如何生效",
+    "trustHistoryHelp": "信任版本如何保存",
+    "attachedPoliciesHelp": "关联策略的作用",
+    "trustHelp": "角色信任与权限边界",
+    "capabilitiesHelp": "操作权限如何判定",
+    "roleSessionHelp": "角色会话的管理范围",
     "back": "返回角色列表",
     "serviceAuthorization": "服务授权",
     "serviceRoleTemplates": "服务授权模板",
@@ -4571,7 +4607,7 @@
       "review": "审阅并创建"
     },
     "liveHints": {
-      "trust": "首版只接受当前账号中的明确用户；信任不会授予用户承担权限，也不会授予角色资源权限。",
+      "trust": "选择当前账号中可以申请承担此角色的用户。",
       "details": "设置角色名称、标签和新会话最长有效期。角色没有密码或长期访问密钥。",
       "review": "核对创建意图。权限策略、权限边界及调用者的承担授权必须在角色详情中分别配置。"
     },
@@ -4626,10 +4662,10 @@
     "liveCancelHint": "将丢弃尚未提交的可信用户及角色信息，不会创建任何角色。",
     "unknownLeaveTitle": "离开结果未知的创建请求？",
     "unknownLeaveHint": "IAM 可能已经创建角色。离开会丢失原请求 ID，之后不能把新请求当作本次重试。",
-    "liveTrustCreateHint": "可信用户仍需被策略显式授予该角色的 iam.role.assume 操作；信任策略只是承担准入的一侧。",
+    "liveTrustCreateHint": "可信用户还需要此角色的 iam.role.assume 授权。角色会话能访问哪些资源，由关联策略和权限边界共同决定。",
     "loadedUsersOnly": "当前只显示已加载的用户目录。需要选择其他用户时，请先返回用户列表继续加载；这里不会猜测未读取的身份。",
-    "liveRootBoundaryHint": "Root 创建不会隐式设置权限边界。创建后承担保持关闭，直到 Root 另行设置权限上限；权限边界本身也不会授予资源权限。",
-    "liveDelegatedBoundaryHint": "受限委派创建不提供边界选择器。IAM 会在提交事务内重新校验当前 USER，并让新角色自动继承其准确权限上限：",
+    "liveRootBoundaryHint": "主账号创建角色后，还需设置权限边界，可信用户才能承担该角色。",
+    "liveDelegatedBoundaryHint": "受委派用户创建的角色会继承其权限边界。IAM 会在创建时核验该边界。",
     "liveRootCreationScope": "本次 Root 命令只创建角色元数据和首个 USER 信任版本，不关联权限策略、不隐式设置权限边界，也不签发凭证。",
     "liveDelegatedCreationScope": "本次受限委派命令只提交角色元数据和首个 USER 信任版本；IAM 在事务内从当前 USER 推导并继承准确权限上限。请求没有边界选择器，不关联权限策略，也不签发凭证。",
     "creationBoundary": "创建时权限上限",
@@ -4887,6 +4923,8 @@
     "previewDeleteReceiptHint": "该角色已从当前浏览器体验会话中移除。这不是 IAM 服务器回执，也不会改变真实账号。"
   },
   "IamWorkspace": {
+    "accessKeyHelp": "访问密钥如何获得权限",
+    "keyProductsHelp": "哪些产品支持访问密钥",
     "selectionEmpty": "尚未选择对象",
     "clearSelection": "清空选择",
     "selectionEmptyHint": "从可选列表中选择对象。",
@@ -5433,6 +5471,11 @@
       }
     },
     "accessAnalysis": {
+      "findingsHelp": "分析结果的含义",
+      "reviewStateHelp": "归档如何影响资源",
+      "evidenceHelp": "分析记录如何关联",
+      "timelineHelp": "状态时间线如何解读",
+      "boundaryHelp": "权限边界说明",
       "open": "访问分析",
       "title": "访问分析",
       "sections": "访问分析范围",
@@ -5854,10 +5897,9 @@
       "uncertainIntent": "原生成请求的结果尚无法确认。重试只会使用同一操作标识 {id}，不会创建新的生成意图。",
       "foreignIntent": "后端连接已切换，原生成请求 {id} 仍须由原连接核对。当前连接不会重放该请求，也不会开始第二个生成意图。",
       "foreignIntentReason": "原连接仍有结果未知的生成请求；请先恢复原连接并按操作标识核对。",
-      "boundary": "LIVE · 当前页面只使用 IAM 已固定的生成、按 ID 读取和下载接口。没有报告列表、后台任务、删除、共享链接或跨产品风险推断。",
-      "scopeTitle": "生成范围与服务边界",
-      "scopeHint": "IAM 同步封存当前账号的一致快照；固定内容立即显示，只有报告结果区等待网络数据。",
-      "synchronous": "同步封存",
+      "boundary": "可以生成新报告，也可以用报告 ID 读取或下载已有报告。",
+      "scopeTitle": "报告范围与生成限制",
+      "scopeHint": "生成报告时，IAM 会同步封存当前账号的用户和访问密钥快照。",
       "limitsTitle": "固定容量边界",
       "knownReportTitle": "读取已知报告",
       "knownReportHint": "服务没有目录接口。只有已经持有准确 reportId 时才能重新鉴权读取；这里不会从浏览器存储恢复或猜测报告。",
@@ -6342,6 +6384,7 @@
     "incompatibleConditions": "现有条件不被全部所选操作支持。草稿已保留，请移除不兼容的条件或操作；系统不会自动放宽授权。"
   },
   "PolicyWizard": {
+    "featureScopeHelp": "产品功能的授权范围",
     "resourceTagsRequired": "请为每条声明开启「按资源标签限制」并填写标签。若不需要标签限制，请切换到可视化编辑。",
     "chooseMethod": "选择创建策略方式",
     "chooseMethodHint": "选择一个创建起点；随后会在同一内容区完成编辑、审阅与保存。",
@@ -6614,6 +6657,8 @@
     }
   },
   "PersonalSecurity": {
+    "personalSettingsHelp": "个人安全设置的适用范围",
+    "contactPurposeHelp": "安全通知地址的用途",
     "eyebrow": "本人安全",
     "title": "安全通知与身份验证器",
     "hint": "管理当前登录用户自己的可信通知地址与首次 TOTP 绑定。",
@@ -7226,6 +7271,8 @@
     "ageAuthorityBoundary": "本页不计算到期日、不保存密码，也不表示 IAM 已完成任一处置。真实资格、受限结果与登录状态必须由固定后端契约提供。"
   },
   "AccessKeyNetworkPreview": {
+    "networkLayersHelp": "账号与密钥的网络规则如何组合",
+    "emptyNetworkHelp": "空网络列表的含义",
     "accountEyebrow": "程序访问边界",
     "accountTitle": "访问密钥来源网络",
     "accountHint": "账号层限制所有长期访问密钥；单把密钥只能进一步收紧，不能放宽账号规则。",

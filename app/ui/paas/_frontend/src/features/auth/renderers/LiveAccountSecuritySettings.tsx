@@ -3,7 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { KeyRound, RefreshCcw, ShieldCheck } from "lucide-react";
-import { Alert, Badge, Button, Card, Checkbox, FormField, Input, LoadingNotice, PasswordInput, Select, Typography } from "@ui/xiak";
+import { Alert, Badge, Button, Card, Checkbox, FormField, HelpDisclosure, Input, LoadingNotice, PasswordInput, Select, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { AccountSecuritySettingsReviewRejected, type AccountSecuritySettingsClient, type AccountSecuritySettingsLoad } from "../application/AccountAccessProvider";
 import { usePersonalSecurity } from "../application/PersonalSecurityProvider";
@@ -319,11 +319,13 @@ function AccountSecuritySettingsWorkspace({ client }: { client: AccountSecurityS
             <div><dt>{t("accountReadVersion")}</dt><dd>{currentSettings.resourceVersion}</dd></div>
             <div><dt>{t("accountReadUpdated")}</dt><dd><time dateTime={currentSettings.updatedAt}>{format.dateTime(new Date(currentSettings.updatedAt), { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })}</time></dd></div>
           </dl>
-          <Alert>{t("accountReadBoundary")}</Alert>
           {stage === "summary" && !mutation ? <>
             <AccountSecurityRulesValues value={currentSettings} />
-            <Typography.Text tone="muted">{password("liveBoundary")}</Typography.Text>
-            <Alert>{network("live.boundary")}</Alert>
+            <HelpDisclosure label={t("accountRulesHelp")}>
+              <p>{t("accountReadBoundary")}</p>
+              <p>{password("liveBoundary")}</p>
+              <p>{network("live.boundary")}</p>
+            </HelpDisclosure>
             {!update ? <Alert status="warning">{client?.canUpdate ? network("live.updateUnavailable") : t("accountUpdateDenied")}</Alert> : <div className={accessStyles.actions}><Button ref={editButton} disabled={refreshing} onClick={editSettings} variant="secondary">{security("edit")}</Button></div>}
           </> : null}
         </> : null}

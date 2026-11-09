@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, Tags } from "lucide-react";
-import { Alert, Badge, Button, Card, EmptyState, FormField, Input, RadioGroup, Select, Steps, Table, Typography, useUnsavedChanges } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, EmptyState, FormField, Input, RadioGroup, Select, Steps, Table, Typography, useUnsavedChanges } from "@ui/xiak";
 import { useTranslations } from "next-intl";
 import type { ExperienceApplicationTagSnapshot } from "../domain/experience";
 import { applicationLabelLooksSensitive, validApplicationLabelValue, validApplicationName } from "../domain/application";
@@ -238,7 +238,7 @@ export function ApplicationTagManagement({ resource, initialSnapshot }: {
           </tr>)}</tbody>
         </Table> : <EmptyState title={t("noResourceTags")} description={t("noResourceTagsHint")} />}
         {snapshot ? <div className={styles.version}><span>{t("tagVersion")}</span><code>{snapshot.etag}</code></div> : null}
-        <Alert status="info">{t("resourceTagBoundary")}</Alert>
+        <HelpDisclosure label={t("tagScopeHelp")}>{t("resourceTagBoundary")}</HelpDisclosure>
       </> : <div className={styles.workflow}>
         <Steps label={w("workflowLabel")} items={steps} current={step === "edit" ? 0 : 1} onChange={(index) => { if (index === 0) { setError(null); setStep("edit"); } }} />
         {step === "edit" ? <form noValidate onSubmit={review}>

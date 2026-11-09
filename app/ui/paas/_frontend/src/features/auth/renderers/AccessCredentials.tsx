@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ComponentProps, type SyntheticEvent } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound, RotateCw } from "lucide-react";
-import { Alert, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, Table, TablePagination, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, Checkbox, ContentPage, FormField, Select, Table, TablePagination, Typography } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { useAccountAccess, type AuthorizationProfileClient } from "../application/AccountAccessProvider";
 import { admittedAuthorizationUserAuthenticationMethods, type AuthorizationProfileDirectory } from "../domain/accounts";
@@ -171,7 +171,7 @@ function InlineFlow({ flow, owner, accountNetwork, keyValue, onChange, onClose, 
             <section><h4>{network("accountLayer")}</h4><AccessKeyNetworkRestrictionValues value={accountNetwork} /></section>
             <AccessKeyNetworkDraftField id={networkId} issue={networkIssue} value={networkDraft} onChange={(value) => { setNetworkDraft(value); setNetworkIssue(null); }} />
           </div>
-          <Alert status="info">{network("andBoundary")}</Alert>
+          <HelpDisclosure label={network("networkLayersHelp")}>{network("andBoundary")}</HelpDisclosure>
         </section>
         <Alert status="warning">{t("keyCreateWarning")}</Alert>
         <FormField id={scenarioId} label={t("keyScenario")} hint={t("keyScenarioHint")}>
@@ -344,7 +344,7 @@ export function ProgrammaticAccessGuide({ owner, client, onInspectPermissions }:
       <span className={styles.programmaticSummary}>{t("keyProgrammaticInspect")}</span>
     </summary>
     <div className={styles.programmaticBody} aria-busy={loading || undefined}>
-      <Alert status="info">{t("keyProgrammaticIdentity", { name: owner.loginName })}</Alert>
+      <HelpDisclosure label={t("accessKeyHelp")}>{t("keyProgrammaticIdentity", { name: owner.loginName })}</HelpDisclosure>
       {loading ? <p className={styles.note}>{t("keyProgrammaticLoading")}</p> : null}
       {status === "ready" && accepted.length === 0 ? <Alert status="warning">{t("keyProgrammaticNone")}</Alert> : null}
       {status === "ready" && accepted.length > 0 ? <>
@@ -414,7 +414,7 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
 
   if (!owner) return <section className={styles.root}>
     <ContentPage.Heading title={t("keys")} scrollKey="access-key-user-directory" />
-    <Alert status="info"><KeyRound aria-hidden="true" />{t("keyBoundary")}</Alert>
+    <HelpDisclosure label={t("accessKeyHelp")}>{t("keyBoundary")}</HelpDisclosure>
     <AccessKeyOwnerDirectory scene={scene} busy={access.busy} loading={access.loading} onOpen={openOwner} onReadPage={access.usersPage} />
     <RotationGuide />
   </section>;
@@ -451,7 +451,7 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
   }
 
   const body = <div className={styles.ownerBody}>
-    <Alert status="info">{t("keyProductBoundary")}</Alert>
+    <HelpDisclosure label={t("keyProductsHelp")}>{t("keyProductBoundary")}</HelpDisclosure>
     {ownerDisabledReason && !activeFlow ? <Alert status="warning">{ownerDisabledReason}</Alert> : null}
     {activeFlow ? <InlineFlow flow={activeFlow} owner={owner} accountNetwork={workspace.settings.accessKeyNetwork} keyValue={flowKey} onChange={setFlow} onClose={closeFlow} onOpenKey={openKey} /> : <>
       <Card>

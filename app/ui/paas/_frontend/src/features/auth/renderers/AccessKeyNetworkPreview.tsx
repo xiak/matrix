@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { Network, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, FormField, TextArea, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, FormField, TextArea, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { accessKeyNetworkDraftValue, accessKeyNetworkRestrictionsEqual, parseAccessKeyNetworkDraft, type AccessKeyNetworkDraftIssue, type AccessKeyNetworkRestrictions, type AccessKeyUsageObservation } from "../domain/accessKeyNetwork";
 import type { AccessKey, AccessWorkspace } from "../domain/accessWorkspace";
@@ -106,7 +106,7 @@ export function AccountAccessKeyNetworkPreview({ workspace }: { workspace: Acces
     </Card.Body></Card> : null}
     {stage === "edit" ? <Card><Card.Header><div><h3 className={styles.focusHeading} ref={heading} tabIndex={-1}>{t("editAccountTitle")}</h3><Typography.Text tone="muted">{t("fullReplacement")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header><Card.Body><form className={styles.networkBody} onSubmit={(event) => { event.preventDefault(); review(); }}>
       <AccessKeyNetworkDraftField id={id} issue={issue} value={draft} onChange={(value) => { setDraft(value); setIssue(null); }} />
-      <Alert>{t("emptyLayerMeaning")}</Alert>
+      <HelpDisclosure label={t("emptyNetworkHelp")}>{t("emptyLayerMeaning")}</HelpDisclosure>
       <div className={styles.actions}><Button disabled={access.busy} type="submit">{t("review")}</Button><Button disabled={access.busy} onClick={() => setStage("summary")} type="button" variant="ghost">{t("cancel")}</Button></div>
     </form></Card.Body></Card> : null}
     {stage === "review" && next ? <Card><Card.Header><div><h3 className={styles.focusHeading} ref={heading} tabIndex={-1}>{t("reviewAccountTitle")}</h3><Typography.Text tone="muted">{t("reviewAccountHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.networkBody}>
@@ -171,7 +171,7 @@ export function AccessKeyNetworkEditor({ keyValue, onClose }: { keyValue: Access
   }
 
   return <Card><Card.Header><div><h2 className={styles.focusHeading} ref={heading} tabIndex={-1}>{t(stage === "edit" ? "editKeyTitle" : "reviewKeyTitle")}</h2><Typography.Text tone="muted">{t("keyEditorHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header><Card.Body className={styles.networkBody}>
-    {stage === "edit" ? <form className={styles.networkBody} onSubmit={(event) => { event.preventDefault(); review(); }}><AccessKeyNetworkDraftField id={id} issue={issue} value={draft} onChange={(value) => { setDraft(value); setIssue(null); }} /><Alert>{t("emptyLayerMeaning")}</Alert><div className={styles.actions}><Button disabled={access.busy} type="submit">{t("review")}</Button><Button disabled={access.busy} onClick={onClose} type="button" variant="ghost">{t("cancel")}</Button></div></form> : null}
+    {stage === "edit" ? <form className={styles.networkBody} onSubmit={(event) => { event.preventDefault(); review(); }}><AccessKeyNetworkDraftField id={id} issue={issue} value={draft} onChange={(value) => { setDraft(value); setIssue(null); }} /><HelpDisclosure label={t("emptyNetworkHelp")}>{t("emptyLayerMeaning")}</HelpDisclosure><div className={styles.actions}><Button disabled={access.busy} type="submit">{t("review")}</Button><Button disabled={access.busy} onClick={onClose} type="button" variant="ghost">{t("cancel")}</Button></div></form> : null}
     {stage === "review" && next ? <><dl className={styles.networkFacts}><div><dt>{t("keyId")}</dt><dd><code>{keyValue.id}</code></dd></div><div><dt>{t("keyVersion")}</dt><dd>v{keyValue.resourceVersion}</dd></div></dl><div className={styles.networkComparison}><section><h3>{t("current")}</h3><AccessKeyNetworkRestrictionValues value={keyValue.networkRestrictions} /></section><section><h3>{t("afterChange")}</h3><AccessKeyNetworkRestrictionValues value={next} /></section></div>{!changed ? <Alert status="info">{t("noChange")}</Alert> : null}<Alert status="warning">{t("keyReviewBoundary")}</Alert><div className={styles.actions}><Button disabled={access.busy || !changed} onClick={() => void save()}>{t("applyMock")}</Button><Button disabled={access.busy} onClick={() => setStage("edit")} variant="secondary">{t("backToEdit")}</Button></div></> : null}
   </Card.Body></Card>;
 }

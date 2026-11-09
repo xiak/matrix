@@ -9,7 +9,7 @@ import {
   ServerCog,
   ShoppingCart
 } from "lucide-react";
-import { Alert, FormField, Badge, Button, Input, Select, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, FormField, Badge, Button, Input, Select, Typography } from "@ui/xiak";
 import { useControlPlane } from "../application/ControlPlaneProvider";
 import type { ConsoleWorkspaceScene } from "../scenes/consoleScene";
 import type { ElasticsearchReference } from "../domain/resources";
@@ -97,9 +97,7 @@ function QuotaOrder({
               value={instanceCount}
             />
           </FormField>
-          <Alert>
-            {t("quotaNotice")}
-          </Alert>
+          <HelpDisclosure label={t("quotaHelp")}>{t("quotaNotice")}</HelpDisclosure>
           {accepted ? <Alert status="success">{t("quotaAccepted")}</Alert> : null}
           <Button
             block
@@ -256,9 +254,7 @@ function PlatformStatus({
           );
         })}
       </div>
-      <Alert>
-        {t("statusNotice")}
-      </Alert>
+      <HelpDisclosure label={t("countsHelp")}>{t("statusNotice")}</HelpDisclosure>
     </div>
   );
 }

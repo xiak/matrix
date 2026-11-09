@@ -2,8 +2,8 @@
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Info, Plus } from "lucide-react";
-import { Alert, Table, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card, type PageCommandsHandle } from "@ui/xiak";
+import { Plus } from "lucide-react";
+import { Alert, HelpDisclosure, Table, TableSelectionCell, TableToolbar, TablePagination, ContentPage, EmptyState, Badge, Button, Card, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccountAccessView } from "../domain/accounts";
@@ -196,13 +196,11 @@ export function AccountUserDirectory({ scene, entityId, initialDetailTab, onCrea
           { id: "state", label: t("filterUserState"), value: state, onChange: (value) => changeFilter(() => setState(value)), options: [{ value: "all", label: t("allStates") }, ...(["active", "passwordChangeRequired", "disabled"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] },
           { id: "role", label: w("filterPolicySource"), value: role, onChange: (value) => changeFilter(() => setRole(value)), options: workspace ? [{ value: "all", label: w("allPolicySources") }, { value: "ungranted", label: w("noPolicyGrants") }, { value: "direct", label: w("directPolicies") }, { value: "inherited", label: w("groupPolicyGrants") }] : [{ value: "all", label: w("allPolicySources") }, { value: "no-direct", label: t("noDirectPolicyAttachments") }, { value: "direct", label: w("directPolicies") }, { value: "platform", label: t("platformPolicyAttachments") }] }
         ]} />
-      {!workspace || !access.supportsUserBatch || visible.length > userBatchLimit ? <div className={styles.userDirectoryNotes} role="note">
-        <Info aria-hidden="true" />
-        <div>
-          {!workspace ? <p>{t("directPolicySourcesHint")}</p> : null}
-          {!access.supportsUserBatch || visible.length > userBatchLimit ? <p>{batch(!access.supportsUserBatch ? "unsupportedHint" : "limitHint", { limit: userBatchLimit })}</p> : null}
-        </div>
-      </div> : null}
+      {!workspace || !access.supportsUserBatch ? <HelpDisclosure className={styles.userDirectoryHelp} label={t("userDirectoryHelp")}>
+        {!workspace ? <p>{t("directPolicySourcesHint")}</p> : null}
+        {!access.supportsUserBatch ? <p>{batch("unsupportedHint")}</p> : null}
+      </HelpDisclosure> : null}
+      {access.supportsUserBatch && visible.length > userBatchLimit ? <Alert status="warning">{batch("limitHint", { limit: userBatchLimit })}</Alert> : null}
       {directoryFailed ? <AccountDirectoryReadFailure kind="users" onRetry={() => { clearSelection(); setCursorPage(1); setPage(1); }} /> : filtered.length ? <Table aria-label={t("userTable")} aria-busy={filtering || undefined} className={styles.userTable} mobileLayout="stack">
           <thead><tr><TableSelectionCell header label={batch("selectPage")} checked={allChecked ? true : visibleCheckedUsers.length ? "mixed" : false} disabled={blocked || visible.length > userBatchLimit} onChange={(checked) => setSelection({ scene, ids: checked ? visible.map((user) => user.id) : [] })} /><th scope="col">{t("user")}</th><th scope="col">{t("userType")}</th><th scope="col">{t("accessMethods")}</th><th scope="col">{workspace ? w("policyAssociations") : t("directPolicyAttachments")}</th><th scope="col">{t("status")}</th></tr></thead>
           <tbody>{visible.map((user) => <AccountUserRow key={user.id} user={user} principalId={scene.currentUserId} workspace={workspace} grants={associations.get(user.id)}

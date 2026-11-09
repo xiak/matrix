@@ -308,10 +308,7 @@
 .accountOwnerIdentity { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
 .accountOwnerLabel { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .accountOwnerMeta { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--xiak-spacing-tight); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); text-align: right; }
-.userDirectoryNotes { display: grid; grid-template-columns: 0.875rem minmax(0, 1fr); align-items: start; gap: var(--xiak-spacing-compact); padding: var(--xiak-spacing-tight) var(--xiak-panel-padding); border-bottom: var(--xiak-border-subtle); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); line-height: var(--xiak-line-height-control); }
-.userDirectoryNotes > svg { width: 0.875rem; height: 0.875rem; margin-top: 0.0625rem; }
-.userDirectoryNotes > div { display: grid; min-width: 0; gap: var(--xiak-spacing-micro); }
-.userDirectoryNotes p { margin: 0; overflow-wrap: anywhere; }
+.userDirectoryHelp { padding: var(--xiak-spacing-narrow) var(--xiak-panel-padding); border-bottom: var(--xiak-border-subtle); }
 .policyDirectoryIntro { display: grid; gap: var(--xiak-spacing-narrow); padding: 0 var(--xiak-panel-padding) var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.65; }
 .policyDirectoryIntro p { margin: 0; }
 .policyListPanel { padding-block-start: 0; }

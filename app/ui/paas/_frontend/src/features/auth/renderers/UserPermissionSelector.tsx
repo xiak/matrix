@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
 import { FileCheck2, Users } from "lucide-react";
-import { Alert, Button, Select, Tabs, Transfer } from "@ui/xiak";
+import { Alert, HelpDisclosure, Button, Select, Tabs, Transfer } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { usePolicyDescription } from "./PolicyDirectory";
@@ -37,7 +37,7 @@ export function UserPermissionSelector({ workspace, scene, value, onChange }: {
     if (next.length <= 30) onChange({ ...value, [key]: next });
   }
   return <div className={styles.stack}>
-    <Alert>{t("leastPrivilege")}</Alert>
+    <HelpDisclosure label={t("permissionSourcesHelp")}>{t("leastPrivilege")}</HelpDisclosure>
     <Tabs.Root value={mode} onValueChange={(next) => { setMode(next); setCopied(false); }}>
       <Tabs.List aria-label={t("permissionMethod")} className={styles.permissionMethods}><Tabs.Trigger value="policies">{t("choosePolicies")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("joinGroups")}</Tabs.Trigger><Tabs.Trigger value="copy">{t("copyUser")}</Tabs.Trigger></Tabs.List>
       <Tabs.Content value={mode} className={styles.stack}>

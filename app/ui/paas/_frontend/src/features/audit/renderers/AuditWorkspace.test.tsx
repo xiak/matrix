@@ -119,7 +119,13 @@ describe("AuditWorkspace", () => {
     render(<LocaleProvider><AuditWorkspace preview /></LocaleProvider>);
 
     expect(screen.getByRole("heading", { level: 1, name: "审计记录" })).toBeTruthy();
-    expect(screen.getByText("租户边界来自当前 IAM 会话")).toBeTruthy();
+    const scopeHelp = screen.getByText("审计记录的可见范围");
+    const disclosure = scopeHelp.closest("details")!;
+    expect(disclosure.open).toBe(false);
+    await user.click(scopeHelp);
+    expect(within(disclosure).getByText(/当前 IAM 会话确定租户范围/)).toBeTruthy();
+    await user.click(scopeHelp);
+    expect(disclosure.open).toBe(false);
     const table = await screen.findByRole("table", { name: "审计记录" });
     expect(within(table).getAllByRole("row")).toHaveLength(11);
     expect(within(table).getAllByRole("columnheader").map((cell) => cell.textContent)).toEqual(["事件", "操作者", "目标资源", "结果"]);

@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import {
   Alert,
+  HelpDisclosure,
   Table,
   TableSkeleton,
   EmptyState,
@@ -191,9 +192,8 @@ function CatalogContent({ scene, preview }: {
   const t = useTranslations("ManagedService");
   return (
     <div className={styles.catalogPage}>
-      <Alert status={preview ? "warning" : "info"}>
-        {t(preview ? "catalogVisibilityMockBoundary" : "catalogVisibilityBoundary", { count: scene.offerings.length })}
-      </Alert>
+      {preview ? <Alert status="warning">{t("catalogVisibilityMockBoundary", { count: scene.offerings.length })}</Alert>
+        : <HelpDisclosure label={t("catalogVisibilityHelp")}>{t("catalogVisibilityBoundary", { count: scene.offerings.length })}</HelpDisclosure>}
       {scene.offerings.length === 0 ? <EmptyState title={t("catalogEmpty")} description={t("catalogEmptyHint")} /> : <div className={styles.catalogGrid}>
         {scene.offerings.map((offering) => (
           <Card className={styles.productCard} key={offering.id}>
@@ -242,7 +242,7 @@ function ManagedProductContent({ preview, scene }: {
 
   return (
     <div className={styles.productOverview}>
-      <Alert status={preview ? "warning" : "info"}>{t(preview ? "productMockBoundary" : "productLiveBoundary")}</Alert>
+      {preview ? <Alert status="warning">{t("productMockBoundary")}</Alert> : null}
       <Card className={styles.productOverviewCard}>
         <Card.Header className={styles.productOverviewHeader}>
           <div className={styles.productIdentity}>
@@ -404,7 +404,8 @@ function LiveServiceAuthorizationCard({ accountId, installationId, authorization
           <div><dt>{t("authorizationPermissionCeiling")}</dt><dd><Typography.Code>{observation.template.spec.policyVersion.policyId}</Typography.Code><small><Typography.Code>{observation.template.spec.policyVersion.versionId}</Typography.Code></small></dd></div>
           <div><dt>{t("authorizationBinding")}</dt><dd>{observation.binding ? <Typography.Code>{observation.binding.id}</Typography.Code> : t("resourceNotBound")}<small>{observation.relation ? <Typography.Code>{observation.relation.role.id}</Typography.Code> : t("accountAuthorizationPending")}</small></dd></div>
         </dl>
-        <Alert status={authorized ? "info" : "warning"}>{t(authorized ? "authorizationObservedBoundary" : "authorizationWriteBoundary")}</Alert>
+        {authorized ? <HelpDisclosure label={t("bindingHelp")}>{t("authorizationObservedBoundary")}</HelpDisclosure>
+          : <Alert status="warning">{t("authorizationWriteBoundary")}</Alert>}
         {currentIntent && !currentIntent.open ? <Alert status="warning">{t("authorizationUnknownPreserved", { id: currentIntent.requestId })}</Alert> : null}
         {blockedByAnotherIntent ? <Alert status="warning">{t("authorizationAnotherIntent", { id: serviceAuthorizationIntent!.installationId })}</Alert> : null}
         <div className={styles.authorizationActions}>

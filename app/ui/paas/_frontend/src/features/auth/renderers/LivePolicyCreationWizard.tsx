@@ -2,7 +2,7 @@
 
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Button, Card, FormField, Input } from "@ui/xiak";
+import { Alert, Button, Card, FormField, HelpDisclosure, Input } from "@ui/xiak";
 import type { PolicyCreateClient, PolicyCreateIntent } from "../application/AccountAccessProvider";
 import type { AccountPolicyDocument, AuthorizationProfileDirectory } from "../domain/accounts";
 import { visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAuthoring";
@@ -126,7 +126,8 @@ export function LivePolicyCreationWizard(props: {
   };
   return <WorkspaceDetail title={t(props.preview ? "previewTitle" : "title")} onBack={() => requestLeave(onBack)}>
     <Card><Card.Body className={styles.catalogNotice}>
-      <Alert status="info">{t(props.preview ? "previewScopeNotice" : "scopeNotice")}</Alert>
+      {props.preview ? <Alert status="info">{t("previewScopeNotice")}</Alert>
+        : <HelpDisclosure label={t("scopeHelp")}>{t("scopeNotice")}</HelpDisclosure>}
       <form ref={form} className={styles.catalogNotice} onSubmit={(event) => { event.preventDefault(); if (review) void create(); else openReview(); }}>
         {review ? <>
           <h2 ref={reviewHeading} tabIndex={-1} className={styles.stepTitle}>{t("reviewTitle")}</h2>

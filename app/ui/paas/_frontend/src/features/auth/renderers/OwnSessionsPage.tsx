@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useFormatter, useTranslations } from "next-intl";
-import { LogOut, RefreshCcw, ShieldCheck, XCircle } from "lucide-react";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, Typography } from "@ui/xiak";
+import { LogOut, RefreshCcw, XCircle } from "lucide-react";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, Typography } from "@ui/xiak";
 import { useOwnSessions } from "../application/OwnSessionsProvider";
 import { useSession } from "../application/SessionProvider";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
@@ -91,7 +91,7 @@ export function OwnSessionsPage() {
         <Typography.Title as="h2" level={3}>{t("scopeTitle")}</Typography.Title>
         <Typography.Text tone="muted">{t("description")}</Typography.Text>
       </div>
-      <Alert status="info"><ShieldCheck aria-hidden="true" />{t("notDevices")}</Alert>
+      <HelpDisclosure label={t("sessionHelp")}>{t("notDevices")}</HelpDisclosure>
     </div>
 
     {confirmingOthers ? <Alert status="warning" className={styles.bulkConfirmation}>

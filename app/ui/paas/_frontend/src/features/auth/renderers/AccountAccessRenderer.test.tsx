@@ -5777,11 +5777,22 @@ describe("account access", () => {
     const { user } = await openAccess(repository, iam({}, childUser.id), "roles");
 
     await user.click(await screen.findByRole("button", { name: "新建角色" }));
-    expect(screen.getByText("受限委派创建不提供边界选择器", { exact: false })).toBeTruthy();
-    expect(screen.getByText(delegatedBoundary.policy.policyId)).toBeTruthy();
-    expect(screen.getByText(delegatedBoundary.policy.versionId)).toBeTruthy();
+    const trustHelp = screen.getByText("角色信任与权限边界");
+    const disclosure = trustHelp.closest("details")!;
+    expect(disclosure.open).toBe(false);
+    await user.click(trustHelp);
+    expect(disclosure.open).toBe(true);
+    expect(within(disclosure).getByText(/iam\.role\.assume/)).toBeTruthy();
+    expect(within(disclosure).getByText(/受委派用户创建的角色会继承其权限边界/)).toBeTruthy();
+    expect(within(disclosure).getByText(delegatedBoundary.policy.policyId)).toBeTruthy();
+    expect(within(disclosure).getByText(delegatedBoundary.policy.versionId)).toBeTruthy();
+    await user.click(trustHelp);
     await user.click(screen.getByRole("checkbox", { name: "developer" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.queryByText(/请输入 1–64 个字符的名称/)).toBeNull();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getAllByText(/请输入 1–64 个字符的名称/)).toHaveLength(1);
+    expect(document.activeElement).toBe(screen.getByLabelText("名称", { exact: true }));
     await user.type(screen.getByLabelText("名称", { exact: true }), "DelegatedReviewer");
     await user.click(screen.getByRole("button", { name: "下一步" }));
 
@@ -5790,7 +5801,7 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "新建角色" }));
 
     expect(await screen.findByRole("heading", { name: "角色已创建" })).toBeTruthy();
-    expect(screen.getAllByText("同一事务中创建角色", { exact: false })).toHaveLength(2);
+    expect(screen.getByText("同一事务中创建角色", { exact: false }).closest('[role="status"]')).toBeTruthy();
     const submitted = create.mock.calls[0]?.[2];
     expect(submitted).toEqual({
       name: "DelegatedReviewer",

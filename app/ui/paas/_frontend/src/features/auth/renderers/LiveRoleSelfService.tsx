@@ -2,8 +2,8 @@
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useFormatter, useTranslations } from "next-intl";
-import { Clock3, LogOut, Repeat2, ShieldCheck, UserRound } from "lucide-react";
-import { Alert, Badge, Button, Card, ContentPage, FormField, PageSkeleton, Select, Typography } from "@ui/xiak";
+import { Clock3, LogOut, ShieldCheck, UserRound } from "lucide-react";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, FormField, PageSkeleton, Select, Typography } from "@ui/xiak";
 import { useRoleSession } from "../application/RoleSessionProvider";
 import { useSession } from "../application/SessionProvider";
 import type { AssumableRole } from "../domain/roles";
@@ -72,7 +72,7 @@ export function LiveRoleSelfService() {
 
   return <section aria-label={t("title")} aria-busy={roleSession.busy !== null} className={styles.root}>
     <ContentPage.Heading title={t("title")} scrollKey="role-self-service-live" actions={headingActions} />
-    <Alert status="info"><Repeat2 aria-hidden="true" />{t("liveBoundary")}</Alert>
+    <HelpDisclosure label={t("roleDirectoryHelp")}>{t("liveBoundary")}</HelpDisclosure>
 
     {roleSession.stage === "role-active" && roleSession.identity ? <Card>
       <Card.Header className={styles.sessionHeader}>
@@ -111,7 +111,7 @@ export function LiveRoleSelfService() {
 
     {discoveryVisible ? <div aria-busy={roleSession.busy === "discover" || undefined} className={styles.discovery}>
       <div className={styles.sectionHeading}><div><Typography.Title as="h2" level={3}>{t("discoveryTitle")}</Typography.Title><Typography.Text tone="muted">{t("discoveryHint")}</Typography.Text></div>{roleSession.directory ? <Badge status="neutral">{t("roleCount", { count: roleSession.directory.items.length })}</Badge> : null}</div>
-      <Alert status="info"><ShieldCheck aria-hidden="true" />{t("discoveryBoundary")}</Alert>
+      <HelpDisclosure label={t("sessionPermissionsHelp")}>{t("discoveryBoundary")}</HelpDisclosure>
       {roleSession.busy === "discover" && !roleSession.directory ? <PageSkeleton label={t("loadingRoles")} labelVisible={false} layout="cards" /> : null}
       {roleSession.error && !roleSession.directory && roleSession.busy === null ? <Alert className={styles.attempt} status="danger"><div><div><strong>{t("discoveryUnavailableTitle")}</strong><span>{t("discoveryUnavailableHint")}</span></div><Button onClick={() => void roleSession.discover()} size="small" variant="secondary">{t("retryDiscovery")}</Button></div></Alert> : null}
       {roleSession.directory?.items.length ? <div className={styles.roleGrid}>{roleSession.directory.items.map((role) => <Card key={role.roleId}>

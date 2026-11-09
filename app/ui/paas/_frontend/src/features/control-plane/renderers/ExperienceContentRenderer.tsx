@@ -15,7 +15,7 @@ import {
   Database,
   Server,
 } from "lucide-react";
-import { Alert, Table, TablePagination, TableToolbar, EmptyState, Badge, Button, Card, FormField, LoadingFeedback, Progress, Select, Skeleton, ContentLayout, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Table, TablePagination, TableToolbar, EmptyState, Badge, Button, Card, FormField, LoadingFeedback, Progress, Select, Skeleton, ContentLayout, Typography } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type {
   AlertScene,
@@ -293,7 +293,7 @@ function ApplicationReadPanel({ resourceId, load, previewControls, onRetry }: {
   if (load.status === "ready") {
     const readyMetadata = load.snapshot.application.metadata;
     body = <>
-      <Alert status="info">{t("applicationRead.boundary")}</Alert>
+      <HelpDisclosure label={t("resourceAccessHelp")}>{t("applicationRead.boundary")}</HelpDisclosure>
       <dl className={styles.resourceFacts}>
         <div><dt>{t("applicationRead.scope")}</dt><dd>{readyMetadata.scope.kind} · <code>{readyMetadata.scope.tenantId}</code></dd></div>
         <div><dt>{t("applicationRead.resourceVersion")}</dt><dd>{readyMetadata.resourceVersion}</dd></div>

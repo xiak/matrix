@@ -1,7 +1,7 @@
 "use client";
 import { useId } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Checkbox, FormField, Input, TagEditor } from "@ui/xiak";
+import { HelpDisclosure, Checkbox, FormField, Input, TagEditor } from "@ui/xiak";
 import type { AccessRole, AccessWorkspace } from "../domain/accessWorkspace";
 import type { RoleTrust } from "../domain/roleTrust";
 import { WorkspaceSelection } from "./AccessWorkspaceUi";
@@ -10,7 +10,7 @@ import styles from "./PolicyAuthoringWizard.module.css";
 export function RoleTrustFields({ value, onChange, workspace, users }: { value: RoleTrust; onChange(value: RoleTrust): void; workspace: AccessWorkspace; users: { id: string; name: string }[] }) {
   const t = useTranslations("RoleWorkspace");
   return <div className={styles.stack}>
-    <Alert>{t("trustHints.user")}</Alert>
+    <HelpDisclosure label={t("trustHelp")}>{t("trustHints.user")}</HelpDisclosure>
     <p className={styles.note}>{t("tenant", { id: workspace.accountId })}</p>
     <WorkspaceSelection label={t("trustedUsers")} options={users} value={value.trustedUserIds} onChange={(trustedUserIds) => onChange({ trustedUserIds })} />
   </div>;

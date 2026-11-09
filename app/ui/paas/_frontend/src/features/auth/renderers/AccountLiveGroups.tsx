@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, EmptyState, FormField, Input, TableSkeleton, TextArea } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, EmptyState, FormField, Input, TableSkeleton, TextArea } from "@ui/xiak";
 import { accountError, type GroupAccessClient } from "../application/AccountAccessProvider";
 import { useGroupMembershipMutation, type GroupMembershipMutationClient } from "../application/groupMembershipMutation";
 import type {
@@ -213,7 +213,7 @@ function LiveGroupPolicyEditor({ client, access, scene, mode, onClose, onChanged
       {mode === "remove" ? <Alert status="warning">{t("remainingSources")}</Alert> : null}
       <div><Button type="button" variant="secondary" disabled={policyLocked} onClick={() => { policyCommand.reset(); setReview(false); }}>{t("backToSelection")}</Button></div>
     </> : <>
-      <Alert>{t("policyChangeHint")}</Alert>
+      <HelpDisclosure label={t("groupPolicyHelp")}>{t("policyChangeHint")}</HelpDisclosure>
       <WorkspaceSelection label={label} options={options} value={selection} onChange={select} limit={1}
         footnote={p(mode === "remove" ? "singleRevokeSelection" : "singleAttachSelection")} />
     </>}
@@ -303,7 +303,7 @@ function LiveGroupMembershipEditor({ group, mode, memberships, scene, command, c
       {mode === "remove" ? <Alert status="warning">{t("remainingSources")}</Alert> : null}
       <Button variant="secondary" type="button" onClick={() => setReview(null)}>{t("backToSelection")}</Button>
     </> : <>
-      <Alert>{t("membershipHint")}</Alert>
+      <HelpDisclosure label={t("membershipHelp")}>{t("membershipHint")}</HelpDisclosure>
       <WorkspaceSelection label={t(`${mode}Members`)} options={options} value={selection} onChange={(value) => { setSelection(value); setReview(null); }} limit={1}
         footnote={m(mode === "remove" ? "singleRemoveSelection" : "singleAddSelection")} />
       {mode === "add" && !scene.directoryComplete ? <p className={styles.note}>{t("loadedUsersOnly")}</p> : null}

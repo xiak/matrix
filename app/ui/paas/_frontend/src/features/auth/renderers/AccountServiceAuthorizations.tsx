@@ -2,7 +2,7 @@
 
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type {
   ServiceLinkedRoleAccessLoad,
@@ -144,7 +144,7 @@ function RelationDirectory({ client, onOpen }: {
       <div><h3 className={styles.detailTitle} id="service-linked-role-directory-title">{t("relations.title")}</h3><p className={styles.note}>{t("relations.hint")}</p></div>
       <Badge>{t("readOnly")}</Badge>
     </div>
-    <Alert>{t("relations.boundary")}</Alert>
+    <HelpDisclosure label={t("relationshipsHelp")}>{t("relations.boundary")}</HelpDisclosure>
     <ServiceAuthorizationReadBoundary status={state.status} retry={load} scope="relations"
       loading={<TableSkeleton label={t("relations.loading")} rows={4} />}>
     {current ? <>
@@ -175,7 +175,7 @@ function TemplateDetail({ template, onBack }: { template: ServiceRoleTemplate; o
       <div className={styles.sectionHeading}>
         <div><Badge status={template.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${template.status}`)}</Badge> <Badge>{t(`purposes.${template.spec.servicePurpose}`)}</Badge></div>
       </div>
-      <Alert>{t("activeIsNotConsent")}</Alert>
+      <HelpDisclosure label={t("templateHelp")}>{t("activeIsNotConsent")}</HelpDisclosure>
       <dl className={styles.facts}>
         <div><dt>{t("fields.templateId")}</dt><dd><code>{template.id}</code></dd></div>
         <div><dt>{t("fields.templateVersion")}</dt><dd>v{template.version}</dd></div>
@@ -258,7 +258,7 @@ function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClie
 
   return <section className={styles.stack} aria-labelledby="service-role-template-directory-title">
     <div><h3 className={styles.detailTitle} id="service-role-template-directory-title">{t("title")}</h3><p className={styles.note}>{t("directoryHint")}</p></div>
-    <Alert>{t("boundary")}</Alert>
+    <HelpDisclosure label={t("templateHelp")}>{t("boundary")}</HelpDisclosure>
     <TableToolbar labels={toolbarLabels}
       search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       filters={[
@@ -341,7 +341,7 @@ function RelationDetail({ client, roleId, initialName, onBack }: { client: Servi
         loading={<TableSkeleton label={t("detail.loading")} rows={5} header={false} />}>
       {current && relation ? <div className={styles.stack}>
         <div className={styles.sectionHeading}><div><Badge status={relation.role.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${relation.role.status}`)}</Badge> <Badge>SERVICE_LINKED</Badge></div></div>
-        <Alert>{t("detail.boundary")}</Alert>
+        <HelpDisclosure label={t("linkedRoleHelp")}>{t("detail.boundary")}</HelpDisclosure>
         <dl className={styles.facts}>
           <div><dt>{t("fields.role")}</dt><dd><code>{relation.role.name}</code><small>{relation.role.description}</small></dd></div>
           <div><dt>{t("fields.roleId")}</dt><dd><code>{relation.role.id}</code></dd></div>
@@ -380,7 +380,7 @@ function RelationDetail({ client, roleId, initialName, onBack }: { client: Servi
             note={current.nextAfter ? t("detail.moreBindings") : t("detail.completeBindings", { count: current.bindings.length })} />
           {pageFailure ? <Alert status="warning">{t(`errors.relations.${pageFailure}.description`)}</Alert> : null}
         </section>
-        <Alert>{t("detail.activeBindingIsNotSession")}</Alert>
+        <HelpDisclosure label={t("bindingHelp")}>{t("detail.activeBindingIsNotSession")}</HelpDisclosure>
         <Alert status="warning">{t("detail.noCommands")}</Alert>
       </div> : null}
       </ServiceAuthorizationReadBoundary>

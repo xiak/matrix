@@ -3,7 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ShieldCheck } from "lucide-react";
-import { Alert, Badge, Button, ContentPage, FormField, Input, TextArea, Wizard } from "@ui/xiak";
+import { Alert, Badge, Button, ContentPage, FormField, HelpDisclosure, Input, TextArea, Wizard } from "@ui/xiak";
 import { accountError, type RoleAccessClient } from "../application/AccountAccessProvider";
 import { validateRoleMetadataInput, type CreateRoleCommand, type RoleTag } from "../domain/roles";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
@@ -127,7 +127,7 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
       setStep(0);
       return;
     }
-    const invalid = validateRoleMetadataInput(normalizedName, normalizedDescription, tags, sessionMinutes);
+    const invalid = step > 0 || uncertain ? validateRoleMetadataInput(normalizedName, normalizedDescription, tags, sessionMinutes) : null;
     if (invalid) {
       setValidationError(invalid);
       setStep(1);
@@ -172,7 +172,7 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
     <Wizard label={w("createRole")} steps={steps.map((key) => ({ id: key, label: t(`liveSteps.${key}`) }))} currentStep={step}
       onStepChange={(next) => { if (!uncertain) { setValidationError(null); setLiveError(null); setStep(next); } }} completed={created} busy={busy}
       formRef={form} onSubmit={submit} title={created ? t("created") : t(`liveSteps.${currentStep}`)}
-      description={created ? t(createdHint) : t(`liveHints.${currentStep}`)} progressLabel={u("stepCount", { current: step + 1, total: 3 })}
+      description={created ? undefined : t(`liveHints.${currentStep}`)} progressLabel={created ? undefined : u("stepCount", { current: step + 1, total: 3 })}
       hint={<><ShieldCheck aria-hidden="true" />{t("liveCreateHint")}</>}
       actions={created ? <Button onClick={() => onDone(createdId!)}>{t("viewRole")}</Button> : <>
         <Button variant="ghost" disabled={busy} onClick={cancel}>{w("cancel")}</Button>
@@ -180,14 +180,16 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
         <Button type="submit" disabled={busy || !client.canCreate}>{busy ? t("saving") : uncertain ? t("retryOriginalRequest") : step < 2 ? t("next") : w("createRole")}</Button>
       </>}>
       {created ? <Alert status="success">{t(createdHint)}</Alert> : <fieldset className={styles.stack} disabled={Boolean(uncertain)}>
-        {validationError ? <Alert status="danger" tabIndex={-1}>{t(`liveErrors.${validationError}`)}</Alert> : null}
+        {validationError && validationError !== "invalidName" ? <Alert status="danger" tabIndex={-1}>{t(`liveErrors.${validationError}`)}</Alert> : null}
         {uncertain ? <Alert status="warning" tabIndex={-1}>{t("createOutcomeUnknown")} <code>{uncertain.requestId}</code></Alert> : null}
         {!client.canCreate ? <Alert status="warning">{client.createRestrictionReason ?? a("errors.forbidden")}</Alert> : null}
         {step === 0 ? <div className={styles.stack}>
-          <Alert>{t("liveTrustCreateHint")}</Alert>
-          <Alert>{delegatedCreation ? <>
-            {t("liveDelegatedBoundaryHint")}{delegatedCeiling ? <> <code>{delegatedCeiling.policyId}</code> · <code>{delegatedCeiling.versionId}</code></> : null}
-          </> : t("liveRootBoundaryHint")}</Alert>
+          <HelpDisclosure label={t("trustHelp")}>
+            <p>{t("liveTrustCreateHint")}</p>
+            <p>{delegatedCreation ? <>
+              {t("liveDelegatedBoundaryHint")}{delegatedCeiling ? <> <code>{delegatedCeiling.policyId}</code> · <code>{delegatedCeiling.versionId}</code></> : null}
+            </> : t("liveRootBoundaryHint")}</p>
+          </HelpDisclosure>
           {!scene.directoryComplete ? <Alert status="warning">{t("loadedUsersOnly")}</Alert> : null}
           <WorkspaceSelection label={t("trustedUsers")} options={trustedUsers} value={trustedUserIds} limit={256}
             onChange={(ids) => changeIntent(() => setTrustedUserIds(ids))} />
@@ -195,6 +197,7 @@ export function LiveRoleCreationWizard({ client, scene, onBack, onDone }: {
         {step === 1 ? <div className={styles.metadata}>
           <FormField id={`${id}-name`} label={w("name")} hint={t("nameHint")} error={validationError === "invalidName" ? t("liveErrors.invalidName") : undefined}>
             <Input id={`${id}-name`} required maxLength={64} value={name} invalid={validationError === "invalidName"}
+              aria-describedby={`${id}-name-hint${validationError === "invalidName" ? ` ${id}-name-error` : ""}`}
               onChange={(event) => changeIntent(() => setName(event.target.value))} />
           </FormField>
           <FormField id={`${id}-description`} label={w("description")}>

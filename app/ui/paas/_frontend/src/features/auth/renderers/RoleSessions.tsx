@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ActionMenu, Alert, Badge, Button, EmptyState, Table, TablePagination, TableToolbar } from "@ui/xiak";
+import { ActionMenu, Alert, HelpDisclosure, Badge, Button, EmptyState, Table, TablePagination, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { AccessRole, AccessRoleSession, AccessWorkspace } from "../domain/accessWorkspace";
@@ -72,7 +72,7 @@ export function RoleSessions({ role, workspace, scene }: { role: AccessRole; wor
   if (intent) return <SessionRevocation session={intent.session} caller={callerLabel(intent.session)} onClose={close} />;
   return <div className={styles.stack} ref={directory}>
     <div className={styles.actionHeader}><h3>{t("sessions")}</h3><Badge status="neutral">MOCK</Badge></div>
-    <Alert status="info">{t("sessionDirectoryHint")}</Alert>
+    <HelpDisclosure label={t("roleSessionHelp")}>{t("sessionDirectoryHint")}</HelpDisclosure>
     <RoleSessionSourceGuide />
     <TableToolbar labels={toolbarLabels} search={{ label: t("exactSessionSearch"), value: sessionId, onChange: (value) => { setSessionId(value); setPage(1); } }} filters={[
       { id: "source-user", label: t("sourceUserFilter"), value: sourceUserId, onChange: (value) => { setSourceUserId(value); setPage(1); }, options: [{ value: "all", label: w("all") }, ...scene.users.map((user) => ({ value: user.id, label: `${user.loginName} · ${user.id}` }))] },

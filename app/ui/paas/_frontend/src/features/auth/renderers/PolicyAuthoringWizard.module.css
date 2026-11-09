@@ -12,6 +12,7 @@
 .featureCopy { display: grid; gap: var(--xiak-spacing-narrow); overflow-wrap: anywhere; }
 .featureCopy small { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .stack { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-comfortable); min-width: 0; }
+fieldset.stack { margin: 0; border: 0; padding: 0; }
 .row, .actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); }
 .row { justify-content: space-between; }
 .row h3 { margin: 0; font-size: var(--xiak-font-size-body); color: var(--xiak-color-text-strong); }

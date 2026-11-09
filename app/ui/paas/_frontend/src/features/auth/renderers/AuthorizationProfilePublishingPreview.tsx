@@ -3,7 +3,7 @@
 import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, FileCode2, LockKeyhole, ShieldCheck } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, Steps, Table, TablePagination, Tabs } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, Steps, Table, TablePagination, Tabs } from "@ui/xiak";
 import {
   authorizationResourceShapeKind,
   type AuthorizationProfileAction,
@@ -170,7 +170,7 @@ function ProfileChangeImpactReview({ current, candidate }: {
       <div><h4 id="authorization-profile-change-impact-title">{t("title")}</h4><p>{t("hint")}</p></div>
       <Badge status="warning">{t("synthetic")}</Badge>
     </div>
-    <Alert status="info">{t("boundary")}</Alert>
+    <HelpDisclosure label={t("changesHelp")}>{t("boundary")}</HelpDisclosure>
     <dl className={styles.changeReferences}>
       <div><dt>{t("current")}</dt><dd><code>{current.profile.product}@{current.profile.revision}</code><small><code>{current.contentDigest}</code></small></dd></div>
       <div><dt>{t("candidate")}</dt><dd><code>{candidate.profile.product}@{candidate.profile.revision}</code><small><code>{candidate.contentDigest}</code></small></dd></div>
@@ -214,7 +214,7 @@ function ServiceTemplateCompatibilityReview({ entry }: { entry: AuthorizationPro
       <div><h4 id="authorization-profile-template-review-title">{t("title")}</h4><p>{t("hint")}</p></div>
       <Badge status={review.compatible ? "success" : "warning"}>{t(review.compatible ? "compatible" : "mismatch")}</Badge>
     </div>
-    <Alert status="info">{t("boundary")}</Alert>
+    <HelpDisclosure label={t("templateHelp")}>{t("boundary")}</HelpDisclosure>
     <dl className={styles.templateReferences}>
       <div><dt>{t("profileReference")}</dt><dd><code>{entry.profile.product}@{entry.profile.revision}</code><small><code>{entry.contentDigest}</code></small></dd></div>
       <div><dt>{t("templateReference")}</dt><dd><code>{template.id}@v{template.version}</code><small><code>{template.contentDigest}</code></small></dd></div>
@@ -332,7 +332,7 @@ export function AuthorizationProfilePublishingPreview({ entry, candidate: suppli
             </section> : null}
           </Tabs.Content>
         </Tabs.Root>
-        <Alert status="info">{t("validation.notProof")}</Alert>
+        <HelpDisclosure label={t("validationHelp")}>{t("validation.notProof")}</HelpDisclosure>
       </Card.Body>
     </Card> : null}
 
@@ -357,7 +357,7 @@ export function AuthorizationProfilePublishingPreview({ entry, candidate: suppli
             <div><dt>{t("release.package.policies")}</dt><dd><Badge status="neutral">{t("release.package.notLoaded")}</Badge><small>{t("release.package.policiesHint")}</small></dd></div>
             <div><dt>{t("release.package.templates")}</dt><dd><Badge status="neutral">{t("release.package.notLoaded")}</Badge><small>{t("release.package.templatesHint")}</small></dd></div>
           </dl>
-          <Alert status="info">{t("release.package.pipeline")}</Alert>
+          <HelpDisclosure label={t("releaseHelp")}>{t("release.package.pipeline")}</HelpDisclosure>
         </section>
         <ul className={styles.boundaries}>
           <li>{t("release.boundaries.noGrant")}</li>

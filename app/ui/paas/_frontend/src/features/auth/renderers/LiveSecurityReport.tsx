@@ -3,7 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Download, FilePlus2 } from "lucide-react";
-import { Alert, Badge, Button, Card, ContentPage, FormField, Input, TableSkeleton, Tabs, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, FormField, Input, TableSkeleton, Tabs, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { SecurityReportClient } from "../application/AccountAccessProvider";
 import { accountSecurityReportLimits, type AccountSecurityReport, type AccountSecurityReportAccess, type AccountSecurityReportCreation } from "../domain/securityReports";
@@ -267,24 +267,21 @@ function LiveSecurityReportGeneration({ authorizationPending, blockedIntent, cli
   const retryingOriginal = Boolean(currentIntent && !busy);
   return <div className={styles.stack}>
     <ContentPage.Heading title={t("title")} scrollKey={`security-report-live:${client.accountId}:${client.sessionRevision}`} actions={<ContentPage.Commands label={t("pageActions")} primary={{ id: "generate", label: t(retryingOriginal ? "retryOriginal" : "generate"), icon: <FilePlus2 aria-hidden="true" />, disabled: Boolean(writeBlocked || !client.canCreate || creation || busy || blockedIntent), disabledReason: !client.canCreate ? t("createDenied") : creation ? t("singleIntent") : blockedIntent ? t("foreignIntentReason") : undefined, onSelect: () => void generate() }} />} />
-    <Alert status="info">{t("boundary")}</Alert>
     {retryingOriginal && currentIntent ? <Alert status="warning">{t("uncertainIntent", { id: currentIntent.requestId })}</Alert> : null}
     {blockedIntent ? <Alert status="warning">{t("foreignIntent", { id: blockedIntent.requestId })}</Alert> : null}
     {failure ? <Alert status="danger"><strong>{t("errorTitle", { operation: t(`operations.${failure.operation}`) })}</strong><p>{t(`errors.${failure.kind}`)}</p></Alert> : null}
     {downloaded ? <Alert status="success">{t("downloaded")}</Alert> : null}
-    <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{t("scopeTitle")}</Typography.Title><Typography.Text tone="muted">{t("scopeHint")}</Typography.Text></div><Badge status="info">{t("synchronous")}</Badge></Card.Header>
-      <Card.Body className={styles.securityReportBody}>
-        <dl className={styles.securityReportSummary} aria-label={t("limitsTitle")}>
-          <div><dt>{preview("users")}</dt><dd>≤ {accountSecurityReportLimits.users}</dd></div>
-          <div><dt>{preview("accessKeys")}</dt><dd>≤ {accountSecurityReportLimits.accessKeys}</dd></div>
-          <div><dt>{preview("rows")}</dt><dd>≤ {accountSecurityReportLimits.rows}</dd></div>
-          <div><dt>{preview("content")}</dt><dd>≤ 4 MiB</dd></div>
-        </dl>
-        <p className={styles.note}>{preview("beforeGenerateHint")}</p>
-        <Alert status="warning">{preview("noRealtimeConclusion")}</Alert>
-      </Card.Body>
-    </Card>
+    <HelpDisclosure label={t("scopeTitle")}>
+      <p>{t("scopeHint")}</p>
+      <dl className={styles.securityReportSummary} aria-label={t("limitsTitle")}>
+        <div><dt>{preview("users")}</dt><dd>≤ {accountSecurityReportLimits.users}</dd></div>
+        <div><dt>{preview("accessKeys")}</dt><dd>≤ {accountSecurityReportLimits.accessKeys}</dd></div>
+        <div><dt>{preview("rows")}</dt><dd>≤ {accountSecurityReportLimits.rows}</dd></div>
+        <div><dt>{preview("content")}</dt><dd>≤ 4 MiB</dd></div>
+      </dl>
+      <p>{t("boundary")}</p>
+      <p>{preview("noRealtimeConclusion")}</p>
+    </HelpDisclosure>
     <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{t("knownReportTitle")}</Typography.Title><Typography.Text tone="muted">{t("knownReportHint")}</Typography.Text></div></Card.Header>
       <Card.Body>

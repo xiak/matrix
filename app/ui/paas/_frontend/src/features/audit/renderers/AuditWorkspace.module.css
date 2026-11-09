@@ -3,10 +3,6 @@
 .directoryHeader > div, .detailHeader > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .detailHeader > div { grid-template-columns: auto minmax(0, 1fr); align-items: center; }
 .detailHeader > span { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
-.boundary { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
-.boundary > svg { width: 1.125rem; height: 1.125rem; margin-top: 0.125rem; }
-.boundary p { display: grid; gap: var(--xiak-spacing-micro); margin: 0; line-height: var(--xiak-line-height-body); }
-.boundary span { font-size: var(--xiak-font-size-small); }
 .queryBar { display: flex; min-height: var(--xiak-control-height); align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .queryBar > :first-child { min-width: 0; }
 .filters { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--xiak-spacing-default); align-items: end; }

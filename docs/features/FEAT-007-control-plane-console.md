@@ -2061,6 +2061,15 @@ policy operation explorers retain their own scoped search. They are separate
 collections, not redundant fields to delete. Theme, locale, keyboard/focus,
 empty/recovery states, selection limits and existing draft guards are preserved.
 
+Optional explanations of permissions, data scope, and configuration rules use
+the shared `HelpDisclosure` next to the relevant task. Its localized topic
+opens a native disclosure by pointer, touch, Enter or Space. Related
+explanations share one initially collapsed control. Field requirements stay
+with their inputs. A failed validation, blocked action, incomplete result,
+pending operation, preview warning, or consequence that needs review stays
+visible where the user acts. Expanding help does not submit the form or
+change its selection.
+
 The public Theme foundation covers tables, dialogs, buttons, native radio and
 checkbox controls, input/select fields, search and password affordances,
 alerts, empty states, tabs, selection menus, statistics and progress. All

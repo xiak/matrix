@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -63,12 +63,18 @@ afterEach(() => {
 });
 
 describe("live account security report", () => {
-  it("renders its fixed scope and known-ID entry without fabricating a report directory", () => {
+  it("keeps the known-ID entry available while its reporting scope is collapsed", async () => {
+    const user = userEvent.setup();
     view(client());
     expect(screen.getByRole("heading", { name: "账号安全报告" })).toBeTruthy();
-    expect(screen.getByText(/只使用 IAM 已固定的生成、按 ID 读取和下载接口/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "生成当前账号安全报告" })).toBeTruthy();
     expect(screen.getByLabelText("报告 ID")).toBeTruthy();
+    const summary = screen.getByText("报告范围与生成限制");
+    const scope = summary.closest("details")!;
+    expect(scope.open).toBe(false);
+    await user.click(summary);
+    expect(scope.open).toBe(true);
+    expect(within(scope).getByText(/同步封存当前账号的用户和访问密钥快照/)).toBeTruthy();
     expect(screen.queryByText("报告目录摘要")).toBeNull();
     expect(screen.queryByText(/MOCK/)).toBeNull();
   });

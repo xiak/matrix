@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Clock3, LogOut, Repeat2, ShieldCheck, UserRound } from "lucide-react";
-import { Alert, Badge, Button, Card, ContentPage, FormField, Select, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, FormField, Select, Typography } from "@ui/xiak";
 import styles from "./RoleSelfServicePreview.module.css";
 
 type PreviewRole = Readonly<{
@@ -192,7 +192,7 @@ export function RoleSelfServicePreview() {
           </Card.Body>
         </Card>;
       })}</div>
-      <Alert status="info"><ShieldCheck aria-hidden="true" />{t("discoveryBoundary")}</Alert>
+      <HelpDisclosure label={t("sessionPermissionsHelp")}>{t("discoveryBoundary")}</HelpDisclosure>
     </div> : null}
 
     {selected && !activeSession ? <Card>

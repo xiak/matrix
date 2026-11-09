@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, RadioGroup, Select, Table, TablePagination, TableSkeleton, Tabs, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, RadioGroup, Select, Table, TablePagination, TableSkeleton, Tabs, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccessAnalysisClient } from "../application/AccountAccessProvider";
 import type { AccountAccessView, IamAction } from "../domain/accounts";
@@ -469,7 +469,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       setSelected(null); setSelectedLoading(true); setDetailError(null); setSelectedRevision((current) => current + 1);
     }}>{t("live.retry")}</Button> : null}</div></Alert> : null}
     {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
-    <Alert status="info">{t("live.findingBoundary")}</Alert>
+    <HelpDisclosure label={t("reviewStateHelp")}>{t("live.findingBoundary")}</HelpDisclosure>
     {selectedLoading ? <Card><TableSkeleton header={false} label={t("live.loadingFindingDetail")} labelVisible={false} rows={5} /></Card> : null}
     {!selectedLoading && selectedFinding ? <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{selectedFinding.target.id}</Typography.Title><Typography.Text tone="muted">{selectedFinding.id}</Typography.Text></div><Badge status={findingBadge[selectedFinding.status]}>{t(`unused.lifecycle.${selectedFinding.status}`)}</Badge></Card.Header>
@@ -499,7 +499,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
 
   return <div className={styles.detailWorkspace}>
     <ContentPage.Heading title={t("title")} scrollKey={`access-analysis-live:${client.accountId}`} />
-    <Alert status="info">{t("live.connectedBoundary")}</Alert>
+    <HelpDisclosure label={t("findingsHelp")}>{t("live.connectedBoundary")}</HelpDisclosure>
     {!client.canList ? <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.knownAnalyzerTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.knownAnalyzerHint")}</Typography.Text></div></Card.Header>
       <Card.Body><FormField id="known-access-analyzer-id" label={t("live.knownAnalyzerLabel")} hint={t("live.knownAnalyzerHint")}>

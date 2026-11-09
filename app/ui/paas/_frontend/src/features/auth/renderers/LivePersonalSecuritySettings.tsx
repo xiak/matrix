@@ -2,8 +2,8 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useFormatter, useTranslations } from "next-intl";
-import { KeyRound, Mail, RefreshCcw, ShieldCheck, Smartphone } from "lucide-react";
-import { Alert, Badge, Button, Card, FormField, Input, PasswordInput, Skeleton, Typography } from "@ui/xiak";
+import { KeyRound, Mail, RefreshCcw, Smartphone } from "lucide-react";
+import { Alert, HelpDisclosure, Badge, Button, Card, FormField, Input, PasswordInput, Skeleton, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import { NotificationContactPasswordRejected, usePersonalSecurity, type PersonalSecurityClient } from "../application/PersonalSecurityProvider";
 import type { AuthenticatorState, NotificationContact, NotificationContactVerification, TOTPEnrollmentStart } from "../domain/personalSecurity";
@@ -224,7 +224,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
       <div><p>{t("eyebrow")}</p><h2 id="live-personal-security" tabIndex={-1}>{t("title")}</h2><span>{t("hint")}</span></div>
       <Badge status="success">LIVE</Badge>
     </div>
-    <Alert status="info"><ShieldCheck aria-hidden="true" />{t("boundary")}</Alert>
+    <HelpDisclosure label={t("personalSettingsHelp")}>{t("boundary")}</HelpDisclosure>
     <SelfPasswordSettings />
     {error ? <Alert status="danger">{t(`errors.${error}`)} {error === "load" ? <Button onClick={() => { setLoadState("loading"); setError(null); void load(); }} size="small" variant="ghost"><RefreshCcw aria-hidden="true" />{t("retry")}</Button> : null}</Alert> : null}
     {!client ? <Alert status="warning">{t("unavailable")}</Alert> : null}
@@ -238,7 +238,7 @@ function SessionPersonalSecuritySettings({ client }: { client: PersonalSecurityC
             {client && factor ? <LiveNotificationContactReplacement client={client} contact={contact} factor={factor} onCommitted={load} /> : null}
           </> : null}
           {loadState === "ready" && contact?.state === "NONE" && !verification ? <form className={styles.form} onSubmit={(event) => void startContact(event)}>
-            <Alert>{t("contact.firstOnly")}</Alert>
+            <HelpDisclosure label={t("contactPurposeHelp")}>{t("contact.firstOnly")}</HelpDisclosure>
             <FormField id={emailId} label={t("contact.address")}><Input autoComplete="email" disabled={contactStartFrozen} id={emailId} inputMode="email" onChange={(event) => { setEmail(event.target.value); contactRequest.current = requestToken("ui-security-contact-"); }} required type="email" value={email} /></FormField>
             <FormField id={contactPasswordId} label={t("currentPassword")} error={contactPasswordIssue ? t("contact.passwordRejected") : undefined}><PasswordInput aria-describedby={contactPasswordIssue ? `${contactPasswordId}-error` : undefined} autoComplete="current-password" capsLockLabel={auth("capsLock")} hideLabel={auth("hidePassword")} id={contactPasswordId} invalid={contactPasswordIssue} onChange={(event) => { setContactPassword(event.target.value); setContactPasswordIssue(false); if (!contactStartFrozen) contactRequest.current = requestToken("ui-security-contact-"); }} ref={contactPasswordRef} required showLabel={auth("showPassword")} value={contactPassword} /></FormField>
             <div className={styles.flowActions}><Button disabled={busy || !email || !contactPassword} type="submit">{busy ? t("saving") : t(contactStartFrozen ? "contact.retryStart" : "contact.send")}</Button></div>

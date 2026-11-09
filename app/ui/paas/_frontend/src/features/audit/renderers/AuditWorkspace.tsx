@@ -10,6 +10,7 @@ import {
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import {
   Alert,
+  HelpDisclosure,
   Badge,
   Button,
   Card,
@@ -367,7 +368,7 @@ export function AuditWorkspace({ preview = false, tenantId: accountId }: { previ
     <Card aria-description={t("description")}>
       <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("directory.heading")}</Typography.Title><Typography.Text tone="muted">{t("description")}</Typography.Text></div><Badge>{preview ? t("preview") : t("live")}</Badge></Card.Header>
       <Card.Body className={styles.stack}>
-        <div className={styles.boundary}><ShieldCheck aria-hidden="true" /><p><strong>{t("boundary.title")}</strong><span>{t("boundary.description")}</span></p></div>
+        <HelpDisclosure label={t("boundary.title")}>{t("boundary.description")}</HelpDisclosure>
         <div className={styles.queryBar}>
           <Button aria-expanded={filtersOpen} aria-controls="audit-query-filters" ref={filterTrigger} type="button" variant="secondary" onClick={() => setFiltersOpen((value) => !value)}><ListFilter aria-hidden="true" />{t("filters.toggle")}{filterCount ? <Badge status="info">{t("filters.activeCount", { count: filterCount })}</Badge> : null}</Button>
           <Button aria-label={t("actions.refresh")} disabled={loading} iconOnly size="small" type="button" variant="ghost" onClick={() => setRefreshRevision((value) => value + 1)}><RefreshCcw aria-hidden="true" /></Button>

@@ -3,7 +3,7 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ArrowLeft, Boxes, KeyRound, ShieldCheck, Unlink } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, Select, Steps, Table, TablePagination, TableToolbar, Tabs } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, Select, Steps, Table, TablePagination, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountPolicyDocument } from "../domain/accounts";
@@ -212,7 +212,7 @@ function TemplateDetail({ reviewRef, observationRef, onReview, onObserve }: {
       <Card><Card.Header className={styles.cardHeading}><ShieldCheck aria-hidden="true" /><div><span>{t("detail.permissionLabel")}</span><h4>{previewTemplate.snapshotName} · v{previewTemplate.revision}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.permissionHint")}</p><Alert status="info">{t("detail.snapshotBoundary")}</Alert></Card.Body></Card>
     </div>
     <div className={styles.snapshot}><div><strong>{t("detail.snapshotTitle")}</strong><span>{t("detail.snapshotCount", { count: previewSnapshot.statements.length })}</span></div><ul>{previewSnapshot.statements.flatMap((statement) => statement.actions).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div>
-    <Alert status="info">{t("detail.modelBoundary")}</Alert>
+    <HelpDisclosure label={t("serviceAccessHelp")}>{t("detail.modelBoundary")}</HelpDisclosure>
     <div className={styles.actions}><Button ref={reviewRef} onClick={onReview}>{t("detail.review")}</Button><Button ref={observationRef} variant="secondary" onClick={onObserve}>{t("detail.observeAuthorized")}</Button></div>
   </div>;
 }
@@ -455,7 +455,7 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
               <div><dt>{t("observation.session.source")}</dt><dd><code>SERVICE_ACCOUNT</code></dd></div>
               <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
             </Card.Facts>
-            <Alert status="info">{t("observation.session.boundary")}</Alert>
+            <HelpDisclosure label={t("sessionHelp")}>{t("observation.session.boundary")}</HelpDisclosure>
             <ServiceRoleRuntimeTrace />
           </Card.Body>
         </Card>

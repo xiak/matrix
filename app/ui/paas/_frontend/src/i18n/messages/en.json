@@ -447,6 +447,7 @@
     "returnToSignIn": "Return to sign in"
   },
   "MfaPreview": {
+    "accountRulesHelp": "How account security rules apply",
     "progress": "Authenticator setup progress",
     "steps": {
       "prepare": "Prepare",
@@ -897,6 +898,7 @@
     "confirm": "Confirm address"
   },
   "OwnSessions": {
+    "sessionHelp": "How sessions relate to devices",
     "title": "Login sessions",
     "scopeTitle": "Active credentials for the current user",
     "description": "Review the current user's active login sessions and end other sessions that are no longer needed.",
@@ -1182,6 +1184,7 @@
     }
   },
   "ApplicationDeploymentManagement": {
+      "deploymentHelp": "Deployment state and permissions",
       "title": "Deployment and versions",
       "hint": "Application identity and runtime deployment are separate. Manage desired versions here and observe results through asynchronous operations.",
       "mockCandidate": "MOCK · Pending integration",
@@ -1358,6 +1361,7 @@
     "role": "Temporary role session"
   },
   "RoleSelfService": {
+    "sessionPermissionsHelp": "Permissions in a role session",
     "title": "Role switch preview",
     "mockBoundary": "Isolated member MOCK for reviewing role discovery, assumption, and exit. It does not change the signed-in user in the header, issue a real credential, or read the administrator role directory.",
     "actorTitle": "Member self-service scenario",
@@ -1431,6 +1435,8 @@
     "confirmExit": "End role"
   },
   "RoleSelfServiceLive": {
+    "roleDirectoryHelp": "Which roles you can assume",
+    "sessionPermissionsHelp": "Permissions in a role session",
     "title": "Role sessions",
     "liveBoundary": "LIVE member self-service. Discovery returns only roles the current user can assume now. Role administration, trust policies, and administrator session history are separate authority boundaries.",
     "sourceTitle": "Source identity",
@@ -1522,6 +1528,8 @@
     }
   },
   "UserWizard": {
+    "permissionSourcesHelp": "Choosing a permission source",
+    "boundaryHelp": "How permission boundaries work",
     "steps": {
       "type": "Choose a use case",
       "identity": "User information",
@@ -1690,6 +1698,9 @@
     }
   },
   "AccountAccess": {
+    "tenantHelp": "Accounts and resources in a new tenant",
+    "tenantDirectoryHelp": "What the tenant directory shows",
+    "userDirectoryHelp": "User directory and bulk actions",
     "roleAccessTitle": "Role switch preview",
     "createUserTitle": "Create subuser",
     "createTenantTitle": "Create tenant account",
@@ -2453,6 +2464,7 @@
     "next": "Next"
   },
   "LivePolicyCreate": {
+    "scopeHelp": "Scope of a custom policy",
     "title": "Create custom policy",
     "previewTitle": "Explore IAM policy authoring",
     "previewScopeNotice": "MOCK preview · This uses the LIVE policy author with an example catalog. Reviewing or finishing never calls IAM, creates a policy, or grants access.",
@@ -2504,6 +2516,7 @@
     "endOldIntent": "End old intent"
   },
   "PolicyVisualAuthoring": {
+    "actionCatalogHelp": "Choosing compatible actions",
     "catalogNotice": "Only exact tenant Actions from the current catalog are available. Compatible Actions may share a statement; use another statement when they differ. The catalog is not an authorization result. IAM validates the final document.",
     "catalogSnapshotTitle": "Product catalog used by this declaration",
     "catalogSnapshotItem": "{product} @ r{revision}",
@@ -2699,6 +2712,8 @@
     }
   },
   "AuthorizationProfilePublishingPreview": {
+    "validationHelp": "What validation results cover",
+    "releaseHelp": "How product declarations are published",
     "workspaceTitle": "Product permission onboarding",
     "workspaceHint": "A workspace for product and IAM teams to review permission declarations, real PEP enforcement ownership and trusted release gates before backend contracts exist. Tenant policy authors do not register product capabilities here.",
     "workspaceBoundary": "This is an isolated MOCK of an internal collaboration flow, not a tenant feature. No draft, validation, approval or publication API is connected, so every gate remains not run or unverified.",
@@ -2762,6 +2777,7 @@
         "runtimeEvidenceHint": "This MOCK is not connected to a product PEP, gateway, or audit evidence and cannot prove whether a request will be allowed or denied."
       },
       "changeImpact": {
+        "changesHelp": "Interpreting declaration changes",
         "title": "Candidate revision impact",
         "hint": "Compare the current catalog revision with one synthetic AuthorizationProfile candidate before trusted release, showing only structural changes to complete declarations.",
         "synthetic": "Synthetic candidate · MOCK",
@@ -2806,6 +2822,7 @@
         }
       },
       "templateReview": {
+        "templateHelp": "Understanding template compatibility",
         "title": "Service-authorization template cross-check",
         "hint": "Before release, compare the template product, service purpose, and workload Actions with this immutable AuthorizationProfile snapshot.",
         "boundary": "This checks compatibility between two release contracts only. A visible template, registered Profile, or passing check is not customer consent and creates no service-linked role, resource binding, or temporary session.",
@@ -2872,6 +2889,8 @@
     "finish": "Finish preview"
   },
   "ServiceAuthorizationPreview": {
+    "serviceAccessHelp": "Requirements for service access",
+    "sessionHelp": "How bindings relate to temporary credentials",
     "backToDirectory": "Back to service authorization",
     "backToTemplate": "Back to authorization template",
     "title": "Service authorization",
@@ -3159,6 +3178,9 @@
     }
   },
   "ServiceAuthorizationDirectory": {
+    "relationshipsHelp": "Authorization relationships and binding history",
+    "linkedRoleHelp": "How service-linked roles are managed",
+    "bindingHelp": "How bindings relate to service sessions",
     "title": "Service authorization",
     "hint": "Inspect this account's consented service-linked roles and resource-binding history, plus platform templates available to future consent flows.",
     "boundary": "Platform templates, account consent, and resource binding are separate boundaries. An available template is not account authorization, and account authorization does not bind every resource.",
@@ -3242,6 +3264,7 @@
     }
   },
   "ServiceRoleTemplateDirectory": {
+    "templateHelp": "How templates relate to account consent",
     "title": "Service authorization templates",
     "directoryHint": "Inspect service-role templates published through a controlled cloud-product and IAM platform release. A template fixes the permission ceiling and workload kinds available to a future consent flow.",
     "boundary": "This directory describes platform capability only; it is not the current account's authorization list. Customer consent, the service-linked role relation, and exact resource bindings are separate state.",
@@ -3315,8 +3338,8 @@
     "preview": "MOCK preview",
     "live": "Live service",
     "boundary": {
-      "title": "The tenant boundary comes from the current IAM session",
-      "description": "This page accepts no tenant selector and shows only sanitized records scoped by the service to the current credential."
+      "title": "Which audit records are visible",
+      "description": "The current IAM session determines the tenant. The service filters and redacts records for the signed-in identity."
     },
     "actions": {
       "verify": "Verify integrity",
@@ -3794,11 +3817,12 @@
     }
   },
   "ManagedService": {
+    "catalogVisibilityHelp": "Which specifications are visible",
+    "bindingHelp": "How service bindings relate to authorization",
     "redisConnectionHint": "Connect to the endpoint with a Redis client and the business username matrix. Obtain this instance’s password from your platform administrator; your Matrix login password does not authenticate to Redis.",
     "kibanaLoginHint": "Open the endpoint in your browser and sign in with the linked Elasticsearch business account. Ask your platform administrator for that instance’s business credentials; your Matrix account cannot sign in to Kibana.",
     "elasticsearchDependency": "Elasticsearch dependency",
     "productMockBoundary": "This is an isolated UX MOCK product workspace and does not create real resources. The matching backend capability is still a candidate awaiting independent verification; this is not evidence of release, high availability, or production readiness.",
-    "productLiveBoundary": "This page shows the service offerings, quotas and instances you can access.",
     "managedCloudService": "Managed cloud service",
     "productData": "Product resource status",
     "productDataLoadingHint": "Loading this product's available shapes, quota and instance state.",
@@ -4091,6 +4115,8 @@
     }
   },
   "ServiceWorkflow": {
+    "quotaHelp": "What activating a quota creates",
+    "countsHelp": "How status figures are calculated",
     "reloadElasticsearch": "Refresh available instances",
     "elasticsearchChanged": "The selected instance changed or no longer matches. Refresh the list and select it again.",
     "elasticsearchEmpty": "No matching Elasticsearch instance. Install one with the same version and region, obtain read and use permissions, then refresh the list.",
@@ -4129,6 +4155,8 @@
     "statusNotice": "Values come from the current organization's control-plane snapshot. Unknown or failed states are never reported as healthy."
   },
   "CloudExperience": {
+    "resourceAccessHelp": "Who can view application details",
+    "tagScopeHelp": "How policies use resource tags",
     "resourceTable": "Unified resource list",
     "resource": "Resource",
     "product": "Product",
@@ -4433,6 +4461,8 @@
     }
   },
   "GroupWorkspace": {
+    "groupPolicyHelp": "How group policies affect members",
+    "membershipHelp": "Membership and inherited permissions",
     "back": "Back to groups",
     "backToGroupDetails": "Back to group details",
     "steps": {
@@ -4548,6 +4578,12 @@
     "confirm": "Confirm change"
   },
   "RoleWorkspace": {
+    "rolePermissionsHelp": "How role permissions work",
+    "trustHistoryHelp": "How trust versions are kept",
+    "attachedPoliciesHelp": "What attached policies grant",
+    "trustHelp": "Role trust and permission boundaries",
+    "capabilitiesHelp": "How action permissions are checked",
+    "roleSessionHelp": "Which role sessions you can manage",
     "back": "Back to roles",
     "serviceAuthorization": "Service authorization",
     "serviceRoleTemplates": "Service authorization templates",
@@ -4571,7 +4607,7 @@
       "review": "Review and create"
     },
     "liveHints": {
-      "trust": "The first release accepts only explicit users in this account. Trust grants neither the user's assume permission nor the role's resource permissions.",
+      "trust": "Choose users in this account who may request to assume the role.",
       "details": "Set the role name, tags and maximum duration for new sessions. A role has no password or long-lived access key.",
       "review": "Review this creation intent. Permission policies, the permission boundary and the caller's assume grant are configured separately from role details."
     },
@@ -4626,10 +4662,10 @@
     "liveCancelHint": "The unsubmitted trusted users and role details will be discarded. Nothing will be created.",
     "unknownLeaveTitle": "Leave a create request with an unknown result?",
     "unknownLeaveHint": "IAM may already have created the role. Leaving loses the original request ID, so a new request cannot be treated as a retry.",
-    "liveTrustCreateHint": "A trusted user still needs an explicit policy grant for iam.role.assume on this role. Trust is only one side of admission.",
+    "liveTrustCreateHint": "Trusted users also need iam.role.assume on this role. Its attached policies and permission boundary determine what the role session can access.",
     "loadedUsersOnly": "Only the currently loaded user directory is shown. Return to the user list and continue loading before selecting another user; this page never guesses unread identities.",
-    "liveRootBoundaryHint": "Root creation sets no implicit permission boundary. Assumption remains closed until Root configures a ceiling separately, and a boundary never grants resource permissions by itself.",
-    "liveDelegatedBoundaryHint": "Restricted delegated creation exposes no boundary selector. IAM revalidates the current USER in the submission transaction and makes the new role inherit that USER's exact permission ceiling:",
+    "liveRootBoundaryHint": "After the account owner creates the role, they must set a permission boundary before trusted users can assume it.",
+    "liveDelegatedBoundaryHint": "A role created by a delegated user inherits that user’s permission boundary. IAM verifies the boundary when creating the role.",
     "liveRootCreationScope": "This Root command creates only role metadata and the first USER trust version. It attaches no policy, sets no implicit permission boundary and issues no credential.",
     "liveDelegatedCreationScope": "This restricted delegated command submits only role metadata and the first USER trust version. IAM derives and inherits the current USER's exact permission ceiling in the transaction. The request has no boundary selector, attaches no policy and issues no credential.",
     "creationBoundary": "Permission ceiling at creation",
@@ -4887,6 +4923,8 @@
     "previewDeleteReceiptHint": "The role was removed from this browser preview session. This is not an IAM server receipt and does not change a real account."
   },
   "IamWorkspace": {
+    "accessKeyHelp": "How access keys use permissions",
+    "keyProductsHelp": "Which products accept access keys",
     "selectionEmpty": "No items selected",
     "clearSelection": "Clear selection",
     "selectionEmptyHint": "Choose items from the available list.",
@@ -5433,6 +5471,11 @@
       }
     },
     "accessAnalysis": {
+      "findingsHelp": "Understanding analysis findings",
+      "reviewStateHelp": "How archiving affects resources",
+      "evidenceHelp": "How analysis records are linked",
+      "timelineHelp": "Reading the state timeline",
+      "boundaryHelp": "Understanding permission boundaries",
       "open": "Access analysis",
       "title": "Access analysis",
       "sections": "Access analysis scope",
@@ -5839,10 +5882,9 @@
       "uncertainIntent": "The original generation result is still unknown. A retry uses the same operation ID {id}; it does not create a new generation intent.",
       "foreignIntent": "The backend client changed while generation {id} remains unresolved. This client neither replays that request nor starts a second generation intent.",
       "foreignIntentReason": "A generation request remains unresolved on the original client. Restore that client and inspect the same operation ID first.",
-      "boundary": "LIVE · This page uses only IAM's fixed create, read-by-ID, and download endpoints. There is no report list, background job, deletion, share URL, or cross-product risk inference.",
-      "scopeTitle": "Generation scope and service boundary",
-      "scopeHint": "IAM synchronously seals a consistent snapshot for the current account. Fixed content renders immediately; only the report result waits for network data.",
-      "synchronous": "Synchronous seal",
+      "boundary": "Generate a new report or use a report ID to open or download an existing one.",
+      "scopeTitle": "Report coverage and limits",
+      "scopeHint": "When you generate a report, IAM captures a snapshot of this account’s users and access keys.",
       "limitsTitle": "Fixed capacity limits",
       "knownReportTitle": "Read a known report",
       "knownReportHint": "The service has no directory endpoint. Reauthorization is possible only when you already hold the exact reportId; this page never restores or guesses reports from browser storage.",
@@ -6327,6 +6369,7 @@
     "incompatibleConditions": "Some selected operations do not support an existing condition. The draft is retained. Remove the incompatible condition or operation; access is never broadened automatically."
   },
   "PolicyWizard": {
+    "featureScopeHelp": "Scope of product permissions",
     "resourceTagsRequired": "Enable resource-tag restrictions and enter tags for every statement. Switch to visual editing if tag restrictions are not needed.",
     "chooseMethod": "Choose a policy creation method",
     "chooseMethodHint": "Choose a starting point, then edit, review, and save in the same content workspace.",
@@ -6599,6 +6642,8 @@
     }
   },
   "PersonalSecurity": {
+    "personalSettingsHelp": "What personal security settings cover",
+    "contactPurposeHelp": "How the security notification address is used",
     "eyebrow": "Personal security",
     "title": "Security notification and authenticator",
     "hint": "Manage the signed-in user's own trusted notification address and first TOTP enrollment.",
@@ -7211,6 +7256,8 @@
     "ageAuthorityBoundary": "This page computes no expiry date, stores no password, and does not claim IAM has completed either path. Real eligibility, restricted outcomes, and login state require a fixed backend contract."
   },
   "AccessKeyNetworkPreview": {
+    "networkLayersHelp": "How account and key network rules combine",
+    "emptyNetworkHelp": "What an empty network list means",
     "accountEyebrow": "Programmatic access boundary",
     "accountTitle": "AccessKey source networks",
     "accountHint": "The account layer limits every long-lived key; an individual key may only narrow it further.",

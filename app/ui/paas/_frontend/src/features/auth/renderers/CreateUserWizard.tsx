@@ -3,7 +3,7 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowRight, Check, CheckCircle2, Code2, ShieldCheck, UserRound } from "lucide-react";
-import { ContentPage, Alert, Badge, Button, Checkbox, EmptyState, FormField, Input, PasswordInput, Radio, RadioGroup, Select, TagEditor, Wizard } from "@ui/xiak";
+import { ContentPage, Alert, HelpDisclosure, Badge, Button, Checkbox, EmptyState, FormField, Input, PasswordInput, Radio, RadioGroup, Select, TagEditor, Wizard } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { PreviewUserProfile } from "../domain/accessWorkspace";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
@@ -134,7 +134,7 @@ export function CreateUserWizard({ onBack }: { onBack(): void }) {
               {workspace ? <UserPermissionSelector workspace={workspace} scene={scene} value={permissions} onChange={setPermissions} /> : <Alert>{t("liveNoGrants")}</Alert>}
               <section className={styles.boundarySection} aria-labelledby={`${id}-boundary-title`}>
                 <div><h3 id={`${id}-boundary-title`}>{t("delegationCeiling")}</h3><p className={styles.muted}>{t("delegationCeilingHint")}</p></div>
-                <Alert status="info">{t("boundaryDoesNotGrant")}</Alert>
+                <HelpDisclosure label={t("boundaryHelp")}>{t("boundaryDoesNotGrant")}</HelpDisclosure>
                 <FormField id={`${id}-boundary`} label={t("permissionBoundary")} hint={t("permissionBoundaryHint")} error={errorText("boundary")}>
                   <Select id={`${id}-boundary`} aria-required="true" aria-invalid={Boolean(errors.boundary)} aria-describedby={[`${id}-boundary-hint`, errorFor("boundary")].filter(Boolean).join(" ")}
                     value={boundaryChoice} placeholder={t("chooseBoundary")} options={[{ value: "none", label: t("explicitNoBoundary") }, ...(workspace?.policies ?? []).map((policy) => ({ value: policy.id, label: `${policy.name} · ${policy.id}` }))]}

@@ -2,7 +2,7 @@
 
 import { useId, useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Button, Checkbox, FormField, Input, Radio, SearchInput, Select, Table, TablePagination, TextArea } from "@ui/xiak";
+import { Alert, HelpDisclosure, Button, Checkbox, FormField, Input, Radio, SearchInput, Select, Table, TablePagination, TextArea } from "@ui/xiak";
 import type { AccountPolicyDocument, AuthorizationProfileAction, AuthorizationProfileCondition, AuthorizationProfileDirectory } from "../domain/accounts";
 import { visualActionGroups, visualActionShapeKey, type VisualActionGroup } from "../domain/accountPolicyVisualAuthoring";
 import { AuthorizationActionTable } from "./AuthorizationActionTable";
@@ -329,7 +329,7 @@ export function AccountPolicyVisualEditor({ document, directory, onChange }: {
     setRemovePending(false);
   };
   return <div className={styles.editor}>
-    <Alert status="info">{t("catalogNotice")}</Alert>
+    <HelpDisclosure label={t("actionCatalogHelp")}>{t("catalogNotice")}</HelpDisclosure>
     <CatalogSnapshot document={document} directory={directory} />
     {statement ? <div className={styles.statementToolbar}>
       <FormField id={id + "-statement"} label={t("statement")}>

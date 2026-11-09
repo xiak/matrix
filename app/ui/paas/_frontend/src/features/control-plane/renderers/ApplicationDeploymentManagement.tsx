@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type FormEvent } from "react";
 import { ArrowRight, Rocket } from "lucide-react";
-import { ActionMenu, Alert, Badge, Button, Card, FormField, Select, Steps, Table, Typography } from "@ui/xiak";
+import { ActionMenu, Alert, HelpDisclosure, Badge, Button, Card, FormField, Select, Steps, Table, Typography } from "@ui/xiak";
 import { useTranslations } from "next-intl";
 import type { ExperienceApplicationDeploymentSnapshot } from "../domain/experience";
 import type { UnifiedResourceScene } from "../scenes/consoleScene";
@@ -216,7 +216,7 @@ export function ApplicationDeploymentManagement({ resource, initialSnapshot }: {
           <div><dt>{t("currentOperation")}</dt><dd>{deployment.currentOperationId ? <code>{deployment.currentOperationId}</code> : t("none")}</dd></div>
         </dl>
         <Table aria-label={t("componentsTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("component")}</th><th scope="col">{t("desiredReplicas")}</th><th scope="col">{t("readyReplicas")}</th></tr></thead><tbody>{deployment.components.map((component) => <tr key={component.name}><td><strong>{component.name}</strong></td><td data-label={t("desiredReplicas")}>{component.replicas}</td><td data-label={t("readyReplicas")}>{component.readyReplicas} / {component.replicas}</td></tr>)}</tbody></Table>
-        <Alert status="info">{t("contractBoundary")}</Alert>
+        <HelpDisclosure label={t("deploymentHelp")}>{t("contractBoundary")}</HelpDisclosure>
       </> : <div className={styles.workflow}>
         <Steps label={t("workflowLabel")} items={steps} current={step === "edit" ? 0 : 1} onChange={(index) => { if (index === 0 && action !== "stop") { setAttempt(null); setDraftError(null); setStep("edit"); } }} />
         {step === "edit" ? <form noValidate onSubmit={review}>

@@ -4544,7 +4544,8 @@ describe("CAM-style access workspace", () => {
       download: vi.fn().mockRejectedValue(new HttpProblem(404, "NOT_FOUND"))
     };
     const { repository } = await open("security-reports", { live: true, repository: { securityReports } });
-    expect(screen.getByText(/只使用 IAM 已固定的生成、按 ID 读取和下载接口/)).toBeTruthy();
+    expect(securityReports.create).not.toHaveBeenCalled();
+    expect(securityReports.read).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: "生成当前账号安全报告" })).toBeTruthy();
     expect(screen.getByLabelText("报告 ID")).toBeTruthy();
     expect(screen.queryByRole("table", { name: "安全报告" })).toBeNull();

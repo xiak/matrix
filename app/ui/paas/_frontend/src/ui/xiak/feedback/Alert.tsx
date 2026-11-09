@@ -1,5 +1,5 @@
 import type { HTMLAttributes, ReactNode } from "react";
-import { CheckCircle2, CircleAlert, Info, TriangleAlert } from "lucide-react";
+import { CheckCircle2, ChevronDown, CircleAlert, Info, TriangleAlert } from "lucide-react";
 import { classNames } from "../utils";
 import styles from "./Alert.module.css";
 
@@ -9,4 +9,11 @@ export function Alert({ status = "info", children, className, ...props }: HTMLAt
   return <div role={status === "danger" ? "alert" : status === "success" ? "status" : undefined} {...props} className={classNames(styles.alert, className)} data-status={status}>
     <Icon aria-hidden="true" /><div>{children}</div>
   </div>;
+}
+
+export function HelpDisclosure({ label, children, className }: { label: string; children: ReactNode; className?: string }) {
+  return <details className={classNames(styles.help, className)}>
+    <summary><Info aria-hidden="true" /><span>{label}</span><ChevronDown aria-hidden="true" /></summary>
+    <div className={styles.helpBody}>{children}</div>
+  </details>;
 }

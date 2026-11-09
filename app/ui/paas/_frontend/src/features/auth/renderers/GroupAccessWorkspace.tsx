@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode, type RefObject } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, EmptyState, Table, TableSkeleton, Tabs } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, EmptyState, Table, TableSkeleton, Tabs } from "@ui/xiak";
 import { AuthorizationOverview, WorkspaceCollection, WorkspaceDetail, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
 
@@ -208,7 +208,7 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
   >
     {workflow ?? <>
     <p className={styles.note}>{group.description || t("none")}</p>
-    <Alert>{g("groupIdentityHint")}</Alert>
+    <HelpDisclosure label={g("membershipHelp")}>{g("groupIdentityHint")}</HelpDisclosure>
     <dl className={styles.facts}>
       <div><dt>ID</dt><dd>{group.id}</dd></div>
       <div><dt>{t("created")}</dt><dd><WorkspaceTime value={group.createdAt} /></dd></div>
@@ -246,7 +246,7 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
           <GroupActionButton control={controls.addPolicy} triggerRef={addPolicyTriggerRef}>{g("addPolicies")}</GroupActionButton>
           <GroupActionButton control={controls.removePolicy} triggerRef={removePolicyTriggerRef} variant="secondary">{g("removePolicies")}</GroupActionButton>
         </div>
-        <Alert>{g("policyChangeHint")}</Alert>
+        <HelpDisclosure label={g("groupPolicyHelp")}>{g("policyChangeHint")}</HelpDisclosure>
         {group.policies.length
           ? <GroupPolicyTable policies={group.policies} onOpen={onOpenPolicy} />
           : <EmptyState title={g("noPolicies")} />}

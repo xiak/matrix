@@ -3,7 +3,7 @@
 import { useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, LoadingNotice, Select, Skeleton, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, FormField, LoadingNotice, Select, Skeleton, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent, type ServiceLinkedRoleClient, type ServiceRoleTemplateClient } from "../application/AccountAccessProvider";
@@ -279,7 +279,7 @@ function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: Ro
   if (phase === "error") return <EmptyState title={t("trustHistoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={retry}>{t("retry")}</Button>} />;
   const items = directory?.items ?? [], pages = Math.max(1, Math.ceil(items.length / pageSize)), current = Math.min(page, pages);
   return <div className={styles.stack} aria-busy={loadingMore}>
-    <Alert>{t("trustHistoryHint")}</Alert>
+    <HelpDisclosure label={t("trustHistoryHelp")}>{t("trustHistoryHint")}</HelpDisclosure>
     {items.length ? <><Table aria-label={t("trustHistory")} mobileLayout="stack"><thead><tr><th scope="col">{t("trustVersion")}</th><th scope="col">{w("created")}</th><th scope="col">{t("trustedUsers")}</th><th scope="col">{w("state")}</th></tr></thead><tbody>{items.slice((current - 1) * pageSize, current * pageSize).map((version) => <tr key={version.id}>
       <td data-label={t("trustVersion")}><Table.PrimaryAction onClick={() => setSelected(version)}>{version.id}</Table.PrimaryAction><small>{version.contentDigest}</small></td>
       <td data-label={w("created")}><WorkspaceTime value={version.createdAt} /></td><td data-label={t("trustedUsers")}>{trustPrincipalCount(version)}</td>
@@ -395,7 +395,7 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
         <Badge>{t("customerManaged")}</Badge>
       </div>
       <p className={styles.note}>{access.role.description || w("none")}</p>
-      <Alert>{t("liveTrustExplanation")}</Alert>
+      <HelpDisclosure label={t("rolePermissionsHelp")}>{t("liveTrustExplanation")}</HelpDisclosure>
       <LiveRoleAuthorizationOverview key={`${client.sessionRevision}:${access.role.id}`} access={access} client={client} onAccessChanged={setAccess} onOpen={onOpen} />
       <dl className={styles.facts}>
         <div><dt>{t("roleId")}</dt><dd><code>{access.role.id}</code></dd></div>
@@ -419,7 +419,7 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
             <Button variant="secondary" disabled={attachmentCapability?.available !== true} title={attachmentCapability?.available === true ? undefined : actionReason(attachmentCapability)} onClick={() => setWorkflow("addPolicy")}>{t("addPolicies")}</Button>
             <Button variant="ghost" disabled={!canRevokeAttachment} title={canRevokeAttachment ? undefined : t("noRevocablePolicies")} onClick={() => setWorkflow("removePolicy")}>{t("removePolicies")}</Button>
           </div>
-          <Alert>{t("permissionsAreRoleGrants")} {t("policyAttachmentAuthorityHint")}</Alert>
+          <HelpDisclosure label={t("attachedPoliciesHelp")}>{t("permissionsAreRoleGrants")} {t("policyAttachmentAuthorityHint")}</HelpDisclosure>
           {access.policyAttachments.length ? <Table aria-label={t("livePermissions")} mobileLayout="stack">
             <thead><tr><th scope="col">{t("policyId")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("attachmentVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
             <tbody>{access.policyAttachments.map((attachment) => <tr key={attachment.id}>
@@ -432,7 +432,7 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="trust">
           <div><Button variant="secondary" disabled={trustCapability?.available !== true} title={trustCapability?.available === true ? undefined : actionReason(trustCapability)} onClick={() => setWorkflow("trust")}>{t("editTrust")}</Button></div>
-          <Alert>{t("trustIsAdmissionOnly")}</Alert>
+          <HelpDisclosure label={t("trustHelp")}>{t("trustIsAdmissionOnly")}</HelpDisclosure>
           {access.trustVersion.document.statements.length ? <Table aria-label={t("liveTrust")} mobileLayout="stack">
             <thead><tr><th scope="col">SID</th><th scope="col">{t("effect")}</th><th scope="col">{t("trustedUsers")}</th></tr></thead>
             <tbody>{access.trustVersion.document.statements.map((statement) => <tr key={statement.sid}>
@@ -454,7 +454,7 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
           {section === "sessions" ? <LiveRoleSessions client={client} roleId={roleId} listCapability={access.capabilities.find((capability) => capability.action === "iam.role-session.list")!} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} /> : null}
         </Tabs.Content>
         <Tabs.Content className={styles.stack} value="capabilities">
-          <Alert>{t("capabilitySnapshotHint")}</Alert>
+          <HelpDisclosure label={t("capabilitiesHelp")}>{t("capabilitySnapshotHint")}</HelpDisclosure>
           <Table aria-label={t("availableOperations")} mobileLayout="stack">
             <thead><tr><th scope="col">Action</th><th scope="col">{t("resource")}</th><th scope="col">{w("state")}</th></tr></thead>
             <tbody>{access.capabilities.map((capability) => <tr key={`${capability.action}:${capability.resource.kind}:${capability.resource.id}`}>

@@ -3,7 +3,7 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type Ref } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound, ShieldCheck, UserRound } from "lucide-react";
-import { Alert, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, FormField, Badge, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { LiveAccessCredentials } from "./LiveAccessCredentials";
@@ -56,7 +56,7 @@ export function CreateTenantWorkspace({ onClose }: { onClose(): void }) {
       <FormField id={formId + "-login"} label={t("primaryLogin")} hint={t("loginHint") + " " + t("primaryLoginHint")}><Input aria-describedby={formId + "-login-hint"} id={formId + "-login"} autoComplete="off" maxLength={64} minLength={3} name="loginName" pattern={loginPattern} placeholder={t("primaryPlaceholder")} required value={loginName} onChange={(event) => setLoginName(event.target.value)} /></FormField>
       <FormField id={formId + "-name"} label={t("displayName")}><Input id={formId + "-name"} maxLength={128} name="displayName" required value={displayName} onChange={(event) => setDisplayName(event.target.value)} /></FormField>
       <PasswordField onChange={setPassword} value={password} />
-      <Alert>{t("tenantNotice")}</Alert>
+      <HelpDisclosure label={t("tenantHelp")}>{t("tenantNotice")}</HelpDisclosure>
       {access.error ? <Alert status="danger" tabIndex={-1}>{t(`errors.${access.error}`)}</Alert> : null}
       <div className={styles.actions}>
         <Button disabled={access.busy || access.loading || !withinNewPasswordProductBounds(password)} type="submit">{t(access.busy ? "creating" : "confirmTenant")}</Button>

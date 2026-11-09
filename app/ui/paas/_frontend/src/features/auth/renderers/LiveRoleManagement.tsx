@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, FormField, Input, LoadingNotice, Select, TextArea } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, FormField, Input, LoadingNotice, Select, TextArea } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { accountError, type RoleAccessClient } from "../application/AccountAccessProvider";
 import type { AccountPolicy, PolicyAttachmentChangeOperationExpectation } from "../domain/accounts";
@@ -219,7 +219,7 @@ export function LiveRoleTrustEditor({ access, client, onAccessChanged, onClose }
       <div><strong>{t("before")}</strong><pre className={styles.code}>{JSON.stringify(access.trustVersion.document, null, 2)}</pre></div>
       <div><strong>{t("after")}</strong><pre className={styles.code}>{JSON.stringify(document, null, 2)}</pre></div>
     </div><Button variant="ghost" disabled={command.locked} onClick={() => { command.reset(); setReview(false); setDocument(null); }}>{t("backToSelection")}</Button></> : <>
-      <Alert>{t("liveTrustEditorHint")}</Alert>
+      <HelpDisclosure label={t("trustHelp")}>{t("liveTrustEditorHint")}</HelpDisclosure>
       <FormField id={`${id}-document`} label={t("trustDocument")} hint={t("trustDocumentContract")}><TextArea id={`${id}-document`} className={styles.policyVersionEditor} rows={18} maxLength={16384} spellCheck={false} disabled={command.locked} value={text} onChange={(event) => { setText(event.target.value); setValidation(undefined); }} /></FormField>
     </>}
   </WorkspaceInlineForm>;

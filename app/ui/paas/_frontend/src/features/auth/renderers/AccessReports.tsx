@@ -3,7 +3,7 @@
 import { useMemo, useState, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { ArrowRight } from "lucide-react";
-import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, Table, Tabs, Typography } from "@ui/xiak";
+import { ActionMenu, Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, Table, Tabs, Typography } from "@ui/xiak";
 import type { AccountAccessView } from "../domain/accounts";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { SessionSummary } from "../domain/session";
@@ -157,7 +157,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           <div><dt>{t("unused.findingCreated")}</dt><dd><WorkspaceTime value={selectedUnused.generatedAt} /></dd></div>
           <div><dt>{t("unused.evidenceCoverage")}</dt><dd>{t("unused.completeSample")}</dd></div>
         </dl>
-        <Alert status="info">{t("unused.correlationBoundary")}</Alert>
+        <HelpDisclosure label={t("evidenceHelp")}>{t("unused.correlationBoundary")}</HelpDisclosure>
         <AccessFindingRecoveryBoundary evidence={{
           recoveryEpoch: selectedUnused.recoveryEpoch,
           recoveryCommandId: selectedUnused.recoveryCommandId,
@@ -170,7 +170,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
             <Badge status={unusedFindingStatus[event.lifecycle]} title={event.lifecycle}>{t(`unused.lifecycle.${event.lifecycle}`)}</Badge>
             <div className={styles.securityCheckCopy}><strong>{t(`unused.lifecycleEvents.${event.lifecycle === "ACTIVE" && event.source === "SYNTHETIC_HUMAN_REVIEW" ? "REOPENED" : event.lifecycle}`)}</strong><p><WorkspaceTime value={event.occurredAt} /> · {t(`unused.lifecycleSources.${event.source}`)}</p></div>
           </li>)}</ol>
-          <Alert status="info">{t("unused.lifecycleEvidenceBoundary")}</Alert>
+          <HelpDisclosure label={t("timelineHelp")}>{t("unused.lifecycleEvidenceBoundary")}</HelpDisclosure>
         </section>
         <section aria-labelledby="unused-access-recommendation" className={styles.stack}>
           <Typography.Title as="h3" id="unused-access-recommendation" level={3}>{t("unused.recommendationTitle")}</Typography.Title>
@@ -199,7 +199,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
         <Card>
           <Card.Header><div><Typography.Title as="h2" level={3}>{t("delegation.title")}</Typography.Title><Typography.Text tone="muted">{t("delegation.hint")}</Typography.Text></div><Badge status="info">{t("delegation.mock")}</Badge></Card.Header>
           <Card.Body className={styles.securityReportBody}>
-            <Alert status="info">{t("delegation.boundary")}</Alert>
+            <HelpDisclosure label={t("boundaryHelp")}>{t("delegation.boundary")}</HelpDisclosure>
             <dl className={`${styles.securityReportSummary} ${styles.scanSummary}`} aria-label={t("delegation.summary")}>
               <div><dt>{t("delegation.boundedIdentities")}</dt><dd>{t("delegation.boundedIdentityCoverage", { shown: analysis.boundaryControlledIdentities.length, total: analysis.delegationCoverage.boundaryReferences })}</dd></div>
               <div><dt>{t("delegation.managerEvidence")}</dt><dd>{t("delegation.evidence.UNAVAILABLE")}</dd></div>

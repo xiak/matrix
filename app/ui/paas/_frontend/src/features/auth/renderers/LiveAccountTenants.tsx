@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import {
   Alert,
+  HelpDisclosure,
   Badge,
   Button,
   Card,
@@ -130,7 +131,7 @@ function CreateLiveAccount({ client, onBack, onCreated }: {
 
   return <WorkspaceDetail title={t("createTenantTitle")} onBack={onBack}>
     <form aria-busy={busy || undefined} aria-label={t("createTenantTitle")} className={styles.form} id={formId} onSubmit={submit} ref={form}>
-      <Alert>{t("tenantNotice")}</Alert>
+      <HelpDisclosure label={t("tenantHelp")}>{t("tenantNotice")}</HelpDisclosure>
       {failure === "conflict" ? <Alert status="warning" tabIndex={-1}>
         <div className={styles.confirmation}>
           <strong>{t("tenantMutationConflictTitle")}</strong>
@@ -393,7 +394,7 @@ function LiveAccountDirectoryGeneration({ client, initialAccounts, initialNextAf
   return <div className={styles.stack}>
     <Card>
       <ContentPage.Heading title={t("tenantAccounts")} scrollKey="live-tenant-directory" actions={client.canCreate ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: listLoading || Boolean(client.pending) || !client.ready, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
-      <Alert>{t("tenantLiveBoundary")}</Alert>
+      <HelpDisclosure label={t("tenantDirectoryHelp")}>{t("tenantLiveBoundary")}</HelpDisclosure>
       {listError ? <Alert status="danger"><div className={styles.confirmation}><span>{t(`errors.${listError}`)}</span><Button onClick={() => void loadPage(cursorStack[pageIndex], pageIndex)} size="small" variant="secondary">{t("retryTenantRead")}</Button></div></Alert> : null}
       {listLoading ? <LoadingNotice className={styles.note} label={t("loadingTenants")} /> : null}
       <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>

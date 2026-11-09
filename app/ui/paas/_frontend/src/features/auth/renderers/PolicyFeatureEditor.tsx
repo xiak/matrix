@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Checkbox, SearchInput } from "@ui/xiak";
+import { HelpDisclosure, Checkbox, SearchInput } from "@ui/xiak";
 import { policyActions, policyServices } from "../domain/previewAuthorizationCatalog";
 import type { PolicyDocument } from "../domain/policyDocument";
 import styles from "./PolicyAuthoringWizard.module.css";
@@ -38,7 +38,7 @@ export function PolicyFeatureEditor({ document, onChange }: { document: PolicyDo
     onChange({ version: "1", statement });
   }
   return <div className={styles.stack}>
-    <Alert>{t("featureScopeHint")}</Alert>
+    <HelpDisclosure label={t("featureScopeHelp")}>{t("featureScopeHint")}</HelpDisclosure>
     <SearchInput aria-label={t("featureSearch")} placeholder={t("featureSearch")} value={query} onChange={(event) => setQuery(event.target.value)} />
     <p className={styles.note}>{r("selectedActions", { count: selected.size })}</p>
     <div className={styles.featureGrid}>
