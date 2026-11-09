@@ -6,6 +6,7 @@ import { FileCheck2, Users } from "lucide-react";
 import { Alert, HelpDisclosure, Button, Select, Tabs, Transfer } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
+import { workspaceSelectionLabels } from "./AccessWorkspaceUi";
 import { usePolicyDescription } from "./PolicyDirectory";
 import styles from "./CreateUserWizard.module.css";
 
@@ -21,19 +22,37 @@ export function UserPermissionSelector({ workspace, scene, value, onChange }: {
   const [kind, setKind] = useState("all");
   const [sourceId, setSourceId] = useState("");
   const [copied, setCopied] = useState(false);
-  const selectedPolicies = workspace.policies.filter((policy) => value.policyIds.includes(policy.id));
   const selectedGroups = workspace.groups.filter((group) => value.groupIds.includes(group.id));
+  const selected = [
+    ...value.policyIds.map((id) => ({
+      id: "policy:" + id, label: workspace.policies.find((policy) => policy.id === id)?.name ?? id,
+      description: t("direct"), icon: <FileCheck2 aria-hidden="true" />
+    })),
+    ...value.groupIds.map((id) => ({
+      id: "group:" + id, label: workspace.groups.find((group) => group.id === id)?.name ?? id,
+      description: t("inherited"), icon: <Users aria-hidden="true" />
+    }))
+  ];
   const sourcePolicies = workspace.userPolicies[sourceId] ?? [];
   const sourceGroups = workspace.groups.filter((group) => group.memberIds.includes(sourceId));
   const source = scene.users.find((user) => user.id === sourceId);
   const options = useMemo(() => mode === "copy" ? [] : mode === "groups"
-    ? workspace.groups.map((group) => ({ id: group.id, label: group.name, description: group.description + " · " + t("groupSize", { users: group.memberIds.length, policies: group.policyIds.length }) }))
-    : workspace.policies.filter((policy) => kind === "all" || policy.kind === kind).map((policy) => ({ id: policy.id, label: policy.name, description: describe(policy), keywords: policy.tags.flatMap((tag) => [tag.key, tag.value]).join(" "), annotation: w(policy.kind) })), [mode, kind, workspace.groups, workspace.policies, describe, t, w]);
+    ? workspace.groups.map((group) => ({ id: "group:" + group.id, label: group.name, description: group.description + " · " + t("groupSize", { users: group.memberIds.length, policies: group.policyIds.length }) }))
+    : workspace.policies.filter((policy) => kind === "all" || policy.kind === kind).map((policy) => ({ id: "policy:" + policy.id, label: policy.name, description: describe(policy), keywords: policy.tags.flatMap((tag) => [tag.key, tag.value]).join(" "), annotation: w(policy.kind) })), [mode, kind, workspace.groups, workspace.policies, describe, t, w]);
   const grantIds = new Set([...value.policyIds, ...selectedGroups.flatMap((group) => group.policyIds)]);
   const elevated = workspace.policies.some((policy) => grantIds.has(policy.id) && policy.versions.find((version) => version.id === policy.defaultVersion)?.document.statement.some((statement) => statement.effect === "allow" && statement.action.includes("*")));
   function toggle(ids: readonly string[], checked: boolean) {
+    if (!checked) {
+      const removed = new Set(ids);
+      onChange({
+        policyIds: value.policyIds.filter((id) => !removed.has("policy:" + id)),
+        groupIds: value.groupIds.filter((id) => !removed.has("group:" + id))
+      });
+      return;
+    }
     const key = mode === "groups" ? "groupIds" : "policyIds";
-    const next = checked ? [...new Set([...value[key], ...ids])] : value[key].filter((item) => !ids.includes(item));
+    const added = ids.map((id) => id.slice(id.indexOf(":") + 1));
+    const next = [...new Set([...value[key], ...added])];
     if (next.length <= 30) onChange({ ...value, [key]: next });
   }
   return <div className={styles.stack}>
@@ -43,11 +62,13 @@ export function UserPermissionSelector({ workspace, scene, value, onChange }: {
       <Tabs.Content value={mode} className={styles.stack}>
         <Transfer key={mode} options={options}
           remaining={30 - (mode === "groups" ? value.groupIds.length : value.policyIds.length)} filterKey={kind}
-          selected={[...selectedPolicies.map((item) => ({ id: item.id, label: item.name, description: t("direct"), icon: <FileCheck2 aria-hidden="true" /> })), ...selectedGroups.map((item) => ({ id: item.id, label: item.name, description: t("inherited"), icon: <Users aria-hidden="true" /> }))]}
-          onSelect={toggle} onClear={() => onChange({ policyIds: [], groupIds: [] })}
-          onRemove={(id) => onChange({ policyIds: value.policyIds.filter((item) => item !== id), groupIds: value.groupIds.filter((item) => item !== id) })}
-          labels={{ available: t(mode === "groups" ? "availableGroups" : "availablePolicies"), selected: t("selectedCount", { count: selectedPolicies.length + selectedGroups.length }), search: t("searchPermissions"), clearSearch: w("clear"), clearSelected: t("clearSelection"), empty: t("nothingSelected"), emptyHint: t("emptySelectionHint"), noResults: w("noResults"), remove: (name) => t("removePermission", { name }), previous: w("previous"), next: w("next"), page: (page, pages) => w("page", { page, pages }), selectPage: w("selectPage"), clearPage: w("clearPage"), pageSelection: (selected, total) => w("pageSelection", { selected, total }), limit: (remaining, needed) => w("pageSelectionLimit", { remaining, needed }), option: t(mode === "groups" ? "groupColumn" : "policyColumn"), annotation: mode === "policies" ? t("policyType") : undefined }}
-          footnote={<>{t("selectionCounts", { policies: value.policyIds.length, groups: value.groupIds.length })}<br />{t("selectionHint")}</>}
+          selected={selected} onSelect={toggle} onClear={() => onChange({ policyIds: [], groupIds: [] })}
+          labels={{
+            ...workspaceSelectionLabels(w), available: t(mode === "groups" ? "availableGroups" : "availablePolicies"),
+            selected: t("selectedCount", { count: selected.length }), search: t("searchPermissions"), empty: t("nothingSelected"),
+            option: t(mode === "groups" ? "groupColumn" : "policyColumn"), annotation: mode === "policies" ? t("policyType") : undefined
+          }}
+          footnote={t("selectionCounts", { policies: value.policyIds.length, groups: value.groupIds.length })}
           filter={mode === "policies" ? <Select aria-label={t("policyType")} value={kind} onValueChange={setKind} options={[{ value: "all", label: w("all") }, { value: "system", label: w("system") }, { value: "custom", label: w("custom") }]} /> : undefined}
           source={mode === "copy" ? <div className={styles.copyPane}>
             <h3>{t("copyUser")}</h3><p className={styles.muted}>{t("copyHint")}</p>

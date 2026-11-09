@@ -238,13 +238,27 @@ export function WorkspaceDelete({ name, onClose, onConfirm, impact, hint, operat
   </WorkspaceDialog>;
 }
 
+export function workspaceSelectionLabels(t: ReturnType<typeof useTranslations<"IamWorkspace">>) {
+  return {
+    onlySelected: t("onlySelected"), selectedName: t("name"), searchSelected: t("searchSelected"),
+    clearSearch: t("clear"), clearSelected: t("clearSelection"), noResults: t("noResults"),
+    previous: t("previous"), next: t("next"), page: (page: number, pages: number) => t("page", { page, pages }),
+    selectPage: t("selectPage"), clearPage: t("clearPage"),
+    pageSelection: (selected: number, total: number) => t("pageSelection", { selected, total }),
+    limit: (remaining: number, needed: number) => t("pageSelectionLimit", { remaining, needed })
+  };
+}
+
 export function WorkspaceSelection({ label, options, value, onChange, limit = 30, footnote }: { label: string; options: { id: string; name: string; description?: string }[]; value: string[]; onChange(ids: string[]): void; limit?: number; footnote?: ReactNode }) {
   const t = useTranslations("IamWorkspace");
   const selectionLimit = Math.max(1, Math.floor(limit));
-  const remove = (id: string) => onChange(value.filter((entry) => entry !== id));
+  const showLimit = options.length > selectionLimit || value.length >= selectionLimit;
   return <Transfer options={options.map((option) => ({ id: option.id, label: option.name, description: option.description }))} remaining={Math.max(0, selectionLimit - value.length)}
     selected={value.map((id) => { const option = options.find((entry) => entry.id === id); return { id, label: option?.name ?? id, description: option?.description }; })}
-    onSelect={(ids, checked) => { const next = checked ? [...new Set([...value, ...ids])] : value.filter((id) => !ids.includes(id)); if (next.length <= selectionLimit) onChange(next); }} onRemove={remove} onClear={() => onChange([])}
-    labels={{ available: label, selected: t("selectCount", { count: value.length }), search: label + " · " + t("search"), clearSearch: t("clear"), clearSelected: t("clearSelection"), empty: t("selectionEmpty"), emptyHint: t("selectionEmptyHint"), noResults: t("noResults"), noOptions: t("empty"), remove: (name) => t("removeSelection", { name }), previous: t("previous"), next: t("next"), page: (page, pages) => t("page", { page, pages }), selectPage: t("selectPage"), clearPage: t("clearPage"), pageSelection: (selected, total) => t("pageSelection", { selected, total }), limit: (remaining, needed) => t("pageSelectionLimit", { remaining, needed }) }}
-    footnote={footnote ?? t(selectionLimit === 1 ? "singleSelectionLimit" : "selectionLimit")} />;
+    onSelect={(ids, checked) => { const next = checked ? [...new Set([...value, ...ids])] : value.filter((id) => !ids.includes(id)); if (!checked || next.length <= selectionLimit) onChange(next); }} onClear={() => onChange([])}
+    labels={{
+      ...workspaceSelectionLabels(t), available: label, selected: t("selectCount", { count: value.length }),
+      search: label + " · " + t("search"), empty: t("selectionEmpty"), noOptions: t("empty")
+    }}
+    footnote={footnote ?? (selectionLimit === 1 ? t("singleSelectionLimit") : showLimit ? t("selectionLimit", { limit: selectionLimit }) : undefined)} />;
 }

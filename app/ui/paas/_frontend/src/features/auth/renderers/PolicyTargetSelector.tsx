@@ -5,6 +5,7 @@ import { useTranslations } from "next-intl";
 import { Badge, Tabs, Transfer } from "@ui/xiak";
 import type { AccessWorkspace, PolicyTargets } from "../domain/accessWorkspace";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
+import { workspaceSelectionLabels } from "./AccessWorkspaceUi";
 
 export function PolicyTargetSelector({ workspace, scene, value, onChange }: {
   workspace: AccessWorkspace; scene: AccountAccessScene; value: PolicyTargets; onChange(value: PolicyTargets): void;
@@ -17,18 +18,32 @@ export function PolicyTargetSelector({ workspace, scene, value, onChange }: {
     groupIds: workspace.groups,
     roleIds: workspace.roles
   };
-  const selected = (Object.keys(sources) as (keyof PolicyTargets)[]).flatMap((key) => sources[key].filter((entry) => value[key].includes(entry.id)).map((entry) => ({ id: key + ":" + entry.id, label: entry.name, description: t(`targets.${key}`) })));
-  function remove(encoded: string) {
-    const key = encoded.slice(0, encoded.indexOf(":")) as keyof PolicyTargets;
-    const id = encoded.slice(encoded.indexOf(":") + 1);
-    onChange({ ...value, [key]: value[key].filter((entry) => entry !== id) });
+  const selected = (Object.keys(sources) as (keyof PolicyTargets)[]).flatMap((key) => value[key].map((id) => ({
+    id: key + ":" + id, label: sources[key].find((entry) => entry.id === id)?.name ?? id, description: t(`targets.${key}`)
+  })));
+  function toggle(encoded: readonly string[], checked: boolean) {
+    if (!checked) {
+      const removed = new Set(encoded);
+      onChange({
+        userIds: value.userIds.filter((id) => !removed.has("userIds:" + id)),
+        groupIds: value.groupIds.filter((id) => !removed.has("groupIds:" + id)),
+        roleIds: value.roleIds.filter((id) => !removed.has("roleIds:" + id))
+      });
+      return;
+    }
+    const ids = encoded.map((id) => id.slice(id.indexOf(":") + 1));
+    const next = [...new Set([...value[kind], ...ids])];
+    if (next.length <= 30) onChange({ ...value, [kind]: next });
   }
   return <Tabs.Root value={kind} onValueChange={(next) => setKind(next as keyof PolicyTargets)}>
     <Tabs.List aria-label={w("associations")}>{(Object.keys(sources) as (keyof PolicyTargets)[]).map((key) => <Tabs.Trigger key={key} value={key}>{t(`targets.${key}`)} <Badge>{value[key].length}</Badge></Tabs.Trigger>)}</Tabs.List>
     <Tabs.Content value={kind}>
       <Transfer key={kind} options={sources[kind].map((entry) => ({ id: kind + ":" + entry.id, label: entry.name, description: entry.description }))} selected={selected} remaining={30 - value[kind].length}
-        onSelect={(encoded, checked) => { const ids = encoded.map((id) => id.slice(id.indexOf(":") + 1)); const next = checked ? [...new Set([...value[kind], ...ids])] : value[kind].filter((id) => !ids.includes(id)); if (next.length <= 30) onChange({ ...value, [kind]: next }); }} onRemove={remove} onClear={() => onChange({ userIds: [], groupIds: [], roleIds: [] })}
-        labels={{ available: t(`targets.${kind}`), selected: t("selectedTargets", { count: selected.length }), search: w("search"), clearSearch: w("clear"), clearSelected: t("clearTargets"), empty: t("noTargets"), emptyHint: t("noTargetsHint"), noResults: w("noResults"), remove: (name) => t("removeTarget", { name }), previous: w("previous"), next: w("next"), page: (page, pages) => w("page", { page, pages }), selectPage: w("selectPage"), clearPage: w("clearPage"), pageSelection: (selected, total) => w("pageSelection", { selected, total }), limit: (remaining, needed) => w("pageSelectionLimit", { remaining, needed }) }} footnote={t("targetLimit")} />
+        onSelect={toggle} onClear={() => onChange({ userIds: [], groupIds: [], roleIds: [] })}
+        labels={{
+          ...workspaceSelectionLabels(w), available: t(`targets.${kind}`), selected: t("selectedTargets", { count: selected.length }),
+          search: w("search"), empty: t("noTargets")
+        }} footnote={t("targetLimit")} />
     </Tabs.Content>
   </Tabs.Root>;
 }

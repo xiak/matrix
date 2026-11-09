@@ -1133,7 +1133,8 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "关联用户 / 组 / 角色" }));
     const workflow = screen.getByRole("form", { name: "关联用户 / 组 / 角色 · ProductionLogReader" });
     expect(screen.queryByRole("dialog")).toBeNull();
-    await user.click(within(workflow).getByRole("button", { name: /移除 DeliveryTeam/ }));
+    await user.click(within(workflow).getByRole("button", { name: "仅看已选" }));
+    await user.click(within(workflow).getByRole("checkbox", { name: "DeliveryTeam" }));
     await user.click(within(workflow).getByRole("button", { name: "下一步：审阅" }));
     expect(within(workflow).getByText("lin 仍直接关联此策略。")).toBeTruthy();
     expect(within(workflow).getByRole("region", { name: "移除关联" }).textContent).toContain("DeliveryTeam");
@@ -1639,7 +1640,9 @@ describe("CAM-style access workspace", () => {
     const policyName = mode === "add" ? "MatrixReadOnlyAccess" : "ProductionLogsByTag";
     await user.click(panel.getByRole("checkbox", { name: policyName }));
     await user.type(panel.getByRole("searchbox"), "no-matching-policy");
-    expect(panel.getByRole("button", { name: "移除 " + policyName })).toBeTruthy();
+    expect(panel.queryByRole("checkbox", { name: policyName })).toBeNull();
+    await user.click(panel.getByRole("button", { name: "仅看已选" }));
+    expect(panel.getByRole("checkbox", { name: policyName })).toHaveProperty("checked", true);
     await user.click(panel.getByRole("button", { name: "审阅变更" }));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("offline"));
@@ -1970,11 +1973,13 @@ describe("CAM-style access workspace", () => {
     const { user, repository } = await openNamedMockUserPermissions();
     await user.click(screen.getByRole("checkbox", { name: "Select all on this page" }));
     expect(screen.getByText(/Selected policies or groups include an all-action wildcard grant/)).toBeTruthy();
-    await user.click(screen.getByRole("button", { name: "Clear page selection" }));
+    await user.click(screen.getByRole("checkbox", { name: "Clear page selection" }));
     expect(screen.queryByText(/Selected policies or groups include an all-action wildcard grant/)).toBeNull();
     await user.click(screen.getByRole("checkbox", { name: "MatrixReadOnlyAccess" }));
     await user.type(screen.getByRole("searchbox", { name: "Search name, ID, description or tags" }), "no-match");
-    expect(screen.getByRole("button", { name: "Remove MatrixReadOnlyAccess" })).toBeTruthy();
+    expect(screen.queryByRole("checkbox", { name: "MatrixReadOnlyAccess" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Selected only" }));
+    expect(screen.getByRole("checkbox", { name: "MatrixReadOnlyAccess" })).toHaveProperty("checked", true);
     await user.click(screen.getByRole("tab", { name: "Join groups" }));
     await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
     await user.click(screen.getByRole("button", { name: "Next" }));
@@ -1984,7 +1989,11 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "User information" }));
     expect((screen.getByLabelText("Display name") as HTMLInputElement).value).toBe("Wizard User");
     await user.click(screen.getByRole("button", { name: "Next" }));
-    expect(screen.getByRole("button", { name: "Remove DeliveryTeam" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Selected only" }));
+    expect(screen.getByRole("checkbox", { name: "DeliveryTeam" })).toHaveProperty("checked", true);
+    expect(screen.getByRole("checkbox", { name: "MatrixReadOnlyAccess" })).toHaveProperty("checked", true);
+    await user.click(screen.getByRole("checkbox", { name: "Clear page selection" }));
+    expect(screen.getByText("Direct policies 0/30 · Groups 0/30")).toBeTruthy();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(repository.execute).not.toHaveBeenCalled();
   });
@@ -2046,7 +2055,11 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("tab", { name: "直接关联策略" }));
     await user.click(screen.getByRole("button", { name: "Language" }));
     expect(screen.getByText("Direct policies 20/30 · Groups 1/30", { exact: false })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Remove DeliveryTeam" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Selected only" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search selected items" }), "DeliveryTeam");
+    expect(screen.getByRole("checkbox", { name: "DeliveryTeam" })).toHaveProperty("checked", true);
+    await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
+    expect(screen.getByText("Direct policies 20/30 · Groups 0/30")).toBeTruthy();
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(repository.execute).not.toHaveBeenCalled();
   }, 15000);
@@ -2619,7 +2632,8 @@ describe("CAM-style access workspace", () => {
   });
 
   it("creates only an empty group, previews a bounded multi-member change, and keeps policy changes single", async () => {
-    const { user, repository, extension } = await open("groups", { users: reviewUsers });
+    const candidates = [...reviewUsers, ...Array.from({ length: 30 }, (_, index) => userAccess("qa-member-" + index))];
+    const { user, repository, extension } = await open("groups", { users: candidates });
     await user.click(await screen.findByRole("button", { name: "新建用户组" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.type(screen.getByLabelText("名称"), "Platform Operators");
@@ -2641,7 +2655,8 @@ describe("CAM-style access workspace", () => {
     expect(memberWorkflow.getByRole("button", { name: "审阅变更" })).toHaveProperty("disabled", true);
     await user.click(memberWorkflow.getByRole("checkbox", { name: "lin" }));
     await user.click(memberWorkflow.getByRole("checkbox", { name: "chen" }));
-    expect(memberWorkflow.getByText(/最多选择 30 项/)).toBeTruthy();
+    expect(memberWorkflow.getByText("最多可选 30 项。")).toBeTruthy();
+    expect(memberWorkflow.getByRole("button", { name: "仅看已选" }).textContent).toContain("2");
     expect(memberWorkflow.getByText(/多成员选择仅用于验证未来批量命令/)).toBeTruthy();
     await user.click(memberWorkflow.getByRole("button", { name: "审阅变更" }));
     expect(memberWorkflow.getByText(/本次变更涉及 2 位成员/)).toBeTruthy();
@@ -3178,7 +3193,8 @@ describe("CAM-style access workspace", () => {
     await user.type(screen.getByLabelText("标签值 1"), "platform");
     await user.click(screen.getByRole("checkbox", { name: "chen" }));
     await user.type(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" }), "no-match");
-    expect(screen.getByRole("button", { name: "移除 chen" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "仅看已选" }));
+    expect(screen.getByRole("checkbox", { name: "chen" })).toHaveProperty("checked", true);
     await user.click(screen.getByRole("tab", { name: /^用户组/ }));
     await user.click(screen.getByRole("checkbox", { name: "DeliveryTeam" }));
     await user.click(screen.getByRole("tab", { name: /^角色/ }));
@@ -3186,7 +3202,8 @@ describe("CAM-style access workspace", () => {
     await user.click(screen.getByRole("button", { name: "上一步" }));
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect((screen.getByLabelText("标签值 1") as HTMLInputElement).value).toBe("platform");
-    expect(screen.getByRole("button", { name: "移除 ProductionLogReviewRole" })).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "仅看已选" }));
+    expect(screen.getByRole("checkbox", { name: "ProductionLogReviewRole" })).toHaveProperty("checked", true);
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     vi.mocked(repository.workspace!.execute).mockRejectedValueOnce(new Error("network unavailable"));

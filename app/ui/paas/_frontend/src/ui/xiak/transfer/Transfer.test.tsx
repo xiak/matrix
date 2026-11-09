@@ -6,124 +6,160 @@ import { Transfer } from "../index";
 
 afterEach(cleanup);
 
-const labels = { available: "Available", selected: "Selected", search: "Search", clearSearch: "Reset search", clearSelected: "Clear all", empty: "No selection", emptyHint: "Choose an item", noResults: "No results", remove: (name: string) => `Remove ${name}`, previous: "Previous page", next: "Next page", page: (page: number, pages: number) => `${page} / ${pages}`, selectPage: "Select this page", clearPage: "Clear this page", pageSelection: (selected: number, total: number) => `${selected} of ${total} on this page`, limit: (remaining: number, needed: number) => `Space for ${remaining}; ${needed} unselected` };
+const labels = { available: "Available", selected: "Selected", onlySelected: "Selected only", selectedName: "Name", search: "Search", searchSelected: "Search selected", clearSearch: "Reset search", clearSelected: "Clear all", empty: "No selection", noResults: "No results", previous: "Previous page", next: "Next page", page: (page: number, pages: number) => `${page} / ${pages}`, selectPage: "Select this page", clearPage: "Clear this page", pageSelection: (selected: number, total: number) => `${selected} of ${total} on this page`, limit: (remaining: number, needed: number) => `Space for ${remaining}; ${needed} unselected` };
 
 const sample = [{ id: "a", label: "Alpha", description: "Read resources" }, { id: "b", label: "Beta" }, { id: "c", label: "Gamma" }, { id: "d", label: "Delta" }];
-function Example({ options = sample, initial = [], capacity = Infinity, onBatch, pageSize, filterKey }: Pick<ComponentProps<typeof Transfer>, "options" | "pageSize" | "filterKey"> & { initial?: string[]; capacity?: number; onBatch?: ComponentProps<typeof Transfer>["onSelect"] }) {
+function Example({ options = sample, initial = [], capacity = Infinity, onBatch, pageSize, filterKey }: Partial<Pick<ComponentProps<typeof Transfer>, "options" | "pageSize" | "filterKey">> & { initial?: string[]; capacity?: number; onBatch?: ComponentProps<typeof Transfer>["onSelect"] }) {
   const [ids, setIds] = useState(initial);
-  return <Transfer options={options} pageSize={pageSize} filterKey={filterKey} remaining={capacity - ids.length} selected={options.filter((item) => ids.includes(item.id))} onSelect={(batch, checked) => { onBatch?.(batch, checked); setIds(checked ? [...new Set([...ids, ...batch])] : ids.filter((id) => !batch.includes(id))); }} onRemove={(id) => setIds(ids.filter((item) => item !== id))} onClear={() => setIds([])} labels={labels} />;
+  return <Transfer options={options} pageSize={pageSize} filterKey={filterKey} remaining={capacity - ids.length} selected={options.filter((item) => ids.includes(item.id))} onSelect={(batch, checked) => { onBatch?.(batch, checked); setIds(checked ? [...new Set([...ids, ...batch])] : ids.filter((id) => !batch.includes(id))); }} onClear={() => setIds([])} labels={labels} />;
 }
 
-it("keeps selections across searches and supports removing and clearing them", async () => {
+const scope = () => screen.getByRole("button", { name: labels.onlySelected });
+const row = (name: string) => screen.getByRole("checkbox", { name });
+
+it("shows a checked item once, reviews all choices in the same table and restores the candidate query", async () => {
   const user = userEvent.setup();
   render(<Example options={sample.slice(0, 2)} />);
-  await user.click(screen.getByText("Alpha", { exact: true }));
-  expect(screen.getByRole("checkbox", { name: "Alpha" })).toHaveProperty("checked", true);
-  const search = screen.getByRole("searchbox");
-  await user.click(search);
-  await user.paste("Beta");
+  expect(scope()).toHaveProperty("disabled", true);
+  await user.click(screen.getByText("Alpha"));
+  expect(row("Alpha")).toHaveProperty("checked", true);
+  expect(screen.getAllByText("Alpha")).toHaveLength(1);
+  expect(scope().textContent).toContain("1");
+  await user.type(screen.getByRole("searchbox"), "Beta");
   expect(screen.queryByRole("checkbox", { name: "Alpha" })).toBeNull();
-  expect(within(screen.getByRole("region", { name: "Selected" })).getByText("Alpha")).toBeTruthy();
-  await user.click(screen.getByRole("checkbox", { name: "Beta" }));
-  await user.click(screen.getByRole("button", { name: "Remove Alpha" }));
-  expect(within(screen.getByRole("region", { name: "Selected" })).queryByText("Alpha")).toBeNull();
-  await user.click(screen.getByRole("button", { name: "Clear all" }));
-  expect(screen.getByText("No selection")).toBeTruthy();
+  await user.click(row("Beta"));
+  await user.click(scope());
+  expect(scope().getAttribute("aria-pressed")).toBe("true");
+  expect(screen.getAllByRole("table")).toHaveLength(1);
+  expect(screen.getByRole("searchbox", { name: labels.searchSelected })).toHaveProperty("value", "");
+  await user.click(row("Alpha"));
+  expect(row("Beta")).toBe(document.activeElement);
+  expect(screen.queryByRole("checkbox", { name: "Alpha" })).toBeNull();
+  await user.type(screen.getByRole("searchbox"), "nothing");
+  await user.click(screen.getByRole("button", { name: labels.clearSelected }));
+  expect(screen.getByText(labels.empty)).toBeTruthy();
+  expect(scope()).toBe(document.activeElement);
+  await user.click(scope());
+  const search = screen.getByRole("searchbox", { name: labels.search });
+  expect(search).toHaveProperty("value", "Beta");
+  expect(row("Beta")).toHaveProperty("checked", false);
   await user.clear(search);
   await user.paste("ＡＬＰＨＡ resources");
-  expect(screen.getByRole("checkbox", { name: "Alpha" })).toBeTruthy();
+  expect(row("Alpha")).toBeTruthy();
   expect(screen.queryByRole("checkbox", { name: "Beta" })).toBeNull();
 });
 
-it("bounds large available lists while searching all options and retaining off-page selections", async () => {
+it("bounds both views and restores page two after reviewing items outside the current candidates", async () => {
   const options = Array.from({ length: 2500 }, (_, id) => ({ id: String(id), label: `Policy ${id}` }));
   const selected = [options[0]!, options[2499]!];
-  const onSelect = vi.fn();
-  const user = userEvent.setup();
-  const props = { selected, onSelect, onRemove: vi.fn(), onClear: vi.fn(), labels };
+  const user = userEvent.setup(), onSelect = vi.fn();
+  const props = { selected, onSelect, onClear: vi.fn(), labels };
   const { rerender } = render(<Transfer {...props} options={options} />);
   expect(screen.getAllByRole("checkbox")).toHaveLength(21);
-  expect(screen.getByRole("status").textContent).toBe("1 / 125");
+  expect(screen.getByText("1 / 125")).toBeTruthy();
   await user.click(screen.getByRole("button", { name: labels.next }));
-  expect(screen.getByRole("checkbox", { name: "Policy 20" })).toBeTruthy();
-  await user.click(screen.getByRole("checkbox", { name: "Policy 20" }));
+  await user.click(row("Policy 20"));
   expect(onSelect).toHaveBeenCalledWith(["20"], true);
-  expect(within(screen.getByRole("region", { name: "Selected" })).getByText("Policy 0")).toBeTruthy();
-  // Keep the full 2,500-option fixture; this contract searches a complete value.
+  await user.click(scope());
+  expect(row("Policy 0")).toHaveProperty("checked", true);
+  expect(row("Policy 2499")).toHaveProperty("checked", true);
+  await user.click(scope());
+  expect(screen.getByText("2 / 125")).toBeTruthy();
   await user.click(screen.getByRole("searchbox"));
   await user.paste("Policy 2499");
   expect(screen.getAllByRole("checkbox")).toHaveLength(2);
-  expect((screen.getByRole("checkbox", { name: "Policy 2499" }) as HTMLInputElement).checked).toBe(true);
+  expect(row("Policy 2499")).toHaveProperty("checked", true);
   await user.click(screen.getByRole("button", { name: labels.clearSearch }));
-  expect(screen.getByRole("status").textContent).toBe("1 / 125");
+  expect(screen.getByText("1 / 125")).toBeTruthy();
   await user.click(screen.getByRole("button", { name: labels.next }));
   rerender(<Transfer {...props} options={options.slice(0, 3)} />);
   expect(screen.getAllByRole("checkbox")).toHaveLength(4);
   expect(screen.queryByRole("button", { name: labels.next })).toBeNull();
+  await user.click(scope());
+  expect(row("Policy 2499")).toHaveProperty("checked", true);
 });
 
-it("selects a page in one update, exposes mixed state, and clears only the current page", async () => {
-  const user = userEvent.setup();
-  const onBatch = vi.fn();
-  render(<Example options={sample} initial={["a", "c"]} pageSize={2} onBatch={onBatch} />);
-  const header = screen.getByRole("checkbox", { name: labels.selectPage });
+it("selects a page atomically, exposes mixed state, and clears only that page", async () => {
+  const user = userEvent.setup(), onBatch = vi.fn();
+  render(<Example initial={["a", "c"]} pageSize={2} onBatch={onBatch} />);
+  const header = row(labels.selectPage);
   expect(header).toHaveProperty("indeterminate", true);
   expect(header.getAttribute("aria-checked")).toBe("mixed");
   header.focus();
   await user.keyboard("[Space]");
   expect(onBatch).toHaveBeenCalledExactlyOnceWith(["b"], true);
   expect(header).toHaveProperty("checked", true);
-  expect(header).toHaveProperty("indeterminate", false);
-  expect(screen.getByRole("button", { name: "Remove Gamma" })).toBeTruthy();
+  expect(scope().textContent).toContain("3");
   await user.click(screen.getByRole("button", { name: labels.next }));
-  expect(screen.getByRole("checkbox", { name: "Gamma" })).toHaveProperty("checked", true);
-  expect(screen.getByRole("checkbox", { name: "Delta" })).toHaveProperty("checked", false);
+  expect(row("Gamma")).toHaveProperty("checked", true);
+  expect(row("Delta")).toHaveProperty("checked", false);
   await user.click(screen.getByRole("button", { name: labels.clearPage }));
   expect(onBatch).toHaveBeenLastCalledWith(["c"], false);
-  expect(screen.getByRole("button", { name: "Remove Alpha" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Remove Beta" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Remove Gamma" })).toBeNull();
+  await user.click(scope());
+  expect(row("Alpha")).toHaveProperty("checked", true);
+  expect(row("Beta")).toHaveProperty("checked", true);
+  expect(screen.queryByRole("checkbox", { name: "Gamma" })).toBeNull();
+  await user.click(scope());
   await user.click(screen.getByRole("button", { name: labels.previous }));
-  await user.click(screen.getByRole("checkbox", { name: labels.selectPage }));
+  await user.click(row(labels.clearPage));
   expect(onBatch).toHaveBeenLastCalledWith(["a", "b"], false);
-  expect(screen.getByText("No selection")).toBeTruthy();
+  expect(scope()).toHaveProperty("disabled", true);
+});
+
+it("paginates and searches the selected collection independently and repairs focus after removing its last row", async () => {
+  const user = userEvent.setup(), onBatch = vi.fn();
+  render(<Example initial={["a", "b", "c"]} pageSize={2} onBatch={onBatch} />);
+  await user.click(scope());
+  await user.click(screen.getByRole("button", { name: labels.next }));
+  await user.click(row("Gamma"));
+  expect(onBatch).toHaveBeenLastCalledWith(["c"], false);
+  expect(row("Alpha")).toBe(document.activeElement);
+  await user.type(screen.getByRole("searchbox"), "Alpha");
+  await user.click(row(labels.clearPage));
+  expect(onBatch).toHaveBeenLastCalledWith(["a"], false);
+  expect(screen.getByText(labels.noResults)).toBeTruthy();
+  await user.click(screen.getByRole("button", { name: labels.clearSearch }));
+  await user.click(row("Beta"));
+  expect(scope()).toBe(document.activeElement);
+  expect(screen.getByText(labels.empty)).toBeTruthy();
+  await user.click(scope());
+  expect(screen.getByText("1 / 2")).toBeTruthy();
 });
 
 it("does not partially select an over-capacity page and still permits deselection at the limit", async () => {
-  const user = userEvent.setup();
-  const onBatch = vi.fn();
-  render(<Example options={sample} initial={["d"]} pageSize={3} capacity={3} onBatch={onBatch} />);
-  expect(screen.getByRole("checkbox", { name: labels.selectPage })).toHaveProperty("disabled", true);
-  expect(screen.getByText("Space for 2; 3 unselected")).toBeTruthy();
-  expect(document.getElementById(screen.getByRole("checkbox", { name: labels.selectPage }).getAttribute("aria-describedby")!)?.textContent).toBe("Space for 2; 3 unselected");
-  await user.click(screen.getByRole("checkbox", { name: labels.selectPage }));
+  const user = userEvent.setup(), onBatch = vi.fn();
+  render(<Example initial={["d"]} pageSize={3} capacity={3} onBatch={onBatch} />);
+  const header = row(labels.selectPage);
+  expect(header).toHaveProperty("disabled", true);
+  expect(document.getElementById(header.getAttribute("aria-describedby")!)?.textContent).toBe("Space for 2; 3 unselected");
+  await user.click(header);
   expect(onBatch).not.toHaveBeenCalled();
-  await user.click(screen.getByRole("checkbox", { name: "Alpha" }));
-  await user.click(screen.getByRole("checkbox", { name: "Beta" }));
-  expect(screen.getByRole("checkbox", { name: "Gamma" })).toHaveProperty("disabled", true);
-  expect(screen.getByRole("checkbox", { name: "Alpha" })).toHaveProperty("disabled", false);
-  expect(screen.getByRole("checkbox", { name: labels.selectPage })).toHaveProperty("indeterminate", true);
+  await user.click(row("Alpha"));
+  await user.click(row("Beta"));
+  expect(row("Gamma")).toHaveProperty("disabled", true);
+  expect(row("Alpha")).toHaveProperty("disabled", false);
+  expect(header).toHaveProperty("indeterminate", true);
   expect(screen.getByText("Space for 0; 1 unselected")).toBeTruthy();
   await user.click(screen.getByRole("button", { name: labels.clearPage }));
-  expect(screen.getByRole("button", { name: "Remove Delta" })).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Remove Alpha" })).toBeNull();
-  expect(screen.getByRole("checkbox", { name: "Gamma" })).toHaveProperty("disabled", false);
+  expect(row("Gamma")).toHaveProperty("disabled", false);
+  await user.click(scope());
+  expect(row("Delta")).toHaveProperty("checked", true);
+  expect(screen.queryByRole("checkbox", { name: "Alpha" })).toBeNull();
 });
 
-it("excludes unavailable rows from bulk selection and disables the empty-result header", async () => {
-  const user = userEvent.setup();
-  const onBatch = vi.fn();
+it("excludes unavailable rows from bulk selection and keeps review available for empty search results", async () => {
+  const user = userEvent.setup(), onBatch = vi.fn();
   render(<Example options={[sample[0]!, { ...sample[1]!, disabled: true }]} onBatch={onBatch} />);
-  await user.click(screen.getByRole("checkbox", { name: labels.selectPage }));
+  await user.click(row(labels.selectPage));
   expect(onBatch).toHaveBeenCalledExactlyOnceWith(["a"], true);
-  expect(screen.getByText("1 of 1 on this page")).toBeTruthy();
+  expect(row("Beta")).toHaveProperty("disabled", true);
   await user.type(screen.getByRole("searchbox"), "no-match");
-  expect(screen.getByRole("checkbox", { name: labels.selectPage })).toHaveProperty("disabled", true);
-  expect(screen.getByRole("button", { name: labels.clearPage })).toHaveProperty("disabled", true);
-  expect(screen.getByRole("button", { name: "Remove Alpha" })).toBeTruthy();
+  expect(row(labels.selectPage)).toHaveProperty("disabled", true);
+  await user.click(scope());
+  expect(within(screen.getByRole("table", { name: labels.selected })).getByRole("checkbox", { name: "Alpha" })).toHaveProperty("checked", true);
 });
 
-it("resets the page on every source filter change without losing the query or selections", async () => {
+it("resets the page on a source filter change without losing the query or selections", async () => {
   const options = sample.map((option) => ({ ...option, description: "Policy" }));
   const user = userEvent.setup();
   const { rerender } = render(<Example options={options} initial={["a"]} pageSize={2} filterKey="all" />);
@@ -135,18 +171,19 @@ it("resets the page on every source filter change without losing the query or se
   rerender(<Example options={options} initial={["a"]} pageSize={2} filterKey="all" />);
   expect(screen.getByText("1 / 2")).toBeTruthy();
   expect(screen.getByRole("searchbox")).toHaveProperty("value", "Policy");
-  expect(screen.getByRole("checkbox", { name: "Alpha" })).toHaveProperty("checked", true);
+  expect(row("Alpha")).toHaveProperty("checked", true);
 });
 
-it("searches metadata and IDs, and limits bulk changes to the filtered result", async () => {
-  const user = userEvent.setup();
-  const onBatch = vi.fn();
+it("searches metadata and IDs and limits bulk changes to filtered items", async () => {
+  const user = userEvent.setup(), onBatch = vi.fn();
   render(<Example options={[...sample, { id: "policy-ops", label: "Operator", keywords: "environment production" }]} initial={["a"]} onBatch={onBatch} />);
   await user.type(screen.getByRole("searchbox"), "ＰＲＯＤＵＣＴＩＯＮ ops");
-  expect(screen.getByRole("checkbox", { name: "Operator" })).toBeTruthy();
+  expect(row("Operator")).toBeTruthy();
   expect(screen.queryByRole("checkbox", { name: "Alpha" })).toBeNull();
-  await user.click(screen.getByRole("checkbox", { name: labels.selectPage }));
+  await user.click(row(labels.selectPage));
   expect(onBatch).toHaveBeenCalledExactlyOnceWith(["policy-ops"], true);
-  await user.click(screen.getByRole("button", { name: labels.clearPage }));
-  expect(screen.getByRole("button", { name: "Remove Alpha" })).toBeTruthy();
+  await user.click(row(labels.clearPage));
+  expect(onBatch).toHaveBeenLastCalledWith(["policy-ops"], false);
+  await user.click(scope());
+  expect(row("Alpha")).toHaveProperty("checked", true);
 });
