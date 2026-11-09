@@ -21,10 +21,35 @@
 }
 
 .rail {
-  gap: var(--xiak-spacing-tight);
-  padding-block: var(--xiak-spacing-default);
+  overflow: hidden;
   border-color: var(--xiak-color-border-global);
   background: var(--xiak-color-bg-global);
+}
+
+.railHeader,
+.contextHeader {
+  display: grid;
+  flex: none;
+  min-height: var(--xiak-content-header-height);
+  border-bottom: var(--xiak-border-subtle);
+}
+
+.railHeader {
+  align-self: stretch;
+  place-items: center;
+}
+
+.railItems {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  align-self: stretch;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--xiak-spacing-tight);
+  padding-block: var(--xiak-spacing-tight) var(--xiak-spacing-default);
+  overflow: hidden auto;
+  scrollbar-width: none;
 }
 
 .railHome,
@@ -75,13 +100,6 @@
   stroke-width: 1.75;
 }
 
-.railDivider {
-  width: 1.875rem;
-  height: var(--xiak-border-width);
-  flex: none;
-  background: var(--xiak-color-border-global);
-}
-
 .railTooltip {
   position: fixed;
   left: calc(var(--xiak-layout-rail-width) - var(--xiak-spacing-narrow));
@@ -120,13 +138,9 @@
 }
 
 .contextHeader {
-  display: grid;
-  min-height: var(--xiak-content-header-height);
   grid-template-columns: auto minmax(0, 1fr) auto;
-  flex: none;
   gap: var(--xiak-spacing-tight);
   align-items: center;
-  border-bottom: var(--xiak-border-subtle);
   padding-inline: var(--xiak-spacing-default);
 }
 

@@ -544,22 +544,25 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
           <ServiceLayout>
             <Sider className={styles.sider}>
               <Sider.RailMenu data-surface="shell" aria-label={frame.preview ? navigationText("favorites") : t("productNavigation")} className={styles.rail}>
-                <Link aria-current={frame.section === "overview" ? "page" : undefined} aria-label={t("dashboardHome")} className={styles.railHome} href="/console/" onAccepted={closeSidebarAndRestoreFocus} title={t("dashboardHome")}><LayoutDashboard aria-hidden="true" /></Link>
-                <span className={styles.railDivider} />
-                {frame.preview ? favorites.flatMap((id) => services.filter((service) => service.id === id)).map((service) => {
-                  const Icon = contextIcons[service.id];
-                  const selected = service.id === frame.productId;
-                  return <Link aria-current={selected ? "page" : undefined} aria-label={service.label} className={styles.railItem} data-selected={selected ? "true" : undefined} href={service.href} key={service.id} onAccepted={() => { closeSidebarAndRestoreFocus(); useConsoleUiStore.getState().visitService(service.id); }} title={service.label}><Icon aria-hidden="true" /><span className={styles.railTooltip}>{service.label}</span></Link>;
-                }) : frame.rail.map((item) => {
-                  const Icon = contextIcons[item.id];
-                  const label = contextName(item.id);
-                  return (
-                    <Link aria-current={item.selected ? (item.href === consoleRouteHref(selection) ? "page" : "location") : undefined} aria-label={label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onAccepted={closeSidebarAndRestoreFocus} title={label}>
-                      <Icon aria-hidden="true" /><span className={styles.railTooltip}>{label}</span>
-                    </Link>
-                  );
-                })}
-                {frame.preview ? <button aria-label={navigationText("addFavorite")} className={styles.railItem} onClick={() => setHeaderPanel("products")} title={navigationText("addFavorite")} type="button"><Star aria-hidden="true" /><span className={styles.railTooltip}>{navigationText("addFavorite")}</span></button> : null}
+                <div className={styles.railHeader}>
+                  <Link aria-current={frame.section === "overview" ? "page" : undefined} aria-label={t("dashboardHome")} className={styles.railHome} href="/console/" onAccepted={closeSidebarAndRestoreFocus} title={t("dashboardHome")}><LayoutDashboard aria-hidden="true" /></Link>
+                </div>
+                <div className={styles.railItems}>
+                  {frame.preview ? favorites.flatMap((id) => services.filter((service) => service.id === id)).map((service) => {
+                    const Icon = contextIcons[service.id];
+                    const selected = service.id === frame.productId;
+                    return <Link aria-current={selected ? "page" : undefined} aria-label={service.label} className={styles.railItem} data-selected={selected ? "true" : undefined} href={service.href} key={service.id} onAccepted={() => { closeSidebarAndRestoreFocus(); useConsoleUiStore.getState().visitService(service.id); }} title={service.label}><Icon aria-hidden="true" /><span className={styles.railTooltip}>{service.label}</span></Link>;
+                  }) : frame.rail.map((item) => {
+                    const Icon = contextIcons[item.id];
+                    const label = contextName(item.id);
+                    return (
+                      <Link aria-current={item.selected ? (item.href === consoleRouteHref(selection) ? "page" : "location") : undefined} aria-label={label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onAccepted={closeSidebarAndRestoreFocus} title={label}>
+                        <Icon aria-hidden="true" /><span className={styles.railTooltip}>{label}</span>
+                      </Link>
+                    );
+                  })}
+                  {frame.preview ? <button aria-label={navigationText("addFavorite")} className={styles.railItem} onClick={() => setHeaderPanel("products")} title={navigationText("addFavorite")} type="button"><Star aria-hidden="true" /><span className={styles.railTooltip}>{navigationText("addFavorite")}</span></button> : null}
+                </div>
               </Sider.RailMenu>
 
               <Sider.ContextMenu

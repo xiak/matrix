@@ -1859,7 +1859,7 @@ is involved. The following are the resulting CSS dimensions under that default:
 | Favorite-service rail | `70px` wide; `40px` targets | Service shortcuts with independent overflow scrolling |
 | Service directory | Full viewport below the global header, with a `55px` toolbar, `40px` search/close controls and `50px` minimum two-line product entries | Search aligns with the result headings and each entry keeps its description and favorite action |
 | Product context navigation | `300px` content plus `1px` divider; `40px` single-line rows (`55px` touch) | Labels and actionable counts; descriptions remain hover and assistive-text hints |
-| Page context bar | `55px` minimum, aligned with the product-navigation heading; `16.25px` title; `40px` compact action-menu target | One persistent page/object title with parent navigation and actions; the two desktop header bands total `110px` |
+| Page context bar | `55px` minimum at the default desktop scale, `16.25px` title and `40px` compact action-menu target. The rail Home icon is centered in this row, whose bottom border aligns with the product heading and page title. | One persistent page/object title with parent navigation and actions. Product shortcuts scroll below the rail header. The two desktop header bands total `110px`. |
 | Primary controls | `30px` small, `40px` default, `50px` large; touch `45/55/55px` | Consistent density across buttons, inputs and menus |
 | Status badge | `25px` minimum height | Labels can wrap within narrow table cells |
 | Card field list | `35px` minimum row, `13.75px` labels and `15px` values | Labels share a column, values wrap and adjacent fields have a divider. Lists up to `270px` wide stack each label above its value. |
