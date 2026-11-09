@@ -1,7 +1,7 @@
 "use client";
 
 import { useId, useRef, useState, type ReactNode } from "react";
-import { Filter, X } from "lucide-react";
+import { Filter, Info, X } from "lucide-react";
 import { Button } from "../button/Button";
 import { SearchInput } from "../input/SearchInput";
 import { Select, type SelectOption } from "../select/Select";
@@ -17,13 +17,16 @@ export type TableToolbarLabels = {
 };
 
 /** One query and disclosed structured conditions for one collection. */
-export function TableToolbar({ search, filters = [], labels, actions, status, tools }: {
+export function TableToolbar({ search, filters = [], labels, actions, status, tools, help }: {
   search: { label: string; placeholder?: string; value: string; onChange(value: string): void };
   filters?: TableFilter[]; labels: TableToolbarLabels;
   actions?: ReactNode; status?: ReactNode; tools?: ReactNode;
+  help?: { label: string; description: string };
 }) {
   const [expanded, setExpanded] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const panelId = useId();
+  const helpId = panelId + "-help";
   const toggle = useRef<HTMLButtonElement>(null);
   const active = filters.filter((filter) => filter.value !== (filter.defaultValue ?? "all"));
   const reset = () => {
@@ -31,7 +34,7 @@ export function TableToolbar({ search, filters = [], labels, actions, status, to
     // Clearing removes the reset control; keep focus on a stable collection tool.
     toggle.current?.focus();
   };
-  return <div className={styles.root} data-expanded={expanded || undefined}>
+  return <div className={styles.root} data-expanded={expanded || undefined} data-with-help={help ? true : undefined}>
     <div className={styles.bar}>
       {actions ? <div className={styles.actions}>{actions}</div> : null}
       <SearchInput className={styles.search} aria-label={search.label} placeholder={search.placeholder ?? search.label}
@@ -41,6 +44,10 @@ export function TableToolbar({ search, filters = [], labels, actions, status, to
         onClick={() => setExpanded((current) => !current)}><Filter aria-hidden="true" /><span>{labels.filters}</span>{active.length ? <> <span className={styles.count}>{active.length}</span></> : null}</Button> : null}
       {status ? <span className={styles.status} role="status">{status}</span> : null}
       {tools ? <div className={styles.tools}>{tools}</div> : null}
+      {help ? <Button variant="ghost" size="small" className={styles.helpTrigger} aria-label={help.label} title={help.label}
+        aria-expanded={helpOpen} aria-controls={helpId} onClick={() => setHelpOpen((open) => !open)}>
+        <Info aria-hidden="true" /><span>{help.label}</span>
+      </Button> : null}
     </div>
     {expanded ? <div id={panelId} role="group" aria-label={labels.filters} className={styles.filters}
       onKeyDown={(event) => { if (event.key === "Escape" && !event.defaultPrevented) { event.stopPropagation(); setExpanded(false); toggle.current?.focus(); } }}>
@@ -58,5 +65,6 @@ export function TableToolbar({ search, filters = [], labels, actions, status, to
       })}
       {!expanded ? <Button variant="ghost" size="small" onClick={reset}>{labels.clearFilters}</Button> : null}
     </div> : null}
+    {help ? <p className={styles.helpText} id={helpId} hidden={!helpOpen}>{help.description}</p> : null}
   </div>;
 }

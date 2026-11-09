@@ -2070,6 +2070,15 @@ pending operation, preview warning, or consequence that needs review stays
 visible where the user acts. Expanding help does not submit the form or
 change its selection.
 
+The IAM Role directory opens with search and filters. Its toolbar includes
+an “About roles” control that reveals the definition below the search row
+and keeps keyboard focus on the trigger. Compact layouts retain the labelled
+info icon in that row. A search-scope note accompanies the option to load
+more roles while a continuation is available. Empty results omit the local
+page controls and keep the continuation action when there are more roles to load.
+Browser checks cover 320px, 390px, 1315px and 1941px layouts and five returns
+to the Role directory through navigation with its explanation collapsed.
+
 The public Theme foundation covers tables, dialogs, buttons, native radio and
 checkbox controls, input/select fields, search and password affordances,
 alerts, empty states, tabs, selection menus, statistics and progress. All

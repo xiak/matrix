@@ -9,8 +9,12 @@
 .search { flex: 1 1 13.75rem; min-width: 0; max-width: 20rem; }
 .status { margin-inline-start: auto; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .tools { max-width: 100%; }
+.helpTrigger { flex: none; margin-inline-start: auto; }
+.status ~ .helpTrigger, .tools + .helpTrigger { margin-inline-start: 0; }
+.helpText { margin: var(--xiak-spacing-default) 0 0; border-top: var(--xiak-border-subtle); padding-block-start: var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
+.root[data-expanded="true"] .helpText { margin: 0; padding-block: var(--xiak-spacing-default); }
 .count { font-variant-numeric: tabular-nums; color: var(--xiak-color-accent-text); }
-.filterTrigger[aria-expanded="true"] { background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
+.filterTrigger[aria-expanded="true"], .helpTrigger[aria-expanded="true"] { background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
 .filters { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--xiak-spacing-default); margin: var(--xiak-spacing-default) calc(-1 * var(--xiak-table-cell-padding-inline)) 0; border-top: var(--xiak-border-subtle); padding: var(--xiak-spacing-comfortable) var(--xiak-table-cell-padding-inline); background: var(--xiak-color-bg-canvas); }
 .filterFields { display: flex; flex-wrap: wrap; min-width: 0; gap: var(--xiak-spacing-default); }
 .field { display: grid; width: min(100%, 16.25rem); min-width: 13.75rem; gap: var(--xiak-spacing-narrow); }
@@ -24,8 +28,16 @@
   .search { flex-basis: calc(100% - 7.5rem); max-width: none; }
   .actions { flex-basis: 100%; }
   .status { margin-inline-start: 0; }
+  .root[data-with-help] .search { flex-basis: min(7rem, 35%); }
+  .root[data-with-help] .status { order: 1; flex-basis: 100%; }
+  .helpTrigger { width: var(--xiak-control-height); min-height: var(--xiak-control-height); padding: 0; }
+  .helpTrigger > span { display: none; }
   .filters { grid-template-columns: minmax(0, 1fr); padding-block: var(--xiak-spacing-default); }
   .filterFields { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-default); }
   .field { width: 100%; min-width: 0; }
+}
+@container matrix-page-content (max-width: 17.5rem) {
+  .root[data-with-help] .filterTrigger { min-width: var(--xiak-control-height); padding-inline: var(--xiak-spacing-narrow); }
+  .root[data-with-help] .filterTrigger > span:first-of-type { position: absolute; width: 0.0625rem; height: 0.0625rem; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
 }

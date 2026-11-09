@@ -536,20 +536,34 @@ function AccountLiveRolesWorkspace({ client, serviceRoleTemplates, serviceLinked
 
   if (entityId) return <RoleDetail client={client} roleId={entityId} onOpen={onOpen} onDeleted={setReceipt} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} />;
 
+  const loadMore = nextAfter ? <Button size="small" variant="secondary" disabled={loadingMore} onClick={async () => {
+    if (loadingMore) return;
+    setLoadingMore(true);
+    setError(null);
+    try {
+      const directory = await client.list(nextAfter);
+      const known = new Set(roles.map((entry) => entry.role.id));
+      if (directory.items.some((entry) => known.has(entry.role.id))) throw new Error("DUPLICATE_ROLE_PAGE");
+      setRoles((current) => [...current, ...directory.items]);
+      setNextAfter(directory.nextAfter);
+    } catch (failure) { setError(a(`errors.${accountError(failure)}`)); }
+    finally { setLoadingMore(false); }
+  }}>{t("loadMore")}</Button> : null;
+
   return <>
     {receipt?.client === client ? <RoleDeletionReceipt receipt={receipt} /> : null}
-    <Card aria-description={t("liveDirectoryHint")}>
+    <Card>
     <ContentPage.Heading title={w("roles")} scrollKey="live-role-directory" actions={<ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")}
       primary={{ id: "create", label: w("createRole"), icon: <Plus aria-hidden="true" />, disabled: !client.canCreate, disabledReason: client.createRestrictionReason ?? undefined, onSelect: onCreate }}
       secondary={serviceLinkedRoles || serviceRoleTemplates ? [{ id: "service-authorization", label: t("serviceAuthorization"), variant: "secondary", onSelect: () => onOpen("service-authorizations") }] : []} />} />
-    <div className={styles.policyDirectoryIntro}><p>{t("liveDirectoryHint")}</p></div>
     <TableToolbar
       labels={toolbarLabels}
       search={{ label: t("searchRoles"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       filters={[{ id: "state", label: w("state"), options: [
         { value: "all", label: w("all") }, { value: "ACTIVE", label: t("active") }, { value: "DISABLED", label: t("disabled") }
       ], value: state, onChange: (value) => { setState(value); setPage(1); } }]}
-      status={phase === "ready" ? t("loadedRoles", { count: roles.length }) : undefined}
+      status={phase === "ready" && roles.length > 0 ? t("loadedRoles", { count: roles.length }) : undefined}
+      help={{ label: t("directoryHelp"), description: t("liveDirectoryHint") }}
     />
     {phase === "loading" ? <TableSkeleton label={t("loadingRoles")} rows={6} /> : null}
     {phase === "error" ? <EmptyState title={t("directoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={retry}>{t("retry")}</Button>} /> : null}
@@ -564,23 +578,10 @@ function AccountLiveRolesWorkspace({ client, serviceRoleTemplates, serviceLinked
         </tr>)}</tbody>
       </Table>
       {!matches.length ? <EmptyState title={roles.length ? w("noResults") : t("noRoles")} description={roles.length ? w("noResultsHint") : t("noRolesHint")} action={roles.length ? <Button variant="secondary" onClick={() => { setQuery(""); setState("all"); setPage(1); }}>{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
-      <Table.Footer note={t("loadedSearchScope")}>
-        <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
-          trailing={nextAfter ? <Button size="small" variant="secondary" disabled={loadingMore} onClick={async () => {
-            if (!nextAfter || loadingMore) return;
-            setLoadingMore(true);
-            setError(null);
-            try {
-              const directory = await client.list(nextAfter);
-              const known = new Set(roles.map((entry) => entry.role.id));
-              if (directory.items.some((entry) => known.has(entry.role.id))) throw new Error("DUPLICATE_ROLE_PAGE");
-              setRoles((current) => [...current, ...directory.items]);
-              setNextAfter(directory.nextAfter);
-            } catch (failure) { setError(a(`errors.${accountError(failure)}`)); }
-            finally { setLoadingMore(false); }
-          }}>{t("loadMore")}</Button> : null}
-          labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} />
-      </Table.Footer>
+      {matches.length > 0 || nextAfter ? <Table.Footer note={nextAfter ? t("loadedSearchScope") : undefined}>
+        {matches.length > 0 ? <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+          trailing={loadMore} labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /> : loadMore}
+      </Table.Footer> : null}
       {error ? <Alert status="warning">{error}</Alert> : null}
     </> : null}
     </Card>

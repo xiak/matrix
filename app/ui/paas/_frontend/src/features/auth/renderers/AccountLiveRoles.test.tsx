@@ -122,16 +122,56 @@ afterEach(() => { cleanup(); sessionStorage.clear(); });
 
 describe("AccountLiveRoles", () => {
   it("keeps the fixed directory shell visible while only role data loads", async () => {
+    const user = userEvent.setup();
     let resolve!: (value: RoleDirectory) => void;
     const api = client({ list: vi.fn().mockImplementation(() => new Promise<RoleDirectory>((done) => { resolve = done; })) });
     render(<LocaleProvider><RolesHarness api={api} /></LocaleProvider>);
 
     expect(screen.getByRole("heading", { name: "角色" })).toBeTruthy();
-    expect(screen.getByText("角色是可被信任身份申请的临时身份", { exact: false })).toBeTruthy();
+    const help = screen.getByRole("button", { name: "角色说明" });
+    const note = document.getElementById(help.getAttribute("aria-controls")!)!;
+    expect(help.getAttribute("aria-expanded")).toBe("false");
+    expect(note.hidden).toBe(true);
+    expect(screen.getByRole("searchbox")).toBeTruthy();
     expect(screen.getByText("正在加载角色目录")).toBeTruthy();
     resolve(directory);
     expect(await screen.findByRole("button", { name: role.name })).toBeTruthy();
+    expect(note.hidden).toBe(true);
+    help.focus();
+    await user.keyboard("{Enter}");
+    expect(help.getAttribute("aria-expanded")).toBe("true");
+    expect(note.hidden).toBe(false);
+    expect(note.textContent).toContain("会话有效期");
+    await user.keyboard("[Space]");
+    expect(note.hidden).toBe(true);
+    expect(document.activeElement).toBe(help);
+    expect(api.list).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("offers continuation for an empty local search only while more roles can be loaded", async () => {
+    const user = userEvent.setup();
+    const items = Array.from({ length: 100 }, (_, index) => ({
+      role: { ...role, id: "role-a" + String(index).padStart(3, "0"), name: "Ops" + index },
+      capabilities: []
+    }));
+    const cursor = items[99]!.role.id;
+    const list = vi.fn().mockResolvedValueOnce({ ...directory, items, nextAfter: cursor }).mockResolvedValueOnce(directory);
+    render(<LocaleProvider><RolesHarness api={client({ list })} /></LocaleProvider>);
+
+    await screen.findByRole("button", { name: "Ops0" });
+    const search = screen.getByRole("searchbox");
+    await user.type(search, role.name);
+    expect(screen.queryByText(/^第 1 \/ 1 页$/)).toBeNull();
+    expect(screen.getByText(/搜索和筛选仅覆盖已加载的角色/)).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "加载更多" }));
+    expect(await screen.findByRole("button", { name: role.name })).toBeTruthy();
+    expect(search).toHaveProperty("value", role.name);
+    expect(list).toHaveBeenLastCalledWith(cursor);
+    expect(screen.queryByRole("button", { name: "加载更多" })).toBeNull();
+    expect(screen.queryByText(/搜索和筛选仅覆盖已加载的角色/)).toBeNull();
+    await user.type(search, "-missing");
+    expect(screen.queryByText(/^第 1 \/ 1 页$/)).toBeNull();
   });
 
   it("routes service authorization to its addressable content workspace instead of opening local state", async () => {
