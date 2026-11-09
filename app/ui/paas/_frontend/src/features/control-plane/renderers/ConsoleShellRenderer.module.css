@@ -53,6 +53,7 @@
   color: var(--xiak-color-text-global);
 }
 
+.railHome[aria-current="page"],
 .railItem[data-selected="true"] {
   background: var(--xiak-color-accent-haze);
   color: var(--xiak-color-text-global);

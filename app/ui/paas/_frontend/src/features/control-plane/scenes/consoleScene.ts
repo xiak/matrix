@@ -3,7 +3,6 @@ import type { ExperienceApplicationDeploymentSnapshot, ExperienceApplicationTagS
 import type { Region, ServiceInstallation, ServiceOffering } from "../domain/resources";
 import type { ConsoleSection, ServiceView } from "../domain/selection";
 
-export type RailIconKind = "overview" | "database" | "devops" | "observability" | "audit" | "access";
 export type NavigationIconKind =
   | "policy"
   | "sso"
@@ -28,9 +27,8 @@ export type ExperienceIconKind = "foundation" | "paas" | "devops" | "observabili
 export type SceneStatus = "neutral" | "info" | "success" | "warning" | "danger";
 
 export type ProductRailItemScene = {
-  id: string;
+  id: "managed-services" | "audit" | "iam";
   href: string;
-  icon: RailIconKind;
   selected: boolean;
 };
 
@@ -206,6 +204,7 @@ export type ConsoleContentScene =
       readyInstanceCount: number;
     }
   | { kind: "catalog"; offerings: OfferingScene[] }
+  | { kind: "product-specifications"; offerings: Pick<ServiceOffering, "id" | "displayName" | "engineVersion" | "quotaShapes">[] }
   | { kind: "quotas"; entitlements: EntitlementScene[] }
   | { kind: "installations"; installations: InstallationScene[] }
   | { kind: "regions"; regions: RegionScene[] }
@@ -234,8 +233,7 @@ export type ConsoleWorkspaceScene =
 
 export type ConsoleScene = {
   section: ConsoleSection;
-  productId: import("./serviceDirectory").ServiceId | "console";
-  productIcon: RailIconKind;
+  productId: import("./serviceDirectory").ServiceId | "console" | "managed-services";
   preview: boolean;
   scope: ConsoleScopeScene | null;
   search: Array<GlobalSearchResultScene & { resourceKind: import("../domain/experience").ExperienceResource["kind"] }>;

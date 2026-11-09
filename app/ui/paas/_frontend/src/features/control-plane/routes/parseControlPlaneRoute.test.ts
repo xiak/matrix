@@ -17,6 +17,7 @@ describe("parseControlPlaneRoute", () => {
 
   it.each([
     ["/console/products/postgresql/", { section: "catalog", product: "postgresql" }],
+    ["/console/products/postgresql/specifications/", { section: "catalog", product: "postgresql", view: "specifications" }],
     ["/console/products/mysql/instances/", { section: "installations", product: "mysql" }],
     ["/console/products/elasticsearch/quotas/", { section: "quotas", product: "elasticsearch" }],
     ["/console/products/rabbitmq/unknown/", { section: "catalog", product: "rabbitmq" }],
@@ -27,6 +28,7 @@ describe("parseControlPlaneRoute", () => {
 
   it.each([
     [{ section: "catalog", product: "postgresql" }, "/console/products/postgresql/"],
+    [{ section: "catalog", product: "mysql", view: "specifications" }, "/console/products/mysql/specifications/"],
     [{ section: "installations", product: "mysql" }, "/console/products/mysql/instances/"],
     [{ section: "quotas", product: "rabbitmq" }, "/console/products/rabbitmq/quotas/"]
   ] as const)("builds product href %j", (selection, href) => {

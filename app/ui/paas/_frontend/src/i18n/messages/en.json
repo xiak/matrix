@@ -1034,6 +1034,10 @@
         "label": "Product overview",
         "hint": "Service capabilities and onboarding"
       },
+      "specifications": {
+        "label": "Specifications",
+        "hint": "Compare CPU, memory and storage for this product's engine versions"
+      },
       "product-instances": {
         "label": "Instances",
         "hint": "Instance state and endpoints"
@@ -1043,8 +1047,8 @@
         "hint": "Entitlements and usage"
       },
       "catalog": {
-        "label": "Engine and plans",
-        "hint": "Available database plans"
+        "label": "Product catalog",
+        "hint": "Browse managed products visible to this account"
       },
       "quotas": {
         "label": "Service quotas",
@@ -3509,6 +3513,7 @@
     "globalNavigation": "Global navigation",
     "console": "Console",
     "consoleName": "Cloud console",
+    "managedServices": "Managed services",
     "unifiedConsole": "Unified cloud console",
     "loading": "Loading",
     "previewHint": "Preview environment · MOCK data does not change the real backend",
@@ -3578,7 +3583,7 @@
         "description": "View application services and deployment resources."
       },
       "catalog": {
-        "title": "Service catalog",
+        "title": "Product catalog",
         "description": "Choose verified data services pinned by the platform release."
       },
       "quotas": {
@@ -3833,7 +3838,7 @@
     }
   },
   "ManagedService": {
-    "catalogVisibilityHelp": "Which specifications are visible",
+    "catalogVisibilityHelp": "Which products are visible",
     "bindingHelp": "How service bindings relate to authorization",
     "redisConnectionHint": "Connect to the endpoint with a Redis client and the business username matrix. Obtain this instance’s password from your platform administrator; your Matrix login password does not authenticate to Redis.",
     "kibanaLoginHint": "Open the endpoint in your browser and sign in with the linked Elasticsearch business account. Ask your platform administrator for that instance’s business credentials; your Matrix account cannot sign in to Kibana.",
@@ -3878,10 +3883,10 @@
     "persistentStorage": "Persistent storage",
     "managedCredentials": "Platform-managed credentials",
     "browseCatalog": "Browse service catalog",
-    "catalogEmpty": "No product shapes are currently visible",
-    "catalogEmptyHint": "The product service successfully returned an empty directory. This is not a service-unavailable result and does not disclose names or denial reasons for entries that were not returned.",
-    "catalogVisibilityBoundary": "{count} currently loaded. The product service must read its trusted catalog candidates, then make an exact IAM decision for each shape on the server. This page never filters denied entries in the browser or reveals the denied count.",
-    "catalogVisibilityMockBoundary": "{count} isolated local MOCK fixtures are currently loaded. They have not passed per-item IAM authorization filtering and are not evidence that a real identity can see these product shapes.",
+    "catalogEmpty": "No managed products are visible",
+    "catalogEmptyHint": "The product service returned an empty catalog. Your account administrator can check catalog access.",
+    "catalogVisibilityBoundary": "{count} entries loaded. The catalog shows entries returned by the product service, which evaluates product visibility with IAM.",
+    "catalogVisibilityMockBoundary": "{count} sample entries loaded. The live service returns the catalog available to your account.",
     "activatable": "Available for activation",
     "unavailable": "Unavailable",
     "engineVersion": "Engine version",
@@ -3892,7 +3897,12 @@
     "configureQuota": "Configure quota",
     "openService": "Open service",
     "openServiceNamed": "Open {name} service",
-    "serviceEntryHint": "Inspect activation and product resources",
+    "viewSpecifications": "View specifications",
+    "specificationsFor": "{name} specifications",
+    "specificationsEmpty": "No specifications are visible for this product",
+    "specificationName": "Plan",
+    "memory": "Memory",
+    "storage": "Storage",
     "servicePageUnsupported": "This console has no page for this service yet",
     "quotaEmpty": "No active service quota",
     "quotaEmptyHint": "Open Activate quota and choose a shape and instance count. Create an instance after the quota is active.",

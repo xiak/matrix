@@ -3,6 +3,7 @@ import { managedServiceProducts } from "@/features/control-plane/domain/managedS
 export function generateStaticParams() {
   return managedServiceProducts.flatMap(({ id }) => [
     { product: id, view: "instances" },
+    { product: id, view: "specifications" },
     { product: id, view: "quotas" }
   ]);
 }

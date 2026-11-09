@@ -30,7 +30,13 @@ export const serviceViews = {
   observability: ["health", "alerts"],
   logs: ["search", "topics", "collection"]
 } as const;
-export type ServiceView = typeof serviceViews[keyof typeof serviceViews][number];
+export type ServiceView = typeof serviceViews[keyof typeof serviceViews][number] | "specifications";
+
+// Published specifications use the same authorized offerings as the catalog.
+// Only operational product pages require the account's activation state.
+export function productWorkspaceFor(selection: ControlPlaneRouteSelection) {
+  return selection.section === "catalog" && selection.view === "specifications" ? undefined : selection.product;
+}
 
 export function hrefInRegion(href: string, regionId?: string): string {
   if (!regionId || regionId === "all") return href;
@@ -41,7 +47,7 @@ export function hrefInRegion(href: string, regionId?: string): string {
 
 export function consoleRouteHref({ section, view, product }: ControlPlaneRouteSelection): string {
   if (product) {
-    const page = section === "installations" ? "instances/" : section === "quotas" ? "quotas/" : "";
+    const page = section === "installations" ? "instances/" : section === "quotas" ? "quotas/" : view === "specifications" ? "specifications/" : "";
     return `/console/products/${product}/${page}`;
   }
   return section === "overview" ? "/console/" : `/console/${section}/${view ? `${view}/` : ""}`;

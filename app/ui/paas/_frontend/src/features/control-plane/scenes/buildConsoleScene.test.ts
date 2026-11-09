@@ -88,9 +88,9 @@ describe("buildConsoleScene", () => {
     expect(logs.navigation.filter((item) => item.selected).map((item) => item.id)).toEqual(["search"]);
     expect(logs.content).toMatchObject({ kind: "logs", view: "search", data: { events: previewExperienceSnapshot.logs.events } });
     expect(buildConsoleScene("logs", snapshot).content).toMatchObject({ kind: "logs", data: null });
-    const database = buildConsoleScene("installations", snapshot, previewExperienceSnapshot);
-    expect(database.navigation.map((item) => item.id)).toEqual(["installations", "catalog", "quotas"]);
-    expect(database.navigation.every((item) => !item.href.includes("/logs/"))).toBe(true);
+    const services = buildConsoleScene("installations", snapshot, previewExperienceSnapshot);
+    expect(services.productId).toBe("managed-services");
+    expect(services.navigation.map((item) => item.id)).toEqual(["catalog", "quotas", "installations"]);
     const monitoring = buildConsoleScene("observability", snapshot, previewExperienceSnapshot, "alerts");
     expect(monitoring.navigation.find((item) => item.selected)?.id).toBe("alerts");
   });
@@ -115,6 +115,7 @@ describe("buildConsoleScene", () => {
     expect(overview.productId).toBe("mysql");
     expect(overview.navigation.map((item) => item.href)).toEqual([
       "/console/products/mysql/",
+      "/console/products/mysql/specifications/",
       "/console/products/mysql/instances/",
       "/console/products/mysql/quotas/"
     ]);
@@ -126,6 +127,13 @@ describe("buildConsoleScene", () => {
     });
     const instances = buildConsoleScene("installations", productSnapshot, previewExperienceSnapshot, undefined, "mysql");
     expect(instances.content).toMatchObject({ kind: "installations", installations: [{ id: "mysql-primary" }] });
+    for (const experience of [undefined, previewExperienceSnapshot]) {
+      const specs = buildConsoleScene("catalog", productSnapshot, experience, "specifications", "mysql");
+      expect(specs.content).toMatchObject({ kind: "product-specifications", offerings: [{ id: "mysql-8.4" }] });
+      expect(specs.navigation.filter(page => page.selected).map(page => page.href)).toEqual(["/console/products/mysql/specifications/"]);
+      expect(buildConsoleFrame({ section: "catalog" }, experience).productId).toBe("managed-services");
+      expect(buildConsoleFrame({ section: "regions" }, experience).productId).toBe("regions");
+    }
   });
 
   it("opens application hosting with only application resources", () => {
@@ -170,13 +178,14 @@ describe("buildConsoleScene", () => {
 
   it("projects real resources into the complete console shell", () => {
     const scene = buildConsoleScene("overview", snapshot);
-    expect(scene.rail.map((item) => item.id)).toEqual(["overview", "managed-database", "audit", "access"]);
+    expect(scene.productId).toBe("console");
+    expect(scene.rail.map((item) => item.id)).toEqual(["managed-services", "audit", "iam"]);
     expect(scene.navigation.map((item) => item.id)).toEqual([
+      "overview",
       "catalog",
       "quotas",
       "installations",
-      "regions",
-      "access"
+      "regions"
     ]);
     expect(scene.content.kind).toBe("overview");
     if (scene.content.kind === "overview") {

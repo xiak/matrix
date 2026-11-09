@@ -114,6 +114,7 @@ export function ConsoleContentLoadingRenderer({ experience = false, label, selec
   const navigation = useTranslations("ServiceNavigation");
   const { section, view, product } = selection;
 
+  if (product && view === "specifications") return <TableRegion label={label} title={navigation("items.specifications.label")} />;
   if (product && section === "catalog") return <ManagedProductLoading label={label} product={product} />;
 
   if (section === "installations") {

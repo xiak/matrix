@@ -1034,6 +1034,10 @@
         "label": "产品概览",
         "hint": "服务能力与开始使用"
       },
+      "specifications": {
+        "label": "产品规格",
+        "hint": "查看本产品各版本的 CPU、内存和存储"
+      },
       "product-instances": {
         "label": "实例",
         "hint": "实例状态与连接端点"
@@ -1043,8 +1047,8 @@
         "hint": "可用额度与使用量"
       },
       "catalog": {
-        "label": "产品规格",
-        "hint": "可用引擎与规格"
+        "label": "产品目录",
+        "hint": "浏览当前账号可见的托管产品"
       },
       "quotas": {
         "label": "服务配额",
@@ -3509,6 +3513,7 @@
     "globalNavigation": "全局导航",
     "console": "控制台",
     "consoleName": "云控制台",
+    "managedServices": "托管服务",
     "unifiedConsole": "统一云控制台",
     "loading": "正在加载",
     "previewHint": "体验环境 · MOCK 数据不写入真实后端",
@@ -3578,7 +3583,7 @@
         "description": "查看应用服务与部署资源。"
       },
       "catalog": {
-        "title": "服务目录",
+        "title": "产品目录",
         "description": "选择平台已验证并由发布制品固定的数据服务。"
       },
       "quotas": {
@@ -3833,7 +3838,7 @@
     }
   },
   "ManagedService": {
-    "catalogVisibilityHelp": "哪些规格可以查看",
+    "catalogVisibilityHelp": "哪些产品可以查看",
     "bindingHelp": "服务绑定与授权的关系",
     "redisConnectionHint": "请使用 Redis 客户端连接上方端点，业务用户名为 matrix。向平台管理员领取本实例的密码；Matrix 登录密码不能用于 Redis。",
     "kibanaLoginHint": "在浏览器中打开上方端点，使用关联 Elasticsearch 的业务账号登录。请向平台管理员领取该实例的业务凭据；Matrix 登录账号不能用于 Kibana 登录。",
@@ -3878,10 +3883,10 @@
     "persistentStorage": "持久化存储",
     "managedCredentials": "平台托管凭据",
     "browseCatalog": "浏览服务目录",
-    "catalogEmpty": "当前没有可见的产品规格",
-    "catalogEmptyHint": "产品服务成功返回了空目录；这不等于服务不可用，也不会暴露未返回规格的名称或拒绝原因。",
-    "catalogVisibilityBoundary": "当前已加载 {count} 项。产品服务必须先读取受信目录候选，再在服务端结合 IAM 对每项精确规格作出判定；本页不在浏览器过滤拒绝项，也不显示拒绝数量。",
-    "catalogVisibilityMockBoundary": "当前已加载 {count} 项隔离 MOCK 本地 fixture，未经过 IAM 逐项授权过滤，不能证明真实身份可见这些产品规格。",
+    "catalogEmpty": "当前没有可见的托管产品",
+    "catalogEmptyHint": "产品服务成功返回了空目录。可联系账号管理员核对目录读取权限。",
+    "catalogVisibilityBoundary": "当前已加载 {count} 项。目录展示产品服务返回的条目，产品的可见范围由服务端结合 IAM 权限判定。",
+    "catalogVisibilityMockBoundary": "当前已加载 {count} 项体验数据。实际产品目录由服务端根据账号权限返回。",
     "activatable": "可激活",
     "unavailable": "不可用",
     "engineVersion": "引擎版本",
@@ -3892,7 +3897,12 @@
     "configureQuota": "配置配额",
     "openService": "进入服务",
     "openServiceNamed": "进入 {name} 服务",
-    "serviceEntryHint": "查看开通状态与产品资源",
+    "viewSpecifications": "查看规格",
+    "specificationsFor": "{name} 产品规格",
+    "specificationsEmpty": "当前产品暂无可见规格",
+    "specificationName": "规格名称",
+    "memory": "内存",
+    "storage": "存储",
     "servicePageUnsupported": "当前控制台尚未接入此服务页面",
     "quotaEmpty": "尚未激活服务配额",
     "quotaEmptyHint": "打开「激活配额」，选择规格和实例数量。激活配额后，还需要创建实例。",

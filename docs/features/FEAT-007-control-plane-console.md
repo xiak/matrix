@@ -836,7 +836,7 @@ The donor shell is translated as a whole into PaaS language:
 | Donor shell responsibility | Matrix control-plane responsibility |
 | --- | --- |
 | guild rail | favorite-service shortcuts and the Dashboard entry |
-| channel/context sidebar | active product navigation for catalog, quotas, installations, and regions |
+| channel/context sidebar | platform directories at platform scope and overview, specifications, instances and quotas within each managed product |
 | chat/content page | selected control-plane workflow or resource detail |
 | right workspace | order review, installation Operation, or contextual inspector |
 | user settings dock | authenticated principal, role summary, and revoking logout action |
@@ -996,8 +996,12 @@ capability and resource scope; a generic administrator label never implies
 activation or resource authority. Product-specific restrictions must be supplied
 by the owning service contract rather than guessed by this component.
 
-The PostgreSQL, MySQL, Elasticsearch and RabbitMQ product routes reuse this gate
-for their overview, instances and quota pages. Isolated MOCK consent is stored
+Managed products use this gate for their overview, instances and quota pages.
+Their specifications pages read only the same authorized offerings as the
+platform catalog. A reader can compare a product's engine versions, CPU,
+memory and storage before activating it. The product is identified by the
+offering's service reference. Results for other products never fill an empty
+specification list. Isolated MOCK consent is stored
 per Account and presentation service key, survives product-page navigation, and
 can be reset for repeated review. Its scope and first operator/notice/time are
 strictly parsed; records contain no bearer, credentials or user-policy data.
@@ -1813,6 +1817,14 @@ Frontend registration never grants backend authority. IAM is a service even
 though it is an administrative workspace; billing can use the same model when
 there is a supported workflow. Unimplemented billing or audit products are not
 advertised as available solely to reproduce another vendor's directory.
+
+The platform-wide product catalog, quotas and instances share the Managed
+services context. The live rail opens the catalog, where each registered
+product has links to its specifications and its operational workspace. Only
+an explicit product route selects that product's local navigation or favorite.
+Live browser checks opened all seven products from the catalog, compared
+the two PostgreSQL 18 plans and followed the instance link after a 390px
+refresh. Browser Back restored the platform catalog.
 
 ```text
 Matrix Cloud header -> Service directory

@@ -27,6 +27,7 @@ export function parseControlPlaneRoute(
     const page = segments?.[2];
     if (page === "instances") return { section: "installations", product };
     if (page === "quotas") return { section: "quotas", product };
+    if (page === "specifications") return { section: "catalog", product, view: "specifications" };
     return { section: "catalog", product };
   }
   if (segment && known.has(segment)) {

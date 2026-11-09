@@ -71,13 +71,12 @@ import { usePreviewServiceActivation } from "../application/previewServiceActiva
 import type { ExperienceSnapshot } from "../domain/experience";
 import { managedServiceProduct } from "../domain/managedServiceProduct";
 import { serviceWorkspaceMayLoad } from "../domain/serviceActivation";
-import { consoleRouteHref, type ControlPlaneRouteSelection } from "../domain/selection";
+import { consoleRouteHref, productWorkspaceFor, type ControlPlaneRouteSelection } from "../domain/selection";
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
 import type {
   ConsoleWorkspaceScene,
-  NavigationIconKind,
-  RailIconKind
+  NavigationIconKind
 } from "../scenes/consoleScene";
 import { ConsoleHeader } from "./ConsoleHeader";
 import { ConsoleContentLoadingRenderer } from "./ConsoleContentLoadingRenderer";
@@ -87,20 +86,13 @@ import { ConsoleWorkspaceRenderer } from "./ConsoleWorkspaceRenderer";
 import { ManagedServiceCommandNotice, ManagedServicePageActions } from "./ManagedServiceCommandNotice";
 import styles from "./ConsoleShellRenderer.module.css";
 import { managedProductIcons, useServiceDirectory } from "./ServiceDirectory";
-import { serviceForSelection, type ServiceId } from "../scenes/serviceDirectory";
+import type { ServiceId } from "../scenes/serviceDirectory";
 import { ConsoleNavigationProvider, useConsoleNavigation } from "../routes/ConsoleNavigation";
 import { buildConsoleFrame } from "../scenes/buildConsoleScene";
 
-const railIcons = {
-  overview: LayoutDashboard,
-  database: Database,
-  devops: GitBranch,
-  observability: ChartNoAxesCombined,
-  audit: ScrollText,
-  access: ShieldCheck
-} satisfies Record<RailIconKind, typeof Database>;
-
-const favoriteIcons = {
+const contextIcons = {
+  console: LayoutDashboard,
+  "managed-services": Boxes,
   regions: MapPin,
   applications: Boxes,
   ...managedProductIcons,
@@ -109,7 +101,7 @@ const favoriteIcons = {
   logs: FileText,
   audit: ScrollText,
   iam: ShieldCheck
-} satisfies Record<ServiceId, typeof Database>;
+} satisfies Record<ServiceId | "console" | "managed-services", typeof Database>;
 
 const navigationIcons = {
   policy: FileText,
@@ -300,7 +292,8 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const dataOwnerKey = roleSession.mode === "ROLE"
     ? `ROLE:${roleSession.identity?.session.id ?? "unverified"}`
     : `USER:${principal?.session.id ?? "none"}:${session.sessionRevision}`;
-  const product = (pendingSelection ?? navigation.selection).product;
+  const selection = pendingSelection ?? navigation.selection;
+  const product = productWorkspaceFor(selection);
   const productReady = !product || Boolean(activationAccountId && serviceWorkspaceMayLoad(
     activation.state,
     activation.access,
@@ -424,9 +417,10 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const workspaceMounted = !roleBlocked && Boolean(productReady && scene?.workspace && (workspaceVisible || activatedWorkspaceKey === workspaceKey));
   const workspaceAction = !roleBlocked && productReady && scene?.workspace && !navigation.pendingHref ? workspaceActions[scene.workspace.kind] : null;
   const WorkspaceActionIcon = workspaceAction?.icon;
-  const activeService = frame.preview ? serviceForSelection(pendingSelection ?? navigation.selection) : undefined;
-  const ProductContextIcon = activeService ? favoriteIcons[activeService.id] : railIcons[frame.productIcon];
-  const productName = frame.productId === "console" ? t("consoleName") : directory(`services.${frame.productId}.name`);
+  const ProductContextIcon = contextIcons[frame.productId];
+  const contextName = (id: keyof typeof contextIcons) => id === "console" ? t("consoleName")
+    : id === "managed-services" ? t("managedServices") : directory(`services.${id}.name`);
+  const productName = contextName(frame.productId);
   const selectedPage = frame.navigation.find((item) => item.selected);
   const localNavigation = frame.navigation.filter((item) => {
     if (frame.section === "access" && roleSession.mode !== "USER") return item.id === "access";
@@ -461,7 +455,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
     disabled: Boolean(pendingSelection), controls: "console-workspace", expanded: workspaceVisible,
     onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary"
   } : undefined;
-  const managedServicePage = !roleBlocked && productReady && !pendingSelection && ["catalog", "quotas", "installations"].includes(frame.section);
+  const managedServicePage = !roleBlocked && productReady && !pendingSelection && selection.view !== "specifications" && ["catalog", "quotas", "installations"].includes(frame.section);
   const recheckPermissions = frame.section === "access" && !frame.preview && roleSession.mode === "USER" && accessView !== "sessions" && accessView !== "role-access" ? {
     id: "refresh-iam-permissions",
     label: accountText(accountAccess.loading ? "refreshingPermissions" : "refreshPermissions"),
@@ -550,17 +544,17 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
           <ServiceLayout>
             <Sider className={styles.sider}>
               <Sider.RailMenu data-surface="shell" aria-label={frame.preview ? navigationText("favorites") : t("productNavigation")} className={styles.rail}>
-                <Link aria-label={t("dashboardHome")} className={styles.railHome} href="/console/" onAccepted={closeSidebarAndRestoreFocus}><LayoutDashboard aria-hidden="true" /></Link>
+                <Link aria-current={frame.section === "overview" ? "page" : undefined} aria-label={t("dashboardHome")} className={styles.railHome} href="/console/" onAccepted={closeSidebarAndRestoreFocus} title={t("dashboardHome")}><LayoutDashboard aria-hidden="true" /></Link>
                 <span className={styles.railDivider} />
                 {frame.preview ? favorites.flatMap((id) => services.filter((service) => service.id === id)).map((service) => {
-                  const Icon = favoriteIcons[service.id];
-                  const selected = service.id === activeService?.id;
+                  const Icon = contextIcons[service.id];
+                  const selected = service.id === frame.productId;
                   return <Link aria-current={selected ? "page" : undefined} aria-label={service.label} className={styles.railItem} data-selected={selected ? "true" : undefined} href={service.href} key={service.id} onAccepted={() => { closeSidebarAndRestoreFocus(); useConsoleUiStore.getState().visitService(service.id); }} title={service.label}><Icon aria-hidden="true" /><span className={styles.railTooltip}>{service.label}</span></Link>;
-                }) : frame.rail.slice(1).map((item) => {
-                  const Icon = railIcons[item.icon];
-                  const label = directory(`services.${item.id === "access" ? "iam" : item.id === "audit" ? "audit" : "postgresql"}.name`);
+                }) : frame.rail.map((item) => {
+                  const Icon = contextIcons[item.id];
+                  const label = contextName(item.id);
                   return (
-                    <Link aria-current={item.selected ? "page" : undefined} aria-label={label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onAccepted={closeSidebarAndRestoreFocus}>
+                    <Link aria-current={item.selected ? (item.href === consoleRouteHref(selection) ? "page" : "location") : undefined} aria-label={label} className={styles.railItem} data-selected={item.selected ? "true" : undefined} href={item.href} key={item.id} onAccepted={closeSidebarAndRestoreFocus} title={label}>
                       <Icon aria-hidden="true" /><span className={styles.railTooltip}>{label}</span>
                     </Link>
                   );
@@ -672,7 +666,7 @@ function ConsoleProviders({ accountRepository, experience, repository, selection
   const session = useSession();
   const roleSession = useRoleSession();
   const credential = useEffectiveCredential();
-  const product = (navigation.pendingSelection ?? selection).product;
+  const product = productWorkspaceFor(navigation.pendingSelection ?? selection);
   const activationAccountId = roleSession.identity?.account.id ?? experience?.organization.id ?? session.current?.session.organizationId;
   const previewActivation = usePreviewServiceActivation({
     accountId: activationAccountId,

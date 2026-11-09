@@ -36,7 +36,7 @@ import type {
   InstallationTerminationMutationError,
   InstallationReadLoad
 } from "../domain/resources";
-import type { ControlPlaneRouteSelection } from "../domain/selection";
+import { productWorkspaceFor, type ControlPlaneRouteSelection } from "../domain/selection";
 import type {
   ManagedServiceAuthorizationIntent,
   ManagedServiceAuthorizationLoad,
@@ -135,7 +135,8 @@ type ControlPlaneRequestOwner = Readonly<{
 // Presentation admission avoids unrelated resource reads during first use. It
 // is not a permit: the repository and owning service still authorize requests.
 function productDataReady(selection: ControlPlaneRouteSelection, access: ProductDataAccess): boolean {
-  return !selection.product || (access?.product === selection.product && access.ready);
+  const product = productWorkspaceFor(selection);
+  return !product || (access?.product === product && access.ready);
 }
 
 function requiredResourcesFor(
@@ -145,7 +146,7 @@ function requiredResourcesFor(
 ): readonly ControlPlaneResourceKind[] {
   if (!productDataReady(selection, productAccess)) return [];
   if (selection.section === "access" || selection.section === "audit") return [];
-  if (selection.section === "catalog") return selection.product
+  if (selection.section === "catalog") return productWorkspaceFor(selection)
     ? ["offerings", "entitlements", "installations"]
     : ["offerings"];
   if (selection.section === "quotas") return ["offerings", "entitlements"];

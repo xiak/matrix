@@ -165,8 +165,14 @@ function messageScenes(experience?: ExperienceSnapshot): ConsoleMessageScene[] {
   return [...alerts, ...operations, ...announcements].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 }
 
-function isPaaSSection(section: ConsoleSection): boolean {
-  return ["catalog", "quotas", "installations", "applications"].includes(section);
+const managedDirectoryPages = [
+  { id: "catalog", icon: "catalog" },
+  { id: "quotas", icon: "quota" },
+  { id: "installations", icon: "installation" }
+] as const;
+
+function isManagedDirectory(section: ConsoleSection) {
+  return managedDirectoryPages.some((page) => page.id === section);
 }
 
 function navigation(
@@ -174,21 +180,12 @@ function navigation(
   experience?: ExperienceSnapshot
 ): ConsoleNavigationItemScene[] {
   const { section, view, product } = selection;
-  if (!experience && !product && section !== "access" && section !== "audit" && section !== "applications") {
-    return [
-      { id: "catalog", messageKey: "catalog", href: "/console/catalog/", icon: "catalog", selected: section === "catalog" },
-      { id: "quotas", messageKey: "quotas", href: "/console/quotas/", icon: "quota", selected: section === "quotas" },
-      { id: "installations", messageKey: "installations", href: "/console/installations/", icon: "installation", selected: section === "installations" },
-      { id: "regions", messageKey: "regions", href: "/console/regions/", icon: "region", selected: section === "regions" },
-      { id: "access", messageKey: "access", href: "/console/access/", icon: "access", selected: false }
-    ];
-  }
-  if (experience && !product && ["catalog", "quotas", "installations"].includes(section)) {
-    return [
-      { id: "installations", messageKey: "installations", href: "/console/installations/", icon: "installation", selected: section === "installations" },
-      { id: "catalog", messageKey: "catalog", href: "/console/catalog/", icon: "catalog", selected: section === "catalog" },
-      { id: "quotas", messageKey: "quotas", href: "/console/quotas/", icon: "quota", selected: section === "quotas" }
-    ];
+  const liveHome = !experience && isHomeSection(section);
+  if (!product && (isManagedDirectory(section) || liveHome)) {
+    const pages = liveHome
+      ? [{ id: "overview", icon: "overview" }, ...managedDirectoryPages, { id: "regions", icon: "region" }] as const
+      : managedDirectoryPages;
+    return pages.map(({ id, icon }) => ({ id, messageKey: id, href: consoleRouteHref({ section: id }), icon, selected: section === id }));
   }
   if (experience && isHomeSection(section)) {
     return [
@@ -218,33 +215,12 @@ function navigation(
 function productRail(section: ConsoleSection, experience?: ExperienceSnapshot): ConsoleScene["rail"] {
   if (!experience) {
     return [
-      { id: "overview", href: "/console/", icon: "overview", selected: section === "overview" },
-      { id: "managed-database", href: "/console/catalog/", icon: "database", selected: ["catalog", "quotas", "installations", "regions"].includes(section) },
-      { id: "audit", href: "/console/audit/", icon: "audit", selected: section === "audit" },
-      { id: "access", href: "/console/access/", icon: "access", selected: section === "access" }
+      { id: "managed-services", href: "/console/catalog/", selected: isManagedDirectory(section) },
+      { id: "audit", href: "/console/audit/", selected: section === "audit" },
+      { id: "iam", href: "/console/access/", selected: section === "access" }
     ];
   }
   return []; // Preview shortcuts are the user\'s favorites, not a fixed product list.
-}
-
-function productContext(selection: ControlPlaneRouteSelection, experience?: ExperienceSnapshot): Pick<ConsoleScene, "productId" | "productIcon"> {
-  const { section, product } = selection;
-  if (product) return { productId: product, productIcon: "database" };
-  if (!experience) {
-    if (section === "applications") return { productId: "applications", productIcon: "overview" };
-    if (section === "audit") return { productId: "audit", productIcon: "audit" };
-    if (section === "access") return { productId: "iam", productIcon: "access" };
-    return { productId: "postgresql", productIcon: "database" };
-  }
-  if (isHomeSection(section)) return { productId: "console", productIcon: "overview" };
-  if (section === "regions") return { productId: "regions", productIcon: "overview" };
-  if (section === "applications") return { productId: "applications", productIcon: "overview" };
-  if (section === "logs") return { productId: "logs", productIcon: "observability" };
-  if (isPaaSSection(section)) return { productId: "postgresql", productIcon: "database" };
-  if (section === "devops") return { productId: "devops", productIcon: "devops" };
-  if (section === "observability") return { productId: "monitoring", productIcon: "observability" };
-  if (section === "audit") return { productId: "audit", productIcon: "audit" };
-  return { productId: "iam", productIcon: "access" };
 }
 
 function globalSearch(experience?: ExperienceSnapshot): ConsoleScene["search"] {
@@ -264,7 +240,7 @@ function baseScene(selection: ControlPlaneRouteSelection, experience?: Experienc
   const { section } = selection;
   return {
     section,
-    ...productContext(selection, experience),
+    productId: serviceForSelection(selection)?.id ?? (isManagedDirectory(section) ? "managed-services" : "console"),
     preview: Boolean(experience),
     scope: experience ? {
       organization: experience.organization,
@@ -338,7 +314,8 @@ function managedProductSnapshot(product: ManagedServiceProductId, snapshot: Cont
   };
 }
 
-function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot, product?: ManagedServiceProductId): ConsoleContentScene {
+function legacyContent(section: ConsoleSection, snapshot: ControlPlaneSnapshot, product?: ManagedServiceProductId, view?: ServiceView): ConsoleContentScene {
+  if (section === "catalog" && product && view === "specifications") return { kind: "product-specifications", offerings: snapshot.offerings };
   const offerings = offeringScenes(snapshot);
   const installations = installationScenes(snapshot);
   if (section === "catalog" && product) return managedProductContent(product, snapshot);
@@ -467,7 +444,7 @@ export function buildConsoleScene(
         available: item.available
       };
     });
-  const content = (experience ? experienceContent(section, selectedSnapshot, experience) : null) ?? legacyContent(section, selectedSnapshot, product);
+  const content = (experience ? experienceContent(section, selectedSnapshot, experience) : null) ?? legacyContent(section, selectedSnapshot, product, view);
   if (content.kind === "devops" || content.kind === "observability" || content.kind === "logs") content.view = view;
 
   return {

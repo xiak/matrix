@@ -218,16 +218,46 @@ function CatalogContent({ scene, preview }: {
               </Card.Facts>
             </Card.Body>
             <Card.Footer className={styles.productCardFooter}>
-              <Typography.Text tone="subtle">{t("serviceEntryHint")}</Typography.Text>
-              {isManagedServiceProductId(offering.serviceId) ? <Button asChild><Link aria-label={t("openServiceNamed", { name: offering.name })} href={consoleRouteHref({ section: "catalog", product: offering.serviceId })}>
-                {t("openService")} <ArrowRight aria-hidden="true" />
-              </Link></Button> : <Typography.Text tone="subtle">{t("servicePageUnsupported")}</Typography.Text>}
+              {isManagedServiceProductId(offering.serviceId) ? <>
+                <Link className={styles.textLink} aria-label={t("viewSpecifications") + " · " + offering.name} href={consoleRouteHref({ section: "catalog", product: offering.serviceId, view: "specifications" })}>{t("viewSpecifications")}</Link>
+                <Button asChild><Link aria-label={t("openServiceNamed", { name: offering.name })} href={consoleRouteHref({ section: "catalog", product: offering.serviceId })}>
+                  {t("openService")} <ArrowRight aria-hidden="true" />
+                </Link></Button>
+              </> : <Typography.Text tone="subtle">{t("servicePageUnsupported")}</Typography.Text>}
             </Card.Footer>
           </Card>
         ))}
       </div>}
     </div>
   );
+}
+
+function ProductSpecifications({ scene, preview }: { scene: Extract<ConsoleContentScene, { kind: "product-specifications" }>; preview: boolean }) {
+  const t = useTranslations("ManagedService");
+  const format = useConsoleFormat();
+  return <div className={styles.cardList}>
+    {preview ? <Typography.Text tone="muted">{t("catalogVisibilityMockBoundary", { count: scene.offerings.length })}</Typography.Text> : null}
+    {!scene.offerings.length ? <EmptyState title={t("specificationsEmpty")} /> : scene.offerings.map((offering) => (
+      <Card key={offering.id}>
+        <Card.Header>
+          <Typography.Title as="h2" level={3}>{offering.displayName}</Typography.Title>
+          <Typography.Text tone="muted">{t("engineVersion")} · {offering.engineVersion}</Typography.Text>
+        </Card.Header>
+        {offering.quotaShapes.length ? <Table aria-label={t("specificationsFor", { name: offering.displayName })} mobileLayout="grid">
+          <thead><tr>
+            <th scope="col">{t("specificationName")}</th><th scope="col">CPU</th>
+            <th scope="col">{t("memory")}</th><th scope="col">{t("storage")}</th>
+          </tr></thead>
+          <tbody>{offering.quotaShapes.map((shape) => <tr key={shape.id}>
+            <td data-label={t("specificationName")} data-mobile-span="full"><strong>{shape.displayName}</strong></td>
+            <td data-label="CPU">{format.number(shape.cpuMillicores / 1000)} vCPU</td>
+            <td data-label={t("memory")}>{shape.memoryMiB % 1024 === 0 ? `${format.number(shape.memoryMiB / 1024)} GiB` : `${format.number(shape.memoryMiB)} MiB`}</td>
+            <td data-label={t("storage")}>{format.number(shape.storageGiB)} GiB</td>
+          </tr>)}</tbody>
+        </Table> : <EmptyState title={t("specificationsEmpty")} />}
+      </Card>
+    ))}
+  </div>;
 }
 
 function ManagedProductContent({ preview, scene }: {
@@ -879,6 +909,7 @@ export function ConsoleContentRenderer({
     return <ExperienceContentRenderer scene={scene} scope={scope} />;
   }
   if (scene.kind === "overview") return <OverviewContent scene={scene} />;
+  if (scene.kind === "product-specifications") return <ProductSpecifications scene={scene} preview={preview} />;
   if (scene.kind === "managed-product") return <ManagedProductContent preview={preview} scene={scene} />;
   if (scene.kind === "catalog") {
     const available = filter === "available";

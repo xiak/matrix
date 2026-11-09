@@ -12,7 +12,7 @@ export const serviceDirectory = [
   { id: "applications", discovery: "platform", category: "applications", group: "hosting", icon: "paas", href: "/console/applications/", sections: ["applications"] },
   ...managedServiceProducts.map(({ id, category, group, icon }) => ({
     id, category, group, icon, discovery: "managed" as const,
-    href: `/console/products/${id}/`, sections: ["catalog", "quotas", "installations"] as const
+    href: `/console/products/${id}/`, sections: [] as const
   })),
   { id: "devops", discovery: "preview", category: "delivery", group: "delivery", icon: "devops", href: "/console/devops/", sections: ["devops"] },
   { id: "monitoring", discovery: "preview", category: "management", group: "monitoring", icon: "observability", href: "/console/observability/", sections: ["observability"] },
@@ -35,6 +35,7 @@ type ServicePage = { id: string; section: ConsoleSection; view?: ServiceView; pr
 function managedProductPages(product: ManagedServiceProductId) {
   return [
     { id: "product-overview", section: "catalog", product, icon: "overview" },
+    { id: "specifications", section: "catalog", product, view: "specifications", icon: "catalog" },
     { id: "product-instances", section: "installations", product, icon: "installation" },
     { id: "product-quotas", section: "quotas", product, icon: "quota" }
   ] as const;
@@ -84,13 +85,9 @@ export const serviceNavigation = {
 } as const satisfies Record<ServiceId, readonly ServicePage[]>;
 export type ServicePageId = typeof serviceNavigation[ServiceId][number]["id"];
 
-export function serviceForSection(section: ConsoleSection) {
-  return serviceDirectory.find((service) => (service.sections as readonly ConsoleSection[]).includes(section));
-}
-
 export function serviceForSelection(selection: ControlPlaneRouteSelection) {
   if (selection.product) return serviceDirectory.find((service) => service.id === selection.product);
-  return serviceForSection(selection.section);
+  return serviceDirectory.find((service) => (service.sections as readonly ConsoleSection[]).includes(selection.section));
 }
 
 export function matchesService(service: ServiceDirectoryItem, query: string): boolean {
