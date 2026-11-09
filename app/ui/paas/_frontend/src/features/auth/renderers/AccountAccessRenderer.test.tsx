@@ -4247,8 +4247,8 @@ describe("account access", () => {
     await user.type(screen.getByRole("searchbox", { name: "搜索策略" }), tenantPolicy.id);
     await user.click(within(table).getByRole("button", { name: "ReadOnlyAccess" }));
     await screen.findByText(/无权读取该策略的详情/);
-    const information = screen.getByText("策略信息").closest("details")!;
-    expect(information.open).toBe(true);
+    const information = screen.getByRole("region", { name: "策略信息" });
+    expect(screen.queryByRole("tab", { name: "原始 JSON" })).toBeNull();
     expect(within(information).getByText(tenantPolicy.id)).toBeTruthy();
     expect(within(information).getByText(versionId)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "返回列表" }));
@@ -4266,10 +4266,13 @@ describe("account access", () => {
     expect(await screen.findByRole("table", { name: "策略声明" })).toBeTruthy();
     expect(readPolicy).toHaveBeenCalledWith(credential, account.id, tenantPolicy.id);
     expect(screen.getByText("paas.application.read")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "授权声明", selected: true })).toBeTruthy();
+    expect(screen.queryByRole("tab", { name: "策略版本" })).toBeNull();
+    await user.click(screen.getByRole("tab", { name: "策略信息" }));
     expect(screen.getByText(/实际访问权限由 IAM/)).toBeTruthy();
-    const evidence = screen.getByText("版本摘要与编译来源");
-    expect(evidence.closest("details")!.open).toBe(false);
-    await user.click(evidence);
+    await user.click(screen.getByRole("tab", { name: "原始 JSON" }));
+    expect(JSON.parse(screen.getByRole("region", { name: "查看原始声明 JSON" }).textContent!)).toEqual(tenantPolicyDetail.version.document);
+    await user.click(screen.getByRole("tab", { name: "版本来源" }));
     const provenance = screen.getByRole("region", { name: "发布编译溯源" });
     expect(within(provenance).getByText("旧版")).toBeTruthy();
     expect(within(provenance).getByText(/不会用当前目录推断或改写历史结果/)).toBeTruthy();
@@ -4298,14 +4301,40 @@ describe("account access", () => {
     const expansion = within(table).getByText("发布时冻结的操作（1）");
     expect(expansion.closest("details")!.open).toBe(false);
     await user.click(expansion);
-    expect(within(table).getByText("paas.application.read")).toBeTruthy();
-    await user.click(screen.getByText("版本摘要与编译来源"));
+    expect(await within(table).findByText("paas.application.read")).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "版本来源" }));
     const provenance = screen.getByRole("region", { name: "发布编译溯源" });
     expect(within(provenance).getByText("编译契约 v1")).toBeTruthy();
     const profiles = within(provenance).getByRole("table", { name: "冻结的产品声明快照" });
     expect(within(profiles).getByText("paas")).toBeTruthy();
     expect(within(profiles).getByText("2")).toBeTruthy();
     expect(within(profiles).getByText(`sha256:${"b".repeat(64)}`)).toBeTruthy();
+  });
+
+  it("filters long statement lists independently and preserves the full declaration across detail tabs", async () => {
+    const actions = ["paas.application.create", "paas.application.read", "paas.application.delete", "devops.run.read", "devops.run.cancel", "audit.record.read"];
+    const resources = ["APPLICATION", "INSTANCE", "REGION", "PIPELINE", "PROJECT", "AUDIT_RECORD"].map((kind) => ({ kind, match: "ANY_IN_AUTHORITY" as const }));
+    const document = { ...tenantPolicyDetail.version.document, statements: [{ sid: "team-access", effect: "ALLOW" as const, actions, resources }] };
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess({ ...tenantPolicyDetail, version: { ...tenantPolicyDetail.version, document } }));
+    const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: tenantPolicy.displayName }));
+    const actionList = await screen.findByRole("region", { name: "声明的操作（team-access）" });
+    const selectors = screen.getByRole("region", { name: "资源选择器（team-access）" });
+    const search = screen.getByRole("searchbox", { name: "搜索声明的操作（team-access）" });
+    await user.type(search, "READ PAAS");
+    expect(within(actionList).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(actionList).getByText("paas.application.read")).toBeTruthy();
+    expect(within(selectors).getAllByRole("listitem")).toHaveLength(6);
+    await user.click(screen.getByRole("tab", { name: "原始 JSON" }));
+    expect(JSON.parse(screen.getByRole("region", { name: "查看原始声明 JSON" }).textContent!)).toEqual(document);
+    await user.click(screen.getByRole("tab", { name: "授权声明" }));
+    expect(search).toHaveProperty("value", "READ PAAS");
+    await user.type(search, " missing");
+    expect(within(actionList).getByText("没有匹配的条目")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "清空搜索" }));
+    expect(search.ownerDocument.activeElement).toBe(search);
+    expect(within(actionList).getAllByRole("listitem")).toHaveLength(6);
+    expect(readPolicy).toHaveBeenCalledTimes(1);
   });
 
   it("loads customer versions only when selected and inspects a non-default version inline", async () => {
@@ -4975,7 +5004,8 @@ describe("account access", () => {
     expect(submitted.requestId).toMatch(/^ui-policy-create-/);
     expect(await screen.findByText(/策略 customer.new 已创建/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看策略" }));
-    expect(await screen.findByText("customer.new")).toBeTruthy();
+    await user.click(await screen.findByRole("tab", { name: "策略信息" }));
+    expect(within(screen.getByRole("tabpanel", { name: "策略信息" })).getByText("customer.new")).toBeTruthy();
   });
 
   it("explains and reviews a Profile-declared trusted request-tag condition without exposing arbitrary keys", async () => {
@@ -5367,7 +5397,7 @@ describe("account access", () => {
     expect(await screen.findByRole("table", { name: "策略声明" })).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "策略版本" }));
     expect(await screen.findByText(/无权读取这些版本/)).toBeTruthy();
-    await user.click(screen.getByRole("tab", { name: "当前默认版本" }));
+    await user.click(screen.getByRole("tab", { name: "授权声明" }));
     expect(screen.getByRole("table", { name: "策略声明" })).toBeTruthy();
     expect(readPolicy).toHaveBeenCalledTimes(1);
   });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, Table, TablePagination, TableSkeleton, TableToolbar, Tabs, type PageCommandsHandle } from "@ui/xiak";
@@ -13,6 +13,7 @@ import { visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAut
 import { findActionCapability, type AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceDetail, WorkspaceInlineForm, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccountAuthorizationProfileCatalog } from "./AccountAuthorizationProfileCatalog";
+import { PolicyStatementValues } from "./PolicyStatementValues";
 import { AccountPolicyDocumentAuthor, type PolicyAuthorMode } from "./AccountPolicyDocumentAuthor";
 import { PolicyVisualReview } from "./AccountPolicyVisualEditor";
 import { PolicyCreateRecovery } from "./LivePolicyCreationWizard";
@@ -209,24 +210,42 @@ function VersionMutationReview({ review, policy, versions, busy, blocked, error,
   </section>;
 }
 
-function PolicyStatementTable({ version }: { version: AccountPolicyVersion }) {
+function FrozenStatementActions({ actions, sid }: { actions: string[]; sid: string }) {
   const t = useTranslations("AccountPolicyDirectory");
+  const [visited, setVisited] = useState(false);
+  return <details className={styles.statementExpansion} onToggle={(event) => { if (event.currentTarget.open) setVisited(true); }}>
+    <summary>{t("frozenActions", { count: actions.length })}</summary>
+    {visited ? <PolicyStatementValues sid={sid} field="frozenListLabel" entries={actions.map((value) => ({ value }))} /> : null}
+  </details>;
+}
+
+function PolicyStatementTable({ version, title }: { version: AccountPolicyVersion; title: string }) {
+  const t = useTranslations("AccountPolicyDirectory");
+  const identityLabel = `${t("statement")} · ${t("effect")}`;
   return <section className={styles.policyStatements}>
-    <h3 className={styles.stepTitle}>{t("statementTitle", { count: version.document.statements.length })}</h3>
+    <div className={styles.sectionHeading}><h2 className={styles.stepTitle}>{t("statementTitle", { count: version.document.statements.length })}</h2><span className={styles.note}>{title}</span></div>
     <Table aria-label={t("statementTable")} mobileLayout="stack" className={styles.policyStatementTable}>
-      <thead><tr><th scope="col">{t("effect")}</th><th scope="col">{t("declaredActions")}</th><th scope="col">{t("resources")}</th><th scope="col">{t("conditions")}</th><th scope="col">{t("statement")}</th></tr></thead>
+      <thead><tr><th scope="col">{identityLabel}</th><th scope="col">{t("declaredActions")}</th><th scope="col">{t("resources")}</th><th scope="col">{t("conditions")}</th></tr></thead>
       <tbody>{version.document.statements.map((statement) => {
         const resolved = version.compilation?.resolvedStatements.find((entry) => entry.sid === statement.sid);
         return <tr key={statement.sid}>
-          <td data-label={t("effect")}><Badge status={statement.effect === "DENY" ? "danger" : "success"}>{t(statement.effect === "DENY" ? "deny" : "allow")}</Badge></td>
-          <td data-label={t("declaredActions")}><div className={styles.policyStackedValues}>{statement.actions.map((action) => <code key={action}>{action}</code>)}
-            {resolved ? <details className={styles.trustDocuments}>
-              <summary>{t("frozenActions", { count: resolved.actions.length })}</summary>
-              <div className={styles.policyStackedValues}>{resolved.actions.map((action) => <code key={action}>{action}</code>)}</div>
-            </details> : null}</div></td>
-          <td data-label={t("resources")}><div className={styles.policyStackedValues}>{statement.resources.map((resource) => <code key={`${resource.kind}:${resource.match}:${resource.id ?? ""}`}>{resource.kind} · {t(`matches.${resource.match}`)}{resource.id ? ` · ${resource.id}` : ""}</code>)}</div></td>
-          <td data-label={t("conditions")}><div className={styles.policyStackedValues}>{statement.conditions?.map((condition) => <code key={`${condition.key}:${condition.operator}`}>{condition.key} · {condition.operator} · {condition.values.join(", ")}</code>) ?? t("none")}</div></td>
-          <td data-label={t("statement")}><code>{statement.sid}</code></td>
+          <td data-label={identityLabel}><div className={styles.statementIdentity}>
+            <Badge status={statement.effect === "DENY" ? "danger" : "success"}>{t(statement.effect === "DENY" ? "deny" : "allow")}</Badge>
+            <code>{statement.sid}</code>
+          </div></td>
+          <td data-label={t("declaredActions")}>
+            <PolicyStatementValues sid={statement.sid} field="declaredActions" entries={statement.actions.map((value) => ({ value }))} />
+            {resolved ? <FrozenStatementActions sid={statement.sid} actions={resolved.actions} /> : null}
+          </td>
+          <td data-label={t("resources")}><PolicyStatementValues sid={statement.sid} field="resources"
+            entries={statement.resources.map((resource) => ({
+              key: JSON.stringify(resource), value: resource.kind, keywords: resource.match,
+              detail: [t(`matches.${resource.match}`), resource.id].filter(Boolean).join(" · ")
+            }))} /></td>
+          <td data-label={t("conditions")}><PolicyStatementValues sid={statement.sid} field="conditions"
+            entries={(statement.conditions ?? []).map((condition) => ({
+              key: JSON.stringify(condition), value: condition.key, detail: `${condition.operator} · ${condition.values.join(", ")}`
+            }))} /></td>
         </tr>;
       })}</tbody>
     </Table>
@@ -253,21 +272,41 @@ function PolicyCompilationProvenance({ version }: { version: AccountPolicyVersio
   </section>;
 }
 
-function PolicyVersionDocument({ version, title }: { version: AccountPolicyVersion; title: string }) {
+function PolicyDocumentTabList({ label, information = false, history = false }: { label: string; information?: boolean; history?: boolean }) {
   const t = useTranslations("AccountPolicyDirectory");
-  return <section className={styles.catalogNotice} aria-label={title}>
-    <div className={styles.catalogDetailHeading}><h2>{title}</h2></div>
-    <PolicyStatementTable version={version} />
-    <details className={styles.trustDocuments}>
-      <summary>{t("versionEvidence")}</summary>
+  return <Tabs.List aria-label={label} variant={information ? "underline" : "compact"} className={information ? styles.policyDetailTabList : styles.policyInspectionTabList}>
+    <Tabs.Trigger value="document">{t("statementsTab")}</Tabs.Trigger>
+    {information ? <Tabs.Trigger value="information">{t("policyInformation")}</Tabs.Trigger> : null}
+    <Tabs.Trigger value="evidence">{t("evidenceTab")}</Tabs.Trigger>
+    <Tabs.Trigger value="json">{t("jsonTab")}</Tabs.Trigger>
+    {history ? <Tabs.Trigger value="versions">{t("versionsTab")}</Tabs.Trigger> : null}
+  </Tabs.List>;
+}
+
+function PolicyVersionPanels({ version, title, section, feedback }: { version?: AccountPolicyVersion; title: string; section: string; feedback?: ReactNode }) {
+  const t = useTranslations("AccountPolicyDirectory");
+  return <>
+    <Tabs.Content value="document" forceMount={version ? true : undefined} hidden={section !== "document"}>
+      {version ? <PolicyStatementTable key={`${version.versionId}:${version.contentDigest}`} version={version} title={title} /> : feedback}
+    </Tabs.Content>
+    <Tabs.Content value="evidence">{version ? <section className={styles.policyStatements} aria-label={t("versionEvidence")}>
       <dl className={styles.catalogFacts}>
+        <div><dt>{t("versionId")}</dt><dd><code>{version.versionId}</code></dd></div>
         <div><dt>{t("versionContract")}</dt><dd>{t("contractVersion", { version: version.contractVersion })}</dd></div>
         <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><code>{version.contentDigest}</code></dd></div>
       </dl>
       <PolicyCompilationProvenance version={version} />
-    </details>
-    <details className={styles.policyRawDocument}><summary>{t("rawDocument")}</summary><pre tabIndex={0}>{JSON.stringify(version.document, null, 2)}</pre></details>
-  </section>;
+    </section> : feedback}</Tabs.Content>
+    <Tabs.Content value="json">{version ? <pre className={styles.code} aria-label={t("rawDocument")} role="region" tabIndex={0}>{JSON.stringify(version.document, null, 2)}</pre> : feedback}</Tabs.Content>
+  </>;
+}
+
+function PolicyVersionDocument({ version, title }: { version: AccountPolicyVersion; title: string }) {
+  const [section, setSection] = useState("document");
+  return <Tabs.Root value={section} onValueChange={setSection} activationMode="manual">
+    <PolicyDocumentTabList label={title} />
+    <PolicyVersionPanels version={version} section={section} title={title} />
+  </Tabs.Root>;
 }
 
 function PolicyVersionPublisher({ policy, defaultVersion, mutation, authorizationReady, onPublished, onConflict, onClose }: {
@@ -495,7 +534,7 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
     {selected.status === "loading" ? <TableSkeleton label={t("loadingVersion")} rows={3} header={false} /> :
       selected.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={selected.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${selected.status}`)}</Alert>
         {selected.status !== "expired" && selected.status !== "notFound" ? <div><Button variant="secondary" onClick={() => { setSelected({ status: "loading" }); setSelectedRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> :
-      <PolicyVersionDocument version={selected.detail.version} title={t("versionDocument", { version: selectedId })} />}
+      <PolicyVersionDocument key={selectedId} version={selected.detail.version} title={t("versionDocument", { version: selectedId })} />}
   </div>;
   return <div ref={list} tabIndex={-1} className={styles.catalogNotice}>
     <p className={styles.note}>{t("versionDirectoryNotice")}</p>
@@ -535,6 +574,7 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
   const [retained, setRetained] = useState<{ continuityIdentity: object; access: NonNullable<Extract<AccountPolicyReadLoad, { status: "ready" }>["access"]> } | null>(null);
   const [revision, setRevision] = useState(0);
   const [section, setSection] = useState("document");
+  const tabFrame = useRef<HTMLDivElement>(null);
   const [versionsMounted, setVersionsMounted] = useState(false);
   const [workflow, setWorkflow] = useState<{ identity: object; detail: AccountPolicyDetail; kind: "update" | "retire" } | null>(null);
   const actionFocus = useRef<PageCommandsHandle>(null);
@@ -580,12 +620,11 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
   const sharedDisabledReason = !source ? t("metadata.readRequired") : !eligibleForMetadata ? t("metadata.ineligible") : !detail ? t("metadata.readRequired")
     : metadataMutation && (!metadataMutation.ready || metadataMutation.recoveryError) ? t("metadata.recoveryUnavailable")
       : metadataMutation?.pending || mutation?.pending ? t("metadata.blocked") : undefined;
-  const documentRegion = policy?.scope === "INSTALLATION" ? <Alert status="info">{t("platformDetailUnavailable")}</Alert> :
+  const documentFeedback = policy?.scope === "INSTALLATION" ? <Alert status="info">{t("platformDetailUnavailable")}</Alert> :
     !client ? <Alert status="danger">{t("errors.unavailable")}</Alert> :
     state.status === "loading" ? <TableSkeleton label={t("loadingDetail")} rows={3} header={false} /> :
     state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`errors.${state.status}`)}</Alert>
-      {state.status !== "expired" && state.status !== "notFound" ? <div><Button variant="secondary" onClick={() => setRevision((value) => value + 1)}>{t("retry")}</Button></div> : null}</div> :
-    detail ? <PolicyVersionDocument version={detail.version} title={t("defaultDocument")} /> : null;
+      {state.status !== "expired" && state.status !== "notFound" ? <div><Button variant="secondary" onClick={() => setRevision((value) => value + 1)}>{t("retry")}</Button></div> : null}</div> : null;
   const metadataActions = metadataMutation ? { secondary: [
     { id: "rename-policy", label: t("metadata.renameAction"),
       disabledReason: sharedDisabledReason ?? (!canRename ? t("metadata.noAuthority") : undefined),
@@ -595,26 +634,44 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
       onSelect: () => { if (detail && canRetire) setWorkflow({ identity: metadataMutation.identity, detail: structuredClone(detail), kind: "retire" }); } }
   ] } : undefined;
   const onVersionApplied = () => setRevision((value) => value + 1);
-  return <WorkspaceDetail title={source?.displayName ?? policyId} onBack={onBack} actionFocusRef={actionFocus} actions={metadataActions}>
+  const versionHistory = source?.management === "CUSTOMER" && source.scope === "TENANT" && displayAccess &&
+    policyCapability(displayAccess.capabilities, "iam.policy-version.list", policyId)?.available && client?.listVersions && client.readVersion
+    ? <AccountPolicyVersions policy={source} capabilities={displayAccess.capabilities} authorizedCapabilities={access?.capabilities ?? []}
+        listVersions={client.listVersions} readVersion={client.readVersion} mutation={mutation} authorizationReady={!authorityPending && Boolean(access)}
+        refreshRevision={refreshRevision} onApplied={onVersionApplied} onConflictRefresh={onVersionConflict} /> : null;
+  const information = <section aria-label={t("policyInformation")} className={styles.policyStatements}>
+    <dl className={styles.catalogFacts}>
+      <div><dt>{t("policyId")}</dt><dd><code>{policyId}</code></dd></div>
+      {source ? <>
+        <div><dt>{t("management")}</dt><dd>{t(source.management === "SYSTEM" ? "system" : "customer")}</dd></div>
+        <div><dt>{t("scope")}</dt><dd>{t(source.scope === "TENANT" ? "tenant" : "installation")}</dd></div>
+        <div><dt>{t("defaultVersion")}</dt><dd><code>{detail?.version.versionId ?? source.defaultVersionId}</code></dd></div>
+        <div><dt>{t("status")}</dt><dd>{t(source.status === "ACTIVE" ? "active" : "retired")}</dd></div>
+        <div><dt>{t("updated")}</dt><dd><WorkspaceTime value={source.updatedAt} /></dd></div>
+      </> : null}
+    </dl>
     <p className={styles.note}>{t("detailNotice")}</p>
-    <details className={styles.trustDocuments} open={source?.scope === "INSTALLATION" || state.status === "forbidden" || undefined}>
-      <summary>{t("policyInformation")}</summary>
-      <dl className={styles.catalogFacts}>
-        <div><dt>{t("policyId")}</dt><dd><code>{policyId}</code></dd></div>
-        {source ? <>
-          <div><dt>{t("management")}</dt><dd>{t(source.management === "SYSTEM" ? "system" : "customer")}</dd></div>
-          <div><dt>{t("scope")}</dt><dd>{t(source.scope === "TENANT" ? "tenant" : "installation")}</dd></div>
-          <div><dt>{t("defaultVersion")}</dt><dd><code>{detail?.version.versionId ?? source.defaultVersionId}</code></dd></div>
-          <div><dt>{t("updated")}</dt><dd><WorkspaceTime value={detail?.policy.updatedAt ?? source.updatedAt} /></dd></div>
-        </> : null}
-      </dl>
-    </details>
-    {source?.management === "CUSTOMER" && source.scope === "TENANT" && Boolean(displayAccess && policyCapability(displayAccess.capabilities, "iam.policy-version.list", policyId)?.available) && client?.listVersions && client.readVersion ?
-      <Tabs.Root value={section} onValueChange={(next) => { setSection(next); if (next === "versions") setVersionsMounted(true); }}>
-        <Tabs.List aria-label={t("detailSections")}><Tabs.Trigger value="document">{t("defaultDocument")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versionsTab")}</Tabs.Trigger></Tabs.List>
-        <Tabs.Content value="document">{documentRegion}</Tabs.Content>
-        <Tabs.Content value="versions" forceMount={versionsMounted || undefined}>{versionsMounted ? <AccountPolicyVersions policy={source} capabilities={displayAccess!.capabilities} authorizedCapabilities={access?.capabilities ?? []} listVersions={client.listVersions} readVersion={client.readVersion} mutation={mutation} authorizationReady={!authorityPending && Boolean(access)} refreshRevision={refreshRevision} onApplied={onVersionApplied} onConflictRefresh={onVersionConflict} /> : null}</Tabs.Content>
-      </Tabs.Root> : documentRegion}
+  </section>;
+  const metadataOnly = source?.scope === "INSTALLATION" || !client || (!detail && state.status !== "loading" && !versionHistory);
+  const activeSection = section === "versions" && !versionHistory ? "document" : section;
+  function changeSection(next: string) {
+    const frame = tabFrame.current;
+    const list = frame?.querySelector('[role="tablist"]');
+    if (frame && list && frame.getBoundingClientRect().top < list.getBoundingClientRect().top) {
+      frame.scrollIntoView({ block: "start" });
+    }
+    setSection(next);
+    if (next === "versions") setVersionsMounted(true);
+  }
+  return <WorkspaceDetail title={source?.displayName ?? policyId} onBack={onBack} actionFocusRef={actionFocus} actions={metadataActions}>
+    {metadataOnly ? <>
+      <h2 className={styles.stepTitle}>{t("policyInformation")}</h2>{documentFeedback}{information}
+    </> : <Tabs.Root ref={tabFrame} activationMode="manual" value={activeSection} onValueChange={changeSection}>
+      <PolicyDocumentTabList label={t("detailSections")} information history={Boolean(versionHistory)} />
+      <PolicyVersionPanels version={detail?.version} section={activeSection} title={t("defaultDocument")} feedback={documentFeedback} />
+      <Tabs.Content value="information">{information}</Tabs.Content>
+      {versionHistory ? <Tabs.Content value="versions" forceMount={versionsMounted || undefined} hidden={activeSection !== "versions"}>{versionsMounted ? versionHistory : null}</Tabs.Content> : null}
+    </Tabs.Root>}
   </WorkspaceDetail>;
 }
 
