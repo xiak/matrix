@@ -1233,6 +1233,12 @@ describe("CAM-style access workspace", () => {
     const method = (scope: HTMLElement, name: string) => within(within(scope).getByText(name, { exact: true }).closest("li")!);
     const row = (await screen.findByRole("button", { name: "查看用户 lin" })).closest("tr")!;
     const lin = within(row);
+    const chenRow = screen.getByRole("button", { name: "查看用户 chen" }).closest("tr")!;
+    const chenMethods = within(chenRow).getByLabelText("控制台访问 · 已启用 / 编程访问 · 未启用");
+    expect(chenMethods.closest("details")).toHaveProperty("open", false);
+    await user.click(chenMethods);
+    expect(method(chenRow, "编程访问").getByText("未启用")).toBeTruthy();
+    await user.click(lin.getByLabelText("控制台访问 · 已启用 / 编程访问 · 已启用"));
     expect(method(row, "控制台访问").getByText("已启用")).toBeTruthy();
     expect(method(row, "编程访问").getByText("已启用")).toBeTruthy();
     await user.click(lin.getByRole("button", { name: "查看用户 lin" }));
@@ -1253,7 +1259,7 @@ describe("CAM-style access workspace", () => {
     // Refresh is the explicit owner of related access-method data. Cursor paging
     // must not reload the identity, policy directories or preview workspace.
     await user.click(screen.getByTestId("refresh-account"));
-    await waitFor(() => expect(method(screen.getByRole("button", { name: "View user chen" }).closest("tr")!, "Console access").getByText("Configuration not provided")).toBeTruthy());
+    await waitFor(() => expect(within(screen.getByRole("button", { name: "View user chen" }).closest("tr")!).getByLabelText("Access methods · Not provided")).toBeTruthy());
     await user.click(await screen.findByRole("button", { name: "View user chen" }));
     expect(screen.getByRole("tab", { name: "Identity" })).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Access methods" }));

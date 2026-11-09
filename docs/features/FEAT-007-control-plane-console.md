@@ -2330,6 +2330,19 @@ account recovery and settings require their own capabilities. Unknown owner
 display names or statuses and absent user access profiles are not fabricated
 from the current actor or interpreted as disabled.
 
+In the user directory the monitor and code icons identify console and
+programmatic access. Per-method check, prohibited and question symbols
+distinguish enabled, disabled and unknown switches. When neither switch is
+reported, one neutral summary covers both. Each summary opens by pointer,
+touch or keyboard to read the full facts. The available width of the cell
+determines whether method names fit beside the icons. User lifecycle badges
+retain a text label alongside a distinct symbol, including the password-change
+requirement. Long principal IDs use the table's identifier disclosure. On
+compact cards, identity, status and access facts have their own space.
+Browser checks cover the LIVE unreported state in Chinese and English at
+320px through 1941px, plus mixed access switches and touch disclosure in the
+isolated preview directory.
+
 The live account-access projection and exact actor-relative capabilities are
 specified in [FEAT-IAM-010](iam/FEAT-IAM-010-console.md). Rendering
 availability is advisory interaction data, not a client-side permit; MOCK

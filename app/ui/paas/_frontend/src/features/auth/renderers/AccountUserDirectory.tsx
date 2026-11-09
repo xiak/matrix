@@ -27,9 +27,9 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
     <td><div className={styles.userIdentity}>
       {user.canRead ? <Table.PrimaryAction aria-label={t("viewUser", { name: user.loginName })} onClick={onOpen}>{user.loginName}</Table.PrimaryAction> : <strong>{user.loginName}</strong>}
       {user.name && user.name !== user.loginName ? <span className={styles.userDisplayName}>{user.name}</span> : null}
-    </div><small className={styles.userIdentifier}>{user.id}</small></td>
+    </div><Table.Identifier value={user.id} /></td>
     <td>{t("child")}{user.id === principalId ? <small>{t("signedIn")}</small> : null}</td>
-    <td data-label={t("accessMethods")}><AccountUserAccessMethods user={user} workspace={workspace} /></td>
+    <td data-label={t("accessMethods")}><AccountUserAccessMethods user={user} workspace={workspace} directory /></td>
     <td data-label={workspace ? w("policyAssociations") : t("directPolicyAttachments")}>{workspace ? <div className={styles.permissionSources}>
       {grants!.direct > 0 ? <span>{w("directPolicyCount", { count: grants!.direct })}</span> : null}
       {grants!.inherited > 0 ? <span>{w("groupPolicyCount", { count: grants!.inherited })}</span> : null}
@@ -38,7 +38,7 @@ function AccountUserRow({ user, principalId, workspace, grants, checked, disable
       {user.attachments.slice(0, 2).map((attachment) => <Badge key={attachment.id} status={attachment.policyStatus === "RETIRED" ? "neutral" : undefined}>{attachment.label}</Badge>)}
       {user.attachments.length > 2 ? <span>{t("morePolicyAttachments", { count: user.attachments.length - 2 })}</span> : null}
     </> : t("noDirectPolicyAttachments")}</div>}</td>
-    <td>{user.state ? <AccountUserStatus state={user.state} /> : t("unknown")}</td>
+    <td>{user.state ? <AccountUserStatus state={user.state} directory /> : t("unknown")}</td>
   </tr>;
 }
 

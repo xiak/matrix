@@ -1,6 +1,7 @@
 "use client";
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
+import { Ban, Check, ChevronDown, CircleCheck, CircleHelp, CodeXml, KeyRound, Monitor } from "lucide-react";
 import { Alert, Badge, Button, EmptyState, FormField, HelpDisclosure, Input, Table, TableSkeleton, Tabs, useLeaveConfirmation } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { UserDeletionRecoveryUnavailable, UserDeletionRejected, useAccountAccess, type UserBoundarySnapshot, type UserDeletionClient } from "../application/AccountAccessProvider";
@@ -21,20 +22,53 @@ import styles from "./AccountAccessRenderer.module.css";
 
 export type AccountUserDetailTab = "identity" | "access" | "policies" | "groups" | "security" | "keys";
 
-export function AccountUserAccessMethods({ user, workspace }: { user: AccountUserScene; workspace: AccessWorkspace | null }) {
+export function AccountUserAccessMethods({ user, workspace, directory = false }: { user: AccountUserScene; workspace: AccessWorkspace | null; directory?: boolean }) {
   const t = useTranslations("UserWizard");
   const a = useTranslations("AccountAccess");
   const profile = workspace?.userProfiles[user.id];
-  return <ul className={styles.accessMethods}>
-    <li data-enabled={profile?.consoleAccess}><span>{t("consoleAccess")}</span><span>{profile ? t(profile.consoleAccess ? "enabled" : "disabled") : workspace ? a("accessUnknown") : a("accessSwitchUnreported")}</span></li>
-    <li data-enabled={profile?.programmaticAccess}><span>{t("programmaticAccess")}</span><span>{profile ? t(profile.programmaticAccess ? "enabled" : "disabled") : workspace ? a("accessUnknown") : a("accessSwitchUnreported")}</span></li>
+  const methods = [
+    { label: t("consoleAccess"), short: a("consoleShort"), Icon: Monitor, enabled: profile?.consoleAccess },
+    { label: t("programmaticAccess"), short: "API", Icon: CodeXml, enabled: profile?.programmaticAccess }
+  ];
+  function stateLabel(enabled: boolean | undefined) {
+    if (enabled === true) return t("enabled");
+    if (enabled === false) return t("disabled");
+    return workspace ? a("accessUnknown") : a("accessSwitchUnreported");
+  }
+  const list = <ul className={styles.accessMethods}>
+    {methods.map(({ label, enabled }) => <li key={label} data-enabled={enabled}><span>{label}</span><span>{stateLabel(enabled)}</span></li>)}
   </ul>;
+  if (!directory) return list;
+
+  const bothUnknown = methods.every(({ enabled }) => typeof enabled !== "boolean");
+  const unknownLabel = workspace ? a("unknown") : a("accessUnreportedShort");
+  const explanation = bothUnknown
+    ? a(workspace ? "unknownAccessMethodsHint" : "unreportedAccessMethodsHint")
+    : methods.map(({ label, enabled }) => label + " · " + stateLabel(enabled)).join(" / ");
+  return <details className={styles.directoryAccess}>
+    <summary aria-label={bothUnknown ? a("accessMethods") + " · " + unknownLabel : explanation} title={explanation}>
+      {bothUnknown ? <span className={styles.methodIndicator}><CircleHelp aria-hidden="true" />{unknownLabel}</span>
+        : methods.map(({ label, short, Icon, enabled }) => {
+          const StateIcon = enabled === true ? Check : enabled === false ? Ban : CircleHelp;
+          return <span key={label} className={styles.methodIndicator} data-enabled={enabled} aria-hidden="true">
+            <Icon /><span className={styles.methodName}>{short}</span><StateIcon className={styles.methodState} />
+          </span>;
+        })}
+      <ChevronDown className={styles.methodChevron} aria-hidden="true" />
+    </summary>
+    {bothUnknown ? <p>{explanation}</p> : list}
+  </details>;
 }
 
-export function AccountUserStatus({ state }: { state: AccountUserScene["state"] }) {
+export function AccountUserStatus({ state, directory = false }: { state: AccountUserScene["state"]; directory?: boolean }) {
   const t = useTranslations("AccountAccess");
   const tone = { active: "success", passwordChangeRequired: "warning", disabled: "neutral" } as const;
-  return <Badge status={tone[state]}>{t(`states.${state}`)}</Badge>;
+  const label = t(`states.${state}`);
+  if (!directory) return <Badge status={tone[state]}>{label}</Badge>;
+  const Icon = { active: CircleCheck, passwordChangeRequired: KeyRound, disabled: Ban }[state];
+  return <Badge status={tone[state]} className={styles.directoryStatus} title={label}>
+    <Icon aria-hidden="true" />{state === "passwordChangeRequired" ? t("passwordChangeShort") : label}
+  </Badge>;
 }
 
 function UserIdentitySummary({ user, editAction }: { user: AccountUserScene; editAction?: ReactNode }) {

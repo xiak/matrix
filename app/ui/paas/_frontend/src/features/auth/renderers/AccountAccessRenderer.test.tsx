@@ -871,7 +871,12 @@ describe("account access", () => {
     const userTable = screen.getByRole("table", { name: "租户用户列表" });
     expect(userTable.getAttribute("data-mobile-layout")).toBe("stack");
     expect(admin.getByText("ReadOnlyAccess").closest("td")?.getAttribute("data-label")).toBe("直接关联策略");
-    expect(admin.getByText("控制台访问").closest("td")?.getAttribute("data-label")).toBe("访问方式");
+    const accessSummary = admin.getByLabelText("访问方式 · 未报告");
+    expect(accessSummary.closest("td")?.getAttribute("data-label")).toBe("访问方式");
+    expect(accessSummary.closest("details")).toHaveProperty("open", false);
+    await user.click(accessSummary);
+    expect(accessSummary.closest("details")).toHaveProperty("open", true);
+    expect(admin.getByText("IAM 未报告控制台访问和编程访问是否启用。")).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "筛选" }));
     await user.click(screen.getByRole("combobox", { name: "筛选策略来源" }));
     await user.click(screen.getByRole("option", { name: "无直接关联策略" }));
