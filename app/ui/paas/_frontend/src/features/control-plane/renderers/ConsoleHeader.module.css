@@ -14,7 +14,7 @@
   box-shadow: none;
 }
 
-.routeProgress { position: absolute; inset: auto 0 -0.0625rem; height: var(--xiak-navigation-progress-height); border-radius: 0; pointer-events: none; }
+.headerProgress { position: absolute; inset: auto 0 -0.0625rem; height: var(--xiak-navigation-progress-height); border-radius: 0; pointer-events: none; }
 
 .navigation,
 .utilities,

@@ -123,11 +123,11 @@ const headerProps: React.ComponentProps<typeof ConsoleHeader> = {
   scope: { regionId: "all", onRegionChange() {} }, identity: { accountType: "Primary", loginName: "preview", principalId: "preview", tenant: { name: "Preview" } }, onLogout() {}, revoking: false
 };
 
-function Harness({ initialHref = "/console/", onAccepted, withDraft = false, withHeader = false }: { initialHref?: string; onAccepted?(): void; withDraft?: boolean; withHeader?: boolean }) {
+function Harness({ initialHref = "/console/", onAccepted, withDraft = false, header }: { initialHref?: string; onAccepted?(): void; withDraft?: boolean; header?: React.ComponentProps<typeof ConsoleHeader> }) {
   const [href, setHref] = useState(initialHref);
   router.push.mockImplementation((target: string) => setHref(target));
   return <ConsoleNavigationProvider selection={parseControlPlanePathname(href.split(/[?#]/)[0] ?? "")}>
-    {withHeader ? <ConsoleHeader {...headerProps} /> : null}
+    {header ? <ConsoleHeader {...header} /> : null}
     <NavigationControls onAccepted={onAccepted} />
     <Suspense fallback={<span>Route fallback</span>}><RouteContent href={href} />{withDraft && href === initialHref ? <DraftProbe /> : null}</Suspense>
   </ConsoleNavigationProvider>;
@@ -188,7 +188,7 @@ describe("Console navigation", () => {
 
   it("updates only the header's route-progress subscriber while a destination is pending", async () => {
     const user = userEvent.setup(), request = hold("/console/resources/");
-    render(<LocaleProvider><Harness withHeader /></LocaleProvider>);
+    render(<LocaleProvider><Harness header={headerProps} /></LocaleProvider>);
     const header = screen.getByLabelText("全局导航");
     expect(within(header).queryByRole("progressbar")).toBeNull();
     staticHeaderRender.mockClear();
@@ -198,6 +198,28 @@ describe("Console navigation", () => {
     await act(async () => request.release());
     expect(within(header).queryByRole("progressbar")).toBeNull();
     expect(staticHeaderRender).not.toHaveBeenCalled();
+  });
+
+  it("hands the same Header progress bar from an open directory to an accepted navigation", async () => {
+    const user = userEvent.setup(), destination = hold("/console/applications/");
+    let failRead!: (reason: Error) => void;
+    const readServiceDefinitions = vi.fn(() => new Promise<never>((_, reject) => { failRead = reject; }));
+    render(<LocaleProvider><Harness header={{ ...headerProps, scene: { ...headerProps.scene, preview: false }, readServiceDefinitions }} /></LocaleProvider>);
+    const header = screen.getByLabelText("全局导航");
+    expect(readServiceDefinitions).not.toHaveBeenCalled();
+    await user.click(within(header).getByRole("button", { name: "打开产品与服务" }));
+    const dialog = screen.getByRole("dialog", { name: "云产品入口" });
+    const bar = within(header).getByRole("progressbar", { name: messages.ServiceDirectory.live.loading });
+    expect(bar.parentElement).toBe(header);
+    expect(within(dialog).queryByRole("progressbar")).toBeNull();
+    await user.click(within(dialog).getByRole("link", { name: /应用托管/ }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("progressbar", { name: /正在打开/ })).toBe(bar);
+    await act(async () => { failRead(new Error("late directory response")); });
+    expect(screen.getByRole("progressbar")).toBe(bar);
+    await act(async () => destination.release());
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(readServiceDefinitions).toHaveBeenCalledTimes(1);
   });
 
   it("waits for leave consent before starting a real route transition or changing the destination", async () => {

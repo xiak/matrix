@@ -13,6 +13,7 @@ import { NotificationCenter } from "./NotificationCenter";
 import { ProductLauncher } from "./ProductLauncher";
 import { RegionSwitcher } from "./ScopeSwitcher";
 import { useServiceDirectory } from "./ServiceDirectory";
+import { useLiveServiceDefinitionDirectory } from "../application/liveServiceActivation";
 import { useConsoleUiStore, type HeaderPanel } from "../application/consoleUiStore";
 import styles from "./ConsoleHeader.module.css";
 
@@ -39,12 +40,30 @@ export function ConsoleBrand({ inactive = false }: { inactive?: boolean }) {
   );
 }
 
-function RouteProgress() {
+function HeaderProgress({ directoryPending }: { directoryPending: boolean }) {
   const { pendingSelection } = useConsoleNavigation();
   const t = useTranslations("Console");
   const navigation = useTranslations("ServiceNavigation");
-  if (!pendingSelection) return null;
-  return <Progress className={styles.routeProgress} aria-label={t("openingPage", { name: navigation(`items.${pendingSelection.view ?? pendingSelection.section}.label`) })} />;
+  const directory = useTranslations("ServiceDirectory");
+  const label = pendingSelection ? t("openingPage", { name: navigation(`items.${pendingSelection.view ?? pendingSelection.section}.label`) })
+    : directoryPending ? directory("live.loading") : null;
+  return label ? <Progress className={styles.headerProgress} aria-label={label} /> : null;
+}
+
+function HeaderNavigation({ open, onOpenChange, preview, readServiceDefinitions }: {
+  open: boolean;
+  onOpenChange(open: boolean): void;
+  preview: boolean;
+  readServiceDefinitions?: ConsoleHeaderProps["readServiceDefinitions"];
+}) {
+  const directory = useLiveServiceDefinitionDirectory(open && !preview, readServiceDefinitions);
+  return <>
+    <div className={styles.navigation}>
+      <ConsoleBrand inactive={open} />
+      <ProductLauncher onOpenChange={onOpenChange} open={open} live={preview ? undefined : directory} />
+    </div>
+    <HeaderProgress directoryPending={directory.status === "checking"} />
+  </>;
 }
 
 export const ConsoleHeader = memo(function ConsoleHeader({ scene, readServiceDefinitions, scope, identity, onLogout, revoking, roleAccessHref, roleSessionActive }: ConsoleHeaderProps) {
@@ -68,10 +87,7 @@ export const ConsoleHeader = memo(function ConsoleHeader({ scene, readServiceDef
 
   return (
     <Layout.Header data-surface="shell" aria-label={t("globalNavigation")} className={styles.header}>
-      <div className={styles.navigation}>
-        <ConsoleBrand inactive={catalogOpen} />
-        <ProductLauncher onOpenChange={openPanel("products")} open={activePanel === "products"} preview={scene.preview} readServiceDefinitions={readServiceDefinitions} />
-      </div>
+      <HeaderNavigation onOpenChange={openPanel("products")} open={catalogOpen} preview={scene.preview} readServiceDefinitions={readServiceDefinitions} />
 
       {scene.preview ? <GlobalSearch inactive={catalogOpen} onChoose={(id) => { const service = services.find((item) => `service-${item.id}` === id); if (service) visitService(service.id); }} onOpenChange={openPanel("search")} open={activePanel === "search"} results={searchResults} /> : null}
 
@@ -83,7 +99,6 @@ export const ConsoleHeader = memo(function ConsoleHeader({ scene, readServiceDef
           <AccountMenu accessHref={roleSessionActive ? null : "/console/access/"} identity={identity} onLogout={onLogout} onOpenChange={openPanel("account")} open={activePanel === "account"} revoking={revoking} roleAccessHref={roleAccessHref} roleSessionActive={roleSessionActive} />
         </div>
       </div>
-      <RouteProgress />
     </Layout.Header>
   );
 });

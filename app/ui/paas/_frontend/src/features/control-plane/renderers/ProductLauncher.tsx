@@ -5,19 +5,18 @@ import { useTranslations } from "next-intl";
 import { Grid2X2 } from "lucide-react";
 import { HeaderPopover, HeaderPopoverTrigger } from "./HeaderPopover";
 import { ServiceDirectory } from "./ServiceDirectory";
-import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
+import type { LiveServiceDirectory } from "../application/liveServiceActivation";
 import styles from "./ProductLauncher.module.css";
 
 type ProductLauncherProps = Readonly<{
   onOpenChange(open: boolean): void;
   open: boolean;
-  preview?: boolean;
-  readServiceDefinitions?(): Promise<ServiceDefinitionDirectory>;
+  live?: LiveServiceDirectory;
 }>;
 
 const panelId = "global-product-launcher";
 
-export function ProductLauncher({ onOpenChange, open, preview = true, readServiceDefinitions }: ProductLauncherProps) {
+export function ProductLauncher({ onOpenChange, open, live }: ProductLauncherProps) {
   const t = useTranslations("ServiceDirectory");
   const trigger = useRef<HTMLButtonElement>(null);
 
@@ -61,7 +60,7 @@ export function ProductLauncher({ onOpenChange, open, preview = true, readServic
       />
       {open ? (
         <HeaderPopover align="start" id={panelId} label={t("dialog")} modal onKeyDown={handleKeyDown} size="catalog">
-          <ServiceDirectory onClose={closeAndRestoreFocus} onNavigate={() => onOpenChange(false)} preview={preview} readServiceDefinitions={readServiceDefinitions} />
+          <ServiceDirectory onClose={closeAndRestoreFocus} onNavigate={() => onOpenChange(false)} live={live} />
         </HeaderPopover>
       ) : null}
     </div>

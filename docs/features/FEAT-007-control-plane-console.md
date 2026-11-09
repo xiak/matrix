@@ -1048,8 +1048,11 @@ resource permission, health or enablement, and the owning resource API still
 authorizes every request. Preview-only workspaces remain absent from LIVE.
 
 Managed products are added only from the backend service-definition directory,
-which is read lazily while the launcher is open. Its loading or failure feedback
-is local to that remote region and cannot remove the stable platform links.
+which is read lazily while the launcher is open. Loading and retry use the
+single progress track on the global Header's bottom divider. The platform
+links stay usable while the request is pending. Failure and its retry action
+appear beside the directory results. Closing the launcher clears its progress.
+An accepted destination uses the same track until the route commits.
 Backend entries provide managed-product membership, names and descriptions; the
 presentation registry supplies only implemented destination/category/icon
 metadata. Missing permission, expired authentication, transport failure and an

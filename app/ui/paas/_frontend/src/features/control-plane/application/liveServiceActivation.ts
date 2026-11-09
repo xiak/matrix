@@ -52,41 +52,41 @@ function activationMatchesDefinition(activation: ServiceActivation, definition: 
 
 type ServiceDirectoryRead = () => Promise<ServiceDefinitionDirectory>;
 type ServiceDirectoryObservation = {
-  source: ServiceDirectoryRead;
-  status: "checking" | "ready" | "forbidden" | "expired" | "unavailable";
+  request: { source: ServiceDirectoryRead; attempt: number };
+  status: "ready" | "forbidden" | "expired" | "unavailable";
   directory: ServiceDefinitionDirectory | null;
 };
 
-// The launcher's backend read stays local to the opened data region. Its source
-// callback is credential-scoped by the provider, so changed identities cannot
-// keep another identity's service entries visible while the new read resolves.
+// Each opening, retry, or change of credential-scoped source owns a fresh read.
 export function useLiveServiceDefinitionDirectory(active: boolean, source?: ServiceDirectoryRead) {
   const [observation, setObservation] = useState<ServiceDirectoryObservation | null>(null);
   const [attempt, setAttempt] = useState(0);
+  const request = useMemo(() => active && source ? { source, attempt } : null, [active, source, attempt]);
   useEffect(() => {
-    if (!active || !source) return;
+    if (!request) return;
     let current = true;
     queueMicrotask(async () => {
       if (!current) return;
-      setObservation({ source, status: "checking", directory: null });
       try {
-        const directory = await source();
-        if (current) setObservation({ source, status: "ready", directory });
+        const directory = await request.source();
+        if (current) setObservation({ request, status: "ready", directory });
       } catch (failure) {
-        if (current) setObservation({ source, directory: null, status: failure instanceof HttpProblem && failure.status === 403
+        if (current) setObservation({ request, directory: null, status: failure instanceof HttpProblem && failure.status === 403
           ? "forbidden" : failure instanceof HttpProblem && failure.status === 401 ? "expired" : "unavailable" });
       }
     });
     return () => { current = false; };
-  }, [active, source, attempt]);
+  }, [request]);
 
-  const owned = active && source && observation?.source === source ? observation : null;
+  const owned = request && observation?.request === request ? observation : null;
   return {
     directory: owned?.directory ?? null,
-    status: owned?.status ?? (active && source ? "checking" : "unavailable"),
+    status: owned?.status ?? (request ? "checking" : "unavailable"),
     retry: () => setAttempt((value) => value + 1)
-  };
+  } as const;
 }
+
+export type LiveServiceDirectory = ReturnType<typeof useLiveServiceDefinitionDirectory>;
 
 // LIVE activation is deliberately independent from the product data provider.
 // A forbidden activation read admits an ordinary product-resource probe instead

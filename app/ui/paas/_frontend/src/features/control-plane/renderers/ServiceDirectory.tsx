@@ -4,11 +4,10 @@ import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { useTranslations } from "next-intl";
 import { ArrowUpRight, Boxes, ChartNoAxesCombined, Clock3, Database, Grid2X2, Layers3, MapPin, MessagesSquare, PackageSearch, ScrollText, Search, Settings2, ShieldCheck, Star, Workflow, X } from "lucide-react";
-import { Alert, Button, EmptyState, Progress, SearchInput } from "@ui/xiak";
+import { Alert, Button, EmptyState, SearchInput } from "@ui/xiak";
 import { useConsoleUiStore } from "../application/consoleUiStore";
-import { useLiveServiceDefinitionDirectory } from "../application/liveServiceActivation";
+import type { LiveServiceDirectory } from "../application/liveServiceActivation";
 import { managedServiceProducts, type ManagedServiceProductId } from "../domain/managedServiceProduct";
-import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
 import { matchesService, serviceCategories, serviceDirectory, type ServiceCategory, type ServiceDirectoryItem } from "../scenes/serviceDirectory";
 import styles from "./ServiceDirectory.module.css";
 
@@ -69,30 +68,30 @@ export function CommonServiceLinks() {
   </ul>;
 }
 
-export function ServiceDirectory({ onClose, onNavigate, preview = true, readServiceDefinitions }: {
+export function ServiceDirectory({ onClose, onNavigate, live }: {
   onClose(): void;
   onNavigate(): void;
-  preview?: boolean;
-  readServiceDefinitions?(): Promise<ServiceDefinitionDirectory>;
+  live?: LiveServiceDirectory;
 }) {
   const t = useTranslations("ServiceDirectory");
   const presentation = useServiceDirectory();
-  const live = useLiveServiceDefinitionDirectory(!preview, readServiceDefinitions);
+  const preview = !live;
+  const directory = live?.directory;
   const services = useMemo(() => preview ? presentation : [
     ...presentation.filter((service) => service.discovery === "platform"),
-    ...(live.directory?.services.flatMap((definition) => {
+    ...(directory?.services.flatMap((definition) => {
       const destination = presentation.find((item) => item.id === definition.id);
       return destination?.discovery === "managed" ? [{ ...destination, label: definition.displayName, description: definition.description,
         keywords: [definition.id, definition.displayName, ...destination.keywords] }] : [];
     }) ?? [])
-  ], [live.directory, presentation, preview]);
-  const unsupported = preview ? [] : live.directory?.services.filter((definition) => {
+  ], [directory, presentation, preview]);
+  const unsupported = directory?.services.filter((definition) => {
     const destination = presentation.find((item) => item.id === definition.id);
     return !destination || destination.discovery === "preview";
   }) ?? [];
-  const managedDirectoryPending = !preview && live.status === "checking";
-  const managedDirectoryFailed = !preview && live.status !== "checking" && live.status !== "ready";
-  const liveFailure = live.status === "forbidden" || live.status === "expired" ? live.status : "unavailable";
+  const managedDirectoryPending = live?.status === "checking";
+  const managedDirectoryFailed = live && live.status !== "checking" && live.status !== "ready";
+  const liveFailure = live?.status === "forbidden" || live?.status === "expired" ? live.status : "unavailable";
   const favorites = useConsoleUiStore((state) => state.favoriteServices);
   const recent = useConsoleUiStore((state) => state.recentServices);
   const [view, setView] = useState<DirectoryView>("all");
@@ -110,6 +109,7 @@ export function ServiceDirectory({ onClose, onNavigate, preview = true, readServ
     ? query.normalize("NFKC").toLowerCase().trim().split(/\s+/).every((word) =>
       `${definition.id} ${definition.displayName} ${definition.description}`.normalize("NFKC").toLowerCase().includes(word))
     : view === "all");
+  const visibleCount = visible.length + unsupportedVisible.length;
   const views = [
     { id: "all", label: t("all"), icon: Grid2X2, count: services.length + unsupported.length },
     { id: "favorites", label: t("favorites"), icon: Star, count: services.filter((service) => favorites.includes(service.id)).length },
@@ -175,11 +175,10 @@ export function ServiceDirectory({ onClose, onNavigate, preview = true, readServ
           <button aria-controls={resultId} aria-pressed={selectedView === id} className={styles.categoryButton} onClick={() => changeView(id as DirectoryView)} tabIndex={selectedView === id ? 0 : -1} title={label} type="button"><Icon aria-hidden="true" /><span>{label}</span><small>{count}</small></button>
         </div>)}
       </nav>
-      <div className={styles.results} id={resultId} onKeyDown={navigateResults} ref={results}>
-        {managedDirectoryPending ? <Progress aria-label={t("live.loading")} className={styles.liveProgress} /> : null}
-        <div className={styles.resultHeading}><div><h2>{searching ? t("searchTitle") : views.find((item) => item.id === view)?.label}</h2><p>{searching ? t("searchScope") : t(preview ? "browseHint" : "live.browseHint")}</p></div><span aria-live="polite" role="status">{t("count", { count: visible.length + unsupportedVisible.length })}</span></div>
+      <div aria-busy={managedDirectoryPending || undefined} className={styles.results} id={resultId} onKeyDown={navigateResults} ref={results}>
+        <div className={styles.resultHeading}><div><h2>{searching ? t("searchTitle") : views.find((item) => item.id === view)?.label}</h2><p>{searching ? t("searchScope") : t(preview ? "browseHint" : "live.browseHint")}</p></div><span aria-live="polite" role="status">{managedDirectoryPending && !visibleCount ? t("live.loading") : t("count", { count: visibleCount })}</span></div>
         {managedDirectoryFailed ? <Alert className={styles.liveFailure} status="warning"><div><strong>{t(`live.${liveFailure}Title`)}</strong><span>{t(`live.${liveFailure}Hint`)}</span></div><Button onClick={live.retry} size="small" variant="secondary">{t("live.retry")}</Button></Alert> : null}
-        {!visible.length && !unsupportedVisible.length ? managedDirectoryPending ? <p className={styles.loadingHint} role="status">{t("live.loading")}</p>
+        {!visibleCount ? managedDirectoryPending ? null
           : <EmptyState compact title={t(emptyTitle)} description={t(`${emptyTitle}Hint`)} icon={<PackageSearch />} action={<Button onClick={() => { changeView("all"); search.current?.focus(); }} variant="secondary">{t("reset")}</Button>} />
           : !searching && (view === "favorites" || view === "recent") ? <ul className={styles.savedServices}>{visible.map((service) => <ServiceEntry key={service.id} onNavigate={onNavigate} onRemoveFavorite={view === "favorites" ? () => search.current?.focus() : undefined} service={service} />)}</ul>
             : <div className={styles.groups}>{serviceCategories.map((category) => {

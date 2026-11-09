@@ -1,10 +1,11 @@
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { useState, type ComponentProps, type ComponentPropsWithoutRef } from "react";
+import { useState, type ComponentPropsWithoutRef } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { useConsoleUiStore } from "../application/consoleUiStore";
+import { useLiveServiceDefinitionDirectory } from "../application/liveServiceActivation";
 import type { ServiceDefinitionDirectory } from "../domain/serviceActivation";
 import { ProductLauncher } from "./ProductLauncher";
 
@@ -19,7 +20,7 @@ vi.mock("next/link", () => ({
   }}>{children}</a>
 }));
 
-type DirectoryProps = Pick<ComponentProps<typeof ProductLauncher>, "preview" | "readServiceDefinitions">;
+type DirectoryProps = { preview?: boolean; readServiceDefinitions?(): Promise<ServiceDefinitionDirectory> };
 
 function liveDirectory(ids = ["mysql"]): ServiceDefinitionDirectory {
   return {
@@ -30,9 +31,10 @@ function liveDirectory(ids = ["mysql"]): ServiceDefinitionDirectory {
   };
 }
 
-function ProductLauncherHarness(props: DirectoryProps = {}) {
+function ProductLauncherHarness({ preview = true, readServiceDefinitions }: DirectoryProps = {}) {
   const [open, setOpen] = useState(false);
-  return <LocaleProvider><ProductLauncher {...props} onOpenChange={setOpen} open={open} /><button type="button">后续操作</button></LocaleProvider>;
+  const directory = useLiveServiceDefinitionDirectory(open && !preview, readServiceDefinitions);
+  return <LocaleProvider><ProductLauncher live={preview ? undefined : directory} onOpenChange={setOpen} open={open} /><button type="button">后续操作</button></LocaleProvider>;
 }
 
 async function openDirectory(props: DirectoryProps = {}) {
@@ -112,7 +114,7 @@ describe("ProductLauncher", () => {
 
     const applications = screen.getByRole("link", { name: /应用托管/ });
     expect(applications.getAttribute("href")).toBe("/console/applications/");
-    expect(screen.getByRole("progressbar", { name: "正在同步需要开通的受管产品" })).toBeTruthy();
+    expect(within(screen.getByRole("dialog")).queryByRole("progressbar")).toBeNull();
     await user.click(applications);
 
     expect(navigation.navigate).toHaveBeenCalledExactlyOnceWith("/console/applications/");

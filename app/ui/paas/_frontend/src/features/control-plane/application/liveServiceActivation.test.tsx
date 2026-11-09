@@ -80,6 +80,31 @@ describe("useLiveServiceDefinitionDirectory", () => {
     expect(result.current.directory?.services).toEqual([]);
   });
 
+  it("starts each reopening fresh and ignores an earlier opening that settles during the new read", async () => {
+    let first!: (value: ServiceDefinitionDirectory) => void;
+    let second!: (value: ServiceDefinitionDirectory) => void;
+    const source = vi.fn()
+      .mockResolvedValueOnce(directory(true))
+      .mockReturnValueOnce(new Promise<ServiceDefinitionDirectory>(resolve => { first = resolve; }))
+      .mockReturnValueOnce(new Promise<ServiceDefinitionDirectory>(resolve => { second = resolve; }));
+    const { result, rerender } = renderHook(({ open }) => useLiveServiceDefinitionDirectory(open, source), { initialProps: { open: true } });
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    rerender({ open: false });
+    expect(result.current.directory).toBeNull();
+    rerender({ open: true });
+    expect(result.current.status).toBe("checking");
+    expect(result.current.directory).toBeNull();
+    await waitFor(() => expect(source).toHaveBeenCalledTimes(2));
+    rerender({ open: false });
+    rerender({ open: true });
+    await waitFor(() => expect(source).toHaveBeenCalledTimes(3));
+    await act(async () => first(directory(true)));
+    expect(result.current.status).toBe("checking");
+    await act(async () => second({ ...directory(false), services: [] }));
+    expect(result.current.status).toBe("ready");
+    expect(result.current.directory?.services).toEqual([]);
+  });
+
   it("keeps a rejected read closed until an explicit same-source retry succeeds", async () => {
     const source = vi.fn().mockRejectedValueOnce(new HttpProblem(403, "PERMISSION_DENIED")).mockResolvedValueOnce(directory(false));
     const { result } = renderHook(() => useLiveServiceDefinitionDirectory(true, source));
