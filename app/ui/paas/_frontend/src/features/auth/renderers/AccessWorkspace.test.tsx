@@ -240,8 +240,7 @@ describe("selection-driven user directory", () => {
   it("keeps MOCK user deletion unavailable until the exact target is disabled", async () => {
     const { user, extension } = await open("users");
     await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
-    await user.click(screen.getByRole("button", { name: "页面操作" }));
-    const menu = within(screen.getByRole("menu", { name: "页面操作" }));
+    const menu = within(await openPageActionMenu(user));
     const remove = menu.getByRole("menuitem", { name: "删除" });
     expect(remove.getAttribute("aria-disabled")).toBe("true");
     expect(menu.getByText("删除前必须先禁用该用户。")).toBeTruthy();

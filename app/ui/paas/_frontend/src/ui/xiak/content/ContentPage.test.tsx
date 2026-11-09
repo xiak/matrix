@@ -50,13 +50,14 @@ describe("ContentPage context heading", () => {
     expect(toolsRendered).toHaveBeenCalledTimes(count);
   });
 
-  it("shares current page callbacks between direct buttons and the compact menu without subscribing the title frame", async () => {
+  it("keeps direct and overflow callbacks current without subscribing the title frame", async () => {
     const user = userEvent.setup(), invoke = vi.fn(), rendered = vi.fn();
     function Detail() {
       const [draft, setDraft] = useState("");
       return <><ContentPage.Heading title="Policy" actions={<ContentPage.Commands label="Page actions" moreLabel="More actions"
         primary={{ id: "save", label: "Save policy", onSelect: () => invoke(draft) }}
-        secondary={[{ id: "delete", label: "Delete policy", danger: true, disabledReason: "In use", onSelect: invoke }]} />} />
+        secondary={[{ id: "copy", label: "Copy policy", onSelect: () => invoke(draft) },
+          { id: "delete", label: "Delete policy", danger: true, disabledReason: "In use", onSelect: invoke }]} />} />
         <input aria-label="Description" value={draft} onChange={(event) => setDraft(event.target.value)} /></>;
     }
     render(<ContentPage><Profiler id="title" onRender={rendered}><ContentPage.Header title="Policy" /></Profiler><ContentPage.Body><Detail /></ContentPage.Body></ContentPage>);
@@ -72,9 +73,8 @@ describe("ContentPage context heading", () => {
     expect(document.getElementById(unavailable.getAttribute("aria-describedby")!)?.textContent).toBe("In use");
     await user.click(unavailable);
     expect(invoke).toHaveBeenCalledTimes(1);
-    await user.keyboard("{Escape}");
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(within(screen.getByRole("menu", { name: "Page actions" })).getByRole("menuitem", { name: "Save policy" }));
+    expect(menu.queryByRole("menuitem", { name: "Save policy" })).toBeNull();
+    await user.click(menu.getByRole("menuitem", { name: "Copy policy" }));
     expect(invoke.mock.calls).toEqual([["Latest description"], ["Latest description"]]);
   });
 
@@ -90,7 +90,7 @@ describe("ContentPage context heading", () => {
     }
     render(<Harness />);
     await user.click(screen.getByRole("button", { name: "Restore workflow trigger" }));
-    expect(document.activeElement).toBe(screen.getByRole("button", { name: "More actions" }));
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Service authorization" }));
     await user.click(screen.getByRole("button", { name: "Restore default trigger" }));
     expect(document.activeElement).toBe(screen.getByRole("button", { name: "Create role" }));
   });
@@ -148,7 +148,9 @@ describe("ContentPage context heading", () => {
     expect(screen.getByRole("menuitem", { name: "Add to group" }).getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByText("Select a row")).toBeTruthy();
     expect(screen.queryByRole("menuitem", { name: "Clear selection" })).toBeNull();
-    await user.click(screen.getByRole("menuitem", { name: "Create user" }));
+    expect(screen.queryByRole("menuitem", { name: "Create user" })).toBeNull();
+    await user.keyboard("{Escape}");
+    await user.click(primary);
     expect(create).toHaveBeenCalledOnce();
     await user.click(screen.getByRole("button", { name: "Select user" }));
     expect(screen.getByRole("button", { name: "Page actions" })).toBe(compact);
@@ -163,14 +165,32 @@ describe("ContentPage context heading", () => {
     expect(screen.queryByRole("menu")).toBeNull();
   });
 
-  it("uses the same compact entry for a single command and does not create an empty menu", async () => {
+  it("runs the only command directly and does not create an empty menu", async () => {
     const user = userEvent.setup(), create = vi.fn();
     const view = render(<ContentPage.Commands label="Page actions" primary={{ id: "create", label: "Create group", onSelect: create }} />);
-    await user.click(screen.getByRole("button", { name: "Page actions" }));
-    await user.click(screen.getByRole("menuitem", { name: "Create group" }));
+    expect(screen.queryByRole("button", { name: "Page actions" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: "Create group" }));
     expect(create).toHaveBeenCalledOnce();
     view.rerender(<ContentPage.Commands label="Page actions" />);
     expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("offers the shell utility inside the compact secondary menu while the primary stays direct", async () => {
+    const user = userEvent.setup(), refresh = vi.fn(), create = vi.fn();
+    render(<ContentPage utility={{ id: "refresh", label: "Recheck permissions", icon: <span aria-hidden="true">↻</span>, onSelect: refresh }}>
+      <ContentPage.Header title="Roles" />
+      <ContentPage.Body><ContentPage.Heading title="Roles" actions={<ContentPage.Commands label="Page actions" moreLabel="More actions"
+        primary={{ id: "create", label: "Create role", onSelect: create }}
+        secondary={[{ id: "services", label: "Service authorization", onSelect() {} }]} />} /></ContentPage.Body>
+    </ContentPage>);
+    await user.click(screen.getByRole("button", { name: "Page actions" }));
+    const menu = within(screen.getByRole("menu"));
+    expect(menu.queryByRole("menuitem", { name: "Create role" })).toBeNull();
+    expect(menu.getByRole("menuitem", { name: "Service authorization" })).toBeTruthy();
+    await user.click(menu.getByRole("menuitem", { name: "Recheck permissions" }));
+    expect(refresh).toHaveBeenCalledOnce();
+    await user.click(screen.getByRole("button", { name: "Create role" }));
+    expect(create).toHaveBeenCalledOnce();
   });
 
   it("hides outgoing actions while pending and restores them on cancellation; cleans up on exit", () => {

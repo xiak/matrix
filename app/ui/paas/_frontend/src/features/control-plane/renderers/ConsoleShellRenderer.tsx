@@ -466,11 +466,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
     disabled: Boolean(pendingSelection) || accountAccess.loading,
     onSelect: accountAccess.reload
   } : undefined;
-  const headerCommands = recheckPermissions
-    ? accessView === "policies"
-      ? <Button iconOnly size="small" variant="ghost" aria-label={recheckPermissions.label} title={recheckPermissions.label}
-          disabled={recheckPermissions.disabled} onClick={recheckPermissions.onSelect}>{recheckPermissions.icon}</Button>
-      : <ContentPage.Commands label={collection("pageActions")} secondary={[recheckPermissions]} />
+  const headerCommands = recheckPermissions ? undefined
     : managedServicePage ? <ManagedServicePageActions key={`${dataOwnerKey}:${navigation.currentHref}`} focusRef={workspaceTrigger} primary={workspaceCommand} />
     : workspaceAction ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={workspaceCommand} /> : undefined;
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");
@@ -607,7 +603,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
             <button aria-hidden="true" aria-label={t("closeNavigation")} className={styles.overlayBackdrop} onClick={closeSidebarAndRestoreFocus} tabIndex={-1} type="button" />
 
             <Layout.Content>
-              <ContentPage parentLabel={pageTitle} pending={Boolean(pendingSelection)} data-navigating={pendingSelection ? "true" : undefined}>
+              <ContentPage parentLabel={pageTitle} utility={recheckPermissions} pending={Boolean(pendingSelection)} data-navigating={pendingSelection ? "true" : undefined}>
                 <Suspense fallback={<ContentPage.Header title={pageTitle} />}><ConsolePageHeader title={pageTitle} selection={pendingSelection ?? navigation.selection} pendingHref={navigation.pendingHref} navigationFocusKey={navigation.navigationFocusKey} className={styles.pageHeader}
                   leading={<Button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label={t("openNavigation")} className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} iconOnly size="small" variant="ghost"><Menu aria-hidden="true" /></Button>}
                   trailing={headerCommands}

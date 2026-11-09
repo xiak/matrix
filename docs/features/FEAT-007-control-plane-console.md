@@ -2236,27 +2236,30 @@ unlayered public-control CSS and missing CSS-module bindings. Feature selectors
 target their own label wrappers instead of recoloring descendant status badges
 or other shared controls.
 
-`ContentPage.Commands` owns responsive commands for every page-context bar:
-IAM lists/details and platform-status, quota and installation workspaces. One
-command definition keeps at most one high-frequency primary command direct on
-desktop and groups its secondary peers under one trailing More menu. A page
-without a primary command keeps one secondary command direct, but groups two or
-more secondary commands under More. At most `1200px` of available content width
-(also below a `950px` viewport for standalone headings), every command moves
-into one Page actions menu. Pages without commands show no empty menu. Titles
-keep their typography and truncate within their own slot; commands never wrap
-into another title band.
-On desktop, selection-dependent count, clear and batch commands grow toward
-the title, with Create anchored at the trailing edge. Compact menus contain
-Create and the same eligible batch commands plus Clear selection; selected
-counts remain visible beside table results. `ActionMenu` shares themed surfaces,
+`ContentPage.Commands` owns the responsive actions in IAM and service page
+headers. A single ordinary action and the declared primary action stay direct
+at every width. A wide header can show one available ordinary secondary action
+beside the primary. Unavailable peers keep their reasons in the menu.
+Additional peers, sensitive secondary commands and explicit
+menu actions such as command recovery share a More menu. A group of secondary
+commands without a designated primary also uses one menu.
+
+At a content-frame width of `32rem` or less, the primary button keeps its
+label and focus target. Secondary and selection commands share one menu,
+including the selection count, Clear selection and applicable disabled reasons.
+The IAM permission check takes an icon beside direct actions and joins an
+existing compact menu when present. As the only header action it has a visible
+label. Empty action sets leave the heading clear. Wide selection controls
+grow toward the title with Create anchored at the trailing edge. At `22rem`
+and below, long titles and translated commands can use a second line when the
+groups no longer fit side by side. If a breakpoint hides an open menu's trigger,
+the menu closes and focus returns to a visible action. `ActionMenu` shares themed surfaces,
 keyboard handling, disabled reasons and destructive separators with `TableActions`.
 Feature callbacks and access checks do not change. CSS selects the presentation
 before paint without viewport subscriptions or shell remounts; closing a context
 workspace restores the currently visible command even after a viewport change.
-Feature workflows may name the exact command ID to restore on desktop; the same
-request intentionally resolves to the visible page-action trigger in compact
-mode instead of focusing its CSS-hidden direct button.
+Feature workflows can restore focus by command ID. A direct command receives
+focus at either width. A grouped command focuses its visible menu trigger.
 The removed universal Refresh button must not be recreated per
 page; a future refresh control requires a scoped stale-data case, a visible
 freshness contract and a repository operation that does not reload unrelated IAM
@@ -4274,14 +4277,11 @@ and is not inherited as a new backend acceptance result.
   tests and vet pass. Tables, forms, dialogs, choices,
   feedback, tabs and metrics use the public controls and shared composition
   described above; source-provided data is not mistranslated as interface copy.
-  Policy-detail command composition is additionally browser-checked on desktop
-  and at 390 x 844: Associate users / groups / roles remains the single direct
-  desktop command; Edit, Copy as custom policy and Delete share one More menu;
-  and the compact Page actions menu contains the same four commands without a
-  second action row or title shift. The same public composition is exercised by
-  account live roles, own sessions and every IAM workspace collection/detail;
-  permission callbacks, disabled reasons and destructive classification remain
-  feature-owned. Source and synchronized embedded UI are fixed at `6ce077f73`.
+  Policy details keep Associate users / groups / roles directly available at
+  desktop and phone widths. Edit, Copy as custom policy and Delete share one
+  secondary menu. The same component serves live roles, own sessions and IAM
+  workspace collections and details. Each feature owns its permission checks,
+  disabled reasons and destructive classifications.
   Extended IAM tests cover group membership, inherited permissions, policy
   editing/version/association invariants, provider-role dependencies,
   enterprise visibility and ungranted member import, one-time MOCK secrets,

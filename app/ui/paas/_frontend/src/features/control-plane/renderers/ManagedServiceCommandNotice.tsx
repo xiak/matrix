@@ -92,7 +92,7 @@ export function ManagedServicePageActions({ primary, focusRef }: { primary?: Pag
   const summaryId = useId();
   const busy = managedServiceCommand?.checking || managedServiceCommand?.phase === "submitting";
   if (!commandRecoveryAvailable) return primary ? <ContentPage.Commands label={collection("pageActions")} primary={primary} focusRef={focusRef} /> : null;
-  const recovery = { id: "recover-command", label: t("recoverOriginalCommand"), onSelect: () => setOpen(true) };
+  const recovery = { id: "recover-command", label: t("recoverOriginalCommand"), overflowOnly: true, onSelect: () => setOpen(true) };
   function close() {
     setOpen(false);
     setSummary("");
@@ -106,7 +106,7 @@ export function ManagedServicePageActions({ primary, focusRef }: { primary?: Pag
   }
   return <>
     {primary ? <ContentPage.Commands label={collection("moreActions")} primary={primary} secondary={[recovery]} focusRef={focusRef} />
-      : <ActionMenu label={collection("moreActions")} actions={[recovery]} iconOnly />}
+      : <ActionMenu label={collection("moreActions")} actions={[recovery]} size="small" iconOnly />}
     {open ? <Dialog open title={recovery.label} closeLabel={t("closeRecovery")} onClose={close} footer={
       <Button disabled={!summary.trim() || busy} onClick={restore} variant="primary">{t("restoreAndInspectOriginalCommand")}</Button>
     }>

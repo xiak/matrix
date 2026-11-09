@@ -68,7 +68,10 @@ export function OwnSessionsPage() {
   const busy = sessions.loading || Boolean(sessions.revokingId) || sessions.revokingOthers;
   const unresolved = Boolean(sessions.uncertainTargetId) || sessions.uncertainOthers;
   const hasOtherSessions = Boolean(page && (page.nextCursor || page.items.some((item) => item.id !== page.currentSessionId)));
-  const actions = <ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")} secondary={[{
+  const actions = <ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")} primary={{
+    id: "refresh", label: t("refresh"), icon: <RefreshCcw aria-hidden="true" />, variant: "secondary",
+    disabled: busy, onSelect: () => { void sessions.load(activeCursor); }
+  }} secondary={[{
     id: "revoke-others",
     label: t("endOthers"),
     icon: <LogOut aria-hidden="true" />,
@@ -76,12 +79,6 @@ export function OwnSessionsPage() {
     disabled: busy || unresolved || !hasOtherSessions,
     disabledReason: unresolved ? t("resolveUncertainFirst") : !hasOtherSessions ? t("noOtherSessions") : undefined,
     onSelect: () => { sessions.clearFeedback(); setConfirmingOthers(true); setConfirmingId(null); }
-  }, {
-    id: "refresh",
-    label: t("refresh"),
-    icon: <RefreshCcw aria-hidden="true" />,
-    disabled: busy,
-    onSelect: () => { void sessions.load(activeCursor); }
   }]} />;
 
   return <section aria-label={t("title")} aria-busy={busy} className={styles.root}>

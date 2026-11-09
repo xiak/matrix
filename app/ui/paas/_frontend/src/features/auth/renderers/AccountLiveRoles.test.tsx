@@ -62,8 +62,7 @@ const liveSessionItem = {
 };
 
 async function openServiceAuthorization(user: ReturnType<typeof userEvent.setup>) {
-  await user.click(await screen.findByRole("button", { name: "更多操作" }));
-  await user.click(within(await screen.findByRole("menu", { name: "更多操作" })).getByRole("menuitem", { name: "服务授权" }));
+  await user.click(await screen.findByRole("button", { name: "服务授权" }));
 }
 async function chooseRoleBoundary(user: ReturnType<typeof userEvent.setup>, label: string) {
   await user.click(screen.getByRole("combobox", { name: "权限边界" }));

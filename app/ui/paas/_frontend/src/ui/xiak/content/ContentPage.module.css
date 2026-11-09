@@ -25,19 +25,25 @@
   background: var(--xiak-color-bg-header);
 }
 
-.headerContent { display: flex; min-width: 0; flex: 1; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
+.headerContent { display: flex; min-width: 0; flex: 1; align-items: center; gap: var(--xiak-spacing-default); }
+.headerControls { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: var(--xiak-spacing-tight); }
+.headerControls:not(:has(> .utilityCommand, > .headerActions:not([hidden], :empty))) { display: none; }
 .headerActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; max-width: 100%; flex: none; }
 .headerActions:empty, .headerActions[hidden] { display: none; }
-.commandBar, .expandedCommands { display: flex; min-width: 0; align-items: center; gap: var(--xiak-spacing-tight); }
-.expandedCommands > button { flex: none; }
-.desktopOverflowCommand { flex: none; }
-.expandedCommands > [data-danger="true"]:not(:disabled) { color: var(--xiak-color-danger-text); }
+.commandBar { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: var(--xiak-spacing-tight); }
+.expandedCommands { display: contents; }
+.directCommand { min-width: 0; }
+.directCommand > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commandBar [data-danger="true"]:not(:disabled) { color: var(--xiak-color-danger-text); }
 .commandBar > .overflowCommand { display: none; }
+.utilityCommand { flex: none; }
+.headerControls:has(> .headerActions:not([hidden], :empty)) > .utilityCommand { width: var(--xiak-control-height-small); padding-inline: 0; }
+.headerControls:has(> .headerActions:not([hidden], :empty)) > .utilityCommand > span { display: none; }
 .identity { display: flex; flex: 1; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; }
 .parentLink { flex: none; }
 .separator { flex: none; width: var(--xiak-font-size-small); height: var(--xiak-font-size-small); color: var(--xiak-color-text-subtle); }
 .title { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-page-context); font-weight: var(--xiak-font-weight-semibold); outline: none; }
-.standaloneHeading { display: flex; min-width: 0; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-default); }
+.standaloneHeading { container: matrix-content-frame / inline-size; display: flex; min-width: 0; justify-content: space-between; align-items: center; gap: var(--xiak-spacing-default); }
 
 .body {
   --xiak-scroll-inset: var(--xiak-spacing-comfortable);
@@ -65,17 +71,28 @@
   }
 
   .headerContent { gap: var(--xiak-spacing-tight); }
-  .commandBar > .expandedCommands { display: none; }
-  .commandBar > .overflowCommand { display: inline-flex; }
 
   .body {
     --xiak-scroll-inset: var(--xiak-spacing-comfortable);
     --xiak-scroll-inset-inline: var(--xiak-spacing-default);
   }
 }
-@container matrix-content-frame (max-width: 60rem) {
+@container matrix-content-frame (max-width: 32rem) {
   .commandBar > .expandedCommands { display: none; }
   .commandBar > .overflowCommand { display: inline-flex; }
+  .commandBar { gap: var(--xiak-spacing-narrow); }
+  .directCommand { max-width: 44cqi; }
+  .headerControls:has(.headerActions:not([hidden]) .commandBar[data-fold-utility="true"]) > .utilityCommand { display: none; }
+  .parentLink { width: var(--xiak-control-height-small); padding-inline: 0; }
+  .parentLink > span, .separator { display: none; }
+}
+@container matrix-content-frame (max-width: 22rem) {
+  .header { flex-wrap: wrap; row-gap: var(--xiak-spacing-narrow); padding-block: var(--xiak-spacing-narrow); }
+  .header, .headerContent, .headerControls { column-gap: var(--xiak-spacing-narrow); }
+  .headerContent { flex-basis: auto; max-width: 100%; }
+  .headerControls { margin-inline-start: auto; }
+  .directCommand { max-width: calc(100cqi - 5rem); }
+  .directCommand > span { white-space: normal; overflow-wrap: anywhere; }
 }
 @media (max-width: 37.5em) {
   .parentLink { width: var(--xiak-control-height-small); padding-inline: 0; }
