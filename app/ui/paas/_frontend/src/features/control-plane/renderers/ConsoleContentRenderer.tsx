@@ -826,7 +826,8 @@ function AccessContent({ pendingHref, view }: { pendingHref?: string | null; vie
   const policyMethod = view === "create-policy" ? params.get("method") ?? undefined : undefined;
   const requestedUserTab = view === "users" ? params.get("tab") : null;
   const userTab = requestedUserTab && ["identity", "access", "policies", "groups", "security", "keys"].includes(requestedUserTab) ? requestedUserTab as AccountUserDetailTab : undefined;
-  return <AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "") + ":" + (userTab ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} userTab={userTab} onNavigate={(next, id, method, nextUserTab) => {
+  const viewKey = view === "policies" ? view : [view, entityId, policyMethod, userTab].join(":");
+  return <AccountAccessRenderer key={viewKey} view={view} entityId={entityId} policyMethod={policyMethod} userTab={userTab} onNavigate={(next, id, method, nextUserTab) => {
     const query = new URLSearchParams();
     if (id) query.set("id", id);
     if (next === "create-policy" && method) query.set("method", method);

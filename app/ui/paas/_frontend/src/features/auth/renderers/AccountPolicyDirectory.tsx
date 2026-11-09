@@ -211,19 +211,22 @@ function VersionMutationReview({ review, policy, versions, busy, blocked, error,
 
 function PolicyStatementTable({ version }: { version: AccountPolicyVersion }) {
   const t = useTranslations("AccountPolicyDirectory");
-  return <section className={styles.catalogNotice}>
+  return <section className={styles.policyStatements}>
     <h3 className={styles.stepTitle}>{t("statementTitle", { count: version.document.statements.length })}</h3>
     <Table aria-label={t("statementTable")} mobileLayout="stack" className={styles.policyStatementTable}>
-      <thead><tr><th scope="col">{t("statement")}</th><th scope="col">{t("effect")}</th><th scope="col">{t("declaredActions")}</th><th scope="col">{t("resources")}</th><th scope="col">{t("conditions")}</th></tr></thead>
+      <thead><tr><th scope="col">{t("effect")}</th><th scope="col">{t("declaredActions")}</th><th scope="col">{t("resources")}</th><th scope="col">{t("conditions")}</th><th scope="col">{t("statement")}</th></tr></thead>
       <tbody>{version.document.statements.map((statement) => {
         const resolved = version.compilation?.resolvedStatements.find((entry) => entry.sid === statement.sid);
         return <tr key={statement.sid}>
-          <td data-label={t("statement")}><code>{statement.sid}</code></td>
           <td data-label={t("effect")}><Badge status={statement.effect === "DENY" ? "danger" : "success"}>{t(statement.effect === "DENY" ? "deny" : "allow")}</Badge></td>
           <td data-label={t("declaredActions")}><div className={styles.policyStackedValues}>{statement.actions.map((action) => <code key={action}>{action}</code>)}
-            {resolved ? <div className={styles.policyResolved}><strong>{t("frozenActions")}</strong>{resolved.actions.map((action) => <code key={action}>{action}</code>)}</div> : null}</div></td>
+            {resolved ? <details className={styles.trustDocuments}>
+              <summary>{t("frozenActions", { count: resolved.actions.length })}</summary>
+              <div className={styles.policyStackedValues}>{resolved.actions.map((action) => <code key={action}>{action}</code>)}</div>
+            </details> : null}</div></td>
           <td data-label={t("resources")}><div className={styles.policyStackedValues}>{statement.resources.map((resource) => <code key={`${resource.kind}:${resource.match}:${resource.id ?? ""}`}>{resource.kind} · {t(`matches.${resource.match}`)}{resource.id ? ` · ${resource.id}` : ""}</code>)}</div></td>
           <td data-label={t("conditions")}><div className={styles.policyStackedValues}>{statement.conditions?.map((condition) => <code key={`${condition.key}:${condition.operator}`}>{condition.key} · {condition.operator} · {condition.values.join(", ")}</code>) ?? t("none")}</div></td>
+          <td data-label={t("statement")}><code>{statement.sid}</code></td>
         </tr>;
       })}</tbody>
     </Table>
@@ -253,13 +256,16 @@ function PolicyCompilationProvenance({ version }: { version: AccountPolicyVersio
 function PolicyVersionDocument({ version, title }: { version: AccountPolicyVersion; title: string }) {
   const t = useTranslations("AccountPolicyDirectory");
   return <section className={styles.catalogNotice} aria-label={title}>
-    <div className={styles.catalogDetailHeading}><h2>{title}</h2><Badge>{t("contractVersion", { version: version.contractVersion })}</Badge></div>
-    <p className={styles.note}>{t("documentNotice")}</p>
-    <dl className={styles.catalogFacts}>
-      <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><code>{version.contentDigest}</code></dd></div>
-    </dl>
-    <PolicyCompilationProvenance version={version} />
+    <div className={styles.catalogDetailHeading}><h2>{title}</h2></div>
     <PolicyStatementTable version={version} />
+    <details className={styles.trustDocuments}>
+      <summary>{t("versionEvidence")}</summary>
+      <dl className={styles.catalogFacts}>
+        <div><dt>{t("versionContract")}</dt><dd>{t("contractVersion", { version: version.contractVersion })}</dd></div>
+        <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><code>{version.contentDigest}</code></dd></div>
+      </dl>
+      <PolicyCompilationProvenance version={version} />
+    </details>
     <details className={styles.policyRawDocument}><summary>{t("rawDocument")}</summary><pre tabIndex={0}>{JSON.stringify(version.document, null, 2)}</pre></details>
   </section>;
 }
@@ -591,13 +597,18 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
   const onVersionApplied = () => setRevision((value) => value + 1);
   return <WorkspaceDetail title={source?.displayName ?? policyId} onBack={onBack} actionFocusRef={actionFocus} actions={metadataActions}>
     <p className={styles.note}>{t("detailNotice")}</p>
-    <dl className={styles.catalogFacts}>
-      <div><dt>{t("policyId")}</dt><dd><code>{policyId}</code></dd></div>
-      {source ? <><div><dt>{t("management")}</dt><dd>{t(source.management === "SYSTEM" ? "system" : "customer")}</dd></div>
-      <div><dt>{t("scope")}</dt><dd>{t(source.scope === "TENANT" ? "tenant" : "installation")}</dd></div>
-      <div><dt>{t("defaultVersion")}</dt><dd><code>{detail?.version.versionId ?? source.defaultVersionId}</code></dd></div>
-      <div><dt>{t("updated")}</dt><dd><WorkspaceTime value={detail?.policy.updatedAt ?? source.updatedAt} /></dd></div></> : null}
-    </dl>
+    <details className={styles.trustDocuments} open={source?.scope === "INSTALLATION" || state.status === "forbidden" || undefined}>
+      <summary>{t("policyInformation")}</summary>
+      <dl className={styles.catalogFacts}>
+        <div><dt>{t("policyId")}</dt><dd><code>{policyId}</code></dd></div>
+        {source ? <>
+          <div><dt>{t("management")}</dt><dd>{t(source.management === "SYSTEM" ? "system" : "customer")}</dd></div>
+          <div><dt>{t("scope")}</dt><dd>{t(source.scope === "TENANT" ? "tenant" : "installation")}</dd></div>
+          <div><dt>{t("defaultVersion")}</dt><dd><code>{detail?.version.versionId ?? source.defaultVersionId}</code></dd></div>
+          <div><dt>{t("updated")}</dt><dd><WorkspaceTime value={detail?.policy.updatedAt ?? source.updatedAt} /></dd></div>
+        </> : null}
+      </dl>
+    </details>
     {source?.management === "CUSTOMER" && source.scope === "TENANT" && Boolean(displayAccess && policyCapability(displayAccess.capabilities, "iam.policy-version.list", policyId)?.available) && client?.listVersions && client.readVersion ?
       <Tabs.Root value={section} onValueChange={(next) => { setSection(next); if (next === "versions") setVersionsMounted(true); }}>
         <Tabs.List aria-label={t("detailSections")}><Tabs.Trigger value="document">{t("defaultDocument")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versionsTab")}</Tabs.Trigger></Tabs.List>
@@ -659,7 +670,7 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
       authorityPending={access.authorityPending} refreshRevision={refreshRevision} onMetadataApplied={onMetadataApplied} onVersionConflict={onApplied} onBack={() => onOpen()} /></>;
 
   return <>{metadataRecovery}{recovery}{createRecovery}<Card>
-    <ContentPage.Heading title={t("title")} scrollKey="policy-directory" actions={access.policyCreate ?
+    <ContentPage.Heading title={t("title")} scrollKey="policy-directory" actions={section === "policies" && access.policyCreate ?
       <ContentPage.Commands label={collection("pageActions")} primary={{ id: "create", label: t("createPolicy"), icon: <Plus aria-hidden="true" />,
         disabled: Boolean(access.policyCreate.pending), onSelect: onCreate }} /> : undefined} />
     <Tabs.Root value={section} onValueChange={(next) => { setSection(next); if (next === "profiles") setCatalogMounted(true); }}>
@@ -667,11 +678,7 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
         <Tabs.Trigger value="policies">{t("policiesTab")}</Tabs.Trigger>
         <Tabs.Trigger value="profiles">{t("profilesTab")}</Tabs.Trigger>
       </Tabs.List>
-      <Tabs.Content value="policies">
-        <div className={styles.policyDirectoryIntro}>
-          <p>{t("description")}</p>
-          <p>{t("managementSnapshot")}</p>
-        </div>
+      <Tabs.Content value="policies" className={styles.policyListPanel}>
         {partial ? <Alert status="warning">{t(scene.tenantPoliciesAvailable ? "platformUnavailable" : "tenantUnavailable")}</Alert> : null}
         <TableToolbar labels={toolbarLabels}
           search={{ label: t("search"), placeholder: t("searchPlaceholder"), value: query, onChange: (value) => change(() => setQuery(value)) }}
@@ -682,17 +689,16 @@ export function AccountPolicyDirectory({ scene, entityId, onOpen, onCreate }: { 
             { id: "status", label: t("status"), value: status, onChange: (value) => change(() => setStatus(value)), options: [{ value: "all", label: t("all") }, { value: "ACTIVE", label: t("active") }, { value: "RETIRED", label: t("retired") }] }
           ]} />
         {failedDirectory ? <AccountDirectoryReadFailure kind={failedDirectory} /> : rows.length ? <Table aria-label={t("table")} className={styles.policyMetadataTable} mobileLayout="grid">
-          <thead><tr><th scope="col">{t("policy")}</th><th scope="col">{t("management")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("status")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
+          <thead><tr><th scope="col">{t("policy")}</th><th scope="col">{t("management")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("status")}</th><th scope="col">{t("updated")}</th></tr></thead>
           <tbody>{rows.map((policy) => <tr key={policy.id}>
-            <td data-label={t("policy")}><Table.PrimaryAction onClick={() => onOpen(policy.id)}>{policy.displayName}</Table.PrimaryAction><small className={styles.userIdentifier}>{policy.id}</small></td>
-            <td data-label={t("management")}><Badge>{t(policy.management === "SYSTEM" ? "system" : "customer")}</Badge></td>
+            <td data-label={t("policy")}><Table.PrimaryAction onClick={() => onOpen(policy.id)} title={policy.id}>{policy.displayName}</Table.PrimaryAction></td>
+            <td data-label={t("management")}>{t(policy.management === "SYSTEM" ? "system" : "customer")}</td>
             <td data-label={t("scope")}>{t(policy.scope === "TENANT" ? "tenant" : "installation")}</td>
             <td data-label={t("status")}><Badge status={policy.status === "ACTIVE" ? "success" : "neutral"}>{t(policy.status === "ACTIVE" ? "active" : "retired")}</Badge></td>
-            <td data-label={t("defaultVersion")}><Table.Identifier value={policy.defaultVersionId} /></td>
-            <td data-label={t("updated")} data-mobile-span="full"><WorkspaceTime compact value={policy.updatedAt} /></td>
+            <td data-label={t("updated")}><WorkspaceTime compact value={policy.updatedAt} /></td>
           </tr>)}</tbody>
         </Table> : <EmptyState title={t(scene.policies.length ? "noResults" : "empty")} description={t(scene.policies.length ? "noResultsHint" : "emptyHint")} action={scene.policies.length ? <Button variant="secondary" onClick={reset}>{toolbarLabels.resetQuery}</Button> : undefined} />}
-        <Table.Footer note={failedDirectory ? undefined : t("completeSnapshot", { count: scene.policies.length })}>{failedDirectory ? null : <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />}</Table.Footer>
+        {!failedDirectory && scene.policies.length > 10 ? <Table.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer> : null}
       </Tabs.Content>
       <Tabs.Content forceMount={catalogMounted || undefined} value="profiles">{catalogMounted ? <AccountAuthorizationProfileCatalog /> : null}</Tabs.Content>
     </Tabs.Root>

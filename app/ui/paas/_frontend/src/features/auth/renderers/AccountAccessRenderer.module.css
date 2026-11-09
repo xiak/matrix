@@ -314,11 +314,13 @@
 .userDirectoryNotes p { margin: 0; overflow-wrap: anywhere; }
 .policyDirectoryIntro { display: grid; gap: var(--xiak-spacing-narrow); padding: 0 var(--xiak-panel-padding) var(--xiak-spacing-default); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: 1.65; }
 .policyDirectoryIntro p { margin: 0; }
-.policyMetadataTable th:first-child { width: 29%; }
+.policyListPanel { padding-block-start: 0; }
+.policyMetadataTable th:first-child { width: 38%; }
 .policyMetadataTable :is(th, td):nth-child(3) { overflow-wrap: normal; word-break: keep-all; }
-.policyMetadataTable th:nth-child(5) { width: 17%; }
-.policyMetadataTable th:last-child { width: 16%; }
-.policyStatementTable th:nth-child(3) { width: 32%; }
+.policyMetadataTable th:last-child { width: 20%; }
+.policyMetadataTable td:last-child, .catalogProductTable td:last-child { color: var(--xiak-color-text-muted); font-weight: var(--xiak-font-weight-regular); }
+.policyStatements { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
+.policyStatementTable th:nth-child(2) { width: 32%; }
 .policyCompilation { display: grid; min-width: 0; gap: var(--xiak-spacing-default); padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel-hover); }
 .policyCompilationTable { background: var(--xiak-color-bg-panel); }
 .policyCompilationTable th:first-child { width: 22%; }
@@ -338,8 +340,6 @@
 .policyVisualFailure { display: grid; justify-items: start; gap: var(--xiak-spacing-default); }
 .policyStatementTable code, .policyRawDocument code { overflow-wrap: anywhere; white-space: normal; }
 .policyStackedValues { display: grid; gap: var(--xiak-spacing-narrow); min-width: 0; overflow-wrap: anywhere; }
-.policyResolved { display: grid; gap: var(--xiak-spacing-narrow); padding-top: var(--xiak-spacing-tight); border-top: var(--xiak-border-subtle); }
-.policyResolved strong { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
 .policyRawDocument { min-width: 0; }
 .policyRawDocument summary { cursor: pointer; color: var(--xiak-color-accent-text); }
 .policyRawDocument pre { max-height: 27.5rem; overflow: auto; padding: var(--xiak-spacing-default); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-small); background: var(--xiak-color-bg-panel-hover); font-size: var(--xiak-font-size-small); }
@@ -408,7 +408,7 @@
 .catalogDetailSection { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); padding: 0 var(--xiak-panel-padding) var(--xiak-panel-padding); }
 .catalogNotice { display: grid; gap: var(--xiak-spacing-default); padding: 0 var(--xiak-panel-padding) var(--xiak-spacing-comfortable); border-bottom: var(--xiak-border-subtle); }
 .catalogSection[data-surface="platform-preview"] .catalogNotice { padding-block-start: var(--xiak-panel-padding); }
-.catalogNoticeHeader { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
+.catalogGuide { margin: 0; padding-inline: var(--xiak-panel-padding); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-compact); }
 .catalogDetailHeading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); }
 .catalogDetailHeading h2 { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-title); overflow-wrap: anywhere; }
 .catalogDetailHeading h2:focus { outline: none; }
@@ -418,11 +418,9 @@
 .catalogFacts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
 .catalogFacts .catalogDigest { grid-column: 1 / -1; }
 .catalogFacts code { white-space: normal; overflow-wrap: anywhere; }
-.catalogProductTable th:first-child { min-width: 11.25rem; }
-.catalogProductTable th:last-child { min-width: 11.25rem; }
+.catalogProductTable th:first-child { width: 30%; }
 .catalogBadges { display: flex; flex-wrap: wrap; gap: var(--xiak-spacing-narrow); }
 .badgeRow { display: inline-flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--xiak-spacing-narrow); }
-.catalogDigestShort { font-size: var(--xiak-font-size-small); }
 
 @media (max-width: 46.875em) {
   .catalogDetailSection { padding-inline: var(--xiak-spacing-default); }

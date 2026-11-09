@@ -162,29 +162,7 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
       <h2 ref={selectedHeading} tabIndex={-1}>{selected.profile.product}</h2>
       {client.preview ? <Badge status="warning">{t("mock")}</Badge> : null}
     </div>
-    <p className={styles.note}>{t("detailHint")}</p>
-    <p className={styles.note}>{t("admissionHint")}</p>
-    <dl className={styles.catalogFacts}>
-      <div><dt>{t("revision")}</dt><dd>{selected.profile.revision}</dd></div>
-      <div><dt>{t("callingService")}</dt><dd>{selected.profile.callingService}</dd></div>
-      <div><dt>{t("actions")}</dt><dd>{selected.profile.actions.length}</dd></div>
-      <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><code>{selected.contentDigest}</code></dd></div>
-    </dl>
     {selected.profile.actions.some((action) => action.scope !== "TENANT") ? <Alert status="warning">{t("platformScopeHint")}</Alert> : null}
-    <AuthorizationOwnershipFlow
-      title={t("responsibility.title")}
-      hint={t("responsibility.hint")}
-      steps={(["product", "iam", "tenant"] as const).map((owner) => ({
-        id: owner,
-        badge: t(`responsibility.${owner}.badge`),
-        title: t(`responsibility.${owner}.title`),
-        hint: t(`responsibility.${owner}.hint`),
-        status: owner === "product" ? "info" as const : owner === "iam" ? "warning" as const : "success" as const,
-        action: owner === "iam" && publishingEnabled
-          ? <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreviewOwner(client)}>{t("previewPublishing")}</Button>
-          : undefined
-      }))}
-    />
     <TableToolbar labels={toolbarLabels}
       search={{ label: t("searchActions"), placeholder: t("searchActionsPlaceholder"), value: actionQuery, onChange: (value) => { setActionQuery(value); setPage(1); } }}
       filters={[
@@ -209,7 +187,32 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
       status={t("actionCount", { count: filteredActions.length })} />
     {visibleActions.length ? <AuthorizationActionTable actions={visibleActions} label={t("actionTable", { product: selected.profile.product })} />
       : <EmptyState title={t("noActions")} description={t("noActionsHint")} action={<Button variant="secondary" onClick={resetActions}>{toolbarLabels.resetQuery}</Button>} />}
-    <Table.Footer note={t("completeActions", { count: selected.profile.actions.length })}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+    {selected.profile.actions.length > 10 ? <Table.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer> : null}
+    <details className={styles.trustDocuments} open={publishingEnabled || undefined}>
+      <summary>{t("declarationInformation")}</summary>
+      <p className={styles.note}>{t("detailHint")}</p>
+      <p className={styles.note}>{t("admissionHint")}</p>
+      <dl className={styles.catalogFacts}>
+        <div><dt>{t("revision")}</dt><dd>{selected.profile.revision}</dd></div>
+        <div><dt>{t("callingService")}</dt><dd>{selected.profile.callingService}</dd></div>
+        <div><dt>{t("actions")}</dt><dd>{selected.profile.actions.length}</dd></div>
+        <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><code>{selected.contentDigest}</code></dd></div>
+      </dl>
+      <AuthorizationOwnershipFlow
+        title={t("responsibility.title")}
+        hint={t("responsibility.hint")}
+        steps={(["product", "iam", "tenant"] as const).map((owner) => ({
+          id: owner,
+          badge: t(`responsibility.${owner}.badge`),
+          title: t(`responsibility.${owner}.title`),
+          hint: t(`responsibility.${owner}.hint`),
+          status: owner === "product" ? "info" as const : owner === "iam" ? "warning" as const : "success" as const,
+          action: owner === "iam" && publishingEnabled
+            ? <Button ref={publishingTrigger} variant="secondary" size="small" onClick={() => setPublishingPreviewOwner(client)}>{t("previewPublishing")}</Button>
+            : undefined
+        }))}
+      />
+    </details>
   </section>;
 
   const resetProducts = () => {
@@ -242,7 +245,7 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
       {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => load()}>{t("retry")}</Button></div> : null}
     </> : null}
     {state.status === "ready" ? <>{visibleProducts.length ? <Table aria-label={t("table")} mobileLayout="stack" className={styles.catalogProductTable}>
-      <thead><tr><th scope="col">{t("product")}</th><th scope="col">{t("callingService")}</th><th scope="col">{t("revision")}</th><th scope="col">{t("actions")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("digest")}</th></tr></thead>
+      <thead><tr><th scope="col">{t("product")}</th><th scope="col">{t("actions")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("callingService")}</th></tr></thead>
       <tbody>{visibleProducts.map((entry) => {
         const scopes = [...new Set(entry.profile.actions.map((action) => action.scope))];
         return <tr key={entry.profile.product}>
@@ -253,26 +256,22 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
             }}
             onClick={() => open(entry)}
           >{entry.profile.product}</Table.PrimaryAction></td>
-          <td data-label={t("callingService")}>{entry.profile.callingService}</td>
-          <td data-label={t("revision")}>{entry.profile.revision}</td>
           <td data-label={t("actions")}>{entry.profile.actions.length}</td>
           <td data-label={t("scope")}><div className={styles.catalogBadges}>{scopes.map((scope) => <Badge status={scopeStatus(scope)} key={scope}>{t(`scopes.${scope}`)}</Badge>)}</div></td>
-          <td data-label={t("digest")}><code className={styles.catalogDigestShort} title={entry.contentDigest}>{entry.contentDigest.slice(0, 18)}…</code></td>
+          <td data-label={t("callingService")}>{entry.profile.callingService}</td>
         </tr>;
       })}</tbody>
     </Table> : <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={resetProducts}>{toolbarLabels.resetQuery}</Button>} />}
-    <Table.Footer note={t("completeProducts", { count: entries.length })}><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer></> : null}
+    {entries.length > 10 ? <Table.Footer><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer> : null}</> : null}
   </section>;
 }
 
 function CatalogNotice({ preview, publishingPreview }: { preview: boolean; publishingPreview: boolean }) {
   const t = useTranslations("AuthorizationProfileCatalog");
   const publishing = useTranslations("AuthorizationProfilePublishingPreview");
+  if (!preview) return <p className={styles.catalogGuide}>{t("notice")}</p>;
   return <div className={styles.catalogNotice}>
-    <div className={styles.catalogNoticeHeader}>
-      <h2 className={styles.detailTitle}>{t("title")}</h2>
-      <p className={styles.note}>{t("ownershipHint")}</p>
-    </div>
-    <Alert status={publishingPreview ? "warning" : preview ? "warning" : "info"}>{publishingPreview ? publishing("workspaceBoundary") : t(preview ? "mockNotice" : "notice")}</Alert>
+    {publishingPreview ? <h2 className={styles.detailTitle}>{t("title")}</h2> : null}
+    <Alert status="warning">{publishingPreview ? publishing("workspaceBoundary") : t("mockNotice")}</Alert>
   </div>;
 }

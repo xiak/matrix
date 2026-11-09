@@ -459,14 +459,18 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
     onSelect: toggleWorkspaceWithFocus, variant: workspaceVisible || !workspaceAction.primary ? "secondary" : "primary"
   } : undefined;
   const managedServicePage = !roleBlocked && productReady && !pendingSelection && ["catalog", "quotas", "installations"].includes(frame.section);
-  const headerCommands = frame.section === "access" && !frame.preview && roleSession.mode === "USER" && accessView !== "sessions" && accessView !== "role-access"
-    ? <ContentPage.Commands label={collection("pageActions")} secondary={[{
-        id: "refresh-iam-permissions",
-        label: accountText(accountAccess.loading ? "refreshingPermissions" : "refreshPermissions"),
-        icon: <RefreshCcw aria-hidden="true" />,
-        disabled: Boolean(pendingSelection) || accountAccess.loading,
-        onSelect: accountAccess.reload
-      }]} />
+  const recheckPermissions = frame.section === "access" && !frame.preview && roleSession.mode === "USER" && accessView !== "sessions" && accessView !== "role-access" ? {
+    id: "refresh-iam-permissions",
+    label: accountText(accountAccess.loading ? "refreshingPermissions" : "refreshPermissions"),
+    icon: <RefreshCcw aria-hidden="true" />,
+    disabled: Boolean(pendingSelection) || accountAccess.loading,
+    onSelect: accountAccess.reload
+  } : undefined;
+  const headerCommands = recheckPermissions
+    ? accessView === "policies"
+      ? <Button iconOnly size="small" variant="ghost" aria-label={recheckPermissions.label} title={recheckPermissions.label}
+          disabled={recheckPermissions.disabled} onClick={recheckPermissions.onSelect}>{recheckPermissions.icon}</Button>
+      : <ContentPage.Commands label={collection("pageActions")} secondary={[recheckPermissions]} />
     : managedServicePage ? <ManagedServicePageActions key={`${dataOwnerKey}:${navigation.currentHref}`} focusRef={workspaceTrigger} primary={workspaceCommand} />
     : workspaceAction ? <ContentPage.Commands label={collection("pageActions")} focusRef={workspaceTrigger} primary={workspaceCommand} /> : undefined;
   const loadingLabel = pendingSelection || !scene ? t("openingPage", { name: pageTitle }) : t("refreshingPage");

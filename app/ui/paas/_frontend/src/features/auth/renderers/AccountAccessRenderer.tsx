@@ -260,7 +260,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "tenants" && access.accountLifecycle ? <LiveAccountTenants client={access.accountLifecycle} scene={scene} /> :
       view === "tenants" ? <TenantDirectory scene={scene} /> :
       view === "settings" ? <><SettingsSectionNav preview={Boolean(workspace)} /><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : <><LivePersonalSecuritySettings /><LiveAccountSecuritySettings client={access.accountSecuritySettings} /></>}</> :
-      view === "policies" && !workspace ? <AccountPolicyDirectory scene={scene} entityId={entityId} onOpen={(id) => onNavigate("policies", id)} onCreate={() => onNavigate("create-policy")} /> :
+      view === "policies" && !workspace ? <AccountPolicyDirectory key={`${scene.accountId}:${session.sessionRevision}`} scene={scene} entityId={entityId} onOpen={(id) => onNavigate("policies", id)} onCreate={() => onNavigate("create-policy")} /> :
       view === "create-policy" && !workspace && access.policyCreate ? <LivePolicyCreationWizard client={access.policyCreate}
         authorizationPending={access.loading} onBack={() => onNavigate("policies")} onDone={(id) => onNavigate("policies", id)} /> :
       view === "policy-language" && workspace ? <LivePolicyCreationWizard preview onBack={() => onNavigate("policies")} /> :
