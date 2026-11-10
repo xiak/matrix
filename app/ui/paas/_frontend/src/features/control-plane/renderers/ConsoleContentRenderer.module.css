@@ -96,32 +96,6 @@
   outline: none;
 }
 
-.installationFacts {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 0;
-  border-block: var(--xiak-border-subtle);
-}
-
-.installationFacts > div {
-  display: grid;
-  min-width: 0;
-  gap: var(--xiak-spacing-narrow);
-  padding: var(--xiak-spacing-default);
-}
-
-.installationFacts dt {
-  color: var(--xiak-color-text-muted);
-  font-size: var(--xiak-font-size-small);
-}
-
-.installationFacts dd {
-  min-width: 0;
-  margin: 0;
-  color: var(--xiak-color-text-strong);
-  font-weight: var(--xiak-font-weight-semibold);
-  overflow-wrap: anywhere;
-}
 
 .authorizationCard {
   overflow: hidden;
@@ -608,14 +582,6 @@
   .detailHeading > :last-child {
     grid-column: 2;
     justify-self: start;
-  }
-
-  .installationFacts {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .installationFacts > div + div {
-    border-top: var(--xiak-border-subtle);
   }
 
   .authorizationHeading {

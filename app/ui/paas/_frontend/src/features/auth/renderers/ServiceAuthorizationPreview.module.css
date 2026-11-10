@@ -1,5 +1,5 @@
 .root { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); }
-.stack { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); }
+.stack:not([hidden]) { display: grid; min-width: 0; gap: var(--xiak-spacing-comfortable); }
 .summary { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--xiak-spacing-default); }
 .summary p, .sectionHeading p, .cardBody p, .boundaries p, .lead, .note { margin: 0; color: var(--xiak-color-text-muted); line-height: 1.65; }
 .sectionHeading h3, .cardHeading h3, .cardHeading h4 { margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
@@ -22,7 +22,6 @@
 .observationHeading h4 { margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
 .cardBody { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
 .cardBody code { overflow-wrap: anywhere; white-space: normal; }
-.observationGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-comfortable); }
 .facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-comfortable); margin: 0; padding-block: var(--xiak-spacing-default); border-block: var(--xiak-border-subtle); }
 .facts > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .facts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); overflow-wrap: anywhere; }
@@ -90,7 +89,7 @@
 @media (max-width: 46.875em) {
   .summary { align-items: flex-start; flex-direction: column; }
   .badges { justify-content: flex-start; }
-  .detailGrid, .facts, .observationGrid { grid-template-columns: minmax(0, 1fr); }
+  .detailGrid, .facts { grid-template-columns: minmax(0, 1fr); }
   .permissionStatement dl { grid-template-columns: minmax(0, 1fr); }
   .sectionHeading { flex-direction: column; }
   .stateBadges { justify-content: flex-start; }

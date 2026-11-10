@@ -3,7 +3,7 @@
 import { useDirectoryTab } from "@/features/control-plane/routes/ConsoleNavigation";
 import { useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { ActionMenu, Alert, Badge, Button, EmptyState, FormField, Table, TablePagination, TableToolbar, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, Card, EmptyState, FormField, Table, TablePagination, TableToolbar, Tabs, TextArea, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { policyUsageCounts, policyVersionLimit, type AccessPolicy, type AccessWorkspace } from "../domain/accessWorkspace";
@@ -137,13 +137,13 @@ function PolicyUseSection({ title, hint, empty, subjects, onOpen }: { title: str
     <h3>{title} ({subjects.length})</h3>
     <p className={styles.note}>{hint}</p>
     {subjects.length ? <>
-      <TableToolbar labels={toolbarLabels} search={{ label: t("usageSearch"), placeholder: t("usageSearchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
-        status={t("usageResults", { shown: filtered.length, total: subjects.length })} />
+      {(subjects.length > 1 || query || deferredQuery) && <TableToolbar labels={toolbarLabels} search={{ label: t("usageSearch"), placeholder: t("usageSearchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
+        status={t("usageResults", { shown: filtered.length, total: subjects.length })} />}
       {visible.length ? <Table aria-label={title} aria-busy={filtering || undefined} mobileLayout="stack"><thead><tr><th scope="col">{t("name")}</th><th scope="col">{t("type")}</th></tr></thead><tbody>{visible.map((subject) => <tr key={subject.view + subject.id}><td data-label={t("name")}><Table.PrimaryAction disabled={filtering} onClick={() => onOpen(subject.view, subject.id)}>{subject.name}</Table.PrimaryAction></td><td data-label={t("type")}>{t(subject.view === "users" ? "subusers" : subject.view)}</td></tr>)}</tbody></Table>
         : <EmptyState title={t("noResults")} description={t("noResultsHint")} action={<Button onClick={clearSearch} variant="secondary">{toolbarLabels.resetQuery}</Button>} />}
-      <Table.Footer note={t("usagePageHint")}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={filtering}
+      {subjects.length > 10 && <Table.Footer note={t("usagePageHint")}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={filtering}
         onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
-        labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+        labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>}
     </> : <p className={styles.note}>{empty}</p>}
   </section>;
 }
@@ -168,7 +168,7 @@ function PolicyUses({ policyId, workspace, scene, onOpen }: { policyId: string; 
 export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }: { workspace: AccessWorkspace; scene: AccountAccessScene; entityId?: string; onCreate(method: PolicyCreationMethod): void; onOpen(view: AccountAccessView, id?: string): void }) {
   const t = useTranslations("IamWorkspace");
   const p = useTranslations("PolicyWizard");
-  const summary = useTranslations("PolicyWorkspace");
+  const summary = useTranslations("AccountPolicyDirectory");
   const describe = usePolicyDescription();
   const access = useAccountAccess();
   const [editing, setEditing] = useState<{ policy?: AccessPolicy; copy?: boolean } | null>(null);
@@ -200,7 +200,17 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
   if (choosingMethod) return <PolicyCreationMethods onClose={() => setChoosingMethod(false)} onSelect={onCreate} />;
   return <>
     {access.workspaceError && !deleting && !editingDescription && !versionWorkflow ? <Alert status="danger">{t(`errors.${access.workspaceError}`)}</Alert> : null}
-    {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("policies")} actions={editingDescription ? undefined : {
+    {selected ? <WorkspaceDetail title={selected.name} onBack={() => onOpen("policies")} information={editingDescription ? null : {
+      title: summary("policyInformation"),
+      content: <><Badge>{t(selected.kind)}</Badge>{describe(selected) && <p className={styles.note}>{describe(selected)}</p>}
+        <Card.Facts>
+          <div><dt>{summary("policyId")}</dt><dd><Table.Identifier value={selected.id} /></dd></div>
+          <div><dt>{summary("defaultVersion")}</dt><dd>v{selected.defaultVersion}</dd></div>
+          <div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div>
+        </Card.Facts>
+        {selected.tags.length > 0 && <section aria-label={p("metadataTags")} className={styles.actions}>{selected.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}</section>}</>,
+      footer: selected.kind === "custom" ? <Button ref={descriptionTrigger} variant="ghost" size="small" onClick={() => setEditingDescription(true)}>{t("editDescription")}</Button> : <p className={styles.note}>{t("systemReadOnly")}</p>
+    }} actions={editingDescription ? undefined : {
       primary: { id: "associate", label: t("associateTargets"), onSelect: () => setAssociating({ policies: [selected] }) },
       secondary: [
         ...(selected.kind === "custom" ? [{ id: "edit", label: t("edit"), onSelect: () => setEditing({ policy: selected }) }] : []),
@@ -209,25 +219,12 @@ export function AccessPolicies({ workspace, scene, entityId, onCreate, onOpen }:
       ]
     }}>
       {editingDescription ? <PolicyDescriptionEditor policy={selected} onClose={() => setEditingDescription(false)} /> : <>
-      <div className={policyStyles.policyOverview}>
-        <div className={policyStyles.policyIntro}>
-          <div className={policyStyles.policyLead}><Badge>{t(selected.kind)}</Badge><p className={policyStyles.policyDescription}>{describe(selected) || "—"}</p></div>
-          {selected.kind === "custom" ? <Button ref={descriptionTrigger} className={policyStyles.policyEditAction} variant="ghost" size="small" onClick={() => setEditingDescription(true)}>{t("editDescription")}</Button> : null}
-        </div>
-        <dl className={policyStyles.policyFacts}>
-          <div><dt>{summary("policyId")}</dt><dd><code className={policyStyles.policyIdentifier}>{selected.id}</code></dd></div>
-          <div><dt>{summary("defaultVersion")}</dt><dd>v{selected.defaultVersion}</dd></div>
-          <div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div>
-        </dl>
-      </div>
-      {selected.tags.length ? <section aria-label={p("metadataTags")} className={styles.actions}><span className={styles.note}>{p("metadataTags")}</span>{selected.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}</section> : null}
-      {selected.kind === "system" ? <p className={styles.note}>{t("systemReadOnly")}</p> : null}
       <PolicySecurityReview policies={[selected]} />
-      <Tabs.Root value={detailTab} onValueChange={setDetailTab}><RelationshipTabs aria-label={selected.name}><Tabs.Trigger value="document">{t("document")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versions")}</Tabs.Trigger><Tabs.Trigger value="usage">{t("usage")} ({usage!.total})</Tabs.Trigger></RelationshipTabs>
-        <Tabs.Content value="document"><PolicyDocumentViewer document={currentDocument(selected)} /></Tabs.Content>
-        <Tabs.Content value="versions"><PolicyVersionHistory policy={selected} usageCount={usage!.total} workspace={workspace} scene={scene} onWorkflowChange={setVersionWorkflow} /></Tabs.Content>
-        <Tabs.Content value="usage"><PolicyUses policyId={selected.id} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>
-      </Tabs.Root>
+      <Card><Tabs.Root value={detailTab} onValueChange={setDetailTab}><Tabs.Bar><RelationshipTabs aria-label={selected.name}><Tabs.Trigger value="document">{t("document")}</Tabs.Trigger><Tabs.Trigger value="versions">{t("versions")}</Tabs.Trigger><Tabs.Trigger value="usage">{t("usage")} ({usage!.total})</Tabs.Trigger></RelationshipTabs></Tabs.Bar>
+        <Tabs.Content inset="panel" value="document"><PolicyDocumentViewer document={currentDocument(selected)} /></Tabs.Content>
+        <Tabs.Content inset="panel" value="versions"><PolicyVersionHistory policy={selected} usageCount={usage!.total} workspace={workspace} scene={scene} onWorkflowChange={setVersionWorkflow} /></Tabs.Content>
+        <Tabs.Content inset="panel" value="usage"><PolicyUses policyId={selected.id} workspace={workspace} scene={scene} onOpen={onOpen} /></Tabs.Content>
+      </Tabs.Root></Card>
       </>}
     </WorkspaceDetail> : <PolicyDirectory workspace={workspace} createFocusRef={creationActionFocus} onCreate={() => setChoosingMethod(true)} onOpen={(id) => onOpen("policies", id)} onAssociate={(policies, additive) => setAssociating({ policies, additive })} onPreviewLanguage={() => onOpen("policy-language")} />}
     {deleting ? <WorkspaceDelete name={deleting.name} onClose={() => setDeleting(null)} onConfirm={async () => { const result = await access.executeWorkspace({ kind: "delete-policy", id: deleting.id }); if (result && entityId === deleting.id) onOpen("policies"); return result; }} /> : null}

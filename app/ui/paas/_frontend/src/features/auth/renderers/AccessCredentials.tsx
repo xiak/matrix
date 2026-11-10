@@ -24,6 +24,21 @@ type KeyFlow =
   | { kind: "status"; keyId: string; requestId: string; status: AccessKey["status"] }
   | { kind: "delete"; keyId: string; requestId: string };
 
+export function AccessKeyFacts({ keyValue, owner }: {
+  keyValue: Pick<AccessKey, "id" | "credentialState" | "status" | "createdAt">;
+  owner: Pick<AccountUserScene, "id" | "name" | "loginName">;
+}) {
+  const t = useTranslations("IamWorkspace");
+  const fenced = keyValue.credentialState === "RECOVERY_FENCED";
+  return <Card.Facts>
+    <div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={keyValue.id} /></dd></div>
+    <div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><small>{owner.loginName}</small><Table.Identifier value={owner.id} /></dd></div>
+    <div><dt>{t("keyCredentialState")}</dt><dd><AccessKeyCredentialStateBadge value={keyValue.credentialState} /><small>{t(fenced ? "keyCredentialFencedHint" : "keyCredentialCurrentHint")}</small></dd></div>
+    <div><dt>{t("keyManagementState")}</dt><dd><Badge status={!fenced && keyValue.status === "ENABLED" ? "success" : "neutral"}>{t(keyValue.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div>
+    <div><dt>{t("created")}</dt><dd><WorkspaceTime value={keyValue.createdAt} /></dd></div>
+  </Card.Facts>;
+}
+
 export function AccessKeyCredentialStateBadge({ value }: { value?: AccessKey["credentialState"] }) {
   const t = useTranslations("IamWorkspace");
   return <Badge status={value === "RECOVERY_FENCED" ? "danger" : "neutral"}>{t(value === "RECOVERY_FENCED" ? "keyCredentialFenced" : value === "CURRENT" ? "keyCredentialCurrent" : "keyCredentialLegacyUnrecorded")}</Badge>;
@@ -438,11 +453,9 @@ export function AccessCredentials({ workspace, scene, embedded = false, onInspec
           primary: { id: "status", label: t(selected.status === "ENABLED" ? "disable" : "enable"), variant: "secondary", disabled: selected.status === "DISABLED" && owner.state !== "active", disabledReason: selected.status === "DISABLED" ? ownerDisabledReason : undefined, onSelect: () => setFlow({ kind: "status", keyId: selected.id, status: selected.status === "ENABLED" ? "DISABLED" : "ENABLED", requestId: requestToken("ui-access-key-status-") }) },
           secondary: [{ id: "network", label: network("configureKey"), onSelect: () => setEditingNetwork(true) }, remove]
         };
-    return <WorkspaceDetail embedded={embedded} title={selected.id} onBack={() => setSelectedId(null)} actions={actions}>
+    return <WorkspaceDetail embedded={embedded} title={selected.id} onBack={() => setSelectedId(null)} actions={actions}
+      information={{ title: t("keyInformation"), icon: <KeyRound aria-hidden="true" />, content: <AccessKeyFacts keyValue={selected} owner={owner} /> }}>
       {selected.credentialState === "RECOVERY_FENCED" ? <Alert status="danger">{t("keyCredentialFencedAlert")}</Alert> : null}
-      <Card><Card.Body className={styles.detailBody}>
-        <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("keyCredentialState")}</dt><dd><AccessKeyCredentialStateBadge value={selected.credentialState} /><span>{t(selected.credentialState === "RECOVERY_FENCED" ? "keyCredentialFencedHint" : "keyCredentialCurrentHint")}</span></dd></div><div><dt>{t("keyManagementState")}</dt><dd><Badge status={selected.credentialState === "RECOVERY_FENCED" ? "neutral" : selected.status === "ENABLED" ? "success" : "neutral"}>{t(selected.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div></dl>
-      </Card.Body></Card>
       <AccessKeyNetworkDetail account={{ status: "ready", value: workspace.settings.accessKeyNetwork }} keyValue={selected} />
       <AccessKeyUsagePreview usage={selected.usage} />
       <ProgrammaticAccessGuide client={access.authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />

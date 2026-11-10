@@ -272,24 +272,23 @@ function PolicyCompilationProvenance({ version }: { version: AccountPolicyVersio
   </section>;
 }
 
-function PolicyDocumentTabList({ label, information = false, history = false }: { label: string; information?: boolean; history?: boolean }) {
+function PolicyDocumentTabList({ label, primary = false, history = false }: { label: string; primary?: boolean; history?: boolean }) {
   const t = useTranslations("AccountPolicyDirectory");
-  return <Tabs.List aria-label={label} variant={information ? "underline" : "compact"} className={information ? styles.policyDetailTabList : styles.policyInspectionTabList}>
+  return <Tabs.List aria-label={label} variant={primary ? "underline" : "compact"} className={primary ? styles.policyDetailTabList : styles.policyInspectionTabList}>
     <Tabs.Trigger value="document">{t("statementsTab")}</Tabs.Trigger>
-    {information ? <Tabs.Trigger value="information">{t("policyInformation")}</Tabs.Trigger> : null}
     <Tabs.Trigger value="evidence">{t("evidenceTab")}</Tabs.Trigger>
     <Tabs.Trigger value="json">{t("jsonTab")}</Tabs.Trigger>
     {history ? <Tabs.Trigger value="versions">{t("versionsTab")}</Tabs.Trigger> : null}
   </Tabs.List>;
 }
 
-function PolicyVersionPanels({ version, title, section, feedback }: { version?: AccountPolicyVersion; title: string; section: string; feedback?: ReactNode }) {
+function PolicyVersionPanels({ version, title, section, feedback, inset }: { version?: AccountPolicyVersion; title: string; section: string; feedback?: ReactNode; inset?: "panel" }) {
   const t = useTranslations("AccountPolicyDirectory");
   return <>
-    <Tabs.Content value="document" forceMount={version ? true : undefined} hidden={section !== "document"}>
+    <Tabs.Content inset={inset} value="document" forceMount={version ? true : undefined} hidden={section !== "document"}>
       {version ? <PolicyStatementTable key={`${version.versionId}:${version.contentDigest}`} version={version} title={title} /> : feedback}
     </Tabs.Content>
-    <Tabs.Content value="evidence">{version ? <section className={styles.policyStatements} aria-label={t("versionEvidence")}>
+    <Tabs.Content inset={inset} value="evidence">{version ? <section className={styles.policyStatements} aria-label={t("versionEvidence")}>
       <dl className={styles.catalogFacts}>
         <div><dt>{t("versionId")}</dt><dd><code>{version.versionId}</code></dd></div>
         <div><dt>{t("versionContract")}</dt><dd>{t("contractVersion", { version: version.contractVersion })}</dd></div>
@@ -297,7 +296,7 @@ function PolicyVersionPanels({ version, title, section, feedback }: { version?: 
       </dl>
       <PolicyCompilationProvenance version={version} />
     </section> : feedback}</Tabs.Content>
-    <Tabs.Content value="json">{version ? <pre className={styles.code} aria-label={t("rawDocument")} role="region" tabIndex={0}>{JSON.stringify(version.document, null, 2)}</pre> : feedback}</Tabs.Content>
+    <Tabs.Content inset={inset} value="json">{version ? <pre className={styles.code} aria-label={t("rawDocument")} role="region" tabIndex={0}>{JSON.stringify(version.document, null, 2)}</pre> : feedback}</Tabs.Content>
   </>;
 }
 
@@ -639,19 +638,20 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
     ? <AccountPolicyVersions policy={source} capabilities={displayAccess.capabilities} authorizedCapabilities={access?.capabilities ?? []}
         listVersions={client.listVersions} readVersion={client.readVersion} mutation={mutation} authorizationReady={!authorityPending && Boolean(access)}
         refreshRevision={refreshRevision} onApplied={onVersionApplied} onConflictRefresh={onVersionConflict} /> : null;
-  const information = <section aria-label={t("policyInformation")} className={styles.policyStatements}>
-    <dl className={styles.catalogFacts}>
-      <div><dt>{t("policyId")}</dt><dd><code>{policyId}</code></dd></div>
+  const information = {
+    title: t("policyInformation"),
+    content: <Card.Facts>
+      <div><dt>{t("policyId")}</dt><dd><Table.Identifier value={policyId} /></dd></div>
       {source ? <>
         <div><dt>{t("management")}</dt><dd>{t(source.management === "SYSTEM" ? "system" : "customer")}</dd></div>
         <div><dt>{t("scope")}</dt><dd>{t(source.scope === "TENANT" ? "tenant" : "installation")}</dd></div>
-        <div><dt>{t("defaultVersion")}</dt><dd><code>{detail?.version.versionId ?? source.defaultVersionId}</code></dd></div>
+        <div><dt>{t("defaultVersion")}</dt><dd><Table.Identifier value={detail?.version.versionId ?? source.defaultVersionId} /></dd></div>
         <div><dt>{t("status")}</dt><dd>{t(source.status === "ACTIVE" ? "active" : "retired")}</dd></div>
         <div><dt>{t("updated")}</dt><dd><WorkspaceTime value={source.updatedAt} /></dd></div>
       </> : null}
-    </dl>
-    <p className={styles.note}>{t("detailNotice")}</p>
-  </section>;
+    </Card.Facts>,
+    footer: <p className={styles.note}>{t("detailNotice")}</p>
+  };
   const metadataOnly = source?.scope === "INSTALLATION" || !client || (!detail && state.status !== "loading" && !versionHistory);
   const activeSection = section === "versions" && !versionHistory ? "document" : section;
   function changeSection(next: string) {
@@ -663,15 +663,12 @@ function AccountPolicyDetailView({ policyId, policy, client, mutation, metadataM
     setSection(next);
     if (next === "versions") setVersionsMounted(true);
   }
-  return <WorkspaceDetail title={source?.displayName ?? policyId} onBack={onBack} actionFocusRef={actionFocus} actions={metadataActions}>
-    {metadataOnly ? <>
-      <h2 className={styles.stepTitle}>{t("policyInformation")}</h2>{documentFeedback}{information}
-    </> : <Tabs.Root ref={tabFrame} activationMode="manual" value={activeSection} onValueChange={changeSection}>
-      <PolicyDocumentTabList label={t("detailSections")} information history={Boolean(versionHistory)} />
-      <PolicyVersionPanels version={detail?.version} section={activeSection} title={t("defaultDocument")} feedback={documentFeedback} />
-      <Tabs.Content value="information">{information}</Tabs.Content>
-      {versionHistory ? <Tabs.Content value="versions" forceMount={versionsMounted || undefined} hidden={activeSection !== "versions"}>{versionsMounted ? versionHistory : null}</Tabs.Content> : null}
-    </Tabs.Root>}
+  return <WorkspaceDetail title={source?.displayName ?? policyId} onBack={onBack} actionFocusRef={actionFocus} actions={metadataActions} information={information}>
+    {metadataOnly ? <Card><Card.Body>{documentFeedback}</Card.Body></Card> : <Card className={styles.policyDocumentSurface}><Tabs.Root ref={tabFrame} activationMode="manual" value={activeSection} onValueChange={changeSection}>
+      <PolicyDocumentTabList label={t("detailSections")} primary history={Boolean(versionHistory)} />
+      <PolicyVersionPanels version={detail?.version} section={activeSection} title={t("defaultDocument")} feedback={documentFeedback} inset="panel" />
+      {versionHistory ? <Tabs.Content inset="panel" value="versions" forceMount={versionsMounted || undefined} hidden={activeSection !== "versions"}>{versionsMounted ? versionHistory : null}</Tabs.Content> : null}
+    </Tabs.Root></Card>}
   </WorkspaceDetail>;
 }
 

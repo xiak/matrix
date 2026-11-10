@@ -170,21 +170,20 @@ function RelationDirectory({ client, onOpen }: {
 
 function TemplateDetail({ template, onBack }: { template: ServiceRoleTemplate; onBack(): void }) {
   const t = useTranslations("ServiceRoleTemplateDirectory");
-  return <WorkspaceDetail title={`${t("detailTitle")} · ${template.id}`} onBack={onBack}>
-    <Card>
-      <div className={styles.sectionHeading}>
-        <div><Badge status={template.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${template.status}`)}</Badge> <Badge>{t(`purposes.${template.spec.servicePurpose}`)}</Badge></div>
-      </div>
-      <HelpDisclosure label={t("templateHelp")}>{t("activeIsNotConsent")}</HelpDisclosure>
-      <dl className={styles.facts}>
-        <div><dt>{t("fields.templateId")}</dt><dd><code>{template.id}</code></dd></div>
+  return <WorkspaceDetail title={`${t("detailTitle")} · ${template.id}`} onBack={onBack} information={{
+      title: t("detailTitle"), content: <><div><Badge status={template.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${template.status}`)}</Badge> <Badge>{t(`purposes.${template.spec.servicePurpose}`)}</Badge></div>
+      <Card.Facts>
+        <div><dt>{t("fields.templateId")}</dt><dd><Table.Identifier value={template.id} /></dd></div>
         <div><dt>{t("fields.templateVersion")}</dt><dd>v{template.version}</dd></div>
         <div><dt>{t("fields.product")}</dt><dd><code>{template.spec.product}</code></dd></div>
         <div><dt>{t("fields.servicePurpose")}</dt><dd>{t(`purposes.${template.spec.servicePurpose}`)} <small><code>{template.spec.servicePurpose}</code></small></dd></div>
-        <div><dt>{t("fields.roleName")}</dt><dd><code>{template.spec.roleName}</code></dd></div>
+        <div><dt>{t("fields.roleName")}</dt><dd><Table.Identifier value={template.spec.roleName} /></dd></div>
         <div><dt>{t("fields.roleDescription")}</dt><dd>{template.spec.roleDescription || "—"}</dd></div>
         <div><dt>{t("fields.maxSession")}</dt><dd>{durationLabel(template.spec.maxSessionDurationSeconds)}</dd></div>
-      </dl>
+      </Card.Facts></>,
+      footer: <HelpDisclosure label={t("templateHelp")}>{t("activeIsNotConsent")}</HelpDisclosure>
+    }}>
+    <Card><Card.Body className={styles.stack}>
       <ServiceAuthorizationChain
         template={{ label: t(`states.${template.status}`), tone: template.status === "ACTIVE" ? "success" : "neutral" }}
         account={{ label: t("accountReadSeparately") }}
@@ -212,7 +211,7 @@ function TemplateDetail({ template, onBack }: { template: ServiceRoleTemplate; o
         </dl>
       </section>
       <Alert status="warning">{t("accountReadHint")}</Alert>
-    </Card>
+    </Card.Body></Card>
   </WorkspaceDetail>;
 }
 
@@ -335,21 +334,37 @@ function RelationDetail({ client, roleId, initialName, onBack }: { client: Servi
   };
 
   const relation = current?.relation;
-  return <WorkspaceDetail title={relation?.role.name ?? initialName} onBack={onBack}>
+  return <WorkspaceDetail title={relation?.role.name ?? initialName} onBack={onBack} information={relation ? {
+    title: t("fields.role"), content: <><div><Badge status={relation.role.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${relation.role.status}`)}</Badge> <Badge>SERVICE_LINKED</Badge></div>
+      <Card.Facts>
+          <div><dt>{t("fields.role")}</dt><dd><code>{relation.role.name}</code><small>{relation.role.description}</small></dd></div>
+          <div><dt>{t("fields.roleId")}</dt><dd><Table.Identifier value={relation.role.id} /></dd></div>
+          <div><dt>{t("fields.targetAccount")}</dt><dd><Table.Identifier value={relation.role.accountId} /></dd></div>
+          <div><dt>{t("fields.servicePrincipal")}</dt><dd><Table.Identifier value={relation.servicePrincipal.principalId} /><small>{relation.servicePrincipal.installationId} · {t(`purposes.${relation.servicePrincipal.purpose}`)}</small></dd></div>
+          <div><dt>{t("fields.maxSession")}</dt><dd>{durationLabel(relation.role.maxSessionDurationSeconds)}</dd></div>
+          <div><dt>{t("fields.resourceVersion")}</dt><dd>v{relation.role.resourceVersion}</dd></div>
+        </Card.Facts></>,
+    footer: <HelpDisclosure label={t("linkedRoleHelp")}>{t("detail.boundary")}</HelpDisclosure>
+  } : null}>
     <Card>
       <ServiceAuthorizationReadBoundary status={state.status} retry={load} scope="relations"
         loading={<TableSkeleton label={t("detail.loading")} rows={5} header={false} />}>
-      {current && relation ? <div className={styles.stack}>
-        <div className={styles.sectionHeading}><div><Badge status={relation.role.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${relation.role.status}`)}</Badge> <Badge>SERVICE_LINKED</Badge></div></div>
-        <HelpDisclosure label={t("linkedRoleHelp")}>{t("detail.boundary")}</HelpDisclosure>
-        <dl className={styles.facts}>
-          <div><dt>{t("fields.role")}</dt><dd><code>{relation.role.name}</code><small>{relation.role.description}</small></dd></div>
-          <div><dt>{t("fields.roleId")}</dt><dd><code>{relation.role.id}</code></dd></div>
-          <div><dt>{t("fields.targetAccount")}</dt><dd><code>{relation.role.accountId}</code></dd></div>
-          <div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{relation.servicePrincipal.principalId}</code><small>{relation.servicePrincipal.installationId} · {t(`purposes.${relation.servicePrincipal.purpose}`)}</small></dd></div>
-          <div><dt>{t("fields.maxSession")}</dt><dd>{durationLabel(relation.role.maxSessionDurationSeconds)}</dd></div>
-          <div><dt>{t("fields.resourceVersion")}</dt><dd>v{relation.role.resourceVersion}</dd></div>
-        </dl>
+      {current && relation ? <Card.Body className={styles.stack}>
+        <section className={styles.stack} aria-labelledby="service-linked-role-bindings">
+          <div><h3 className={styles.detailTitle} id="service-linked-role-bindings">{t("detail.bindingsTitle")}</h3><p className={styles.note}>{t("detail.bindingsHint")}</p></div>
+          {current.bindings.length ? <Table aria-label={t("detail.bindingsTable")} mobileLayout="stack">
+            <thead><tr><th scope="col">{t("fields.workload")}</th><th scope="col">{t("fields.bindingState")}</th><th scope="col">{t("fields.binding")}</th><th scope="col">{t("fields.lifecycle")}</th></tr></thead>
+            <tbody>{current.bindings.map((binding) => <tr key={binding.id}>
+              <td data-label={t("fields.workload")}><strong>{binding.workload.kind}</strong><small><code>{binding.workload.id}</code></small></td>
+              <td data-label={t("fields.bindingState")}><Badge status={binding.status === "ACTIVE" ? "success" : "neutral"}>{t(`bindingStates.${binding.status}`)}</Badge></td>
+              <td data-label={t("fields.binding")}><code>{binding.id}</code><small>v{binding.resourceVersion} · {binding.template.id} @v{binding.template.version}</small></td>
+              <td data-label={t("fields.lifecycle")}><small>{t("detail.created")} <WorkspaceTime value={binding.createdAt} /></small><small>{binding.revokedAt ? <>{t("detail.revoked")} <WorkspaceTime value={binding.revokedAt} /></> : <>{t("detail.updated")} <WorkspaceTime value={binding.updatedAt} /></>}</small></td>
+            </tr>)}</tbody>
+          </Table> : <EmptyState title={t("detail.emptyBindingsTitle")} description={t("detail.emptyBindingsDescription")} />}
+          {(current.nextAfter || pageIndex > 0 || pages[pageIndex + 1]) && <CursorFooter page={pageIndex + 1} hasNext={Boolean(current.nextAfter || pages[pageIndex + 1])} busy={paging} previous={() => { setPageIndex((value) => Math.max(0, value - 1)); setPageFailure(null); }} next={nextPage}
+            note={current.nextAfter ? t("detail.moreBindings") : t("detail.completeBindings", { count: current.bindings.length })} />}
+          {pageFailure ? <Alert status="warning">{t(`errors.relations.${pageFailure}.description`)}</Alert> : null}
+        </section>
         <ServiceAuthorizationChain
           template={{ label: t("detail.exactTemplate"), tone: "neutral" }}
           account={{ label: t(`states.${relation.role.status}`), tone: relation.role.status === "ACTIVE" ? "success" : "neutral" }}
@@ -365,24 +380,9 @@ function RelationDetail({ client, roleId, initialName, onBack }: { client: Servi
             <div><dt>{t("fields.policyDigest")}</dt><dd><code>{relation.permissionCeiling.contentDigest}</code></dd></div>
           </dl>
         </section>
-        <section className={styles.stack} aria-labelledby="service-linked-role-bindings">
-          <div><h3 className={styles.detailTitle} id="service-linked-role-bindings">{t("detail.bindingsTitle")}</h3><p className={styles.note}>{t("detail.bindingsHint")}</p></div>
-          {current.bindings.length ? <Table aria-label={t("detail.bindingsTable")} mobileLayout="stack">
-            <thead><tr><th scope="col">{t("fields.workload")}</th><th scope="col">{t("fields.bindingState")}</th><th scope="col">{t("fields.binding")}</th><th scope="col">{t("fields.lifecycle")}</th></tr></thead>
-            <tbody>{current.bindings.map((binding) => <tr key={binding.id}>
-              <td data-label={t("fields.workload")}><strong>{binding.workload.kind}</strong><small><code>{binding.workload.id}</code></small></td>
-              <td data-label={t("fields.bindingState")}><Badge status={binding.status === "ACTIVE" ? "success" : "neutral"}>{t(`bindingStates.${binding.status}`)}</Badge></td>
-              <td data-label={t("fields.binding")}><code>{binding.id}</code><small>v{binding.resourceVersion} · {binding.template.id} @v{binding.template.version}</small></td>
-              <td data-label={t("fields.lifecycle")}><small>{t("detail.created")} <WorkspaceTime value={binding.createdAt} /></small><small>{binding.revokedAt ? <>{t("detail.revoked")} <WorkspaceTime value={binding.revokedAt} /></> : <>{t("detail.updated")} <WorkspaceTime value={binding.updatedAt} /></>}</small></td>
-            </tr>)}</tbody>
-          </Table> : <EmptyState title={t("detail.emptyBindingsTitle")} description={t("detail.emptyBindingsDescription")} />}
-          <CursorFooter page={pageIndex + 1} hasNext={Boolean(current.nextAfter || pages[pageIndex + 1])} busy={paging} previous={() => { setPageIndex((value) => Math.max(0, value - 1)); setPageFailure(null); }} next={nextPage}
-            note={current.nextAfter ? t("detail.moreBindings") : t("detail.completeBindings", { count: current.bindings.length })} />
-          {pageFailure ? <Alert status="warning">{t(`errors.relations.${pageFailure}.description`)}</Alert> : null}
-        </section>
         <HelpDisclosure label={t("bindingHelp")}>{t("detail.activeBindingIsNotSession")}</HelpDisclosure>
         <Alert status="warning">{t("detail.noCommands")}</Alert>
-      </div> : null}
+      </Card.Body> : null}
       </ServiceAuthorizationReadBoundary>
     </Card>
   </WorkspaceDetail>;

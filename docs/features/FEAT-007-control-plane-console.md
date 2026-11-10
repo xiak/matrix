@@ -911,7 +911,7 @@ readable at 360 CSS pixels without horizontal page scrolling.
 Table-backed directories use the public `Table.Footer` and `TablePagination`
 composition: the page summary stays on the left and page-size plus icon-only
 navigation controls stay on the right, including one-page directory results.
-The Group detail relationship lists use the adaptive controls described below. A complete
+Embedded relationship and evidence lists use the adaptive controls described below. A complete
 client snapshot may expose its true page count and page size. A server cursor
 uses the same visual control but does not invent a total or offer a page-size
 choice the backend cannot honor. Selection always applies to the visible page.
@@ -1098,7 +1098,7 @@ contract.
 | Users | Project Account + RootIdentity as a compact owner summary and independent protected detail; only User rows participate in group, grant, credential and lifecycle tasks. Copying permissions must describe precisely which direct bindings or memberships are copied; it never clones passwords, keys, boundaries or role sessions. |
 | Groups | Use a two-step group-only journey: details, then review. Creation produces an empty group and opens its detail. The fixed LIVE contract reviews and changes one member or direct-policy relationship per request. The isolated MOCK may select up to 30 members only as an explicitly labelled future-batch interaction preview; it does not add a LIVE endpoint or turn client-side request loops into an atomic command. Group detail explains inherited-grant impact. A group is not a login identity and cannot be assumed. |
 | Policy directory | The default tab puts search and filters directly above the returned policy name, type, scope, lifecycle status and update time. Search accepts the name and stable ID. Returning from a detail keeps the current identity's query, filters and page. Only the policy tab offers the authorized creation action. Permission refresh has a labelled icon button. The other tab is a read-only product reference for actions and scopes. Both directories page the bounded snapshot locally when it exceeds the smallest page size. |
-| Policy inspection | Policy information includes the full stable and default-version IDs from the directory even when the document read is denied. A readable policy opens on its authorization statements. Top-level tabs also expose policy information, version sources and the original JSON. Authorized customer policies offer version history. Long statement lists have independent search and scrolling. The authored actions and the expansion frozen at publication remain separately inspectable, including in historical versions. Product reference details lead with the action directory and keep the declaration metadata and ownership information available together. IAM evaluates effective access for each request. |
+| Policy inspection | A readable policy opens on its authorization statements. Tabs switch to version sources, original JSON and, for authorized customer policies, version history. The adjacent information panel exposes the directory's full stable and default-version IDs even if the document read is denied. Long statement lists have independent search and scrolling. The authored actions and the expansion frozen at publication remain separately inspectable, including in historical versions. Product reference details lead with the action directory and keep the declaration metadata and ownership information available together. IAM evaluates effective access for each request. |
 | Policy creation | Four entry points share one content-area edit/configure/review draft and save contract. The product-function entry selects registered Matrix capabilities; project permissions are explicitly unavailable. Templates copy into custom policies, never mutate presets. Resource-tag conditions remain distinct from policy metadata tags. |
 | Policy editor | Use a code-owned preview capability catalog and structured statement editor. Invalid drafts remain editable; errors block progression, warnings explain broad access. Unsupported syntax cannot be silently dropped when switching modes. |
 | Policy detail | Present a readable effect/action/resource summary, full JSON, bounded versions, exact linked subjects and separate boundary references. Group links lead to affected members and their named inherited grants. Previewing an old version never activates it. |
@@ -2322,14 +2322,23 @@ This form contract is separate from the service directory's trigger-or-X
 contract below. IAM uses a default overview and grouped service-local links;
 detail workspaces use semantic tabs for memberships, policies, trust and
 security. Detail surfaces stretch across the available content area at wide
-viewports while prose keeps its own readable line length. Group detail opens
-with the member and direct-policy tabs and the selected relationship's commands.
-The group description, identifier, creation time and inheritance help sit in
-a separate information panel beside the records, or below them on narrow screens.
-Long group and policy-version identifiers expand in place. For a complete group
-relationship list, search appears from the second record and pagination above
-ten records. These thresholds use the unfiltered list size. Partial membership
-lists keep search, pagination, coverage information and any available continuation.
+viewports while prose keeps its own readable line length.
+
+Object details put the task in the first column. An IAM group opens on members,
+a policy on its statements, a managed-service instance on connection information
+or installation progress, and an audit record on its outcome and request evidence.
+Tabs select one set of records or evidence at a time. Actions for that selection
+sit with it. A labelled information panel holds identity, dates, versions and
+scope. This layout also applies to users, roles, service authorizations, tenants,
+keys, product declarations, findings, reports and application details with
+deployments or tags. A single read-only record can present its facts directly.
+The information panel follows the task at narrow container widths and inside
+another object's detail. Long identifiers in the panel expand in place.
+
+A complete relationship list shows search from the second record and pagination
+above ten records, using the unfiltered size. Active queries and filters remain
+reachable when they return no rows. Cursor-backed lists keep their coverage and
+continuation controls whenever another page is available, including empty windows.
 Subuser creation replaces the dialog with a dedicated content-area route at
 `/console/access/create-user/`. The public `Wizard` owns the form
 frame, focused step heading and sticky action footer. The footer shares

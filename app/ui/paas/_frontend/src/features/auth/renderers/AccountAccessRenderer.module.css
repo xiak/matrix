@@ -1,4 +1,4 @@
-.stack,
+.stack:not([hidden]),
 .detail,
 .form {
   display: grid;
@@ -88,20 +88,6 @@
 }
 
 .detailWorkspace { display: grid; gap: var(--xiak-spacing-comfortable); min-width: 0; padding: var(--xiak-panel-padding); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
-.detailWorkspace:has(> .groupWorkspace) { padding: 0; border: 0; background: transparent; }
-.groupWorkspace {
-  display: grid;
-  min-width: 0;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  gap: var(--xiak-spacing-default);
-}
-@container matrix-page-content (min-width: 48rem) {
-  .groupWorkspace { grid-template-columns: minmax(0, 1fr) clamp(15rem, 24%, 17rem); }
-}
-.groupRelationshipHeader, .groupInformation header { min-height: var(--xiak-content-header-height); }
-.groupRelationshipHeader { padding: 0; gap: 0 var(--xiak-spacing-tight); }
-.groupRelationshipTabs { align-self: stretch; border: 0; padding-block-start: 0; }
 .groupTabCount {
   display: inline-grid;
   min-width: var(--xiak-icon-size);
@@ -112,45 +98,15 @@
   color: var(--xiak-color-text-muted);
   font: var(--xiak-font-weight-medium) var(--xiak-font-size-caption)/var(--xiak-icon-size) var(--xiak-font-numeric);
 }
-.groupRelationshipTabs [aria-selected="true"] .groupTabCount {
-  background: var(--xiak-color-accent-haze);
-  color: var(--xiak-color-accent-text);
-}
-.groupCommands {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--xiak-spacing-tight);
-  padding: var(--xiak-spacing-narrow) var(--xiak-panel-padding);
-}
-.groupCommands:empty { display: none; }
-.groupRecords { padding-block-start: 0; }
-@container xiak-card (max-width: 26rem) {
-  .groupRelationshipHeader { align-items: stretch; flex-direction: column; }
-  .groupRelationshipHeader:has(.groupCommands:not(:empty)) .groupRelationshipTabs { border-block-end: var(--xiak-border-subtle); }
-  .groupCommands { padding-block: var(--xiak-spacing-tight); }
-}
+[aria-selected="true"] .groupTabCount { background: var(--xiak-color-accent-haze); color: var(--xiak-color-accent-text); }
 @container xiak-table (width > 35rem) {
-  .groupRecords table { table-layout: fixed; }
-  .groupRecords th:first-child { width: 45%; }
+  .relationshipTable { table-layout: fixed; }
+  .relationshipTable th:first-child { width: 45%; }
 }
 @container xiak-table (max-width: 35rem) {
-  .groupRecords td:first-child::before { display: none; }
-  .groupRecords td:has(details[open]) { grid-column: 1 / -1; }
+  .relationshipTable td:first-child::before { display: none; }
+  .relationshipTable td:has(details[open]) { grid-column: 1 / -1; }
 }
-.groupInformation {
-  display: grid;
-  min-width: 0;
-  gap: var(--xiak-spacing-default);
-}
-.groupInformation h2 {
-  display: flex;
-  align-items: center;
-  gap: var(--xiak-spacing-tight);
-  margin: 0;
-  color: var(--xiak-color-text-strong);
-  font-size: var(--xiak-font-size-subtitle);
-}
-.groupInformation h2 svg { width: var(--xiak-icon-size); height: var(--xiak-icon-size); color: var(--xiak-color-text-muted); }
 .associationWorkflow { min-width: 0; }
 .associationTargetId { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); font: var(--xiak-font-size-small)/1.5 var(--xiak-font-mono); }
 .bindingList li.associationChangeItem { display: grid; justify-content: stretch; gap: var(--xiak-spacing-micro); }
@@ -377,20 +333,21 @@
 .policyMetadataTable th:last-child { width: 20%; }
 .policyMetadataTable td:last-child, .catalogProductTable td:last-child { color: var(--xiak-color-text-muted); font-weight: var(--xiak-font-weight-regular); }
 .policyStatements { display: grid; min-width: 0; gap: var(--xiak-spacing-default); }
+.policyDocumentSurface { overflow: clip; }
+.collectionNote { margin: 0; padding: var(--xiak-spacing-tight) var(--xiak-panel-padding); color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); }
 .policyDetailTabList {
   position: sticky;
   top: 0;
   z-index: 2;
   flex-wrap: wrap;
-  padding-inline: 0;
+  padding-inline: var(--xiak-spacing-tight);
   background: var(--xiak-color-bg-panel);
 }
 .policyDetailTabList > button, .policyInspectionTabList > button { white-space: nowrap; }
 .policyInspectionTabList { flex-wrap: wrap; }
 @container matrix-page-content (max-width: 25rem) {
-  .policyDetailTabList { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--xiak-spacing-micro); }
-  .policyDetailTabList > button { white-space: normal; }
-  .policyDetailTabList > :last-child:nth-child(odd) { grid-column: 1 / -1; }
+  .policyDetailTabList { flex-wrap: nowrap; }
+  .policyDetailTabList > button { flex: none; }
 }
 .policyStatementTable { table-layout: fixed; }
 .policyStatementTable th:first-child { width: 16%; }

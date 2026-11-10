@@ -526,11 +526,17 @@ describe("AccountLiveRoles", () => {
     expect(api.listTrustVersions).toHaveBeenCalledWith(role.id);
     expect(within(table).getByText("当前版本")).toBeTruthy();
     expect(within(table).getByText("历史版本")).toBeTruthy();
-    await user.click(within(table).getByRole("button", { name: previousTrustVersion.id }));
+    const search = screen.getByRole("searchbox", { name: "搜索信任版本" });
+    await user.type(search, previousTrustVersion.id);
+    const versionTrigger = within(table).getByRole("button", { name: previousTrustVersion.id });
+    await user.click(versionTrigger);
     const detail = screen.getByRole("group", { name: "信任版本详情" });
     expect(within(detail).getByText(previousTrustVersion.contentDigest)).toBeTruthy();
     expect(within(detail).getByText(/user-sam/)).toBeTruthy();
     expect(within(detail).queryByRole("button", { name: /user-sam/ })).toBeNull();
+    await user.click(within(detail).getByRole("button", { name: /返回/ }));
+    expect(search).toHaveProperty("value", previousTrustVersion.id);
+    expect(document.activeElement).toBe(versionTrigger);
     expect(screen.queryByRole("dialog")).toBeNull();
   });
 

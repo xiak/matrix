@@ -12,6 +12,27 @@
 .trigger:disabled { color: var(--xiak-color-text-disabled); cursor: not-allowed; }
 .content { min-width: 0; max-width: 100%; padding-block-start: var(--xiak-spacing-comfortable); outline: none; }
 .content[data-state="inactive"] { display: none; }
+.content[data-inset="none"] { padding: 0; }
+.content[data-inset="panel"] { padding: var(--xiak-panel-padding); }
+.bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0 var(--xiak-spacing-tight);
+  min-width: 0;
+  min-height: var(--xiak-content-header-height);
+  border-block-end: var(--xiak-border-subtle);
+}
+.bar > .list { max-width: 100%; align-self: stretch; padding-block-start: 0; border: 0; }
+.bar > .list > .trigger { flex: none; white-space: nowrap; }
+.commands { display: flex; min-width: 0; flex-wrap: wrap; gap: var(--xiak-spacing-tight); padding: var(--xiak-spacing-narrow) var(--xiak-panel-padding); }
+.commands:empty { display: none; }
+@container xiak-card (max-width: 26rem) {
+  .bar { flex-direction: column; align-items: stretch; }
+  .bar:has(.commands:not(:empty)) > .list { border-block-end: var(--xiak-border-subtle); }
+  .commands { padding-block: var(--xiak-spacing-tight); }
+}
 .trigger > svg { width: var(--xiak-icon-size); height: var(--xiak-icon-size); }
 
 .underline {

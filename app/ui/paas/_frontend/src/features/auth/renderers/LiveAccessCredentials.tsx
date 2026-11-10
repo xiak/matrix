@@ -13,7 +13,7 @@ import { AccountIdentifier } from "./AccountOverview";
 import { AccessKeyOwnerDirectory } from "./AccessKeyOwnerDirectory";
 import { accessKeyNetworkRestrictionsEqual, parseAccessKeyNetworkDraft, type AccessKeyNetworkDraftIssue } from "../domain/accessKeyNetwork";
 import { AccessKeyNetworkDetail, AccessKeyNetworkDraftField, AccessKeySecuritySignals, AccessKeyUsagePreview, type AccessKeyAccountNetworkState } from "./AccessKeyNetworkPreview";
-import { AccessKeyCredentialStateBadge, ProgrammaticAccessGuide, RotationGuide } from "./AccessCredentials";
+import { AccessKeyCredentialStateBadge, AccessKeyFacts, ProgrammaticAccessGuide, RotationGuide } from "./AccessCredentials";
 import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccountReadBoundary, type AccountReadStatus } from "./AccountReadBoundary";
 import styles from "./AccessCredentials.module.css";
@@ -506,7 +506,8 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
           }, remove]
         };
     return <section className={styles.root}>
-      <WorkspaceDetail embedded={Boolean(scopedOwner)} title={selected.key.id} onBack={() => setSelection(null)} actions={actions}>
+      <WorkspaceDetail embedded={Boolean(scopedOwner)} title={selected.key.id} onBack={() => setSelection(null)} actions={actions}
+        information={{ title: t("keyInformation"), icon: <KeyRound aria-hidden="true" />, content: <AccessKeyFacts keyValue={selected.key} owner={owner} /> }}>
         {!scopedOwner ? <HelpDisclosure label={t("keyProductsHelp")}>{t("keyLiveProductBoundary")}</HelpDisclosure> : null}
         {recoveryError ? <Alert status="danger">{t("keyRecoveryStorageUnavailable")}</Alert> : null}
         {mutationIntent ? <Alert status="warning">{currentMutationIntent
@@ -515,9 +516,6 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
             ? <Button onClick={resumeMutation} size="small" variant="ghost">{t("keyLiveResume")}</Button> : null}</Alert> : null}
         {interactionError ? <Alert status="danger">{t(`keyLiveErrors.${interactionError}`)} {interactionError === "unavailable" ? <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button> : null}</Alert> : null}
         {selected.key.credentialState === "RECOVERY_FENCED" ? <Alert status="danger">{t("keyCredentialFencedAlert")}</Alert> : null}
-        <Card><Card.Body className={styles.detailBody}>
-          <dl className={styles.keyFacts}><div><dt>{t("keyId")}</dt><dd><AccountIdentifier label={t("keyId")} value={selected.key.id} /></dd></div><div><dt>{t("owner")}</dt><dd><strong>{owner.name}</strong><span>{owner.loginName} · {owner.id}</span></dd></div><div><dt>{t("keyCredentialState")}</dt><dd><AccessKeyCredentialStateBadge value={selected.key.credentialState} /><span>{t(selected.key.credentialState === "RECOVERY_FENCED" ? "keyCredentialFencedHint" : "keyCredentialCurrentHint")}</span></dd></div><div><dt>{t("keyManagementState")}</dt><dd><Badge status={selected.key.credentialState === "CURRENT" && selected.key.status === "ENABLED" ? "success" : "neutral"}>{t(selected.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></dd></div><div><dt>{t("created")}</dt><dd><WorkspaceTime value={selected.key.createdAt} /></dd></div></dl>
-        </Card.Body></Card>
         <AccessKeyNetworkDetail account={accountNetwork} keyValue={selected.key} source="LIVE" />
         <AccessKeyUsagePreview source="LIVE" usage={selected.usage} />
         <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />

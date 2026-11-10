@@ -150,7 +150,9 @@ describe("AuditWorkspace", () => {
 
     await user.click(opener);
     expect(screen.getByRole("heading", { level: 1, name: /审计记录 #114/ })).toBeTruthy();
-    expect(screen.getByText("哈希链证据")).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "请求与授权证据", selected: true })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "哈希链证据" }));
+    expect(within(screen.getByRole("tabpanel", { name: "哈希链证据" })).getByText("记录哈希")).toBeTruthy();
     expect(screen.getByText(/来源服务记录该事件已按自身语义完成/)).toBeTruthy();
     const source = screen.getByText("事件来源").closest("div")!;
     expect(within(source).getByText("AUDIT")).toBeTruthy();

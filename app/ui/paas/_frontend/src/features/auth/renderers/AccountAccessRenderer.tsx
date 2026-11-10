@@ -114,6 +114,13 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   const [section, setSection] = useState<"accounts" | "governance">("accounts");
   const [cursorPage, setCursorPage] = useState(1);
   const createActionFocus = useRef<PageCommandsHandle>(null);
+  const accountTriggers = useRef(new Map<string, HTMLButtonElement>());
+  const returnToAccount = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (selectedId || !returnToAccount.current) return;
+    accountTriggers.current.get(returnToAccount.current)?.focus({ preventScroll: true });
+    returnToAccount.current = null;
+  }, [selectedId]);
   const previousCreating = useRef(false);
   const selected = scene.accounts.find((account) => account.id === selectedId);
   useLayoutEffect(() => {
@@ -121,7 +128,7 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
     previousCreating.current = creating;
     if (wasCreating && !creating) createActionFocus.current?.focus("create");
   }, [creating]);
-  if (selected) return <AccountTenantWorkspace account={selected} key={`${selected.id}:${selected.resourceVersion}`} onBack={() => setSelectedId(null)} />;
+  if (selected) return <AccountTenantWorkspace account={selected} key={`${selected.id}:${selected.resourceVersion}`} onBack={() => { returnToAccount.current = selected.id; setSelectedId(null); }} />;
   if (creating) return <CreateTenantWorkspace onClose={() => setCreating(false)} />;
   return <Tabs.Root value={section} onValueChange={(value) => setSection(value as typeof section)}>
     <Tabs.List aria-label={t("tenantManagementSections")}>
@@ -132,7 +139,7 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
       <Card>
         <ContentPage.Heading title={t("tenantAccounts")} scrollKey="tenant-directory" actions={scene.canCreateAccounts ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: access.busy || access.loading, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
         {scene.directoryFailures?.accounts ? <AccountDirectoryReadFailure kind="accounts" /> : <><Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
-            <tbody>{scene.accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><Table.PrimaryAction onClick={() => { setSelectedId(account.id); setCreating(false); }}>{account.name}</Table.PrimaryAction><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
+            <tbody>{scene.accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><Table.PrimaryAction ref={(node) => { if (node) accountTriggers.current.set(account.id, node); else accountTriggers.current.delete(account.id); }} onClick={() => { setSelectedId(account.id); setCreating(false); }}>{account.name}</Table.PrimaryAction><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
           </Table>
           {!scene.accounts.length ? <EmptyState title={t("noTenants")} /> : null}
         <Table.Footer note={t("tenantScopeHint")}><TablePagination mode="cursor" disabled={access.busy || access.loading} summary={w("cursorPage", { page: cursorPage })}

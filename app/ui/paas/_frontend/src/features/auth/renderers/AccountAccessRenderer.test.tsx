@@ -4252,7 +4252,7 @@ describe("account access", () => {
     await user.type(screen.getByRole("searchbox", { name: "搜索策略" }), tenantPolicy.id);
     await user.click(within(table).getByRole("button", { name: "ReadOnlyAccess" }));
     await screen.findByText(/无权读取该策略的详情/);
-    const information = screen.getByRole("region", { name: "策略信息" });
+    const information = screen.getByRole("complementary", { name: "策略信息" });
     expect(screen.queryByRole("tab", { name: "原始 JSON" })).toBeNull();
     expect(within(information).getByText(tenantPolicy.id)).toBeTruthy();
     expect(within(information).getByText(versionId)).toBeTruthy();
@@ -4273,7 +4273,7 @@ describe("account access", () => {
     expect(screen.getByText("paas.application.read")).toBeTruthy();
     expect(screen.getByRole("tab", { name: "授权声明", selected: true })).toBeTruthy();
     expect(screen.queryByRole("tab", { name: "策略版本" })).toBeNull();
-    await user.click(screen.getByRole("tab", { name: "策略信息" }));
+    expect(within(screen.getByRole("complementary", { name: "策略信息" })).getByText(tenantPolicy.id)).toBeTruthy();
     expect(screen.getByText(/实际访问权限由 IAM/)).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "原始 JSON" }));
     expect(JSON.parse(screen.getByRole("region", { name: "查看原始声明 JSON" }).textContent!)).toEqual(tenantPolicyDetail.version.document);
@@ -5009,8 +5009,7 @@ describe("account access", () => {
     expect(submitted.requestId).toMatch(/^ui-policy-create-/);
     expect(await screen.findByText(/策略 customer.new 已创建/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查看策略" }));
-    await user.click(await screen.findByRole("tab", { name: "策略信息" }));
-    expect(within(screen.getByRole("tabpanel", { name: "策略信息" })).getByText("customer.new")).toBeTruthy();
+    expect(within(await screen.findByRole("complementary", { name: "策略信息" })).getByText("customer.new")).toBeTruthy();
   });
 
   it("explains and reviews a Profile-declared trusted request-tag condition without exposing arbitrary keys", async () => {
@@ -6252,6 +6251,11 @@ describe("account access", () => {
     await waitFor(() => expect(replacement.getUser).toHaveBeenCalledTimes(1));
     const attach = await screen.findByRole("button", { name: "关联策略" }) as HTMLButtonElement;
     const revoke = screen.getByRole("button", { name: "撤销策略 ReadOnlyAccess" }) as HTMLButtonElement;
+    const attachments = screen.getByRole("table", { name: "直接关联策略" });
+    const policyLink = within(attachments).getByRole<HTMLAnchorElement>("link", { name: tenantPolicy.displayName });
+    const destination = new URL(policyLink.href);
+    expect(destination.pathname.replace(/\/$/, "")).toBe("/console/access/policies");
+    expect(destination.searchParams.get("id")).toBe(tenantPolicy.id);
     expect(attach.disabled).toBe(true);
     expect(revoke.disabled).toBe(true);
     expect(replacementExecute).not.toHaveBeenCalled();

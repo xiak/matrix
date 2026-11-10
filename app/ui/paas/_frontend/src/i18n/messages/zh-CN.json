@@ -2631,6 +2631,7 @@
     "next": "下一页"
   },
   "AuthorizationProfileCatalog": {
+    "declarationMetadata": "声明信息",
     "title": "权限能力目录",
     "notice": "按产品查找编写策略可用的操作、资源和条件。实际权限由 IAM 按请求判定。",
     "mockNotice": "这是隔离 MOCK 的权限能力目录示例，不来自 IAM 注册表，示例摘要不具备信任含义，也不会授予真实权限。",
@@ -3838,6 +3839,7 @@
     }
   },
   "ManagedService": {
+    "instanceInformation": "实例信息",
     "catalogVisibilityHelp": "哪些产品可以查看",
     "bindingHelp": "服务绑定与授权的关系",
     "redisConnectionHint": "请使用 Redis 客户端连接上方端点，业务用户名为 matrix。向平台管理员领取本实例的密码；Matrix 登录密码不能用于 Redis。",
@@ -4608,6 +4610,7 @@
     "confirm": "确认变更"
   },
   "RoleWorkspace": {
+    "roleInformation": "角色信息",
     "rolePermissionsHelp": "角色权限如何生效",
     "trustHistoryHelp": "信任版本如何保存",
     "attachedPoliciesHelp": "关联策略的作用",
@@ -4872,6 +4875,7 @@
     "trustHistoryHint": "每次修改都会发布一个不可变版本并选为当前版本。历史版本用于审计与对比，不能从这里重新选为当前配置。",
     "loadingTrustHistory": "正在加载信任版本",
     "trustHistoryUnavailable": "信任版本暂时不可用",
+    "searchTrustVersions": "搜索信任版本",
     "trustHistoryPageHint": "这里只显示 IAM 已返回的不可变版本；如有后续游标，请继续加载。",
     "noTrustHistory": "暂无信任版本",
     "noTrustHistoryHint": "IAM 尚未返回该角色的信任版本。",
@@ -4954,6 +4958,7 @@
     "previewDeleteReceiptHint": "该角色已从当前浏览器体验会话中移除。这不是 IAM 服务器回执，也不会改变真实账号。"
   },
   "IamWorkspace": {
+    "keyInformation": "访问密钥信息",
     "accessKeyHelp": "访问密钥如何获得权限",
     "keyProductsHelp": "哪些产品支持访问密钥",
     "selectionEmpty": "尚未选择对象",
@@ -5502,6 +5507,7 @@
       }
     },
     "accessAnalysis": {
+      "findingInformation": "发现项信息",
       "findingsHelp": "分析结果的含义",
       "reviewStateHelp": "归档如何影响资源",
       "evidenceHelp": "分析记录如何关联",

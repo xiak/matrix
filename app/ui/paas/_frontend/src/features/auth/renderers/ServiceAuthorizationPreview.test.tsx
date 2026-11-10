@@ -99,10 +99,9 @@ describe("ServiceAuthorizationPreview", () => {
     expect(within(bindings).getByText("org-xiak")).toBeTruthy();
     expect(within(bindings).getByText("preview.service-linked-role.managed-service-installation-read")).toBeTruthy();
     expect(within(bindings).getByText("managedservice.installation-reader@v1")).toBeTruthy();
-    expect(screen.getByText("第 1 页")).toBeTruthy();
     expect(screen.getByText("当前 MOCK 只展示一页精确绑定；LIVE 读取仅按后端返回的不透明游标继续，不推断总页数。")).toBeTruthy();
-    expect((screen.getByRole("button", { name: "上一页绑定" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "下一页绑定" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(within(bindings).getAllByRole("row")).toHaveLength(2);
+    expect(screen.queryByRole("button", { name: "下一页绑定" })).toBeNull();
 
     await user.click(screen.getByRole("tab", { name: "运行边界" }));
     expect(screen.getByRole("heading", { name: "ServiceRoleSession" })).toBeTruthy();

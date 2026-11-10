@@ -1,9 +1,9 @@
 "use client";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { DirectoryScope, useDirectoryQuery, useDirectoryTab } from "@/features/control-plane/routes/ConsoleNavigation";
 import { Ban, Check, ChevronDown, CircleCheck, CircleHelp, CodeXml, KeyRound, Monitor } from "lucide-react";
-import { Alert, Badge, Button, EmptyState, FormField, HelpDisclosure, Input, Table, TableSkeleton, Tabs, useLeaveConfirmation } from "@ui/xiak";
+import { Alert, Badge, Button, Card, EmptyState, FormField, HelpDisclosure, Input, Table, TableSkeleton, Tabs, useLeaveConfirmation } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { UserDeletionRecoveryUnavailable, UserDeletionRejected, useAccountAccess, type UserBoundarySnapshot, type UserDeletionClient } from "../application/AccountAccessProvider";
 import { useUserManagementMutation } from "../application/userManagementMutation";
@@ -72,15 +72,12 @@ export function AccountUserStatus({ state, directory = false }: { state: Account
   </Badge>;
 }
 
-function UserIdentitySummary({ user, editAction }: { user: AccountUserScene; editAction?: ReactNode }) {
+function UserIdentitySummary({ user }: { user: AccountUserScene }) {
   const t = useTranslations("AccountAccess");
   const auth = useTranslations("Auth");
   const { scene } = useAccountAccess();
   return <section className={styles.identitySummary} aria-label={t("userProfile")}>
-    <div className={styles.userSectionHeader}>
-      <div className={styles.userName}><h2>{user.name}</h2><AccountUserStatus state={user.state} /></div>
-      {editAction}
-    </div>
+    <div className={styles.userName}><h2>{user.name}</h2><AccountUserStatus state={user.state} /></div>
     <dl className={styles.userMeta}>
       <div><dt>{auth("loginName")}</dt><dd>{user.qualifiedName}</dd></div>
       <div><dt>{t("owningAccount")}</dt><dd>{scene?.accountName ?? user.accountId}</dd></div>
@@ -282,24 +279,27 @@ function LiveUserWorkspace({ userId, summary, tab, onTabChange, onBack }: LiveUs
   const { user } = loaded;
   const section = tab ?? "policies";
   const canManage = command.ready && userManagement && !access.busy && !access.loading;
-  return <WorkspaceDetail title={user.loginName} onBack={onBack}>
-    <UserIdentitySummary user={user} editAction={<Button ref={renameRef} disabled={!canManage || !user.canUpdate}
+  return <WorkspaceDetail title={user.loginName} onBack={onBack} information={{
+    title: t("userProfile"),
+    content: <UserIdentitySummary user={user} />,
+    footer: <Button ref={renameRef} disabled={!canManage || !user.canUpdate}
       title={!user.canUpdate ? t(`restrictions.${user.updateRestrictionReason ?? "AUTHORITY_REQUIRED"}`) : undefined}
-      onClick={() => requestLeave(() => { returnAction.current = "rename"; setWorkflow("rename"); })} size="small" variant="secondary">{t("editDisplayName")}</Button>} />
+      onClick={() => requestLeave(() => { returnAction.current = "rename"; setWorkflow("rename"); })} size="small" variant="secondary">{t("editDisplayName")}</Button>
+  }}>
     {commandFeedback}
     {access.error ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
     {access.success ? <Alert status="success">{t(access.success)}</Alert> : null}
-    <Tabs.Root activationMode="manual" value={section} onValueChange={(next) => onTabChange(next as LiveUserTab)}>
-      <Tabs.List ref={tabList} variant="underline" aria-label={t("userProfile")} className={styles.userTabs}>
+    <Card><Tabs.Root activationMode="manual" value={section} onValueChange={(next) => onTabChange(next as LiveUserTab)}>
+      <Tabs.Bar><Tabs.List ref={tabList} variant="underline" aria-label={t("userProfile")} className={styles.userTabs}>
         <Tabs.Trigger value="policies">{w("permissions")}</Tabs.Trigger>
         <Tabs.Trigger value="keys">{w("keys")}</Tabs.Trigger>
         <Tabs.Trigger value="security">{t("loginSecurity")}</Tabs.Trigger>
-      </Tabs.List>
-      <Tabs.Content value="policies" className={styles.userSections}>
+      </Tabs.List></Tabs.Bar>
+      <Tabs.Content inset="panel" value="policies" className={styles.userSections}>
         <UserDirectPolicies key={user.resourceVersion} user={user} />
         {permissionBoundaries && loaded.boundary ? <LivePermissionBoundary client={permissionBoundaries} snapshot={loaded.boundary} onChanged={boundaryChanged} /> : null}
       </Tabs.Content>
-      <Tabs.Content value="keys" className={styles.userSections}>
+      <Tabs.Content inset="panel" value="keys" className={styles.userSections}>
         {access.accessKeys && access.scene ? <>
           <LiveAccessCredentials accountSecuritySettings={access.accountSecuritySettings} authorizationProfiles={access.authorizationProfiles}
             client={access.accessKeys} scene={access.scene} createIntent={access.accessKeyCreateIntent} mutationIntent={access.accessKeyMutationIntent}
@@ -308,12 +308,12 @@ function LiveUserWorkspace({ userId, summary, tab, onTabChange, onBack }: LiveUs
           <HelpDisclosure label={t("accessMethodsAndCredentials")}>{t("liveCredentialManagedHint")}</HelpDisclosure>
         </> : <p className={styles.note}>{t("liveCredentialContractHint")}</p>}
       </Tabs.Content>
-      <Tabs.Content value="security">
+      <Tabs.Content inset="panel" value="security">
         <UserSignInSecurity key={`${user.id}:${user.resourceVersion}`} user={user} statusDisabled={!canManage} statusActionRef={statusRef}
           onStatus={() => { returnAction.current = "status"; setWorkflow("status"); }}
           onDelete={userDeletion && !access.userDeletionRecoveryError && !unknown ? () => setDeleting(true) : undefined} />
       </Tabs.Content>
-    </Tabs.Root>
+    </Tabs.Root></Card>
     {deleting && userDeletion ? <LiveUserDelete key={`${userDeletion.identity}:${loaded.user.id}`} user={loaded.user} client={userDeletion}
       onClose={() => setDeleting(false)} onDeleted={setDeleted} onUnknown={() => setDeleting(false)} /> : null}
   </WorkspaceDetail>;
@@ -323,11 +323,11 @@ export function AccountPrimaryWorkspace({ scene, onBack, onOpen }: { scene: Acco
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const primary = scene.accountOwner;
-  return <WorkspaceDetail title={primary.loginName} onBack={onBack} actions={{ primary: { id: "settings", label: t("settings"), variant: "secondary", onSelect: () => onOpen("settings") } }}>
-    <div className={styles.userSummary}><div><strong>{primary.name ?? t("resourceOwner")}</strong><span className={styles.note}>{scene.accountName}</span></div><Badge>{t("primary")}</Badge></div>
-
-    <Tabs.Root defaultValue="identity"><Tabs.List aria-label={primary.loginName}><Tabs.Trigger value="identity">{t("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{t("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="permissions">{w("permissions")}</Tabs.Trigger></Tabs.List>
-      <Tabs.Content className={styles.stack} value="identity"><dl className={styles.facts}>
+  return <WorkspaceDetail title={primary.loginName} onBack={onBack} information={{
+    title: t("accountIdentity"), content: <div className={styles.userSummary}><div><strong>{primary.name ?? t("resourceOwner")}</strong><span className={styles.note}>{scene.accountName}</span></div><Badge>{t("primary")}</Badge></div>
+  }} actions={{ primary: { id: "settings", label: t("settings"), variant: "secondary", onSelect: () => onOpen("settings") } }}>
+    <Card><Tabs.Root defaultValue="identity"><Tabs.Bar><Tabs.List variant="underline" aria-label={primary.loginName}><Tabs.Trigger value="identity">{t("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{t("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="permissions">{w("permissions")}</Tabs.Trigger></Tabs.List></Tabs.Bar>
+      <Tabs.Content inset="panel" className={styles.stack} value="identity"><dl className={styles.facts}>
         <div><dt>{t("userType")}</dt><dd>{t("primary")}{primary.isCurrent ? ` · ${t("signedIn")}` : ""}</dd></div>
         <div><dt>{t("ownership")}</dt><dd>{scene.accountName}</dd></div>
         <div><dt>{t("tenantId")}</dt><dd>{scene.accountId}</dd></div>
@@ -335,9 +335,9 @@ export function AccountPrimaryWorkspace({ scene, onBack, onOpen }: { scene: Acco
         <div><dt>{t("currentLoginName")}</dt><dd>{primary.loginName}</dd></div>
         <div><dt>{t("status")}</dt><dd>{primary.state ? t(`states.${primary.state}`) : t("unknown")}</dd></div>
       </dl></Tabs.Content>
-      <Tabs.Content className={styles.stack} value="access"><dl className={styles.facts}><div><dt>{t("accessMethods")}</dt><dd>{t("primaryConsoleAccess")}</dd></div></dl><p className={styles.note}>{t("primaryCredentialsHint")}</p></Tabs.Content>
-      <Tabs.Content className={styles.stack} value="permissions"><section className={styles.identitySection}><h3>{t("resourceOwner")}</h3><p className={styles.note}>{t("ownerPermissionsHint")}</p><p className={styles.note}>{t("rootIdentityBoundaryHint")}</p></section></Tabs.Content>
-    </Tabs.Root>
+      <Tabs.Content inset="panel" className={styles.stack} value="access"><dl className={styles.facts}><div><dt>{t("accessMethods")}</dt><dd>{t("primaryConsoleAccess")}</dd></div></dl><p className={styles.note}>{t("primaryCredentialsHint")}</p></Tabs.Content>
+      <Tabs.Content inset="panel" className={styles.stack} value="permissions"><section className={styles.identitySection}><h3>{t("resourceOwner")}</h3><p className={styles.note}>{t("ownerPermissionsHint")}</p><p className={styles.note}>{t("rootIdentityBoundaryHint")}</p></section></Tabs.Content>
+    </Tabs.Root></Card>
   </WorkspaceDetail>;
 }
 
@@ -365,6 +365,12 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
   const securityActionFocus = useRef<HTMLButtonElement>(null);
   const previousSecurity = useRef(false);
   const [association, setAssociation] = useState<"groups" | "policies" | null>(null);
+  const associationTrigger = useRef<HTMLButtonElement>(null);
+  const previousAssociation = useRef(association);
+  useLayoutEffect(() => {
+    if (previousAssociation.current && !association) associationTrigger.current?.focus({ preventScroll: true });
+    previousAssociation.current = association;
+  }, [association]);
   const groups = workspace.groups.filter((group) => group.memberIds.includes(user.id));
   const direct = workspace.userPolicies[user.id] ?? [];
   const inherited = [...new Set(groups.flatMap((group) => group.policyIds))];
@@ -399,37 +405,39 @@ export function AccountUserWorkspace({ user, scene, workspace, initialTab = "ide
     <UserDirectPolicies user={user} />
     <UserSignInSecurity key={`${user.id}:${user.resourceVersion}`} user={user} />
   </WorkspaceDetail>;
-  return <WorkspaceDetail title={user.loginName} onBack={onBack} focus={focusDetailHeading} actionFocusRef={editActionFocus} actions={workflow === "edit" ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setWorkflow("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: !user.canDelete, disabledReason: !user.canDelete ? a(`restrictions.${user.deleteRestrictionReason ?? "AUTHORITY_REQUIRED"}`) : undefined, onSelect: onDelete }] }}>
-    {workflow === "edit" ? <UserEditor user={user} onClose={() => setWorkflow(null)} /> : <>
-    <div className={styles.userSummary}><div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div><div className={styles.roleTags}><Badge>{a("child")}</Badge><AccountUserStatus state={user.state} /></div></div>
-    <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as AccountUserDetailTab)}><RelationshipTabs aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></RelationshipTabs>
-      <Tabs.Content className={styles.stack} value="identity"><dl className={styles.facts}>
-        <div><dt>{a("userType")}</dt><dd>{a("child")}</dd></div><div><dt>{a("ownership")}</dt><dd>{scene.accountName}</dd></div><div><dt>{a("tenantId")}</dt><dd>{scene.accountId}</dd></div><div><dt>{a("userId")}</dt><dd>{user.id}</dd></div><div><dt>{a("currentLoginName")}</dt><dd>{user.loginName}</dd></div><div><dt>{a("qualifiedLogin")}</dt><dd>{user.qualifiedName}</dd></div>
-        {profile ? <div><dt>{wizard("steps.tags")}</dt><dd>{profile.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}{!profile.tags.length ? wizard("none") : null}</dd></div> : null}
-      </dl><p className={styles.note}>{a("subuserOwnershipHint")}</p></Tabs.Content>
-      <Tabs.Content className={styles.stack} value="access"><AccountUserAccessMethods user={user} workspace={workspace} /><p className={styles.note}>{a("accessPermissionHint")}</p><p className={styles.note}>{wizard("keyHint")}</p><p className={styles.note}>{wizard("mockSecurity")}</p></Tabs.Content>
-      <Tabs.Content className={styles.stack} value="policies"><div className={styles.actions}><Button variant="secondary" onClick={() => setAssociation("policies")}>{t("associate")}</Button><Button variant="secondary" onClick={() => onOpen("policy-configuration", user.id)}>{t("policyConfigurationReview")}</Button></div><p className={styles.note}>{a("permissionSourceHint")}</p>
-        <AuthorizationOverview title={t("grantOverview")} hint={t("grantOverviewHint")} items={[
+  return <WorkspaceDetail title={user.loginName} onBack={onBack} focus={focusDetailHeading} information={workflow ? null : {
+    title: a("userProfile"),
+    content: <div className={styles.userSummary}><div><strong>{user.name}</strong><span className={styles.note}>{user.qualifiedName}</span></div><div className={styles.roleTags}><Badge>{a("child")}</Badge><AccountUserStatus state={user.state} /></div></div>,
+    related: activeTab === "policies" ? <AuthorizationOverview title={t("grantOverview")} hint={t("grantOverviewHint")} items={[
           { label: t("directPolicies"), value: <RelationshipLink view="users" id={user.id} tab="policies" scope="direct">{direct.length} {t(direct.length === 1 ? "item" : "items")}</RelationshipLink> },
           { label: t("inheritedPolicies"), value: <RelationshipLink view="users" id={user.id} tab="policies" scope="inherited">{inherited.length} {t(inherited.length === 1 ? "item" : "items")}</RelationshipLink> },
           { label: t("policiesWithDeny"), value: <RelationshipLink view="users" id={user.id} tab="policies" scope="deny">{policiesWithDeny.size} {t(policiesWithDeny.size === 1 ? "item" : "items")}</RelationshipLink> },
           { label: t("permissionBoundary"), value: t(boundary ? "configured" : "notConfigured") }
-        ]} />
+        ]} /> : null
+  }} actionFocusRef={editActionFocus} actions={workflow === "edit" ? undefined : { primary: { id: "edit", label: t("edit"), variant: "secondary", onSelect: () => setWorkflow("edit") }, secondary: [{ id: "delete", label: t("delete"), danger: true, disabled: !user.canDelete, disabledReason: !user.canDelete ? a(`restrictions.${user.deleteRestrictionReason ?? "AUTHORITY_REQUIRED"}`) : undefined, onSelect: onDelete }] }}>
+    {workflow === "edit" ? <UserEditor user={user} onClose={() => setWorkflow(null)} /> : <Card>
+    <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as AccountUserDetailTab)}><Tabs.Bar actions={activeTab === "policies" ? <><Button ref={associationTrigger} size="small" onClick={() => { setFocusDetailHeading(false); setAssociation("policies"); }}>{t("associate")}</Button><Button size="small" variant="secondary" onClick={() => onOpen("policy-configuration", user.id)}>{t("policyConfigurationReview")}</Button></> : activeTab === "groups" ? <Button ref={associationTrigger} size="small" variant="secondary" onClick={() => { setFocusDetailHeading(false); setAssociation("groups"); }}>{t("edit")}</Button> : undefined}><RelationshipTabs aria-label={user.loginName}><Tabs.Trigger value="identity">{a("identityInfo")}</Tabs.Trigger><Tabs.Trigger value="access">{a("accessMethods")}</Tabs.Trigger><Tabs.Trigger value="policies">{t("permissions")}</Tabs.Trigger><Tabs.Trigger value="groups">{t("userGroups")}</Tabs.Trigger><Tabs.Trigger value="security">{t("securitySettings")}</Tabs.Trigger><Tabs.Trigger value="keys">{t("keys")}</Tabs.Trigger></RelationshipTabs></Tabs.Bar>
+      <Tabs.Content inset="panel" className={styles.stack} value="identity"><dl className={styles.facts}>
+        <div><dt>{a("userType")}</dt><dd>{a("child")}</dd></div><div><dt>{a("ownership")}</dt><dd>{scene.accountName}</dd></div><div><dt>{a("tenantId")}</dt><dd>{scene.accountId}</dd></div><div><dt>{a("userId")}</dt><dd>{user.id}</dd></div><div><dt>{a("currentLoginName")}</dt><dd>{user.loginName}</dd></div><div><dt>{a("qualifiedLogin")}</dt><dd>{user.qualifiedName}</dd></div>
+        {profile ? <div><dt>{wizard("steps.tags")}</dt><dd>{profile.tags.map((tag) => <Badge key={tag.key}>{tag.key} : {tag.value || "—"}</Badge>)}{!profile.tags.length ? wizard("none") : null}</dd></div> : null}
+      </dl><p className={styles.note}>{a("subuserOwnershipHint")}</p></Tabs.Content>
+      <Tabs.Content inset="panel" className={styles.stack} value="access"><AccountUserAccessMethods user={user} workspace={workspace} /><p className={styles.note}>{a("accessPermissionHint")}</p><p className={styles.note}>{wizard("keyHint")}</p><p className={styles.note}>{wizard("mockSecurity")}</p></Tabs.Content>
+      <Tabs.Content inset="none" value="policies">
         <DirectoryScope label={scopeLabel}><WorkspaceRelationshipDirectory title={t("userPolicies")} searchLabel={t("searchUserPolicies")} items={visiblePolicies}
           columns={[t("name"), t("type"), t("documentEffect"), t("grantSource")]} emptyTitle={t("noSelection")}
           status={(shown) => relationship("completeResults", { shown, total: visiblePolicies.length })} footerNote={relationship("completeScope")}
           keywords={(policy) => [policy.description, t(policy.kind), ...groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => group.name)].join(" ")}
           row={(policy, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("policies", policy.id)}>{policy.name}</Table.PrimaryAction><small>{policy.description}</small></td><td>{t(policy.kind)}</td><td><Badge status={policiesWithDeny.has(policy.id) ? "danger" : "neutral"}>{t(policiesWithDeny.has(policy.id) ? "containsDeny" : "allowStatementsOnly")}</Badge></td><td><div className={styles.stack}>{direct.includes(policy.id) ? <span>{t("directPolicies")}</span> : null}{groups.filter((group) => group.policyIds.includes(policy.id)).map((group) => <button key={group.id} className={styles.userLink} disabled={blocked} onClick={() => onOpen("groups", group.id)}>{t("inheritedFrom", { name: group.name })}</button>)}</div></td></>} /></DirectoryScope>
-        <PermissionBoundary owner="user" workspace={workspace} value={boundary} onSave={(policyId) => access.executeWorkspace({ kind: "set-user-boundary", principalId: user.id, policyId })} onOpen={(id) => onOpen("policies", id)} />
+        <Card.Body><HelpDisclosure label={t("grantOverview")}>{a("permissionSourceHint")}</HelpDisclosure><PermissionBoundary owner="user" workspace={workspace} value={boundary} onSave={(policyId) => access.executeWorkspace({ kind: "set-user-boundary", principalId: user.id, policyId })} onOpen={(id) => onOpen("policies", id)} /></Card.Body>
       </Tabs.Content>
-      <Tabs.Content className={styles.stack} value="groups"><div><Button variant="secondary" onClick={() => setAssociation("groups")}>{t("edit")}</Button></div><WorkspaceRelationshipDirectory title={t("userGroups")} searchLabel={t("searchUserGroups")} items={groups}
+      <Tabs.Content inset="none" value="groups"><WorkspaceRelationshipDirectory title={t("userGroups")} searchLabel={t("searchUserGroups")} items={groups}
         columns={[t("name"), t("permissions")]} emptyTitle={t("empty")}
         status={(shown) => relationship("completeResults", { shown, total: groups.length })} footerNote={relationship("completeScope")}
         keywords={(group) => [group.description, ...group.policyIds].join(" ")}
         row={(group, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("groups", group.id)}>{group.name}</Table.PrimaryAction><small>{group.description}</small></td><td><RelationshipLink view="groups" id={group.id} tab="policies" label={group.name + " · " + t("permissions") + " · " + group.policyIds.length}>{group.policyIds.length}</RelationshipLink></td></>} /></Tabs.Content>
-      <Tabs.Content className={styles.stack} value="security"><dl className={styles.facts}><div><dt>{a("status")}</dt><dd>{a(`states.${user.state}`)}</dd></div>{profile ? <><div><dt>{wizard("forceReset")}</dt><dd>{wizard(profile.passwordResetRequired ? "enabled" : "disabled")}</dd></div><div><dt>{wizard("loginProtection")}</dt><dd>{wizard(profile.loginProtection ? "enabled" : "disabled")}</dd></div></> : null}<div><dt>{a("directPolicyAttachments")}</dt><dd>{user.attachments.map((attachment) => attachment.label).join(" · ") || a("noGrantLabel")}</dd></div></dl><p className={styles.note}>{wizard("mockSecurity")}</p>{user.protected ? <p className={styles.note}>{a("protectedHint")}</p> : null}<div><Button ref={securityActionFocus} variant="secondary" onClick={() => { setFocusDetailHeading(false); setWorkflow("security"); }}>{a("manage")}</Button></div></Tabs.Content>
-      <Tabs.Content value="keys"><AccessCredentials embedded scene={{ ...scene, users: [user] }} workspace={{ ...workspace, keys: workspace.keys.filter((key) => key.ownerId === user.id) }} /></Tabs.Content>
+      <Tabs.Content inset="panel" className={styles.stack} value="security"><dl className={styles.facts}><div><dt>{a("status")}</dt><dd>{a(`states.${user.state}`)}</dd></div>{profile ? <><div><dt>{wizard("forceReset")}</dt><dd>{wizard(profile.passwordResetRequired ? "enabled" : "disabled")}</dd></div><div><dt>{wizard("loginProtection")}</dt><dd>{wizard(profile.loginProtection ? "enabled" : "disabled")}</dd></div></> : null}<div><dt>{a("directPolicyAttachments")}</dt><dd>{user.attachments.map((attachment) => attachment.label).join(" · ") || a("noGrantLabel")}</dd></div></dl><p className={styles.note}>{wizard("mockSecurity")}</p>{user.protected ? <p className={styles.note}>{a("protectedHint")}</p> : null}<div><Button ref={securityActionFocus} variant="secondary" onClick={() => { setFocusDetailHeading(false); setWorkflow("security"); }}>{a("manage")}</Button></div></Tabs.Content>
+      <Tabs.Content inset="panel" value="keys"><AccessCredentials embedded scene={{ ...scene, users: [user] }} workspace={{ ...workspace, keys: workspace.keys.filter((key) => key.ownerId === user.id) }} /></Tabs.Content>
     </Tabs.Root>
-    </>}
+    </Card>}
   </WorkspaceDetail>;
 }

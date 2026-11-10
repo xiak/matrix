@@ -2631,6 +2631,7 @@
     "next": "Next"
   },
   "AuthorizationProfileCatalog": {
+    "declarationMetadata": "Declaration information",
     "title": "Permission catalog",
     "notice": "Find actions, resources and conditions to use in a policy. IAM evaluates access for each request.",
     "mockNotice": "This is an isolated MOCK permission catalog sample. It does not come from the IAM registry, its sample digests are not trusted, and it grants no real access.",
@@ -3838,6 +3839,7 @@
     }
   },
   "ManagedService": {
+    "instanceInformation": "Instance information",
     "catalogVisibilityHelp": "Which products are visible",
     "bindingHelp": "How service bindings relate to authorization",
     "redisConnectionHint": "Connect to the endpoint with a Redis client and the business username matrix. Obtain this instance’s password from your platform administrator; your Matrix login password does not authenticate to Redis.",
@@ -4608,6 +4610,7 @@
     "confirm": "Confirm change"
   },
   "RoleWorkspace": {
+    "roleInformation": "Role information",
     "rolePermissionsHelp": "How role permissions work",
     "trustHistoryHelp": "How trust versions are kept",
     "attachedPoliciesHelp": "What attached policies grant",
@@ -4872,6 +4875,7 @@
     "trustHistoryHint": "Each change publishes an immutable version and selects it as current. Historical versions are audit and comparison evidence; they cannot be re-selected here.",
     "loadingTrustHistory": "Loading trust versions",
     "trustHistoryUnavailable": "Trust versions are temporarily unavailable",
+    "searchTrustVersions": "Search trust versions",
     "trustHistoryPageHint": "Only immutable versions returned by IAM are shown. Continue loading when a cursor is present.",
     "noTrustHistory": "No trust versions",
     "noTrustHistoryHint": "IAM has not returned a trust version for this role.",
@@ -4954,6 +4958,7 @@
     "previewDeleteReceiptHint": "The role was removed from this browser preview session. This is not an IAM server receipt and does not change a real account."
   },
   "IamWorkspace": {
+    "keyInformation": "Access key information",
     "accessKeyHelp": "How access keys use permissions",
     "keyProductsHelp": "Which products accept access keys",
     "selectionEmpty": "No items selected",
@@ -5502,6 +5507,7 @@
       }
     },
     "accessAnalysis": {
+      "findingInformation": "Finding information",
       "findingsHelp": "Understanding analysis findings",
       "reviewStateHelp": "How archiving affects resources",
       "evidenceHelp": "How analysis records are linked",

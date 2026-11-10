@@ -26,6 +26,7 @@ import {
   Button,
   Card,
   ContentLayout,
+  ContentPage,
   FormField,
   Input,
   Typography
@@ -774,19 +775,20 @@ function InstallationContent({ scene, preview, accountId }: {
           setReview(null);
           window.setTimeout(() => authorizationTrigger.current?.focus({ preventScroll: true }), 0);
         }} />
-      </> : <>
-        <dl className={styles.installationFacts}>
-          <div><dt>{t("instanceId")}</dt><dd><Typography.Code>{selected.id}</Typography.Code></dd></div>
-          <div><dt>{t("product")}</dt><dd>{selected.engine}<small><Typography.Code>{selected.offeringId}</Typography.Code></small></dd></div>
+      </> : <ContentPage.Detail information={{ title: t("instanceInformation"), icon: <Server aria-hidden="true" />, content: <Card.Facts>
+          <div><dt>{t("instanceId")}</dt><dd><Table.Identifier value={selected.id} /></dd></div>
+          <div><dt>{t("product")}</dt><dd>{selected.engine}<small><Table.Identifier value={selected.offeringId} /></small></dd></div>
           <div><dt>{t("region")}</dt><dd>{selected.regionName}</dd></div>
-          {detailLoad.status === "ready" && detailLoad.installation.elasticsearch ? <div><dt>{t("elasticsearchDependency")}</dt><dd><Typography.Code>{detailLoad.installation.elasticsearch.installationId}</Typography.Code></dd></div> : null}
-          <div><dt>{t("status")}</dt><dd><Badge status={selected.status}>{t(`installationPhases.${selected.phase}`)}</Badge></dd></div>
-          <div><dt>{t("endpoint")}</dt><dd><Typography.Code>{selected.endpoint ?? t("unassigned")}</Typography.Code></dd></div>
-          <div><dt>{t("operationId")}</dt><dd><Typography.Code>{selected.operationId}</Typography.Code><small>{t(`operationKinds.${selected.operationKind}`)}</small></dd></div>
+          {detailLoad.status === "ready" && detailLoad.installation.elasticsearch ? <div><dt>{t("elasticsearchDependency")}</dt><dd><Table.Identifier value={detailLoad.installation.elasticsearch.installationId} /></dd></div> : null}
+          <div><dt>{t("operationId")}</dt><dd><Table.Identifier value={selected.operationId} /><small>{t(`operationKinds.${selected.operationKind}`)}</small></dd></div>
           <div><dt>{t("resourceVersion")}</dt><dd>{selected.resourceVersion}</dd></div>
           <div><dt>{t("createdAt")}</dt><dd>{format.timestamp(selected.createdAt)}</dd></div>
-          {selected.safeFailureCode ? <div><dt>{t("safeFailureCode")}</dt><dd><Typography.Code>{selected.safeFailureCode}</Typography.Code></dd></div> : null}
-        </dl>
+        </Card.Facts> }}>
+        <Card><Card.Header><Typography.Title as="h3" level={3}>{t("endpoint")}</Typography.Title></Card.Header>
+          <Card.Body><Typography.Code>{selected.endpoint ?? t("unassigned")}</Typography.Code>
+            {selected.safeFailureCode && <Alert status="warning">{t("safeFailureCode")} · <Typography.Code>{selected.safeFailureCode}</Typography.Code></Alert>}
+          </Card.Body>
+        </Card>
         {connectionHint && selected.phase === "READY" ? <Alert>{t(connectionHint)}</Alert> : null}
         {preview && accountId ? <Card className={styles.authorizationCard}>
           <Card.Header className={styles.authorizationHeading}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Eyebrow>{t("authorizationEyebrow")}</Typography.Eyebrow><Typography.Title as="h3" level={3}>{t("serviceAuthorization")}</Typography.Title><Typography.Text tone="muted">{t("serviceAuthorizationHint")}</Typography.Text></div><Badge status="warning">MOCK</Badge></Card.Header>
@@ -810,7 +812,7 @@ function InstallationContent({ scene, preview, accountId }: {
           preview={preview}
           trigger={terminationTrigger}
         /> : null}
-      </>}
+      </ContentPage.Detail>}
     </section>;
   }
 

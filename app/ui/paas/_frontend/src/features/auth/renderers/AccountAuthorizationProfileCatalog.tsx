@@ -162,8 +162,15 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
       <h2 ref={selectedHeading} tabIndex={-1}>{selected.profile.product}</h2>
       {client.preview ? <Badge status="warning">{t("mock")}</Badge> : null}
     </div>
+    <ContentPage.Detail information={{ title: t("declarationMetadata"), content: <Card.Facts>
+        <div><dt>{t("revision")}</dt><dd>{selected.profile.revision}</dd></div>
+        <div><dt>{t("callingService")}</dt><dd>{selected.profile.callingService}</dd></div>
+        <div><dt>{t("actions")}</dt><dd>{selected.profile.actions.length}</dd></div>
+        <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><Table.Identifier value={selected.contentDigest} /></dd></div>
+      </Card.Facts> }}>
     {selected.profile.actions.some((action) => action.scope !== "TENANT") ? <Alert status="warning">{t("platformScopeHint")}</Alert> : null}
-    <TableToolbar labels={toolbarLabels}
+    <Card>
+    {(selected.profile.actions.length > 1 || actionQuery || scopeFilter !== "all" || subjectFilter !== "all" || credentialFilter !== "all") && <TableToolbar labels={toolbarLabels}
       search={{ label: t("searchActions"), placeholder: t("searchActionsPlaceholder"), value: actionQuery, onChange: (value) => { setActionQuery(value); setPage(1); } }}
       filters={[
         { id: "scope", label: t("scopeFilter"), value: scopeFilter, options: [
@@ -184,20 +191,15 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
           { value: "ACCESS_KEY", label: t("credentials.ACCESS_KEY") }
         ], onChange: (value) => { setCredentialFilter(value as "all" | AuthorizationUserAuthenticationMethod); setPage(1); } }
       ]}
-      status={t("actionCount", { count: filteredActions.length })} />
+      status={t("actionCount", { count: filteredActions.length })} />}
     {visibleActions.length ? <AuthorizationActionTable actions={visibleActions} label={t("actionTable", { product: selected.profile.product })} />
       : <EmptyState title={t("noActions")} description={t("noActionsHint")} action={<Button variant="secondary" onClick={resetActions}>{toolbarLabels.resetQuery}</Button>} />}
     {selected.profile.actions.length > 10 ? <Table.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer> : null}
+    </Card>
     <details className={styles.trustDocuments} open={publishingEnabled || undefined}>
       <summary>{t("declarationInformation")}</summary>
       <p className={styles.note}>{t("detailHint")}</p>
       <p className={styles.note}>{t("admissionHint")}</p>
-      <dl className={styles.catalogFacts}>
-        <div><dt>{t("revision")}</dt><dd>{selected.profile.revision}</dd></div>
-        <div><dt>{t("callingService")}</dt><dd>{selected.profile.callingService}</dd></div>
-        <div><dt>{t("actions")}</dt><dd>{selected.profile.actions.length}</dd></div>
-        <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><code>{selected.contentDigest}</code></dd></div>
-      </dl>
       <AuthorizationOwnershipFlow
         title={t("responsibility.title")}
         hint={t("responsibility.hint")}
@@ -213,6 +215,7 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
         }))}
       />
     </details>
+    </ContentPage.Detail>
   </section>;
 
   const resetProducts = () => {

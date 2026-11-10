@@ -133,7 +133,11 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
       label: t(selectedUnused.lifecycle === "ACTIVE" ? "unused.transition.archiveAction" : "unused.transition.reopenAction"),
       onSelect: () => setUnusedTransition(selectedUnused.lifecycle === "ACTIVE" ? "ARCHIVED" : "ACTIVE")
     };
-    return <WorkspaceDetail key={selectedUnused.id} title={t("unused.detailTitle", { name: selectedUnused.name })} onBack={() => { setSelectedUnusedFinding(null); setUnusedTransitionNotice(null); }} actions={{
+    return <WorkspaceDetail key={selectedUnused.id} title={t("unused.detailTitle", { name: selectedUnused.name })} information={{ title: t("findingInformation"), content: <Card.Facts>
+          <div><dt>{t("unused.findingId")}</dt><dd><Table.Identifier value={selectedUnused.id} /></dd></div>
+          <div><dt>{t("unused.analyzerId")}</dt><dd><Table.Identifier value={selectedUnused.analyzerId} /></dd></div>
+          <div><dt>{t("account")}</dt><dd><Table.Identifier value={selectedUnused.accountId} /></dd></div>
+      </Card.Facts>, footer: <HelpDisclosure label={t("evidenceHelp")}>{t("unused.correlationBoundary")}</HelpDisclosure> }} onBack={() => { setSelectedUnusedFinding(null); setUnusedTransitionNotice(null); }} actions={{
       primary: lifecycleAction,
       secondary: [
         { id: "target", label: t("unused.reviewTarget"), onSelect: () => onNavigate(selectedUnused.target.view, selectedUnused.target.id) },
@@ -146,9 +150,6 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
       <Card.Header><div><Typography.Title as="h2" level={3}>{selectedUnused.name}</Typography.Title><Typography.Text tone="muted">{selectedUnused.subjectId}</Typography.Text></div><span className={styles.badgeRow}><Badge status="info">{t("unused.mockSample")}</Badge><Badge status={unusedFindingStatus[selectedUnused.lifecycle]} title={selectedUnused.lifecycle}>{t(`unused.lifecycle.${selectedUnused.lifecycle}`)}</Badge></span></Card.Header>
       <Card.Body className={styles.detail}>
         <dl className={styles.facts}>
-          <div><dt>{t("unused.findingId")}</dt><dd><code>{selectedUnused.id}</code></dd></div>
-          <div><dt>{t("unused.analyzerId")}</dt><dd><code>{selectedUnused.analyzerId}</code></dd></div>
-          <div><dt>{t("account")}</dt><dd><code>{selectedUnused.accountId}</code></dd></div>
           <div><dt>{t("unused.findingType")}</dt><dd>{t(`unused.types.${selectedUnused.findingType}`)}</dd></div>
           <div><dt>{t("unused.status")}</dt><dd>{t(`unused.lifecycle.${selectedUnused.lifecycle}`)}<small className={styles.factMeta}>{selectedUnused.lifecycle}</small></dd></div>
           <div><dt>{t("unused.principalType")}</dt><dd>{t(`unused.subjects.${selectedUnused.subjectKind}`)}</dd></div>
@@ -158,7 +159,7 @@ export function AccessAnalysisPreview({ workspace, scene, onBack, onNavigate }: 
           <div><dt>{t("unused.findingCreated")}</dt><dd><WorkspaceTime value={selectedUnused.generatedAt} /></dd></div>
           <div><dt>{t("unused.evidenceCoverage")}</dt><dd>{t("unused.completeSample")}</dd></div>
         </dl>
-        <HelpDisclosure label={t("evidenceHelp")}>{t("unused.correlationBoundary")}</HelpDisclosure>
+
         <AccessFindingRecoveryBoundary evidence={{
           recoveryEpoch: selectedUnused.recoveryEpoch,
           recoveryCommandId: selectedUnused.recoveryCommandId,
@@ -278,27 +279,24 @@ function CredentialReportPreview({ workspace, scene, onBack }: {
     UNOBSERVED: t("coverage.UNOBSERVED"), UNAVAILABLE: t("coverage.UNAVAILABLE")
   };
   const actions = { secondary: [{ id: "export", label: t("exportCsv"), disabledReason: t("exportUnavailable"), onSelect: () => undefined }] };
-  return <WorkspaceDetail key={`report:credentials:${workspace.accountId}`} title={workspaceT("credentialReport")} onBack={onBack} actions={actions}>
-    <Alert status="info">{t("previewBoundary")}</Alert>
-    <Card>
-      <Card.Header><div><Typography.Title as="h2" level={3}>{t("coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("coverageHint")}</Typography.Text></div><Badge status="info">{t("mock")}</Badge></Card.Header>
-      <Card.Body className={styles.detail}>
-        <dl className={styles.facts}>
-          <div><dt>{t("account")}</dt><dd><code>{report.accountId}</code></dd></div>
+  return <WorkspaceDetail key={`report:credentials:${workspace.accountId}`} title={workspaceT("credentialReport")} onBack={onBack} actions={actions} information={{
+    title: t("coverageTitle"), content: <><Card.Facts>
+          <div><dt>{t("account")}</dt><dd><Table.Identifier value={report.accountId} /></dd></div>
           <div><dt>{t("generatedAt")}</dt><dd><WorkspaceTime value={report.generatedAt} /></dd></div>
           <div><dt>{t("directory")}</dt><dd>{coverageLabels[report.coverage.directory]}</dd></div>
           <div><dt>{t("authenticator")}</dt><dd>{coverageLabels[report.coverage.authenticatorEnrollment]}</dd></div>
           <div><dt>{t("activityWindow")}</dt><dd>{coverageLabels[report.coverage.activityWindow]}</dd></div>
           <div><dt>{t("collectionStart")}</dt><dd>{report.coverage.collectionStart ? <WorkspaceTime value={report.coverage.collectionStart} /> : t("unavailable")}</dd></div>
-        </dl>
-        <section className={styles.stack} aria-labelledby="report-source-watermarks">
+        </Card.Facts><Badge status="info">{t("mock")}</Badge></>,
+    footer: <p className={styles.note}>{t("coverageHint")}</p>,
+    related: <Card><Card.Body><section className={styles.stack} aria-labelledby="report-source-watermarks">
           <Typography.Title as="h3" id="report-source-watermarks" level={3}>{t("sourceWatermarks")}</Typography.Title>
           <dl className={styles.activityEvidence}>
             {(["successfulLogin", "accessKeyUse", "roleUse", "businessOutcome"] as const).map((source) => <div key={source}><dt>{workspaceT(`activityObservations.${source}.title`)}</dt><dd>{report.coverage.sourceWatermarks[source] ? <WorkspaceTime value={report.coverage.sourceWatermarks[source]} /> : t("unavailable")}</dd></div>)}
           </dl>
-        </section>
-      </Card.Body>
-    </Card>
+        </section></Card.Body></Card>
+  }}>
+    <Alert status="info">{t("previewBoundary")}</Alert>
     <WorkspaceCollection embedded title={t("members")} description={t("membersHint")} items={members}
       columns={[t("member"), t("status"), t("accessMethods"), t("credentialEvidence"), t("directPolicies"), t("accessKeys")]}
       keywords={(user) => `${user.status} ${String(user.consoleAccess)} ${String(user.programmaticAccess)}`}
@@ -347,19 +345,11 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, initia
     },
     secondary: [{ id: "download", label: t("download"), disabledReason: t("downloadUnavailable"), onSelect: () => undefined }]
   };
-  return <WorkspaceDetail key={`report:security:${workspace.accountId}`} title={t(report ? "detailTitle" : "createTitle")} onBack={onBack} actions={actions}>
-    <Alert status="info">{t("mockBoundary")}</Alert>
-    <Card>
-      <Card.Header>
-        <div><Typography.Title as="h2" level={3}>{t(report ? "sealedTitle" : "reviewTitle")}</Typography.Title><Typography.Text tone="muted">{t(report ? "sealedHint" : "reviewHint")}</Typography.Text></div>
-        <Badge status={report ? "success" : "info"}>{t(report ? "available" : "review")}</Badge>
-      </Card.Header>
-      <Card.Body className={styles.detail}>
-        <dl className={styles.facts}>
-          <div><dt>{t("account")}</dt><dd><code>{workspace.accountId}</code></dd></div>
-          <div><dt>{t("requestId")}</dt><dd><code>{requestId}</code></dd></div>
+  const metadata = <Card.Facts>
+          <div><dt>{t("account")}</dt><dd><Table.Identifier value={workspace.accountId} /></dd></div>
+          <div><dt>{t("requestId")}</dt><dd><Table.Identifier value={requestId} /></dd></div>
           {report ? <>
-            <div><dt>{t("reportId")}</dt><dd><code>{report.reportId}</code></dd></div>
+            <div><dt>{t("reportId")}</dt><dd><Table.Identifier value={report.reportId} /></dd></div>
             <div><dt>{t("observedAt")}</dt><dd><WorkspaceTime value={report.observedAt} /></dd></div>
             <div><dt>{t("expiresAt")}</dt><dd><WorkspaceTime value={report.expiresAt} /></dd></div>
             <div><dt>{t("settingsVersion")}</dt><dd>v{report.accountSecuritySettingsVersion}</dd></div>
@@ -367,15 +357,27 @@ function AccountSecurityReportPreview({ workspace, scene, currentSession, initia
           <div><dt>{t("format")}</dt><dd>{t("formatValue", { version: report?.formatVersion ?? 2 })}</dd></div>
           <div><dt>{t("retention")}</dt><dd>{t("retentionValue", { days: accountSecurityReportLimits.retainedDays, reports: accountSecurityReportLimits.retainedReports })}</dd></div>
           <div><dt>{t("permissions")}</dt><dd className={styles.reportPermissions}><code>iam.security-report.create</code><code>iam.security-report.read</code><code>iam.security-report.download</code></dd></div>
-        </dl>
+        </Card.Facts>;
+  return <WorkspaceDetail key={`report:security:${workspace.accountId}`} title={t(report ? "detailTitle" : "createTitle")} onBack={onBack} actions={actions} information={report ? {
+    title: t("sealedTitle"), content: <><Badge status="success">{t("available")}</Badge>{metadata}</>,
+    footer: <p className={styles.note}>{t("sealedHint")}</p>
+  } : null}>
+    <Alert status="info">{t("mockBoundary")}</Alert>
+    {!report && <Card>
+      <Card.Header>
+        <div><Typography.Title as="h2" level={3}>{t("reviewTitle")}</Typography.Title><Typography.Text tone="muted">{t("reviewHint")}</Typography.Text></div>
+        <Badge status="info">{t("review")}</Badge>
+      </Card.Header>
+      <Card.Body className={styles.detail}>
+        {metadata}
       </Card.Body>
-    </Card>
+    </Card>}
     {report ? <Tabs.Root defaultValue="overview">
-      <Tabs.List aria-label={t("reportSections")}>
+      <Card><Tabs.Bar><Tabs.List variant="underline" aria-label={t("reportSections")}>
         <Tabs.Trigger value="overview">{t("overviewTab")}</Tabs.Trigger>
         <Tabs.Trigger value="users">{t("usersTab", { count: report.users.length })}</Tabs.Trigger>
         <Tabs.Trigger value="accessKeys">{t("accessKeysTab", { count: report.accessKeys.length })}</Tabs.Trigger>
-      </Tabs.List>
+      </Tabs.List></Tabs.Bar></Card>
       <Tabs.Content className={styles.stack} value="overview">
         <Card>
           <Card.Header><div><Typography.Title as="h2" level={3}>{t("scopeTitle")}</Typography.Title><Typography.Text tone="muted">{t("scopeHint")}</Typography.Text></div><Badge status="info">{t("immutable")}</Badge></Card.Header>

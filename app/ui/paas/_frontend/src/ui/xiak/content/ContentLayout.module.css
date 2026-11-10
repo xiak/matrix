@@ -7,6 +7,12 @@
   gap: var(--xiak-spacing-default);
   align-items: start;
 }
+.detailFrame { container: xiak-resource-detail / inline-size; min-width: 0; }
+.layout.detail { grid-template-columns: minmax(0, 1fr); }
+@container xiak-resource-detail (min-width: 48rem) {
+  .layout.detail { grid-template-columns: minmax(0, 1fr) clamp(15rem, 24%, 17rem); }
+}
+.detailFrame .detailFrame .layout.detail { grid-template-columns: minmax(0, 1fr); }
 
 .main,
 .aside {

@@ -1,7 +1,7 @@
 "use client";
 
 import * as Primitive from "@radix-ui/react-tabs";
-import { forwardRef, type ComponentProps, type ComponentPropsWithoutRef } from "react";
+import { forwardRef, type ComponentProps, type ComponentPropsWithoutRef, type ReactNode } from "react";
 import { classNames } from "../utils";
 import styles from "./Tabs.module.css";
 
@@ -18,6 +18,9 @@ const StaticSurface = forwardRef<HTMLDivElement, ComponentPropsWithoutRef<"div">
 });
 
 export const Tabs = {
+  Bar: function TabBar({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
+    return <div className={styles.bar}>{children}{actions && <div className={styles.commands}>{actions}</div>}</div>;
+  },
   Root: function TabRoot({ className, ...props }: ComponentProps<typeof Primitive.Root>) {
     return <Primitive.Root {...props} className={classNames(styles.root, className)} />;
   },
@@ -29,7 +32,7 @@ export const Tabs = {
   Trigger: function TabTrigger({ className, ...props }: ComponentProps<typeof Primitive.Trigger>) {
     return <Primitive.Trigger {...props} className={classNames(styles.trigger, className)} />;
   },
-  Content: function TabContent({ children, className, ...props }: Omit<ComponentProps<typeof Primitive.Content>, "asChild" | "style">) {
-    return <Primitive.Content {...props} asChild><StaticSurface className={classNames(styles.content, className)}>{children}</StaticSurface></Primitive.Content>;
+  Content: function TabContent({ children, className, inset, ...props }: Omit<ComponentProps<typeof Primitive.Content>, "asChild" | "style"> & { inset?: "none" | "panel" }) {
+    return <Primitive.Content {...props} asChild><StaticSurface data-inset={inset} className={classNames(styles.content, className)}>{children}</StaticSurface></Primitive.Content>;
   }
 };

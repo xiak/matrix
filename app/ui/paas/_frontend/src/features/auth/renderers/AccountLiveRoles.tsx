@@ -2,15 +2,15 @@
 
 import { useCallback, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Plus } from "lucide-react";
-import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, FormField, LoadingNotice, Select, Skeleton, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { Plus, Shield } from "lucide-react";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, FormField, LoadingNotice, Select, Skeleton, Table, TablePagination, TableSkeleton, TableToolbar, Tabs, type PageCommandsHandle } from "@ui/xiak";
 import { requestToken } from "@/infrastructure/http/jsonRequest";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { accountError, type RoleAccessClient, type RoleSessionRevokeIntent, type ServiceLinkedRoleClient, type ServiceRoleTemplateClient } from "../application/AccountAccessProvider";
 import type { AccountAccessView, AccountPolicy } from "../domain/accounts";
 import type { RoleAccess, RoleCapability, RoleCapabilityAction, RoleListing, RolePermissionBoundary, RoleTrustVersion, RoleTrustVersionDirectory } from "../domain/roles";
 import { useDirectoryTab } from "@/features/control-plane/routes/ConsoleNavigation";
-import { RelationshipTabs, AuthorizationOverview, RelationshipLink, WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { RelationshipTabs, AuthorizationOverview, RelationshipLink, WorkspaceDetail, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import { LiveRoleSessions } from "./LiveRoleSessions";
 import { LiveRoleDelete, LiveRoleMetadataEditor, LiveRolePolicyEditor, LiveRoleStatusEditor, LiveRoleTrustEditor, type LiveRoleDeletionReceipt } from "./LiveRoleManagement";
 import { readPendingPolicyAttachmentChange } from "./PolicyAttachmentChangeFlow";
@@ -231,7 +231,18 @@ function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: Ro
   const [directory, setDirectory] = useState<RoleTrustVersionDirectory | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null), [loadingMore, setLoadingMore] = useState(false);
-  const [selected, setSelected] = useState<RoleTrustVersion | null>(null), [page, setPage] = useState(1), [pageSize, setPageSize] = useState(10);
+  const [selected, setSelected] = useState<RoleTrustVersion | null>(null);
+  const relationship = useTranslations("RelationshipDirectory");
+  const versionTrigger = useRef<HTMLButtonElement>(null);
+  const detailHeading = useRef<HTMLHeadingElement>(null);
+  const returnToVersion = useRef(false);
+  useLayoutEffect(() => {
+    if (selected) detailHeading.current?.focus({ preventScroll: true });
+    else if (returnToVersion.current) {
+      returnToVersion.current = false;
+      versionTrigger.current?.focus({ preventScroll: true });
+    }
+  }, [selected]);
   const requests = useRef(0), pageRequests = useRef(0);
   const [refresh, setRefresh] = useState(0);
 
@@ -249,7 +260,7 @@ function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: Ro
   }, [a, client, refresh, roleId]);
 
   const retry = () => {
-    setPhase("loading"); setDirectory(null); setSelected(null); setError(null); setPage(1);
+    setPhase("loading"); setDirectory(null); setSelected(null); setError(null);
     setRefresh((value) => value + 1);
   };
 
@@ -269,24 +280,33 @@ function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: Ro
     }
   };
 
-  if (selected) return <section aria-label={t("trustVersionDetail")} className={styles.stack} role="group">
-    <div className={styles.sectionHeading}><Button variant="ghost" onClick={() => setSelected(null)}>{t("backToTrustHistory")}</Button><h3 className={styles.detailTitle}>{t("trustVersionDetail")}</h3></div>
-    <div className={styles.sectionHeading}><Badge status={selected.id === currentVersionId ? "success" : "neutral"}>{t(selected.id === currentVersionId ? "currentTrust" : "historicalTrust")}</Badge><code>{selected.id}</code></div>
-    <dl className={styles.facts}><div><dt>{w("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div><div><dt>{t("statementCount")}</dt><dd>{selected.document.statements.length}</dd></div><div><dt>{t("principalCount")}</dt><dd>{trustPrincipalCount(selected)}</dd></div><div><dt>{t("verifiedDigest")}</dt><dd><code>{selected.contentDigest}</code></dd></div></dl>
-    <pre className={styles.code}>{JSON.stringify(selected.document, null, 2)}</pre>
-  </section>;
-
   if (phase === "loading") return <TableSkeleton label={t("loadingTrustHistory")} rows={4} />;
   if (phase === "error") return <EmptyState title={t("trustHistoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={retry}>{t("retry")}</Button>} />;
-  const items = directory?.items ?? [], pages = Math.max(1, Math.ceil(items.length / pageSize)), current = Math.min(page, pages);
+  const items = directory?.items ?? [];
   return <div className={styles.stack} aria-busy={loadingMore}>
-    <HelpDisclosure label={t("trustHistoryHelp")}>{t("trustHistoryHint")}</HelpDisclosure>
-    {items.length ? <><Table aria-label={t("trustHistory")} mobileLayout="stack"><thead><tr><th scope="col">{t("trustVersion")}</th><th scope="col">{w("created")}</th><th scope="col">{t("trustedUsers")}</th><th scope="col">{w("state")}</th></tr></thead><tbody>{items.slice((current - 1) * pageSize, current * pageSize).map((version) => <tr key={version.id}>
-      <td data-label={t("trustVersion")}><Table.PrimaryAction onClick={() => setSelected(version)}>{version.id}</Table.PrimaryAction><small>{version.contentDigest}</small></td>
-      <td data-label={w("created")}><WorkspaceTime value={version.createdAt} /></td><td data-label={t("trustedUsers")}>{trustPrincipalCount(version)}</td>
-      <td data-label={w("state")}><Badge status={version.id === currentVersionId ? "success" : "neutral"}>{t(version.id === currentVersionId ? "currentTrust" : "historicalTrust")}</Badge></td>
-    </tr>)}</tbody></Table><Table.Footer note={t("trustHistoryPageHint")}><TablePagination page={current} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} trailing={directory?.nextAfter ? <Button size="small" variant="secondary" disabled={loadingMore} onClick={() => void loadMore()}>{t("loadMore")}</Button> : null} labels={{ summary: w("page", { page: current, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer></> : <EmptyState title={t("noTrustHistory")} description={t("noTrustHistoryHint")} />}
-    {error ? <Alert status="warning">{error}</Alert> : null}
+    {selected && <section aria-label={t("trustVersionDetail")} className={styles.stack} role="group">
+      <div className={styles.sectionHeading}><Button variant="ghost" onClick={() => { returnToVersion.current = true; setSelected(null); }}>{t("backToTrustHistory")}</Button><h3 ref={detailHeading} tabIndex={-1} className={styles.detailTitle}>{t("trustVersionDetail")}</h3></div>
+      <div className={styles.sectionHeading}><Badge status={selected.id === currentVersionId ? "success" : "neutral"}>{t(selected.id === currentVersionId ? "currentTrust" : "historicalTrust")}</Badge><Table.Identifier value={selected.id} /></div>
+      <dl className={styles.facts}><div><dt>{w("created")}</dt><dd><WorkspaceTime value={selected.createdAt} /></dd></div><div><dt>{t("statementCount")}</dt><dd>{selected.document.statements.length}</dd></div><div><dt>{t("principalCount")}</dt><dd>{trustPrincipalCount(selected)}</dd></div><div><dt>{t("verifiedDigest")}</dt><dd><Table.Identifier value={selected.contentDigest} /></dd></div></dl>
+      <pre className={styles.code}>{JSON.stringify(selected.document, null, 2)}</pre>
+  </section>}
+    <div className={styles.stack} hidden={Boolean(selected)}>
+      <HelpDisclosure label={t("trustHistoryHelp")}>{t("trustHistoryHint")}</HelpDisclosure>
+      <WorkspaceRelationshipDirectory title={t("trustHistory")} searchLabel={t("searchTrustVersions")}
+        items={items.map((version) => ({ ...version, name: version.id }))}
+        columns={[t("trustVersion"), w("created"), t("trustedUsers"), w("state")]}
+        emptyTitle={t("noTrustHistory")} emptyDescription={t("noTrustHistoryHint")}
+        keywords={(version) => version.contentDigest}
+        status={(shown, loaded) => directory?.nextAfter ? relationship("loadedResults", { shown, loaded }) : relationship("completeResults", { shown, total: loaded })}
+        footerNote={t("trustHistoryPageHint")}
+        loadMore={directory?.nextAfter ? { label: t("loadMore"), disabled: loadingMore, onClick: () => void loadMore() } : undefined}
+        row={(version, blocked) => <><td><Table.PrimaryAction disabled={blocked} onClick={(event) => {
+          versionTrigger.current = event.currentTarget; setSelected(version);
+        }}>{version.id}</Table.PrimaryAction><Table.Identifier value={version.contentDigest} /></td>
+          <td><WorkspaceTime value={version.createdAt} /></td><td>{trustPrincipalCount(version)}</td>
+          <td><Badge status={version.id === currentVersionId ? "success" : "neutral"}>{t(version.id === currentVersionId ? "currentTrust" : "historicalTrust")}</Badge></td></>} />
+      {error ? <Alert status="warning">{error}</Alert> : null}
+    </div>
   </div>;
 }
 
@@ -304,8 +324,27 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
   const [access, setAccess] = useState<RoleAccess | null>(null);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
+  const relationship = useTranslations("RelationshipDirectory");
   const [section, setSection] = useDirectoryTab("permissions", ["permissions", "trust", "trustHistory", "sessions", "capabilities"]);
   const [workflow, setWorkflow] = useState<"metadata" | "status" | "trust" | "addPolicy" | "removePolicy" | null>(null);
+  const commandFocus = useRef<PageCommandsHandle>(null);
+  const addTrigger = useRef<HTMLButtonElement>(null);
+  const removeTrigger = useRef<HTMLButtonElement>(null);
+  const trustTrigger = useRef<HTMLButtonElement>(null);
+  const tabList = useRef<HTMLDivElement>(null);
+  const previousWorkflow = useRef(workflow);
+  useLayoutEffect(() => {
+    const previous = previousWorkflow.current;
+    previousWorkflow.current = workflow;
+    if (!previous || workflow) return;
+    if (previous === "metadata" || previous === "status") {
+      commandFocus.current?.focus(previous === "metadata" ? "edit-role" : "set-role-status");
+      return;
+    }
+    const trigger = { addPolicy: addTrigger, removePolicy: removeTrigger, trust: trustTrigger }[previous].current;
+    const target = trigger && !trigger.disabled ? trigger : tabList.current?.querySelector<HTMLButtonElement>('[aria-selected="true"]');
+    target?.focus({ preventScroll: true });
+  }, [workflow]);
   const [deleting, setDeleting] = useState(false);
   const [deleted, setDeleted] = useState<LiveRoleDeletionReceipt | null>(null);
   const deletionNavigationStarted = useRef(false);
@@ -383,7 +422,24 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
     <RoleDeletionReceipt receipt={deleted} />
   </WorkspaceDetail>;
 
-  return <><WorkspaceDetail title={access?.role.name ?? roleId} onBack={() => onOpen("roles")} actions={actions}>
+  return <><WorkspaceDetail title={access?.role.name ?? roleId} onBack={() => onOpen("roles")} actionFocusRef={commandFocus} actions={actions} information={phase === "ready" && access && !workflow ? {
+    title: t("roleInformation"), icon: <Shield aria-hidden="true" />,
+    content: <><div className={styles.sectionHeading}>
+        <Badge status={access.role.status === "ACTIVE" ? "success" : "neutral"}>{t(access.role.status === "ACTIVE" ? "active" : "disabled")}</Badge>
+        <Badge>{t("customerManaged")}</Badge>
+      </div>
+      {access.role.description && <p className={styles.note}>{access.role.description}</p>}
+      <Card.Facts>
+        <div><dt>{t("roleId")}</dt><dd><Table.Identifier value={access.role.id} /></dd></div>
+        <div><dt>{t("resourceVersion")}</dt><dd>v{access.role.resourceVersion}</dd></div>
+        <div><dt>{t("maximumSession")}</dt><dd>{durationLabel(access.role.maxSessionDurationSeconds)}</dd></div>
+        <div><dt>{t("trustVersion")}</dt><dd><Table.Identifier value={access.trustVersion.id} /></dd></div>
+        <div><dt>{w("created")}</dt><dd><WorkspaceTime value={access.role.createdAt} /></dd></div>
+        <div><dt>{t("updated")}</dt><dd><WorkspaceTime value={access.role.updatedAt} /></dd></div>
+      </Card.Facts>
+      {access.role.tags.length ? <div className={styles.roleTags}>{access.role.tags.map((tag) => <Badge key={tag.key}>{tag.key}: {tag.value}</Badge>)}</div> : null}</>,
+    footer: <HelpDisclosure label={t("rolePermissionsHelp")}>{t("liveTrustExplanation")}</HelpDisclosure>
+  } : null}>
     {phase === "loading" ? <TableSkeleton label={t("loadingRole")} rows={4} header={false} /> : null}
     {phase === "error" ? <EmptyState title={t("roleUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={retry}>{t("retry")}</Button>} /> : null}
     {phase === "ready" && access ? workflow === "metadata" ? <LiveRoleMetadataEditor key={`${client.sessionRevision}:${access.role.id}:metadata`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setWorkflow(null)} />
@@ -391,48 +447,32 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
       : workflow === "trust" ? <LiveRoleTrustEditor key={`${client.sessionRevision}:${access.role.id}:trust`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setWorkflow(null)} />
       : workflow === "addPolicy" || workflow === "removePolicy" ? <LiveRolePolicyEditor key={`${client.sessionRevision}:${access.role.id}:${workflow}`} access={access} client={client} mode={workflow === "addPolicy" ? "add" : "remove"} onAccessChanged={setAccess} onClose={() => setWorkflow(null)} />
       : <>
-      <div className={styles.sectionHeading}>
-        <Badge status={access.role.status === "ACTIVE" ? "success" : "neutral"}>{t(access.role.status === "ACTIVE" ? "active" : "disabled")}</Badge>
-        <Badge>{t("customerManaged")}</Badge>
-      </div>
-      <p className={styles.note}>{access.role.description || w("none")}</p>
-      <HelpDisclosure label={t("rolePermissionsHelp")}>{t("liveTrustExplanation")}</HelpDisclosure>
-      <LiveRoleAuthorizationOverview key={`${client.sessionRevision}:${access.role.id}`} access={access} client={client} onAccessChanged={setAccess} onOpen={onOpen} />
-      <dl className={styles.facts}>
-        <div><dt>{t("roleId")}</dt><dd><code>{access.role.id}</code></dd></div>
-        <div><dt>{t("resourceVersion")}</dt><dd>v{access.role.resourceVersion}</dd></div>
-        <div><dt>{t("maximumSession")}</dt><dd>{durationLabel(access.role.maxSessionDurationSeconds)}</dd></div>
-        <div><dt>{t("trustVersion")}</dt><dd><code>{access.trustVersion.id}</code></dd></div>
-        <div><dt>{w("created")}</dt><dd><WorkspaceTime value={access.role.createdAt} /></dd></div>
-        <div><dt>{t("updated")}</dt><dd><WorkspaceTime value={access.role.updatedAt} /></dd></div>
-      </dl>
-      {access.role.tags.length ? <div className={styles.roleTags}>{access.role.tags.map((tag) => <Badge key={tag.key}>{tag.key}: {tag.value}</Badge>)}</div> : null}
-      <Tabs.Root value={section} onValueChange={setSection}>
-        <RelationshipTabs aria-label={access.role.name}>
+      <Card><Tabs.Root ref={tabList} value={section} onValueChange={setSection}>
+        <Tabs.Bar actions={section === "permissions" ? <>
+            <Button ref={addTrigger} size="small" disabled={attachmentCapability?.available !== true} title={attachmentCapability?.available === true ? undefined : actionReason(attachmentCapability)} onClick={() => setWorkflow("addPolicy")}>{t("addPolicies")}</Button>
+            <Button ref={removeTrigger} size="small" variant="secondary" disabled={!canRevokeAttachment} title={canRevokeAttachment ? undefined : t("noRevocablePolicies")} onClick={() => setWorkflow("removePolicy")}>{t("removePolicies")}</Button>
+          </> : section === "trust" ? <Button ref={trustTrigger} size="small" disabled={trustCapability?.available !== true} title={trustCapability?.available === true ? undefined : actionReason(trustCapability)} onClick={() => setWorkflow("trust")}>{t("editTrust")}</Button> : undefined}><RelationshipTabs aria-label={access.role.name}>
           <Tabs.Trigger value="permissions">{t("livePermissions")} ({access.policyAttachments.length})</Tabs.Trigger>
           <Tabs.Trigger value="trust">{t("liveTrust")} ({access.trustVersion.document.statements.length})</Tabs.Trigger>
           <Tabs.Trigger value="trustHistory">{t("trustHistory")}</Tabs.Trigger>
           <Tabs.Trigger value="sessions">{t("liveSessions")}</Tabs.Trigger>
           <Tabs.Trigger value="capabilities">{t("availableOperations")}</Tabs.Trigger>
-        </RelationshipTabs>
-        <Tabs.Content className={styles.stack} value="permissions">
-          <div className={styles.actions}>
-            <Button variant="secondary" disabled={attachmentCapability?.available !== true} title={attachmentCapability?.available === true ? undefined : actionReason(attachmentCapability)} onClick={() => setWorkflow("addPolicy")}>{t("addPolicies")}</Button>
-            <Button variant="ghost" disabled={!canRevokeAttachment} title={canRevokeAttachment ? undefined : t("noRevocablePolicies")} onClick={() => setWorkflow("removePolicy")}>{t("removePolicies")}</Button>
-          </div>
-          <HelpDisclosure label={t("attachedPoliciesHelp")}>{t("permissionsAreRoleGrants")} {t("policyAttachmentAuthorityHint")}</HelpDisclosure>
-          {access.policyAttachments.length ? <Table aria-label={t("livePermissions")} mobileLayout="stack">
-            <thead><tr><th scope="col">{t("policyId")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("attachmentVersion")}</th><th scope="col">{t("updated")}</th></tr></thead>
-            <tbody>{access.policyAttachments.map((attachment) => <tr key={attachment.id}>
-              <td data-label={t("policyId")}><Table.PrimaryAction onClick={() => onOpen("policies", attachment.policyId)}>{attachment.policyId}</Table.PrimaryAction><small>{attachment.id}</small></td>
+        </RelationshipTabs></Tabs.Bar>
+        <Tabs.Content inset="none" className={styles.stack} value="permissions">
+          <WorkspaceRelationshipDirectory title={t("livePermissions")} searchLabel={t("searchAttachedPolicies")}
+            items={access.policyAttachments.map((attachment) => ({ ...attachment, name: attachment.policyId }))}
+            columns={[t("policyId"), t("scope"), t("attachmentVersion"), t("updated")]}
+            status={(shown, loaded) => relationship("completeResults", { shown, total: loaded })} footerNote={relationship("completeScope")}
+            emptyTitle={t("noLivePermissions")} emptyDescription={t("noLivePermissionsHint")}
+            row={(attachment, blocked) => <>
+              <td data-label={t("policyId")}><Table.PrimaryAction disabled={blocked} onClick={() => onOpen("policies", attachment.policyId)}>{attachment.policyId}</Table.PrimaryAction><Table.Identifier value={attachment.id} /></td>
               <td data-label={t("scope")}>{t("tenantScope")}</td>
               <td data-label={t("attachmentVersion")}>v{attachment.resourceVersion}</td>
               <td data-label={t("updated")}><WorkspaceTime value={attachment.updatedAt} /></td>
-            </tr>)}</tbody>
-          </Table> : <EmptyState title={t("noLivePermissions")} description={t("noLivePermissionsHint")} />}
+            </>} />
+          <Card.Footer><HelpDisclosure label={t("attachedPoliciesHelp")}>{t("permissionsAreRoleGrants")} {t("policyAttachmentAuthorityHint")}</HelpDisclosure></Card.Footer>
         </Tabs.Content>
-        <Tabs.Content className={styles.stack} value="trust">
-          <div><Button variant="secondary" disabled={trustCapability?.available !== true} title={trustCapability?.available === true ? undefined : actionReason(trustCapability)} onClick={() => setWorkflow("trust")}>{t("editTrust")}</Button></div>
+        <Tabs.Content inset="panel" className={styles.stack} value="trust">
           <HelpDisclosure label={t("trustHelp")}>{t("trustIsAdmissionOnly")}</HelpDisclosure>
           {access.trustVersion.document.statements.length ? <Table aria-label={t("liveTrust")} mobileLayout="stack">
             <thead><tr><th scope="col">SID</th><th scope="col">{t("effect")}</th><th scope="col">{t("trustedUsers")}</th></tr></thead>
@@ -448,13 +488,13 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
           </details>
           <p className={styles.note}>{t("verifiedDigest")}: <code>{access.trustVersion.contentDigest}</code></p>
         </Tabs.Content>
-        <Tabs.Content className={styles.stack} value="trustHistory">
+        <Tabs.Content inset="panel" className={styles.stack} value="trustHistory">
           {section === "trustHistory" ? <LiveRoleTrustHistory client={client} roleId={roleId} currentVersionId={access.role.currentTrustVersionId} /> : null}
         </Tabs.Content>
-        <Tabs.Content className={styles.stack} value="sessions">
+        <Tabs.Content inset="panel" className={styles.stack} value="sessions">
           {section === "sessions" ? <LiveRoleSessions client={client} roleId={roleId} listCapability={access.capabilities.find((capability) => capability.action === "iam.role-session.list")!} revokeIntent={revokeIntent} onRevokeIntentChange={onRevokeIntentChange} /> : null}
         </Tabs.Content>
-        <Tabs.Content className={styles.stack} value="capabilities">
+        <Tabs.Content inset="panel" className={styles.stack} value="capabilities">
           <HelpDisclosure label={t("capabilitiesHelp")}>{t("capabilitySnapshotHint")}</HelpDisclosure>
           <Table aria-label={t("availableOperations")} mobileLayout="stack">
             <thead><tr><th scope="col">Action</th><th scope="col">{t("resource")}</th><th scope="col">{w("state")}</th></tr></thead>
@@ -465,7 +505,8 @@ function RoleDetail({ client, roleId, onOpen, onDeleted, revokeIntent, onRevokeI
             </tr>)}</tbody>
           </Table>
         </Tabs.Content>
-      </Tabs.Root>
+      </Tabs.Root></Card>
+      <Card><Card.Body className={styles.stack}><LiveRoleAuthorizationOverview key={`${client.sessionRevision}:${access.role.id}`} access={access} client={client} onAccessChanged={setAccess} onOpen={onOpen} /></Card.Body></Card>
     </> : null}
   </WorkspaceDetail>{deleting && access ? <LiveRoleDelete key={`${client.sessionRevision}:${access.role.id}:delete`} access={access} client={client} onAccessChanged={setAccess} onClose={() => setDeleting(false)} onDeleted={setDeleted} /> : null}</>;
 }

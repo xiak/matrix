@@ -15,7 +15,7 @@ import {
   Database,
   Server,
 } from "lucide-react";
-import { Alert, HelpDisclosure, Table, TablePagination, TableToolbar, EmptyState, Badge, Button, Card, FormField, LoadingFeedback, Progress, Select, Skeleton, ContentLayout, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Table, TablePagination, TableToolbar, EmptyState, Badge, Button, Card, FormField, LoadingFeedback, Progress, Select, Skeleton, ContentLayout, ContentPage, Typography } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type {
   AlertScene,
@@ -290,10 +290,11 @@ function applicationReadBadge(status: ApplicationReadView["status"]) {
   return "warning" as const;
 }
 
-function ApplicationReadPanel({ resourceId, load, previewControls, onRetry }: {
+function ApplicationReadPanel({ resourceId, load, previewControls, onRetry, children }: {
   resourceId: string;
   load: ApplicationReadView;
   previewControls?: ReactNode;
+  children?: ReactNode;
   onRetry?(): void;
 }) {
   const t = useTranslations("CloudExperience");
@@ -308,14 +309,14 @@ function ApplicationReadPanel({ resourceId, load, previewControls, onRetry }: {
     const readyMetadata = load.snapshot.application.metadata;
     body = <>
       <HelpDisclosure label={t("resourceAccessHelp")}>{t("applicationRead.boundary")}</HelpDisclosure>
-      <dl className={styles.resourceFacts}>
+      <Card.Facts>
         <div><dt>{t("applicationRead.scope")}</dt><dd>{readyMetadata.scope.kind} · <code>{readyMetadata.scope.tenantId}</code></dd></div>
         <div><dt>{t("applicationRead.resourceVersion")}</dt><dd>{readyMetadata.resourceVersion}</dd></div>
-        <div><dt>{t("applicationRead.etag")}</dt><dd><code>{load.snapshot.etag}</code></dd></div>
+        <div><dt>{t("applicationRead.etag")}</dt><dd><Table.Identifier value={load.snapshot.etag} /></dd></div>
         <div><dt>{t("applicationRead.labels")}</dt><dd>{t("applicationRead.labelCount", { count: labelCount })}</dd></div>
         <div><dt>{t("applicationRead.createdAt")}</dt><dd>{format.timestamp(readyMetadata.createdAt)}</dd></div>
         <div><dt>{t("applicationRead.updatedAt")}</dt><dd>{format.timestamp(readyMetadata.updatedAt)}</dd></div>
-      </dl>
+      </Card.Facts>
     </>;
   } else if (load.status === "loading") {
     body = <div className={styles.applicationReadLoading}>
@@ -332,9 +333,7 @@ function ApplicationReadPanel({ resourceId, load, previewControls, onRetry }: {
     </div>;
   }
   useEffect(() => { heading.current?.focus({ preventScroll: true }); }, [resourceId]);
-  return <Card>
-    <Card.Header>
-      <div className={styles.resourceIdentity}>
+  const identity = <div className={styles.resourceIdentity}>
         <span className={styles.resourceIdentityIcon}><Boxes aria-hidden="true" /></span>
         <div>
           <span>{application ? `${application.kind} · ${application.apiVersion}` : t(previewControls ? "applicationRead.previewEyebrow" : "applicationRead.liveEyebrow")}</span>
@@ -342,15 +341,16 @@ function ApplicationReadPanel({ resourceId, load, previewControls, onRetry }: {
           <code>{resourceId}</code>
         </div>
         <Badge status={applicationReadBadge(load.status)}>{t(`applicationRead.states.${load.status}`)}</Badge>
-      </div>
-    </Card.Header>
-    <Card.Body>
-      <div className={styles.applicationReadBody}>
+      </div>;
+  const information = <div className={styles.applicationReadBody}>
         {body}
         {previewControls}
-      </div>
-    </Card.Body>
-  </Card>;
+      </div>;
+  if (children && load.status === "ready") return <>
+    {identity}
+    <ContentPage.Detail information={{ title: t("applicationRead.title"), content: information }}>{children}</ContentPage.Detail>
+  </>;
+  return <Card><Card.Header>{identity}</Card.Header><Card.Body>{information}</Card.Body></Card>;
 }
 
 function ApplicationResourceDetail({ resource, readSnapshot, tagSnapshot, deploymentSnapshot }: {
@@ -374,11 +374,12 @@ function ApplicationResourceDetail({ resource, readSnapshot, tagSnapshot, deploy
             <FormField id={scenarioId} label={t("applicationRead.scenarioLabel")} hint={t("applicationRead.scenarioHint")}>
               <Select id={scenarioId} value={outcome} options={applicationReadOutcomes.map((value) => ({ value, label: t(`applicationRead.options.${value}`) }))} onValueChange={(value) => setOutcome(value as ApplicationReadOutcome)} />
             </FormField>
-          </details>} />
+          </details>}>
     {readable ? <>
       <ApplicationDeploymentManagement key={`${resource.id}:${deploymentSnapshot?.deployment.resourceVersion ?? "unavailable"}`} resource={resource} initialSnapshot={deploymentSnapshot} />
       <ApplicationTagManagement key={`${resource.id}:${tagSnapshot?.etag ?? "unavailable"}`} resource={resource} initialSnapshot={tagSnapshot} />
     </> : null}
+    </ApplicationReadPanel>
   </section>;
 }
 

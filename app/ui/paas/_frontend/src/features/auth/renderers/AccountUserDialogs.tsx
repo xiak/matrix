@@ -3,11 +3,11 @@
 import { useEffect, useId, useLayoutEffect, useRef, useState, type FormEvent, type Ref } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, HelpDisclosure, FormField, Button, Input, PasswordInput, Select, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, FormField, Button, Input, PasswordInput, Select, Table, Typography } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { useAccessDraft } from "./useAccessDraft";
-import { WorkspaceDetail, WorkspaceTime } from "./AccessWorkspaceUi";
+import { RelationshipLink, WorkspaceDetail, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import type { CapabilityRestriction } from "../domain/accounts";
 import type { AccountUserScene } from "../scenes/accountAccessScene";
 import styles from "./AccountAccessRenderer.module.css";
@@ -68,6 +68,9 @@ export function CreateTenantWorkspace({ onClose }: { onClose(): void }) {
 
 export function UserDirectPolicies({ user }: { user: AccountUserScene }) {
   const t = useTranslations("AccountAccess");
+  const relationship = useTranslations("RelationshipDirectory");
+  const workspace = useTranslations("IamWorkspace");
+  const policy = useTranslations("AccountPolicyDirectory");
   const policyChange = useTranslations("PolicyAttachmentChange");
   const access = useAccountAccess();
   const [choosing, setChoosing] = useState(false);
@@ -117,14 +120,20 @@ export function UserDirectPolicies({ user }: { user: AccountUserScene }) {
       </Button> : null}
     </div>
     {user.attachments.length > 0 ? <>
-      <ul className={styles.bindingList}>
-        {user.attachments.map((attachment) => <li key={attachment.id}>
-          <div><strong>{attachment.label}</strong><small>{attachment.policyId} · {t(attachment.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}{attachment.policyStatus === "RETIRED" ? ` · ${t("retiredPolicy")}` : ""}</small></div>
-          <Button aria-label={t("revokePolicy", { name: attachment.label })} disabled={relationDisabled || !attachment.canRevoke} title={!attachment.canRevoke ? restriction(attachment.revokeRestrictionReason) : undefined} onClick={(event) => {
-            if (access.beginUserPolicyRevocation(user, attachment.id)) lastTrigger.current = event.currentTarget;
-          }} size="small" variant="ghost">{t("revoke")}</Button>
-        </li>)}
-      </ul>
+      <WorkspaceRelationshipDirectory title={t("directPolicyAttachments")} searchLabel={workspace("searchUserPolicies")}
+        items={user.attachments.map((attachment) => ({ ...attachment, name: attachment.label }))}
+        columns={[t("attachmentPolicy"), policy("scope"), t("actions")]}
+        status={(shown, loaded) => relationship("completeResults", { shown, total: loaded })} footerNote={relationship("completeScope")}
+        emptyTitle={t("noDirectPolicyAttachments")} keywords={(attachment) => attachment.policyId}
+        row={(attachment, blocked) => <>
+          <td><RelationshipLink view="policies" id={attachment.policyId} enabled={!blocked}>{attachment.label}</RelationshipLink>
+            {attachment.label !== attachment.policyId && <Table.Identifier value={attachment.policyId} />}</td>
+          <td>{t(attachment.scope === "INSTALLATION" ? "installationScope" : "tenantScope")}{attachment.policyStatus === "RETIRED" && <small>{t("retiredPolicy")}</small>}</td>
+          <td><Button aria-label={t("revokePolicy", { name: attachment.label })} disabled={blocked || relationDisabled || !attachment.canRevoke}
+            title={!attachment.canRevoke ? restriction(attachment.revokeRestrictionReason) : undefined} onClick={(event) => {
+              if (access.beginUserPolicyRevocation(user, attachment.id)) lastTrigger.current = event.currentTarget;
+            }} size="small" variant="ghost">{t("revoke")}</Button></td>
+        </>} />
       <HelpDisclosure label={t("policySources")}>{t("policyAttachmentHint")}</HelpDisclosure>
     </> : <p className={styles.note}>{t("noPolicyAttachmentsHint")}</p>}
     {policyChanged ? <Alert status="warning">{t("policyRevisionChanged")} <Button size="small" variant="ghost" onClick={() => setSelectedPolicy(null)}>{t("reselectPolicy")}</Button></Alert> : null}

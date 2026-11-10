@@ -1597,7 +1597,7 @@ describe("CAM-style access workspace", () => {
       } }));
     } });
     const table = await screen.findByRole("table", { name: "权限策略" });
-    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getByRole("columnheader", { name: "名称" })).toBeTruthy();
     expect(within(table).getAllByRole("row")).toHaveLength(11);
     expect(screen.getByText("显示 12 / 共 12 条")).toBeTruthy();
     const search = screen.getByRole("searchbox", { name: "搜索角色关联策略" });
@@ -1793,7 +1793,7 @@ describe("CAM-style access workspace", () => {
     const { user, extension } = await open("users", { entityId: "principal-lin" });
     await user.click(await screen.findByRole("tab", { name: "权限策略" }));
     const policies = screen.getByRole("table", { name: "用户关联策略（模拟）" });
-    expect(policies.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(policies).getByRole("columnheader", { name: "名称" })).toBeTruthy();
     expect(within(policies).getByText("ProductionLogReader").closest("td")?.getAttribute("data-label")).toBe("名称");
     expect(screen.queryByRole("button", { name: "平台内置角色" })).toBeNull();
     await user.click(await screen.findByRole("button", { name: "修改权限边界" }));
@@ -1861,7 +1861,7 @@ describe("CAM-style access workspace", () => {
     expect(within(denyRow).getByText("含显式拒绝").getAttribute("data-status")).toBe("danger");
     expect(within(policies).getAllByText("仅允许声明")).toHaveLength(3);
     expect(screen.queryByText("模拟访问")).toBeNull();
-    await user.click(within(screen.getByRole("tabpanel", { name: "权限策略" })).getByRole("button", { name: "检查策略配置" }));
+    await user.click(screen.getByRole("button", { name: "检查策略配置" }));
     expect(await screen.findByRole("button", { name: "生成本地检查表" })).toBeTruthy();
     expect(screen.getByRole("combobox", { name: "用户" }).textContent).toContain("qiao");
     expect(screen.getByLabelText("Entity destination").textContent).toBe("principal-qiao");
@@ -1892,7 +1892,7 @@ describe("CAM-style access workspace", () => {
     } });
     await user.click(await screen.findByRole("tab", { name: "权限策略" }));
     const policyTable = screen.getByRole("table", { name: "用户关联策略（模拟）" });
-    expect(policyTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(policyTable).getByRole("columnheader", { name: "名称" })).toBeTruthy();
     expect(within(policyTable).getAllByRole("row")).toHaveLength(11);
     expect(screen.getByText("显示 12 / 共 12 条")).toBeTruthy();
     const policySearch = screen.getByRole("searchbox", { name: "搜索用户关联策略" });
@@ -1907,7 +1907,7 @@ describe("CAM-style access workspace", () => {
     await user.click(await screen.findByRole("button", { name: "查看用户 lin" }));
     await user.click(await screen.findByRole("tab", { name: "所属用户组" }));
     const groupTable = screen.getByRole("table", { name: "所属用户组" });
-    expect(groupTable.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(groupTable).getByRole("columnheader", { name: "名称" })).toBeTruthy();
     expect(within(groupTable).getAllByRole("row")).toHaveLength(11);
     await user.type(screen.getByRole("searchbox", { name: "搜索所属用户组" }), "UserGroup12");
     await waitFor(() => expect(within(groupTable).getAllByRole("row")).toHaveLength(2));
@@ -1920,8 +1920,8 @@ describe("CAM-style access workspace", () => {
   ] as const)("keeps $kind association changes in the content area and retries without losing review", async ({ tab, trigger, title, option, change, kind }) => {
     const { user, repository, extension } = await open("users", { entityId: "principal-lin" });
     await user.click(await screen.findByRole("tab", { name: tab }));
-    const panel = screen.getByRole("tabpanel", { name: tab });
-    await user.click(within(panel).getByRole("button", { name: trigger }));
+    const bar = screen.getByRole("tablist", { name: "lin" }).parentElement!;
+    await user.click(within(bar).getByRole("button", { name: trigger }));
     const workflow = screen.getByRole("form", { name: `${title} · lin` });
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(within(workflow).getByRole("checkbox", { name: option }));
@@ -2094,7 +2094,11 @@ describe("CAM-style access workspace", () => {
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
   });
   it("opens and filters the preview operation history from overview", async () => {
-    const { user } = await open("overview");
+    const { user } = await open("overview", { seed: async (extension) => {
+      extension.transact((snapshot) => ({ workspace: { ...snapshot, events: [...snapshot.events,
+        { id: "event-second-login", action: "sign-in", target: "second-user", at: "2026-09-10T01:10:00Z" }
+      ] } }));
+    } });
     await user.click(await screen.findByRole("button", { name: "查看全部记录" }));
     expect(screen.getByText(/不作为真实安全审计凭证/)).toBeTruthy();
     await user.type(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" }), "no-matching-target");

@@ -2,7 +2,7 @@
 
 import { type FormEvent, useId, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, FormField, PasswordInput } from "@ui/xiak";
+import { Alert, Badge, Button, Card, FormField, PasswordInput } from "@ui/xiak";
 import { useAccountAccess } from "../application/AccountAccessProvider";
 import type { CapabilityRestriction } from "../domain/accounts";
 import type { AccountTenantScene } from "../scenes/accountAccessScene";
@@ -10,6 +10,17 @@ import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { WorkspaceDetail } from "./AccessWorkspaceUi";
 import { AccountIdentifier } from "./AccountOverview";
 import styles from "./AccountAccessRenderer.module.css";
+
+export function TenantIdentityFacts({ account }: { account: AccountTenantScene }) {
+  const t = useTranslations("AccountAccess");
+  return <Card.Facts>
+        <div><dt>{t("tenantId")}</dt><dd><AccountIdentifier label={t("tenantId")} value={account.id} /></dd></div>
+        <div><dt>{t("primaryLogin")}</dt><dd>{account.rootLoginName}</dd></div>
+        <div><dt>{t("rootIdentityId")}</dt><dd><AccountIdentifier label={t("rootIdentityId")} value={account.rootPrincipalId} /></dd></div>
+        <div><dt>{t("alias")}</dt><dd>{account.loginAlias ?? t("aliasUnset")}</dd></div>
+        <div><dt>{t("status")}</dt><dd><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></dd></div>
+      </Card.Facts>;
+}
 
 export function AccountTenantWorkspace({ account, onBack }: { account: AccountTenantScene; onBack(): void }) {
   const t = useTranslations("AccountAccess");
@@ -39,24 +50,11 @@ export function AccountTenantWorkspace({ account, onBack }: { account: AccountTe
     })) cancel();
   }
 
-  return <WorkspaceDetail title={account.name} onBack={onBack}>
-    <div className={styles.userSummary}>
-      <div><strong>{account.name}</strong><span className={styles.note}>{account.id}</span></div>
-      <Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge>
-    </div>
-
-    <section className={styles.identitySection}>
-      <h3>{t("tenantIdentity")}</h3>
-      <dl className={styles.facts}>
-        <div><dt>{t("tenantId")}</dt><dd><AccountIdentifier label={t("tenantId")} value={account.id} /></dd></div>
-        <div><dt>{t("primaryLogin")}</dt><dd>{account.rootLoginName}</dd></div>
-        <div><dt>{t("rootIdentityId")}</dt><dd><AccountIdentifier label={t("rootIdentityId")} value={account.rootPrincipalId} /></dd></div>
-        <div><dt>{t("alias")}</dt><dd>{account.loginAlias ?? t("aliasUnset")}</dd></div>
-        <div><dt>{t("status")}</dt><dd>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</dd></div>
-      </dl>
-      <p className={styles.note}>{t("tenantLifecycleHint")}</p>
-    </section>
-
+  return <WorkspaceDetail title={account.name} onBack={onBack} information={{
+    title: t("tenantIdentity"), content: <TenantIdentityFacts account={account} />,
+    footer: <p className={styles.note}>{t("tenantLifecycleHint")}</p>
+  }}>
+    <Card><Card.Body className={styles.stack}>
     <section className={styles.identitySection}>
       <h3>{t("tenantLifecycle")}</h3>
       <div className={styles.actions}>
@@ -95,5 +93,6 @@ export function AccountTenantWorkspace({ account, onBack }: { account: AccountTe
         <Button disabled={disabled} onClick={cancel} variant="ghost">{t("cancel")}</Button>
       </div>
     </form> : null}
+    </Card.Body></Card>
   </WorkspaceDetail>;
 }

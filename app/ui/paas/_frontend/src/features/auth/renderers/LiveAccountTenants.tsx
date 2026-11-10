@@ -29,7 +29,7 @@ import {
 import type { Account, AccountAccess } from "../domain/accounts";
 import { withinNewPasswordProductBounds } from "../domain/passwordEntry";
 import { buildAccountTenantScene, type AccountAccessScene, type AccountTenantScene } from "../scenes/accountAccessScene";
-import { AccountIdentifier } from "./AccountOverview";
+import { TenantIdentityFacts } from "./AccountTenantWorkspace";
 import { OrganizationGovernancePreview } from "./OrganizationGovernancePreview";
 import { WorkspaceDetail } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
@@ -231,29 +231,17 @@ function LiveAccountDetail({ access, client, error, loading, onBack, onRefresh, 
     } finally { setBusy(false); }
   }
 
-  return <WorkspaceDetail title={account?.name ?? t("tenantAccounts")} onBack={onBack}>
-    <div className={styles.userSummary}>
-      <div><strong>{account?.name ?? account?.id}</strong>{account ? <span className={styles.note}>{account.id}</span> : null}</div>
-      {account ? <Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge> : null}
-    </div>
+  return <WorkspaceDetail title={account?.name ?? t("tenantAccounts")} onBack={onBack} information={account ? {
+    title: t("tenantIdentity"), content: <TenantIdentityFacts account={account} />,
+    footer: <p className={styles.note}>{t("tenantLifecycleHint")}</p>
+  } : null}>
     {loading ? <LoadingNotice className={styles.note} label={t("tenantDetailLoading")} /> : null}
     {error ? <Alert status="danger"><div className={styles.confirmation}><span>{t(`errors.${error}`)}</span><Button onClick={() => void onRefresh()} size="small" variant="secondary">{t("retryTenantRead")}</Button></div></Alert> : null}
     {failure === "conflict" ? <Alert status="warning"><div className={styles.confirmation}><strong>{t("tenantMutationConflictTitle")}</strong><p>{t("tenantMutationConflictHint", { account: account?.id ?? "—" })}</p>{exact ? <p>{t("tenantObservedState", { status: t(exact.enabled ? "tenantActive" : "tenantDisabled"), version: exact.resourceVersion })}</p> : null}</div></Alert> : null}
     {failure === "refresh" ? <Alert status="warning">{t("tenantMutationRefreshFailed")}</Alert> : null}
     {rejected ? <Alert status="danger">{t(`errors.${rejected}`)}</Alert> : null}
     {notice ? <Alert status="success">{t(notice === "status" ? "tenantStatusUpdated" : "tenantRootRecovered")}</Alert> : null}
-    {account ? <section className={styles.identitySection}>
-      <h3>{t("tenantIdentity")}</h3>
-      <dl className={styles.facts}>
-        <div><dt>{t("tenantId")}</dt><dd><AccountIdentifier label={t("tenantId")} value={account.id} /></dd></div>
-        <div><dt>{t("primaryLogin")}</dt><dd>{account.rootLoginName}</dd></div>
-        <div><dt>{t("rootIdentityId")}</dt><dd><AccountIdentifier label={t("rootIdentityId")} value={account.rootPrincipalId} /></dd></div>
-        <div><dt>{t("alias")}</dt><dd>{account.loginAlias ?? t("aliasUnset")}</dd></div>
-        <div><dt>{t("status")}</dt><dd>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</dd></div>
-      </dl>
-      <p className={styles.note}>{t("tenantLifecycleHint")}</p>
-    </section> : null}
-    {exact ? <section className={styles.identitySection}>
+    {exact ? <Card><Card.Body className={styles.identitySection}>
       <h3>{t("tenantLifecycle")}</h3>
       <div className={styles.actions}>
         <Button disabled={busy || blocked || Boolean(pending) || !exact.canSetStatus} title={!exact.canSetStatus ? restriction(exact.statusRestrictionReason) : undefined} onClick={() => { setConfirmation("status"); setFailure(null); }} variant="secondary">{t(exact.enabled ? "disableTenant" : "enableTenant")}</Button>
@@ -261,7 +249,7 @@ function LiveAccountDetail({ access, client, error, loading, onBack, onRefresh, 
       </div>
       {!exact.canSetStatus ? <p className={styles.note}>{t("tenantStatusRestriction")}: {restriction(exact.statusRestrictionReason)}</p> : null}
       {!exact.canRecoverRoot ? <p className={styles.note}>{t("tenantRecoveryRestriction")}: {restriction(exact.recoveryRestrictionReason)}</p> : null}
-    </section> : null}
+    </Card.Body></Card> : null}
     {confirmation === "status" && exact ? <Alert status={exact.enabled ? "warning" : "info"}>
       <div className={styles.confirmation}>
         <p>{t(exact.enabled ? "disableTenantHint" : "enableTenantHint")}</p>
@@ -292,6 +280,7 @@ function LiveAccountDirectoryGeneration({ client, initialAccounts, initialNextAf
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const collection = useTranslations("Collection");
+  const [section, setSection] = useState<"accounts" | "governance">("accounts");
   const [accounts, setAccounts] = useState(initialAccounts);
   const [nextAfter, setNextAfter] = useState(initialNextAfter);
   const [cursorStack, setCursorStack] = useState<Array<string | undefined>>([undefined]);
@@ -305,6 +294,13 @@ function LiveAccountDirectoryGeneration({ client, initialAccounts, initialNextAf
   const [detailError, setDetailError] = useState<ReturnType<typeof accountError> | null>(null);
   const [creating, setCreating] = useState(false);
   const createActionFocus = useRef<PageCommandsHandle>(null);
+  const accountTriggers = useRef(new Map<string, HTMLButtonElement>());
+  const returnToAccount = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    if (selectedId || !returnToAccount.current) return;
+    accountTriggers.current.get(returnToAccount.current)?.focus({ preventScroll: true });
+    returnToAccount.current = null;
+  }, [selectedId]);
   const previousCreating = useRef(false);
   const detailRequest = useRef(0);
   const lifecycleClient = useRef(client);
@@ -388,41 +384,39 @@ function LiveAccountDirectoryGeneration({ client, initialAccounts, initialNextAf
 
   if (creating) return <CreateLiveAccount client={client} onBack={() => setCreating(false)} onCreated={refreshAfterCreate} />;
   if (selectedId) return <LiveAccountDetail access={selectedAccess} client={client} error={detailError} loading={detailLoading}
-    onBack={() => { detailRequest.current += 1; setSelectedId(null); setSelectedAccess(null); setDetailError(null); }}
+    onBack={() => { detailRequest.current += 1; returnToAccount.current = selectedId; setSelectedId(null); setSelectedAccess(null); setDetailError(null); }}
     onRefresh={async () => { await readSelected(selectedId); }} onUpdated={updateAfterMutation} summary={selectedSummary} />;
 
-  return <div className={styles.stack}>
-    <Card>
-      <ContentPage.Heading title={t("tenantAccounts")} scrollKey="live-tenant-directory" actions={client.canCreate ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: listLoading || Boolean(client.pending) || !client.ready, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
-      <HelpDisclosure label={t("tenantDirectoryHelp")}>{t("tenantLiveBoundary")}</HelpDisclosure>
-      {listError ? <Alert status="danger"><div className={styles.confirmation}><span>{t(`errors.${listError}`)}</span><Button onClick={() => void loadPage(cursorStack[pageIndex], pageIndex)} size="small" variant="secondary">{t("retryTenantRead")}</Button></div></Alert> : null}
-      {listLoading ? <LoadingNotice className={styles.note} label={t("loadingTenants")} /> : null}
-      <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
-        <tbody>{accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><Table.PrimaryAction onClick={() => { setSelectedSummary(account); setSelectedAccess(null); setDetailError(null); setDetailLoading(true); setSelectedId(account.id); }}>{account.name}</Table.PrimaryAction><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
-      </Table>
-      {!accounts.length && !listLoading ? <EmptyState title={t("noTenants")} /> : null}
-      <Table.Footer note={t("tenantScopeHint")}><TablePagination mode="cursor" disabled={listLoading} summary={w("cursorPage", { page: pageIndex + 1 })}
-        previous={{ label: t("firstPage"), disabled: pageIndex === 0, onClick: () => { const next = Math.max(0, pageIndex - 1); void loadPage(cursorStack[next], next); } }}
-        next={{ label: t("nextPage"), disabled: !nextAfter, onClick: () => { if (!nextAfter) return; const next = pageIndex + 1; setCursorStack((current) => { const updated = current.slice(0, next); updated[next] = nextAfter; return updated; }); void loadPage(nextAfter, next); } }} /></Table.Footer>
-    </Card>
-  </div>;
+  return <Tabs.Root value={section} onValueChange={(value) => setSection(value as typeof section)}>
+    <Tabs.List variant="underline" aria-label={t("tenantManagementSections")}>
+      <Tabs.Trigger value="accounts">{t("tenantAccounts")}</Tabs.Trigger>
+      <Tabs.Trigger value="governance">{t("organizationGovernance.tab")}</Tabs.Trigger>
+    </Tabs.List>
+    <Tabs.Content value="accounts">
+      <Card>
+        <ContentPage.Heading title={t("tenantAccounts")} scrollKey="live-tenant-directory" actions={client.canCreate ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: listLoading || Boolean(client.pending) || !client.ready, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
+        <HelpDisclosure label={t("tenantDirectoryHelp")}>{t("tenantLiveBoundary")}</HelpDisclosure>
+        {listError ? <Alert status="danger"><div className={styles.confirmation}><span>{t(`errors.${listError}`)}</span><Button onClick={() => void loadPage(cursorStack[pageIndex], pageIndex)} size="small" variant="secondary">{t("retryTenantRead")}</Button></div></Alert> : null}
+        {listLoading ? <LoadingNotice className={styles.note} label={t("loadingTenants")} /> : null}
+        <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
+          <tbody>{accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><Table.PrimaryAction ref={(node) => { if (node) accountTriggers.current.set(account.id, node); else accountTriggers.current.delete(account.id); }} onClick={() => { setSelectedSummary(account); setSelectedAccess(null); setDetailError(null); setDetailLoading(true); setSelectedId(account.id); }}>{account.name}</Table.PrimaryAction><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
+        </Table>
+        {!accounts.length && !listLoading ? <EmptyState title={t("noTenants")} /> : null}
+        <Table.Footer note={t("tenantScopeHint")}><TablePagination mode="cursor" disabled={listLoading} summary={w("cursorPage", { page: pageIndex + 1 })}
+          previous={{ label: t("firstPage"), disabled: pageIndex === 0, onClick: () => { const next = Math.max(0, pageIndex - 1); void loadPage(cursorStack[next], next); } }}
+          next={{ label: t("nextPage"), disabled: !nextAfter, onClick: () => { if (!nextAfter) return; const next = pageIndex + 1; setCursorStack((current) => { const updated = current.slice(0, next); updated[next] = nextAfter; return updated; }); void loadPage(nextAfter, next); } }} /></Table.Footer>
+      </Card>
+    </Tabs.Content>
+    <Tabs.Content value="governance"><OrganizationGovernancePreview /></Tabs.Content>
+  </Tabs.Root>;
 }
 
 export function LiveAccountTenants({ client, scene }: { client: AccountLifecycleClient; scene: AccountAccessScene }) {
-  const t = useTranslations("AccountAccess");
-  const [section, setSection] = useState<"accounts" | "governance">("accounts");
   const [binding, setBinding] = useState(() => ({ identity: client.identity, generation: 0 }));
   let current = binding;
   if (binding.identity !== client.identity) {
     current = { identity: client.identity, generation: binding.generation + 1 };
     setBinding(current);
   }
-  return <Tabs.Root value={section} onValueChange={(value) => setSection(value as typeof section)}>
-    <Tabs.List aria-label={t("tenantManagementSections")}>
-      <Tabs.Trigger value="accounts">{t("tenantAccounts")}</Tabs.Trigger>
-      <Tabs.Trigger value="governance">{t("organizationGovernance.tab")}</Tabs.Trigger>
-    </Tabs.List>
-    <Tabs.Content value="accounts"><LiveAccountDirectoryGeneration client={client} initialAccounts={scene.accounts} initialNextAfter={scene.nextAccountPage} key={current.generation} /></Tabs.Content>
-    <Tabs.Content value="governance"><OrganizationGovernancePreview /></Tabs.Content>
-  </Tabs.Root>;
+  return <LiveAccountDirectoryGeneration client={client} initialAccounts={scene.accounts} initialNextAfter={scene.nextAccountPage} key={current.generation} />;
 }

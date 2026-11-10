@@ -15,6 +15,7 @@ import {
   Button,
   Card,
   ContentPage,
+  Tabs,
   EmptyState,
   FormField,
   Input,
@@ -151,6 +152,13 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
   const event = record.event;
   return <section className={styles.stack}>
     <ContentPage.Heading title={t("detail.title", { sequence: record.sequence })} scrollKey={`audit-record:${record.sequence}`} back={{ label: t("actions.back"), onClick: onBack }} focus />
+    <ContentPage.Detail information={{ title: t("detail.context"), content: <Card.Facts>
+            <div><dt>{t("columns.actor")}</dt><dd><strong>{event.actor.id}</strong><small>{event.actor.type === "ROLE" ? t("detail.roleLineage", { session: event.actor.roleSession.sessionId, source: event.actor.roleSession.sourceUserId ?? event.actor.roleSession.sourceServicePrincipalId }) : event.actor.type === "USER" && event.actor.accessKeyId ? t("detail.accessKeyLineage", { accessKey: event.actor.accessKeyId }) : t(`actorTypes.${event.actor.type}`)}</small></dd></div>
+            <div><dt>{t("columns.target")}</dt><dd><strong>{event.target.id}</strong><small>{event.target.kind}</small></dd></div>
+            <div><dt>{t("detail.source")}</dt><dd><strong>{record.source}</strong><small><code>{event.action}</code></small></dd></div>
+            <div><dt>{t("detail.authority")}</dt><dd><strong>{t(`authority.${event.authorityKind}`)}</strong><small>{authorityId(event)}</small></dd></div>
+            <div><dt>{t("detail.retention")}</dt><dd><strong>{t("detail.indefinite")}</strong><small>{t("detail.ingested", { time: format.dateTime(new Date(record.ingestedAt), { dateStyle: "medium", timeStyle: "long" }) })}</small></dd></div>
+          </Card.Facts> }}>
     <Card>
       <Card.Header className={styles.detailHeader}>
         <div><Badge status={resultStatuses[event.result]}>{t(`results.${event.result}`)}</Badge><Typography.Title as="h2" level={3}>{event.action}</Typography.Title></div>
@@ -162,39 +170,30 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
           <span>{t(`detail.resultMeaning.${event.result}`)}</span>
           {event.outcome && event.reason ? <span>{t("detail.pipelineOutcome", { outcome: t(`detail.outcomes.${event.outcome}`), reason: event.reason })}</span> : null}
         </div>
-        <section aria-labelledby="audit-event-context">
-          <h3 id="audit-event-context" className={styles.sectionTitle}>{t("detail.context")}</h3>
-          <dl className={styles.facts}>
-            <div><dt>{t("columns.actor")}</dt><dd><strong>{event.actor.id}</strong><small>{event.actor.type === "ROLE" ? t("detail.roleLineage", { session: event.actor.roleSession.sessionId, source: event.actor.roleSession.sourceUserId ?? event.actor.roleSession.sourceServicePrincipalId }) : event.actor.type === "USER" && event.actor.accessKeyId ? t("detail.accessKeyLineage", { accessKey: event.actor.accessKeyId }) : t(`actorTypes.${event.actor.type}`)}</small></dd></div>
-            <div><dt>{t("columns.target")}</dt><dd><strong>{event.target.id}</strong><small>{event.target.kind}</small></dd></div>
-            <div><dt>{t("detail.source")}</dt><dd><strong>{record.source}</strong><small><code>{event.action}</code></small></dd></div>
-            <div><dt>{t("detail.authority")}</dt><dd><strong>{t(`authority.${event.authorityKind}`)}</strong><small>{authorityId(event)}</small></dd></div>
-            <div><dt>{t("detail.retention")}</dt><dd><strong>{t("detail.indefinite")}</strong><small>{t("detail.ingested", { time: format.dateTime(new Date(record.ingestedAt), { dateStyle: "medium", timeStyle: "long" }) })}</small></dd></div>
-          </dl>
-        </section>
-        <section aria-labelledby="audit-request-evidence">
-          <h3 id="audit-request-evidence" className={styles.sectionTitle}>{t("detail.requestEvidence")}</h3>
-          <dl className={styles.evidence}>
-            <div><dt>{t("detail.eventId")}</dt><dd><code>{event.eventId}</code></dd></div>
-            <div><dt>{t("detail.requestId")}</dt><dd><code>{event.requestId}</code></dd></div>
-            <div><dt>{t("detail.correlationId")}</dt><dd><code>{event.correlationId}</code></dd></div>
-            {event.operationId ? <div><dt>{t("detail.operationId")}</dt><dd><code>{event.operationId}</code></dd></div> : null}
-            {event.iamDecisionId ? <div><dt>{t("detail.decisionId")}</dt><dd><code>{event.iamDecisionId}</code></dd></div> : null}
-            <div><dt>{t("detail.requestDigest")}</dt><dd><code>{event.requestDigest}</code></dd></div>
-            {event.authorityEvidenceDigest ? <div><dt>{t("detail.authorityEvidenceDigest")}</dt><dd><code>{event.authorityEvidenceDigest}</code><small>{t("detail.authorityEvidenceHint")}</small></dd></div> : null}
-          </dl>
-        </section>
-        <section aria-labelledby="audit-chain-evidence">
-          <h3 id="audit-chain-evidence" className={styles.sectionTitle}>{t("detail.chainEvidence")}</h3>
-          <dl className={styles.evidence}>
-            <div><dt>{t("detail.sequence")}</dt><dd><code>{record.sequence}</code></dd></div>
-            <div><dt>{t("detail.previousHash")}</dt><dd><code>{record.previousHash}</code></dd></div>
-            <div><dt>{t("detail.contentDigest")}</dt><dd><code>{record.contentDigest}</code></dd></div>
-            <div><dt>{t("detail.recordHash")}</dt><dd><code>{record.recordHash}</code></dd></div>
-          </dl>
-        </section>
       </Card.Body>
     </Card>
+    <Card><Tabs.Root defaultValue="request">
+      <Tabs.Bar><Tabs.List variant="underline" aria-label={t("detail.title", { sequence: record.sequence })}>
+        <Tabs.Trigger value="request">{t("detail.requestEvidence")}</Tabs.Trigger>
+        <Tabs.Trigger value="chain">{t("detail.chainEvidence")}</Tabs.Trigger>
+      </Tabs.List></Tabs.Bar>
+      <Tabs.Content inset="panel" value="request"><dl className={styles.evidence}>
+            <div><dt>{t("detail.eventId")}</dt><dd><Table.Identifier value={event.eventId} /></dd></div>
+            <div><dt>{t("detail.requestId")}</dt><dd><Table.Identifier value={event.requestId} /></dd></div>
+            <div><dt>{t("detail.correlationId")}</dt><dd><Table.Identifier value={event.correlationId} /></dd></div>
+            {event.operationId ? <div><dt>{t("detail.operationId")}</dt><dd><Table.Identifier value={event.operationId} /></dd></div> : null}
+            {event.iamDecisionId ? <div><dt>{t("detail.decisionId")}</dt><dd><Table.Identifier value={event.iamDecisionId} /></dd></div> : null}
+            <div><dt>{t("detail.requestDigest")}</dt><dd><Table.Identifier value={event.requestDigest} /></dd></div>
+            {event.authorityEvidenceDigest ? <div><dt>{t("detail.authorityEvidenceDigest")}</dt><dd><Table.Identifier value={event.authorityEvidenceDigest} /><small>{t("detail.authorityEvidenceHint")}</small></dd></div> : null}
+          </dl></Tabs.Content>
+      <Tabs.Content inset="panel" value="chain"><dl className={styles.evidence}>
+            <div><dt>{t("detail.sequence")}</dt><dd><code>{record.sequence}</code></dd></div>
+            <div><dt>{t("detail.previousHash")}</dt><dd><Table.Identifier value={record.previousHash} /></dd></div>
+            <div><dt>{t("detail.contentDigest")}</dt><dd><Table.Identifier value={record.contentDigest} /></dd></div>
+            <div><dt>{t("detail.recordHash")}</dt><dd><Table.Identifier value={record.recordHash} /></dd></div>
+          </dl></Tabs.Content>
+    </Tabs.Root></Card>
+    </ContentPage.Detail>
   </section>;
 }
 

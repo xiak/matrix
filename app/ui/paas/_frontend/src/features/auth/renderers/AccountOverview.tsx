@@ -24,7 +24,7 @@ export function AccountIdentifier({ value, label }: { value: string; label: stri
   const [copied, setCopied] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
   return <div className={styles.identifier}>
-    <Typography.Code>{value}</Typography.Code>
+    <Table.Identifier value={value} />
     <Button aria-label={t(copied === value ? "copiedIdentifier" : "copyIdentifier", { name: label })} iconOnly size="small" variant="ghost" onClick={async () => {
       try { await navigator.clipboard.writeText(value); setCopied(value); setFailed(false); }
       catch { setCopied(null); setFailed(true); }

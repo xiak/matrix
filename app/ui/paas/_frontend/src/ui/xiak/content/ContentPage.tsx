@@ -4,6 +4,8 @@ import { createContext, useCallback, useContext, useId, useImperativeHandle, use
 import { createPortal } from "react-dom";
 import { ArrowLeft, ChevronRight } from "lucide-react";
 import { Button } from "../button/Button";
+import { Card } from "../card/Card";
+import { ContentLayout } from "./ContentLayout";
 import { ActionMenu, type ActionMenuItem } from "../action-menu/ActionMenu";
 import { TableActions } from "../table/TableActions";
 import { classNames } from "../utils";
@@ -203,4 +205,29 @@ function Body({ children, className, inactive = false, pending = false, loading,
   </div>;
 }
 
-export const ContentPage = Object.assign(ContentPageRoot, { Header, Heading, Commands, Body });
+type DetailInformation = {
+  title: string;
+  content: ReactNode;
+  icon?: ReactNode;
+  footer?: ReactNode;
+  related?: ReactNode;
+};
+
+function Detail({ information, children }: { information: DetailInformation; children: ReactNode }) {
+  const heading = useId();
+  return <ContentLayout variant="detail">
+      <ContentLayout.Main>{children}</ContentLayout.Main>
+      <ContentLayout.Aside aria-labelledby={heading}>
+        <Card>
+          <Card.Header className={styles.informationHeader}>
+            <h2 id={heading}>{information.icon}{information.title}</h2>
+          </Card.Header>
+          <Card.Body className={styles.informationBody}>{information.content}</Card.Body>
+          {information.footer && <Card.Footer>{information.footer}</Card.Footer>}
+        </Card>
+        {information.related}
+      </ContentLayout.Aside>
+  </ContentLayout>;
+}
+
+export const ContentPage = Object.assign(ContentPageRoot, { Header, Heading, Commands, Body, Detail });

@@ -98,7 +98,7 @@ describe("live account security report", () => {
     await user.click(screen.getByRole("button", { name: "生成当前账号安全报告" }));
     await waitFor(() => expect(value.create).toHaveBeenCalledWith(expect.objectContaining({ formatVersion: 2, requestId: expect.stringMatching(/^ui-security-report-[0-9a-f]{32}$/) })));
     await waitFor(() => expect(value.read).toHaveBeenCalledWith(report.metadata.id));
-    expect(await screen.findByRole("heading", { name: report.metadata.id })).toBeTruthy();
+    expect(within(await screen.findByRole("complementary", { name: "账号安全报告" })).getAllByText(report.metadata.id).length).toBeGreaterThan(0);
     expect(screen.getByText("IAM 已验证")).toBeTruthy();
     expect(screen.getByText("CSV v2 · 服务端规范化")).toBeTruthy();
     expect(screen.getByRole("button", { name: "下载已校验 CSV" })).toBeTruthy();
@@ -154,13 +154,13 @@ describe("live account security report", () => {
     view(client({ read }));
     await user.type(screen.getByLabelText("报告 ID"), report.metadata.id);
     await user.click(screen.getByRole("button", { name: "读取报告" }));
-    expect(await screen.findByRole("heading", { name: report.metadata.id })).toBeTruthy();
+    expect(within(await screen.findByRole("complementary", { name: "账号安全报告" })).getAllByText(report.metadata.id).length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "读取报告" }));
 
     expect(await screen.findByText(/页面已清除报告标识、生成结果和报告内容/)).toBeTruthy();
     expect((screen.getByLabelText("报告 ID") as HTMLInputElement).value).toBe("");
-    expect(screen.queryByRole("heading", { name: report.metadata.id })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "账号安全报告" })).toBeNull();
   });
 
   it("downloads only through the client that re-reads and verifies current metadata", async () => {
@@ -189,7 +189,7 @@ describe("live account security report", () => {
     view(value);
     await user.type(screen.getByLabelText("报告 ID"), report.metadata.id);
     await user.click(screen.getByRole("button", { name: "读取报告" }));
-    expect(await screen.findByRole("heading", { name: report.metadata.id })).toBeTruthy();
+    expect(within(await screen.findByRole("complementary", { name: "账号安全报告" })).getAllByText(report.metadata.id).length).toBeGreaterThan(0);
     expect(screen.getByText(/当前报告可以读取，但当前身份不能下载/)).toBeTruthy();
     expect(screen.queryByRole("button", { name: "下载已校验 CSV" })).toBeNull();
     expect(value.download).not.toHaveBeenCalled();
@@ -210,7 +210,7 @@ describe("live account security report", () => {
     const refreshed = client({ continuityIdentity, download, read: vi.fn().mockReturnValue(exactRead) });
     rendered.rerender(<LocaleProvider><LiveSecurityReport client={refreshed} /></LocaleProvider>);
 
-    expect(screen.getByRole("heading", { name: report.metadata.id })).toBeTruthy();
+    expect(within(screen.getByRole("complementary", { name: "账号安全报告" })).getByText(report.metadata.id)).toBeTruthy();
     const downloadButton = screen.getByRole("button", { name: "下载已校验 CSV" });
     expect(downloadButton).toHaveProperty("disabled", true);
     await user.click(downloadButton);
@@ -246,7 +246,7 @@ describe("live account security report", () => {
     await user.click(screen.getByRole("button", { name: "重试原生成请求" }));
     await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
     expect(create.mock.calls[1]?.[0]).toEqual(expect.objectContaining({ formatVersion: 2, requestId: originalRequestId }));
-    expect(await screen.findByRole("heading", { name: report.metadata.id })).toBeTruthy();
+    expect(within(await screen.findByRole("complementary", { name: "账号安全报告" })).getAllByText(report.metadata.id).length).toBeGreaterThan(0);
   });
 
   it("retains an unknown generation across same-session reauthorization and a later denial", async () => {
@@ -283,13 +283,13 @@ describe("live account security report", () => {
 
     rendered.rerender(<LocaleProvider><LiveSecurityReport client={replacement} /></LocaleProvider>);
 
-    expect(screen.queryByRole("heading", { name: report.metadata.id })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "账号安全报告" })).toBeNull();
     expect((screen.getByLabelText("报告 ID") as HTMLInputElement).value).toBe("");
     await act(async () => {
       resolveOldRead(reportAccess(report));
       await oldRead;
     });
-    expect(screen.queryByRole("heading", { name: report.metadata.id })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "账号安全报告" })).toBeNull();
     expect(replacement.read).not.toHaveBeenCalled();
   });
 
@@ -307,7 +307,7 @@ describe("live account security report", () => {
     rendered.rerender(<LocaleProvider><LiveSecurityReport client={replacement} /></LocaleProvider>);
     await act(async () => { resolveOldRead(reportAccess(report)); await oldRead; });
 
-    expect(screen.queryByRole("heading", { name: report.metadata.id })).toBeNull();
+    expect(screen.queryByRole("complementary", { name: "账号安全报告" })).toBeNull();
     expect(replacement.read).not.toHaveBeenCalled();
   });
 

@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { type ReactNode, useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Download, FilePlus2 } from "lucide-react";
-import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, FormField, Input, TableSkeleton, Tabs, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, FormField, Input, Table, TableSkeleton, Tabs, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { SecurityReportClient } from "../application/AccountAccessProvider";
 import { accountSecurityReportLimits, type AccountSecurityReport, type AccountSecurityReportAccess, type AccountSecurityReportCreation } from "../domain/securityReports";
@@ -51,7 +51,7 @@ function saveSecurityReport(bytes: Uint8Array, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-function SecurityReportDocument({ report }: { report: AccountSecurityReport }) {
+function SecurityReportDocument({ report, actions }: { report: AccountSecurityReport; actions: ReactNode }) {
   const t = useTranslations("IamWorkspace.securityReportPreview");
   const live = useTranslations("IamWorkspace.securityReportLive");
   const workspace = useTranslations("IamWorkspace");
@@ -64,11 +64,11 @@ function SecurityReportDocument({ report }: { report: AccountSecurityReport }) {
   const users = report.users.map((user) => ({ ...user, name: user.displayName }));
   const accessKeys = report.accessKeys.map((key) => ({ ...key, name: key.id }));
   return <Tabs.Root value={section} onValueChange={setSection}>
-    <Tabs.List ref={tabs} aria-label={t("reportSections")}>
+    <Card><Tabs.Bar actions={actions}><Tabs.List variant="underline" ref={tabs} aria-label={t("reportSections")}>
       <Tabs.Trigger value="overview">{t("overviewTab")}</Tabs.Trigger>
       <Tabs.Trigger value="users">{t("usersTab", { count: report.users.length })}</Tabs.Trigger>
       <Tabs.Trigger value="accessKeys">{t("accessKeysTab", { count: report.accessKeys.length })}</Tabs.Trigger>
-    </Tabs.List>
+    </Tabs.List></Tabs.Bar></Card>
     <Tabs.Content className={styles.stack} value="overview">
       <Card>
         <Card.Header><div><Typography.Title as="h2" level={3}>{t("scopeTitle")}</Typography.Title><Typography.Text tone="muted">{t("scopeHint")}</Typography.Text></div><Badge status="success">{live("verifiedSnapshot")}</Badge></Card.Header>
@@ -271,13 +271,7 @@ function LiveSecurityReportGeneration({ authorizationPending, blockedIntent, cli
   const canDownload = Boolean(report && reportAccess &&
     findActionCapability(reportAccess.capabilities, "iam.security-report.download", "SECURITY_REPORT", report.metadata.id)?.available);
   const retryingOriginal = Boolean(currentIntent && !busy);
-  return <div className={styles.stack}>
-    <ContentPage.Heading title={t("title")} scrollKey={`security-report-live:${client.accountId}:${client.sessionRevision}`} actions={<ContentPage.Commands label={t("pageActions")} primary={{ id: "generate", label: t(retryingOriginal ? "retryOriginal" : "generate"), icon: <FilePlus2 aria-hidden="true" />, disabled: Boolean(writeBlocked || !client.canCreate || creation || busy || blockedIntent), disabledReason: !client.canCreate ? t("createDenied") : creation ? t("singleIntent") : blockedIntent ? t("foreignIntentReason") : undefined, onSelect: () => void generate() }} />} />
-    {retryingOriginal && currentIntent ? <Alert status="warning">{t("uncertainIntent", { id: currentIntent.requestId })}</Alert> : null}
-    {blockedIntent ? <Alert status="warning">{t("foreignIntent", { id: blockedIntent.requestId })}</Alert> : null}
-    {failure ? <Alert status="danger"><strong>{t("errorTitle", { operation: t(`operations.${failure.operation}`) })}</strong><p>{t(`errors.${failure.kind}`)}</p></Alert> : null}
-    {downloaded ? <Alert status="success">{t("downloaded")}</Alert> : null}
-    <HelpDisclosure label={t("scopeTitle")}>
+  const scopeHelp = <HelpDisclosure label={t("scopeTitle")}>
       <p>{t("scopeHint")}</p>
       <dl className={styles.securityReportSummary} aria-label={t("limitsTitle")}>
         <div><dt>{preview("users")}</dt><dd>≤ {accountSecurityReportLimits.users}</dd></div>
@@ -287,8 +281,8 @@ function LiveSecurityReportGeneration({ authorizationPending, blockedIntent, cli
       </dl>
       <p>{t("boundary")}</p>
       <p>{preview("noRealtimeConclusion")}</p>
-    </HelpDisclosure>
-    <Card>
+    </HelpDisclosure>;
+  const lookup = <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{t("knownReportTitle")}</Typography.Title><Typography.Text tone="muted">{t("knownReportHint")}</Typography.Text></div></Card.Header>
       <Card.Body>
         <form className={styles.form} onSubmit={(event) => { event.preventDefault(); const target = knownReportId.trim(); if (target) void read(target); }}>
@@ -296,8 +290,8 @@ function LiveSecurityReportGeneration({ authorizationPending, blockedIntent, cli
           <div><Button disabled={Boolean(authorizationPending || busy || !knownReportId.trim())} type="submit" variant="secondary">{t("read")}</Button></div>
         </form>
       </Card.Body>
-    </Card>
-    {creation ? <Card>
+    </Card>;
+  const receipt = creation ? <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{t("createdTitle")}</Typography.Title><Typography.Text tone="muted">{t("createdHint")}</Typography.Text></div><Badge status="success">{t(`outcomes.${creation.outcome}`)}</Badge></Card.Header>
       <Card.Body className={styles.detail}><dl className={styles.facts}>
         <div><dt>{t("reportId")}</dt><dd><code>{creation.metadata.id}</code></dd></div>
@@ -305,21 +299,30 @@ function LiveSecurityReportGeneration({ authorizationPending, blockedIntent, cli
         <div><dt>{preview("expiresAt")}</dt><dd><WorkspaceTime value={creation.metadata.expiresAt} /></dd></div>
         <div><dt>{preview("rows")}</dt><dd>{creation.metadata.rowCount}</dd></div>
       </dl></Card.Body>
-    </Card> : null}
+    </Card> : null;
+  return <div className={styles.stack}>
+    <ContentPage.Heading title={t("title")} scrollKey={`security-report-live:${client.accountId}:${client.sessionRevision}`} actions={<ContentPage.Commands label={t("pageActions")} primary={{ id: "generate", label: t(retryingOriginal ? "retryOriginal" : "generate"), icon: <FilePlus2 aria-hidden="true" />, disabled: Boolean(writeBlocked || !client.canCreate || creation || busy || blockedIntent), disabledReason: !client.canCreate ? t("createDenied") : creation ? t("singleIntent") : blockedIntent ? t("foreignIntentReason") : undefined, onSelect: () => void generate() }} />} />
+    {retryingOriginal && currentIntent ? <Alert status="warning">{t("uncertainIntent", { id: currentIntent.requestId })}</Alert> : null}
+    {blockedIntent ? <Alert status="warning">{t("foreignIntent", { id: blockedIntent.requestId })}</Alert> : null}
+    {failure ? <Alert status="danger"><strong>{t("errorTitle", { operation: t(`operations.${failure.operation}`) })}</strong><p>{t(`errors.${failure.kind}`)}</p></Alert> : null}
+    {downloaded ? <Alert status="success">{t("downloaded")}</Alert> : null}
+    {!report && <>{scopeHelp}{lookup}{receipt}</>}
     {busy === "read" ? <Card><TableSkeleton header label={t("loadingReport")} rows={4} /></Card> : null}
-    {report ? <>
-      <Card>
-        <Card.Header><div><Typography.Title as="h2" level={3}>{report.metadata.id}</Typography.Title><Typography.Text tone="muted">{t("detailHint")}</Typography.Text></div><div className={styles.actions}><Badge status={expired ? "warning" : "success"}>{t(expired ? "expired" : "readable")}</Badge>{canDownload ? <Button disabled={Boolean(writeBlocked || busy || expired)} onClick={() => void download()} variant="secondary"><Download aria-hidden="true" />{busy === "download" ? t("downloading") : t("download")}</Button> : null}</div></Card.Header>
-        <Card.Body className={styles.detail}><dl className={styles.facts}>
-          <div><dt>{preview("account")}</dt><dd><code>{report.metadata.accountId}</code></dd></div>
+    {report && <ContentPage.Detail information={{
+      title: preview("detailTitle"), content: <><Badge status={expired ? "warning" : "success"}>{t(expired ? "expired" : "readable")}</Badge><Card.Facts>
+          <div><dt>{t("reportId")}</dt><dd><Table.Identifier value={report.metadata.id} /></dd></div>
+          <div><dt>{preview("account")}</dt><dd><Table.Identifier value={report.metadata.accountId} /></dd></div>
           <div><dt>{preview("observedAt")}</dt><dd><WorkspaceTime value={report.metadata.observedAt} /></dd></div>
           <div><dt>{preview("expiresAt")}</dt><dd><WorkspaceTime value={report.metadata.expiresAt} /></dd></div>
           <div><dt>{preview("settingsVersion")}</dt><dd>v{report.accountSecuritySettingsVersion}</dd></div>
           <div><dt>{preview("format")}</dt><dd>{preview("formatValue", { version: report.metadata.formatVersion })}</dd></div>
           <div><dt>{t("csvBytes")}</dt><dd>{report.metadata.csvBytes.toLocaleString()} B</dd></div>
-        </dl>{expired ? <Alert status="warning">{t("expiredHint")}</Alert> : null}{!canDownload ? <Alert status="info">{t("downloadDenied")}</Alert> : null}</Card.Body>
-      </Card>
-      <SecurityReportDocument report={report} />
-    </> : null}
+        </Card.Facts></>,
+      footer: scopeHelp, related: <>{lookup}{receipt}</>
+    }}>
+      {expired && <Alert status="warning">{t("expiredHint")}</Alert>}
+      {!canDownload && <Alert status="info">{t("downloadDenied")}</Alert>}
+      <SecurityReportDocument report={report} actions={canDownload ? <Button disabled={Boolean(writeBlocked || busy || expired)} onClick={() => void download()} variant="secondary"><Download aria-hidden="true" />{busy === "download" ? t("downloading") : t("download")}</Button> : null} />
+    </ContentPage.Detail>}
   </div>;
 }

@@ -13,10 +13,11 @@ import styles from "./AccountAccessRenderer.module.css";
 const noop = () => {};
 
 export function RelationshipLink({ view, id, tab, scope, label, enabled = true, children }: {
-  view: "users" | "groups" | "roles" | "policies"; id: string; tab: string; scope?: string; label?: string; enabled?: boolean; children: ReactNode;
+  view: "users" | "groups" | "roles" | "policies"; id: string; tab?: string; scope?: string; label?: string; enabled?: boolean; children: ReactNode;
 }) {
   if (!enabled) return <span>{children}</span>;
-  const query = new URLSearchParams({ id, tab });
+  const query = new URLSearchParams({ id });
+  if (tab) query.set("tab", tab);
   if (scope) query.set("scope", scope);
   return <ConsoleLink className={styles.relationshipLink} prefetch={false} href={`/console/access/${view}/?${query}`} aria-label={label}>{children}</ConsoleLink>;
 }
@@ -37,7 +38,7 @@ export function RelationshipTabs(props: ComponentProps<typeof Tabs.List>) {
     });
     return () => cancelAnimationFrame(frame);
   }, [tab, scope]);
-  return <Tabs.List {...props} ref={list} />;
+  return <Tabs.List variant="underline" {...props} ref={list} />;
 }
 
 export function WorkspaceTime({ value, compact = false }: { value: string | null; compact?: boolean }) {
@@ -75,7 +76,7 @@ const initialRelationshipPageSize = 10;
 
 export function WorkspaceRelationshipDirectory<T extends { id: string; name: string }>({
   title, searchLabel, items, columns, row, keywords, status, footerNote, loadMore, emptyTitle, emptyDescription,
-  busy = false, controls = "always", mobileLayout = "stack"
+  busy = false, controls = "as-needed"
 }: {
   title: string;
   searchLabel: string;
@@ -90,7 +91,6 @@ export function WorkspaceRelationshipDirectory<T extends { id: string; name: str
   emptyDescription?: string;
   busy?: boolean;
   controls?: "always" | "as-needed";
-  mobileLayout?: "stack" | "grid";
 }) {
   const t = useTranslations("IamWorkspace");
   const relationship = useTranslations("RelationshipDirectory");
@@ -115,10 +115,10 @@ export function WorkspaceRelationshipDirectory<T extends { id: string; name: str
 
   return <>
     {showSearch && <TableToolbar labels={toolbarLabels} search={{ label: searchLabel, placeholder: relationship("searchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }} status={status(filtered.length, items.length)} />}
-    {visible.length ? <Table aria-label={title} aria-busy={blocked || undefined} mobileLayout={mobileLayout}>
+    {visible.length ? <Table className={styles.relationshipTable} aria-label={title} aria-busy={blocked || undefined} mobileLayout="grid">
       <thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
       <tbody>{visible.map((item) => <tr key={item.id}>{labelCollectionCells(row(item, blocked), columns)}</tr>)}</tbody>
-    </Table> : <EmptyState title={query ? t("noResults") : emptyTitle} description={query ? t("noResultsHint") : emptyDescription}
+    </Table> : <EmptyState compact title={query ? t("noResults") : emptyTitle} description={query ? t("noResultsHint") : emptyDescription}
       action={query ? <Button onClick={clearSearch} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
     {showPagination && <Table.Footer note={footerNote}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={blocked}
       onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
@@ -162,33 +162,39 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
   const pages = Math.max(1, Math.ceil(matches.length / pageSize));
   const currentPage = Math.min(page, pages);
   const reset = () => { setQuery(""); setKind(filterDefault); setPage(1); };
+  const showQuery = !embedded || Boolean(create || filter || status || loadMore || loading || unavailable || query || deferredQuery) || items.length > 1;
+  const showPages = !embedded || Boolean(loadMore) || items.length > initialRelationshipPageSize;
   const action = create ? <Button ref={createActionRef} disabled={create.disabled} title={create.reason} onClick={create.onClick} size="small"><Plus aria-hidden="true" />{create.label}</Button> : null;
   const primary = create ? { id: "create", label: create.label, icon: <Plus aria-hidden="true" />, disabled: create.disabled, disabledReason: create.disabled ? create.reason : undefined, onSelect: create.onClick } satisfies PageCommand : undefined;
   return <Card aria-description={description}>
     {!embedded ? <ContentPage.Heading title={title} scrollKey={`collection:${title}`} actions={!workflow && (primary || secondaryActions.length) ? <ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")} primaryRef={createActionRef} focusRef={createFocusRef} primary={primary} secondary={secondaryActions} /> : undefined} /> : null}
     {!workflow && intro ? intro : null}
     {workflow ?? <>
-    <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
+    {showQuery && <TableToolbar labels={toolbarLabels} search={{ label: t("search"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }}
       actions={embedded ? action : null}
       filters={filter ? [{ id: "kind", label: filter.label, options: [{ value: "all", label: t("all") }, ...filter.options], value: kind, onChange: (value) => { setKind(value); setPage(1); } }] : []}
-      status={loading || unavailable ? "" : status ?? t("count", { count: matches.length })} />
+      status={loading || unavailable ? "" : status ?? t("count", { count: matches.length })} />}
     {unavailable ? <EmptyState title={unavailable.title} description={unavailable.description} action={unavailable.action} />
       : loading ? <TableSkeleton label={loading.label} rows={loading.rows ?? 4} header={false} />
       : <>
         <Table aria-label={title} aria-busy={deferredQuery !== query} mobileLayout="stack"><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{labelCollectionCells(row(item), columns)}</tr>)}</tbody></Table>
         {!matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
-        <Table.Footer note={footerNote}>
+        {showPages && <Table.Footer note={footerNote}>
           <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
             trailing={loadMore ? <Button disabled={loadMore.disabled || loadMore.busy} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
             labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
-        </Table.Footer>
+        </Table.Footer>}
+        {!showPages && footerNote ? <p className={styles.collectionNote}>{footerNote}</p> : null}
       </>}
     </>}
   </Card>;
 }
 
-export function WorkspaceDetail({ title, onBack, backLabel, actions, children, embedded = false, focus = true, primaryActionRef, actionFocusRef }: {
+export type WorkspaceInformation = ComponentProps<typeof ContentPage.Detail>["information"];
+
+export function WorkspaceDetail({ title, onBack, backLabel, actions, children, information, embedded = false, focus = true, primaryActionRef, actionFocusRef }: {
   title: string; onBack(): void; actions?: { primary?: PageCommand; secondary?: readonly PageCommand[] }; children: ReactNode; embedded?: boolean;
+  information?: WorkspaceInformation | null;
   backLabel?: string;
   focus?: boolean;
   primaryActionRef?: RefObject<HTMLButtonElement | null>;
@@ -198,7 +204,11 @@ export function WorkspaceDetail({ title, onBack, backLabel, actions, children, e
   const c = useTranslations("Collection");
   const commands = actions ? <ContentPage.Commands label={c("pageActions")} moreLabel={c("moreActions")} primaryRef={primaryActionRef} focusRef={actionFocusRef} {...actions} /> : undefined;
   const resolvedBackLabel = backLabel ?? t("back");
-  return <div className={styles.detailWorkspace}>{embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{resolvedBackLabel}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div> : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: resolvedBackLabel, onClick: onBack }} actions={commands} focus={focus} />}{children}</div>;
+  return <div className={information ? styles.stack : styles.detailWorkspace}>
+    {embedded ? <div className={styles.sectionHeading}><Button variant="ghost" onClick={onBack}>{resolvedBackLabel}</Button><h2 className={styles.detailTitle}>{title}</h2>{commands}</div>
+      : <ContentPage.Heading title={title} scrollKey={`detail:${title}`} back={{ label: resolvedBackLabel, onClick: onBack }} actions={commands} focus={focus} />}
+    {information ? <ContentPage.Detail information={information}>{children}</ContentPage.Detail> : children}
+  </div>;
 }
 
 export function WorkspaceInlineForm({ title, onClose, onBack, onSubmit, children, backLabel, submitLabel, cancelLabel, submitDisabled, submitVariant, validationError, operation, draft }: {

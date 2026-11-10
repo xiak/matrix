@@ -3,7 +3,7 @@
 import { useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ArrowLeft, Boxes, KeyRound, ShieldCheck, Unlink } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, Select, Steps, Table, TablePagination, TableToolbar, Tabs } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, Select, Steps, Table, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
 import type { AccountPolicyDocument } from "../domain/accounts";
@@ -187,20 +187,26 @@ function TemplateDetail({ reviewRef, observationRef, onReview, onObserve }: {
 }) {
   const t = useTranslations("ServiceAuthorizationPreview");
   const previewSnapshot = previewPermissionCeiling();
-  return <div className={styles.stack}>
-    <div className={styles.sectionHeading}><div><span>{t("detail.eyebrow")}</span><h3>{t("template.name")}</h3><p>{t("detail.hint")}</p></div><div className={styles.stateBadges}><Badge status="warning">{t("states.contractSample")}</Badge><Badge status="neutral">{t("states.notAuthorized")}</Badge></div></div>
-    <dl className={styles.facts}>
+  return <ContentPage.Detail information={{
+    title: t("detail.eyebrow"),
+    content: <><div className={styles.stateBadges}><Badge status="warning">{t("states.contractSample")}</Badge><Badge>{t("states.notAuthorized")}</Badge></div>
+    <Card.Facts>
       <div><dt>{t("fields.product")}</dt><dd><code>{previewTemplate.product}</code></dd></div>
-      <div><dt>{t("fields.templateId")}</dt><dd><code>{previewTemplate.id}</code></dd></div>
+      <div><dt>{t("fields.templateId")}</dt><dd><Table.Identifier value={previewTemplate.id} /></dd></div>
       <div><dt>{t("fields.templateRevision")}</dt><dd>v{previewTemplate.revision}</dd></div>
       <div><dt>{t("fields.servicePurpose")}</dt><dd><code>{previewTemplate.servicePurpose}</code></dd></div>
-      <div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div>
+      <div><dt>{t("fields.roleName")}</dt><dd><Table.Identifier value={previewTemplate.roleName} /></dd></div>
       <div><dt>{t("fields.roleDescription")}</dt><dd>{t("template.roleDescription")}</dd></div>
       <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
       <div><dt>{t("fields.supportedWorkload")}</dt><dd><code>{previewTemplate.workload.resourceKind}</code></dd></div>
       <div><dt>{t("fields.bindAction")}</dt><dd><code>{previewTemplate.workload.bindAction}</code></dd></div>
       <div><dt>{t("fields.unbindAction")}</dt><dd><code>{previewTemplate.workload.unbindAction}</code></dd></div>
-    </dl>
+    </Card.Facts></>,
+    footer: <HelpDisclosure label={t("serviceAccessHelp")}>{t("detail.modelBoundary")}</HelpDisclosure>
+  }}>
+    <Card><Card.Header className={styles.sectionHeading}><div><h3>{t("template.name")}</h3><p>{t("detail.hint")}</p></div>
+      <div className={styles.actions}><Button ref={reviewRef} onClick={onReview}>{t("detail.review")}</Button><Button ref={observationRef} variant="secondary" onClick={onObserve}>{t("detail.observeAuthorized")}</Button></div>
+    </Card.Header><Card.Body className={styles.stack}>
     <ServiceAuthorizationChain
       template={{ label: t("states.contractSample"), tone: "warning" }}
       account={{ label: t("states.notAuthorized") }}
@@ -212,9 +218,8 @@ function TemplateDetail({ reviewRef, observationRef, onReview, onObserve }: {
       <Card><Card.Header className={styles.cardHeading}><ShieldCheck aria-hidden="true" /><div><span>{t("detail.permissionLabel")}</span><h4>{previewTemplate.snapshotName} · v{previewTemplate.revision}</h4></div></Card.Header><Card.Body className={styles.cardBody}><p>{t("detail.permissionHint")}</p><Alert status="info">{t("detail.snapshotBoundary")}</Alert></Card.Body></Card>
     </div>
     <div className={styles.snapshot}><div><strong>{t("detail.snapshotTitle")}</strong><span>{t("detail.snapshotCount", { count: previewSnapshot.statements.length })}</span></div><ul>{previewSnapshot.statements.flatMap((statement) => statement.actions).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div>
-    <HelpDisclosure label={t("serviceAccessHelp")}>{t("detail.modelBoundary")}</HelpDisclosure>
-    <div className={styles.actions}><Button ref={reviewRef} onClick={onReview}>{t("detail.review")}</Button><Button ref={observationRef} variant="secondary" onClick={onObserve}>{t("detail.observeAuthorized")}</Button></div>
-  </div>;
+    </Card.Body></Card>
+  </ContentPage.Detail>;
 }
 
 function ServiceRoleRuntimeTrace() {
@@ -336,9 +341,7 @@ function ServiceRoleSessionDirectoryPreview({ accountId }: { accountId: string }
         <td data-label={t("observation.session.fields.lifecycle")}><WorkspaceTime value={session.expiresAt} /><small><Badge status={session.lifecycle === "EXPIRED" ? "neutral" : "info"}>{t(`observation.session.states.${session.lifecycle}`)}</Badge></small></td>
       </tr>)}</tbody>
     </Table>
-    <Table.Footer note={t("observation.session.footer")}><TablePagination mode="cursor" summary={t("observation.session.cursorPage", { page: 1 })}
-      previous={{ label: t("observation.session.previous"), disabled: true, onClick: () => undefined }}
-      next={{ label: t("observation.session.next"), disabled: true, onClick: () => undefined }} /></Table.Footer></>
+    <p className={styles.note}>{t("observation.session.footer")}</p></>
       : <EmptyState title={t("observation.session.emptyTitle")} description={t("observation.session.emptyHint")} action={<Button variant="secondary" onClick={() => { setQuery(""); setLifecycle("ALL"); }}>{toolbarLabels.resetQuery}</Button>} />}
   </section>;
 }
@@ -371,21 +374,37 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
   const t = useTranslations("ServiceAuthorizationPreview");
   const previewSnapshot = previewPermissionCeiling();
   const [detailSection, setDetailSection] = useState("configuration");
-  return <div className={styles.stack}>
-    <div className={styles.sectionHeading}>
-      <div><span>{t("observation.eyebrow")}</span><h3>{t("observation.title")}</h3><p>{t("observation.hint")}</p></div>
+  return <ContentPage.Detail information={{
+    title: t("observation.relation.title"),
+    content: <><Badge status="success">{previewAccountAccess.roleStatus}</Badge>
+      <Card.Facts>
+        <div><dt>{t("fields.targetAccount")}</dt><dd><Table.Identifier value={accountId} /></dd></div>
+        <div><dt>{t("fields.roleId")}</dt><dd><Table.Identifier value={previewAccountAccess.roleId} /></dd></div>
+        <div><dt>{t("fields.roleManagement")}</dt><dd><Table.Identifier value={previewAccountAccess.roleManagement} /></dd></div>
+        <div><dt>{t("fields.resourceVersion")}</dt><dd>{previewAccountAccess.roleResourceVersion}</dd></div>
+        <div><dt>{t("fields.serviceInstallation")}</dt><dd><Table.Identifier value={previewAccountAccess.principalInstallationId} /></dd></div>
+        <div><dt>{t("fields.servicePrincipal")}</dt><dd><Table.Identifier value={previewAccountAccess.principalId} /></dd></div>
+        <div><dt>{t("fields.purpose")}</dt><dd><Table.Identifier value={previewTemplate.servicePurpose} /></dd></div>
+        <div><dt>{t("fields.roleName")}</dt><dd><Table.Identifier value={previewTemplate.roleName} /></dd></div>
+        <div><dt>{t("fields.roleDescription")}</dt><dd>{t("template.roleDescription")}</dd></div>
+        <div><dt>{t("fields.templateReference")}</dt><dd><Table.Identifier value={`${previewTemplate.id}@v${previewTemplate.version}`} /></dd></div>
+        <div><dt>{t("fields.contentDigest")}</dt><dd><Table.Identifier value={previewTemplate.contentDigest} /></dd></div>
+        <div><dt>{t("fields.permissionCeiling")}</dt><dd><Table.Identifier value={`${previewTemplate.policyId}@${previewTemplate.policyVersionId}`} /></dd></div>
+        <div><dt>{t("fields.permissionCeilingDigest")}</dt><dd><Table.Identifier value={previewTemplate.policyContentDigest} /></dd></div>
+      </Card.Facts></>,
+    footer: <HelpDisclosure label={t("serviceAccessHelp")}>{t("observation.contractBoundary")}</HelpDisclosure>
+  }}>
+    <Card><Card.Header className={styles.sectionHeading}>
+      <div><h3>{t("observation.title")}</h3><p>{t("observation.hint")}</p></div>
       <div className={styles.stateBadges}><Badge status="success">{t("states.authorized")}</Badge><Badge status="warning">MOCK</Badge></div>
-    </div>
-    <Alert status="info">{t("observation.contractBoundary")}</Alert>
-    <ServiceAuthorizationValiditySummary />
+    </Card.Header>
     <Tabs.Root value={detailSection} onValueChange={setDetailSection}>
-      <Tabs.List aria-label={t("observation.details.sectionsLabel")}>
+      <Tabs.Bar><Tabs.List variant="underline" aria-label={t("observation.details.sectionsLabel")}>
         <Tabs.Trigger value="configuration">{t("observation.details.configuration")}</Tabs.Trigger>
         <Tabs.Trigger value="bindings">{t("observation.details.bindings", { count: 1 })}</Tabs.Trigger>
         <Tabs.Trigger value="runtime">{t("observation.details.runtime")}</Tabs.Trigger>
-      </Tabs.List>
-      <Tabs.Content className={styles.stack} value="configuration">
-        <div className={styles.observationGrid}>
+      </Tabs.List></Tabs.Bar>
+      <Tabs.Content inset="panel" className={styles.stack} value="configuration">
           <Card>
             <Card.Header className={styles.observationHeading}><div><span>{t("observation.template.eyebrow")}</span><h4>{t("observation.template.title")}</h4></div><Badge status="success">{t("states.active")}</Badge></Card.Header>
             <Card.Body className={styles.cardBody}><Card.Facts>
@@ -399,28 +418,9 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
               <div><dt>{t("fields.maxSession")}</dt><dd>{t("observation.durationMinutes", { count: previewTemplate.maxSessionDurationSeconds / 60 })}</dd></div>
             </Card.Facts></Card.Body>
           </Card>
-          <Card>
-            <Card.Header className={styles.observationHeading}><div><span>{t("observation.relation.eyebrow")}</span><h4>{t("observation.relation.title")}</h4></div><Badge status="success">{previewAccountAccess.roleStatus}</Badge></Card.Header>
-            <Card.Body className={styles.cardBody}><Card.Facts>
-              <div><dt>{t("fields.targetAccount")}</dt><dd><code>{accountId}</code></dd></div>
-              <div><dt>{t("fields.roleId")}</dt><dd><code>{previewAccountAccess.roleId}</code></dd></div>
-              <div><dt>{t("fields.roleManagement")}</dt><dd><code>{previewAccountAccess.roleManagement}</code></dd></div>
-              <div><dt>{t("fields.resourceVersion")}</dt><dd>{previewAccountAccess.roleResourceVersion}</dd></div>
-              <div><dt>{t("fields.serviceInstallation")}</dt><dd><code>{previewAccountAccess.principalInstallationId}</code></dd></div>
-              <div><dt>{t("fields.servicePrincipal")}</dt><dd><code>{previewAccountAccess.principalId}</code></dd></div>
-              <div><dt>{t("fields.purpose")}</dt><dd><code>{previewTemplate.servicePurpose}</code></dd></div>
-              <div><dt>{t("fields.roleName")}</dt><dd><code>{previewTemplate.roleName}</code></dd></div>
-              <div><dt>{t("fields.roleDescription")}</dt><dd>{t("template.roleDescription")}</dd></div>
-              <div><dt>{t("fields.templateReference")}</dt><dd><code>{previewTemplate.id}@v{previewTemplate.version}</code></dd></div>
-              <div><dt>{t("fields.contentDigest")}</dt><dd><code>{previewTemplate.contentDigest}</code></dd></div>
-              <div><dt>{t("fields.permissionCeiling")}</dt><dd><code>{previewTemplate.policyId}@{previewTemplate.policyVersionId}</code></dd></div>
-              <div><dt>{t("fields.permissionCeilingDigest")}</dt><dd><code>{previewTemplate.policyContentDigest}</code></dd></div>
-            </Card.Facts></Card.Body>
-          </Card>
-        </div>
         <Alert status="warning">{t("observation.roleIsNotBinding")}</Alert>
       </Tabs.Content>
-      <Tabs.Content className={styles.stack} value="bindings">
+      <Tabs.Content inset="panel" className={styles.stack} value="bindings">
         <section className={styles.bindingSection} aria-labelledby="service-authorization-binding-title">
           <div className={styles.sectionHeading}><div><h3 id="service-authorization-binding-title">{t("observation.binding.title")}</h3><p>{t("observation.binding.hint")}</p></div><Badge status="neutral">1</Badge></div>
           <Table aria-label={t("observation.binding.tableLabel")} mobileLayout="stack">
@@ -438,12 +438,10 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
               <td data-label={t("fields.updatedAt")}><WorkspaceTime value={previewAccountAccess.updatedAt} /><small>{t("observation.binding.createdAt")} <WorkspaceTime value={previewAccountAccess.createdAt} /></small></td>
             </tr></tbody>
           </Table>
-          <Table.Footer note={t("observation.binding.snapshotNote")}><TablePagination mode="cursor" summary={t("observation.binding.cursorPage", { page: 1 })}
-            previous={{ label: t("observation.binding.previous"), disabled: true, onClick: () => undefined }}
-            next={{ label: t("observation.binding.next"), disabled: true, onClick: () => undefined }} /></Table.Footer>
+          <p className={styles.note}>{t("observation.binding.snapshotNote")}</p>
         </section>
       </Tabs.Content>
-      <Tabs.Content className={styles.stack} value="runtime">
+      <Tabs.Content inset="panel" className={styles.stack} value="runtime">
         <Card>
           <Card.Header className={styles.observationHeading}>
             <div><span>{t("observation.session.eyebrow")}</span><h4>{t("observation.session.title")}</h4></div>
@@ -463,8 +461,10 @@ function ServiceLinkedRoleObservation({ accountId }: { accountId: string }) {
         <div className={styles.snapshot}><div><strong>{t("observation.permissionTitle")}</strong><span>{t("observation.permissionHint")}</span></div><ul>{previewSnapshot.statements.flatMap((statement) => statement.actions).map((action) => <li key={action}><code>{action}</code></li>)}</ul></div>
       </Tabs.Content>
     </Tabs.Root>
-    <Alert status="info">{t("observation.readOnly")}</Alert>
-  </div>;
+    </Card>
+    <ServiceAuthorizationValiditySummary />
+    <p className={styles.note}>{t("observation.readOnly")}</p>
+  </ContentPage.Detail>;
 }
 
 function PreviewOperationControls({ kind, targetResourceId, primaryLabel, closeLabel, danger = false, leadingAction, onApplied, onClose }: {
@@ -625,7 +625,9 @@ export function ServiceAuthorizationPreview({ workspace }: {
 
   return <>
     <ContentPage.Heading key={view} title={title} scrollKey={`service-authorization:${view}`} back={view === "directory" ? undefined : { label: backLabel, onClick: back }} focus={focusHeading} />
-    <Card aria-label={title}>
+    {view === "detail" ? <TemplateDetail reviewRef={reviewTrigger} observationRef={observationTrigger} onReview={() => { setStage(0); setNavigation({ view: "review", focusHeading: true }); }} onObserve={() => { setAccountAccessOrigin("detail"); setNavigation({ view: "account-access", focusHeading: true }); }} /> : null}
+    {view === "account-access" ? <ServiceLinkedRoleObservation accountId={workspace.accountId} /> : null}
+    {view === "directory" || view === "review" ? <Card aria-label={title}>
       <Card.Body className={styles.root}>
         <div className={styles.summary}><p>{t("subtitle")}</p><div className={styles.badges}><Badge status="warning">MOCK</Badge><Badge>{t("previewOnly")}</Badge></div></div>
         <Alert status="warning">{t("boundary")}</Alert>
@@ -635,10 +637,8 @@ export function ServiceAuthorizationPreview({ workspace }: {
           <Tabs.Content className={styles.stack} value="authorizations"><AccountAuthorizationDirectory accountId={workspace.accountId} triggerRef={accountAccessTrigger} onOpen={() => { setAccountAccessOrigin("directory"); setNavigation({ view: "account-access", focusHeading: true }); }} /></Tabs.Content>
           <Tabs.Content className={styles.stack} value="templates"><TemplateDirectory triggerRef={templateTrigger} onOpen={() => setNavigation({ view: "detail", focusHeading: true })} /></Tabs.Content>
         </Tabs.Root> : null}
-        {view === "detail" ? <TemplateDetail reviewRef={reviewTrigger} observationRef={observationTrigger} onReview={() => { setStage(0); setNavigation({ view: "review", focusHeading: true }); }} onObserve={() => { setAccountAccessOrigin("detail"); setNavigation({ view: "account-access", focusHeading: true }); }} /> : null}
         {view === "review" ? <ServiceAuthorizationConsentReview accountId={workspace.accountId} targetResourceId={previewWorkload.id} stage={stage} onStageChange={setStage} onClose={() => setNavigation({ view: "detail", focusHeading: false })} /> : null}
-        {view === "account-access" ? <ServiceLinkedRoleObservation accountId={workspace.accountId} /> : null}
       </Card.Body>
-    </Card>
+    </Card> : null}
   </>;
 }

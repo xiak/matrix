@@ -468,7 +468,14 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       ? <Alert status="warning">{t("live.foreignMutation", { id: blockedIntent.requestId })}</Alert>
       : null;
 
-  if (selectedReference) return <WorkspaceDetail title={t("live.findingTitle", { id: selectedFinding?.target.id ?? selectedReference.targetId })} onBack={() => {
+  if (selectedReference) return <WorkspaceDetail title={t("live.findingTitle", { id: selectedFinding?.target.id ?? selectedReference.targetId })} information={{ title: t("findingInformation"), content: <Card.Facts>
+          <div><dt>{t("unused.findingId")}</dt><dd><Table.Identifier value={selectedReference.findingId} /></dd></div>
+          <div><dt>{t("unused.analyzerId")}</dt><dd><Table.Identifier value={selectedReference.analyzerId} /></dd></div>
+          {selectedFinding && <>
+            <div><dt>{t("live.targetVersion")}</dt><dd>{selectedFinding.targetResourceVersion}</dd></div>
+            <div><dt>{t("rule.resourceVersion")}</dt><dd>{selectedFinding.resourceVersion}</dd></div>
+          </>}
+      </Card.Facts>, footer: <HelpDisclosure label={t("reviewStateHelp")}>{t("live.findingBoundary")}</HelpDisclosure> }} onBack={() => {
     setSelectedReference(null); setSelected(null); setFindingAuthorityClient(null); setDetailError(null); setNotice(null);
   }}>
     {mutationBoundary}
@@ -479,18 +486,14 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       setSelected(null); setSelectedLoading(true); setDetailError(null); setSelectedRevision((current) => current + 1);
     }}>{t("live.retry")}</Button> : null}</div></Alert> : null}
     {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
-    <HelpDisclosure label={t("reviewStateHelp")}>{t("live.findingBoundary")}</HelpDisclosure>
+
     {selectedLoading ? <Card><TableSkeleton header={false} label={t("live.loadingFindingDetail")} labelVisible={false} rows={5} /></Card> : null}
     {!selectedLoading && selectedFinding ? <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{selectedFinding.target.id}</Typography.Title><Typography.Text tone="muted">{selectedFinding.id}</Typography.Text></div><Badge status={findingBadge[selectedFinding.status]}>{t(`unused.lifecycle.${selectedFinding.status}`)}</Badge></Card.Header>
       <Card.Body className={styles.detail}>
         <dl className={styles.facts}>
-          <div><dt>{t("unused.findingId")}</dt><dd><code>{selectedFinding.id}</code></dd></div>
-          <div><dt>{t("unused.analyzerId")}</dt><dd><code>{selectedFinding.analyzerId}</code></dd></div>
           <div><dt>{t("unused.findingType")}</dt><dd>{t(`unused.types.${findingTypeKey(selectedFinding.type)}`)}</dd></div>
           <div><dt>{t("unused.status")}</dt><dd>{t(`unused.lifecycle.${selectedFinding.status}`)}</dd></div>
-          <div><dt>{t("live.targetVersion")}</dt><dd>{selectedFinding.targetResourceVersion}</dd></div>
-          <div><dt>{t("rule.resourceVersion")}</dt><dd>{selectedFinding.resourceVersion}</dd></div>
           <div><dt>{t("live.windowStartedAt")}</dt><dd><WorkspaceTime value={selectedFinding.windowStartedAt} /></dd></div>
           <div><dt>{t("live.observedAt")}</dt><dd><WorkspaceTime value={selectedFinding.observedAt} /></dd></div>
           <div><dt>{t("live.lastActivityAt")}</dt><dd>{selectedFinding.lastActivityAt ? <WorkspaceTime value={selectedFinding.lastActivityAt} /> : t("live.noActivity")}</dd></div>

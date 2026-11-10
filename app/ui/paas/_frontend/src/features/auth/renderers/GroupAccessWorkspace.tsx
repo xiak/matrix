@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, type ReactNode, type RefObject } from "react";
+import { type ReactNode, type RefObject } from "react";
 import { FileText, Plus, UsersRound } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, HelpDisclosure, Badge, Button, Card, EmptyState, Table, TableSkeleton, Tabs } from "@ui/xiak";
@@ -119,7 +119,7 @@ function GroupMemberTable({ members, authoritativeTotal, directoryComplete = tru
   const a = useTranslations("AccountAccess");
   const g = useTranslations("GroupWorkspace");
   const relationship = useTranslations("RelationshipDirectory");
-  return <WorkspaceRelationshipDirectory title={t("members")} searchLabel={g("searchMembers")} items={members} mobileLayout="grid"
+  return <WorkspaceRelationshipDirectory title={t("members")} searchLabel={g("searchMembers")} items={members}
     controls={directoryComplete ? "as-needed" : "always"}
     status={(shown, loaded) => !directoryComplete && authoritativeTotal !== undefined
       ? relationship("partialResults", { shown, loaded, total: authoritativeTotal })
@@ -149,8 +149,7 @@ function GroupPolicyTable({ policies, onOpen }: {
   const relationship = useTranslations("RelationshipDirectory");
   const showDocumentEffect = policies.some((policy) => policy.documentEffect !== undefined);
   const columns = [t("name"), t("type"), t("version"), ...(showDocumentEffect ? [t("documentEffect")] : [])];
-  return <WorkspaceRelationshipDirectory title={t("permissions")} searchLabel={g("searchPolicies")} items={policies} mobileLayout="grid"
-    controls="as-needed"
+  return <WorkspaceRelationshipDirectory title={t("permissions")} searchLabel={g("searchPolicies")} items={policies}
     status={(shown) => relationship("completeResults", { shown, total: policies.length })} footerNote={relationship("completeScope")}
     emptyTitle={g("noPolicies")} keywords={(policy) => [policy.policyId, policy.description ?? "", policy.kind ? t(policy.kind) : ""].join(" ")} columns={columns} row={(policy, blocked) => <>
       <td data-label={t("name")}>
@@ -184,41 +183,19 @@ function GroupActionButton({ control, triggerRef, children, variant, icon }: {
   >{icon}{children}</Button>;
 }
 
-function GroupInformation({ group }: { group: GroupDetailRecord }) {
+function GroupAuthorizationOverview({ group }: { group: GroupDetailRecord }) {
   const t = useTranslations("IamWorkspace");
   const g = useTranslations("GroupWorkspace");
-  const headingId = useId();
+  if (group.policyDocumentEffects !== "complete" || group.memberCount === undefined) return null;
   const policiesWithDeny = group.policies.filter((policy) => policy.documentEffect === "containsDeny").length;
-
-  return <aside className={styles.groupInformation} aria-labelledby={headingId}>
-    <Card>
-      <Card.Header>
-        <h2 id={headingId}><UsersRound aria-hidden="true" />{g("summaryTitle")}</h2>
-      </Card.Header>
-      <Card.Body>
-        <Card.Facts>
-          {group.description && <div><dt>{t("description")}</dt><dd>{group.description}</dd></div>}
-          <div><dt>{g("groupId")}</dt><dd><Table.Identifier value={group.id} /></dd></div>
-          <div><dt>{t("created")}</dt><dd><WorkspaceTime value={group.createdAt} /></dd></div>
-        </Card.Facts>
-      </Card.Body>
-      <Card.Footer>
-        <HelpDisclosure label={g("membershipHelp")}>
-          <p>{g("groupIdentityHint")}</p>
-          <p>{g("policyChangeHint")}</p>
-        </HelpDisclosure>
-      </Card.Footer>
-    </Card>
-    {group.policyDocumentEffects === "complete" && group.memberCount !== undefined &&
-      <AuthorizationOverview title={g("authorizationOverview")} hint={g("authorizationOverviewHint")}
+  return <AuthorizationOverview title={g("authorizationOverview")} hint={g("authorizationOverviewHint")}
         items={[
           { label: t("members"), value: <RelationshipLink view="groups" id={group.id} tab="members">{t("memberCount", { count: group.memberCount })}</RelationshipLink> },
           { label: g("directPolicies"), value: <RelationshipLink view="groups" id={group.id} tab="policies">{g("directPolicyCount", { count: group.directPolicyCount })}</RelationshipLink> },
           { label: t("policiesWithDeny"), value: <RelationshipLink view="groups" id={group.id} tab="policies" scope="deny">{policiesWithDeny} {t(policiesWithDeny === 1 ? "item" : "items")}</RelationshipLink> },
           { label: t("permissionBoundary"), value: g("noPermissionBoundary") }
         ]}
-      />}
-  </aside>;
+      />;
 }
 
 function GroupMembers({ group, controls, onOpen }: {
@@ -271,6 +248,16 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
   return <WorkspaceDetail
     title={group.name}
     onBack={onBack}
+    information={workflow ? null : {
+      title: g("summaryTitle"), icon: <UsersRound aria-hidden="true" />,
+      content: <Card.Facts>
+        {group.description && <div><dt>{t("description")}</dt><dd>{group.description}</dd></div>}
+        <div><dt>{g("groupId")}</dt><dd><Table.Identifier value={group.id} /></dd></div>
+        <div><dt>{t("created")}</dt><dd><WorkspaceTime value={group.createdAt} /></dd></div>
+      </Card.Facts>,
+      footer: <HelpDisclosure label={g("membershipHelp")}><p>{g("groupIdentityHint")}</p><p>{g("policyChangeHint")}</p></HelpDisclosure>,
+      related: <GroupAuthorizationOverview group={group} />
+    }}
     primaryActionRef={editTriggerRef}
     actionFocusRef={actionFocusRef}
     actions={workflow ? undefined : {
@@ -278,28 +265,24 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
       secondary: controls.delete ? [{ id: "delete", label: t("delete"), danger: true, disabled: controls.delete.disabled, disabledReason: controls.delete.disabled ? controls.delete.reason : undefined, onSelect: controls.delete.onInvoke }] : undefined
     }}
   >
-    {workflow ?? <div className={styles.groupWorkspace}>
-      <Card>
+    {workflow ?? <Card>
         <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as "members" | "policies")}>
-          <Card.Header className={styles.groupRelationshipHeader}>
-            <RelationshipTabs aria-label={group.name} variant="underline" className={styles.groupRelationshipTabs}>
-              <GroupRelationshipTab value="members" label={t("members")} count={group.memberCount} />
-              <GroupRelationshipTab value="policies" label={g("directPolicies")} count={group.directPolicyCount} />
-            </RelationshipTabs>
-            <div className={styles.groupCommands}>
-              {activeTab === "members" ? <>
+          <Tabs.Bar actions={activeTab === "members" ? <>
                 <GroupActionButton control={controls.addMember} triggerRef={addMemberTriggerRef} icon={<Plus aria-hidden="true" />}>{g("addMembers")}</GroupActionButton>
                 <GroupActionButton control={controls.removeMember} triggerRef={removeMemberTriggerRef} variant="secondary">{g("removeMembers")}</GroupActionButton>
               </> : <>
                 <GroupActionButton control={controls.addPolicy} triggerRef={addPolicyTriggerRef} icon={<Plus aria-hidden="true" />}>{g("addPolicies")}</GroupActionButton>
                 <GroupActionButton control={controls.removePolicy} triggerRef={removePolicyTriggerRef} variant="secondary">{g("removePolicies")}</GroupActionButton>
-              </>}
-            </div>
-          </Card.Header>
-          <Tabs.Content className={styles.groupRecords} value="members">
+              </>}>
+            <RelationshipTabs aria-label={group.name}>
+              <GroupRelationshipTab value="members" label={t("members")} count={group.memberCount} />
+              <GroupRelationshipTab value="policies" label={g("directPolicies")} count={group.directPolicyCount} />
+            </RelationshipTabs>
+          </Tabs.Bar>
+          <Tabs.Content inset="none" value="members">
             <GroupMembers group={group} controls={controls} onOpen={onOpenMember} />
           </Tabs.Content>
-          <Tabs.Content className={styles.groupRecords} value="policies">
+          <Tabs.Content inset="none" value="policies">
             <DirectoryScope label={denyOnly ? t("policiesWithDeny") : undefined} empty={!displayedPolicies.length}>
               {displayedPolicies.length > 0
                 ? <GroupPolicyTable policies={displayedPolicies} onOpen={onOpenPolicy} />
@@ -307,8 +290,6 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
             </DirectoryScope>
           </Tabs.Content>
         </Tabs.Root>
-      </Card>
-      <GroupInformation group={group} />
-    </div>}
+    </Card>}
   </WorkspaceDetail>;
 }
