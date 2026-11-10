@@ -43,7 +43,7 @@
 
 .railHeader::after {
   position: absolute;
-  inset-inline: calc((100% - var(--xiak-rail-target-size)) / 2);
+  inset-inline: calc((100% - 32px) / 2);
   inset-block-end: 0;
   height: var(--xiak-border-width);
   background: var(--xiak-color-border-subtle);
