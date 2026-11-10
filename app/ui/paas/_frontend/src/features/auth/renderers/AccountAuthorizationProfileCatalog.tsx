@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, ChevronDown } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
@@ -9,6 +9,7 @@ import { useAccountAccess, type AuthorizationProfileClient, type AuthorizationPr
 import {
   admittedAuthorizationSubjects,
   admittedAuthorizationUserAuthenticationMethods,
+  authorizationResourceShapeKind,
   type AuthorizationAuthorityScope,
   type AuthorizationProfileAction,
   type AuthorizationProfileEntry,
@@ -127,11 +128,19 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
       if (scopeFilter !== "all" && action.scope !== scopeFilter) return false;
       if (subjectFilter !== "all" && !subjects.includes(subjectFilter)) return false;
       if (credentialFilter !== "all" && !credentials.includes(credentialFilter)) return false;
-      const value = [action.action, action.resourceKind, action.scope, action.resultResourceKind ?? "", ...subjects, ...credentials,
-        ...(action.conditions ?? []).map((condition) => condition.key)].join(" ").toLowerCase();
+      if (!words.length) return true;
+      const value = [
+        action.action, action.resourceKind, action.scope, t(`scopes.${action.scope}`), action.resultResourceKind,
+        ...subjects.flatMap((subject) => [subject, t(`subjects.${subject}`)]),
+        ...credentials.flatMap((method) => [method, t(`credentials.${method}`)]),
+        ...action.resourceShapes.map((shape) => t(`shapes.${authorizationResourceShapeKind(shape)}`)),
+        ...(action.conditions ?? []).flatMap((condition) => [
+          condition.key, t(`conditionSources.${condition.source}`), t(`conditionValueTypes.${condition.valueType}`)
+        ])
+      ].join(" ").normalize("NFKC").toLowerCase();
       return words.every((word) => value.includes(word));
     });
-  }, [actionQuery, credentialFilter, scopeFilter, selected, subjectFilter]);
+  }, [actionQuery, credentialFilter, scopeFilter, selected, subjectFilter, t]);
 
   const productPages = Math.max(1, Math.ceil(filteredEntries.length / productPageSize));
   const currentProductPage = Math.min(productPage, productPages);
@@ -162,15 +171,21 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
       <h2 ref={selectedHeading} tabIndex={-1}>{selected.profile.product}</h2>
       {client.preview ? <Badge status="warning">{t("mock")}</Badge> : null}
     </div>
-    <ContentPage.Detail information={{ title: t("declarationMetadata"), content: <Card.Facts>
-        <div><dt>{t("revision")}</dt><dd>{selected.profile.revision}</dd></div>
+    <ContentPage.Detail information={{
+      title: t("declarationMetadata"),
+      content: <Card.Facts className={styles.declarationFacts}>
         <div><dt>{t("callingService")}</dt><dd>{selected.profile.callingService}</dd></div>
+        <div><dt>{t("revision")}</dt><dd>{selected.profile.revision}</dd></div>
         <div><dt>{t("actions")}</dt><dd>{selected.profile.actions.length}</dd></div>
-        <div className={styles.catalogDigest}><dt>{t("digest")}</dt><dd><Table.Identifier value={selected.contentDigest} /></dd></div>
-      </Card.Facts> }}>
+      </Card.Facts>,
+      footer: <details className={styles.declarationDigest}>
+        <summary>{t("digest")}<ChevronDown aria-hidden="true" /></summary>
+        <code>{selected.contentDigest}</code>
+      </details>
+    }}>
     {selected.profile.actions.some((action) => action.scope !== "TENANT") ? <Alert status="warning">{t("platformScopeHint")}</Alert> : null}
     <Card>
-    {(selected.profile.actions.length > 1 || actionQuery || scopeFilter !== "all" || subjectFilter !== "all" || credentialFilter !== "all") && <TableToolbar labels={toolbarLabels}
+    <TableToolbar labels={toolbarLabels}
       search={{ label: t("searchActions"), placeholder: t("searchActionsPlaceholder"), value: actionQuery, onChange: (value) => { setActionQuery(value); setPage(1); } }}
       filters={[
         { id: "scope", label: t("scopeFilter"), value: scopeFilter, options: [
@@ -191,7 +206,9 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
           { value: "ACCESS_KEY", label: t("credentials.ACCESS_KEY") }
         ], onChange: (value) => { setCredentialFilter(value as "all" | AuthorizationUserAuthenticationMethod); setPage(1); } }
       ]}
-      status={t("actionCount", { count: filteredActions.length })} />}
+      status={filteredActions.length === selected.profile.actions.length
+        ? t("actionCount", { count: filteredActions.length })
+        : t("actionMatches", { shown: filteredActions.length, total: selected.profile.actions.length })} />
     {visibleActions.length ? <AuthorizationActionTable actions={visibleActions} label={t("actionTable", { product: selected.profile.product })} />
       : <EmptyState title={t("noActions")} description={t("noActionsHint")} action={<Button variant="secondary" onClick={resetActions}>{toolbarLabels.resetQuery}</Button>} />}
     {selected.profile.actions.length > 10 ? <Table.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer> : null}

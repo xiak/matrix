@@ -70,7 +70,7 @@ function ActionDeclarationDisclosure({ actions }: { actions: AuthorizationProfil
     </div>
     {open ? <div className={styles.actionDeclarationBody} id={id}>
       <AuthorizationActionTable actions={actions.slice((currentPage - 1) * pageSize, currentPage * pageSize)}
-        label={t("selectedActionDeclarationsTable")} />
+        initialAction={actions.length === 1 ? actions[0]?.action : undefined} label={t("selectedActionDeclarationsTable")} />
       <Table.Footer><TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage}
         onPageSizeChange={(size) => { setPageSize(size); setPage(1); }} labels={{ summary: t("page", { page: currentPage, pages }),
           pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>

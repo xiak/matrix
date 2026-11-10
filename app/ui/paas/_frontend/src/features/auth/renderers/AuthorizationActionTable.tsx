@@ -1,5 +1,7 @@
 "use client";
 
+import { Fragment, useId, useState } from "react";
+import { ChevronRight } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { Table } from "@ui/xiak";
 import {
@@ -10,35 +12,83 @@ import {
 } from "../domain/accounts";
 import styles from "./AuthorizationActionTable.module.css";
 
-// The catalog and the product-onboarding review show the same declaration,
-// never an evaluated grant. Search and paging remain owned by their screens.
-export function AuthorizationActionTable({ actions, label }: { actions: AuthorizationProfileAction[]; label: string }) {
+function ActionDetails({ action }: { action: AuthorizationProfileAction }) {
   const t = useTranslations("AuthorizationProfileCatalog");
-  return <Table aria-label={label} mobileLayout="stack" className={styles.table}>
-    <thead><tr><th scope="col">{t("action")}</th><th scope="col">{t("resourceTarget")}</th><th scope="col">{t("subjectCredential")}</th><th scope="col">{t("conditions")}</th></tr></thead>
-    <tbody>{actions.map((action) => {
-      const subjects = admittedAuthorizationSubjects(action);
-      const userAuthenticationMethods = admittedAuthorizationUserAuthenticationMethods(action);
-      return <tr key={action.action}>
-        <td data-label={t("action")}><code>{action.action}</code></td>
-        <td data-label={t("resourceTarget")}><small>{t(`scopes.${action.scope}`)}</small><strong>{action.resourceKind}</strong>
-          {action.resourceShapes.map((shape) => <small key={`${shape.mode}:${shape.collectionUsage ?? ""}`}>{t(`shapes.${authorizationResourceShapeKind(shape)}`)}</small>)}
-          {action.instanceListBatch ? <small>{t("instanceListBatch")}</small> : null}
-          {action.resultResourceKind ? <small>{t("resultResource", { resource: action.resultResourceKind })}</small> : null}
-        </td>
-        <td data-label={t("subjectCredential")}>
-          <strong>{subjects.map((subject) => t(`subjects.${subject}`)).join(" · ")}</strong>
-          {action.subjectTypes === undefined ? <small>{t("legacySubjects")}</small> : null}
-          <small>{t("userCredentials")}: {subjects.includes("USER")
-            ? userAuthenticationMethods.map((method) => t(`credentials.${method}`)).join(" · ")
-            : t("notApplicable")}</small>
-          {subjects.includes("USER") && action.userAuthenticationMethods === undefined ? <small>{t("legacyCredentials")}</small> : null}
-        </td>
-        <td data-label={t("conditions")}>{action.conditions?.length ? <ul className={styles.conditionList}>{action.conditions.map((condition) => <li key={condition.key}>
+  const subjects = admittedAuthorizationSubjects(action);
+  const credentials = admittedAuthorizationUserAuthenticationMethods(action);
+  return <dl className={styles.details}>
+    <div>
+      <dt>{t("resourceTarget")}</dt>
+      <dd>
+        <ul className={styles.items}>{action.resourceShapes.map((shape) =>
+          <li key={authorizationResourceShapeKind(shape)}>{t(`shapes.${authorizationResourceShapeKind(shape)}`)}</li>
+        )}</ul>
+        {action.instanceListBatch && <small>{t("instanceListBatch")}</small>}
+        {action.resultResourceKind && <small>{t("resultResource", { resource: action.resultResourceKind })}</small>}
+      </dd>
+    </div>
+    <div>
+      <dt>{t("subjectCredential")}</dt>
+      <dd>
+        <div>{subjects.map((subject) => t(`subjects.${subject}`)).join(" · ")}</div>
+        {action.subjectTypes === undefined && <small>{t("legacySubjects")}</small>}
+        <dl className={styles.credentials}>
+          <dt>{t("userCredentials")}</dt>
+          <dd>{subjects.includes("USER") ? credentials.map((method) => t(`credentials.${method}`)).join(" · ") : t("notApplicable")}</dd>
+        </dl>
+        {subjects.includes("USER") && action.userAuthenticationMethods === undefined && <small>{t("legacyCredentials")}</small>}
+      </dd>
+    </div>
+    <div>
+      <dt>{t("conditions")}</dt>
+      <dd>{action.conditions?.length ? <ul className={styles.items}>{action.conditions.map((condition) =>
+        <li key={condition.key}>
           <code>{condition.key}</code>
           <small>{t(`conditionSources.${condition.source}`)} · {t(`conditionValueTypes.${condition.valueType}`)}</small>
-        </li>)}</ul> : t("none")}</td>
-      </tr>;
+        </li>
+      )}</ul> : t("none")}</dd>
+    </div>
+  </dl>;
+}
+
+export function AuthorizationActionTable({ actions, label, initialAction }: {
+  actions: AuthorizationProfileAction[];
+  label: string;
+  initialAction?: string;
+}) {
+  const t = useTranslations("AuthorizationProfileCatalog");
+  const id = useId();
+  const [expanded, setExpanded] = useState<string | null>(initialAction ?? null);
+  if (expanded !== null && !actions.some((item) => item.action === expanded)) setExpanded(null);
+
+  return <Table aria-label={label} mobileLayout="grid" className={styles.table}>
+    <thead><tr>
+      <th scope="col" className={styles.actionColumn}>{t("action")}</th>
+      <th scope="col" className={styles.resourceColumn}>{t("resource")}</th>
+      <th scope="col">{t("scope")}</th>
+      <th scope="col">{t("subjectFilter")}</th>
+      <th scope="col" className={styles.count}>{t("conditions")}</th>
+    </tr></thead>
+    <tbody>{actions.map((action) => {
+      const open = expanded === action.action;
+      const triggerId = `${id}-${action.action}`;
+      const detailId = `${triggerId}-detail`;
+      return <Fragment key={action.action}>
+        <tr className={styles.summary} data-expanded={open || undefined}>
+          <td><Table.PrimaryAction id={triggerId} className={styles.disclose}
+            aria-expanded={open} aria-controls={open ? detailId : undefined}
+            onClick={() => setExpanded(open ? null : action.action)}>
+            <ChevronRight aria-hidden="true" /><code>{action.action}</code>
+          </Table.PrimaryAction></td>
+          <td className={styles.resource} data-label={t("resource")}><code>{action.resourceKind}</code></td>
+          <td className={styles.scope} data-label={t("scope")}>{t(`scopes.${action.scope}`)}</td>
+          <td className={styles.subject}>{admittedAuthorizationSubjects(action).map((subject) => t(`subjects.${subject}`)).join(" · ")}</td>
+          <td className={styles.count}>{action.conditions?.length || t("none")}</td>
+        </tr>
+        {open && <tr className={styles.inspection}><td colSpan={5}>
+          <section id={detailId} aria-labelledby={triggerId}><ActionDetails action={action} /></section>
+        </td></tr>}
+      </Fragment>;
     })}</tbody>
   </Table>;
 }

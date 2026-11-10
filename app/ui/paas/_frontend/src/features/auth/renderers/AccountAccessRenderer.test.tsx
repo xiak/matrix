@@ -5033,9 +5033,10 @@ describe("account access", () => {
     const declaration = screen.getByRole("region", { name: "已选 Action 的产品声明" });
     expect(within(declaration).getByText("paas.application.read", { selector: "code" })).toBeTruthy();
     expect(within(declaration).getByText("租户")).toBeTruthy();
-    expect(within(declaration).getByText("实例（支持已声明前缀）")).toBeTruthy();
-    expect(within(declaration).getByText("用户")).toBeTruthy();
-    expect(within(declaration).getByText("iam.account-id", { selector: "code" })).toBeTruthy();
+    const detail = within(declaration).getByRole("region", { name: "paas.application.read" });
+    expect(within(detail).getByText("实例（支持已声明前缀）")).toBeTruthy();
+    expect(within(detail).getByText("用户")).toBeTruthy();
+    expect(within(detail).getByText("iam.account-id", { selector: "code" })).toBeTruthy();
     expect(screen.getByText(/不是当前用户的授权结果，也不是策略编译结果/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "收起声明详情" }));
     expect(screen.queryByRole("region", { name: "已选 Action 的产品声明" })).toBeNull();
@@ -5510,6 +5511,13 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "paas" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.getByRole("heading", { level: 2, name: "paas" })).toBe(document.activeElement);
+    const metadata = within(screen.getByRole("complementary", { name: "声明信息" }));
+    expect(metadata.getByText("PAAS")).toBeTruthy();
+    const digest = metadata.getByText("内容摘要", { selector: "summary" });
+    expect(digest.closest("details")!.open).toBe(false);
+    await user.click(digest);
+    expect(digest.closest("details")!.open).toBe(true);
+    expect(metadata.getByText(profileDirectory().items[0]!.contentDigest, { selector: "code" })).toBeTruthy();
     const declaration = screen.getByText("产品声明与接入职责");
     expect(declaration.closest("details")!.open).toBe(false);
     await user.click(declaration);
@@ -5535,15 +5543,32 @@ describe("account access", () => {
     const { user } = await openAccess(accounts({ listAuthorizationProfiles: vi.fn().mockResolvedValue(catalog) }), iam(), "policies");
     await user.click(await screen.findByRole("tab", { name: "权限能力目录" }));
     await user.click(await screen.findByRole("button", { name: "paas" }));
-    const rows = within(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).getAllByRole("row");
-    expect(within(rows[1]!).getByText("用户 · 角色")).toBeTruthy();
-    expect(within(rows[1]!).getByText("用户凭证: 访问密钥")).toBeTruthy();
-    expect(within(rows[1]!).queryByText(/历史默认/)).toBeNull();
-    expect(within(rows[2]!).getByText("身份类型沿用历史默认")).toBeTruthy();
-    expect(within(rows[2]!).getByText("凭证沿用历史默认（仅登录会话）")).toBeTruthy();
-    expect(within(rows[3]!).getByText("服务身份")).toBeTruthy();
-    expect(within(rows[3]!).getByText("用户凭证: 不适用")).toBeTruthy();
-    expect(within(rows[3]!).queryByText(/仅登录会话/)).toBeNull();
+    const table = within(screen.getByRole("table", { name: "产品 paas 的 Action 声明" }));
+    expect(table.getAllByRole("row")).toHaveLength(4);
+    expect(table.queryByRole("region")).toBeNull();
+    const explicit = table.getByRole("button", { name: sample.action });
+    explicit.focus();
+    await user.keyboard("{Enter}");
+    const explicitDetails = table.getByRole("region", { name: sample.action });
+    expect(explicit.getAttribute("aria-controls")).toBe(explicitDetails.id);
+    expect(within(explicitDetails).getByText("用户 · 角色")).toBeTruthy();
+    expect(within(explicitDetails).getByText("访问密钥")).toBeTruthy();
+    expect(within(explicitDetails).queryByText(/历史默认/)).toBeNull();
+    await user.keyboard("{Enter}");
+    expect(table.queryByRole("region")).toBeNull();
+    expect(document.activeElement).toBe(explicit);
+
+    await user.click(table.getByRole("button", { name: "paas.application.legacy" }));
+    const legacy = table.getByRole("region", { name: "paas.application.legacy" });
+    expect(within(legacy).getByText("身份类型沿用历史默认")).toBeTruthy();
+    expect(within(legacy).getByText("凭证沿用历史默认（仅登录会话）")).toBeTruthy();
+    await user.click(table.getByRole("button", { name: "paas.application.probe" }));
+    expect(table.queryByRole("region", { name: "paas.application.legacy" })).toBeNull();
+    const probe = table.getByRole("region", { name: "paas.application.probe" });
+    expect(within(probe).getByText("服务身份")).toBeTruthy();
+    expect(within(probe).getByText("不适用")).toBeTruthy();
+    expect(within(probe).getByText("无")).toBeTruthy();
+    expect(within(probe).queryByText(/仅登录会话/)).toBeNull();
 
     expect(screen.queryByRole("combobox", { name: "用户凭据" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "筛选" }));
@@ -5563,6 +5588,11 @@ describe("account access", () => {
     await user.click(screen.getByRole("button", { name: "清除筛选" }));
     await user.type(screen.getByRole("searchbox", { name: "搜索 Action" }), "ACCESS_KEY");
     expect(within(screen.getByRole("table", { name: "产品 paas 的 Action 声明" })).getAllByRole("row")).toHaveLength(2);
+    await user.clear(screen.getByRole("searchbox", { name: "搜索 Action" }));
+    await user.type(screen.getByRole("searchbox", { name: "搜索 Action" }), "租户 访问密钥");
+    expect(table.getAllByRole("button")).toHaveLength(1);
+    expect(table.getByRole("button", { name: sample.action })).toBeTruthy();
+    expect(screen.getByText("匹配 1 / 3 项操作")).toBeTruthy();
   });
 
   it("keeps the catalog notice and search in place while its data region waits", async () => {

@@ -776,10 +776,11 @@ describe("policy creation entry and directory contract", () => {
     await user.click(screen.getByRole("tab", { name: "Action 声明" }));
     expect(screen.queryByRole("region", { name: "候选修订影响" })).toBeNull();
     const reviewActions = screen.getByRole("table", { name: "逐项核对权限声明" });
-    expect(within(reviewActions).getByText("paas.application.read")).toBeTruthy();
-    expect(within(reviewActions).getByText("实例（支持已声明前缀）")).toBeTruthy();
-    expect(within(reviewActions).getByText(/用户凭证: 登录会话/)).toBeTruthy();
-    expect(within(reviewActions).getAllByText(/IAM 事务时间/).length).toBeGreaterThan(0);
+    await user.click(within(reviewActions).getByRole("button", { name: "paas.application.read" }));
+    const action = within(reviewActions).getByRole("region", { name: "paas.application.read" });
+    expect(within(action).getByText("实例（支持已声明前缀）")).toBeTruthy();
+    expect(within(action).getByText("登录会话")).toBeTruthy();
+    expect(within(action).getByText(/IAM 事务时间/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("heading", { level: 3, name: "审阅不可变发布引用与消费边界" })).toBe(document.activeElement);
     const releaseGates = screen.getByRole("region", { name: "发布门禁状态" });
@@ -855,7 +856,8 @@ describe("policy creation entry and directory contract", () => {
     expect(within(review).getAllByText("匹配")).toHaveLength(4);
     expect(within(review).getByText(/不代表客户账号已经同意/)).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Action 声明" }));
-    expect(screen.getByText("产品 PEP 有界批量候选检查")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "managedservice.offering.read" }));
+    expect(within(screen.getByRole("region", { name: "managedservice.offering.read" })).getByText("产品 PEP 有界批量候选检查")).toBeTruthy();
   });
   it("pages action evidence instead of mounting an unbounded onboarding review", async () => {
     const actions = Array.from({ length: 1202 }, (_, index) => ({
@@ -871,12 +873,15 @@ describe("policy creation entry and directory contract", () => {
     await user.click(screen.getByRole("tab", { name: "Action 声明" }));
     const review = screen.getByRole("table", { name: "逐项核对权限声明" });
     expect(within(review).getAllByRole("row")).toHaveLength(11);
-    expect(within(review).getByText("paas.review-0001.read")).toBeTruthy();
+    await user.click(within(review).getByRole("button", { name: "paas.review-0001.read" }));
+    expect(within(review).getByRole("region", { name: "paas.review-0001.read" })).toBeTruthy();
     expect(within(review).queryByText("paas.review-0011.read")).toBeNull();
     await user.click(within(review.closest("section")!).getByRole("button", { name: "下一页" }));
     expect(within(review).getAllByRole("row")).toHaveLength(11);
     expect(within(review).getByText("paas.review-0011.read")).toBeTruthy();
     expect(within(review).queryByText("paas.review-0001.read")).toBeNull();
+    await user.click(within(review.closest("section")!).getByRole("button", { name: "上一页" }));
+    expect(within(review).getByRole("button", { name: "paas.review-0001.read" }).getAttribute("aria-expanded")).toBe("false");
     expect(screen.getByText(/分页仅改变显示/)).toBeTruthy();
   });
   it("compares complete candidate declarations without turning a revision into a publish decision", async () => {

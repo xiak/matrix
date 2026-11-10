@@ -2705,6 +2705,7 @@
     "allSubjects": "全部主体",
     "allCredentials": "全部用户凭据",
     "actionCount": "{count} 个 Action",
+    "actionMatches": "匹配 {shown} / {total} 项操作",
     "actionTable": "产品 {product} 的 Action 声明",
     "action": "Action",
     "resource": "资源",

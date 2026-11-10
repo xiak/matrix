@@ -2705,6 +2705,7 @@
     "allSubjects": "All subjects",
     "allCredentials": "All USER credentials",
     "actionCount": "{count, plural, one {# Action} other {# Actions}}",
+    "actionMatches": "{shown} of {total} Actions",
     "actionTable": "Action declarations for {product}",
     "action": "Action",
     "resource": "Resource",

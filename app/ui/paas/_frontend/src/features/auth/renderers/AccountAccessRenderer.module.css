@@ -627,6 +627,38 @@ details.statementRule > summary { padding-block: var(--xiak-spacing-tight); }
 .catalogDetailHeading { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-default); }
 .catalogDetailHeading h2 { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-title); overflow-wrap: anywhere; }
 .catalogDetailHeading h2:focus { outline: none; }
+.declarationFacts {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) repeat(2, minmax(0, 1fr));
+  gap: var(--xiak-spacing-comfortable) var(--xiak-spacing-tight);
+}
+.declarationFacts > div {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: start;
+  gap: var(--xiak-spacing-narrow);
+  min-height: 0;
+  padding: 0;
+}
+.declarationFacts > div + div { border: 0; }
+.declarationFacts dd { font-weight: var(--xiak-font-weight-semibold); font-variant-numeric: tabular-nums; }
+.declarationDigest { width: 100%; min-width: 0; }
+.declarationDigest summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--xiak-control-height-small);
+  border-radius: var(--xiak-radius-small);
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  list-style: none;
+  cursor: pointer;
+}
+.declarationDigest summary::-webkit-details-marker { display: none; }
+.declarationDigest summary:hover { color: var(--xiak-color-accent-text); }
+.declarationDigest summary:focus-visible { outline: 0.125rem solid var(--xiak-color-border-focus); outline-offset: 0.125rem; }
+.declarationDigest svg { width: var(--xiak-control-chevron-size); height: var(--xiak-control-chevron-size); }
+.declarationDigest[open] svg { transform: rotate(180deg); }
+.declarationDigest code { display: block; margin-block-start: var(--xiak-spacing-tight); font-size: var(--xiak-font-size-caption); overflow-wrap: anywhere; user-select: all; }
 .catalogFacts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--xiak-spacing-default); margin: 0; padding-block: var(--xiak-spacing-default); border-block: var(--xiak-border-subtle); }
 .catalogFacts > div { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
 .catalogFacts dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); }
