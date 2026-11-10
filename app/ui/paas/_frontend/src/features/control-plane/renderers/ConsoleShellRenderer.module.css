@@ -35,8 +35,20 @@
 }
 
 .railHeader {
+  position: relative;
   align-self: stretch;
   place-items: center;
+  border-bottom: 0;
+}
+
+.railHeader::after {
+  position: absolute;
+  inset-inline: calc((100% - var(--xiak-rail-target-size)) / 2);
+  inset-block-end: 0;
+  height: var(--xiak-border-width);
+  background: var(--xiak-color-border-subtle);
+  content: "";
+  pointer-events: none;
 }
 
 .railItems {
