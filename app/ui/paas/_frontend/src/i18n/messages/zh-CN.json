@@ -4490,6 +4490,9 @@
   "GroupWorkspace": {
     "groupPolicyHelp": "组策略如何影响成员",
     "membershipHelp": "成员关系与权限继承",
+    "summaryTitle": "用户组信息",
+    "membersSectionHint": "管理加入该组的子用户；成员会继承本组直接关联的策略。",
+    "policiesSectionHint": "管理该组直接关联的策略；变更会影响所有成员的继承权限。",
     "back": "返回用户组列表",
     "backToGroupDetails": "返回用户组详情",
     "steps": {

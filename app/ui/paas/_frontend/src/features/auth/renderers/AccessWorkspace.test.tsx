@@ -2282,6 +2282,10 @@ describe("CAM-style access workspace", () => {
     const directory = await screen.findByRole("table", { name: "用户组" });
     await user.click(within(directory).getByRole("button", { name: "ProgressiveTeam" }));
     expect(await screen.findByRole("heading", { name: "ProgressiveTeam" })).toBeTruthy();
+    const summary = screen.getByRole("region", { name: "用户组信息" });
+    expect(within(summary).getByRole("heading", { name: "用户组信息", level: 2 })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "成员", level: 2 })).toBeTruthy();
+    expect(screen.getByText("管理加入该组的子用户；成员会继承本组直接关联的策略。")).toBeTruthy();
     expect(screen.queryByRole("region", { name: "用户组授权模型" })).toBeNull();
     expect(screen.getByText("正在读取成员关系…")).toBeTruthy();
     expect(screen.queryByRole("table", { name: "成员" })).toBeNull();

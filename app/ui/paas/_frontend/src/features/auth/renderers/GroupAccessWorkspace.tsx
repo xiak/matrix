@@ -211,13 +211,22 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
     }}
   >
     {workflow ?? <>
-    <p className={styles.note}>{group.description || t("none")}</p>
-    <HelpDisclosure label={g("membershipHelp")}>{g("groupIdentityHint")}</HelpDisclosure>
-    <dl className={styles.facts}>
-      <div><dt>ID</dt><dd>{group.id}</dd></div>
-      <div><dt>{t("created")}</dt><dd><WorkspaceTime value={group.createdAt} /></dd></div>
-    </dl>
-    {showAuthorizationOverview ? <AuthorizationOverview
+    <section className={styles.groupSummary} aria-label={g("summaryTitle")}>
+      <div className={styles.groupSummaryHeader}>
+        <div className={styles.groupSummaryCopy}>
+          <h2>{g("summaryTitle")}</h2>
+          <p>{group.description || t("none")}</p>
+        </div>
+        <div className={styles.groupSummaryHelp}>
+          <HelpDisclosure label={g("membershipHelp")}>{g("groupIdentityHint")}</HelpDisclosure>
+        </div>
+      </div>
+      <dl className={styles.groupFacts}>
+        <div><dt>ID</dt><dd><code>{group.id}</code></dd></div>
+        <div><dt>{t("created")}</dt><dd><WorkspaceTime value={group.createdAt} /></dd></div>
+      </dl>
+    </section>
+    {showAuthorizationOverview ? <div className={styles.groupOverviewSlot}><AuthorizationOverview
       title={g("authorizationOverview")}
       hint={g("authorizationOverviewHint")}
       items={[
@@ -226,34 +235,50 @@ export function GroupDetail({ group, controls, workflow, editTriggerRef, actionF
         { label: t("policiesWithDeny"), value: <RelationshipLink view="groups" id={group.id} tab="policies" scope="deny">{policiesWithDeny} {t(policiesWithDeny === 1 ? "item" : "items")}</RelationshipLink> },
         { label: t("permissionBoundary"), value: g("noPermissionBoundary") }
       ]}
-    /> : null}
-    <Tabs.Root value={activeTab} onValueChange={(value) => setActiveTab(value as "members" | "policies")}>
-      <RelationshipTabs aria-label={group.name}>
+    /></div> : null}
+    <Tabs.Root className={styles.groupRelationships} value={activeTab} onValueChange={(value) => setActiveTab(value as "members" | "policies")}>
+      <RelationshipTabs aria-label={group.name} className={styles.groupRelationshipTabs} variant="underline">
         <Tabs.Trigger value="members">{t("members")}{group.memberCount === undefined ? null : ` (${group.memberCount})`}</Tabs.Trigger>
         <Tabs.Trigger value="policies">{g("directPolicies")} ({group.directPolicyCount})</Tabs.Trigger>
       </RelationshipTabs>
-      <Tabs.Content className={styles.stack} value="members">
-        <div className={styles.actions}>
-          <GroupActionButton control={controls.addMember} triggerRef={addMemberTriggerRef}>{g("addMembers")}</GroupActionButton>
-          <GroupActionButton control={controls.removeMember} triggerRef={removeMemberTriggerRef} variant="secondary">{g("removeMembers")}</GroupActionButton>
+      <Tabs.Content className={styles.groupTabContent} value="members">
+        <div className={styles.groupTabHeader}>
+          <div className={styles.groupTabHeading}>
+            <h2>{t("members")}</h2>
+            <p>{g("membersSectionHint")}</p>
+          </div>
+          <div className={styles.actions}>
+            <GroupActionButton control={controls.addMember} triggerRef={addMemberTriggerRef}>{g("addMembers")}</GroupActionButton>
+            <GroupActionButton control={controls.removeMember} triggerRef={removeMemberTriggerRef} variant="secondary">{g("removeMembers")}</GroupActionButton>
+          </div>
         </div>
-        {group.membersAvailability === "loading" ? <TableSkeleton label={g("loadingMembers")} rows={3} header={false} />
-          : group.membersAvailability === "forbidden" ? <EmptyState title={g("membersUnavailable")} description={g("membersUnavailableHint")} />
-          : group.membersAvailability === "error" ? <EmptyState title={g("membersLoadFailed")} description={group.membersError ?? g("membersLoadFailedHint")} action={<GroupActionButton control={controls.retryMembers} variant="secondary">{g("retry")}</GroupActionButton>} />
-          : <>{group.membersAvailability === "refreshing" ? <Alert status="info">{g("refreshingMembers")}</Alert> : null}
-            {group.members.length || group.membersDirectoryComplete === false
-              ? <GroupMemberTable members={group.members} authoritativeTotal={group.memberCount} directoryComplete={group.membersDirectoryComplete} loadMore={controls.loadMoreMembers} onOpen={onOpenMember} />
-              : <EmptyState title={g("noMembers")} description={g("noMembersHint")} />}</>}
+        <div className={styles.groupTabBody}>
+          {group.membersAvailability === "loading" ? <TableSkeleton label={g("loadingMembers")} rows={3} header={false} />
+            : group.membersAvailability === "forbidden" ? <EmptyState compact title={g("membersUnavailable")} description={g("membersUnavailableHint")} />
+            : group.membersAvailability === "error" ? <EmptyState compact title={g("membersLoadFailed")} description={group.membersError ?? g("membersLoadFailedHint")} action={<GroupActionButton control={controls.retryMembers} variant="secondary">{g("retry")}</GroupActionButton>} />
+            : <>{group.membersAvailability === "refreshing" ? <Alert status="info">{g("refreshingMembers")}</Alert> : null}
+              {group.members.length || group.membersDirectoryComplete === false
+                ? <GroupMemberTable members={group.members} authoritativeTotal={group.memberCount} directoryComplete={group.membersDirectoryComplete} loadMore={controls.loadMoreMembers} onOpen={onOpenMember} />
+                : <EmptyState compact title={g("noMembers")} description={g("noMembersHint")} />}</>}
+        </div>
       </Tabs.Content>
-      <Tabs.Content className={styles.stack} value="policies">
-        <div className={styles.actions}>
-          <GroupActionButton control={controls.addPolicy} triggerRef={addPolicyTriggerRef}>{g("addPolicies")}</GroupActionButton>
-          <GroupActionButton control={controls.removePolicy} triggerRef={removePolicyTriggerRef} variant="secondary">{g("removePolicies")}</GroupActionButton>
+      <Tabs.Content className={styles.groupTabContent} value="policies">
+        <div className={styles.groupTabHeader}>
+          <div className={styles.groupTabHeading}>
+            <h2>{g("directPolicies")}</h2>
+            <p>{g("policiesSectionHint")}</p>
+          </div>
+          <div className={styles.actions}>
+            <GroupActionButton control={controls.addPolicy} triggerRef={addPolicyTriggerRef}>{g("addPolicies")}</GroupActionButton>
+            <GroupActionButton control={controls.removePolicy} triggerRef={removePolicyTriggerRef} variant="secondary">{g("removePolicies")}</GroupActionButton>
+          </div>
         </div>
-        <HelpDisclosure label={g("groupPolicyHelp")}>{g("policyChangeHint")}</HelpDisclosure>
-        <DirectoryScope label={denyOnly ? t("policiesWithDeny") : undefined} empty={!displayedPolicies.length}>{displayedPolicies.length
-          ? <GroupPolicyTable policies={displayedPolicies} onOpen={onOpenPolicy} />
-          : <EmptyState title={g("noPolicies")} />}</DirectoryScope>
+        <div className={styles.groupTabBody}>
+          <HelpDisclosure label={g("groupPolicyHelp")}>{g("policyChangeHint")}</HelpDisclosure>
+          <DirectoryScope label={denyOnly ? t("policiesWithDeny") : undefined} empty={!displayedPolicies.length}>{displayedPolicies.length
+            ? <GroupPolicyTable policies={displayedPolicies} onOpen={onOpenPolicy} />
+            : <EmptyState compact title={g("noPolicies")} />}</DirectoryScope>
+        </div>
       </Tabs.Content>
     </Tabs.Root>
     </>}

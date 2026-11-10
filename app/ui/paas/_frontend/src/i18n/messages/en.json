@@ -4490,6 +4490,9 @@
   "GroupWorkspace": {
     "groupPolicyHelp": "How group policies affect members",
     "membershipHelp": "Membership and inherited permissions",
+    "summaryTitle": "Group information",
+    "membersSectionHint": "Manage the subusers in this group. Members inherit the group's directly attached policies.",
+    "policiesSectionHint": "Manage policies attached directly to this group. Changes affect inherited access for every member.",
     "back": "Back to groups",
     "backToGroupDetails": "Back to group details",
     "steps": {

@@ -2321,8 +2321,12 @@ This form contract is separate from the service directory's trigger-or-X
 contract below. IAM uses a default overview and grouped service-local links;
 detail workspaces use semantic tabs for memberships, policies, trust and
 security. Detail surfaces stretch across the available content area at wide
-viewports while prose keeps its own readable line length. Subuser creation
-replaces the dialog with a dedicated content-area
+viewports while prose keeps its own readable line length. Group detail keeps
+its resource summary and metadata distinct from a full-width underlined
+relationship switcher. Each selected relationship owns its heading, commands
+and bounded content or compact empty-state surface instead of merging them into
+one undifferentiated panel. Subuser creation replaces the dialog with a
+dedicated content-area
 route at `/console/access/create-user/`. The public `Wizard` owns the form
 frame, focused step heading and sticky action footer. The footer shares
 `ContentPage`'s responsive scroll inset so its opaque surface reaches the
