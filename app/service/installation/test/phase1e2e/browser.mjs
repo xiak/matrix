@@ -105,8 +105,27 @@ function detail() {
   return page.locator('section[aria-labelledby="managed-service-installation-detail-title"]');
 }
 
-function fact(label) {
-  return detail().locator("dt").filter({ hasText: new RegExp(`^${label}$`) }).locator("..").locator("dd");
+function installationRow(product) {
+  return page.getByRole("table", { name: "服务实例列表", exact: true }).getByRole("row")
+    .filter({ has: page.getByRole("button", { name: product.name, exact: true }) });
+}
+
+async function verifyIdentifier(label, expected) {
+  const information = detail().getByRole("complementary", { name: "实例信息", exact: true });
+  const value = information.getByText(label, { exact: true }).locator("..").locator("dd");
+  await value.waitFor({ state: "visible" });
+  const summary = value.locator("details:not([open]) > summary");
+  if (await summary.count()) await summary.click();
+  await value.getByText(expected, { exact: true }).waitFor({ state: "visible" });
+}
+
+function lifecyclePhase() {
+  return detail().getByRole("article", { name: "实例生命周期", exact: true }).locator("header [data-status]");
+}
+
+function endpointValue() {
+  return detail().getByRole("article")
+    .filter({ has: page.getByRole("heading", { name: "端点", exact: true }) }).locator("code");
 }
 
 async function screenshot(product, state) {
@@ -119,12 +138,11 @@ async function screenshot(product, state) {
 
 async function readInstance(product, phase) {
   await visit(product, "instances");
-  const row = page.getByRole("table", { name: "服务实例列表", exact: true }).locator("tbody tr")
-    .filter({ has: page.getByRole("button", { name: product.name, exact: true }) });
-  await waitText(row.locator('td[data-label="状态"]'), phase, 210_000);
+  const row = installationRow(product);
+  await waitText(row.locator('td[data-label="状态"] [data-status]'), phase, 210_000);
   await row.getByRole("button", { name: product.name, exact: true }).click();
-  await waitText(fact("实例 ID"), product.instance);
-  await waitText(fact("状态"), phase);
+  await verifyIdentifier("实例 ID", product.instance);
+  await waitText(lifecyclePhase(), phase);
 }
 
 try {
@@ -271,13 +289,13 @@ try {
       if (product.id === "kibana") await choose("Elasticsearch 实例", /handbook-browser-elasticsearch/);
       await screenshot(product, "install");
       await page.getByRole("button", { name: "提交安装任务", exact: true }).click();
-      await page.getByText("安装任务已由平台接受", { exact: true }).waitFor();
+      await installationRow(product).waitFor({ state: "visible" });
     });
     await step(`${product.id}-ready-detail`, async () => {
       await readInstance(product, "运行中");
-      const endpoint = (await fact("端点").innerText()).trim();
+      const endpoint = (await endpointValue().innerText()).trim();
       assert.match(endpoint, /127\.0\.0\.1:[0-9]+/);
-      if (product.id === "kibana") await waitText(fact("关联 Elasticsearch"), "handbook-browser-elasticsearch");
+      if (product.id === "kibana") await verifyIdentifier("关联 Elasticsearch", "handbook-browser-elasticsearch");
       await screenshot(product, "running");
     });
   }
@@ -290,8 +308,8 @@ try {
       await page.getByRole("textbox", { name: "输入实例 ID 以确认", exact: true }).fill(product.instance);
       await page.getByRole("button", { name: "确认终止实例", exact: true }).click();
       await detail().getByText("平台已完成实例终止并归还关联配额。有查看权限的用户仍可查看这条终止记录。", { exact: true }).waitFor({ timeout: 210_000 });
-      await waitText(fact("状态"), "已终止");
-      await waitText(fact("端点"), "尚未分配");
+      await waitText(lifecyclePhase(), "已终止");
+      await waitText(endpointValue(), "尚未分配");
       await screenshot(product, "terminated");
     });
     await step(`${product.id}-quota-returned`, async () => {
