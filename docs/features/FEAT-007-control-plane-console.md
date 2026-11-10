@@ -910,7 +910,8 @@ readable at 360 CSS pixels without horizontal page scrolling.
 
 Table-backed directories use the public `Table.Footer` and `TablePagination`
 composition: the page summary stays on the left and page-size plus icon-only
-navigation controls stay on the right, including one-page results. A complete
+navigation controls stay on the right, including one-page directory results.
+The Group detail relationship lists use the adaptive controls described below. A complete
 client snapshot may expose its true page count and page size. A server cursor
 uses the same visual control but does not invent a total or offer a page-size
 choice the backend cannot honor. Selection always applies to the visible page.
@@ -2321,13 +2322,16 @@ This form contract is separate from the service directory's trigger-or-X
 contract below. IAM uses a default overview and grouped service-local links;
 detail workspaces use semantic tabs for memberships, policies, trust and
 security. Detail surfaces stretch across the available content area at wide
-viewports while prose keeps its own readable line length. Group detail keeps
-its resource summary and metadata distinct from a full-width underlined
-relationship switcher. Each selected relationship owns its heading, commands
-and bounded content or compact empty-state surface instead of merging them into
-one undifferentiated panel. Subuser creation replaces the dialog with a
-dedicated content-area
-route at `/console/access/create-user/`. The public `Wizard` owns the form
+viewports while prose keeps its own readable line length. Group detail opens
+with the member and direct-policy tabs and the selected relationship's commands.
+The group description, identifier, creation time and inheritance help sit in
+a separate information panel beside the records, or below them on narrow screens.
+Long group and policy-version identifiers expand in place. For a complete group
+relationship list, search appears from the second record and pagination above
+ten records. These thresholds use the unfiltered list size. Partial membership
+lists keep search, pagination, coverage information and any available continuation.
+Subuser creation replaces the dialog with a dedicated content-area route at
+`/console/access/create-user/`. The public `Wizard` owns the form
 frame, focused step heading and sticky action footer. The footer shares
 `ContentPage`'s responsive scroll inset so its opaque surface reaches the
 scrollport edge, not the padded content edge; it returns to document flow at

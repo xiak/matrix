@@ -4491,8 +4491,7 @@
     "groupPolicyHelp": "How group policies affect members",
     "membershipHelp": "Membership and inherited permissions",
     "summaryTitle": "Group information",
-    "membersSectionHint": "Manage the subusers in this group. Members inherit the group's directly attached policies.",
-    "policiesSectionHint": "Manage policies attached directly to this group. Changes affect inherited access for every member.",
+    "groupId": "Group ID",
     "back": "Back to groups",
     "backToGroupDetails": "Back to group details",
     "steps": {
@@ -4538,7 +4537,7 @@
     "authorizationOverviewHint": "Members inherit the group's directly attached policies; the group itself has no permission boundary. This summarizes current default policy documents, not a member's request-level decision.",
     "noPermissionBoundary": "Not set on groups",
     "noMembers": "No members yet",
-    "noMembersHint": "Add subusers to inherit the group's directly attached policies. The account owner cannot join a group.",
+    "noMembersHint": "Subusers who join this group inherit its directly attached policies.",
     "deleteImpact": "Deleting this group removes {members, plural, one {# membership} other {# memberships}} and {policies, plural, one {# direct policy attachment} other {# direct policy attachments}}. Users, policies and resources are not deleted.",
     "moreMembers": "And {count} more members.",
     "loadingGroups": "Loading groups…",

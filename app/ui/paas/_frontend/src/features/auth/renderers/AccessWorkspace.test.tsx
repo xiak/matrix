@@ -2204,6 +2204,7 @@ describe("CAM-style access workspace", () => {
     const { rerender } = render(renderDetail("refreshing"));
     expect(screen.getByText("正在更新成员关系；更新完成前暂不可修改。")).toBeTruthy();
     expect(within(screen.getByRole("table", { name: "成员" })).getByRole("button", { name: "lin" })).toBeTruthy();
+    expect(screen.getByRole("searchbox", { name: "搜索用户组成员" })).toBeTruthy();
     expect(screen.getByText(/搜索和分页仅作用于当前已载入记录/)).toBeTruthy();
     rerender(renderDetail("error"));
     expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
@@ -2227,7 +2228,7 @@ describe("CAM-style access workspace", () => {
       listGroupMemberships
     } });
     const table = await screen.findByRole("table", { name: "成员" });
-    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getByRole("columnheader", { name: "用户类型" })).toBeTruthy();
     expect(within(table).getAllByRole("row")).toHaveLength(11);
     expect(screen.getByText("显示 11 / 已载入 11 条")).toBeTruthy();
     expect(screen.getByText(/搜索和分页仅作用于当前已载入记录/)).toBeTruthy();
@@ -2255,13 +2256,43 @@ describe("CAM-style access workspace", () => {
     }} controls={{}} onBack={vi.fn()} onOpenMember={vi.fn()} onOpenPolicy={onOpenPolicy} /></LocaleProvider>);
     await user.click(screen.getByRole("tab", { name: "直接关联策略 (12)" }));
     const table = screen.getByRole("table", { name: "权限策略" });
-    expect(table.getAttribute("data-mobile-layout")).toBe("stack");
+    expect(within(table).getByRole("columnheader", { name: "版本" })).toBeTruthy();
     expect(within(table).getAllByRole("row")).toHaveLength(11);
     expect(screen.getByText("显示 12 / 共 12 条")).toBeTruthy();
     await user.type(screen.getByRole("searchbox", { name: "搜索直接关联策略" }), "Policy12");
     await waitFor(() => expect(within(table).getAllByRole("row")).toHaveLength(2));
+    expect(screen.getByRole("searchbox", { name: "搜索直接关联策略" })).toHaveProperty("value", "Policy12");
     await user.click(within(table).getByRole("button", { name: "Policy12" }));
     expect(onOpenPolicy).toHaveBeenCalledWith("policy-12");
+  });
+  it("shows a single attached policy directly and lets the reader inspect its full version and group identity", async () => {
+    const user = userEvent.setup({ delay: null });
+    const id = "group-123456789abcedf0123456789";
+    const version = "version-0123456789abcdef0123456789abcdef";
+    const onOpenPolicy = vi.fn();
+    render(<LocaleProvider><GroupDetail group={{
+      id, name: "Readers", description: "", createdAt: "2026-09-11T08:00:00Z", directPolicyCount: 1, members: [],
+      policies: [{ id: "link-1", policyId: "policy-read", name: "ReadOnly", kind: "system", version }]
+    }} controls={{}} onOpenMember={vi.fn()} onOpenPolicy={onOpenPolicy} onBack={vi.fn()} /></LocaleProvider>);
+
+    const info = within(screen.getByRole("complementary", { name: "用户组信息" }));
+    const groupId = info.getByLabelText(id);
+    await user.click(groupId);
+    expect(groupId.closest("details")).toHaveProperty("open", true);
+    expect(info.getByText(id)).toBeTruthy();
+
+    await user.click(screen.getByRole("tab", { name: "直接关联策略 (1)" }));
+    const panel = within(screen.getByRole("tabpanel", { name: "直接关联策略 (1)" }));
+    const table = within(panel.getByRole("table", { name: "权限策略" }));
+    expect(panel.queryByRole("searchbox")).toBeNull();
+    expect(panel.queryByRole("combobox", { name: "每页条数" })).toBeNull();
+    const versionControl = table.getByLabelText(version);
+    expect(versionControl.closest("details")).toHaveProperty("open", false);
+    await user.click(versionControl);
+    expect(versionControl.closest("details")).toHaveProperty("open", true);
+    expect(table.getByText(version)).toBeTruthy();
+    await user.click(table.getByRole("button", { name: "ReadOnly" }));
+    expect(onOpenPolicy).toHaveBeenCalledWith("policy-read");
   });
   it("reveals the live group object before its membership relationship page finishes", async () => {
     const liveGroup: GroupAccess = {
@@ -2282,12 +2313,11 @@ describe("CAM-style access workspace", () => {
     const directory = await screen.findByRole("table", { name: "用户组" });
     await user.click(within(directory).getByRole("button", { name: "ProgressiveTeam" }));
     expect(await screen.findByRole("heading", { name: "ProgressiveTeam" })).toBeTruthy();
-    const summary = screen.getByRole("region", { name: "用户组信息" });
-    expect(within(summary).getByRole("heading", { name: "用户组信息", level: 2 })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "成员", level: 2 })).toBeTruthy();
-    expect(screen.getByText("管理加入该组的子用户；成员会继承本组直接关联的策略。")).toBeTruthy();
+    const summary = within(screen.getByRole("complementary", { name: "用户组信息" }));
+    expect(summary.getByText(liveGroup.group.description)).toBeTruthy();
+    expect(summary.getByText(liveGroup.group.id)).toBeTruthy();
     expect(screen.queryByRole("region", { name: "用户组授权模型" })).toBeNull();
-    expect(screen.getByText("正在读取成员关系…")).toBeTruthy();
+    expect(within(screen.getByRole("tabpanel", { name: "成员" })).getByText("正在读取成员关系…")).toBeTruthy();
     expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
     await act(async () => { resolveMemberships({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null }); });
     expect(await screen.findByText("暂无成员")).toBeTruthy();

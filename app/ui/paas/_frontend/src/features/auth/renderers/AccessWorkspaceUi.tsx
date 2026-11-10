@@ -71,7 +71,12 @@ function labelCollectionCells(content: ReactNode, columns: readonly string[]) {
     : cell);
 }
 
-export function WorkspaceRelationshipDirectory<T extends { id: string; name: string }>({ title, searchLabel, items, columns, row, keywords, status, footerNote, loadMore, emptyTitle, emptyDescription, busy = false }: {
+const initialRelationshipPageSize = 10;
+
+export function WorkspaceRelationshipDirectory<T extends { id: string; name: string }>({
+  title, searchLabel, items, columns, row, keywords, status, footerNote, loadMore, emptyTitle, emptyDescription,
+  busy = false, controls = "always", mobileLayout = "stack"
+}: {
   title: string;
   searchLabel: string;
   items: T[];
@@ -84,13 +89,15 @@ export function WorkspaceRelationshipDirectory<T extends { id: string; name: str
   emptyTitle: string;
   emptyDescription?: string;
   busy?: boolean;
+  controls?: "always" | "as-needed";
+  mobileLayout?: "stack" | "grid";
 }) {
   const t = useTranslations("IamWorkspace");
   const relationship = useTranslations("RelationshipDirectory");
   const toolbarLabels = useTableToolbarLabels();
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(initialRelationshipPageSize);
   const deferredQuery = useDeferredValue(query);
   const filtering = deferredQuery !== query;
   const filtered = useMemo(() => {
@@ -102,18 +109,21 @@ export function WorkspaceRelationshipDirectory<T extends { id: string; name: str
   const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const blocked = busy || filtering;
   const clearSearch = () => { setQuery(""); setPage(1); };
+  const keepControls = controls === "always" || Boolean(loadMore);
+  const showSearch = keepControls || items.length > 1 || Boolean(query || deferredQuery);
+  const showPagination = keepControls || items.length > initialRelationshipPageSize;
 
   return <>
-    <TableToolbar labels={toolbarLabels} search={{ label: searchLabel, placeholder: relationship("searchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }} status={status(filtered.length, items.length)} />
-    {visible.length ? <Table aria-label={title} aria-busy={blocked || undefined} mobileLayout="stack">
+    {showSearch && <TableToolbar labels={toolbarLabels} search={{ label: searchLabel, placeholder: relationship("searchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }} status={status(filtered.length, items.length)} />}
+    {visible.length ? <Table aria-label={title} aria-busy={blocked || undefined} mobileLayout={mobileLayout}>
       <thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
       <tbody>{visible.map((item) => <tr key={item.id}>{labelCollectionCells(row(item, blocked), columns)}</tr>)}</tbody>
     </Table> : <EmptyState title={query ? t("noResults") : emptyTitle} description={query ? t("noResultsHint") : emptyDescription}
       action={query ? <Button onClick={clearSearch} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
-    <Table.Footer note={footerNote}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={blocked}
+    {showPagination && <Table.Footer note={footerNote}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={blocked}
       onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
       trailing={loadMore ? <Button disabled={loadMore.disabled} title={loadMore.reason} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
-      labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>
+      labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer>}
   </>;
 }
 

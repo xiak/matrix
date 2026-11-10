@@ -88,79 +88,74 @@
 }
 
 .detailWorkspace { display: grid; gap: var(--xiak-spacing-comfortable); min-width: 0; padding: var(--xiak-panel-padding); border: var(--xiak-border-subtle); border-radius: var(--xiak-radius-panel); background: var(--xiak-color-bg-panel); }
-.detailWorkspace:has(> .groupSummary) { gap: 0; overflow: hidden; padding: 0; }
-.groupSummary {
+.detailWorkspace:has(> .groupWorkspace) { padding: 0; border: 0; background: transparent; }
+.groupWorkspace {
   display: grid;
   min-width: 0;
-  gap: var(--xiak-spacing-comfortable);
-  padding: var(--xiak-panel-padding);
-  background: var(--xiak-color-bg-panel);
+  grid-template-columns: minmax(0, 1fr);
+  align-items: start;
+  gap: var(--xiak-spacing-default);
 }
-.groupSummaryHeader {
+@container matrix-page-content (min-width: 48rem) {
+  .groupWorkspace { grid-template-columns: minmax(0, 1fr) clamp(15rem, 24%, 17rem); }
+}
+.groupRelationshipHeader, .groupInformation header { min-height: var(--xiak-content-header-height); }
+.groupRelationshipHeader { padding: 0; gap: 0 var(--xiak-spacing-tight); }
+.groupRelationshipTabs { align-self: stretch; border: 0; padding-block-start: 0; }
+.groupTabCount {
+  display: inline-grid;
+  min-width: var(--xiak-icon-size);
+  place-items: center;
+  border-radius: var(--xiak-radius-small);
+  padding-inline: var(--xiak-spacing-narrow);
+  background: var(--xiak-color-bg-panel-hover);
+  color: var(--xiak-color-text-muted);
+  font: var(--xiak-font-weight-medium) var(--xiak-font-size-caption)/var(--xiak-icon-size) var(--xiak-font-numeric);
+}
+.groupRelationshipTabs [aria-selected="true"] .groupTabCount {
+  background: var(--xiak-color-accent-haze);
+  color: var(--xiak-color-accent-text);
+}
+.groupCommands {
   display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--xiak-spacing-comfortable);
+  flex-wrap: wrap;
+  gap: var(--xiak-spacing-tight);
+  padding: var(--xiak-spacing-narrow) var(--xiak-panel-padding);
 }
-.groupSummaryCopy { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
-.groupSummaryCopy h2, .groupSummaryCopy p { margin: 0; }
-.groupSummaryCopy h2 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-subtitle); }
-.groupSummaryCopy p { max-width: 75ch; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-control); line-height: var(--xiak-line-height-body); overflow-wrap: anywhere; }
-.groupSummaryHelp { flex: none; }
-.groupFacts {
+.groupCommands:empty { display: none; }
+.groupRecords { padding-block-start: 0; }
+@container xiak-card (max-width: 26rem) {
+  .groupRelationshipHeader { align-items: stretch; flex-direction: column; }
+  .groupRelationshipHeader:has(.groupCommands:not(:empty)) .groupRelationshipTabs { border-block-end: var(--xiak-border-subtle); }
+  .groupCommands { padding-block: var(--xiak-spacing-tight); }
+}
+@container xiak-table (width > 35rem) {
+  .groupRecords table { table-layout: fixed; }
+  .groupRecords th:first-child { width: 45%; }
+}
+@container xiak-table (max-width: 35rem) {
+  .groupRecords td:first-child::before { display: none; }
+  .groupRecords td:has(details[open]) { grid-column: 1 / -1; }
+}
+.groupInformation {
   display: grid;
   min-width: 0;
-  grid-template-columns: minmax(0, 1.6fr) minmax(12rem, 0.6fr);
-  gap: 0;
+  gap: var(--xiak-spacing-default);
+}
+.groupInformation h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--xiak-spacing-tight);
   margin: 0;
-  padding-block-start: var(--xiak-spacing-comfortable);
-  border-block-start: var(--xiak-border-subtle);
+  color: var(--xiak-color-text-strong);
+  font-size: var(--xiak-font-size-subtitle);
 }
-.groupFacts > div { display: grid; min-width: 0; align-content: start; gap: var(--xiak-spacing-narrow); }
-.groupFacts > div + div { margin-inline-start: var(--xiak-spacing-comfortable); padding-inline-start: var(--xiak-spacing-comfortable); border-inline-start: var(--xiak-border-subtle); }
-.groupFacts dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); }
-.groupFacts dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
-.groupFacts code { font-family: var(--xiak-font-mono); font-size: var(--xiak-font-size-small); }
-.groupOverviewSlot { padding: 0 var(--xiak-panel-padding) var(--xiak-panel-padding); }
-.groupRelationships { display: grid; min-width: 0; border-block-start: var(--xiak-border-subtle); background: var(--xiak-color-bg-panel); }
-.groupRelationshipTabs { background: var(--xiak-color-bg-panel-hover); }
-.groupTabContent { display: grid; min-width: 0; padding-block-start: 0; }
-.groupTabHeader {
-  display: flex;
-  min-width: 0;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--xiak-spacing-comfortable);
-  padding: var(--xiak-spacing-comfortable) var(--xiak-panel-padding);
-  border-block-end: var(--xiak-border-subtle);
-  background: var(--xiak-color-bg-panel);
-}
-.groupTabHeading { display: grid; min-width: 0; gap: var(--xiak-spacing-narrow); }
-.groupTabHeading h2, .groupTabHeading p { margin: 0; }
-.groupTabHeading h2 { color: var(--xiak-color-text-strong); font-size: var(--xiak-font-size-body); }
-.groupTabHeading p { max-width: 75ch; color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-small); line-height: var(--xiak-line-height-body); }
-.groupTabHeader .actions { flex: none; justify-content: flex-end; }
-.groupTabBody {
-  display: grid;
-  min-width: 0;
-  gap: var(--xiak-spacing-comfortable);
-  padding: var(--xiak-spacing-comfortable) var(--xiak-panel-padding);
-  background: var(--xiak-color-bg-canvas);
-}
+.groupInformation h2 svg { width: var(--xiak-icon-size); height: var(--xiak-icon-size); color: var(--xiak-color-text-muted); }
 .associationWorkflow { min-width: 0; }
 .associationTargetId { display: block; margin-top: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); font: var(--xiak-font-size-small)/1.5 var(--xiak-font-mono); }
 .bindingList li.associationChangeItem { display: grid; justify-content: stretch; gap: var(--xiak-spacing-micro); }
 .associationChangeItem strong { min-width: 0; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-medium); overflow-wrap: anywhere; }
 .detailWorkspace > .facts { padding-block: var(--xiak-spacing-tight); }
-
-@container matrix-page-content (max-width: 45rem) {
-  .groupSummaryHeader, .groupTabHeader { flex-direction: column; align-items: stretch; }
-  .groupSummaryHelp { align-self: start; }
-  .groupFacts { grid-template-columns: minmax(0, 1fr); }
-  .groupFacts > div + div { margin-inline-start: 0; margin-block-start: var(--xiak-spacing-default); padding-inline-start: 0; padding-block-start: var(--xiak-spacing-default); border-inline-start: 0; border-block-start: var(--xiak-border-subtle); }
-  .groupTabHeader .actions { justify-content: flex-start; }
-}
 
 .facts dt {
   color: var(--xiak-color-text-muted);
