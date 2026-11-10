@@ -857,7 +857,7 @@ describe("policy creation entry and directory contract", () => {
     expect(within(review).getByText(/不代表客户账号已经同意/)).toBeTruthy();
     await user.click(screen.getByRole("tab", { name: "Action 声明" }));
     await user.click(screen.getByRole("button", { name: "managedservice.offering.read" }));
-    expect(within(screen.getByRole("region", { name: "managedservice.offering.read" })).getByText("产品 PEP 有界批量候选检查")).toBeTruthy();
+    expect(within(screen.getByRole("region", { name: "managedservice.offering.read" })).getByText("产品端支持分批校验候选资源")).toBeTruthy();
   });
   it("pages action evidence instead of mounting an unbounded onboarding review", async () => {
     const actions = Array.from({ length: 1202 }, (_, index) => ({

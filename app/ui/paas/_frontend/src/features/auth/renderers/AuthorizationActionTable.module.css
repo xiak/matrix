@@ -13,26 +13,79 @@
 .disclose[aria-expanded="true"] svg { transform: rotate(90deg); }
 .resource, .scope, .subject, .table .count { color: var(--xiak-color-text-muted); }
 .table .count { text-align: end; font-variant-numeric: tabular-nums; }
-.summary[data-expanded] { background: var(--xiak-color-bg-panel-hover); }
+.summary[data-expanded] { background: var(--xiak-color-accent-haze); }
+.summary[data-expanded] > td:first-child { box-shadow: inset 0.125rem 0 var(--xiak-color-accent-text); }
 .table .inspection > td { height: auto; padding: 0; }
 .details {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: var(--xiak-spacing-comfortable);
-  margin: 0;
-  border-inline-start: 0.125rem solid var(--xiak-color-border-focus);
-  padding: var(--xiak-spacing-comfortable) var(--xiak-panel-padding);
-  background: var(--xiak-color-bg-panel);
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  align-items: start;
+  gap: var(--xiak-spacing-roomy);
+  padding: var(--xiak-spacing-default) var(--xiak-panel-padding);
+  padding-inline-start: calc(var(--xiak-table-cell-padding-inline) + var(--xiak-control-chevron-size) + var(--xiak-spacing-narrow));
+  background: color-mix(in srgb, var(--xiak-color-bg-panel-hover) 40%, var(--xiak-color-bg-panel));
 }
 .details > div { min-width: 0; }
-.details > div + div { border-inline-start: var(--xiak-border-subtle); padding-inline-start: var(--xiak-spacing-comfortable); }
-.details > div > dt { margin-bottom: var(--xiak-spacing-tight); color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
-.details dd { margin: 0; }
-.items { display: grid; gap: var(--xiak-spacing-narrow); margin: 0; padding: 0; list-style: none; }
-.items + small { margin-top: var(--xiak-spacing-narrow); }
-.credentials { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--xiak-spacing-narrow); margin: var(--xiak-spacing-narrow) 0 0; }
-.credentials dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); }
+.details h3 {
+  margin: 0 0 var(--xiak-spacing-tight);
+  color: var(--xiak-color-text-strong);
+  font-size: var(--xiak-font-size-small);
+  font-weight: var(--xiak-font-weight-semibold);
+  line-height: var(--xiak-line-height-control);
+}
+.accessRules:only-child { grid-column: 1 / -1; }
+.properties {
+  display: grid;
+  grid-template-columns: fit-content(42%) minmax(0, 1fr);
+  align-items: baseline;
+  gap: var(--xiak-spacing-compact) var(--xiak-spacing-default);
+  margin: 0;
+}
+.properties > div { display: contents; }
+.properties dt { color: var(--xiak-color-text-muted); font-size: var(--xiak-font-size-caption); }
+.properties dd { min-width: 0; margin: 0; color: var(--xiak-color-text-strong); overflow-wrap: anywhere; }
+.targets { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--xiak-spacing-micro) var(--xiak-spacing-narrow); margin: 0; padding: 0; list-style: none; }
+.targets li + li::before { content: "·"; margin-inline-end: var(--xiak-spacing-narrow); color: var(--xiak-color-text-muted); }
+.defaultOrigin {
+  display: inline-block;
+  margin-inline-start: var(--xiak-spacing-narrow);
+  border-radius: var(--xiak-radius-small);
+  padding-inline: var(--xiak-spacing-narrow);
+  background: var(--xiak-color-bg-code);
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-caption);
+  line-height: var(--xiak-line-height-caption);
+}
+.conditions { --xiak-table-scroll-max-height: 12rem; }
+.conditionTable { table-layout: fixed; min-width: 0; font-size: var(--xiak-font-size-caption); }
+/* Condition columns stay aligned when the enclosing Action switches to stacked rows. */
+.conditionTable > thead { position: static; width: auto; height: auto; overflow: visible; clip-path: none; }
+.conditionTable > tbody { display: table-row-group; }
+.conditionTable tr { display: table-row; padding: 0; border: 0; }
+.conditionTable :is(th, td) {
+  display: table-cell;
+  width: auto;
+  min-width: 0;
+  height: auto;
+  border: 0;
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-tight);
+  background: transparent;
+  font-weight: var(--xiak-font-weight-regular);
+  line-height: var(--xiak-line-height-caption);
+  overflow-wrap: anywhere;
+}
+.conditionTable thead th { background: var(--xiak-color-bg-panel-hover); color: var(--xiak-color-text-muted); }
+.conditionTable thead th:first-child { width: 45%; }
+.conditionTable thead th:last-child { width: 16%; }
+.conditionTable tbody tr + tr > * { border-block-start: var(--xiak-border-subtle); }
+.conditionTable tbody th { color: var(--xiak-color-text-strong); }
+.conditionTable tbody td { color: var(--xiak-color-text-muted); }
+.conditionTable code { white-space: normal; }
+.conditionTable tbody tr:hover { background: transparent; }
 
+@container xiak-table (max-width: 38rem) {
+  .details { grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-default); padding-inline: var(--xiak-panel-padding); }
+}
 @container xiak-table (max-width: 35rem) {
   .table .summary {
     grid-template-columns: minmax(0, 1fr) auto;
@@ -40,6 +93,8 @@
     padding: var(--xiak-spacing-narrow) var(--xiak-panel-padding) var(--xiak-spacing-tight);
   }
   .summary td { padding: 0; }
+  .summary[data-expanded] { box-shadow: inset 0.125rem 0 var(--xiak-color-accent-text); }
+  .summary[data-expanded] > td:first-child { box-shadow: none; }
   .summary .disclose { width: 100%; }
   .summary .resource, .summary .scope { font-size: var(--xiak-font-size-caption); }
   .summary .resource { padding-inline-start: calc(var(--xiak-control-chevron-size) + var(--xiak-spacing-narrow)); }
@@ -47,7 +102,12 @@
   .summary td[data-label]::before, .summary .subject, .summary .count { display: none; }
   .table .inspection { padding: 0; }
 }
-@container xiak-table (max-width: 27rem) {
-  .details { grid-template-columns: minmax(0, 1fr); gap: var(--xiak-spacing-default); }
-  .details > div + div { border-inline-start: 0; border-block-start: var(--xiak-border-subtle); padding: var(--xiak-spacing-default) 0 0; }
+@container xiak-table (max-width: 19rem) {
+  .conditionTable > thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .conditionTable, .conditionTable > tbody { display: block; width: 100%; }
+  .conditionTable tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--xiak-spacing-micro) var(--xiak-spacing-tight); padding-block: var(--xiak-spacing-narrow); }
+  .conditionTable tbody tr + tr { border-block-start: var(--xiak-border-subtle); }
+  .conditionTable tbody tr > * { display: block; padding: 0; border: 0; }
+  .conditionTable tbody th { grid-column: 1 / -1; }
+  .conditionTable tbody td:last-child { text-align: end; }
 }

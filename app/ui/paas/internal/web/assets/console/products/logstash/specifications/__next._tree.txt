@@ -1,10 +1,10 @@
 :HL["/_next/static/chunks/2fb2dv2_2-vi0.css","style"]
 :HL["/_next/static/chunks/24ep0wqdmaqa8.css","style"]
-:HL["/_next/static/chunks/2x5sp9hzqw1ye.css","style"]
+:HL["/_next/static/chunks/03wu-34yh5hg1.css","style"]
 :HL["/_next/static/chunks/0-aio73n1h_98.css","style"]
 5:[["children",{"s":"__PAGE__","h":160}]]
 4:[["children",{"s":{"n":"view","t":"d","k":"specifications","s":[]},"h":65632,"c":"$Q5"}]]
 3:[["children",{"s":{"n":"product","t":"d","k":"logstash","s":[]},"h":196704,"c":"$Q4"}]]
 2:[["children",{"s":"products","h":131168,"c":"$Q3"}]]
 1:[["children",{"s":"console","h":131168,"c":"$Q2"}]]
-0:{"b":"matrix-f2483357feab164cc9c8","t":{"t":{"s":"","h":131152,"c":"$Q1"}}}
+0:{"b":"matrix-01e75e90ff148350f8d9","t":{"t":{"s":"","h":131152,"c":"$Q1"}}}

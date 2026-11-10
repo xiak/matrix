@@ -16,39 +16,44 @@ function ActionDetails({ action }: { action: AuthorizationProfileAction }) {
   const t = useTranslations("AuthorizationProfileCatalog");
   const subjects = admittedAuthorizationSubjects(action);
   const credentials = admittedAuthorizationUserAuthenticationMethods(action);
-  return <dl className={styles.details}>
-    <div>
-      <dt>{t("resourceTarget")}</dt>
-      <dd>
-        <ul className={styles.items}>{action.resourceShapes.map((shape) =>
-          <li key={authorizationResourceShapeKind(shape)}>{t(`shapes.${authorizationResourceShapeKind(shape)}`)}</li>
-        )}</ul>
-        {action.instanceListBatch && <small>{t("instanceListBatch")}</small>}
-        {action.resultResourceKind && <small>{t("resultResource", { resource: action.resultResourceKind })}</small>}
-      </dd>
+  const conditions = action.conditions ?? [];
+  return <div className={styles.details}>
+    <div className={styles.accessRules}>
+      <h3>{t("accessRules")}</h3>
+      <dl className={styles.properties}>
+        <div><dt>{t("targets")}</dt><dd>
+          <ul className={styles.targets}>{action.resourceShapes.map((shape) => {
+            const kind = authorizationResourceShapeKind(shape);
+            return <li key={kind}>{t(`shapes.${kind}`)}</li>;
+          })}</ul>
+        </dd></div>
+        <div><dt>{t("subjectFilter")}</dt><dd>
+          {subjects.map((subject) => t(`subjects.${subject}`)).join(" · ")}
+          {action.subjectTypes === undefined && <> <span className={styles.defaultOrigin}>{t("historicalDefault")}</span></>}
+        </dd></div>
+        <div><dt>{t("userCredentials")}</dt><dd>
+          {subjects.includes("USER") ? credentials.map((method) => t(`credentials.${method}`)).join(" · ") : t("notApplicable")}
+          {subjects.includes("USER") && action.userAuthenticationMethods === undefined && <> <span className={styles.defaultOrigin}>{t("historicalDefault")}</span></>}
+        </dd></div>
+        {action.resultResourceKind && <div><dt>{t("resultResource")}</dt><dd><code>{action.resultResourceKind}</code></dd></div>}
+        {action.instanceListBatch && <div><dt>{t("listChecks")}</dt><dd>{t("instanceListBatch")}</dd></div>}
+        {!conditions.length && <div><dt>{t("conditions")}</dt><dd>{t("none")}</dd></div>}
+      </dl>
     </div>
-    <div>
-      <dt>{t("subjectCredential")}</dt>
-      <dd>
-        <div>{subjects.map((subject) => t(`subjects.${subject}`)).join(" · ")}</div>
-        {action.subjectTypes === undefined && <small>{t("legacySubjects")}</small>}
-        <dl className={styles.credentials}>
-          <dt>{t("userCredentials")}</dt>
-          <dd>{subjects.includes("USER") ? credentials.map((method) => t(`credentials.${method}`)).join(" · ") : t("notApplicable")}</dd>
-        </dl>
-        {subjects.includes("USER") && action.userAuthenticationMethods === undefined && <small>{t("legacyCredentials")}</small>}
-      </dd>
-    </div>
-    <div>
-      <dt>{t("conditions")}</dt>
-      <dd>{action.conditions?.length ? <ul className={styles.items}>{action.conditions.map((condition) =>
-        <li key={condition.key}>
-          <code>{condition.key}</code>
-          <small>{t(`conditionSources.${condition.source}`)} · {t(`conditionValueTypes.${condition.valueType}`)}</small>
-        </li>
-      )}</ul> : t("none")}</dd>
-    </div>
-  </dl>;
+    {conditions.length > 0 && <div className={styles.conditions}>
+      <h3>{t("conditions")}</h3>
+      <Table aria-label={t("conditions")} className={styles.conditionTable}>
+        <thead><tr>
+          <th scope="col">{t("conditionKey")}</th><th scope="col">{t("conditionSource")}</th><th scope="col">{t("conditionType")}</th>
+        </tr></thead>
+        <tbody>{conditions.map((condition) => <tr key={condition.key}>
+          <th scope="row"><code>{condition.key}</code></th>
+          <td>{t(`conditionSources.${condition.source}`)}</td>
+          <td>{t(`conditionValueTypes.${condition.valueType}`)}</td>
+        </tr>)}</tbody>
+      </Table>
+    </div>}
+  </div>;
 }
 
 export function AuthorizationActionTable({ actions, label, initialAction }: {

@@ -5536,7 +5536,8 @@ describe("account access", () => {
     const entry = catalog.items[0]!;
     const sample = entry.profile.actions[0]!;
     entry.profile.actions = [
-      { ...sample, subjectTypes: ["USER", "ROLE"], userAuthenticationMethods: ["ACCESS_KEY"] },
+      { ...sample, subjectTypes: ["USER", "ROLE"], userAuthenticationMethods: ["ACCESS_KEY"],
+        conditions: [...(sample.conditions ?? []), { key: "iam.current-time", source: "IAM_TRANSACTION_TIME", valueType: "TIME" }] },
       { ...sample, action: "paas.application.legacy" },
       { ...sample, action: "paas.application.probe", scope: "INSTALLATION_PROBE", conditions: [] }
     ];
@@ -5554,21 +5555,32 @@ describe("account access", () => {
     expect(within(explicitDetails).getByText("用户 · 角色")).toBeTruthy();
     expect(within(explicitDetails).getByText("访问密钥")).toBeTruthy();
     expect(within(explicitDetails).queryByText(/历史默认/)).toBeNull();
+    const conditions = within(within(explicitDetails).getByRole("table", { name: "可信条件" }));
+    expect(conditions.getAllByRole("columnheader").map((header) => header.textContent)).toEqual(["条件键", "来源", "值类型"]);
+    const identity = conditions.getByRole("row", { name: /iam.account-id/ });
+    expect(within(identity).getByRole("cell", { name: "IAM 已认证身份" })).toBeTruthy();
+    expect(within(identity).getByRole("cell", { name: "字符串" })).toBeTruthy();
+    const time = conditions.getByRole("row", { name: /iam.current-time/ });
+    expect(within(time).getByRole("cell", { name: "IAM 事务时间" })).toBeTruthy();
+    expect(within(time).getByRole("cell", { name: "时间" })).toBeTruthy();
     await user.keyboard("{Enter}");
     expect(table.queryByRole("region")).toBeNull();
     expect(document.activeElement).toBe(explicit);
 
     await user.click(table.getByRole("button", { name: "paas.application.legacy" }));
     const legacy = table.getByRole("region", { name: "paas.application.legacy" });
-    expect(within(legacy).getByText("身份类型沿用历史默认")).toBeTruthy();
-    expect(within(legacy).getByText("凭证沿用历史默认（仅登录会话）")).toBeTruthy();
+    const legacySubjects = within(legacy).getByText("适用主体", { selector: "dt" }).nextElementSibling!;
+    const legacyCredentials = within(legacy).getByText("用户凭证", { selector: "dt" }).nextElementSibling!;
+    expect(legacySubjects.textContent).toMatch(/用户\s*历史默认/);
+    expect(legacyCredentials.textContent).toMatch(/登录会话\s*历史默认/);
     await user.click(table.getByRole("button", { name: "paas.application.probe" }));
     expect(table.queryByRole("region", { name: "paas.application.legacy" })).toBeNull();
     const probe = table.getByRole("region", { name: "paas.application.probe" });
     expect(within(probe).getByText("服务身份")).toBeTruthy();
     expect(within(probe).getByText("不适用")).toBeTruthy();
     expect(within(probe).getByText("无")).toBeTruthy();
-    expect(within(probe).queryByText(/仅登录会话/)).toBeNull();
+    expect(within(probe).queryByRole("table", { name: "可信条件" })).toBeNull();
+    expect(within(probe).getByText("用户凭证", { selector: "dt" }).nextElementSibling!.textContent).toBe("不适用");
 
     expect(screen.queryByRole("combobox", { name: "用户凭据" })).toBeNull();
     await user.click(screen.getByRole("button", { name: "筛选" }));
