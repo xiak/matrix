@@ -89,15 +89,20 @@ async function choose(label, option) {
 async function waitText(locator, expected, timeout = 30_000) {
   await locator.waitFor({ state: "visible", timeout });
   const deadline = Date.now() + timeout;
+  let lastObservedPhase = null;
   while (Date.now() < deadline) {
     const text = (await locator.innerText()).trim();
     if (text === expected) return;
-    if (["失败", "回滚失败", "终止失败"].includes(text)) {
+    if (["排队中", "安装中", "就绪", "安装失败", "回滚失败", "等待终止", "终止中", "终止失败", "已终止"].includes(text)) {
+      lastObservedPhase = text;
+    }
+    if (["安装失败", "回滚失败", "终止失败"].includes(text)) {
       report.observedFailurePhase = text;
       throw new Error("terminal-phase");
     }
     await delay(500);
   }
+  report.observedFailurePhase = lastObservedPhase;
   throw new Error("observation-timeout");
 }
 
@@ -292,7 +297,7 @@ try {
       await installationRow(product).waitFor({ state: "visible" });
     });
     await step(`${product.id}-ready-detail`, async () => {
-      await readInstance(product, "运行中");
+      await readInstance(product, "就绪");
       const endpoint = (await endpointValue().innerText()).trim();
       assert.match(endpoint, /127\.0\.0\.1:[0-9]+/);
       if (product.id === "kibana") await verifyIdentifier("关联 Elasticsearch", "handbook-browser-elasticsearch");
@@ -303,7 +308,7 @@ try {
   // Kibana must finish cleanup before its exact Elasticsearch dependency.
   for (const product of [...products].reverse()) {
     await step(`${product.id}-termination`, async () => {
-      await readInstance(product, "运行中");
+      await readInstance(product, "就绪");
       await detail().getByRole("button", { name: "审阅终止实例", exact: true }).click();
       await page.getByRole("textbox", { name: "输入实例 ID 以确认", exact: true }).fill(product.instance);
       await page.getByRole("button", { name: "确认终止实例", exact: true }).click();
