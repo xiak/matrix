@@ -13,7 +13,7 @@ import { visualDraftHasIncompleteFields } from "../domain/accountPolicyVisualAut
 import { findActionCapability, type AccountAccessScene } from "../scenes/accountAccessScene";
 import { WorkspaceDetail, WorkspaceInlineForm, WorkspaceTime } from "./AccessWorkspaceUi";
 import { AccountAuthorizationProfileCatalog } from "./AccountAuthorizationProfileCatalog";
-import { PolicyStatementValues } from "./PolicyStatementValues";
+import { PolicyStatements } from "./PolicyStatements";
 import { AccountPolicyDocumentAuthor, type PolicyAuthorMode } from "./AccountPolicyDocumentAuthor";
 import { PolicyVisualReview } from "./AccountPolicyVisualEditor";
 import { PolicyCreateRecovery } from "./LivePolicyCreationWizard";
@@ -210,48 +210,6 @@ function VersionMutationReview({ review, policy, versions, busy, blocked, error,
   </section>;
 }
 
-function FrozenStatementActions({ actions, sid }: { actions: string[]; sid: string }) {
-  const t = useTranslations("AccountPolicyDirectory");
-  const [visited, setVisited] = useState(false);
-  return <details className={styles.statementExpansion} onToggle={(event) => { if (event.currentTarget.open) setVisited(true); }}>
-    <summary>{t("frozenActions", { count: actions.length })}</summary>
-    {visited ? <PolicyStatementValues sid={sid} field="frozenListLabel" entries={actions.map((value) => ({ value }))} /> : null}
-  </details>;
-}
-
-function PolicyStatementTable({ version, title }: { version: AccountPolicyVersion; title: string }) {
-  const t = useTranslations("AccountPolicyDirectory");
-  const identityLabel = `${t("statement")} · ${t("effect")}`;
-  return <section className={styles.policyStatements}>
-    <div className={styles.sectionHeading}><h2 className={styles.stepTitle}>{t("statementTitle", { count: version.document.statements.length })}</h2><span className={styles.note}>{title}</span></div>
-    <Table aria-label={t("statementTable")} mobileLayout="stack" className={styles.policyStatementTable}>
-      <thead><tr><th scope="col">{identityLabel}</th><th scope="col">{t("declaredActions")}</th><th scope="col">{t("resources")}</th><th scope="col">{t("conditions")}</th></tr></thead>
-      <tbody>{version.document.statements.map((statement) => {
-        const resolved = version.compilation?.resolvedStatements.find((entry) => entry.sid === statement.sid);
-        return <tr key={statement.sid}>
-          <td data-label={identityLabel}><div className={styles.statementIdentity}>
-            <Badge status={statement.effect === "DENY" ? "danger" : "success"}>{t(statement.effect === "DENY" ? "deny" : "allow")}</Badge>
-            <code>{statement.sid}</code>
-          </div></td>
-          <td data-label={t("declaredActions")}>
-            <PolicyStatementValues sid={statement.sid} field="declaredActions" entries={statement.actions.map((value) => ({ value }))} />
-            {resolved ? <FrozenStatementActions sid={statement.sid} actions={resolved.actions} /> : null}
-          </td>
-          <td data-label={t("resources")}><PolicyStatementValues sid={statement.sid} field="resources"
-            entries={statement.resources.map((resource) => ({
-              key: JSON.stringify(resource), value: resource.kind, keywords: resource.match,
-              detail: [t(`matches.${resource.match}`), resource.id].filter(Boolean).join(" · ")
-            }))} /></td>
-          <td data-label={t("conditions")}><PolicyStatementValues sid={statement.sid} field="conditions"
-            entries={(statement.conditions ?? []).map((condition) => ({
-              key: JSON.stringify(condition), value: condition.key, detail: `${condition.operator} · ${condition.values.join(", ")}`
-            }))} /></td>
-        </tr>;
-      })}</tbody>
-    </Table>
-  </section>;
-}
-
 function PolicyCompilationProvenance({ version }: { version: AccountPolicyVersion }) {
   const t = useTranslations("AccountPolicyDirectory");
   const compilation = version.compilation;
@@ -286,7 +244,7 @@ function PolicyVersionPanels({ version, title, section, feedback, inset }: { ver
   const t = useTranslations("AccountPolicyDirectory");
   return <>
     <Tabs.Content inset={inset} value="document" forceMount={version ? true : undefined} hidden={section !== "document"}>
-      {version ? <PolicyStatementTable key={`${version.versionId}:${version.contentDigest}`} version={version} title={title} /> : feedback}
+      {version ? <PolicyStatements key={`${version.versionId}:${version.contentDigest}`} version={version} title={title} /> : feedback}
     </Tabs.Content>
     <Tabs.Content inset={inset} value="evidence">{version ? <section className={styles.policyStatements} aria-label={t("versionEvidence")}>
       <dl className={styles.catalogFacts}>
