@@ -4316,6 +4316,39 @@ describe("account access", () => {
     expect(within(profiles).getByText(`sha256:${"b".repeat(64)}`)).toBeTruthy();
   });
 
+  it("browses and searches a short multi-service statement using the same scope tabs", async () => {
+    const statement: AccountPolicyDetail["version"]["document"]["statements"][number] = {
+      sid: "permissions", effect: "ALLOW",
+      actions: ["audit.integrity.verify", "audit.record.read", "platform.product.read"],
+      resources: ["AUDIT_CHAIN", "AUDIT_RECORD", "INSTALLATION"].map((kind) => ({ kind, match: "ANY_IN_AUTHORITY" as const }))
+    };
+    const detail = { ...tenantPolicyDetail, version: { ...tenantPolicyDetail.version,
+      document: { ...tenantPolicyDetail.version.document, statements: [statement] }
+    } };
+    const readPolicy = vi.fn().mockResolvedValue(policyAccess(detail));
+    const { user } = await openAccess(accounts({ readPolicy }), iam(), "policies");
+    await user.click(await screen.findByRole("button", { name: tenantPolicy.displayName }));
+    const rule = within(await screen.findByRole("article", { name: statement.sid }));
+    expect(rule.getByRole("tab", { name: "操作 (3)", selected: true })).toBeTruthy();
+    const actions = within(rule.getByRole("tabpanel", { name: "操作 (3)" }));
+    expect(actions.getByText("审计服务")).toBeTruthy();
+    await user.click(actions.getByText("平台服务"));
+    expect(await actions.findByText("platform.product.read")).toBeTruthy();
+    await user.type(rule.getByRole("searchbox"), "audit.record");
+    expect(actions.getAllByRole("listitem")).toHaveLength(1);
+    expect(actions.getByText("audit.record.read")).toBeTruthy();
+    await user.click(rule.getByRole("tab", { name: "资源范围 (3)" }));
+    const resources = within(rule.getByRole("tabpanel", { name: "资源范围 (3)" }));
+    expect(resources.getAllByRole("listitem")).toHaveLength(3);
+    expect(rule.getByRole("searchbox")).toHaveProperty("value", "");
+    await user.type(rule.getByRole("searchbox"), "installation");
+    expect(resources.getByText("INSTALLATION")).toBeTruthy();
+    expect(resources.getAllByRole("listitem")).toHaveLength(1);
+    await user.click(rule.getByRole("tab", { name: "操作 (3)" }));
+    expect(rule.getByRole("searchbox")).toHaveProperty("value", "audit.record");
+    expect(readPolicy).toHaveBeenCalledTimes(1);
+  });
+
   it("filters long statement lists independently and preserves the full declaration across detail tabs", async () => {
     const actions = ["paas.application.create", "paas.application.read", "paas.application.delete", "devops.run.read", "devops.run.cancel", "audit.record.read"];
     const resources = ["APPLICATION", "INSTANCE", "REGION", "PIPELINE", "PROJECT", "AUDIT_RECORD"].map((kind) => ({ kind, match: "ANY_IN_AUTHORITY" as const }));
@@ -4373,11 +4406,13 @@ describe("account access", () => {
     await user.click(deny);
     expect(rule.open).toBe(true);
     expect(within(rule).getByText("拒绝")).toBeTruthy();
+    await user.click(await within(rule).findByRole("tab", { name: "资源范围 (2)" }));
     expect(await within(rule).findByText("精确 · app-one")).toBeTruthy();
     expect(within(rule).getByText("权限域内前缀 · staging-")).toBeTruthy();
+    expect(within(rule).queryByText("权限域内全部")).toBeNull();
+    await user.click(within(rule).getByRole("tab", { name: "条件 (1)" }));
     expect(within(rule).getByText("STRING_EQUALS")).toBeTruthy();
     for (const value of ["team-a", "team-b"]) expect(within(rule).getByText(value)).toBeTruthy();
-    expect(within(rule).queryByText("权限域内全部")).toBeNull();
   });
 
   it("loads customer versions only when selected and inspects a non-default version inline", async () => {
@@ -4406,7 +4441,12 @@ describe("account access", () => {
 
     await user.click(within(table).getByRole("button", { name: "version-a" }));
     expect(await screen.findByRole("heading", { name: "查看版本 version-a" })).toBe(document.activeElement);
-    expect(await screen.findByRole("region", { name: "策略声明" })).toBeTruthy();
+    const statements = within(await screen.findByRole("region", { name: "策略声明" }));
+    expect(statements.getByRole("tab", { name: "操作 (1)", selected: true })).toBeTruthy();
+    expect(statements.getByText("应用托管")).toBeTruthy();
+    expect(statements.getByText("paas.application.read")).toBeTruthy();
+    await user.click(statements.getByRole("tab", { name: "资源范围 (1)" }));
+    expect(statements.getByText("APPLICATION")).toBeTruthy();
     expect(readPolicyVersion).toHaveBeenCalledWith(credential, account.id, customer.id, "version-a");
     expect(screen.queryByRole("dialog")).toBeNull();
     await user.click(screen.getByRole("button", { name: "返回版本目录" }));

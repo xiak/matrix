@@ -12,10 +12,6 @@ type Field = "actions" | "resourceScope" | "conditions";
 type Entry = { value: string; detail?: string; values?: string[]; keywords?: string; key?: string };
 const fieldOrder: readonly Field[] = ["actions", "resourceScope", "conditions"];
 
-function needsSearch(entries: Entry[]) {
-  return entries.length > 5 || entries.some((entry) => [entry.value, entry.detail, ...(entry.values ?? [])].join(" ").length > 120);
-}
-
 function ValueRows({ entries, commonScope }: { entries: Entry[]; commonScope?: string }) {
   if (commonScope) return <div className={styles.statementKinds}>
     <p>{commonScope}</p>
@@ -52,11 +48,10 @@ function ProductActions({ actions, names }: { actions: Entry[]; names: Map<strin
     if (entries) entries.push(action);
     else groups.set(product, [action]);
   }
-  if (groups.size === 1) return <ValueRows entries={actions} />;
   return <div className={styles.statementProducts}>
     {Array.from(groups, ([product, entries], index) => {
       const name = names.get(product);
-      return <ScopeDisclosure key={product} initiallyOpen={index === 0 && entries.length <= 3} summary={<>
+      return <ScopeDisclosure key={product} initiallyOpen={groups.size === 1 || (index === 0 && entries.length <= 3)} summary={<>
         <strong>{name ?? product}</strong>
         {name && !name.toLowerCase().includes(product) && <code>{product}</code>}
         <span>{t("actionCount", { count: entries.length })}</span>
@@ -84,13 +79,9 @@ function StatementScope({ statement, actions, names }: { statement: Statement; a
       key: JSON.stringify(condition), value: condition.key, detail: condition.operator, values: condition.values
     }))
   };
-  const commonScope = statement.resources.length > 1 && statement.resources.every((resource) => resource.match === "ANY_IN_AUTHORITY")
+  const commonScope = statement.resources.length > 0 && statement.resources.every((resource) => resource.match === "ANY_IN_AUTHORITY")
     ? t("allResourcesOfKinds") : undefined;
   const fields = fieldOrder.filter((key) => entries[key].length > 0);
-  if (!fields.some((key) => needsSearch(entries[key]))) return <dl className={styles.statementFacts}>
-    {fields.map((key) => <div key={key}><dt>{t(key)}</dt><dd><ValueRows entries={entries[key]} commonScope={key === "resourceScope" ? commonScope : undefined} /></dd></div>)}
-  </dl>;
-
   const values = entries[field];
   const query = queries[field];
   const normalized = (text: string) => text.normalize("NFKC").toLowerCase();
@@ -111,18 +102,18 @@ function StatementScope({ statement, actions, names }: { statement: Statement; a
           {t(key)}<span aria-hidden="true">{entries[key].length}</span>
         </Tabs.Trigger>)}
       </Tabs.List>
-      {needsSearch(values) && <div className={styles.statementSearch}>
+      <div className={styles.statementSearch}>
         <SearchInput aria-label={t("searchStatementValues", { label: t(field), sid: statement.sid })} aria-controls={viewportId}
           placeholder={t(`valueSearch.${field}`)} controlSize="small" value={query} onChange={(event) => changeQuery(event.target.value)}
           clearAction={query ? { label: collection("clearSearch"), onClear: () => changeQuery("") } : undefined} />
-      </div>}
+      </div>
     </div>
     {fields.map((key) => <Tabs.Content key={key} value={key} inset="none">
       {field === key && <>
         {words.length > 0 && <p className={styles.statementMatchCount} role="status">{t("valueMatches", { shown: matches.length, total: values.length })}</p>}
-        <div id={viewportId} ref={viewport} role="region" aria-label={label} className={styles.statementViewport} tabIndex={needsSearch(values) ? 0 : undefined}>
+        <div id={viewportId} ref={viewport} role="region" aria-label={label} className={styles.statementViewport} tabIndex={0}>
           {matches.length === 0 ? <p className={styles.statementNoMatches}>{t("noValueMatches")}</p>
-            : field === "actions" && !words.length && needsSearch(values) ? <ProductActions actions={values} names={names} />
+            : field === "actions" && !words.length ? <ProductActions actions={values} names={names} />
             : <ValueRows entries={matches} commonScope={field === "resourceScope" ? commonScope : undefined} />}
         </div>
       </>}
