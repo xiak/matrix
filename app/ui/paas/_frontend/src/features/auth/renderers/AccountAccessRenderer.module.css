@@ -467,7 +467,6 @@
   min-width: 0;
   gap: var(--xiak-spacing-default);
 }
-.detailWorkspace:has(> .identitySummary) { max-inline-size: 60rem; }
 .identitySummary { gap: var(--xiak-spacing-narrow); }
 .userSectionHeader,
 .userName,
