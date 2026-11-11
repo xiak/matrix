@@ -114,7 +114,7 @@ def restore_accepted_delivery(repo, run_id, token, root):
 
 
 def main(accepted_run_id=None):
-    import base64, hashlib, json, os, pathlib, re, subprocess, urllib.error, urllib.request
+    import base64, hashlib, json, os, pathlib, re, subprocess, time, urllib.error, urllib.request
     root = pathlib.Path(os.environ['RUNNER_TEMP'])
     delivery = root / 'delivery'
     version, repo, source = os.environ['RELEASE_VERSION'], os.environ['GITHUB_REPOSITORY'], os.environ['GITHUB_SHA']
@@ -235,13 +235,25 @@ def main(accepted_run_id=None):
             raise SystemExit('ambiguous release identity')
         return matches[0] if matches else None
 
+    expected_notes = notes.read_text(encoding='utf-8')
+    def is_owned_draft(release):
+        return (release is not None and release.get('draft') is True
+                and release.get('target_commitish') == source and release.get('body') == expected_notes)
+
     existing_release = find_release()
     if existing_release is None:
         subprocess.run(['gh', 'release', 'create', version, '--repo', repo, '--target', source, '--draft',
                         '--title', 'Matrix ' + version, '--notes-file', str(notes)], check=True)
-        existing_release = find_release()
-    if (not existing_release or not existing_release['draft'] or existing_release['target_commitish'] != source
-            or existing_release.get('body') != notes.read_text(encoding='utf-8')):
+        # A successful create can precede the release-list replica by a few
+        # seconds. Poll only after our create succeeded, and authorize no asset
+        # mutation until the complete owned-draft identity becomes visible.
+        for delay in (0, 1, 2, 4, 8):
+            if delay:
+                time.sleep(delay)
+            existing_release = find_release()
+            if is_owned_draft(existing_release):
+                break
+    if not is_owned_draft(existing_release):
         raise SystemExit('release is not the matching unpublished draft')
     release_id = existing_release['id']
     existing_assets = api(f'releases/{release_id}/assets?per_page=100')

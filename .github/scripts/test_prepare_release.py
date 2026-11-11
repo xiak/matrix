@@ -144,6 +144,7 @@ class ReleaseDeliveryTests(unittest.TestCase):
         self.commands = []
         self.lose_upload_response = False
         self.lose_create_response = False
+        self.release_metadata_lag = 0
         self.corrupt_uploaded_digest = False
         self.recovery_routes = {}
 
@@ -172,7 +173,11 @@ class ReleaseDeliveryTests(unittest.TestCase):
             value = self.release if self.release and not self.release['draft'] else None
         elif route.startswith('releases?per_page=100&page='):
             page = int(route.rsplit('=', 1)[1])
-            releases = self.other_releases + ([self.release] if self.release else [])
+            release = self.release
+            if release and self.release_metadata_lag:
+                release = {**release, 'body': None}
+                self.release_metadata_lag -= 1
+            releases = self.other_releases + ([release] if release else [])
             value = releases[(page - 1) * 100:page * 100]
         elif route == 'releases/1/assets?per_page=100':
             value = self.assets
@@ -356,6 +361,23 @@ class ReleaseDeliveryTests(unittest.TestCase):
         self.assertEqual({a['name'] for a in self.assets}, {p.name for p in self.delivery.iterdir()})
         self.assertIn('\n```sh\nsha256sum --check', self.release['body'])
         self.assertTrue((self.root / 'summary.md').is_file())
+
+    def test_created_draft_metadata_is_polled_until_consistent(self):
+        self.release_metadata_lag = 2
+        with mock.patch('time.sleep') as sleep:
+            self.prepare()
+        self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2)])
+        self.assertEqual(sum(command[1:3] == ['release', 'create'] for command in self.commands), 1)
+        self.assertEqual(len(self.assets), len(list(self.delivery.iterdir())))
+
+    def test_created_draft_metadata_retry_is_bounded(self):
+        self.release_metadata_lag = 100
+        with mock.patch('time.sleep') as sleep:
+            with self.assertRaisesRegex(SystemExit, 'not the matching unpublished draft'):
+                self.prepare()
+        self.assertEqual(sleep.call_args_list, [mock.call(1), mock.call(2), mock.call(4), mock.call(8)])
+        self.assertEqual(sum(command[1:3] == ['release', 'create'] for command in self.commands), 1)
+        self.assertEqual(self.assets, [])
 
     def test_damaged_signature_is_rejected_even_with_updated_transport_checksums(self):
         (self.delivery / 'release.sig').write_bytes(b'X' * 64)
