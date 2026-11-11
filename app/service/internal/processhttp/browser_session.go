@@ -26,11 +26,19 @@ func BrowserSessionHandler(next http.Handler, origin string) (http.Handler, erro
 	if next == nil {
 		return nil, errors.New("browser session handler is required")
 	}
+	browserOrigin := origin
 	if origin != "" {
 		parsed, err := url.Parse(origin)
 		if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" ||
 			parsed.User != nil || parsed.Path != "" || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.String() != origin {
 			return nil, errors.New("browser session origin is invalid")
+		}
+		// URL origins used by the signed API boundary keep an explicit port,
+		// while browsers omit a scheme's default port from the Origin header.
+		// Accept only that one browser serialization of the sealed origin.
+		port := parsed.Port()
+		if (parsed.Scheme == "https" && port == "443") || (parsed.Scheme == "http" && port == "80") {
+			browserOrigin = parsed.Scheme + "://" + strings.TrimSuffix(parsed.Host, ":"+port)
 		}
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -46,7 +54,8 @@ func BrowserSessionHandler(next http.Handler, origin string) (http.Handler, erro
 		}
 		origins, sites := r.Header.Values("Origin"), r.Header.Values("Sec-Fetch-Site")
 		if len(modes) != 1 || modes[0] != "cookie" || len(origins) > 1 || len(sites) > 1 ||
-			(len(origins) == 1 && origins[0] != origin) || (len(sites) == 1 && sites[0] != "same-origin") ||
+			(len(origins) == 1 && origins[0] != origin && origins[0] != browserOrigin) ||
+			(len(sites) == 1 && sites[0] != "same-origin") ||
 			(r.Method != http.MethodGet && r.Method != http.MethodHead && len(origins) != 1) {
 			browserSessionProblem(w, http.StatusForbidden, "iam.browser-session.origin-rejected")
 			return

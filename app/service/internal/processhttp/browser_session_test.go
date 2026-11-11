@@ -107,6 +107,47 @@ func TestBrowserIssuanceUsesConfiguredHTTPSAndBindsRoleToSource(t *testing.T) {
 	}
 }
 
+func TestBrowserSessionMatchesDefaultPortOriginSerialization(t *testing.T) {
+	for _, test := range []struct {
+		name, configured, presented string
+		status                      int
+	}{
+		{"HTTPS default omitted", "https://console.example.test:443", "https://console.example.test", 204},
+		{"HTTPS default explicit", "https://console.example.test:443", "https://console.example.test:443", 204},
+		{"HTTP default omitted", "http://console.example.test:80", "http://console.example.test", 204},
+		{"HTTPS non-default explicit", "https://console.example.test:8443", "https://console.example.test:8443", 204},
+		{"HTTPS non-default omitted", "https://console.example.test:8443", "https://console.example.test", 403},
+		{"HTTP non-default omitted", "http://console.example.test:8080", "http://console.example.test", 403},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			handler, err := BrowserSessionHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				calls++
+				w.WriteHeader(http.StatusNoContent)
+			}), test.configured)
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(http.MethodPost, "http://internal/v1/auth/login", nil)
+			request.Header.Set(BrowserTransportHeader, "cookie")
+			request.Header.Set("Origin", test.presented)
+			request.Header.Set("Sec-Fetch-Site", "same-origin")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != test.status {
+				t.Fatalf("status=%d want=%d", response.Code, test.status)
+			}
+			wantCalls := 0
+			if test.status == http.StatusNoContent {
+				wantCalls = 1
+			}
+			if calls != wantCalls {
+				t.Fatalf("calls=%d want=%d", calls, wantCalls)
+			}
+		})
+	}
+}
+
 func TestBrowserTransportRejectsDuplicateCookiesAndDisabledConfiguration(t *testing.T) {
 	secret := "mx1." + strings.Repeat("a", 43)
 	for _, origin := range []string{"", "http://127.0.0.1:8080"} {
