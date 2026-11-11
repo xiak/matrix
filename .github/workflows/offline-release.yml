@@ -365,7 +365,15 @@ jobs:
           }
           stop_engine() {
             kill -TERM "$engine_pid"
-            wait "$engine_pid"
+            engine_status=0
+            wait "$engine_pid" || engine_status=$?
+            # A native daemon may report the SIGTERM used for the intentional
+            # restart as 143 instead of translating it to a zero exit. Both
+            # mean the requested stop completed; every other status still
+            # fails the release gate.
+            if [[ "$engine_status" != 0 && "$engine_status" != 143 ]]; then
+              return "$engine_status"
+            fi
           }
           start_https_proxy() {
             "$MATRIX_BROWSER_NODE" "$MATRIX_HTTPS_PROXY_SCRIPT" "$SSL_CERT_FILE" "$work/private/https-key.pem" \
