@@ -167,15 +167,42 @@ func TestDocumentCSPRemainsScopedAndFitsTheReleaseGateway(t *testing.T) {
 	}
 }
 
-func TestHandlerServesBoundedClientWorkspaceQueriesWithoutSelectingContent(t *testing.T) {
+func TestHandlerServesBoundedClientViewQueriesWithoutSelectingContent(t *testing.T) {
 	handler := NewHandler()
 	for _, target := range []string{
+		"/console/regions/?scope=ready",
+		"/console/regions/__next.console.regions.__PAGE__.txt?scope=ready&_rsc=probe",
+		"/console/catalog/?scope=available",
+		"/console/quotas/?scope=available",
+		"/console/installations/?scope=ready",
+		"/console/installations/?scope=processing",
+		"/console/products/mysql/instances/?scope=ready",
+		"/console/products/mysql/quotas/?scope=available",
+		"/console/resources/?scope=healthy&region=shanghai-b",
+		"/console/operations/?state=RUNNING&q=failed%20deployment",
+		"/console/devops/pipelines/?scope=succeeded&environment=Production%20A",
+		"/console/observability/health/?scope=degraded",
+		"/console/observability/alerts/?scope=firing",
+		"/console/logs/search/?topic=system&region=shanghai-b",
+		"/console/messages/?read=unread&category=alert&q=disk%20full",
 		"/console/applications/?resource=application-member",
 		"/console/applications/__next.console.applications.__PAGE__.txt?resource=application-member&_rsc=probe",
+		"/console/access/?check=state.review",
+		"/console/access/users/?state=passwordChangeRequired",
+		"/console/access/users/index.txt?state=passwordChangeRequired&_rsc=cTS5kOzVIXrWOwrI",
+		"/console/access/users/?state=enabled&association=direct&q=alice%20operator",
 		"/console/access/users/?id=principal-member",
+		"/console/access/users/?id=principal-member&tab=policies&scope=direct",
 		"/console/access/groups/?id=group%2Fexample",
+		"/console/access/groups/?id=group%2Fexample&tab=members",
+		"/console/access/groups/?id=group%2Fexample&tab=policies&scope=deny",
 		"/console/access/policies/?id=policy-reviewer",
+		"/console/access/policies/?id=policy-reviewer&tab=usage",
+		"/console/access/policies/?kind=custom",
 		"/console/access/roles/?id=role-reviewer",
+		"/console/access/roles/?id=role-reviewer&tab=permissions",
+		"/console/access/roles/?id=role-reviewer&tab=policies&scope=deny",
+		"/console/access/security-reports/?retention=expiringSoon",
 		"/console/access/policy-configuration/?id=principal-member",
 		"/console/access/create-policy/?method=visual",
 		"/console/access/create-policy/?method=json",
@@ -189,6 +216,12 @@ func TestHandlerServesBoundedClientWorkspaceQueriesWithoutSelectingContent(t *te
 		"/console/access/users/?id=principal-member&tab=keys",
 		"/console/access/users/__next.console.access.$d$view.__PAGE__.txt?id=principal-member&_rsc=probe",
 		"/console/access/users/__next.console.access.$d$view.__PAGE__.txt?id=principal-member&tab=keys&_rsc=probe",
+		// The static transport does not reinterpret presentation semantics.
+		// Stale or route-irrelevant safe state reaches the same client, which
+		// owns normalization and visible filter feedback.
+		"/console/regions/?scope=retired-client-value",
+		"/console/messages/?scope=ready",
+		"/console/access/users/?method=visual",
 	} {
 		t.Run(target, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, target, nil)
@@ -206,29 +239,28 @@ func TestHandlerServesBoundedClientWorkspaceQueriesWithoutSelectingContent(t *te
 func TestHandlerRejectsAuthoritySelectorsAndAmbiguousWorkspaceQueries(t *testing.T) {
 	handler := NewHandler()
 	for _, target := range []string{
+		"/console/regions/?scope=ready&scope=ready",
+		"/console/messages/?read=unread&q=line%0Abreak",
+		"/console/devops/pipelines/?environment=bad%0Avalue",
+		"/console/regions/?region=two%20regions",
 		"/console/applications/?resource=",
 		"/console/applications/?resource=application-a&resource=application-b",
-		"/console/access/users/?resource=application-member",
 		"/console/access/users/?accountId=other",
 		"/console/access/users/?id=member&tenantId=other",
 		"/console/access/users/?id=member&authorization=secret",
 		"/console/access/users/?id=member&resourceVersion=1",
 		"/console/access/users/?id=a&id=b",
 		"/console/access/users/?id=",
-		"/console/access/users/?tab=keys",
 		"/console/access/users/?id=member&tab=",
-		"/console/access/users/?id=member&tab=unknown",
 		"/console/access/users/?id=member&tab=keys&tab=policies",
-		"/console/access/groups/?id=group-member&tab=keys",
 		"/console/access/users/?id=%GG",
 		"/console/access/users/?id=%FF",
 		"/console/access/users/?id=member%0A",
-		"/console/access/users/?method=tags",
 		"/console/access/users/?_rsc=probe",
-		"/console/access/create-policy/?method=unknown",
-		"/console/access/create-policy/?id=member",
 		"/console/access/users/?id=" + strings.Repeat("a", 257),
+		"/console/access/users/?unexpected=view",
 		"/_next/static/missing.js?id=member",
+		"/?scope=ready",
 		"/console/access/users/?" + strings.Repeat("id=a&", 500),
 	} {
 		t.Run(target, func(t *testing.T) {
@@ -238,6 +270,41 @@ func TestHandlerRejectsAuthoritySelectorsAndAmbiguousWorkspaceQueries(t *testing
 				t.Fatalf("ambiguous query accepted: status=%d", response.Code)
 			}
 		})
+	}
+}
+
+func TestHandlerRendersBrandedBadRequestForDocumentNavigation(t *testing.T) {
+	handler := NewHandler()
+	document := httptest.NewRecorder()
+	handler.ServeHTTP(document, httptest.NewRequest(http.MethodGet, "/console/access/users/?accountId=other", nil))
+	if document.Code != http.StatusBadRequest ||
+		!strings.HasPrefix(document.Header().Get("Content-Type"), "text/html") ||
+		!strings.Contains(document.Body.String(), "这个链接无法打开") ||
+		!strings.Contains(document.Body.String(), "Matrix Cloud") ||
+		strings.Contains(document.Body.String(), `"kind":"Problem"`) {
+		t.Fatalf("browser bad request is not a branded document: status=%d headers=%v body=%s", document.Code, document.Header(), document.Body.String())
+	}
+	if policy := document.Header().Get("Content-Security-Policy"); strings.Contains(policy, "'unsafe-inline'") || !strings.Contains(policy, "style-src 'self'") {
+		t.Fatalf("browser bad-request CSP is unsafe: %s", policy)
+	}
+	explicitDocument := httptest.NewRecorder()
+	handler.ServeHTTP(explicitDocument, httptest.NewRequest(http.MethodGet, "/console/access/users/index.html?accountId=other", nil))
+	if explicitDocument.Code != http.StatusBadRequest || !strings.HasPrefix(explicitDocument.Header().Get("Content-Type"), "text/html") ||
+		!strings.Contains(explicitDocument.Body.String(), "这个链接无法打开") {
+		t.Fatalf("explicit HTML bad request is not a branded document: status=%d headers=%v body=%s", explicitDocument.Code, explicitDocument.Header(), explicitDocument.Body.String())
+	}
+	stylesheet := httptest.NewRecorder()
+	handler.ServeHTTP(stylesheet, httptest.NewRequest(http.MethodGet, "/_matrix/bad-request.css", nil))
+	if stylesheet.Code != http.StatusOK || !strings.HasPrefix(stylesheet.Header().Get("Content-Type"), "text/css") || stylesheet.Body.Len() == 0 {
+		t.Fatalf("browser bad-request stylesheet is unavailable: status=%d headers=%v", stylesheet.Code, stylesheet.Header())
+	}
+
+	segment := httptest.NewRecorder()
+	handler.ServeHTTP(segment, httptest.NewRequest(http.MethodGet,
+		"/console/access/users/index.txt?accountId=other&_rsc=probe", nil))
+	if segment.Code != http.StatusBadRequest || segment.Header().Get("Content-Type") != "application/problem+json" ||
+		!strings.Contains(segment.Body.String(), `"code":"INVALID_REQUEST"`) {
+		t.Fatalf("invalid router segment did not retain the machine problem contract: status=%d headers=%v body=%s", segment.Code, segment.Header(), segment.Body.String())
 	}
 }
 

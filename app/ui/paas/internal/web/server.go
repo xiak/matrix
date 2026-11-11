@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -31,7 +32,19 @@ const APIVersion = "ui.matrix.xiak.com/v1"
 //go:embed all:assets
 var content embed.FS
 
+// These documents belong to the static transport boundary. They remain
+// available even when the application route itself cannot be admitted.
+//
+//go:embed bad-request.html bad-request.css
+var transportProblemContent embed.FS
+
 var inlineScript = regexp.MustCompile(`(?is)<script(?:\s[^>]*)?>(.*?)</script>`)
+
+var clientViewQueryKeys = map[string]struct{}{
+	"association": {}, "category": {}, "check": {}, "environment": {},
+	"id": {}, "kind": {}, "method": {}, "q": {}, "read": {}, "region": {},
+	"resource": {}, "retention": {}, "scope": {}, "state": {}, "tab": {}, "topic": {},
+}
 
 type readiness struct {
 	APIVersion string `json:"apiVersion"`
@@ -46,6 +59,7 @@ func NewHandler() http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /ready", serveReadiness)
+	mux.HandleFunc("GET /_matrix/bad-request.css", serveBadRequestStyle)
 	mux.HandleFunc("GET /", serveStatic(assets))
 	return securityHeaders(mux)
 }
@@ -58,8 +72,16 @@ func serveStatic(assets fs.FS) http.HandlerFunc {
 			return
 		}
 		assetName, pageRequest := staticAssetName(request.URL.Path)
-		if assetName == "" || !validStaticQuery(request, assetName) {
+		if assetName == "" {
 			writeProblem(response, http.StatusBadRequest, "INVALID_REQUEST")
+			return
+		}
+		if !validStaticQuery(request, assetName) {
+			if path.Ext(assetName) == ".html" {
+				serveBadRequestDocument(response)
+			} else {
+				writeProblem(response, http.StatusBadRequest, "INVALID_REQUEST")
+			}
 			return
 		}
 		asset, err := fs.ReadFile(assets, assetName)
@@ -112,59 +134,55 @@ func validStaticQuery(request *http.Request, assetName string) bool {
 	if extension != ".txt" && extension != ".html" {
 		return false
 	}
+	consoleRoute := route == "console" || strings.HasPrefix(route, "console/")
 	for key, entries := range values {
-		if len(entries) != 1 || entries[0] == "" || len(entries[0]) > 256 ||
-			!utf8.ValidString(entries[0]) || strings.IndexFunc(entries[0], func(character rune) bool {
-			return character <= ' ' || character == '\u007f'
-		}) >= 0 {
+		if len(entries) != 1 || !validStaticQueryValue(key, entries[0]) {
 			return false
 		}
-		switch key {
-		case "_rsc":
+		if key == "_rsc" {
 			if extension != ".txt" {
 				return false
 			}
-		case "id":
-			// These queries locate a client-owned workspace. They never select
-			// an authority account or change which static content is served.
-			switch route {
-			case "console/access/users", "console/access/groups", "console/access/policies", "console/access/roles", "console/access/policy-configuration":
-			default:
-				return false
-			}
-		case "method":
-			if route != "console/access/create-policy" {
-				return false
-			}
-			switch entries[0] {
-			case "visual", "json", "tags", "features":
-			default:
-				return false
-			}
-		case "resource":
-			// Application detail is a client-owned workspace reached from the
-			// permission-filtered directory. The value selects only client view
-			// state; the PaaS detail API still validates the identifier and
-			// independently authorizes the exact resource on every request.
-			if route != "console/applications" {
-				return false
-			}
-		case "tab":
-			// User detail tabs are client-owned view state, not authority
-			// selectors. Keep them bound to one exact User workspace.
-			if route != "console/access/users" || len(values["id"]) != 1 || values["id"][0] == "" {
-				return false
-			}
-			switch entries[0] {
-			case "identity", "access", "policies", "groups", "security", "keys":
-			default:
-				return false
-			}
-		default:
+			continue
+		}
+		if !consoleRoute {
+			return false
+		}
+		if _, accepted := clientViewQueryKeys[key]; !accepted {
 			return false
 		}
 	}
 	return true
+}
+
+func validStaticQueryValue(key, value string) bool {
+	if value == "" || len(value) > 256 || !utf8.ValidString(value) {
+		return false
+	}
+	text := key == "q" || key == "environment"
+	return strings.IndexFunc(value, func(character rune) bool {
+		return unicode.IsControl(character) || (!text && unicode.IsSpace(character))
+	}) < 0
+}
+
+func serveBadRequestDocument(response http.ResponseWriter) {
+	document, err := transportProblemContent.ReadFile("bad-request.html")
+	if err != nil {
+		panic("embedded bad-request document is missing")
+	}
+	writeStatic(response, http.StatusBadRequest, "bad-request.html", document)
+}
+
+func serveBadRequestStyle(response http.ResponseWriter, request *http.Request) {
+	if request.URL.RawQuery != "" || request.ContentLength > 0 || len(request.TransferEncoding) > 0 {
+		writeProblem(response, http.StatusBadRequest, "INVALID_REQUEST")
+		return
+	}
+	stylesheet, err := transportProblemContent.ReadFile("bad-request.css")
+	if err != nil {
+		panic("embedded bad-request stylesheet is missing")
+	}
+	writeStatic(response, http.StatusOK, "bad-request.css", stylesheet)
 }
 
 func writeStatic(response http.ResponseWriter, status int, assetName string, asset []byte) {

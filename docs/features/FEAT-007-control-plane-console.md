@@ -813,11 +813,19 @@ unset and explicitly `0`, and requires both inventories and the committed
 embed to match by path and SHA-256. Drift remains an error, with bounded
 missing/unexpected/changed diagnostics rather than rewritten asset payloads.
 
-The static host admits only bounded, singleton `id` queries on owned IAM
-workspace routes and the four `method` values on policy creation. Invalid UTF-8,
-control characters, duplicate values, unknown keys and authority selectors are
-rejected. These queries never select different static content or grant API
-authority; direct workspace entry preserves the same CSP and offline assets.
+The static transport and presentation query contracts are deliberately
+separate. The host admits only bounded, singleton presentation keys used by the
+console: entity workspaces (`id`, `tab`, `resource`, `method`), directory state
+(`scope`, `state`, `association`, `q`, `kind`, `retention`, `check`, `category`,
+`read`, `topic`, `environment`) and the shared `region` selector. It does not
+duplicate route-specific enum or dependency semantics; React owns their
+normalization and visible filter feedback. Next's `_rsc` token is admitted only
+on exported text segments. Invalid UTF-8, control characters, duplicate or
+empty values, unknown keys and authority selectors are rejected. Queries never
+select different static content or grant API authority; every API independently
+authorizes requested data. A rejected browser document renders a branded,
+non-secret recovery page, while router segments retain the machine-readable
+problem contract for the existing route error boundary.
 
 The first end-to-end component chain is:
 
@@ -2024,8 +2032,10 @@ Same-path workspace query changes use Next's supported native-history
 integration instead of fetching another page tree. They retain draft guarding,
 encoded entity IDs, replacement and Back/Forward behavior; cross-page visits
 continue through the prefetched router transition with an immediate destination
-frame and locally delayed loading placeholders.
-The
+frame and locally delayed loading placeholders. A valid directory deep link
+keeps the same shell, page title and controls, applies only its visible filter,
+and exposes that filter through the existing toolbar or removable filter
+context; it never replaces the console with a transport problem document. The
 content begins with meaningful resource summary, tabs or data, not another
 generic title, return toolbar or repeated preview banner. Header MOCK identity and mutation-level limitations
 remain visible; errors, risks and destructive confirmations are never hidden

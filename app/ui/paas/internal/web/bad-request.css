@@ -1,0 +1,85 @@
+:root {
+  color-scheme: dark light;
+  font-family: Inter, "Noto Sans SC", "Microsoft YaHei", system-ui, sans-serif;
+  background: #081522;
+  color: #e9f5ff;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  min-height: 100vh;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at 15% 10%, #123149 0, transparent 38%), #081522;
+}
+
+main {
+  width: min(720px, calc(100% - 32px));
+}
+
+img {
+  width: 230px;
+  max-width: 65vw;
+  margin: 0 0 28px;
+}
+
+section {
+  padding: 32px;
+  border: 1px solid #2c4d63;
+  border-radius: 8px;
+  background: #0d1e2d;
+  box-shadow: 0 24px 70px rgb(0 0 0 / 28%);
+}
+
+.code {
+  margin: 0 0 12px;
+  color: #7de7f5;
+  font: 600 13px/1.5 ui-monospace, "Cascadia Code", monospace;
+  letter-spacing: .04em;
+}
+
+h1 {
+  margin: 0 0 12px;
+  font-size: clamp(26px, 5vw, 38px);
+}
+
+p {
+  max-width: 58ch;
+  margin: 0 0 24px;
+  color: #bfd1de;
+  line-height: 1.7;
+}
+
+a {
+  display: inline-flex;
+  min-height: 42px;
+  align-items: center;
+  padding: 0 18px;
+  border-radius: 4px;
+  background: #6fe3f3;
+  color: #06202a;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+a:focus-visible {
+  outline: 3px solid #ffffff;
+  outline-offset: 3px;
+}
+
+.secondary {
+  margin: 24px 0 0;
+  font-size: 13px;
+  color: #86a1b3;
+}
+
+@media (prefers-color-scheme: light) {
+  :root { background: #f4f8fb; color: #102b3b; }
+  body { background: radial-gradient(circle at 15% 10%, #dff7fb 0, transparent 38%), #f4f8fb; }
+  section { border-color: #b9d2df; background: #ffffff; box-shadow: 0 24px 70px rgb(32 74 96 / 14%); }
+  p { color: #415f70; }
+  .code { color: #0f7788; }
+  .secondary { color: #647e8d; }
+}
