@@ -30,6 +30,7 @@
 .headerControls:not(:has(> .utilityCommand, > .headerActions:not([hidden], :empty))) { display: none; }
 .headerActions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--xiak-spacing-tight); min-width: 0; max-width: 100%; flex: none; }
 .headerActions:empty, .headerActions[hidden] { display: none; }
+.headerProgress { position: absolute; inset: auto 0 0; height: var(--xiak-navigation-progress-height); border-radius: 0; pointer-events: none; }
 .commandBar { display: flex; min-width: 0; max-width: 100%; align-items: center; gap: var(--xiak-spacing-tight); }
 .expandedCommands { display: contents; }
 .directCommand { min-width: 0; }

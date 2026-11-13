@@ -112,7 +112,7 @@ export function LiveRoleSelfService() {
     {discoveryVisible ? <div aria-busy={roleSession.busy === "discover" || undefined} className={styles.discovery}>
       <div className={styles.sectionHeading}><div><Typography.Title as="h2" level={3}>{t("discoveryTitle")}</Typography.Title><Typography.Text tone="muted">{t("discoveryHint")}</Typography.Text></div>{roleSession.directory ? <Badge status="neutral">{t("roleCount", { count: roleSession.directory.items.length })}</Badge> : null}</div>
       <HelpDisclosure label={t("sessionPermissionsHelp")}>{t("discoveryBoundary")}</HelpDisclosure>
-      {roleSession.busy === "discover" && !roleSession.directory ? <PageSkeleton label={t("loadingRoles")} labelVisible={false} layout="cards" /> : null}
+      {roleSession.busy === "discover" && !roleSession.directory ? <PageSkeleton label={t("loadingRoles")} layout="cards" /> : null}
       {roleSession.error && !roleSession.directory && roleSession.busy === null ? <Alert className={styles.attempt} status="danger"><div><div><strong>{t("discoveryUnavailableTitle")}</strong><span>{t("discoveryUnavailableHint")}</span></div><Button onClick={() => void roleSession.discover()} size="small" variant="secondary">{t("retryDiscovery")}</Button></div></Alert> : null}
       {roleSession.directory?.items.length ? <div className={styles.roleGrid}>{roleSession.directory.items.map((role) => <Card key={role.roleId}>
         <Card.Header className={styles.roleHeader}><div><Typography.Title as="h3" level={3}>{role.name}</Typography.Title><code>{role.roleId}</code></div><Badge status="success">{t("eligible")}</Badge></Card.Header>

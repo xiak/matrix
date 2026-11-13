@@ -214,7 +214,7 @@ function LiveRoleAuthorizationOverview({ access, client, onAccessChanged, onOpen
             ...(!selected && value ? [{ value, label: value, disabled: true }] : [])
           ]} onValueChange={(next) => { setValue(next); intent.current = null; setOperation({ state: "idle" }); }} />
         </FormField>}
-        {policyPhase === "loading" ? <LoadingNotice className={styles.note} label={t("boundaryDirectoryLoading")} /> : null}
+        {policyPhase === "loading" ? <LoadingNotice label={t("boundaryDirectoryLoading")} /> : null}
         {policyPhase === "error" || !policiesAvailable ? <p className={styles.note}>{t("boundaryDirectoryUnavailable")}</p> : null}
         <div className={styles.actions}>
           <Button type="submit" disabled={locked || (!review && !eligible)}>{operation.state === "pending" ? t("boundarySaving") : operation.state === "uncertain" ? t("boundaryRetryOriginal") : review ? t("boundaryConfirm") : t("reviewChange")}</Button>

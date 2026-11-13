@@ -310,7 +310,7 @@ function AccountSecuritySettingsWorkspace({ client }: { client: AccountSecurityS
       <Card.Header><div className={styles.cardTitle}><span><ShieldCheck aria-hidden="true" /></span><div><Typography.Title as="h3" level={3}>{security("controlTitle")}</Typography.Title><Typography.Text tone="muted">{security("fullReplacement")}</Typography.Text></div></div></Card.Header>
       <Card.Body className={styles.policyForm} aria-busy={result.status === "loading" || refreshing}>
         {!client ? <Alert status="warning">{t("accountReadUnavailable")}</Alert> : null}
-        {client && result.status === "loading" ? <LoadingNotice className={accessStyles.note} label={t("accountReadLoading")} /> : null}
+        {client && result.status === "loading" ? <LoadingNotice label={t("accountReadLoading")} /> : null}
         {refreshing ? <Typography.Text role="status" tone="muted">{t("accountReadRefreshing")}</Typography.Text> : null}
         {currentSettings ? <>
           <dl className={styles.facts}>

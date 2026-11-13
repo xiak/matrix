@@ -189,8 +189,8 @@ function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; vi
   return <div className={styles.stack}>
     <ContentPage.Heading title={title} scrollKey={`loading:${view}:${entityId ?? "directory"}`} />
     {collection
-      ? <Card><TableSkeleton header label={t("loading")} labelVisible={false} rows={5} /></Card>
-      : <PageSkeleton label={t("loading")} labelVisible={false} layout={view === "overview" ? "dashboard" : "access"} />}
+      ? <Card><TableSkeleton header label={t("loading")} rows={5} /></Card>
+      : <PageSkeleton label={t("loading")} layout={view === "overview" ? "dashboard" : "access"} />}
   </div>;
 }
 
@@ -263,7 +263,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
     {access.error && !workflow ? <Alert status="danger">{t(`errors.${access.error}`)}</Alert> : null}
     {access.success && !workflow && view !== "policies" ? <Alert status="success">{t(access.success)}</Alert> : null}
     {access.workspaceError && !workflow && view !== "policies" ? <Alert status="danger">{w(`errors.${access.workspaceError}`)}</Alert> : null}
-    {showPageLoading ? <AccountAccessInitialLoading entityId={entityId} view={view} /> : access.loading ? <LoadingNotice className={styles.note} label={t("loading")} /> : null}
+    {showPageLoading ? <AccountAccessInitialLoading entityId={entityId} view={view} /> : access.loading ? <LoadingNotice label={t("loading")} /> : null}
     {scene && !showPageLoading ? denied ? <EmptyState title={t("accessDenied")} description={t("accessDeniedHint")} action={<Button onClick={() => onNavigate("overview")} variant="secondary">{t("backToOverview")}</Button>} /> :
       view === "overview" ? <AccountOverview scene={scene} onNavigate={onNavigate} /> :
       view === "users" ? <AccountUserDirectory key={workspace ? `${entityId ?? "users"}:${userTab ?? "identity"}` : entityId ?? "users"} entityId={entityId} initialDetailTab={userTab} onChangeDetailTab={(id, tab) => onNavigate("users", id, undefined, tab)} scene={scene} onCreate={() => onNavigate("create-user")} onOpen={onNavigate} /> :

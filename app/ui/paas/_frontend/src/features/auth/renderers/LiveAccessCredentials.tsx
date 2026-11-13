@@ -550,7 +550,7 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
     <AccountReadBoundary status={loading && !directory ? "loading" : directoryError ? keyReadStatus(directoryError) : "ready"}
       loading={<Card>
         <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div></Card.Header>
-        <TableSkeleton header={false} label={t("keyLiveLoading")} labelVisible={false} rows={2} />
+        <TableSkeleton header={false} label={t("keyLiveLoading")} rows={2} />
       </Card>}
       failure={directoryError ? { title: t("keyLiveLoadFailedTitle"), description: t(`keyLiveErrors.${directoryError}`) } : undefined}
       onRetry={() => void load(owner.id)} problem={directoryProblem}>

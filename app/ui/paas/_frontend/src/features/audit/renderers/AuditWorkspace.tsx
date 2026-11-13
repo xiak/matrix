@@ -374,7 +374,7 @@ export function AuditWorkspace({ preview = false, tenantId: accountId }: { previ
         </div>
         {filtersOpen ? <AuditFilterPanel initialFilters={appliedFilters} loading={loading} onApply={apply} onReset={reset} /> : null}
         {error ? <EmptyState title={t("errors.title")} description={t(`errors.${error}`)} action={error !== "expired" ? <Button variant="secondary" onClick={() => setRefreshRevision((value) => value + 1)}>{t("actions.retry")}</Button> : undefined} /> : null}
-        {!error && !page ? <TableSkeleton label={t("directory.loading")} labelVisible={false} rows={6} header={false} /> : null}
+        {!error && !page ? <TableSkeleton label={t("directory.loading")} rows={6} header={false} /> : null}
         {!error && page ? <div className={styles.collection} aria-busy={loading || undefined}>
           <div className={styles.collectionStatus}><span role="status">{status}</span>{loading ? <span>{t("directory.refreshing")}</span> : null}</div>
           {page.omittedRecordCount > 0 ? <Alert status="warning" role="status">{t("directory.omitted", { count: page.omittedRecordCount })}</Alert> : null}

@@ -14,16 +14,16 @@ function DataPanel({ description, label, title }: { description?: string; label:
         {description ? <Typography.Text tone="muted">{description}</Typography.Text> : null}
       </div>
     </Card.Header>
-    <TableSkeleton header={false} label={label} labelVisible={false} rows={5} />
+    <TableSkeleton header={false} label={label} rows={5} />
   </Card>;
 }
 
 function CardCollection({ label, title }: { label: string; title: string }) {
-  return <section aria-label={title}><CardGridSkeleton cards={3} label={label} labelVisible={false} /></section>;
+  return <section aria-label={title}><CardGridSkeleton cards={3} label={label} /></section>;
 }
 
 function TableRegion({ label, title }: { label: string; title: string }) {
-  return <Card aria-label={title}><TableSkeleton header={false} label={label} labelVisible={false} rows={5} /></Card>;
+  return <Card aria-label={title}><TableSkeleton header={false} label={label} rows={5} /></Card>;
 }
 
 function PlaceholderPanel({ description, rows = 3, title }: { description?: string; rows?: number; title: string }) {
@@ -51,7 +51,7 @@ function CloudOverviewLoading({ label }: { label: string }) {
           <Typography.Title as="h2" level={2}>{cloud("welcome")}</Typography.Title>
         </div>
       </section>
-      <LoadingFeedback label={label} labelVisible={false}>
+      <LoadingFeedback label={label}>
         <div aria-hidden="true" className={styles.dashboardPlaceholder}>
           <div className={styles.metricGrid}>
             {Array.from({ length: 4 }, (_, index) => (
@@ -98,7 +98,7 @@ function ManagedProductLoading({ label, product }: { label: string; product: Man
           <p>{directory(`services.${product}.description`)}</p>
         </div>
       </section>
-      <LoadingFeedback label={label} labelVisible={false}>
+      <LoadingFeedback label={label}>
         <DataPanel description={managed("productDataLoadingHint")} label={label} title={managed("productData")} />
       </LoadingFeedback>
     </div>

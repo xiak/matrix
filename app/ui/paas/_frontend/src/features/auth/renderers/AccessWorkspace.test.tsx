@@ -2163,7 +2163,7 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("heading", { name: "用户组" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "新建用户组" })).toBeTruthy();
     expect(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" })).toBeTruthy();
-    expect(screen.getByText("正在读取用户组…")).toBeTruthy();
+    expect(screen.getByText("正在读取用户组…").getAttribute("data-visible")).toBe("false");
     expect(screen.queryByText("暂无记录")).toBeNull();
 
     await act(async () => { resolveGroups({ items: [], nextAfter: null }); });
@@ -2191,7 +2191,7 @@ describe("CAM-style access workspace", () => {
 
     expect(screen.getByRole("heading", { name: liveGroup.group.id })).toBeTruthy();
     expect(screen.getByRole("button", { name: "返回列表" })).toBeTruthy();
-    expect(screen.getByText("正在读取用户组详情…")).toBeTruthy();
+    expect(screen.getByText("正在读取用户组详情…").getAttribute("data-visible")).toBe("false");
     expect(screen.queryByRole("heading", { name: liveGroup.group.name })).toBeNull();
     expect(screen.queryByRole("button", { name: "添加成员" })).toBeNull();
     expect(screen.queryByText("Loaded after the detail shell")).toBeNull();

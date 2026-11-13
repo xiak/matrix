@@ -235,7 +235,7 @@ function LiveAccountDetail({ access, client, error, loading, onBack, onRefresh, 
     title: t("tenantIdentity"), content: <TenantIdentityFacts account={account} />,
     footer: <p className={styles.note}>{t("tenantLifecycleHint")}</p>
   } : null}>
-    {loading ? <LoadingNotice className={styles.note} label={t("tenantDetailLoading")} /> : null}
+    {loading ? <LoadingNotice label={t("tenantDetailLoading")} /> : null}
     {error ? <Alert status="danger"><div className={styles.confirmation}><span>{t(`errors.${error}`)}</span><Button onClick={() => void onRefresh()} size="small" variant="secondary">{t("retryTenantRead")}</Button></div></Alert> : null}
     {failure === "conflict" ? <Alert status="warning"><div className={styles.confirmation}><strong>{t("tenantMutationConflictTitle")}</strong><p>{t("tenantMutationConflictHint", { account: account?.id ?? "—" })}</p>{exact ? <p>{t("tenantObservedState", { status: t(exact.enabled ? "tenantActive" : "tenantDisabled"), version: exact.resourceVersion })}</p> : null}</div></Alert> : null}
     {failure === "refresh" ? <Alert status="warning">{t("tenantMutationRefreshFailed")}</Alert> : null}
@@ -397,7 +397,7 @@ function LiveAccountDirectoryGeneration({ client, initialAccounts, initialNextAf
         <ContentPage.Heading title={t("tenantAccounts")} scrollKey="live-tenant-directory" actions={client.canCreate ? <ContentPage.Commands label={collection("pageActions")} focusRef={createActionFocus} primary={{ id: "create", label: t("openTenant"), icon: <Plus aria-hidden="true" />, disabled: listLoading || Boolean(client.pending) || !client.ready, onSelect: () => { setCreating(true); setSelectedId(null); } }} /> : undefined} />
         <HelpDisclosure label={t("tenantDirectoryHelp")}>{t("tenantLiveBoundary")}</HelpDisclosure>
         {listError ? <Alert status="danger"><div className={styles.confirmation}><span>{t(`errors.${listError}`)}</span><Button onClick={() => void loadPage(cursorStack[pageIndex], pageIndex)} size="small" variant="secondary">{t("retryTenantRead")}</Button></div></Alert> : null}
-        {listLoading ? <LoadingNotice className={styles.note} label={t("loadingTenants")} /> : null}
+        {listLoading ? <LoadingNotice label={t("loadingTenants")} /> : null}
         <Table aria-label={t("tenantTable")} mobileLayout="stack"><thead><tr><th scope="col">{t("tenant")}</th><th scope="col">{t("primaryLogin")}</th><th scope="col">{t("alias")}</th><th scope="col">{t("status")}</th></tr></thead>
           <tbody>{accounts.map((account) => <tr key={account.id}><td data-label={t("tenant")}><Table.PrimaryAction ref={(node) => { if (node) accountTriggers.current.set(account.id, node); else accountTriggers.current.delete(account.id); }} onClick={() => { setSelectedSummary(account); setSelectedAccess(null); setDetailError(null); setDetailLoading(true); setSelectedId(account.id); }}>{account.name}</Table.PrimaryAction><small>{account.id}</small></td><td data-label={t("primaryLogin")}>{account.rootLoginName}</td><td data-label={t("alias")}>{account.loginAlias ?? t("aliasUnset")}</td><td data-label={t("status")}><Badge status={account.enabled ? "success" : "neutral"}>{t(account.enabled ? "tenantActive" : "tenantDisabled")}</Badge></td></tr>)}</tbody>
         </Table>

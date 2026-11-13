@@ -468,7 +468,7 @@ function ApplicationDirectoryLoadingTable() {
       <th scope="col">{t("applicationDirectory.columns.updated")}</th>
     </tr></thead>
     <tbody><tr><td className={styles.applicationDirectoryLoadingCell} colSpan={4}>
-      <LoadingFeedback label={t("applicationDirectory.loading")} labelVisible={false}>
+      <LoadingFeedback label={t("applicationDirectory.loading")}>
         <div aria-hidden="true" className={styles.applicationDirectorySkeleton}>
           {Array.from({ length: 4 }, (_, index) => <div className={styles.applicationDirectorySkeletonRow} key={index}><Skeleton /><Skeleton /><Skeleton /><Skeleton /></div>)}
         </div>

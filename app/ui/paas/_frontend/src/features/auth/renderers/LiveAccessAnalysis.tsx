@@ -487,7 +487,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
     }}>{t("live.retry")}</Button> : null}</div></Alert> : null}
     {notice ? <Alert status="success">{t(`live.notices.${notice}`)}</Alert> : null}
 
-    {selectedLoading ? <Card><TableSkeleton header={false} label={t("live.loadingFindingDetail")} labelVisible={false} rows={5} /></Card> : null}
+    {selectedLoading ? <Card><TableSkeleton header={false} label={t("live.loadingFindingDetail")} rows={5} /></Card> : null}
     {!selectedLoading && selectedFinding ? <Card>
       <Card.Header><div><Typography.Title as="h2" level={3}>{selectedFinding.target.id}</Typography.Title><Typography.Text tone="muted">{selectedFinding.id}</Typography.Text></div><Badge status={findingBadge[selectedFinding.status]}>{t(`unused.lifecycle.${selectedFinding.status}`)}</Badge></Card.Header>
       <Card.Body className={styles.detail}>
@@ -545,14 +545,14 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       </Tabs.List>
       <AccountReadBoundary
         status={analyzersLoading ? "loading" : analyzers === null ? readStatus(error) : !analyzer ? "empty" : "ready"}
-        loading={<Tabs.Content value={section}><Card><TableSkeleton header label={t("live.loading")} labelVisible={false} rows={4} /></Card></Tabs.Content>}
+        loading={<Tabs.Content value={section}><Card><TableSkeleton header label={t("live.loading")} rows={4} /></Card></Tabs.Content>}
         empty={{ title: t(client.canList ? "live.noAnalyzerTitle" : "live.listDeniedTitle"), description: t(client.canList ? "live.noAnalyzerHint" : "live.listDeniedHint"), action: client.canCreate ? <Button disabled={writeBlocked} onClick={() => void createAnalyzer()}>{t("live.createAnalyzer")}</Button> : undefined }}
         failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${error ?? "unavailable"}`) }}
         onRetry={knownAnalyzerId.trim() ? () => void openKnownAnalyzer() : client.canList ? reload : undefined} problem={readProblem}>
       {analyzer ? <>
         <Tabs.Content className={styles.stack} value="coverage">
           <AccountReadBoundary status={presentedFindingsLoading ? "loading" : presentedFindings ? "ready" : readStatus(findingsReadFailure)}
-            loading={<Card><TableSkeleton header label={t("live.loadingCoverage")} labelVisible={false} rows={6} /></Card>}
+            loading={<Card><TableSkeleton header label={t("live.loadingCoverage")} rows={6} /></Card>}
             failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${findingsReadFailure}`) }} onRetry={reload} problem={readProblem}>
           {presentedFindings ? <Card>
             <Card.Header><div><Typography.Title as="h2" level={3}>{t("external.coverageTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.coverageHint")}</Typography.Text></div><Badge status="info"><WorkspaceTime value={presentedFindings.observedAt} /></Badge></Card.Header>
@@ -565,7 +565,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
           <Card>
             <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.findingsTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.findingsHint")}</Typography.Text></div><FormField id="live-access-finding-status" label={t("unused.status")}><Select id="live-access-finding-status" disabled={presentedFindingsLoading} value={filter} onValueChange={changeFilter} options={(['ALL', 'ACTIVE', 'ARCHIVED', 'RESOLVED'] as const).map((value) => ({ value, label: t(`live.filters.${value}`) }))} /></FormField></Card.Header>
             <AccountReadBoundary status={presentedFindingsLoading ? "loading" : presentedFindings ? "ready" : readStatus(findingsReadFailure)}
-              loading={<TableSkeleton label={t("live.loadingFindings")} labelVisible={false} rows={6} />}
+              loading={<TableSkeleton label={t("live.loadingFindings")} rows={6} />}
               failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${findingsReadFailure}`) }} onRetry={reload} problem={readProblem}>
             {presentedFindings ? presentedFindings.items.length ? <Table aria-label={t("live.findingsTitle")} mobileLayout="stack"><thead><tr><th scope="col">{t("unused.principal")}</th><th scope="col">{t("unused.findingType")}</th><th scope="col">{t("unused.status")}</th><th scope="col">{t("live.observedAt")}</th></tr></thead><tbody>{presentedFindings.items.map((finding) => <tr key={finding.id}><td data-label={t("unused.principal")}><Table.PrimaryAction onClick={() => {
               setSelectedReference({ analyzerId: finding.analyzerId, findingId: finding.id, targetId: finding.target.id });

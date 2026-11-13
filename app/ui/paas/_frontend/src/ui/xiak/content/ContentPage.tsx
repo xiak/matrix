@@ -7,6 +7,7 @@ import { Button } from "../button/Button";
 import { Card } from "../card/Card";
 import { ContentLayout } from "./ContentLayout";
 import { ActionMenu, type ActionMenuItem } from "../action-menu/ActionMenu";
+import { Progress } from "../progress/Progress";
 import { TableActions } from "../table/TableActions";
 import { classNames } from "../utils";
 import styles from "./ContentPage.module.css";
@@ -21,23 +22,49 @@ type HeadingContribution = PageHeading & { owner: string };
 type HeadingSlot = { target: HTMLDivElement | null; parentLabel?: string; utility?: HeaderUtility; utilityRef: RefObject<HTMLButtonElement | null>; update(value: HeadingContribution): void; remove(owner: string): void };
 const HeadingSlotContext = createContext<HeadingSlot | null>(null);
 const CommandUtilityContext = createContext<Pick<HeadingSlot, "utility" | "utilityRef"> | null>(null);
-const HeaderStateContext = createContext<{ heading: HeadingContribution | null; scrollKey: string | null; pending: boolean; setTarget(target: HTMLDivElement | null): void; setUtilityButton(button: HTMLButtonElement | null): void } | null>(null);
+const HeaderStateContext = createContext<{ heading: HeadingContribution | null; loadingLabel: string | null; scrollKey: string | null; pending: boolean; setTarget(target: HTMLDivElement | null): void; setUtilityButton(button: HTMLButtonElement | null): void } | null>(null);
+const LoadingRegistryContext = createContext<{ report(id: string, label: string): void; remove(id: string): void } | null>(null);
 const ScrollPositionContext = createContext<Map<string, number> | null>(null);
+
+export function useContentPageLoading(label: string | null): void {
+  const registry = useContext(LoadingRegistryContext);
+  const id = useId();
+  useLayoutEffect(() => {
+    if (registry && label) registry.report(id, label);
+    else registry?.remove(id);
+  }, [id, label, registry]);
+  useLayoutEffect(() => () => registry?.remove(id), [id, registry]);
+}
 
 function ContentPageRoot({ className, children, parentLabel, utility, pending = false, ...props }: ComponentPropsWithoutRef<"section"> & { parentLabel?: string; utility?: HeaderUtility; pending?: boolean }) {
   const [target, setTarget] = useState<HTMLDivElement | null>(null);
   const [heading, setHeading] = useState<HeadingContribution | null>(null);
+  const [loading, setLoading] = useState<ReadonlyMap<string, string>>(() => new Map());
   const utilityRef = useRef<HTMLButtonElement>(null);
   const setUtilityButton = useCallback((button: HTMLButtonElement | null) => { utilityRef.current = button; }, []);
   const [positions] = useState(() => new Map<string, number>());
   const remove = useCallback((owner: string) => setHeading((current) => current?.owner === owner ? null : current), []);
+  const reportLoading = useCallback((id: string, label: string) => setLoading((current) => {
+    if (current.get(id) === label) return current;
+    const next = new Map(current);
+    next.set(id, label);
+    return next;
+  }), []);
+  const removeLoading = useCallback((id: string) => setLoading((current) => {
+    if (!current.has(id)) return current;
+    const next = new Map(current);
+    next.delete(id);
+    return next;
+  }), []);
   // Only presentation metadata reaches the header. Actions keep their feature
   // providers through a portal; form state never travels through the shell.
   const slot = useMemo(() => ({ target, parentLabel, utility, utilityRef, update: setHeading, remove }), [target, parentLabel, utility, remove]);
-  const header = useMemo(() => ({ heading: pending ? null : heading, scrollKey: heading?.scrollKey ?? null, pending, setTarget, setUtilityButton }), [heading, pending, setUtilityButton]);
-  return <HeadingSlotContext.Provider value={slot}><HeaderStateContext.Provider value={header}><ScrollPositionContext.Provider value={positions}>
+  const loadingRegistry = useMemo(() => ({ report: reportLoading, remove: removeLoading }), [removeLoading, reportLoading]);
+  const loadingLabel = pending ? null : Array.from(loading.values()).at(-1) ?? null;
+  const header = useMemo(() => ({ heading: pending ? null : heading, loadingLabel, scrollKey: heading?.scrollKey ?? null, pending, setTarget, setUtilityButton }), [heading, loadingLabel, pending, setUtilityButton]);
+  return <LoadingRegistryContext.Provider value={loadingRegistry}><HeadingSlotContext.Provider value={slot}><HeaderStateContext.Provider value={header}><ScrollPositionContext.Provider value={positions}>
     <section className={classNames(styles.page, className)} {...props}>{children}</section>
-  </ScrollPositionContext.Provider></HeaderStateContext.Provider></HeadingSlotContext.Provider>;
+  </ScrollPositionContext.Provider></HeaderStateContext.Provider></HeadingSlotContext.Provider></LoadingRegistryContext.Provider>;
 }
 
 function HeadingIdentity({ title, back, focus, headingRef }: Omit<PageHeading, "title"> & { title: ReactNode; headingRef?: Ref<HTMLHeadingElement> }) {
@@ -53,6 +80,7 @@ function Header({ className, title, back, leading, trailing, progress, navigatio
   const utility = slot?.utility;
   const heading = state?.heading;
   const pending = state?.pending ?? false;
+  const loadingLabel = state?.loadingLabel;
   const setTarget = state?.setTarget;
   const titleRef = useRef<HTMLHeadingElement>(null);
   const owner = heading?.owner;
@@ -73,7 +101,7 @@ function Header({ className, title, back, leading, trailing, progress, navigatio
         title={utility.disabledReason ?? utility.label} disabled={pending || !commandEnabled(utility)}
         aria-controls={utility.controls} aria-expanded={utility.expanded} onClick={utility.onSelect}>{utility.icon}<span>{utility.label}</span></Button> : null}
     </div>
-    {progress}
+    {progress ?? (loadingLabel ? <Progress aria-label={loadingLabel} className={styles.headerProgress} /> : null)}
   </header>;
 }
 
