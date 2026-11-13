@@ -134,8 +134,17 @@ describe("AccountLiveRoles", () => {
     expect(note.hidden).toBe(true);
     expect(screen.getByRole("searchbox")).toBeTruthy();
     expect(screen.getByText("正在加载角色目录")).toBeTruthy();
+    const loadingTable = screen.getByRole("table", { name: "角色" });
+    expect(loadingTable.getAttribute("aria-busy")).toBe("true");
+    expect(within(loadingTable).getByRole("columnheader", { name: "名称" })).toBeTruthy();
+    expect(within(loadingTable).getByRole("columnheader", { name: "状态" })).toBeTruthy();
+    expect(loadingTable.querySelectorAll('tbody tr[aria-hidden="true"]')).toHaveLength(6);
+    expect(screen.getByRole("button", { name: "上一页" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "下一页" })).toHaveProperty("disabled", true);
     resolve(directory);
     expect(await screen.findByRole("button", { name: role.name })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "角色" })).toBe(loadingTable);
+    expect(loadingTable.querySelector('tbody tr[aria-hidden="true"]')).toBeNull();
     expect(note.hidden).toBe(true);
     help.focus();
     await user.keyboard("{Enter}");
@@ -515,15 +524,23 @@ describe("AccountLiveRoles", () => {
 
   it("loads immutable trust history only on demand and opens a version inline", async () => {
     const user = userEvent.setup();
-    const api = client();
+    let resolveTrustVersions!: (value: Awaited<ReturnType<RoleAccessClient["listTrustVersions"]>>) => void;
+    const api = client({ listTrustVersions: vi.fn(() => new Promise<Awaited<ReturnType<RoleAccessClient["listTrustVersions"]>>>((resolve) => { resolveTrustVersions = resolve; })) });
     render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
 
     expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
     expect(api.listTrustVersions).not.toHaveBeenCalled();
     await user.click(screen.getByRole("tab", { name: "信任版本" }));
 
-    const table = await screen.findByRole("table", { name: "信任版本" });
+    const table = screen.getByRole("table", { name: "信任版本" });
     expect(api.listTrustVersions).toHaveBeenCalledWith(role.id);
+    expect(within(table).getByRole("columnheader", { name: "当前信任版本" })).toBeTruthy();
+    expect(within(table).getByRole("columnheader", { name: "创建时间" })).toBeTruthy();
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(4);
+    expect(screen.getByRole("button", { name: "上一页" })).toHaveProperty("disabled", true);
+    await act(async () => { resolveTrustVersions({ accountId: role.accountId, roleId: role.id, items: [previousTrustVersion, access.trustVersion], nextAfter: null }); });
+    await within(table).findByText("当前版本");
+    expect(screen.getByRole("table", { name: "信任版本" })).toBe(table);
     expect(within(table).getByText("当前版本")).toBeTruthy();
     expect(within(table).getByText("历史版本")).toBeTruthy();
     const search = screen.getByRole("searchbox", { name: "搜索信任版本" });
@@ -772,6 +789,26 @@ describe("AccountLiveRoles", () => {
     expect(api.removePermissionBoundary).not.toHaveBeenCalled();
     expect(api.readSession).toHaveBeenCalledWith(role.id, liveSession.id);
     expect(document.activeElement).toBe(screen.getByRole("heading", { name: "角色会话" }));
+  });
+
+  it("keeps the live-session directory frame mounted while its rows load", async () => {
+    const user = userEvent.setup();
+    let resolveSessions!: (value: Awaited<ReturnType<RoleAccessClient["listSessions"]>>) => void;
+    const api = client({ listSessions: vi.fn(() => new Promise<Awaited<ReturnType<RoleAccessClient["listSessions"]>>>((resolve) => { resolveSessions = resolve; })) });
+    render(<LocaleProvider><RolesHarness api={api} entityId={role.id} /></LocaleProvider>);
+
+    expect(await screen.findByRole("heading", { name: role.name })).toBeTruthy();
+    await user.click(screen.getByRole("tab", { name: "角色会话" }));
+    const table = screen.getByRole("table", { name: "角色会话" });
+    expect(within(table).getByRole("columnheader", { name: "来源身份" })).toBeTruthy();
+    expect(within(table).getByRole("columnheader", { name: "状态" })).toBeTruthy();
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(4);
+    expect(screen.getByRole("button", { name: "上一页" })).toHaveProperty("disabled", true);
+
+    await act(async () => { resolveSessions({ accountId: role.accountId, roleId: role.id, observedAt: timestamp, items: [liveSessionItem], nextAfter: null }); });
+    await within(table).findByText(liveSession.id);
+    expect(screen.getByRole("table", { name: "角色会话" })).toBe(table);
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(1);
   });
 
   it("renders service-account lineage and sends closed source filters", async () => {

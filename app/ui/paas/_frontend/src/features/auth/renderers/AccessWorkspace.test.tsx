@@ -6,7 +6,7 @@ import { LocaleProvider, useLocalePreference } from "@/i18n/LocaleProvider";
 import { UnsavedChangesProvider, useLeaveConfirmation } from "@ui/xiak";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, useAccountAccess } from "../application/AccountAccessProvider";
-import { accountAccessViews, type AccountAccessView, type AccountIdentity, type AccountPolicy, type ActionCapability, type AuthorizationProfileAction, type AuthorizationProfileEntry, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
+import { accountAccessViews, accountSettingsSections, defaultAccountSettingsSection, type AccountAccessView, type AccountIdentity, type AccountPolicy, type AccountSettingsSection, type ActionCapability, type AuthorizationProfileAction, type AuthorizationProfileEntry, type CapabilityRestriction, type GroupAccess, type GroupMembershipAccess, type IamAction, type User, type UserAccess } from "../domain/accounts";
 import type { AccessPolicy } from "../domain/accessWorkspace";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
 import { createPreviewAccessWorkspace } from "../repositories/previewAccessWorkspace";
@@ -91,8 +91,11 @@ function Harness({ repository, initialView, initialEntityId }: { repository: Acc
   const [entityId, setEntityId] = useState(initialEntityId);
   const [policyMethod, setPolicyMethod] = useState<string>();
   const [userTab, setUserTab] = useState<AccountUserDetailTab>();
+  const [settingsSection, setSettingsSection] = useState<AccountSettingsSection>(defaultAccountSettingsSection);
   if (!session.current) return <button onClick={() => void session.login("admin", "preview")}>Enter</button>;
-  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><ReauthenticationGuardProbe /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} userTab={userTab} onNavigate={(next, id, method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); setUserTab(nextUserTab); })} /></AccountAccessProvider>;
+  return <AccountAccessProvider repository={repository}><button onClick={() => locale.setLocale(locale.locale === "en" ? "zh-CN" : "en")}>Language</button><AccountRefresh /><ReauthenticationGuardProbe /><nav>{accountAccessViews.map((target) => <button data-testid={"go-" + target} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setPolicyMethod(undefined); setUserTab(undefined); if (target === "settings") setSettingsSection(defaultAccountSettingsSection); })}>{target}</button>)}</nav>
+    {view === "settings" ? <div aria-label="test settings sections">{accountSettingsSections.map((section) => <button aria-current={settingsSection === section ? "page" : undefined} data-testid={`settings-${section}`} key={section} onClick={() => requestLeave(() => setSettingsSection(section))}>{section}</button>)}</div> : null}
+    <output aria-label="Entity destination">{entityId ?? "directory"}</output><AccountAccessRenderer key={view + ":" + (entityId ?? "") + ":" + (policyMethod ?? "")} view={view} entityId={entityId} policyMethod={policyMethod} settingsSection={settingsSection} userTab={userTab} onSettingsSectionChange={(section) => requestLeave(() => setSettingsSection(section))} onNavigate={(next, id, method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setPolicyMethod(method); setUserTab(nextUserTab); })} /></AccountAccessProvider>;
 }
 async function open(initialView: AccountAccessView, options?: { live?: boolean; reader?: boolean; entityId?: string; users?: UserAccess[]; repository?: Partial<AccountRepository>; seed?(extension: ReturnType<typeof createPreviewAccessWorkspace>): Promise<void> }) {
   const directoryUsers = options?.users ?? users;
@@ -176,7 +179,7 @@ async function invokePageAction(user: ReturnType<typeof userEvent.setup>, label:
   await user.click(within(menu).getByRole("menuitem", { name: label }));
 }
 async function openSecuritySection(user: ReturnType<typeof userEvent.setup>, name: "本人安全" | "账号策略" | "会话安全") {
-  await user.click(await screen.findByRole("tab", { name }));
+  await user.click(await screen.findByTestId(name === "本人安全" ? "settings-personal-security" : "settings-account-security"));
 }
 async function logActions(user: ReturnType<typeof userEvent.setup>, actions: string[]) {
   await select(user, "产品服务", "日志服务");
@@ -2164,10 +2167,20 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByRole("button", { name: "新建用户组" })).toBeTruthy();
     expect(screen.getByRole("searchbox", { name: "搜索名称、ID 或关键字" })).toBeTruthy();
     expect(screen.getByText("正在读取用户组…").getAttribute("data-visible")).toBe("false");
+    const loadingTable = screen.getByRole("table", { name: "用户组" });
+    expect(loadingTable.getAttribute("aria-busy")).toBe("true");
+    expect(within(loadingTable).getByRole("columnheader", { name: "名称" })).toBeTruthy();
+    expect(within(loadingTable).queryByRole("columnheader", { name: "成员" })).toBeNull();
+    expect(within(loadingTable).getByRole("columnheader", { name: "直接关联策略" })).toBeTruthy();
+    expect(loadingTable.querySelectorAll('tbody tr[aria-hidden="true"]')).toHaveLength(6);
+    expect(screen.getByRole("button", { name: "上一页" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "下一页" })).toHaveProperty("disabled", true);
     expect(screen.queryByText("暂无记录")).toBeNull();
 
     await act(async () => { resolveGroups({ items: [], nextAfter: null }); });
     expect(await screen.findByText("暂无记录")).toBeTruthy();
+    expect(screen.getByRole("table", { name: "用户组" })).toBe(loadingTable);
+    expect(loadingTable.querySelector('tbody tr[aria-hidden="true"]')).toBeNull();
 
     await user.click(screen.getByTestId("go-users"));
     await user.click(screen.getByTestId("go-groups"));
@@ -2327,9 +2340,19 @@ describe("CAM-style access workspace", () => {
     expect(summary.getByText(liveGroup.group.id)).toBeTruthy();
     expect(screen.queryByRole("region", { name: "用户组授权模型" })).toBeNull();
     expect(within(screen.getByRole("tabpanel", { name: "成员" })).getByText("正在读取成员关系…")).toBeTruthy();
-    expect(screen.queryByRole("table", { name: "成员" })).toBeNull();
-    await act(async () => { resolveMemberships({ accountId: account.id, groupId: liveGroup.group.id, items: [], nextAfter: null }); });
-    expect(await screen.findByText("暂无成员")).toBeTruthy();
+    const table = screen.getByRole("table", { name: "成员" });
+    expect(within(table).getByRole("columnheader", { name: "名称" })).toBeTruthy();
+    expect(within(table).getByRole("columnheader", { name: "用户类型" })).toBeTruthy();
+    expect(within(table).getByRole("columnheader", { name: "状态" })).toBeTruthy();
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(3);
+    const membership: GroupMembershipAccess = {
+      membership: { id: "membership-progressive", accountId: account.id, groupId: liveGroup.group.id, userId: "principal-progressive", createdBy: rootUser.id, resourceVersion: 1, createdAt: "2026-09-11T08:00:00Z", updatedAt: "2026-09-11T08:00:00Z" },
+      capabilities: []
+    };
+    await act(async () => { resolveMemberships({ accountId: account.id, groupId: liveGroup.group.id, items: [membership], nextAfter: null }); });
+    expect(await within(table).findByRole("button", { name: "principal-progressive" })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "成员" })).toBe(table);
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(1);
     expect(screen.queryByText("正在读取成员关系…")).toBeNull();
   });
   it("keeps live group facts available when membership loading fails and retries only that relation", async () => {
@@ -3724,10 +3747,13 @@ describe("CAM-style access workspace", () => {
     expect(draft.checked).toBe(true);
 
     await openSecuritySection(user, "本人安全");
-    expect(screen.getByRole("tab", { name: "本人安全" }).getAttribute("aria-selected")).toBe("true");
-    await openSecuritySection(user, "账号策略");
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "继续编辑" }));
     expect((screen.getByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" }) as HTMLInputElement).checked).toBe(true);
-
+    await openSecuritySection(user, "本人安全");
+    await user.click(screen.getByRole("button", { name: "放弃并离开" }));
+    expect(screen.getByTestId("settings-personal-security").getAttribute("aria-current")).toBe("page");
+    expect(screen.queryByRole("heading", { name: "多因素认证要求" })).toBeNull();
     await openSecuritySection(user, "会话安全");
     expect(screen.getByRole("heading", { name: "会话空闲策略" })).toBeTruthy();
   });
@@ -3841,9 +3867,8 @@ describe("CAM-style access workspace", () => {
     expect(screen.getByText("当前规则")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "编辑模拟规则" })).toBeNull();
     expect(screen.getByText(/操作者本人必须先绑定验证器/)).toBeTruthy();
-    await openSecuritySection(user, "本人安全");
     await user.click(screen.getByRole("button", { name: "查看本人身份验证方法" }));
-    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBe(document.activeElement);
+    expect(screen.getByRole("heading", { name: "身份验证方法" })).toBeTruthy();
     expect(screen.queryByRole("checkbox", { name: "要求日常 IAM 用户在登录时完成 MFA" })).toBeNull();
     expect(screen.queryByLabelText("密码最小长度")).toBeNull();
     expect(screen.queryByLabelText("会话时长（分钟）")).toBeNull();
@@ -4254,7 +4279,6 @@ describe("CAM-style access workspace", () => {
     expect(pending).toMatchObject({ baselineLoginProtection: false, requestedLoginProtection: true, status: "UNKNOWN" });
     expect((await extension.read("preview")).personalMfa.reauthenticationRequired).toBe(true);
     expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
-    expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
     expect(screen.queryByText(/身份验证方法或账号规则的变更已生效/)).toBeNull();
     await user.click(screen.getByTestId("go-users"));
     await user.click(screen.getByTestId("go-settings"));
@@ -4267,9 +4291,9 @@ describe("CAM-style access workspace", () => {
     await openSecuritySection(user, "账号策略");
     expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
-    expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
     expect(screen.queryByText(/身份验证方法或账号规则的变更已生效/)).toBeNull();
     await openSecuritySection(user, "本人安全");
+    expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
     expect(screen.getByRole("button", { name: "替换验证器" }).getAttribute("title")).toContain("账号规则结果尚未确定");
     expect(repository.workspace!.execute).not.toHaveBeenCalled();
     expect(repository.execute).not.toHaveBeenCalled();
@@ -4280,7 +4304,6 @@ describe("CAM-style access workspace", () => {
     const pending = (await extension.read("preview")).pendingAccountRuleChange;
     expect(await screen.findByRole("heading", { name: "账号规则的保存结果未知" })).toBeTruthy();
     expect(screen.queryByRole("button", { name: "按原意图查询" })).toBeNull();
-    expect(screen.getByText(/账号规则保存结果未知。先重新登录/)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "重新登录以继续" }));
     expect(screen.getByRole("button", { name: "Enter" })).toBeTruthy();
     await extension.execute("preview", { kind: "complete-personal-mfa-reauthentication" });

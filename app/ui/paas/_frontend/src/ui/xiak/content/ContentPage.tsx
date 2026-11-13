@@ -202,34 +202,32 @@ function Commands({ label, moreLabel = label, primary, secondary = [], selection
   </div>;
 }
 
-function Body({ children, className, inactive = false, pending = false, loading, transitionKey, ...props }: ComponentPropsWithoutRef<"div"> & {
+function Body({ children, className, inactive = false, pending = false, transitionKey, ...props }: ComponentPropsWithoutRef<"div"> & {
   transitionKey?: string;
   inactive?: boolean;
   pending?: boolean;
-  loading?: ReactNode;
 }) {
   const positions = useContext(ScrollPositionContext);
   const scrollKey = useContext(HeaderStateContext)?.scrollKey;
   const viewport = useRef<HTMLDivElement>(null);
   const positionKey = transitionKey === undefined ? undefined : scrollKey ? `${transitionKey}#${scrollKey}` : transitionKey;
-  useLayoutEffect(() => { if (!pending && positionKey !== undefined && viewport.current) viewport.current.scrollTop = positions?.get(positionKey) ?? 0; }, [pending, positionKey, positions]);
+  const transitioning = pending || inactive;
+  useLayoutEffect(() => { if (!transitioning && positionKey !== undefined && viewport.current) viewport.current.scrollTop = positions?.get(positionKey) ?? 0; }, [positionKey, positions, transitioning]);
   if (transitionKey === undefined) return <div {...props} aria-busy={inactive || props["aria-busy"]} className={classNames(styles.body, className)} inert={inactive || props.inert}>{children}</div>;
-  // The viewport is a stable paint/scroll boundary. Route identity belongs to
-  // its inner content so a commit resets feature state without flashing a new
-  // page-sized background layer.
-  const showLoading = pending && loading !== undefined && loading !== null;
+  // Route preparation never introduces a page-sized blank layer. A cached
+  // destination can paint its stable frame immediately; otherwise the last
+  // committed content remains visible until destination structure exists.
   return <div className={styles.stage}>
     <div {...props} ref={viewport} onScroll={(event) => {
-      if (!pending && positions) {
+      if (!transitioning && positions) {
         positions.delete(positionKey!);
         positions.set(positionKey!, event.currentTarget.scrollTop);
         if (positions.size > 64) positions.delete(positions.keys().next().value!);
       }
       props.onScroll?.(event);
-    }} aria-busy={pending || inactive || props["aria-busy"]} className={classNames(styles.body, className)}>
-      <div aria-hidden={pending || undefined} className={styles.content} hidden={pending} inert={pending || inactive} key={transitionKey}>{children}</div>
+    }} aria-busy={transitioning || props["aria-busy"]} className={classNames(styles.body, className)}>
+      <div className={styles.content} inert={transitioning} key={transitionKey}>{children}</div>
     </div>
-    {showLoading ? <div className={classNames(styles.body, styles.pending)}>{loading}</div> : null}
   </div>;
 }
 

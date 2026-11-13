@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, Table, TablePagination, TableSkeleton, TableToolbar, Tabs, type PageCommandsHandle } from "@ui/xiak";
+import { ActionMenu, Alert, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, LoadingNotice, Table, TablePagination, TableSkeleton, TableToolbar, Tabs, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AccountPolicyReadClient, type AccountPolicyReadLoad, type AccountPolicyVersionDirectoryLoad, type AccountPolicyVersionReadLoad, type PolicyVersionMutationClient, type PolicyVersionMutationResult } from "../application/AccountAccessProvider";
 import type { PolicyMutationClient } from "../application/policyMutation";
@@ -497,16 +497,17 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
     <p className={styles.note}>{t("versionDirectoryNotice")}</p>
     {published && state.status === "ready" && state.directory.policy.defaultVersionId === published.defaultVersionId && state.directory.items.some((item) => item.versionId === published.versionId) ? <Alert status="success"><h3 ref={publishedHeading} tabIndex={-1} className={styles.stepTitle}>{t("publishSucceeded", { version: published.versionId })}</h3><p>{t("publishSucceededDetail", { version: published.defaultVersionId })}</p></Alert> : null}
     {mutationError ? <Alert status="danger">{mutationError}</Alert> : null}
-    {state.status === "loading" ? <TableSkeleton label={t("loadingVersions")} rows={3} header={false} /> :
-      state.status !== "ready" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${state.status}`)}</Alert>
-        {state.status !== "expired" && state.status !== "notFound" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> : <>
-        <div className={styles.catalogDetailHeading}><p>{t("versionCount", { count: state.directory.items.length, limit: policyVersionLimit })}</p>
+    {state.status === "loading" ? <LoadingNotice label={t("loadingVersions")} /> : null}
+    {state.status !== "ready" && state.status !== "loading" ? <div className={styles.catalogNotice}><Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`versionErrors.${state.status}`)}</Alert>
+      {state.status !== "expired" && state.status !== "notFound" ? <div><Button variant="secondary" onClick={() => { setState({ status: "loading" }); setRevision((value) => value + 1); }}>{t("retry")}</Button></div> : null}</div> : null}
+    {state.status === "loading" || state.status === "ready" ? <>
+        {state.status === "ready" ? <div className={styles.catalogDetailHeading}><p>{t("versionCount", { count: state.directory.items.length, limit: policyVersionLimit })}</p>
           {mutation?.canPublish && canPublish ? <Button ref={publishButton} variant="secondary" disabled={versionLimitReached || !writesAuthorized || !publishAuthorized || Boolean(mutation.pending) || mutation.blockedByMetadata || mutation.blockedByAuthority} onClick={() => { setPublished(null); setMutationError(null); setPublisherOpen(true); }}>{t("publishVersion")}</Button> : null}
-        </div>
-        {versionLimitReached ? <Alert status="warning">{t("versionLimitReached", { limit: policyVersionLimit })}</Alert> : null}
-        <Table aria-label={t("versionTable")} mobileLayout="stack" className={styles.policyVersionTable}>
+        </div> : null}
+        {state.status === "ready" && versionLimitReached ? <Alert status="warning">{t("versionLimitReached", { limit: policyVersionLimit })}</Alert> : null}
+        <Table aria-label={t("versionTable")} aria-busy={state.status === "loading" || undefined} mobileLayout="stack" className={styles.policyVersionTable}>
           <thead><tr><th scope="col">{t("versionId")}</th><th scope="col">{t("defaultVersion")}</th><th scope="col">{t("versionContract")}</th><th scope="col">{t("digest")}</th></tr></thead>
-          <tbody>{state.directory.items.map((item) => <tr key={item.versionId}>
+          <tbody>{state.status === "loading" ? <Table.LoadingRows columns={4} rows={3} /> : state.directory.items.map((item) => <tr key={item.versionId}>
             <td data-label={t("versionId")}><div className={styles.rowActionCell}>{canReadVersion
               ? <Table.PrimaryAction data-version-id={item.versionId} onClick={() => { opener.current = item.versionId; setSelected({ status: "loading" }); setSelectedId(item.versionId); }}>{item.versionId}</Table.PrimaryAction>
               : <code>{item.versionId}</code>}{mutation && item.versionId !== state.directory.policy.defaultVersionId && (canSetDefault || canRetireVersion) ? <ActionMenu iconOnly label={t("versionActions", { version: item.versionId })} actions={[
@@ -518,7 +519,7 @@ function AccountPolicyVersions({ policy, capabilities, authorizedCapabilities, l
             <td data-label={t("digest")}><code>{item.contentDigest}</code></td>
           </tr>)}</tbody>
         </Table>
-      </>}
+      </> : null}
   </div>;
 }
 

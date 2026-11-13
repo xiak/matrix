@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useId, useLayoutEffect, useRef, useState, type MouseEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
 import { Alert, ContentPage, FormField, Table, TablePagination, TableSkeleton, EmptyState, Badge, Button, Card, Input, LoadingNotice, Typography, PageSkeleton, Tabs, type PageCommandsHandle } from "@ui/xiak";
 import { useAccountAccess, useAccountCapabilities } from "../application/AccountAccessProvider";
-import type { AccountAccessView } from "../domain/accounts";
+import { defaultAccountSettingsSection, type AccountAccessView, type AccountSettingsSection } from "../domain/accounts";
 import type { AccountAccessScene } from "../scenes/accountAccessScene";
 import { AccountIdentifier, AccountOverview } from "./AccountOverview";
 import { AccountUserDirectory } from "./AccountUserDirectory";
@@ -42,7 +42,7 @@ import { useRoleSession } from "../application/RoleSessionProvider";
 import { useSession } from "../application/SessionProvider";
 import { AccountLiveRoles } from "./AccountLiveRoles";
 import { LiveRoleCreationWizard } from "./LiveRoleCreationWizard";
-import { LiveAccessAnalysis } from "./LiveAccessAnalysis";
+import { AccessAnalysisClientLoading, LiveAccessAnalysis } from "./LiveAccessAnalysis";
 import { LiveSecurityReport } from "./LiveSecurityReport";
 import { ServiceAuthorizationPreview } from "./ServiceAuthorizationPreview";
 import { AccountServiceAuthorizations } from "./AccountServiceAuthorizations";
@@ -53,32 +53,6 @@ import { AccountDirectoryReadFailure } from "./AccountReadBoundary";
 
 const aliasPattern = "[a-z][a-z0-9\\-]{1,61}[a-z0-9]";
 const accountSignInSettingsId = "account-sign-in-settings";
-
-function SettingsSectionNav({ preview }: { preview: boolean }) {
-  const t = useTranslations("AccountAccess");
-  const sections = preview ? [
-    { id: accountSignInSettingsId, label: t("settingsSignIn"), hint: t("settingsSignInHint") },
-    { id: "security-settings-workspace", label: t("securityWorkspaceTitle"), hint: t("securityWorkspaceNavHint") }
-  ] : [
-    { id: accountSignInSettingsId, label: t("settingsSignIn"), hint: t("settingsSignInHint") },
-    { id: "live-personal-security", label: t("settingsPersonalSecurity"), hint: t("settingsPersonalSecurityHint") },
-    { id: "live-account-security", label: t("settingsAccountSecurity"), hint: t("settingsAccountSecurityHint") }
-  ];
-
-  function openSection(event: MouseEvent<HTMLAnchorElement>, id: string) {
-    event.preventDefault();
-    const target = document.getElementById(id);
-    target?.focus({ preventScroll: true });
-    target?.scrollIntoView?.({ block: "start" });
-  }
-
-  return <nav aria-label={t("settingsNavigation")} className={styles.settingsSectionNav}>
-    {sections.map((section) => <a className={styles.settingsSectionLink} href={`#${section.id}`} key={section.id} onClick={(event) => openSection(event, section.id)}>
-      <strong>{section.label}</strong>
-      <span>{section.hint}</span>
-    </a>)}
-  </nav>;
-}
 
 function UserSettings({ scene }: { scene: AccountAccessScene }) {
   const t = useTranslations("AccountAccess");
@@ -151,7 +125,7 @@ function TenantDirectory({ scene }: { scene: AccountAccessScene }) {
   </Tabs.Root>;
 }
 
-type AccountAccessRendererProps = { view?: AccountAccessView; entityId?: string; policyMethod?: string; userTab?: AccountUserDetailTab; onNavigate(view: AccountAccessView, id?: string, method?: PolicyCreationMethod, userTab?: AccountUserDetailTab): void };
+type AccountAccessRendererProps = { view?: AccountAccessView; entityId?: string; policyMethod?: string; userTab?: AccountUserDetailTab; settingsSection?: AccountSettingsSection; onSettingsSectionChange?(section: AccountSettingsSection): void; onNavigate(view: AccountAccessView, id?: string, method?: PolicyCreationMethod, userTab?: AccountUserDetailTab): void };
 
 function AccountAccessInitialLoading({ entityId, view }: { entityId?: string; view: AccountAccessView }) {
   const t = useTranslations("AccountAccess");
@@ -209,7 +183,7 @@ export function AccountAccessRenderer(props: AccountAccessRendererProps) {
   return <ManagedAccountAccessRenderer {...props} />;
 }
 
-function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMethod, userTab, onNavigate }: AccountAccessRendererProps) {
+function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMethod, userTab, settingsSection = defaultAccountSettingsSection, onSettingsSectionChange, onNavigate }: AccountAccessRendererProps) {
   const t = useTranslations("AccountAccess");
   const w = useTranslations("IamWorkspace");
   const access = useAccountAccess();
@@ -218,8 +192,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
   const scene = access.scene;
   const workspace = access.workspace;
   // A menu destination can render before its IAM client is ready, even with a cached scene.
-  const waitingForClient = (view === "access-analysis" && capabilities.supportsLiveAccessAnalysis && !access.accessAnalysis) ||
-    (view === "security-reports" && capabilities.supportsLiveSecurityReports && !access.securityReports);
+  const waitingForClient = view === "security-reports" && capabilities.supportsLiveSecurityReports && !access.securityReports;
   const showPageLoading = scene ? waitingForClient : access.loading;
   const unknownReset = access.passwordResetUnknown;
   const resetLookup = access.passwordResetLookup;
@@ -270,7 +243,9 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
       view === "create-user" ? <CreateUserWizard onBack={() => onNavigate("users")} /> :
       view === "tenants" && access.accountLifecycle ? <LiveAccountTenants client={access.accountLifecycle} scene={scene} /> :
       view === "tenants" ? <TenantDirectory scene={scene} /> :
-      view === "settings" ? <><SettingsSectionNav preview={Boolean(workspace)} /><UserSettings key={scene.accountVersion} scene={scene} />{workspace ? <AccessSecuritySettings workspace={workspace} /> : <><LivePersonalSecuritySettings /><LiveAccountSecuritySettings client={access.accountSecuritySettings} /></>}</> :
+      view === "settings" ? settingsSection === "sign-in" ? <UserSettings key={scene.accountVersion} scene={scene} />
+        : workspace ? <AccessSecuritySettings onOpenPersonalSecurity={() => onSettingsSectionChange?.("personal-security")} section={settingsSection} workspace={workspace} />
+          : settingsSection === "account-security" ? <LiveAccountSecuritySettings client={access.accountSecuritySettings} /> : <LivePersonalSecuritySettings /> :
       view === "policies" && !workspace ? <AccountPolicyDirectory key={`${scene.accountId}:${session.sessionRevision}`} scene={scene} entityId={entityId} onOpen={(id) => onNavigate("policies", id)} onCreate={() => onNavigate("create-policy")} /> :
       view === "create-policy" && !workspace && access.policyCreate ? <LivePolicyCreationWizard client={access.policyCreate}
         authorizationPending={access.loading} onBack={() => onNavigate("policies")} onDone={(id) => onNavigate("policies", id)} /> :
@@ -285,6 +260,7 @@ function ManagedAccountAccessRenderer({ view = "overview", entityId, policyMetho
         loadOwner={access.loadUser} userDirectory={{ busy: access.busy, loading: access.loading, readPage: access.usersPage }} onInspectPermissions={(ownerId) => onNavigate("users", ownerId, undefined, "policies")} /> :
       view === "access-diagnosis" ? <CurrentAccessDiagnosisPreview workspace={workspace ?? undefined} scene={scene} onOpen={onNavigate} /> :
       view === "access-analysis" && !workspace && access.accessAnalysis ? <LiveAccessAnalysis key={`${access.accessAnalysis.accountId}:${access.accessAnalysis.sessionRevision}`} authorizationPending={access.loading} client={access.accessAnalysis} onNavigate={onNavigate} /> :
+      view === "access-analysis" && !workspace && capabilities.supportsLiveAccessAnalysis ? <AccessAnalysisClientLoading canList={scene.canListAccessAnalyzers} /> :
       view === "access-analysis" ? <AccessAnalysisPreview workspace={workspace ?? undefined} scene={scene} onNavigate={onNavigate} /> :
       view === "security-reports" && !workspace && access.securityReports ? <LiveSecurityReport key={`${access.securityReports.accountId}:${access.securityReports.sessionRevision}`} authorizationPending={access.loading} client={access.securityReports} /> :
       view === "security-reports" ? <SecurityReportDirectoryPreview workspace={workspace ?? undefined} scene={scene} currentSession={session.current?.session} /> :

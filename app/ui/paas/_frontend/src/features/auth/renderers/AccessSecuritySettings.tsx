@@ -1,8 +1,9 @@
 "use client";
-import { useId, useState } from "react";
+import { useId } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Card, Tabs } from "@ui/xiak";
+import { Alert, Badge, Card } from "@ui/xiak";
 import type { AccessWorkspace } from "../domain/accessWorkspace";
+import type { AccountSettingsSection } from "../domain/accounts";
 import { MfaSecurityPreview } from "./MfaPreviewExperience";
 import { AccountSecuritySettingsPreview } from "./AccountSecuritySettingsPreview";
 import { PasswordRulesPreview } from "./PasswordRulesPreview";
@@ -13,44 +14,27 @@ import { FederationBoundaryOverview } from "./FederationBoundaryOverview";
 import styles from "./AccountAccessRenderer.module.css";
 import securityStyles from "./MfaPreviewExperience.module.css";
 
-export function AccessSecuritySettings({ workspace }: { workspace: AccessWorkspace }) {
+export function AccessSecuritySettings({ onOpenPersonalSecurity, section, workspace }: { onOpenPersonalSecurity(): void; section: Exclude<AccountSettingsSection, "sign-in">; workspace: AccessWorkspace }) {
   const t = useTranslations("AccountAccess");
   const mfa = useTranslations("MfaPreview");
-  const [section, setSection] = useState<"personal" | "account" | "session">("personal");
-  const [mounted, setMounted] = useState({ personal: true, account: false, session: false });
+  const personal = section === "personal-security";
+  const title = t(personal ? "settingsPersonalSecurity" : "settingsAccountSecurity");
+  const hint = t(personal ? "settingsPersonalSecurityHint" : "settingsAccountSecurityHint");
 
-  const openSection = (value: string) => {
-    const next = value as "personal" | "account" | "session";
-    setSection(next);
-    setMounted((current) => current[next] ? current : { ...current, [next]: true });
-  };
-
-  return <section aria-labelledby="security-settings-workspace-title" className={securityStyles.securityRoot} id="security-settings-workspace" tabIndex={-1}>
+  return <section aria-labelledby="security-settings-workspace-title" className={securityStyles.securityRoot} id={`preview-${section}`} tabIndex={-1}>
     <div className={securityStyles.sectionHeading}>
       <div>
         <p>{t("securityWorkspaceEyebrow")}</p>
-        <h2 id="security-settings-workspace-title">{t("securityWorkspaceTitle")}</h2>
-        <span>{t("securityWorkspaceHint")}</span>
+        <h2 id="security-settings-workspace-title">{title}</h2>
+        <span>{hint}</span>
       </div>
       <Badge status="warning">MOCK</Badge>
     </div>
     <Alert>{mfa("mockBoundary")}</Alert>
-    <Tabs.Root className={securityStyles.securityTabs} onValueChange={openSection} value={section}>
-      <Tabs.List aria-label={t("securityWorkspaceSections")}>
-        <Tabs.Trigger value="personal">{t("settingsPersonalSecurity")}</Tabs.Trigger>
-        <Tabs.Trigger value="account">{t("securityWorkspaceAccountPolicy")}</Tabs.Trigger>
-        <Tabs.Trigger value="session">{t("securityWorkspaceSession")}</Tabs.Trigger>
-      </Tabs.List>
-      <Tabs.Content className={securityStyles.securityTabContent} forceMount={mounted.personal || undefined} value="personal">
-        {mounted.personal ? <><MfaSecurityPreview workspace={workspace} /><PasskeyConceptPreview /></> : null}
-      </Tabs.Content>
-      <Tabs.Content className={securityStyles.securityTabContent} forceMount={mounted.account || undefined} value="account">
-        {mounted.account ? <><AccountSecuritySettingsPreview workspace={workspace} /><AccountAccessKeyNetworkPreview workspace={workspace} /><PasswordRulesPreview accountId={workspace.accountId} /></> : null}
-      </Tabs.Content>
-      <Tabs.Content className={securityStyles.securityTabContent} forceMount={mounted.session || undefined} value="session">
-        {mounted.session ? <SessionIdleSettingsPreview /> : null}
-      </Tabs.Content>
-    </Tabs.Root>
+    <div className={securityStyles.securityTabContent}>
+      {personal ? <><MfaSecurityPreview workspace={workspace} /><PasskeyConceptPreview /></>
+        : <><AccountSecuritySettingsPreview onOpenPersonalSecurity={onOpenPersonalSecurity} workspace={workspace} /><AccountAccessKeyNetworkPreview workspace={workspace} /><PasswordRulesPreview accountId={workspace.accountId} /><SessionIdleSettingsPreview /></>}
+    </div>
   </section>;
 }
 

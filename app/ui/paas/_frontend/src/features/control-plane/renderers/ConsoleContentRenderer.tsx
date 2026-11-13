@@ -2,6 +2,7 @@ import { Suspense, useCallback, useEffect, useId, useLayoutEffect, useRef, useSt
 import { useSearchParams } from "next/navigation";
 import { ConsoleLink as Link, useConsoleNavigation, useDirectoryQuery, DirectoryScope } from "../routes/ConsoleNavigation";
 import { AccountAccessRenderer } from "@/features/auth/renderers/AccountAccessRenderer";
+import { accountSettingsSection } from "@/features/auth/domain/accounts";
 import type { AccountUserDetailTab } from "@/features/auth/renderers/AccountUserWorkspace";
 import {
   ArrowRight,
@@ -871,8 +872,9 @@ function AccessContent({ pendingHref, view }: { pendingHref?: string | null; vie
   const policyMethod = view === "create-policy" ? params.get("method") ?? undefined : undefined;
   const requestedUserTab = view === "users" ? params.get("tab") : null;
   const userTab = requestedUserTab && ["identity", "access", "policies", "groups", "security", "keys"].includes(requestedUserTab) ? requestedUserTab as AccountUserDetailTab : undefined;
+  const settingsSection = view === "settings" ? accountSettingsSection(params.get("section")) : undefined;
   const viewKey = view === "policies" ? view : [view, entityId, policyMethod].join(":");
-  return <AccountAccessRenderer key={viewKey} view={view} entityId={entityId} policyMethod={policyMethod} userTab={userTab} onNavigate={(next, id, method, nextUserTab) => {
+  return <AccountAccessRenderer key={viewKey} view={view} entityId={entityId} policyMethod={policyMethod} settingsSection={settingsSection} userTab={userTab} onSettingsSectionChange={(section) => navigate(`/console/access/settings/?section=${section}`)} onNavigate={(next, id, method, nextUserTab) => {
     const query = new URLSearchParams();
     if (id) query.set("id", id);
     if (next === "create-policy" && method) query.set("method", method);

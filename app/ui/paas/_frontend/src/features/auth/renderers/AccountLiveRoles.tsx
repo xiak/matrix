@@ -280,7 +280,6 @@ function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: Ro
     }
   };
 
-  if (phase === "loading") return <TableSkeleton label={t("loadingTrustHistory")} rows={4} />;
   if (phase === "error") return <EmptyState title={t("trustHistoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={retry}>{t("retry")}</Button>} />;
   const items = directory?.items ?? [];
   return <div className={styles.stack} aria-busy={loadingMore}>
@@ -294,6 +293,8 @@ function LiveRoleTrustHistory({ client, roleId, currentVersionId }: { client: Ro
       <HelpDisclosure label={t("trustHistoryHelp")}>{t("trustHistoryHint")}</HelpDisclosure>
       <WorkspaceRelationshipDirectory title={t("trustHistory")} searchLabel={t("searchTrustVersions")}
         items={items.map((version) => ({ ...version, name: version.id }))}
+        controls="always"
+        loading={phase === "loading" ? { label: t("loadingTrustHistory"), rows: 4 } : undefined}
         columns={[t("trustVersion"), w("created"), t("trustedUsers"), w("state")]}
         emptyTitle={t("noTrustHistory")} emptyDescription={t("noTrustHistoryHint")}
         keywords={(version) => version.contentDigest}
@@ -607,24 +608,24 @@ function AccountLiveRolesWorkspace({ client, serviceRoleTemplates, serviceLinked
       status={phase === "ready" && roles.length > 0 ? t("loadedRoles", { count: roles.length }) : undefined}
       help={{ label: t("directoryHelp"), description: t("liveDirectoryHint") }}
     />
-    {phase === "loading" ? <TableSkeleton label={t("loadingRoles")} rows={6} /> : null}
+    {phase === "loading" ? <LoadingNotice label={t("loadingRoles")} /> : null}
     {phase === "error" ? <EmptyState title={t("directoryUnavailable")} description={error ?? undefined} action={<Button variant="secondary" onClick={retry}>{t("retry")}</Button>} /> : null}
-    {phase === "ready" ? <>
-      <Table aria-label={w("roles")} aria-busy={query !== deferredQuery} mobileLayout="stack">
+    {phase !== "error" ? <>
+      <Table aria-label={w("roles")} aria-busy={phase === "loading" || query !== deferredQuery} mobileLayout="stack">
         <thead><tr><th scope="col">{w("name")}</th><th scope="col">{w("state")}</th><th scope="col">{t("maximumSession")}</th><th scope="col">{t("updated")}</th></tr></thead>
-        <tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(({ role }) => <tr key={role.id}>
+        <tbody>{phase === "loading" ? <Table.LoadingRows columns={4} rows={6} /> : matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map(({ role }) => <tr key={role.id}>
           <td data-label={w("name")}><Table.PrimaryAction onClick={() => onOpen("roles", role.id)}>{role.name}</Table.PrimaryAction><small>{role.description || role.id}</small></td>
           <td data-label={w("state")}><Badge status={role.status === "ACTIVE" ? "success" : "neutral"}>{t(role.status === "ACTIVE" ? "active" : "disabled")}</Badge></td>
           <td data-label={t("maximumSession")}>{durationLabel(role.maxSessionDurationSeconds)}</td>
           <td data-label={t("updated")}><WorkspaceTime value={role.updatedAt} /></td>
         </tr>)}</tbody>
       </Table>
-      {!matches.length ? <EmptyState title={roles.length ? w("noResults") : t("noRoles")} description={roles.length ? w("noResultsHint") : t("noRolesHint")} action={roles.length ? <Button variant="secondary" onClick={() => { setQuery(""); setState("all"); setPage(1); }}>{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
-      {matches.length > 0 || nextAfter ? <Table.Footer note={nextAfter ? t("loadedSearchScope") : undefined}>
-        {matches.length > 0 ? <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+      {phase === "ready" && !matches.length ? <EmptyState title={roles.length ? w("noResults") : t("noRoles")} description={roles.length ? w("noResultsHint") : t("noRolesHint")} action={roles.length ? <Button variant="secondary" onClick={() => { setQuery(""); setState("all"); setPage(1); }}>{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
+      {phase === "loading" || matches.length > 0 || nextAfter ? <Table.Footer note={nextAfter ? t("loadedSearchScope") : undefined}>
+        {phase === "loading" || matches.length > 0 ? <TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={phase === "loading" || query !== deferredQuery} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
           trailing={loadMore} labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /> : loadMore}
       </Table.Footer> : null}
-      {error ? <Alert status="warning">{error}</Alert> : null}
+      {phase === "ready" && error ? <Alert status="warning">{error}</Alert> : null}
     </> : null}
     </Card>
   </>;

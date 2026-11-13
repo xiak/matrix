@@ -4,6 +4,7 @@ import { forwardRef, type ComponentPropsWithoutRef, type ReactNode, type Ref, ty
 import { classNames } from "../utils";
 import styles from "./Table.module.css";
 import { Checkbox } from "../choice/Choice";
+import { Skeleton } from "../skeleton/Skeleton";
 
 // Native table semantics keep rich feature cells, column headers and links
 // accessible. The shared scroll boundary owns density, focus and overflow.
@@ -42,7 +43,16 @@ function Identifier({ value }: { value: string }) {
   </details>;
 }
 
-export const Table = Object.assign(TableRoot, { Footer, Identifier, PrimaryAction });
+function LoadingRows({ columns, rows = 4 }: { columns: number; rows?: number }) {
+  return <>{Array.from({ length: rows }, (_, row) => <tr aria-hidden="true" className={styles.loadingRow} key={row}>
+    {Array.from({ length: columns }, (_, column) => <td key={column}>
+      <Skeleton className={classNames(styles.loadingCell, column === 0 && styles.loadingPrimary)} />
+      {column === 0 ? <Skeleton className={styles.loadingCaption} /> : null}
+    </td>)}
+  </tr>)}</>;
+}
+
+export const Table = Object.assign(TableRoot, { Footer, Identifier, LoadingRows, PrimaryAction });
 
 export function TableSelectionCell({ header, id, label, checked, disabled, onChange, "aria-describedby": describedBy }: { header?: boolean; id?: string; label: string; checked: boolean | "mixed"; disabled?: boolean; "aria-describedby"?: string; onChange(checked: boolean): void }) {
   const Cell = header ? "th" : "td";

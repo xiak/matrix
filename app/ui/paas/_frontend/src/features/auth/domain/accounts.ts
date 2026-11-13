@@ -90,6 +90,14 @@ export type ActionCapability = {
 export const accountAccessViews = ["users", "create-user", "groups", "create-group", "policies", "create-policy", "policy-language", "policy-configuration", "access-diagnosis", "roles", "create-role", "service-authorizations", "role-access", "providers", "user-sso", "federations", "keys", "sessions", "access-analysis", "security-reports", "settings", "authorization-profiles", "tenants"] as const;
 export type AccountAccessView = "overview" | typeof accountAccessViews[number];
 
+export const accountSettingsSections = ["sign-in", "personal-security", "account-security"] as const;
+export type AccountSettingsSection = typeof accountSettingsSections[number];
+export const defaultAccountSettingsSection: AccountSettingsSection = "personal-security";
+
+export function accountSettingsSection(value: string | null | undefined): AccountSettingsSection {
+  return accountSettingsSections.find((section) => section === value) ?? defaultAccountSettingsSection;
+}
+
 export type RootIdentity = {
   principalId: string;
   loginName: string;

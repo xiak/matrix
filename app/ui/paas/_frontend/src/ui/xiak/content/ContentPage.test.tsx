@@ -197,7 +197,7 @@ describe("ContentPage context heading", () => {
     const action = vi.fn();
     const page = (pending: boolean, detail: boolean) => <ContentPage parentLabel="Users" pending={pending}>
       <ContentPage.Header title="Users" />
-      <ContentPage.Body pending={pending} transitionKey="users" loading={<p>Loading</p>}>
+      <ContentPage.Body pending={pending} transitionKey="users">
         {detail ? <ContentPage.Heading title="admin" back={{ label: "Back to users", onClick: action }} actions={<button>Edit user</button>} focus /> : <p>User list</p>}
       </ContentPage.Body>
     </ContentPage>;
@@ -218,7 +218,7 @@ describe("ContentPage context heading", () => {
     const back = vi.fn();
     const page = (pending: boolean, ready: boolean) => <ContentPage pending={pending} parentLabel="Policies">
       <ContentPage.Header title="Create policy" back={{ label: "Back to policies", parentLabel: "Policies", onClick: back }} />
-      <ContentPage.Body pending={pending} transitionKey="create-policy" loading={<p role="status">Opening policy editor</p>}>
+      <ContentPage.Body pending={pending} transitionKey="create-policy">
         {ready ? <ContentPage.Heading title="Create policy" back={{ label: "Back to policies", parentLabel: "Policies", onClick: back }} actions={<button>Inspect draft</button>} /> : <p>Loading policy data</p>}
       </ContentPage.Body>
     </ContentPage>;
@@ -238,7 +238,7 @@ describe("ContentPage context heading", () => {
     const oldBack = vi.fn(), nextBack = vi.fn();
     const page = (pending: boolean, detail: boolean) => <ContentPage pending={pending} parentLabel="Users">
       <ContentPage.Header title={pending ? "Create policy" : "Users"} back={pending ? { label: "Back to policies", parentLabel: "Policies", onClick: nextBack } : undefined} />
-      <ContentPage.Body pending={pending} transitionKey="users" loading={<p>Loading</p>}>
+      <ContentPage.Body pending={pending} transitionKey="users">
         {detail ? <ContentPage.Heading title="admin" back={{ label: "Back to users", onClick: oldBack }} actions={<button>Edit user</button>} /> : <p>User list</p>}
       </ContentPage.Body>
     </ContentPage>;
@@ -307,7 +307,7 @@ describe("ContentPage context heading", () => {
 });
 
 describe("ContentPage transition", () => {
-  it("can expose cached destination structure without enabling it before route commit", () => {
+  it("paints cached destination structure without enabling it before route commit", () => {
     const body = (inactive: boolean) => <ContentPage.Body inactive={inactive} transitionKey="groups"><button>Manage group</button></ContentPage.Body>;
     const view = render(body(true));
     const button = screen.getByRole("button", { name: "Manage group" });
@@ -319,36 +319,31 @@ describe("ContentPage transition", () => {
     expect(button.closest("[inert]")).toBeNull();
   });
 
-  it("never reveals outgoing content while waiting for regional loading feedback", () => {
-    const body = (loading?: React.ReactNode) => <ContentPage.Body transitionKey="resources" pending loading={loading}><input aria-label="Filter resources" /></ContentPage.Body>;
-    const view = render(body());
+  it("keeps outgoing content painted but inactive until destination structure exists", () => {
+    const body = () => <ContentPage.Body transitionKey="resources" pending><input aria-label="Filter resources" /></ContentPage.Body>;
+    render(body());
     const input = screen.getByRole("textbox", { name: "Filter resources", hidden: true });
     expect(input.closest("[inert]")).toBeTruthy();
-    expect(input.closest("[hidden]")).toBeTruthy();
+    expect(input.closest("[hidden]")).toBeNull();
+    expect(input.closest('[aria-hidden="true"]')).toBeNull();
     expect(screen.queryByRole("status")).toBeNull();
-
-    view.rerender(body(<p role="status">Opening logs…</p>));
-    expect(input.closest("[hidden]")).toBeTruthy();
-    expect(screen.getByRole("status").textContent).toBe("Opening logs…");
   });
 
-  it("immediately hides the old draft behind loading, then restores it if navigation is cancelled", async () => {
+  it("keeps the old draft painted and inactive, then restores it if navigation is cancelled", async () => {
     const user = userEvent.setup();
-    const body = (pending: boolean) => <ContentPage.Body transitionKey="resources" pending={pending} loading={<p role="status">Opening logs…</p>}><input aria-label="Filter resources" /></ContentPage.Body>;
+    const body = (pending: boolean) => <ContentPage.Body transitionKey="resources" pending={pending}><input aria-label="Filter resources" /></ContentPage.Body>;
     const view = render(body(false));
     const input = screen.getByRole("textbox");
     await user.type(input, "postgres");
     view.rerender(body(true));
     expect(input.closest("[inert]")).toBeTruthy();
-    expect(input.closest("[hidden]")).toBeTruthy();
-    expect(screen.queryByRole("textbox")).toBeNull();
-    expect(screen.getByRole("status").textContent).toBe("Opening logs…");
+    expect(input.closest("[hidden]")).toBeNull();
+    expect(screen.getByRole("textbox")).toBe(input);
     view.rerender(body(false));
     expect(screen.getByRole("textbox")).toBe(input);
     expect((input as HTMLInputElement).value).toBe("postgres");
     expect(input.closest("[inert]")).toBeNull();
     expect(input.closest("[hidden]")).toBeNull();
-    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("keeps the scroll viewport stable while replacing the outgoing page content", () => {

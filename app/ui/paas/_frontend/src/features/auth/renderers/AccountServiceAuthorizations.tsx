@@ -2,7 +2,7 @@
 
 import { useCallback, useDeferredValue, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, LoadingNotice, Table, TablePagination, TableSkeleton, TableToolbar, Tabs } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import type {
   ServiceLinkedRoleAccessLoad,
@@ -145,26 +145,24 @@ function RelationDirectory({ client, onOpen }: {
       <Badge>{t("readOnly")}</Badge>
     </div>
     <HelpDisclosure label={t("relationshipsHelp")}>{t("relations.boundary")}</HelpDisclosure>
-    <ServiceAuthorizationReadBoundary status={state.status} retry={load} scope="relations"
-      loading={<TableSkeleton label={t("relations.loading")} rows={4} />}>
-    {current ? <>
-      {current.items.length ? <Table aria-label={t("relations.tableLabel")} mobileLayout="stack">
+    {state.status === "loading" || current ? <>
+      {state.status === "loading" ? <LoadingNotice label={t("relations.loading")} /> : null}
+      {state.status === "loading" || current?.items.length ? <Table aria-label={t("relations.tableLabel")} aria-busy={state.status === "loading" || paging || undefined} mobileLayout="stack">
         <thead><tr><th scope="col">{t("fields.service")}</th><th scope="col">{t("fields.role")}</th><th scope="col">{t("fields.bindings")}</th><th scope="col">{t("fields.stateAndTime")}</th></tr></thead>
-        <tbody>{current.items.map((item) => <tr key={item.relation.role.id}>
+        <tbody>{state.status === "loading" ? <Table.LoadingRows columns={4} rows={4} /> : current!.items.map((item) => <tr key={item.relation.role.id}>
           <td data-label={t("fields.service")}><strong>{t(`purposes.${item.relation.servicePrincipal.purpose}`)}</strong><small><code>{item.relation.servicePrincipal.installationId}</code></small><small><code>{item.relation.servicePrincipal.principalId}</code></small></td>
           <td data-label={t("fields.role")}><Table.PrimaryAction onClick={(event) => onOpen(item, event.currentTarget)}>{item.relation.role.name}</Table.PrimaryAction><small><code>{item.relation.role.id}</code></small><small>{item.relation.role.description}</small></td>
           <td data-label={t("fields.bindings")}><strong>{t("relations.bindingCount", { active: item.activeBindingCount, total: item.bindingCount })}</strong><small><code>{item.relation.template.id} @v{item.relation.template.version}</code></small></td>
           <td data-label={t("fields.stateAndTime")}><Badge status={item.relation.role.status === "ACTIVE" ? "success" : "neutral"}>{t(`states.${item.relation.role.status}`)}</Badge><small><WorkspaceTime value={item.relation.role.updatedAt} /></small></td>
         </tr>)}</tbody>
       </Table> : <EmptyState title={t("relations.emptyTitle")} description={t("relations.emptyDescription")} />}
-      <CursorFooter page={pageIndex + 1} hasNext={Boolean(current.nextAfter || pages[pageIndex + 1])} busy={paging} previous={() => {
+      <CursorFooter page={pageIndex + 1} hasNext={Boolean(current?.nextAfter || pages[pageIndex + 1])} busy={state.status === "loading" || paging} previous={() => {
         setResult((value) => value.client === client ? { ...value, pageIndex: Math.max(0, value.pageIndex - 1) } : value);
         setPagingState({ client, busy: false, failure: null });
       }} next={nextPage}
-        note={current.nextAfter ? t("relations.more") : t("relations.complete", { count: current.items.length })} />
+        note={state.status === "loading" ? "" : current!.nextAfter ? t("relations.more") : t("relations.complete", { count: current!.items.length })} />
       {pageFailure ? <Alert status="warning">{t(`errors.relations.${pageFailure}.description`)}</Alert> : null}
-    </> : null}
-    </ServiceAuthorizationReadBoundary>
+    </> : <ServiceAuthorizationReadBoundary status={state.status} retry={load} scope="relations" loading={null} />}
   </section>;
 }
 
@@ -264,13 +262,12 @@ function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClie
         { id: "purpose", label: t("purposeFilter"), value: purpose, defaultValue: "all", onChange: (value) => { setPurpose(value as typeof purpose); setPage(1); }, options: [{ value: "all", label: t("allPurposes") }, ...(["IAM", "PAAS", "AUDIT", "INSTALLATION_VERIFIER"] as const).map((value) => ({ value, label: t(`purposes.${value}`) }))] },
         { id: "status", label: t("stateFilter"), value: status, defaultValue: "all", onChange: (value) => { setStatus(value as typeof status); setPage(1); }, options: [{ value: "all", label: t("allStates") }, ...(["ACTIVE", "RETIRED"] as const).map((value) => ({ value, label: t(`states.${value}`) }))] }
       ]}
-      status={state.status === "ready" ? query !== deferredQuery ? t("filtering") : t("resultCount", { count: filtered.length, total: state.directory.items.length }) : state.status === "loading" ? t("loading") : undefined} />
-    <ServiceAuthorizationReadBoundary status={state.status} retry={retry} scope="templates"
-      loading={<TableSkeleton label={t("loading")} rows={4} />}>
-    {state.status === "ready" ? <>
-      {filtered.length ? <Table aria-label={t("tableLabel")} aria-busy={query !== deferredQuery || undefined} mobileLayout="stack">
+      status={state.status === "ready" ? query !== deferredQuery ? t("filtering") : t("resultCount", { count: filtered.length, total: state.directory.items.length }) : undefined} />
+    {state.status === "loading" || state.status === "ready" ? <>
+      {state.status === "loading" ? <LoadingNotice label={t("loading")} /> : null}
+      {state.status === "loading" || filtered.length ? <Table aria-label={t("tableLabel")} aria-busy={state.status === "loading" || query !== deferredQuery || undefined} mobileLayout="stack">
         <thead><tr><th scope="col">{t("fields.template")}</th><th scope="col">{t("fields.roleName")}</th><th scope="col">{t("fields.workloadKinds")}</th><th scope="col">{t("fields.policySnapshot")}</th><th scope="col">{t("fields.templateState")}</th></tr></thead>
-        <tbody>{visible.map((template) => <tr key={template.id}>
+        <tbody>{state.status === "loading" ? <Table.LoadingRows columns={5} rows={4} /> : visible.map((template) => <tr key={template.id}>
           <td data-label={t("fields.template")}><Table.PrimaryAction onClick={(event) => onOpen(template, event.currentTarget)}>{template.id}</Table.PrimaryAction><small>v{template.version} · <code>{template.spec.product}</code></small></td>
           <td data-label={t("fields.roleName")}><code>{template.spec.roleName}</code><small>{template.spec.roleDescription}</small></td>
           <td data-label={t("fields.workloadKinds")}><div className={styles.roleTags}>{template.spec.workloads.map((workload) => <Badge key={workload.resourceKind}>{workload.resourceKind}</Badge>)}</div></td>
@@ -279,11 +276,10 @@ function TemplateDirectory({ client, onOpen }: { client: ServiceRoleTemplateClie
         </tr>)}</tbody>
       </Table> : <EmptyState title={state.directory.items.length ? t("noMatchesTitle") : t("emptyTitle")} description={state.directory.items.length ? t("noMatchesDescription") : t("emptyDescription")}
         action={state.directory.items.length ? <Button variant="secondary" onClick={resetQuery}>{toolbarLabels.resetQuery}</Button> : undefined} />}
-      {filtered.length ? <Table.Footer note={t("footerNote")}><TablePagination page={currentPage} pages={pages} pageSize={pageSize}
+      {state.status === "loading" || filtered.length ? <Table.Footer note={t("footerNote")}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={state.status === "loading" || query !== deferredQuery}
         onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
         labels={{ summary: w("page", { page: currentPage, pages }), pageSize: w("pageSize"), previous: w("previous"), next: w("next") }} /></Table.Footer> : null}
-    </> : null}
-    </ServiceAuthorizationReadBoundary>
+    </> : <ServiceAuthorizationReadBoundary status={state.status} retry={retry} scope="templates" loading={null} />}
   </section>;
 }
 

@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
-import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, RadioGroup, Select, Table, TablePagination, TableSkeleton, Tabs, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, FormField, Input, LoadingNotice, RadioGroup, Select, Skeleton, Table, TablePagination, TableSkeleton, Tabs, Typography } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccessAnalysisClient } from "../application/AccountAccessProvider";
 import type { AccountAccessView, IamAction } from "../domain/accounts";
@@ -71,6 +71,76 @@ type LiveAccessAnalysisProps = {
   authorizationPending?: boolean;
   onNavigate(view: AccountAccessView, id?: string): void;
 };
+
+function AccessFindingDirectoryTable({ findings, loading = false, onOpen }: {
+  findings?: AccessFinding[];
+  loading?: boolean;
+  onOpen?(finding: AccessFinding): void;
+}) {
+  const t = useTranslations("IamWorkspace.accessAnalysis");
+  return <>
+    {loading ? <LoadingNotice label={t("live.loadingFindings")} /> : null}
+    <Table aria-busy={loading} aria-label={t("live.findingsTitle")} mobileLayout="stack">
+      <thead><tr><th scope="col">{t("unused.principal")}</th><th scope="col">{t("unused.findingType")}</th><th scope="col">{t("unused.status")}</th><th scope="col">{t("live.observedAt")}</th></tr></thead>
+      <tbody>{loading ? Array.from({ length: 6 }, (_, index) => <tr aria-hidden="true" key={index}>
+        <td><Skeleton className={styles.findingSkeletonPrimary} /><Skeleton className={styles.findingSkeletonSecondary} /></td>
+        <td><Skeleton className={styles.findingSkeletonCell} /></td>
+        <td><Skeleton className={styles.findingSkeletonStatus} /></td>
+        <td><Skeleton className={styles.findingSkeletonCell} /></td>
+      </tr>) : findings?.map((finding) => <tr key={finding.id}>
+        <td data-label={t("unused.principal")}><Table.PrimaryAction onClick={() => onOpen?.(finding)}>{finding.target.id}</Table.PrimaryAction><small>{finding.id}</small></td>
+        <td data-label={t("unused.findingType")}>{t(`unused.types.${findingTypeKey(finding.type)}`)}</td>
+        <td data-label={t("unused.status")}><Badge status={findingBadge[finding.status]}>{t(`unused.lifecycle.${finding.status}`)}</Badge></td>
+        <td data-label={t("live.observedAt")}><WorkspaceTime value={finding.observedAt} /></td>
+      </tr>)}</tbody>
+    </Table>
+  </>;
+}
+
+function AccessFindingDirectoryLoadingCard() {
+  const t = useTranslations("IamWorkspace.accessAnalysis");
+  return <Card aria-busy="true">
+    <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.findingsTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.findingsHint")}</Typography.Text></div><FormField id="live-access-finding-status" label={t("unused.status")}><Select id="live-access-finding-status" disabled value="ACTIVE" onValueChange={() => undefined} options={(['ALL', 'ACTIVE', 'ARCHIVED', 'RESOLVED'] as const).map((value) => ({ value, label: t(`live.filters.${value}`) }))} /></FormField></Card.Header>
+    <AccessFindingDirectoryTable loading />
+    <Table.Footer note={t("live.cursorBoundary")}><TablePagination mode="cursor" disabled summary={t("live.page", { page: 1 })}
+      previous={{ label: t("live.previous"), disabled: true, onClick() {} }} next={{ label: t("live.next"), disabled: true, onClick() {} }} /></Table.Footer>
+  </Card>;
+}
+
+export function AccessAnalysisClientLoading({ canList }: { canList: boolean }) {
+  const t = useTranslations("IamWorkspace.accessAnalysis");
+  return <div aria-busy="true" className={styles.detailWorkspace}>
+    <ContentPage.Heading title={t("title")} scrollKey="access-analysis-live:loading" />
+    <HelpDisclosure label={t("findingsHelp")}>{t("live.connectedBoundary")}</HelpDisclosure>
+    {!canList ? <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.knownAnalyzerTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.knownAnalyzerHint")}</Typography.Text></div></Card.Header>
+      <Card.Body><FormField id="known-access-analyzer-id" label={t("live.knownAnalyzerLabel")} hint={t("live.knownAnalyzerHint")}>
+        <Input id="known-access-analyzer-id" autoComplete="off" disabled maxLength={128} />
+      </FormField></Card.Body>
+      <Card.Footer><Button disabled>{t("live.openKnownAnalyzer")}</Button></Card.Footer>
+    </Card> : null}
+    <Card>
+      <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.knownFindingTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.knownFindingHint")}</Typography.Text></div></Card.Header>
+      <Card.Body><div className={styles.settingsGrid}>
+        <FormField id="known-access-finding-analyzer-id" label={t("unused.analyzerId")} hint={t("live.knownFindingAnalyzerHint")}>
+          <Input id="known-access-finding-analyzer-id" autoComplete="off" disabled maxLength={128} />
+        </FormField>
+        <FormField id="known-access-finding-id" label={t("unused.findingId")} hint={t("live.knownFindingIdHint")}>
+          <Input id="known-access-finding-id" autoComplete="off" disabled maxLength={128} />
+        </FormField>
+      </div></Card.Body>
+      <Card.Footer><Button disabled>{t("live.openKnownFinding")}</Button></Card.Footer>
+    </Card>
+    <Tabs.Root value="unused">
+      <Tabs.List aria-label={t("sections")} className={styles.accessAnalysisTabs}>
+        <Tabs.Trigger disabled value="coverage">{t("live.tabs.coverage")}</Tabs.Trigger>
+        <Tabs.Trigger disabled value="unused">{t("tabs.unused")}</Tabs.Trigger>
+        <Tabs.Trigger disabled value="rule">{t("tabs.rule")}</Tabs.Trigger>
+      </Tabs.List>
+      <Tabs.Content className={styles.stack} value="unused"><AccessFindingDirectoryLoadingCard /></Tabs.Content>
+    </Tabs.Root>
+  </div>;
+}
 
 type LiveAccessAnalysisGenerationProps = LiveAccessAnalysisProps & {
   blockedIntent: AccessAnalysisMutationIntent | null;
@@ -545,7 +615,7 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
       </Tabs.List>
       <AccountReadBoundary
         status={analyzersLoading ? "loading" : analyzers === null ? readStatus(error) : !analyzer ? "empty" : "ready"}
-        loading={<Tabs.Content value={section}><Card><TableSkeleton header label={t("live.loading")} rows={4} /></Card></Tabs.Content>}
+        loading={<Tabs.Content value={section}>{section === "unused" ? <AccessFindingDirectoryLoadingCard /> : <Card><TableSkeleton header label={t("live.loading")} rows={4} /></Card>}</Tabs.Content>}
         empty={{ title: t(client.canList ? "live.noAnalyzerTitle" : "live.listDeniedTitle"), description: t(client.canList ? "live.noAnalyzerHint" : "live.listDeniedHint"), action: client.canCreate ? <Button disabled={writeBlocked} onClick={() => void createAnalyzer()}>{t("live.createAnalyzer")}</Button> : undefined }}
         failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${error ?? "unavailable"}`) }}
         onRetry={knownAnalyzerId.trim() ? () => void openKnownAnalyzer() : client.canList ? reload : undefined} problem={readProblem}>
@@ -565,12 +635,12 @@ function LiveAccessAnalysisGeneration({ authorizationPending = false, blockedInt
           <Card>
             <Card.Header><div><Typography.Title as="h2" level={3}>{t("live.findingsTitle")}</Typography.Title><Typography.Text tone="muted">{t("live.findingsHint")}</Typography.Text></div><FormField id="live-access-finding-status" label={t("unused.status")}><Select id="live-access-finding-status" disabled={presentedFindingsLoading} value={filter} onValueChange={changeFilter} options={(['ALL', 'ACTIVE', 'ARCHIVED', 'RESOLVED'] as const).map((value) => ({ value, label: t(`live.filters.${value}`) }))} /></FormField></Card.Header>
             <AccountReadBoundary status={presentedFindingsLoading ? "loading" : presentedFindings ? "ready" : readStatus(findingsReadFailure)}
-              loading={<TableSkeleton label={t("live.loadingFindings")} rows={6} />}
+              loading={<AccessFindingDirectoryTable loading />}
               failure={{ title: t("live.loadFailedTitle"), description: t(`live.errors.${findingsReadFailure}`) }} onRetry={reload} problem={readProblem}>
-            {presentedFindings ? presentedFindings.items.length ? <Table aria-label={t("live.findingsTitle")} mobileLayout="stack"><thead><tr><th scope="col">{t("unused.principal")}</th><th scope="col">{t("unused.findingType")}</th><th scope="col">{t("unused.status")}</th><th scope="col">{t("live.observedAt")}</th></tr></thead><tbody>{presentedFindings.items.map((finding) => <tr key={finding.id}><td data-label={t("unused.principal")}><Table.PrimaryAction onClick={() => {
+            {presentedFindings ? presentedFindings.items.length ? <AccessFindingDirectoryTable findings={presentedFindings.items} onOpen={(finding) => {
               setSelectedReference({ analyzerId: finding.analyzerId, findingId: finding.id, targetId: finding.target.id });
               setSelected(null); setSelectedLoading(true); setDetailError(null); setNotice(null);
-            }}>{finding.target.id}</Table.PrimaryAction><small>{finding.id}</small></td><td data-label={t("unused.findingType")}>{t(`unused.types.${findingTypeKey(finding.type)}`)}</td><td data-label={t("unused.status")}><Badge status={findingBadge[finding.status]}>{t(`unused.lifecycle.${finding.status}`)}</Badge></td><td data-label={t("live.observedAt")}><WorkspaceTime value={finding.observedAt} /></td></tr>)}</tbody></Table> : <EmptyState title={t("live.noFindingsTitle")} description={t("live.noFindingsHint")} /> : null}
+            }} /> : <EmptyState title={t("live.noFindingsTitle")} description={t("live.noFindingsHint")} /> : null}
             </AccountReadBoundary>
             <Table.Footer note={t("live.cursorBoundary")}><TablePagination mode="cursor" disabled={presentedFindingsLoading} summary={t("live.page", { page: pageIndex + 1 })}
               previous={{ label: t("live.previous"), disabled: pageIndex === 0, onClick: () => { setFindingsLoading(true); setError(null); setPageIndex((current) => Math.max(0, current - 1)); } }}

@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { act, cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
@@ -141,9 +141,12 @@ describe("AccountServiceAuthorizations", () => {
     expect(screen.getByText("正在读取当前账号的服务授权")).toBeTruthy();
     expect(templateClient.load).not.toHaveBeenCalled();
 
-    resolve({ status: "ready", directory });
-    const table = await screen.findByRole("table", { name: "当前账号服务授权关系" });
-    expect(within(table).getByText("1 个有效 / 2 个历史绑定")).toBeTruthy();
+    const table = screen.getByRole("table", { name: "当前账号服务授权关系" });
+    expect(within(table).getByRole("columnheader", { name: "服务身份" })).toBeTruthy();
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(4);
+    await act(async () => { resolve({ status: "ready", directory }); });
+    expect(await within(table).findByText("1 个有效 / 2 个历史绑定")).toBeTruthy();
+    expect(screen.getByRole("table", { name: "当前账号服务授权关系" })).toBe(table);
     expect(within(table).getByText(relation.role.name)).toBeTruthy();
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(screen.queryByRole("button", { name: /授权|解绑|撤销|承担/ })).toBeNull();
@@ -252,15 +255,21 @@ describe("AccountServiceAuthorizations", () => {
       list: vi.fn().mockResolvedValue({ status: "ready", directory }),
       read: vi.fn()
     };
-    const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn().mockResolvedValue({ status: "ready", directory: templatesWithRetired }) };
+    let resolveTemplates!: (value: ServiceRoleTemplateLoad) => void;
+    const templateClient: ServiceRoleTemplateClient = { sessionRevision: 1, load: vi.fn(() => new Promise<ServiceRoleTemplateLoad>((resolve) => { resolveTemplates = resolve; })) };
     const user = userEvent.setup();
     render(<LocaleProvider><AccountServiceAuthorizations relations={relations} templates={templateClient} /></LocaleProvider>);
     await screen.findByRole("table", { name: "当前账号服务授权关系" });
     expect(templateClient.load).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("tab", { name: "平台模板" }));
-    const table = await screen.findByRole("table", { name: "服务授权模板目录" });
+    const table = screen.getByRole("table", { name: "服务授权模板目录" });
     expect(templateClient.load).toHaveBeenCalledTimes(1);
+    expect(within(table).getByRole("columnheader", { name: "模板" })).toBeTruthy();
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(4);
+    await act(async () => { resolveTemplates({ status: "ready", directory: templatesWithRetired }); });
+    await within(table).findByText("ManagedServiceInstallationReader");
+    expect(screen.getByRole("table", { name: "服务授权模板目录" })).toBe(table);
     expect(within(table).getByText("ManagedServiceInstallationReader")).toBeTruthy();
     expect(within(table).getByText("AuditExportReviewer")).toBeTruthy();
     expect(within(table).getAllByText("非账号授权状态")).toHaveLength(2);

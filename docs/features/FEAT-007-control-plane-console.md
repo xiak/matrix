@@ -1065,7 +1065,8 @@ which is read lazily while the launcher is open. Loading and retry use the
 single progress track on the global Header's bottom divider. The platform
 links stay usable while the request is pending. Failure and its retry action
 appear beside the directory results. Closing the launcher clears its progress.
-An accepted destination uses the same track until the route commits.
+An accepted destination hands progress to the content Header until the route
+commits; it does not keep or duplicate the global product-launcher track.
 Backend entries provide managed-product membership, names and descriptions; the
 presentation registry supplies only implemented destination/category/icon
 metadata. Missing permission, expired authentication, transport failure and an
@@ -2032,7 +2033,7 @@ Same-path workspace query changes use Next's supported native-history
 integration instead of fetching another page tree. They retain draft guarding,
 encoded entity IDs, replacement and Back/Forward behavior; cross-page visits
 continue through the prefetched router transition with an immediate destination
-frame and locally delayed loading placeholders. A valid directory deep link
+frame and immediate, shape-matched regional placeholders. A valid directory deep link
 keeps the same shell, page title and controls, applies only its visible filter,
 and exposes that filter through the existing toolbar or removable filter
 context; it never replaces the console with a transport problem document. The
@@ -2149,8 +2150,8 @@ Console navigation keeps the global Header and shell mounted. One shared route
 transition owner connects console links and global-search results to the actual
 App Router transition. After any required draft-leave consent, clicking a
 destination immediately switches the route-known title, parent context and
-service-local navigation, hides outgoing content/actions and starts the Header
-progress track. Resource readiness never delays this destination frame. A
+service-local navigation, paints the destination frame and starts the content
+Header progress track. Resource readiness never delays this destination frame. A
 frame is a projection of the existing scene vocabulary, not an empty resource
 snapshot, an authorization result or another client router. Pending requests
 cannot expose the old page after the product directory closes. Next still owns
@@ -2160,13 +2161,15 @@ Accepted-navigation side effects such as closing Products and services, global
 search, notifications, the account panel or the compact service drawer run only
 after the destination frame is in the DOM. This applies to every registered
 service and prevents a closing overlay from revealing the outgoing page.
-Regional PageSkeleton and labelled TableSkeleton acknowledge loading at once,
-but mount their placeholder DOM/animation only after a sustained 200ms wait.
-That timer belongs to the regional feedback component, not the shell or Header;
-fast completion cancels it without imposing a minimum loading dwell. A dedicated
-route subscriber renders an indeterminate two-pixel progress track over the
-global Header's bottom divider, without subscribing static Header controls to
-its loading state. The shell does not expose a universal manual refresh action:
+Regional PageSkeleton and labelled TableSkeleton acknowledge loading and reserve
+their final geometry immediately; there is no blank delay or minimum dwell.
+An unchanged Card, toolbar or page parent remains mounted while its owned data
+region loads. A table directory mounts its real table, column headers and
+pagination once, marks it busy, and changes only its `tbody` from non-interactive
+skeleton rows to authoritative rows. The content Header alone renders the
+indeterminate two-pixel route/page-read progress track. The global Header reports
+only work it owns, such as product-directory loading, and cannot duplicate the
+content progress. The shell does not expose a universal manual refresh action:
 mutation revalidation, retry and any product-owned refresh remain at the data
 boundary they actually affect. The public
 indeterminate Progress animates only a clipped, paint-contained child transform,
@@ -2199,10 +2202,10 @@ scene. Prepared snapshots are scoped to the current session credential and are
 never reused by a later login identity.
 
 When no complete provider projection exists, the outgoing content becomes
-hidden and inert immediately; its draft remains mounted until the visit commits
-or is cancelled. The destination still renders its stable content structure,
+inert immediately; its draft remains protected until the visit commits or is
+cancelled. The destination renders its stable content structure,
 including card or table identity and descriptive headings, while only the rows,
-cards or other provider-owned data region receives delayed skeleton feedback.
+cards or other provider-owned data region receives immediate skeleton feedback.
 The content viewport remains mounted across a committed visit rather than
 replacing its background/scroll boundary. Only keyed route content is replaced,
 with no full-canvas opacity transition. Initial resource loading and load
@@ -4090,9 +4093,10 @@ cross-tenant page, duplicate/unordered resource, or weak/missing/mismatched ETag
 becomes unavailable data rather than a partial success.
 
 The directory frame, title, boundary explanation, fixed columns and cursor
-footer render independently of the asynchronous page. A polite status is
-immediate and only table rows receive the shared 200 ms delayed skeleton, so a
-fast response does not flash a page-wide placeholder. The request identity is
+footer render independently of the asynchronous page. A polite status and the
+row-region skeleton reserve the final table geometry immediately, so the page
+never passes through an empty card or page-wide placeholder. The request
+identity is
 the repository reader, cursor and explicit retry revision; current loading is
 derived from that identity rather than synchronously reset by an effect. Cursor
 history and the cross-window tenant guard are owned by that reader identity: a
@@ -4130,14 +4134,18 @@ and browser back/forward observations belong to the
 [User-boundary evidence](iam/FEAT-IAM-010-console.md).
 The one-click DEV MOCK entry still returns to the requested User directory.
 The normal DEV preview remains independent. ContentPage and PageSkeleton own
-the shared transition behavior; the control-plane loading renderer selects a
-destination structure and feature-owned data-region placeholder rather than
-giving individual pages navigation timers. The committed URL and business
-selection remain Next-owned until the real page transition completes. An
-immediate provider projection reuses only an authoritative preview or managed
-snapshot and cannot create data or authority. A true managed-service cache miss
-retains the destination structure plus regional loading feedback instead of
-inventing an empty success scene.
+the shared transition behavior. Accepted navigation renders the destination's
+stable frame immediately and reserves only unresolved data regions with
+shape-matched skeletons; a feature must not replace an unchanged Card, toolbar
+or page parent merely because one child read is pending. The content context
+Header is the sole owner of route and page-read progress. The global Header
+reports only work that it owns, such as loading the product directory, and must
+not duplicate content-route progress. The committed URL and business selection
+remain Next-owned until the real page transition completes. An immediate
+provider projection reuses only an authoritative preview or managed snapshot
+and cannot create data or authority. A true managed-service cache miss retains
+the destination structure plus regional loading feedback instead of inventing
+an empty success scene.
 
 The IAM service-authorization directory now follows the same addressable task
 contract as the other content workspaces. The Role collection dispatches
@@ -4311,13 +4319,13 @@ and is not inherited as a new backend acceptance result.
   retain the same title and parent elements through loading and registration,
   prove draft input causes no title-frame commits, and check that the return
   action still reads the latest draft. Loading-state tests prove static global
-  Header controls do not rerender when the isolated route progress starts or
-  stops. Browser checks
+  Header controls do not rerender or duplicate progress when isolated
+  content-route feedback starts or stops. Browser checks
   verify the equal 56px context bars for users and federations, detail and
-  creation return controls, immediate route acknowledgement and delayed destination
-  titles/skeletons for sustained waits, progress
-  inside the global Header, and current-draft leave/cancel protection without
-  creating an account. Sidebar checks retain a 56px header with one complete
+  creation return controls, immediate route acknowledgement and destination
+  frames whose unresolved regions reserve their final geometry immediately,
+  one progress line in the content Header, and current-draft leave/cancel
+  protection without creating an account. Sidebar checks retain a 56px header with one complete
   localized product name for application hosting, no generic navigation caption,
   and the IAM identity/permission groups. The shell/scene suites cover the
   Chinese/English identity and navigation behavior. No new warning/error logs

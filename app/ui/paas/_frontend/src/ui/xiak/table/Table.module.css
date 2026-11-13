@@ -33,6 +33,11 @@
 .table td strong { display: block; color: var(--xiak-color-text-strong); font-weight: var(--xiak-font-weight-semibold); }
 .table td small { display: block; margin-top: var(--xiak-spacing-micro); color: var(--xiak-color-text-subtle); font-size: var(--xiak-font-size-caption); line-height: var(--xiak-line-height-caption); }
 .table td code { white-space: nowrap; }
+.loadingRow { pointer-events: none; }
+.loadingCell, .loadingCaption { min-height: 0.75rem; border-radius: var(--xiak-radius-small); }
+.loadingCell { width: min(80%, 8rem); }
+.loadingPrimary { width: min(100%, 12rem); }
+.loadingCaption { width: min(60%, 8rem); min-height: 0.625rem; margin-top: var(--xiak-spacing-micro); }
 .table:where([data-mobile-layout="stack"], [data-mobile-layout="grid"]) td code { white-space: normal; }
 .table td .shortIdentifier, .identifier > code { font-size: var(--xiak-font-size-caption); white-space: normal; overflow-wrap: anywhere; }
 .identifier summary {

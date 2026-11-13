@@ -1,6 +1,6 @@
 "use client";
 
-import { ConsoleLink as Link, useConsoleNavigation } from "../routes/ConsoleNavigation";
+import { ConsoleLink as Link } from "../routes/ConsoleNavigation";
 import { memo, useMemo } from "react";
 import { useTranslations } from "next-intl";
 import { consoleRouteHref } from "../domain/selection";
@@ -41,13 +41,8 @@ export function ConsoleBrand({ inactive = false }: { inactive?: boolean }) {
 }
 
 function HeaderProgress({ directoryPending }: { directoryPending: boolean }) {
-  const { pendingSelection } = useConsoleNavigation();
-  const t = useTranslations("Console");
-  const navigation = useTranslations("ServiceNavigation");
   const directory = useTranslations("ServiceDirectory");
-  const label = pendingSelection ? t("openingPage", { name: navigation(`items.${pendingSelection.view ?? pendingSelection.section}.label`) })
-    : directoryPending ? directory("live.loading") : null;
-  return label ? <Progress className={styles.headerProgress} aria-label={label} /> : null;
+  return directoryPending ? <Progress className={styles.headerProgress} aria-label={directory("live.loading")} /> : null;
 }
 
 function HeaderNavigation({ open, onOpenChange, preview, readServiceDefinitions }: {

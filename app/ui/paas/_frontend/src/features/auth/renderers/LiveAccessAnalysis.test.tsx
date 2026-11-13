@@ -6,7 +6,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import type { AccessAnalysisClient } from "../application/AccountAccessProvider";
 import type { ActionCapability } from "../domain/accounts";
 import type { AccessAnalyzer, AccessAnalyzerAccess, AccessFinding, AccessFindingAccess, AccessFindingDirectory } from "../domain/accessAnalysis";
-import { LiveAccessAnalysis } from "./LiveAccessAnalysis";
+import { AccessAnalysisClientLoading, LiveAccessAnalysis } from "./LiveAccessAnalysis";
 
 const timestamp = "2026-09-11T08:00:00Z";
 const analyzer = {
@@ -74,6 +74,23 @@ function view(value: AccessAnalysisClient) {
 afterEach(cleanup);
 
 describe("live access analysis", () => {
+  it("paints the stable destination frame while the authorized client is being prepared", () => {
+    render(<LocaleProvider><AccessAnalysisClientLoading canList /></LocaleProvider>);
+    expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
+    expect(screen.getByText(/本页读取当前账号的 Analyzer/)).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "来源覆盖" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "未使用访问" })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "分析规则" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "未使用访问 Finding" })).toBeTruthy();
+    expect(screen.getByRole("combobox", { name: "发现状态" })).toHaveProperty("disabled", true);
+    const loading = screen.getByText("正在加载 Finding").closest('[role="status"]')!;
+    expect(loading).not.toBeNull();
+    const table = screen.getByRole("table", { name: "未使用访问 Finding" });
+    expect(table.querySelectorAll('tbody tr[aria-hidden="true"]')).toHaveLength(6);
+    expect(screen.getByRole("columnheader", { name: "身份或凭证" })).toBeTruthy();
+    expect(screen.getByText("第 1 页")).toBeTruthy();
+  });
+
   it("renders the stable page shell before the first server response", () => {
     const pending = new Promise<never>(() => undefined);
     const listAnalyzers = vi.fn<AccessAnalysisClient["listAnalyzers"]>().mockReturnValue(pending);

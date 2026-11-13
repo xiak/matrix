@@ -3,7 +3,7 @@
 import { Children, Fragment, cloneElement, isValidElement, useDeferredValue, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode, type Ref, type RefObject } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { Plus } from "lucide-react";
-import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, Table, TableSkeleton, TableToolbar, TablePagination, Tabs, Transfer, type PageCommand, type PageCommandsHandle } from "@ui/xiak";
+import { Alert, Button, Card, ContentPage, Dialog, EmptyState, FormField, Input, LoadingNotice, Table, TableToolbar, TablePagination, Tabs, Transfer, type PageCommand, type PageCommandsHandle } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { ConsoleLink, useDirectoryQuery } from "@/features/control-plane/routes/ConsoleNavigation";
 import { useOptionalAccountAccess } from "../application/AccountAccessProvider";
@@ -76,7 +76,7 @@ const initialRelationshipPageSize = 10;
 
 export function WorkspaceRelationshipDirectory<T extends { id: string; name: string }>({
   title, searchLabel, items, columns, row, keywords, status, footerNote, loadMore, emptyTitle, emptyDescription,
-  busy = false, controls = "as-needed"
+  busy = false, controls = "as-needed", loading
 }: {
   title: string;
   searchLabel: string;
@@ -89,6 +89,7 @@ export function WorkspaceRelationshipDirectory<T extends { id: string; name: str
   loadMore?: { label: string; disabled?: boolean; reason?: string; onClick(): void };
   emptyTitle: string;
   emptyDescription?: string;
+  loading?: { label: string; rows?: number };
   busy?: boolean;
   controls?: "always" | "as-needed";
 }) {
@@ -107,17 +108,18 @@ export function WorkspaceRelationshipDirectory<T extends { id: string; name: str
   const pages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, pages);
   const visible = filtered.slice((currentPage - 1) * pageSize, currentPage * pageSize);
-  const blocked = busy || filtering;
+  const blocked = busy || filtering || Boolean(loading);
   const clearSearch = () => { setQuery(""); setPage(1); };
-  const keepControls = controls === "always" || Boolean(loadMore);
+  const keepControls = controls === "always" || Boolean(loadMore || loading);
   const showSearch = keepControls || items.length > 1 || Boolean(query || deferredQuery);
   const showPagination = keepControls || items.length > initialRelationshipPageSize;
 
   return <>
-    {showSearch && <TableToolbar labels={toolbarLabels} search={{ label: searchLabel, placeholder: relationship("searchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }} status={status(filtered.length, items.length)} />}
-    {visible.length ? <Table className={styles.relationshipTable} aria-label={title} aria-busy={blocked || undefined} mobileLayout="grid">
+    {showSearch && <TableToolbar labels={toolbarLabels} search={{ label: searchLabel, placeholder: relationship("searchPlaceholder"), value: query, onChange: (value) => { setQuery(value); setPage(1); } }} status={loading ? "" : status(filtered.length, items.length)} />}
+    {loading ? <LoadingNotice label={loading.label} /> : null}
+    {loading || visible.length ? <Table className={styles.relationshipTable} aria-label={title} aria-busy={blocked || undefined} mobileLayout="grid">
       <thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead>
-      <tbody>{visible.map((item) => <tr key={item.id}>{labelCollectionCells(row(item, blocked), columns)}</tr>)}</tbody>
+      <tbody>{loading ? <Table.LoadingRows columns={columns.length} rows={loading.rows ?? 4} /> : visible.map((item) => <tr key={item.id}>{labelCollectionCells(row(item, blocked), columns)}</tr>)}</tbody>
     </Table> : <EmptyState compact title={query ? t("noResults") : emptyTitle} description={query ? t("noResultsHint") : emptyDescription}
       action={query ? <Button onClick={clearSearch} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} />}
     {showPagination && <Table.Footer note={footerNote}><TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={blocked}
@@ -175,12 +177,14 @@ export function WorkspaceCollection<T extends { id: string; name: string }>({ ti
       filters={filter ? [{ id: "kind", label: filter.label, options: [{ value: "all", label: t("all") }, ...filter.options], value: kind, onChange: (value) => { setKind(value); setPage(1); } }] : []}
       status={loading || unavailable ? "" : status ?? t("count", { count: matches.length })} />}
     {unavailable ? <EmptyState title={unavailable.title} description={unavailable.description} action={unavailable.action} />
-      : loading ? <TableSkeleton label={loading.label} rows={loading.rows ?? 4} header={false} />
       : <>
-        <Table aria-label={title} aria-busy={deferredQuery !== query} mobileLayout="stack"><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{labelCollectionCells(row(item), columns)}</tr>)}</tbody></Table>
-        {!matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
+        {loading ? <LoadingNotice label={loading.label} /> : null}
+        <Table aria-label={title} aria-busy={Boolean(loading) || deferredQuery !== query} mobileLayout="stack"><thead><tr>{columns.map((column) => <th scope="col" key={column}>{column}</th>)}</tr></thead><tbody>{loading
+          ? <Table.LoadingRows columns={columns.length} rows={loading.rows ?? 4} />
+          : matches.slice((currentPage - 1) * pageSize, currentPage * pageSize).map((item) => <tr key={item.id}>{labelCollectionCells(row(item), columns)}</tr>)}</tbody></Table>
+        {!loading && !matches.length ? <EmptyState title={items.length ? t("noResults") : t("empty")} description={items.length ? t("noResultsHint") : t("emptyHint")} action={items.length ? <Button onClick={reset} variant="secondary">{toolbarLabels.resetQuery}</Button> : undefined} /> : null}
         {showPages && <Table.Footer note={footerNote}>
-          <TablePagination page={currentPage} pages={pages} pageSize={pageSize} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
+          <TablePagination page={currentPage} pages={pages} pageSize={pageSize} disabled={Boolean(loading) || deferredQuery !== query} onPageChange={setPage} onPageSizeChange={(size) => { setPageSize(size); setPage(1); }}
             trailing={loadMore ? <Button disabled={loadMore.disabled || loadMore.busy} onClick={loadMore.onClick} size="small" variant="secondary">{loadMore.label}</Button> : null}
             labels={{ summary: t("page", { page: currentPage, pages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} />
         </Table.Footer>}

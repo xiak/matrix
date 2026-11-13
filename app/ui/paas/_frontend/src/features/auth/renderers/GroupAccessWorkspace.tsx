@@ -3,7 +3,7 @@
 import { type ReactNode, type RefObject } from "react";
 import { FileText, Plus, UsersRound } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, HelpDisclosure, Badge, Button, Card, EmptyState, Table, TableSkeleton, Tabs } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, EmptyState, Table, Tabs } from "@ui/xiak";
 import { DirectoryScope, useDirectoryQuery, useDirectoryTab } from "@/features/control-plane/routes/ConsoleNavigation";
 import { RelationshipTabs, AuthorizationOverview, RelationshipLink, WorkspaceCollection, WorkspaceDetail, WorkspaceRelationshipDirectory, WorkspaceTime } from "./AccessWorkspaceUi";
 import styles from "./AccountAccessRenderer.module.css";
@@ -78,7 +78,7 @@ export function GroupDirectory({ groups, create, loadMore, status, footerNote, l
 }) {
   const t = useTranslations("IamWorkspace");
   const g = useTranslations("GroupWorkspace");
-  const showMemberCount = groups.every((group) => group.memberCount !== undefined);
+  const showMemberCount = groups.length > 0 && groups.every((group) => group.memberCount !== undefined);
 
   return <WorkspaceCollection
     title={t("groups")}
@@ -108,11 +108,12 @@ export function GroupDirectory({ groups, create, loadMore, status, footerNote, l
   />;
 }
 
-function GroupMemberTable({ members, authoritativeTotal, directoryComplete = true, loadMore, onOpen }: {
+function GroupMemberTable({ members, authoritativeTotal, directoryComplete = true, loadMore, loading = false, onOpen }: {
   members: GroupMemberRecord[];
   authoritativeTotal?: number;
   directoryComplete?: boolean;
   loadMore?: GroupActionControl;
+  loading?: boolean;
   onOpen(userId: string): void;
 }) {
   const t = useTranslations("IamWorkspace");
@@ -120,7 +121,8 @@ function GroupMemberTable({ members, authoritativeTotal, directoryComplete = tru
   const g = useTranslations("GroupWorkspace");
   const relationship = useTranslations("RelationshipDirectory");
   return <WorkspaceRelationshipDirectory title={t("members")} searchLabel={g("searchMembers")} items={members}
-    controls={directoryComplete ? "as-needed" : "always"}
+    controls="always"
+    loading={loading ? { label: g("loadingMembers"), rows: 3 } : undefined}
     status={(shown, loaded) => !directoryComplete && authoritativeTotal !== undefined
       ? relationship("partialResults", { shown, loaded, total: authoritativeTotal })
       : authoritativeTotal === undefined ? relationship("loadedResults", { shown, loaded }) : relationship("completeResults", { shown, total: authoritativeTotal })}
@@ -204,7 +206,6 @@ function GroupMembers({ group, controls, onOpen }: {
   onOpen(userId: string): void;
 }) {
   const g = useTranslations("GroupWorkspace");
-  if (group.membersAvailability === "loading") return <TableSkeleton label={g("loadingMembers")} rows={3} header={false} />;
   if (group.membersAvailability === "forbidden") return <EmptyState compact title={g("membersUnavailable")} description={g("membersUnavailableHint")} />;
   if (group.membersAvailability === "error") return <EmptyState compact title={g("membersLoadFailed")}
     description={group.membersError ?? g("membersLoadFailedHint")}
@@ -212,9 +213,9 @@ function GroupMembers({ group, controls, onOpen }: {
 
   return <>
     {group.membersAvailability === "refreshing" && <Alert status="info">{g("refreshingMembers")}</Alert>}
-    {group.members.length > 0 || group.membersDirectoryComplete === false
+    {group.membersAvailability === "loading" || group.members.length > 0 || group.membersDirectoryComplete === false
       ? <GroupMemberTable members={group.members} authoritativeTotal={group.memberCount} directoryComplete={group.membersDirectoryComplete}
-          loadMore={controls.loadMoreMembers} onOpen={onOpen} />
+          loadMore={controls.loadMoreMembers} loading={group.membersAvailability === "loading"} onOpen={onOpen} />
       : <EmptyState compact icon={<UsersRound />} title={g("noMembers")} description={g("noMembersHint")} />}
   </>;
 }

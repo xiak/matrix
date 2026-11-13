@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ComponentProps } from "react";
 import { useTranslations } from "next-intl";
 import { KeyRound } from "lucide-react";
-import { Alert, HelpDisclosure, Badge, Button, Card, Checkbox, ContentPage, Table, TableSkeleton, Typography, useUnsavedChanges } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, Checkbox, ContentPage, LoadingNotice, Table, Typography, useUnsavedChanges } from "@ui/xiak";
 import { HttpProblem, requestToken } from "@/infrastructure/http/jsonRequest";
 import type { AccessKeyAccess, AccessKeyDirectory, AccessKeyStatus } from "../domain/accessKeys";
 import type { IamAction } from "../domain/accounts";
@@ -547,22 +547,18 @@ export function LiveAccessCredentials({ client, scene, createIntent = null, muta
           : intentOwnerButton(currentMutationIntent.userId)
         : null}</Alert> : null}
     {interactionError ? <Alert status="danger">{t(`keyLiveErrors.${interactionError}`)} {interactionError === "unavailable" ? <Button onClick={() => void load(owner.id)} size="small" variant="ghost">{t("keyLiveRetry")}</Button> : null}</Alert> : null}
-    <AccountReadBoundary status={loading && !directory ? "loading" : directoryError ? keyReadStatus(directoryError) : "ready"}
-      loading={<Card>
-        <Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div></Card.Header>
-        <TableSkeleton header={false} label={t("keyLiveLoading")} rows={2} />
-      </Card>}
-      failure={directoryError ? { title: t("keyLiveLoadFailedTitle"), description: t(`keyLiveErrors.${directoryError}`) } : undefined}
-      onRetry={() => void load(owner.id)} problem={directoryProblem}>
-    {flow && directory ? <LiveKeyWorkflow flow={flow} owner={owner} directory={directory} client={client}
-      retryingOriginal={flow.kind === "create" && currentCreateIntent?.phase === "unknown" && currentCreateIntent.requestId === flow.requestId}
-      onChanged={() => load(owner.id, false)} onClose={() => setFlow(null)}
-      onInspectRecovered={(keyId) => { setFlow(null); const found = directory.items.find((item) => item.key.id === keyId); if (found) void openKey(found); else void load(owner.id); }} /> : null}
-    {!flow && !selected && directory ? <>
-      <Card><Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div><Badge status={directory.items.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: directory.items.length })}</Badge></Card.Header><Card.Body className={styles.tableBody}>{directory.items.length ? <Table aria-label={t("keys")} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("keyCredentialState")}</th><th scope="col">{t("keyManagementState")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keySecuritySignals")}</th></tr></thead><tbody>{directory.items.map((item) => <tr key={item.key.id}><td data-label={t("keyId")}><Table.PrimaryAction onClick={() => void openKey(item)}>{item.key.id}</Table.PrimaryAction></td><td data-label={t("keyCredentialState")}><AccessKeyCredentialStateBadge value={item.key.credentialState} /></td><td data-label={t("keyManagementState")}><Badge status={item.key.credentialState === "CURRENT" && item.key.status === "ENABLED" ? "success" : "neutral"}>{t(item.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={item.key.createdAt} /></td><td data-label={t("keySecuritySignals")}><AccessKeySecuritySignals account={accountNetwork} keyValue={item.key} usage={item.usage} /></td></tr>)}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body></Card>
-      <ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} />
-      <RotationGuide />
-    </> : null}
-    </AccountReadBoundary>
+    {directoryError ? <AccountReadBoundary status={keyReadStatus(directoryError)} loading={null}
+      failure={{ title: t("keyLiveLoadFailedTitle"), description: t(`keyLiveErrors.${directoryError}`) }}
+      onRetry={() => void load(owner.id)} problem={directoryProblem} /> : <>
+      {flow && directory ? <LiveKeyWorkflow flow={flow} owner={owner} directory={directory} client={client}
+        retryingOriginal={flow.kind === "create" && currentCreateIntent?.phase === "unknown" && currentCreateIntent.requestId === flow.requestId}
+        onChanged={() => load(owner.id, false)} onClose={() => setFlow(null)}
+        onInspectRecovered={(keyId) => { setFlow(null); const found = directory.items.find((item) => item.key.id === keyId); if (found) void openKey(found); else void load(owner.id); }} /> : null}
+      {!flow && (directory || loading) ? <>
+        {loading && !directory ? <LoadingNotice label={t("keyLiveLoading")} /> : null}
+        <Card><Card.Header className={styles.directoryHeader}><div><Typography.Title as="h2" level={3}>{t("keyDirectory")}</Typography.Title><Typography.Text tone="muted">{t("keyDirectoryHint", { name: owner.loginName })}</Typography.Text></div>{directory ? <Badge status={directory.items.length >= 2 ? "warning" : "neutral"}>{t("keyQuota", { count: directory.items.length })}</Badge> : null}</Card.Header><Card.Body className={styles.tableBody}>{!directory || directory.items.length ? <Table aria-label={t("keys")} aria-busy={!directory || undefined} mobileLayout="stack"><thead><tr><th scope="col">{t("keyId")}</th><th scope="col">{t("keyCredentialState")}</th><th scope="col">{t("keyManagementState")}</th><th scope="col">{t("created")}</th><th scope="col">{t("keySecuritySignals")}</th></tr></thead><tbody>{directory ? directory.items.map((item) => <tr key={item.key.id}><td data-label={t("keyId")}><Table.PrimaryAction onClick={() => void openKey(item)}>{item.key.id}</Table.PrimaryAction></td><td data-label={t("keyCredentialState")}><AccessKeyCredentialStateBadge value={item.key.credentialState} /></td><td data-label={t("keyManagementState")}><Badge status={item.key.credentialState === "CURRENT" && item.key.status === "ENABLED" ? "success" : "neutral"}>{t(item.key.status === "ENABLED" ? "enabled" : "disabled")}</Badge></td><td data-label={t("created")}><WorkspaceTime value={item.key.createdAt} /></td><td data-label={t("keySecuritySignals")}><AccessKeySecuritySignals account={accountNetwork} keyValue={item.key} usage={item.usage} /></td></tr>) : <Table.LoadingRows columns={5} rows={2} />}</tbody></Table> : <div className={styles.emptyKeys}><KeyRound aria-hidden="true" /><strong>{t("keyEmpty")}</strong><span>{t("keyEmptyHint")}</span></div>}</Card.Body></Card>
+        {directory ? <><ProgrammaticAccessGuide client={authorizationProfiles} owner={owner} onInspectPermissions={onInspectPermissions} /><RotationGuide /></> : null}
+      </> : null}
+    </>}
   </section>;
 }

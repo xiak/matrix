@@ -84,11 +84,14 @@ describe("LiveAccessCredentials", () => {
     expect(screen.getByRole("heading", { name: "访问密钥" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "用户访问密钥" })).toBeTruthy();
     expect(screen.getByText("正在读取该用户的访问密钥…").closest('[role="status"]')).toBeTruthy();
-    expect(screen.queryByRole("table", { name: "访问密钥" })).toBeNull();
+    const table = screen.getByRole("table", { name: "访问密钥" });
+    expect(within(table).getByRole("columnheader", { name: "Access key ID" })).toBeTruthy();
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(2);
 
     await waitFor(() => expect(api.list).toHaveBeenCalledWith(owner.id));
     await act(async () => resolveDirectory(directory));
-    expect(await screen.findByRole("button", { name: key.id })).toBeTruthy();
+    expect(await within(table).findByRole("button", { name: key.id })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "访问密钥" })).toBe(table);
   });
 
   it("binds directory and detail reads to the exact client while preserving the selected user frame", async () => {

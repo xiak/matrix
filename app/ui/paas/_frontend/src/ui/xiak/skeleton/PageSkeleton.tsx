@@ -1,28 +1,19 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { useContentPageLoading } from "../content/ContentPage";
 import { Skeleton } from "./Skeleton";
 import styles from "./PageSkeleton.module.css";
 
 export type PageSkeletonLayout = "dashboard" | "table" | "cards" | "list" | "access";
 
-export const LOADING_FEEDBACK_DELAY_MS = 200;
-
-// A destination/region acknowledges the wait immediately. Placeholder DOM and
-// animation are local and delayed, never the page identity or navigation shell.
+// A destination/region acknowledges the wait immediately and reserves its
+// final geometry with a local placeholder. Stable parent controls stay mounted.
 export function LoadingFeedback({ label, children }: { label: string; children?: ReactNode }) {
   useContentPageLoading(label);
-  const [visible, setVisible] = useState(false);
-  const hasPlaceholder = children !== undefined && children !== null;
-  useEffect(() => {
-    if (!hasPlaceholder) return;
-    const timer = window.setTimeout(() => setVisible(true), LOADING_FEEDBACK_DELAY_MS);
-    return () => window.clearTimeout(timer);
-  }, [hasPlaceholder]);
   return <div className={styles.root} role="status" aria-live="polite" aria-atomic="true">
     <p className={styles.label} data-visible="false">{label}</p>
-    {visible ? children : null}
+    {children}
   </div>;
 }
 

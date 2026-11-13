@@ -186,21 +186,21 @@ describe("Console navigation", () => {
     expect(screen.queryByRole("status", { name: "用户组删除回执" })).toBeNull();
   });
 
-  it("updates only the header's route-progress subscriber while a destination is pending", async () => {
+  it("does not duplicate content-route progress in the global header", async () => {
     const user = userEvent.setup(), request = hold("/console/resources/");
     render(<LocaleProvider><Harness header={headerProps} /></LocaleProvider>);
     const header = screen.getByLabelText("全局导航");
     expect(within(header).queryByRole("progressbar")).toBeNull();
     staticHeaderRender.mockClear();
     await user.click(screen.getByRole("link", { name: "Resources" }));
-    expect(within(header).getByRole("progressbar", { name: "正在打开资源中心…" })).toBeTruthy();
+    expect(within(header).queryByRole("progressbar")).toBeNull();
     expect(staticHeaderRender).not.toHaveBeenCalled();
     await act(async () => request.release());
     expect(within(header).queryByRole("progressbar")).toBeNull();
     expect(staticHeaderRender).not.toHaveBeenCalled();
   });
 
-  it("hands the same Header progress bar from an open directory to an accepted navigation", async () => {
+  it("ends global directory progress when an accepted navigation closes the directory", async () => {
     const user = userEvent.setup(), destination = hold("/console/applications/");
     let failRead!: (reason: Error) => void;
     const readServiceDefinitions = vi.fn(() => new Promise<never>((_, reject) => { failRead = reject; }));
@@ -214,9 +214,10 @@ describe("Console navigation", () => {
     expect(within(dialog).queryByRole("progressbar")).toBeNull();
     await user.click(within(dialog).getByRole("link", { name: /应用托管/ }));
     expect(screen.queryByRole("dialog")).toBeNull();
-    expect(screen.getByRole("progressbar", { name: /正在打开/ })).toBe(bar);
+    expect(bar.isConnected).toBe(false);
+    expect(screen.queryByRole("progressbar")).toBeNull();
     await act(async () => { failRead(new Error("late directory response")); });
-    expect(screen.getByRole("progressbar")).toBe(bar);
+    expect(screen.queryByRole("progressbar")).toBeNull();
     await act(async () => destination.release());
     expect(screen.queryByRole("progressbar")).toBeNull();
     expect(readServiceDefinitions).toHaveBeenCalledTimes(1);

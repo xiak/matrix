@@ -61,7 +61,6 @@
 
 .stage { position: relative; display: flex; min-width: 0; min-height: 0; flex: 1; overflow: hidden; }
 .content { min-width: 0; }
-.pending { position: absolute; inset: 0; background: var(--xiak-color-bg-canvas); }
 
 .informationBody {
   display: grid;

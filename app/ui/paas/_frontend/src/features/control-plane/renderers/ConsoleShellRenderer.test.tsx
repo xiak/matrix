@@ -358,6 +358,40 @@ afterEach(() => {
 });
 
 describe("ConsoleShellRenderer", () => {
+  it("owns account-setting navigation in the IAM sidebar and renders only the selected responsibility", async () => {
+    const { user, commitRoute } = await renderConsole({
+      section: "access",
+      view: "settings",
+      experience: previewExperienceSnapshot,
+      accountRepository: previewAccountRepository,
+      iamRepository: previewIamRepository
+    });
+
+    const branch = screen.getByRole("button", { name: "用户设置" });
+    expect(branch.getAttribute("aria-expanded")).toBe("true");
+    let sections = screen.getByRole("navigation", { name: "账号设置分区" });
+    expect(within(sections).getAllByRole("link").map((link) => link.textContent)).toEqual(["登录与账号", "本人安全", "账号安全策略"]);
+    expect(within(sections).getByRole("link", { name: "本人安全" }).getAttribute("aria-current")).toBe("page");
+    expect(await screen.findByRole("heading", { name: "本人安全" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "主账号别名" })).toBeNull();
+
+    await user.click(branch);
+    expect(branch.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByRole("navigation", { name: "账号设置分区" })).toBeNull();
+    await user.click(branch);
+    sections = screen.getByRole("navigation", { name: "账号设置分区" });
+
+    act(() => commitRoute("/console/access/settings/?section=account-security"));
+    await waitFor(() => expect(within(sections).getByRole("link", { name: "账号安全策略" }).getAttribute("aria-current")).toBe("page"));
+    expect(await screen.findByRole("heading", { name: "账号安全策略" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "本人安全" })).toBeNull();
+
+    act(() => commitRoute("/console/access/settings/?section=sign-in"));
+    await waitFor(() => expect(within(sections).getByRole("link", { name: "登录与账号" }).getAttribute("aria-current")).toBe("page"));
+    expect(await screen.findByRole("heading", { name: "主账号别名" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "账号安全策略" })).toBeNull();
+  });
+
   it("opens each IAM summary with precisely the users counted, including password changes among enabled users", async () => {
     const sample = await previewAccountRepository.listUsers(previewCredential);
     const items = sample.items.slice(0, 3).map((entry, index) => ({
@@ -424,32 +458,22 @@ describe("ConsoleShellRenderer", () => {
     { selection: { section: "audit" }, role: "article", name: "审计记录" },
     { selection: { section: "access" }, role: "article", name: "概览" },
     { selection: { section: "access", view: "policies" }, role: "article", name: "策略" }
-  ] as const)("keeps the $name destination region stable while only its data placeholder is delayed", ({ selection, role, name }) => {
-    vi.useFakeTimers();
+  ] as const)("keeps the $name destination region stable while painting only its data placeholder", ({ selection, role, name }) => {
     render(<LocaleProvider><ConsoleContentLoadingRenderer label={`正在打开${name}…`} selection={selection as ControlPlaneRouteSelection} /></LocaleProvider>);
 
     const region = screen.getByRole(role, { name });
     const status = within(region).getByRole("status");
     expect(status.textContent).toBe(`正在打开${name}…`);
-    expect(status.querySelector("[aria-hidden]")).toBeNull();
-    act(() => vi.advanceTimersByTime(199));
-    expect(status.querySelector("[aria-hidden]")).toBeNull();
-    act(() => vi.advanceTimersByTime(1));
     expect(status.querySelector("[aria-hidden]")).not.toBeNull();
   });
 
   it("keeps the cloud overview identity stable instead of showing database loading chrome", () => {
-    vi.useFakeTimers();
     render(<LocaleProvider><ConsoleContentLoadingRenderer experience label="正在打开控制台总览…" selection={{ section: "overview" }} /></LocaleProvider>);
 
     expect(screen.getByRole("heading", { level: 2, name: "欢迎使用 Matrix Cloud" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "最近服务实例" })).toBeNull();
     const status = screen.getByRole("status");
-    expect(status.textContent).toBe("正在打开控制台总览…");
-    expect(status.querySelector("[aria-hidden]")).toBeNull();
-
-    act(() => vi.advanceTimersByTime(200));
-
+    expect(status.querySelector("[data-visible]")?.textContent).toBe("正在打开控制台总览…");
     expect(status.querySelector("[aria-hidden]")).not.toBeNull();
     expect(screen.getByText("常用产品")).toBeTruthy();
     expect(screen.getByText("最近资源")).toBeTruthy();
@@ -1286,7 +1310,7 @@ describe("ConsoleShellRenderer", () => {
     expect(screen.getByRole("heading", { level: 1, name: "控制台总览" })).toBeTruthy();
     expect(screen.getByRole("heading", { level: 2, name: "欢迎使用 Matrix Cloud" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "最近服务实例" })).toBeNull();
-    expect(oldResource.closest("[hidden]")).toBeTruthy();
+    expect(oldResource.isConnected).toBe(false);
     expect(repository.load).toHaveBeenCalledWith("renderer-test-memory-only-session", ["regions"]);
 
     await act(async () => resolveSnapshot(snapshot));
@@ -1340,7 +1364,11 @@ describe("ConsoleShellRenderer", () => {
 
     await user.click(within(menu).getByRole("link", { name: "用户组" }));
 
-    expect(screen.getByRole("heading", { level: 1, name: "用户组" })).toBeTruthy();
+    const title = screen.getByRole("heading", { level: 1, name: "用户组" });
+    const progress = screen.getByRole("progressbar", { name: "正在打开用户组…" });
+    expect(screen.getAllByRole("progressbar")).toEqual([progress]);
+    expect(within(screen.getByLabelText("全局导航")).queryByRole("progressbar")).toBeNull();
+    expect(within(title.closest("header")!).getByRole("progressbar")).toBe(progress);
     expect(users.isConnected).toBe(false);
     expect(screen.queryByText("正在打开用户组…")).toBeNull();
     const groups = await screen.findByRole("table", { name: "用户组" });
@@ -1351,6 +1379,7 @@ describe("ConsoleShellRenderer", () => {
     await act(async () => { heldRoute.ready = true; release(); });
     await waitFor(() => expect(groups.closest("[inert]")).toBeNull());
     expect(groups.isConnected).toBe(true);
+    expect(screen.queryByRole("progressbar")).toBeNull();
     expect(accountRepository.currentIdentity).toHaveBeenCalledTimes(1);
   });
 

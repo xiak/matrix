@@ -1,6 +1,6 @@
 import { act, cleanup, fireEvent, render, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { previewCredential, previewIamRepository, resetPreviewEnvironment } from "../repositories/previewIamRepository";
@@ -21,6 +21,37 @@ afterEach(async () => {
 });
 
 describe("OwnSessionsPage", () => {
+  it("keeps the session table and controls mounted while only its rows load", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const originalList = previewIamRepository.sessions!.list;
+    const repository = {
+      ...previewIamRepository,
+      sessions: {
+        ...previewIamRepository.sessions!,
+        list: vi.fn(async (credential: string, after?: string) => {
+          await gate;
+          return originalList(credential, after);
+        })
+      }
+    };
+    const screen = render(<LocaleProvider><SessionProvider repository={repository}><Harness /></SessionProvider></LocaleProvider>);
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "进入体验" })));
+
+    const loadingTable = await screen.findByRole("table", { name: "有效登录会话" });
+    expect(loadingTable.getAttribute("aria-busy")).toBe("true");
+    expect(within(loadingTable).getByRole("columnheader", { name: "会话 ID" })).toBeTruthy();
+    expect(within(loadingTable).getByRole("columnheader", { name: "操作" })).toBeTruthy();
+    expect(loadingTable.querySelectorAll('tbody tr[aria-hidden="true"]')).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "上一页" })).toHaveProperty("disabled", true);
+    expect(screen.getByRole("button", { name: "下一页" })).toHaveProperty("disabled", true);
+
+    await act(async () => release());
+    expect(await screen.findByText("session-ux-preview-002")).toBeTruthy();
+    expect(screen.getByRole("table", { name: "有效登录会话" })).toBe(loadingTable);
+    expect(loadingTable.querySelector('tbody tr[aria-hidden="true"]')).toBeNull();
+  });
+
   it("renders fixed semantics immediately and revokes only a confirmed other session", async () => {
     const screen = render(<LocaleProvider><SessionProvider repository={previewIamRepository}><Harness /></SessionProvider></LocaleProvider>);
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "进入体验" })));

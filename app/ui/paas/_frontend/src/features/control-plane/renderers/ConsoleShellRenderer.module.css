@@ -228,6 +228,16 @@
 
 .contextItem:has(> em) { grid-template-columns: 1.5rem minmax(0, 1fr) auto; }
 
+.contextItemButton {
+  width: 100%;
+  grid-template-columns: 1.5rem minmax(0, 1fr) auto;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  text-align: start;
+}
+
 .contextItem::before {
   position: absolute;
   inset: var(--xiak-spacing-micro) var(--xiak-spacing-tight);
@@ -271,6 +281,67 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.settingsBranch { display: grid; flex: none; min-width: 0; }
+
+.settingsBranch[data-active="true"] > .contextItemButton { color: var(--xiak-color-text-strong); }
+
+.settingsChevron {
+  width: 1rem;
+  height: 1rem;
+  color: var(--xiak-color-text-muted);
+  stroke-width: 1.75;
+  transition: transform var(--xiak-motion-fast) var(--xiak-ease-standard);
+}
+
+.contextItemButton[aria-expanded="true"] .settingsChevron { transform: rotate(90deg); }
+
+.settingsChildren {
+  position: relative;
+  display: grid;
+  gap: var(--xiak-spacing-micro);
+  margin: 0 var(--xiak-spacing-tight) var(--xiak-spacing-tight) calc(var(--xiak-spacing-default) + 0.75rem);
+  padding-left: var(--xiak-spacing-tight);
+}
+
+.settingsChildren::before {
+  position: absolute;
+  top: 0;
+  bottom: calc((var(--xiak-line-height-control) + 2 * var(--xiak-spacing-narrow)) / 2);
+  left: 0;
+  border-left: var(--xiak-border-subtle);
+  content: "";
+  pointer-events: none;
+}
+
+.settingsChild {
+  position: relative;
+  min-width: 0;
+  border-radius: var(--xiak-radius-control);
+  padding: var(--xiak-spacing-narrow) var(--xiak-spacing-tight);
+  color: var(--xiak-color-text-muted);
+  font-size: var(--xiak-font-size-small);
+  font-weight: var(--xiak-font-weight-navigation);
+  line-height: var(--xiak-line-height-control);
+  outline: none;
+  white-space: nowrap;
+}
+
+.settingsChild::before {
+  position: absolute;
+  left: calc(-1 * var(--xiak-spacing-tight));
+  content: "";
+  pointer-events: none;
+  top: 50%;
+  width: var(--xiak-spacing-tight);
+  border-top: var(--xiak-border-subtle);
+}
+
+.settingsChild:hover { background: var(--xiak-color-bg-item-hover); color: var(--xiak-color-text-strong); }
+.settingsChild:active { background: var(--xiak-color-bg-control-pressed); }
+.settingsChild[data-selected="true"] { background: var(--xiak-color-accent-haze); color: var(--xiak-color-text-strong); }
+.settingsChild[data-selected="true"]:hover { background: var(--xiak-color-accent-haze-hover); }
+.settingsChild:focus-visible { outline: 0.125rem solid var(--xiak-color-border-focus); outline-offset: -0.125rem; }
 
 .contextItem em {
   min-width: 1.375rem;

@@ -8,6 +8,7 @@ import { HttpProblem } from "@/infrastructure/http/jsonRequest";
 import { SessionProvider, useSession } from "../application/SessionProvider";
 import { AccountAccessProvider, UserDeletionRejected, useAccountAccess, useAccountCapabilities, type RoleAccessClient, type RoleSessionRevokeIntent, type UserManagementClient } from "../application/AccountAccessProvider";
 import type { Account, AccountAccess, AccountAccessView, AccountIdentity, AccountPolicy, AccountPolicyAccess, AccountPolicyDetail, AccountPolicyDocument, AccountPolicyVersion, AccountPolicyVersionDirectory, AccountSecuritySettings, ActionCapability, AuthorizationProfileDirectory, CapabilityRestriction, IamAction, PolicyAttachmentChangeExpectation, PolicyDirectory, SecuritySettingsUpdateIntent, User, UserAccess, UserDeletion, UserDeletionIntent, UserPolicyAttachment, UserPermissionBoundary } from "../domain/accounts";
+import { accountSettingsSections, defaultAccountSettingsSection, type AccountSettingsSection } from "../domain/accounts";
 import type { AccountLifecycleCompletion, AccountLifecycleIntent, UserManagementIntent, UserManagementCompletion } from "../domain/accounts";
 import type { AuthenticatorState, NotificationContact, SecurityStepUp } from "../domain/personalSecurity";
 import type { AccountRepository, IamRepository } from "../repositories/iamRepository";
@@ -603,18 +604,21 @@ function ReadClassificationProbe() {
   </>;
 }
 
-function AuthenticatedAccess({ repository, initialView, initialEntityId, initialUserTab, active = true }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string; initialUserTab?: AccountUserDetailTab; active?: boolean }) {
+function AuthenticatedAccess({ repository, initialView, initialEntityId, initialUserTab, initialSettingsSection, active = true }: { repository: AccountRepository; initialView: AccountAccessView; initialEntityId?: string; initialUserTab?: AccountUserDetailTab; initialSettingsSection: AccountSettingsSection; active?: boolean }) {
   const requestLeave = useLeaveConfirmation();
   const session = useSession();
   const [view, setView] = useState(initialView);
   const [entityId, setEntityId] = useState<string | undefined>(initialEntityId);
   const [userTab, setUserTab] = useState<AccountUserDetailTab | undefined>(initialUserTab);
-  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><AuthorityRefreshProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setUserTab(undefined); })}>{target}</button>)}</nav><AccountAccessRenderer view={view} entityId={entityId} userTab={userTab} onNavigate={(next, id, _method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setUserTab(nextUserTab); })} /></AccountAccessProvider> : <LoginRenderer />;
+  const [settingsSection, setSettingsSection] = useState(initialSettingsSection);
+  return session.phase === "authenticated" ? <AccountAccessProvider repository={repository} active={active}><CapabilityProbe /><AuthorityRefreshProbe /><nav>{(["overview", "users", "settings", "policies", "roles", "tenants"] as const).map((target) => <button data-testid={"nav-" + target} aria-current={view === target ? "page" : undefined} key={target} onClick={() => requestLeave(() => { setView(target); setEntityId(undefined); setUserTab(undefined); if (target === "settings") setSettingsSection("sign-in"); })}>{target}</button>)}</nav>
+    {view === "settings" ? <div aria-label="test settings sections">{accountSettingsSections.map((section) => <button aria-current={settingsSection === section ? "page" : undefined} data-testid={`settings-${section}`} key={section} onClick={() => requestLeave(() => setSettingsSection(section))}>{section}</button>)}</div> : null}
+    <AccountAccessRenderer view={view} entityId={entityId} settingsSection={settingsSection} userTab={userTab} onSettingsSectionChange={(section) => requestLeave(() => setSettingsSection(section))} onNavigate={(next, id, _method, nextUserTab) => requestLeave(() => { setView(next); setEntityId(id); setUserTab(nextUserTab); })} /></AccountAccessProvider> : <LoginRenderer />;
 }
 
-async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential, initialEntityId?: string, initialUserTab?: AccountUserDetailTab) {
+async function openAccess(repository = accounts(), iamRepository = iam(), initialView: AccountAccessView = "users", expectedCredential = credential, initialEntityId?: string, initialUserTab?: AccountUserDetailTab, initialSettingsSection: AccountSettingsSection = defaultAccountSettingsSection) {
   const user = userEvent.setup({ delay: null });
-  const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} initialEntityId={initialEntityId} initialUserTab={initialUserTab} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
+  const tree = (activeRepository: AccountRepository, active = true) => <LocaleProvider><LanguageSwitch /><SessionProvider repository={iamRepository}><UnsavedChangesProvider><AuthenticatedAccess repository={activeRepository} initialView={initialView} initialEntityId={initialEntityId} initialUserTab={initialUserTab} initialSettingsSection={initialSettingsSection} active={active} /></UnsavedChangesProvider></SessionProvider></LocaleProvider>;
   const view = render(tree(repository));
   // These feature tests need an authenticated Session, not a keystroke-by-
   // keystroke login journey; the qualified-login owner covers that separately.
@@ -961,7 +965,13 @@ describe("account access", () => {
     // The shell can project the destination while the committed self-service route still owns the provider.
     setAccessActive(false);
     expect(screen.queryByText(/NOT_CONNECTED/)).toBeNull();
-    expect(screen.getByText("正在读取 IAM 账号信息…")).toBeTruthy();
+    if (target === "access-analysis") {
+      expect(screen.getByRole("heading", { name: "访问分析" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: "未使用访问 Finding" })).toBeTruthy();
+      const loading = screen.getByText("正在加载 Finding").closest('[role="status"]')!;
+      expect(loading).not.toBeNull();
+      expect(screen.getByRole("table", { name: "未使用访问 Finding" }).querySelectorAll('tbody tr[aria-hidden="true"]')).toHaveLength(6);
+    } else expect(screen.getByText("正在读取 IAM 账号信息…")).toBeTruthy();
 
     setAccessActive(true);
     const help = (await screen.findByText(helpLabel)).closest("details");
@@ -1259,7 +1269,7 @@ describe("account access", () => {
   it("keeps navigation out of mutation renders and preserves unrelated exact capabilities", async () => {
     let finish!: () => void;
     const repository = accounts({ execute: vi.fn(() => new Promise<void>((resolve) => { finish = resolve; })) });
-    const { user } = await openAccess(repository, iam(), "settings");
+    const { user } = await openAccess(repository, iam(), "settings", credential, undefined, undefined, "sign-in");
     await screen.findByRole("button", { name: "保存别名" });
     await user.type(screen.getByLabelText(/^主账号别名/), "acme");
     expect(screen.getByTestId("can-manage").textContent).toBe("true");
@@ -1282,6 +1292,7 @@ describe("account access", () => {
     await screen.findByRole("table", { name: "租户用户列表" });
     expect(read).not.toHaveBeenCalled();
     await user.click(screen.getByTestId("nav-settings"));
+    await user.click(screen.getByTestId("settings-account-security"));
     expect(await screen.findByText(/没有查看账号安全规则的权限/)).toBeTruthy();
     expect(read).toHaveBeenCalledWith(credential, account.id);
     expect(screen.getByTestId("nav-settings").getAttribute("aria-current")).toBe("page");
@@ -1295,7 +1306,7 @@ describe("account access", () => {
       ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item);
     const deniedRead = vi.fn().mockResolvedValue(accountSecuritySettings);
     await openAccess(accounts({ currentIdentity: vi.fn().mockResolvedValue(readDeniedIdentity),
-      accountSecuritySettings: { read: deniedRead, update } }), iam(), "settings");
+      accountSecuritySettings: { read: deniedRead, update } }), iam(), "settings", credential, undefined, undefined, "account-security");
     expect(await screen.findByText(/没有查看账号安全规则的权限/)).toBeTruthy();
     expect(deniedRead).not.toHaveBeenCalled();
     expect(update.startStepUp).not.toHaveBeenCalled();
@@ -1306,7 +1317,7 @@ describe("account access", () => {
       ? { ...item, available: false, restrictionReason: "AUTHORITY_REQUIRED" as const } : item);
     const readable = vi.fn().mockResolvedValue(accountSecuritySettings);
     await openAccess(accounts({ currentIdentity: vi.fn().mockResolvedValue(updateDeniedIdentity),
-      accountSecuritySettings: { read: readable, update } }), iam(), "settings");
+      accountSecuritySettings: { read: readable, update } }), iam(), "settings", credential, undefined, undefined, "account-security");
     expect(await screen.findByText(/可以查看账号安全规则，但不能修改/)).toBeTruthy();
     expect(readable).toHaveBeenCalledWith(credential, account.id);
     expect(screen.queryByRole("button", { name: "编辑安全规则" })).toBeNull();
@@ -1315,7 +1326,7 @@ describe("account access", () => {
 
   it("expires the credential on a real account-rule 401 instead of treating it as read denial", async () => {
     const read = vi.fn().mockRejectedValue(new HttpProblem(401, "IAM_SESSION_EXPIRED"));
-    await openAccess(accounts({ accountSecuritySettings: { read } }), iam(), "settings");
+    await openAccess(accounts({ accountSecuritySettings: { read } }), iam(), "settings", credential, undefined, undefined, "account-security");
     expect(await screen.findByRole("button", { name: "登录控制台" })).toBeTruthy();
     expect(screen.queryByText(/没有查看账号安全规则的权限/)).toBeNull();
   });
@@ -3362,20 +3373,21 @@ describe("account access", () => {
     expect(screen.getByText("admin", { exact: true })).toBeTruthy();
   });
 
-  it("navigates the long settings page by responsibility without remounting or refetching it", async () => {
+  it("renders one requested settings responsibility without retaining the superseded content navigation", async () => {
     const repository = accounts();
     const { user } = await openAccess(repository, iam(), "settings");
-    const navigation = screen.getByRole("navigation", { name: "账号设置分区" });
     const initialReads = vi.mocked(repository.currentIdentity).mock.calls.length;
+    expect(screen.getByRole("heading", { name: "安全通知与身份验证器" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "主账号别名" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "账号安全规则" })).toBeNull();
+    expect(screen.queryByRole("navigation", { name: "账号设置分区" })).toBeNull();
 
-    await user.click(within(navigation).getByRole("link", { name: /^本人安全/ }));
-    expect(screen.getByRole("heading", { name: "安全通知与身份验证器" })).toBe(document.activeElement);
-
-    await user.click(within(navigation).getByRole("link", { name: /^账号安全/ }));
-    expect(screen.getByRole("heading", { name: "账号安全规则" })).toBe(document.activeElement);
-
-    await user.click(within(navigation).getByRole("link", { name: /^登录标识/ }));
-    expect(screen.getByRole("heading", { name: "主账号别名" })).toBe(document.activeElement);
+    await user.click(screen.getByTestId("settings-account-security"));
+    expect(await screen.findByRole("heading", { name: "账号安全规则" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "安全通知与身份验证器" })).toBeNull();
+    await user.click(screen.getByTestId("settings-sign-in"));
+    expect(await screen.findByRole("heading", { name: "主账号别名" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "账号安全规则" })).toBeNull();
     expect(repository.currentIdentity).toHaveBeenCalledTimes(initialReads);
   });
 
@@ -3964,6 +3976,7 @@ describe("account access", () => {
     await user.click(screen.getByTestId("nav-users"));
     await screen.findByRole("table", { name: "租户用户列表" });
     await user.click(screen.getByTestId("nav-settings"));
+    await user.click(screen.getByTestId("settings-personal-security"));
     expect(await screen.findByText(enrollment.requestId)).toBeTruthy();
     expect(screen.queryByText(seed, { exact: true })).toBeNull();
     await user.click(screen.getByRole("button", { name: "查询原绑定意图" }));
@@ -4037,6 +4050,7 @@ describe("account access", () => {
     await user.click(screen.getByTestId("nav-users"));
     await screen.findByRole("table", { name: "租户用户列表" });
     await user.click(screen.getByTestId("nav-settings"));
+    await user.click(screen.getByTestId("settings-personal-security"));
     expect(await screen.findByText(originalRequestId)).toBeTruthy();
     expect(screen.queryByLabelText("当前密码")).toBeNull();
 
@@ -4216,6 +4230,7 @@ describe("account access", () => {
     await user.click(screen.getByTestId("nav-users"));
     await screen.findByRole("table", { name: "租户用户列表" });
     await user.click(screen.getByTestId("nav-settings"));
+    await user.click(screen.getByTestId("settings-personal-security"));
     expect(await screen.findByText(operationRequestId)).toBeTruthy();
     await user.click(screen.getByRole("button", { name: "查询原重新生成结果" }));
     expect(await screen.findByText(/一次性恢复码材料已不在当前页面/)).toBeTruthy();
@@ -4421,7 +4436,8 @@ describe("account access", () => {
     const current = { ...tenantPolicyDetail.version, policyId: customer.id, versionId: customer.defaultVersionId };
     const earlier = { ...current, versionId: "version-a", contentDigest: `sha256:${"b".repeat(64)}` };
     const readPolicy = vi.fn().mockResolvedValue(policyAccess({ policy: customer, version: current }));
-    const listPolicyVersions = vi.fn().mockResolvedValue({ policy: customer, items: [earlier, current] });
+    let resolveVersions!: (value: AccountPolicyVersionDirectory) => void;
+    const listPolicyVersions = vi.fn(() => new Promise<AccountPolicyVersionDirectory>((resolve) => { resolveVersions = resolve; }));
     const readPolicyVersion = vi.fn().mockResolvedValue({ policy: customer, version: earlier });
     const repository = accounts({ readPolicy, listPolicyVersions, readPolicyVersion,
       listPolicies: vi.fn(async (_credential: string, platform: boolean) => platform ? directory(true) : { ...directory(false), items: [customer, tenantPolicy] }) });
@@ -4432,7 +4448,12 @@ describe("account access", () => {
     expect(readPolicyVersion).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("tab", { name: "策略版本" }));
-    const table = await screen.findByRole("table", { name: "策略版本目录" });
+    const table = screen.getByRole("table", { name: "策略版本目录" });
+    expect(within(table).getByRole("columnheader", { name: "版本 ID" })).toBeTruthy();
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(3);
+    await act(async () => { resolveVersions({ policy: customer, items: [earlier, current] }); });
+    await within(table).findByText("当前默认");
+    expect(screen.getByRole("table", { name: "策略版本目录" })).toBe(table);
     expect(within(table).queryByRole("columnheader", { name: "操作" })).toBeNull();
     expect(within(table).getByText("当前默认")).toBeTruthy();
     expect(screen.getByText("当前可管理版本：2 / 5")).toBeTruthy();
@@ -5619,10 +5640,13 @@ describe("account access", () => {
     const search = screen.getByRole("searchbox", { name: "搜索产品能力" });
     await user.type(search, "paas");
     expect((search as HTMLInputElement).value).toBe("paas");
-    expect(screen.queryByRole("table", { name: "产品权限能力目录" })).toBeNull();
+    const table = screen.getByRole("table", { name: "产品权限能力目录" });
+    expect(within(table).getByRole("columnheader", { name: "产品" })).toBeTruthy();
+    expect(table.querySelectorAll("tbody tr")).toHaveLength(4);
     await act(async () => resolve(profileDirectory()));
     expect(screen.getByRole("searchbox", { name: "搜索产品能力" })).toBe(search);
-    expect(await screen.findByRole("table", { name: "产品权限能力目录" })).toBeTruthy();
+    expect(await within(table).findByRole("button", { name: "paas" })).toBeTruthy();
+    expect(screen.getByRole("table", { name: "产品权限能力目录" })).toBe(table);
   });
 
   it("retains the same catalog search control and query through a local retry", async () => {

@@ -21,6 +21,7 @@ import {
   Boxes,
   Building2,
   ChartNoAxesCombined,
+  ChevronRight,
   CircleGauge,
   Clock3,
   Database,
@@ -46,6 +47,7 @@ import {
   X
 } from "lucide-react";
 import { useSession } from "@/features/auth/application/SessionProvider";
+import { accountSettingsSection, accountSettingsSections, defaultAccountSettingsSection, type AccountSettingsSection } from "@/features/auth/domain/accounts";
 import { useEffectiveCredential, useRoleSession } from "@/features/auth/application/RoleSessionProvider";
 import { LiveRoleSelfService } from "@/features/auth/renderers/LiveRoleSelfService";
 import { AccountAccessProvider, useAccountAccess, useAccountCapabilities } from "@/features/auth/application/AccountAccessProvider";
@@ -75,6 +77,7 @@ import { consoleRouteHref, productWorkspaceFor, type ControlPlaneRouteSelection 
 import type { ControlPlaneRepository } from "../repositories/controlPlaneRepository";
 import { httpControlPlaneRepository } from "../repositories/httpControlPlaneRepository";
 import type {
+  ConsoleNavigationItemScene,
   ConsoleWorkspaceScene,
   NavigationIconKind
 } from "../scenes/consoleScene";
@@ -167,6 +170,42 @@ function HeaderBackdrop() {
 function ServiceLayout({ children }: { children: React.ReactNode }) {
   const catalogOpen = useConsoleUiStore((state) => state.headerPanel === "products");
   return <Layout inert={catalogOpen}>{children}</Layout>;
+}
+
+const settingsSectionMessages = {
+  "sign-in": "settingsSignIn",
+  "personal-security": "settingsPersonalSecurity",
+  "account-security": "settingsAccountSecurity"
+} as const satisfies Record<AccountSettingsSection, "settingsSignIn" | "settingsPersonalSecurity" | "settingsAccountSecurity">;
+
+function SettingsNavigationFallback({ item, onAccepted }: { item: ConsoleNavigationItemScene; onAccepted(): void }) {
+  const navigationText = useTranslations("ServiceNavigation");
+  return <Link aria-current={item.selected ? "page" : undefined} aria-description={navigationText("items.settings.hint")} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={`/console/access/settings/?section=${defaultAccountSettingsSection}`} onAccepted={onAccepted} title={navigationText("items.settings.hint")}>
+    <span className={styles.contextIcon}><Settings2 aria-hidden="true" /></span><span className={styles.contextLabel}>{navigationText("items.settings.label")}</span>
+  </Link>;
+}
+
+function SettingsNavigationBranch({ item, onAccepted, pendingHref }: { item: ConsoleNavigationItemScene; onAccepted(): void; pendingHref: string | null }) {
+  const query = useSearchParams();
+  const navigationText = useTranslations("ServiceNavigation");
+  const accountText = useTranslations("AccountAccess");
+  const [expanded, setExpanded] = useState(item.selected);
+  const requested = item.selected
+    ? pendingHref ? new URL(pendingHref, "https://matrix.invalid").searchParams.get("section") : query.get("section")
+    : null;
+  const selectedSection = accountSettingsSection(requested);
+  return <div className={styles.settingsBranch} data-active={item.selected ? "true" : undefined}>
+    <button aria-controls="iam-settings-navigation" aria-expanded={expanded} className={`${styles.contextItem} ${styles.contextItemButton}`} data-branch-active={item.selected ? "true" : undefined} onClick={() => setExpanded((current) => !current)} title={navigationText("items.settings.hint")} type="button">
+      <span className={styles.contextIcon}><Settings2 aria-hidden="true" /></span><span className={styles.contextLabel}>{navigationText("items.settings.label")}</span><ChevronRight aria-hidden="true" className={styles.settingsChevron} />
+    </button>
+    {expanded ? <nav aria-label={accountText("settingsNavigation")} className={styles.settingsChildren} id="iam-settings-navigation">
+      {accountSettingsSections.map((section) => {
+        const active = item.selected && selectedSection === section;
+        const label = accountText(settingsSectionMessages[section]);
+        return <Link aria-current={active ? "page" : undefined} className={styles.settingsChild} data-selected={active ? "true" : undefined} href={`/console/access/settings/?section=${section}`} key={section} onAccepted={onAccepted} title={label}>{label}</Link>;
+      })}
+    </nav> : null}
+  </div>;
 }
 
 type WorkspaceSize = "compact" | "medium" | "wide";
@@ -266,9 +305,7 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
   const pendingContent = pendingScene?.content ?? null;
   const content = pendingContent ?? scene?.content;
   const contentTransitionPending = Boolean(pendingSelection && !pendingContent);
-  const contentTransitionKey = pendingContent && pendingSelection
-    ? consoleRouteHref(pendingSelection)
-    : navigation.currentHref;
+  const contentTransitionKey = pendingSelection ? consoleRouteHref(pendingSelection) : navigation.currentHref;
   const sidebarPanel = useRef<HTMLDivElement>(null);
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
   const sidebarCloseButton = useRef<HTMLButtonElement>(null);
@@ -587,9 +624,11 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                       return (
                         <Fragment key={item.id}>
                           {item.group && item.group !== localNavigation[index - 1]?.group ? <p>{iamWorkspaceText(item.group)}</p> : null}
-                          <Link aria-current={item.selected ? "page" : undefined} aria-description={navigationText(`items.${item.messageKey}.hint`)} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} onAccepted={closeSidebarAndRestoreFocus} title={navigationText(`items.${item.messageKey}.hint`)}>
+                          {item.id === "settings" ? <Suspense fallback={<SettingsNavigationFallback item={item} onAccepted={closeSidebarAndRestoreFocus} />}>
+                            <SettingsNavigationBranch item={item} key={item.selected ? "selected" : "idle"} onAccepted={closeSidebarAndRestoreFocus} pendingHref={navigation.pendingHref} />
+                          </Suspense> : <Link aria-current={item.selected ? "page" : undefined} aria-description={navigationText(`items.${item.messageKey}.hint`)} className={styles.contextItem} data-selected={item.selected ? "true" : undefined} href={item.href} onAccepted={closeSidebarAndRestoreFocus} title={navigationText(`items.${item.messageKey}.hint`)}>
                             <span className={styles.contextIcon}><Icon aria-hidden="true" /></span><span className={styles.contextLabel}>{navigationText(`items.${item.messageKey}.label`)}</span>{typeof item.count === "number" ? <em>{item.count}</em> : null}
-                          </Link>
+                          </Link>}
                         </Fragment>
                       );
                     })}
@@ -610,15 +649,15 @@ function ConsoleShell({ activation, activationAccountId, experience }: {
                 <Suspense fallback={<ContentPage.Header title={pageTitle} />}><ConsolePageHeader title={pageTitle} selection={pendingSelection ?? navigation.selection} pendingHref={navigation.pendingHref} navigationFocusKey={navigation.navigationFocusKey} className={styles.pageHeader}
                   leading={<Button aria-controls="console-product-navigation" aria-expanded={sidebarOverlayOpen} aria-label={t("openNavigation")} className={styles.mobileMenuButton} onClick={openSidebar} ref={sidebarTrigger} iconOnly size="small" variant="ghost"><Menu aria-hidden="true" /></Button>}
                   trailing={headerCommands}
-                  progress={!pendingSelection && controlPlane.loading && frame.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
-                <ContentPage.Body inactive={Boolean(pendingContent)} transitionKey={contentTransitionKey} pending={contentTransitionPending} loading={contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><ConsoleContentLoadingRenderer experience={Boolean(experience)} key={navigation.pendingHref} label={loadingLabel} selection={pendingSelection} /></div> : undefined}>
-                  <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
+                  progress={pendingSelection || controlPlane.loading && frame.section !== "access" ? <Progress aria-label={loadingLabel} className={styles.navigationProgress} /> : null} /></Suspense>
+                <ContentPage.Body inactive={Boolean(pendingSelection)} transitionKey={contentTransitionKey}>
+                  {contentTransitionPending && pendingSelection ? <div className={styles.pageCanvas}><ConsoleContentLoadingRenderer experience={Boolean(experience)} label={loadingLabel} selection={pendingSelection} /></div> : <div aria-busy={controlPlane.loading && frame.section !== "access"} className={styles.pageCanvas}>
                     {session.error ? <Alert className={styles.feedback} status="danger">{authErrors(session.error)}</Alert> : null}
                     {managedServicePage && !workspaceVisible ? <ManagedServiceCommandNotice installations={content?.kind === "installations" ? content.installations : undefined} offeringId={navigation.selection.product && managedServiceProduct(navigation.selection.product).offeringId} /> : null}
                     {roleBlocked ? <LiveRoleSelfService /> : product ? <ManagedProductActivation account={{ id: activationAccountId ?? "", name: frame.scope?.organization.name }} activation={activation} preview={frame.preview} product={product}>
                       {resourceContent}
                     </ManagedProductActivation> : resourceContent}
-                  </div>
+                  </div>}
                 </ContentPage.Body>
               </ContentPage>
             </Layout.Content>

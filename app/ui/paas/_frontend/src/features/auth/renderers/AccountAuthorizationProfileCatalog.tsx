@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, ChevronDown } from "lucide-react";
 import { useTranslations } from "next-intl";
-import { Alert, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, TableToolbar } from "@ui/xiak";
+import { Alert, Badge, Button, Card, ContentPage, EmptyState, LoadingNotice, Table, TablePagination, TableToolbar } from "@ui/xiak";
 import { useTableToolbarLabels } from "@/i18n/useTableToolbarLabels";
 import { useAccountAccess, type AuthorizationProfileClient, type AuthorizationProfileLoad } from "../application/AccountAccessProvider";
 import {
@@ -258,15 +258,15 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
           { value: "INSTALLATION_PROBE", label: t("scopes.INSTALLATION_PROBE") }
         ] }
       ]}
-      status={state.status === "ready" ? t("productCount", { count: filteredEntries.length }) : state.status === "loading" ? t("loading") : undefined} />
-    {state.status === "loading" ? <TableSkeleton label={t("loading")} rows={4} /> : null}
+      status={state.status === "ready" ? t("productCount", { count: filteredEntries.length }) : undefined} />
+    {state.status === "loading" ? <LoadingNotice label={t("loading")} /> : null}
     {state.status !== "ready" && state.status !== "loading" ? <>
       <Alert status={state.status === "forbidden" ? "warning" : "danger"}>{t(`errors.${state.status}`)}</Alert>
       {state.status !== "expired" ? <div><Button variant="secondary" onClick={() => load()}>{t("retry")}</Button></div> : null}
     </> : null}
-    {state.status === "ready" ? <>{visibleProducts.length ? <Table aria-label={t("table")} mobileLayout="stack" className={styles.catalogProductTable}>
+    {state.status === "loading" || (state.status === "ready" && visibleProducts.length) ? <Table aria-label={t("table")} aria-busy={state.status === "loading" || undefined} mobileLayout="stack" className={styles.catalogProductTable}>
       <thead><tr><th scope="col">{t("product")}</th><th scope="col">{t("actions")}</th><th scope="col">{t("scope")}</th><th scope="col">{t("callingService")}</th></tr></thead>
-      <tbody>{visibleProducts.map((entry) => {
+      <tbody>{state.status === "loading" ? <Table.LoadingRows columns={4} rows={4} /> : visibleProducts.map((entry) => {
         const scopes = [...new Set(entry.profile.actions.map((action) => action.scope))];
         return <tr key={entry.profile.product}>
           <td data-label={t("product")}><Table.PrimaryAction
@@ -281,8 +281,9 @@ function AuthorizationProfileCatalog({ client, surface }: { client: Authorizatio
           <td data-label={t("callingService")}>{entry.profile.callingService}</td>
         </tr>;
       })}</tbody>
-    </Table> : <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={resetProducts}>{toolbarLabels.resetQuery}</Button>} />}
-    {entries.length > 10 ? <Table.Footer><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer> : null}</> : null}
+    </Table> : null}
+    {state.status === "ready" && !visibleProducts.length ? <EmptyState title={t("noProducts")} description={t("noProductsHint")} action={<Button variant="secondary" onClick={resetProducts}>{toolbarLabels.resetQuery}</Button>} /> : null}
+    {state.status === "loading" || (state.status === "ready" && visibleProducts.length) ? <Table.Footer><TablePagination page={currentProductPage} pages={productPages} pageSize={productPageSize} disabled={state.status === "loading"} onPageChange={setProductPage} onPageSizeChange={(size) => { setProductPageSize(size); setProductPage(1); }} labels={{ summary: t("page", { page: currentProductPage, pages: productPages }), pageSize: t("pageSize"), previous: t("previous"), next: t("next") }} /></Table.Footer> : null}
   </section>;
 }
 

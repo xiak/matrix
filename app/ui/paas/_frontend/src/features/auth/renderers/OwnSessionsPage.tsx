@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useFormatter, useTranslations } from "next-intl";
 import { LogOut, RefreshCcw, XCircle } from "lucide-react";
-import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, Table, TablePagination, TableSkeleton, Typography } from "@ui/xiak";
+import { Alert, HelpDisclosure, Badge, Button, Card, ContentPage, EmptyState, LoadingNotice, Table, TablePagination, Typography } from "@ui/xiak";
 import { useOwnSessions } from "../application/OwnSessionsProvider";
 import { useSession } from "../application/SessionProvider";
 import { uxPreviewEnabled } from "@/infrastructure/runtime/uxPreviewMode";
@@ -66,6 +66,7 @@ export function OwnSessionsPage() {
   const currentListed = page?.items.some((item) => item.id === page.currentSessionId) ?? false;
   const activeCursor = cursors[cursorIndex];
   const busy = sessions.loading || Boolean(sessions.revokingId) || sessions.revokingOthers;
+  const initialLoading = sessions.loading && !page;
   const unresolved = Boolean(sessions.uncertainTargetId) || sessions.uncertainOthers;
   const hasOtherSessions = Boolean(page && (page.nextCursor || page.items.some((item) => item.id !== page.currentSessionId)));
   const actions = <ContentPage.Commands label={collection("pageActions")} moreLabel={collection("moreActions")} primary={{
@@ -117,11 +118,11 @@ export function OwnSessionsPage() {
         <div><Typography.Title as="h2" level={3}>{t("activeTitle")}</Typography.Title><Typography.Text tone="muted">{t("activeHint")}</Typography.Text></div>
         {page ? <span className={styles.observed}><span>{t("observedAt")}</span><time dateTime={page.observedAt} title={page.observedAt}>{formatTime(page.observedAt)}</time></span> : null}
       </Card.Header>
-      {sessions.loading && !page ? <TableSkeleton header={false} label={t("loading")} rows={3} /> : null}
-      {page ? <>
-        <Table aria-label={t("table")} className={styles.table} mobileLayout="grid">
+      {initialLoading ? <LoadingNotice label={t("loading")} /> : null}
+      {page || initialLoading ? <>
+        <Table aria-busy={busy} aria-label={t("table")} className={styles.table} mobileLayout="grid">
           <thead><tr><th scope="col">{t("sessionId")}</th><th scope="col">{t("issuedAt")}</th><th scope="col">{t("expiresAt")}</th><th scope="col">{t("status")}</th><th scope="col">{t("actions")}</th></tr></thead>
-          <tbody>{page.items.map((item) => {
+          <tbody>{page ? page.items.map((item) => {
             const isCurrent = item.id === page.currentSessionId;
             const confirming = confirmingId === item.id;
             return <tr key={item.id}>
@@ -135,15 +136,15 @@ export function OwnSessionsPage() {
               </div> : isCurrent ? <Button disabled={session.phase === "revoking"} onClick={() => { void session.logout(); }} size="small" variant="ghost"><LogOut aria-hidden="true" />{t("exitCurrent")}</Button>
                 : <Button disabled={Boolean(sessions.revokingId || sessions.revokingOthers || sessions.uncertainTargetId || sessions.uncertainOthers)} onClick={() => { sessions.clearFeedback(); setConfirmingId(item.id); }} size="small" variant="ghost">{t("end")}</Button>}</td>
             </tr>;
-          })}</tbody>
+          }) : <Table.LoadingRows columns={5} rows={3} />}</tbody>
         </Table>
-        {!page.items.length ? <EmptyState title={t("empty")} description={t("emptyHint")} /> : null}
+        {page && !page.items.length ? <EmptyState title={t("empty")} description={t("emptyHint")} /> : null}
         <Table.Footer note={<div className={styles.footerNotes}><span>{t("impact")}</span>{cursorIndex > 0 && !currentListed ? <span>{t("currentAbsent")}</span> : null}</div>}>
           <TablePagination mode="cursor" disabled={busy} summary={t("page", { page: cursorIndex + 1 })}
             previous={{ label: t("previous"), disabled: cursorIndex === 0, onClick: () => { void move(cursorIndex - 1, cursors[cursorIndex - 1]); } }}
-            next={{ label: t("next"), disabled: !page.nextCursor, onClick: () => { void next(); } }} />
+            next={{ label: t("next"), disabled: !page?.nextCursor, onClick: () => { void next(); } }} />
         </Table.Footer>
-      </> : sessions.loading ? null : <EmptyState title={t("loadTitle")} description={t("loadDescription")} action={<Button onClick={() => { void sessions.load(activeCursor); }} variant="secondary">{t("retryLoad")}</Button>} />}
+      </> : <EmptyState title={t("loadTitle")} description={t("loadDescription")} action={<Button onClick={() => { void sessions.load(activeCursor); }} variant="secondary">{t("retryLoad")}</Button>} />}
     </Card> : null}
     {uxPreviewEnabled ? <SessionExpiryPreview /> : null}
   </section>;

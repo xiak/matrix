@@ -1,7 +1,7 @@
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ContentPage } from "../content/ContentPage";
-import { CardGridSkeleton, LoadingNotice, LOADING_FEEDBACK_DELAY_MS, PageSkeleton, TableSkeleton, type PageSkeletonLayout } from "./PageSkeleton";
+import { CardGridSkeleton, LoadingNotice, PageSkeleton, TableSkeleton, type PageSkeletonLayout } from "./PageSkeleton";
 
 afterEach(() => { cleanup(); vi.useRealTimers(); });
 
@@ -24,15 +24,10 @@ describe("PageSkeleton", () => {
     expect(screen.queryByRole("row")).toBeNull();
   });
 
-  it.each([PageSkeleton, TableSkeleton, CardGridSkeleton])("acknowledges immediately, but mounts placeholder DOM only for sustained regional waits", (Feedback) => {
-    vi.useFakeTimers();
+  it.each([PageSkeleton, TableSkeleton, CardGridSkeleton])("reserves regional geometry immediately without exposing placeholder controls", (Feedback) => {
     render(<Feedback label="Loading resources…" />);
     const status = screen.getByRole("status");
     expect(status.textContent).toBe("Loading resources…");
-    expect(status.querySelector("[aria-hidden]")).toBeNull();
-    act(() => vi.advanceTimersByTime(LOADING_FEEDBACK_DELAY_MS - 1));
-    expect(status.querySelector("[aria-hidden]")).toBeNull();
-    act(() => vi.advanceTimersByTime(1));
     expect(status.querySelector("[aria-hidden]")).not.toBeNull();
     expect(screen.queryByRole("button")).toBeNull();
   });
@@ -75,15 +70,12 @@ describe("PageSkeleton", () => {
     expect(screen.queryByRole("progressbar")).toBeNull();
   });
 
-  it("restarts feedback for a new destination and cancels the regional timer on fast completion", () => {
-    vi.useFakeTimers();
+  it("replaces regional feedback without an empty intermediate frame", () => {
     const view = render(<PageSkeleton label="Opening users…" />);
-    act(() => vi.advanceTimersByTime(LOADING_FEEDBACK_DELAY_MS));
     expect(screen.getByRole("status").querySelector("[aria-hidden]")).not.toBeNull();
     view.rerender(<PageSkeleton label="Opening roles…" />);
     expect(screen.getByRole("status").textContent).toBe("Opening roles…");
-    expect(screen.getByRole("status").querySelector("[aria-hidden]")).toBeNull();
+    expect(screen.getByRole("status").querySelector("[aria-hidden]")).not.toBeNull();
     view.unmount();
-    expect(vi.getTimerCount()).toBe(0);
   });
 });
