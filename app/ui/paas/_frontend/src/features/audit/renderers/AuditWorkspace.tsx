@@ -161,8 +161,13 @@ function RecordDetail({ record, onBack }: { record: AuditRecord; onBack(): void 
           </Card.Facts> }}>
     <Card>
       <Card.Header className={styles.detailHeader}>
-        <div><Badge status={resultStatuses[event.result]}>{t(`results.${event.result}`)}</Badge><Typography.Title as="h2" level={3}>{event.action}</Typography.Title></div>
-        <span>{format.dateTime(new Date(event.occurredAt), { dateStyle: "medium", timeStyle: "long" })}</span>
+        <div className={styles.detailIdentity}>
+          <Typography.Title as="h2" level={3}>{event.action}</Typography.Title>
+          <div className={styles.detailMeta}>
+            <Badge status={resultStatuses[event.result]}>{t(`results.${event.result}`)}</Badge>
+            <time dateTime={event.occurredAt}>{format.dateTime(new Date(event.occurredAt), { dateStyle: "medium", timeStyle: "long" })}</time>
+          </div>
+        </div>
       </Card.Header>
       <Card.Body className={styles.stack}>
         <div className={styles.resultMeaning} data-result={event.result}>
